@@ -1745,9 +1745,9 @@ export function requiredEndFlow(loaded: ComposedFlow): ComposedFlow {
   });
 }
 
-/** The progress parts of an `inspectRun` result: its status, nodes in flight and interrupted counts. */
-export function progressOf({ status, inFlight, interruptedAttempts }: RunInspection) {
-  return { status, inFlight, interruptedAttempts };
+/** The progress parts of an `inspectRun` result: its status, nodes in flight and crashed counts. */
+export function progressOf({ status, inFlight, crashedAttempts }: RunInspection) {
+  return { status, inFlight, crashedAttempts };
 }
 
 // ---- Runs of one-AGENT flows over a scripted model, and `yian run` over a fake chat endpoint ----

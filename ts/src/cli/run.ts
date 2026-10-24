@@ -1735,17 +1735,17 @@ export async function status(log: string, { json }: { json: boolean }, io: CliIo
     }
     return 1;
   }
-  const { status: runStatus, inFlight, interruptedAttempts } = inspection;
+  const { status: runStatus, inFlight, crashedAttempts } = inspection;
   if (json) {
     // `printJson` writes a number as a float and a `bigint` as an int.
-    const counts = Object.fromEntries([...interruptedAttempts].map(([node, n]) => [node, BigInt(n)]));
+    const counts = Object.fromEntries([...crashedAttempts].map(([node, n]) => [node, BigInt(n)]));
     await printJson({ status: runStatus, in_flight: inFlight, interrupted_attempts: counts }, io.stdout);
     return 0;
   }
   let text = `status: ${runStatus}\n`;
   if (inFlight.length > 0) text += `in flight: ${inFlight.join(", ")}\n`;
-  if (interruptedAttempts.size > 0) {
-    const counts = [...interruptedAttempts].map(([node, n]) => `${node}=${n}`);
+  if (crashedAttempts.size > 0) {
+    const counts = [...crashedAttempts].map(([node, n]) => `${node}=${n}`);
     text += `interrupted attempts: ${counts.join(", ")}\n`;
   }
   await io.stdout.write(text);

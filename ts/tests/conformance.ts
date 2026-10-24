@@ -2726,7 +2726,7 @@ function goldenLog(log: string, ctx: CaseContext): void {
  * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
  * 0); after the run's terminal outcome only backward and memory records follow; after a
  * `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a replay's
- * status, in-flight nodes, interrupted counts and failure, and the log's run id, schema, flow
+ * status, in-flight nodes, crashed counts and failure, and the log's run id, schema, flow
  * fingerprint, learnable flag and last seq, and without it the same except in its one blind
  * corner (nothing in flight, a node still ready, and END succeeded or proved unreachable); a finished
  * run's counts are `result`'s; and a finished log resumed with `options` gives the same status and
@@ -2787,7 +2787,7 @@ async function checkInvariants(
   const expected = {
     status: finished ?? (state.lastStopSequence === null ? "interrupted" : "stopped"),
     inFlight: finished === null ? [...state.acceptedStarts.keys()] : [],
-    interruptedAttempts: Object.fromEntries(counts),
+    crashedAttempts: Object.fromEntries(counts),
     runId: first.runId,
     schema: first.schema,
     flowFingerprint: started.flowFingerprint,
@@ -2800,7 +2800,7 @@ async function checkInvariants(
   const form = (inspection: RunInspection) => ({
     ...inspection,
     inFlight: [...inspection.inFlight],
-    interruptedAttempts: Object.fromEntries(inspection.interruptedAttempts),
+    crashedAttempts: Object.fromEntries(inspection.crashedAttempts),
     failure: inspection.failure === null ? null : failureForm(inspection.failure, flow),
   });
   compare(`inspectRun with the flow${at}`, form(inspectRun(log, { flow, env: options.env })), expected);
@@ -2819,8 +2819,8 @@ async function checkInvariants(
   compare(`inspectRun without the flow${at}`, allowed, expected);
   if (finished === null) return;
   if (result !== null) {
-    const counted = Object.fromEntries(result.interruptedAttempts);
-    compare(`interrupted counts${at}`, counted, expected.interruptedAttempts);
+    const counted = Object.fromEntries(result.crashedAttempts);
+    compare(`crashed counts${at}`, counted, expected.crashedAttempts);
   }
   const before = readFileSync(log);
   const reopened = await resumeFlow({ log, ...options });

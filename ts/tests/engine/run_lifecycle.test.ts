@@ -989,7 +989,7 @@ test("a resume after a crash publishes RunResumed and NodeAttemptResumed with th
     new NodeAttemptResumed({ nodeId: "work", crashed: 2 }),
     new NodeStarted({ nodeId: "work" }),
   ]);
-  expect(result.interruptedAttempts).toEqual(new Map([["work", 2]]));
+  expect(result.crashedAttempts).toEqual(new Map([["work", 2]]));
 });
 
 test("a TOOL cut between its failed and started steps resumes with the next attempt", async () => {
@@ -1273,12 +1273,12 @@ describe("the SIGKILL platform sweep", () => {
           expect(progressOf(inspectRun(log))).toEqual({
             status: "interrupted",
             inFlight: [nodeId],
-            interruptedAttempts: new Map([[nodeId, 1]]),
+            crashedAttempts: new Map([[nodeId, 1]]),
           });
           const resumed = await resume(flow, { log });
           expect(resumed.status).toBe("succeeded");
           expect(resumed.output).toEqual(uncut.output);
-          expect(resumed.interruptedAttempts).toEqual(new Map([[nodeId, 1]]));
+          expect(resumed.crashedAttempts).toEqual(new Map([[nodeId, 1]]));
           expect(nodeOutcomes(log)).toEqual(nodeOutcomes(uncutLog));
         }
       },

@@ -197,14 +197,14 @@ const RULES: Rule[] = [
     },
   },
   {
-    name: "defaults.ts imports only node builtins",
+    name: "defaults.ts imports only node builtins and the event cap's value",
     files: only("defaults.ts"),
-    allow: [],
-    why: "defaults must stay a node: builtin leaf",
+    allow: ["typesys/event_limit"],
+    why: "defaults must stay a leaf: node: builtins, and typesys/event_limit, which imports nothing",
     samples: {
       file: "defaults.ts",
-      bad: ["diagnostics", "typesys", "index"],
-      good: [],
+      bad: ["diagnostics", "typesys", "typesys/json", "index"],
+      good: ["typesys/event_limit"],
     },
   },
   {

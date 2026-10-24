@@ -477,3 +477,35 @@ test("a pending step without a deadline, or with a null one, has none", () => {
   const w = fold(...START, pending("ask", 1, "r/ask/1"), pending("ask", 2, "r/ask/2", { deadline: null }));
   expect(nodeCalls(w, "ask").map((call) => call.deadline)).toEqual([null, null]);
 });
+
+test("events a resume frees from an orphan take commit go to takes already waiting, oldest wait first", () => {
+  // seq 2: s; 3: a starts; 4: a's inline commit holds s; 5, 6: b and c wait, nothing left to read;
+  // 7: the resume drops a's commit, so s goes to b.
+  const w = fold(
+    ...START,
+    send("msgs", "s"),
+    new NodeStartedRecord("a"),
+    takeCommit("a", [2]),
+    takeWait("b", "one"),
+    takeWait("c", "one"),
+    new RunResumedRecord(["a"], 0),
+  );
+  expect(w.calls.get("r/b")!.assigned).toEqual([2]);
+  expect(w.calls.get("r/c")!.assigned).toEqual([]);
+  expect(unreadEvents(w)).toEqual(new Map());
+  expect(wakeableNodes(w)).toEqual(["b"]);
+});
+
+test("events freed when a take's node settles without its commit go to waiting takes", () => {
+  const w = fold(
+    ...START,
+    send("msgs", "s"),
+    send("msgs", "t"),
+    new NodeStartedRecord("a"),
+    takeCommit("a", [2, 3]),
+    takeWait("b", "all"),
+    new NodeRoutedRecord("a", "go"),
+  );
+  expect(w.calls.get("r/b")!.assigned).toEqual([2, 3]);
+  expect(unreadEvents(w)).toEqual(new Map());
+});

@@ -29,7 +29,7 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { openSqlite, withWarnings } from "../../src/platform.ts";
 import { inspectRun, readRunIndex, RunIndexBusyError, type RunIndexRow, runLogPath, updateRunIndex } from "../../src/run.ts";
-import { emptyRunScan, foldRunScan, type RunScan, runScanFromJson, scanStatus } from "../../src/runtime/run_index.ts";
+import { emptyRunScan, foldRunScan, indexRows, type RunScan, runScanFromJson, scanStatus } from "../../src/runtime/run_index.ts";
 import { WaitsState } from "../../src/runtime/waits.ts";
 import { DEADLINE, runStart, sleepWait, send as sendTo, takeWait as takeWaitOn, WAIT_LOGS } from "./wait_logs.ts";
 import {
@@ -433,6 +433,38 @@ describe("updateRunIndex and readRunIndex", () => {
     expect(readRunIndex(runs)).toEqual([]);
     updateRunIndex(runs);
     expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([["run-1", "failed"]]);
+  });
+
+  test("a read takes the layout version and the rows from one snapshot, so a rebuild between them can't mix layouts", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", failedRun);
+    updateRunIndex(runs);
+    const path = join(runs, "index.sqlite");
+    const reader = openSqlite(path, { readonly: true });
+    try {
+      // Another yian version rebuilds the index between the version check and the rows' read.
+      const rebuild = () => {
+        const writer = openSqlite(path);
+        try {
+          writer.exec("PRAGMA busy_timeout = 0");
+          writer.exec("DROP TABLE runs; CREATE TABLE runs (run_id TEXT PRIMARY KEY, junk TEXT); PRAGMA user_version = 7");
+        } catch {
+          // The read's snapshot holds the file, so the rebuild waits for it.
+        } finally {
+          writer.close();
+        }
+      };
+      const racing: typeof reader = {
+        ...reader,
+        prepare: (sql) => {
+          if (sql.startsWith("SELECT")) rebuild();
+          return reader.prepare(sql);
+        },
+      };
+      expect(indexRows(racing).map((row) => row["run_id"])).toEqual(["run-1"]);
+    } finally {
+      reader.close();
+    }
   });
 
   test("an update waits a bounded time for a held lock, then throws; reads go on meanwhile", () => {

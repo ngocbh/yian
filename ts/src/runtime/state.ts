@@ -20,18 +20,22 @@ import { classifyPath } from "../compile/validation.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
+  CallClosed,
   NodeExpanded,
   NodeFailed,
   NodeRouted,
   NodeSkipped,
   NodeStarted,
   NodeSucceeded,
-  type RunCancelled,
+  NodeWaiting,
+  NodeWoken,
+  RunCancelled,
   RunFailed,
   RunResumed,
   RunStarted,
   type RunEvent,
   RunSucceeded,
+  RunWaiting,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
 import { ResolvedValue, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
@@ -43,10 +47,11 @@ import {
   type MemoryStack,
 } from "../memory/index.ts";
 import { sameMemoryScope } from "../memory/contracts.ts";
-import { ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
+import { type CompleteResult, ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
 import { BindingError } from "../nodes/binding.ts";
 import {
   type Binding,
+  type CallView,
   comparePaths,
   fileFieldsType,
   isExactly,
@@ -62,9 +67,10 @@ import {
   sameOptional,
   validateOutputContract,
 } from "../nodes/contracts.ts";
-import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { eventBytes, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
+  isInboxType,
   isRecord,
   jsTypeName,
   normalizeTypedFiles,
@@ -91,6 +97,7 @@ import {
   canonicalTyped,
   decodeRecord,
   encodeRecord,
+  InboxClosedRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
@@ -100,6 +107,8 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   type OutcomeCarriers,
   PoolCommitRecord,
   RecordEnvelope,
@@ -108,12 +117,18 @@ import {
   type RecordedTool,
   type RunLog,
   type RunParent,
+  RunCancelledRecord,
+  RunFailedRecord,
   type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
   type RunStopReason,
   RunStoppedRecord,
+  RunWaitingRecord,
+  requireRecordTime,
   SCHEMA_VERSION,
+  type TakeCommit,
+  type WaitEntry,
 } from "./log.ts";
 import {
   checkMemoryScope,
@@ -133,7 +148,16 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
-import { WaitsState } from "./waits.ts";
+import { ASK, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
+import {
+  applyWaitsRecord,
+  availableUnread,
+  type Call,
+  type CallStateKind,
+  nodeCalls,
+  WaitsState,
+  wakeableNodes,
+} from "./waits.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
 export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
@@ -230,6 +254,47 @@ export class NodeDataError extends Error {
     this.original = original;
     this.origin = origin;
   }
+}
+
+/** Why a host delivery (a send, complete, close or cancel) was refused. */
+export type DeliveryRefusal =
+  | "unknown_inbox"
+  | "not_started"
+  | "ended"
+  | "inbox_closed"
+  | "invalid_value"
+  | "too_large"
+  | "unknown_call"
+  | "call_settled"
+  | "not_host_call";
+
+/** A send, complete, close or cancel the run refuses; nothing was appended. */
+export class DeliveryRefused extends RangeError {
+  override name = "DeliveryRefused";
+  /** Why the delivery was refused. */
+  readonly reason: DeliveryRefusal;
+  /** The call's state for `call_settled`; `null` otherwise. */
+  readonly callState: CallStateKind | null;
+
+  /** Hold `reason` and the message; `options.cause` becomes the error's cause. */
+  constructor(
+    reason: DeliveryRefusal,
+    message: string,
+    options: { callState?: CallStateKind | null; cause?: unknown } = {},
+  ) {
+    super(message, Object.hasOwn(options, "cause") ? { cause: options.cause } : {});
+    this.reason = reason;
+    this.callState = options.callState ?? null;
+  }
+}
+
+/**
+ * Refuse a delivery to a run that has ended (`ended`) or whose run start is incomplete
+ * (`not_started`), in that order.
+ */
+function requireDeliverable(state: RunState): void {
+  if (state.result !== null) throw new DeliveryRefused("ended", "the run has ended");
+  if (!state.inputsCommitted) throw new DeliveryRefused("not_started", "the run hasn't started");
 }
 
 /** Mark one explicit live node-produced growth rejection. */
@@ -434,12 +499,14 @@ export interface PendingCommit {
   /** The pool key the value is written under. */
   readonly key: string;
   /**
-   * The value's canonical typed wire text; `null` for a derived commit until the success that
-   * accepts it (for an expansion commit, its spawner's `NodeExpanded`) rebuilds the value.
+   * The value's canonical typed wire text; `null` for a derived or take commit until the success
+   * that accepts it (for an expansion commit, its spawner's `NodeExpanded`) rebuilds the value.
    */
   readonly valueJson: string | null;
   /** A derived commit's sources (`PoolCommitRecord.from`), else `null`. */
   readonly from: ReadonlyMap<string, number> | null;
+  /** A take commit's inbox and consumed sends (`PoolCommitRecord.take`), else `null`. */
+  readonly take: TakeCommit | null;
   /** The spawner whose expansion wrote this commit for a child START, else `null`. */
   readonly spawner: string | null;
   /**
@@ -592,14 +659,16 @@ export function rebuildGrowth(
 }
 
 /**
- * The value a prepared record accepts into the pool, for a reader folding a log (`foldRunLog`):
- * a run-start commit's own value, or for a success, its commit's value (rebuilt for a derived
- * commit), with the commit's seq; `null` for any other record.
+ * The value a prepared record accepts, for a reader folding a log (`foldRunLog`): a run-start
+ * commit's or a send's own value, or for a success, its commit's value (rebuilt for a derived or
+ * take commit), with the commit's seq; `null` for any other record.
  */
 export function acceptedCommit(prepared: PreparedTransition): { seq: number; value: TypedValue } | null {
   const plan = prepared._plan;
-  // A run-start commit always holds its value.
-  if (plan.kind === "commit" && plan.initial) return { seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) };
+  // A run-start commit and a send always hold their values, and apply at once.
+  if (plan.kind === "commit" && (plan.initial || plan.send)) {
+    return { seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) };
+  }
   if (plan.kind !== "success") return null;
   const seq = (prepared.record as NodeSucceededRecord).commit;
   return { seq, value: normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson)) };
@@ -714,6 +783,7 @@ interface RunResumedDelta {
   readonly kind: "resumed";
   readonly retryNodeIds: readonly string[];
   readonly numWorkers: number;
+  readonly closedCalls: readonly string[];
 }
 
 /** Appending one canonical step to an in-flight node's steps. */
@@ -729,6 +799,31 @@ interface RunStoppedDelta {
   readonly nodeIds: readonly string[];
 }
 
+/** Moving an in-flight node to the waiting set. */
+interface NodeWaitingDelta {
+  readonly kind: "waiting";
+  readonly nodeId: string;
+}
+
+/** Moving a waiting node back in flight; `closedCalls` are the timed-out host calls it closes. */
+interface NodeWokenDelta {
+  readonly kind: "woken";
+  readonly nodeId: string;
+  readonly closedCalls: readonly string[];
+}
+
+/** Recording that every unsettled node waits; it changes nothing but the sequence. */
+interface RunWaitingDelta {
+  readonly kind: "runWaiting";
+  readonly nodeIds: readonly string[];
+}
+
+/** Closing an inbox; the waits fold applies it. */
+interface InboxClosedDelta {
+  readonly kind: "inboxClosed";
+  readonly inbox: string;
+}
+
 /**
  * One pool commit. A run-start commit (`initial`) applies at once; a node's waits for its success.
  * `valueJson` is the value's canonical typed wire text.
@@ -737,18 +832,29 @@ interface CommitPlan extends PlanAnchors {
   readonly kind: "commit";
   readonly nodeId: string;
   readonly key: string;
-  /** The value's canonical typed wire text, or `null` for a derived commit. */
+  /** The value's canonical typed wire text, or `null` for a derived or take commit. */
   readonly valueJson: string | null;
   readonly from: ReadonlyMap<string, number> | null;
+  readonly take: TakeCommit | null;
   readonly initial: boolean;
   /** Whether this is an expansion's commit for a child START, which waits under its key. */
   readonly expansion: boolean;
+  /** Whether this is a send to a START inbox, which applies at once to the inbox store. */
+  readonly send: boolean;
 }
 
-/** One dispatch, resume, step or stop. */
+/** One dispatch, resume, step, stop, wait, wake, run wait or inbox close. */
 interface FrontierPlan extends PlanAnchors {
   readonly kind: "frontier";
-  readonly delta: NodeStartedDelta | RunResumedDelta | NodeStepDelta | RunStoppedDelta;
+  readonly delta:
+    | NodeStartedDelta
+    | RunResumedDelta
+    | NodeStepDelta
+    | RunStoppedDelta
+    | NodeWaitingDelta
+    | NodeWokenDelta
+    | RunWaitingDelta
+    | InboxClosedDelta;
 }
 
 /** The touched coordinates of one successful output commit. */
@@ -761,6 +867,8 @@ interface SuccessDelta {
   readonly edgeHeads: readonly string[];
   readonly newlyReadyIds: readonly string[];
   readonly observerCommitAs: string | null;
+  /** The sends a take commit consumed, whose values leave the inbox store. */
+  readonly consumedEvents: readonly number[];
 }
 
 /**
@@ -803,10 +911,21 @@ interface RoutePlan extends PlanAnchors {
   readonly terminal: TerminalDelta | null;
 }
 
-/** One canonical failure. */
+/** One canonical failure; `closedCalls` are the open host calls it closes. */
 interface FailurePlan extends PlanAnchors {
   readonly kind: "failure";
   readonly failure: Failure;
+  readonly closedCalls: readonly string[];
+}
+
+/**
+ * A run ending with no completing node: a cancel, or a failure at quiescence with nodes waiting
+ * (`failure` set). `closedCalls` are the open host calls it closes.
+ */
+interface EndingPlan extends PlanAnchors {
+  readonly kind: "ending";
+  readonly failure: Failure | null;
+  readonly closedCalls: readonly string[];
 }
 
 /** The scalar authority of one flat deterministic expansion. */
@@ -856,7 +975,16 @@ interface BackwardPlan extends PlanAnchors {
 }
 
 /** Every plan kind a `PreparedTransition` carries. */
-type PreparedPlan = RunStartedPlan | CommitPlan | FrontierPlan | SuccessPlan | RoutePlan | FailurePlan | GrowthPlan | BackwardPlan;
+type PreparedPlan =
+  | RunStartedPlan
+  | CommitPlan
+  | FrontierPlan
+  | SuccessPlan
+  | RoutePlan
+  | FailurePlan
+  | EndingPlan
+  | GrowthPlan
+  | BackwardPlan;
 
 /**
  * One canonical record plus its already validated total state-change plan. Frozen.
@@ -1082,6 +1210,210 @@ export function prepareInitialCommit(state: RunState, key: string, value: unknow
 }
 
 /**
+ * Prepare a host's send of `event` to the top-level inbox `inbox`: a commit by the START under
+ * `<START>.<inbox>`, applied at once to the inbox store, never to the pool.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @param event The value, checked against `T`.
+ * @returns The canonical `PoolCommitRecord` and its plan, with no observers.
+ * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
+ *   such inbox; `inbox_closed` once it is closed; `invalid_value` when `event` fails `T` (the
+ *   `TypeCheckError` is the cause); `too_large` when its run-log JSON is over the run's
+ *   `MAX_EVENT_BYTES`.
+ */
+export function prepareSend(state: RunState, inbox: string, event: unknown): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareSend expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  requireDeliverable(state);
+  const element = inboxElementType(state, inbox);
+  if (element === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  if (state.waits.inboxes.get(inbox)?.closed === true) {
+    throw new DeliveryRefused("inbox_closed", `inbox ${reprText(inbox)} is closed`);
+  }
+  let wire: TypedWire;
+  try {
+    [wire] = canonicalTyped(event, element);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new DeliveryRefused("invalid_value", `inbox ${reprText(inbox)} refuses the event: ${error.message}`, {
+      cause: error,
+    });
+  }
+  const size = eventBytes(wire.value);
+  if (size > state.runDefaults.maxEventBytes) {
+    throw new DeliveryRefused("too_large", eventTooLarge(`the event to inbox ${reprText(inbox)}`, size, state));
+  }
+  return prepareRecord(state, new PoolCommitRecord(state.flow.startId, sendKey(state, inbox), wire));
+}
+
+/** The message for a value of `size` bytes over the run's `MAX_EVENT_BYTES`; `what` names it. */
+function eventTooLarge(what: string, size: number, state: RunState): string {
+  return `${what} is ${size} bytes, over the run's limit of ${state.runDefaults.maxEventBytes} (YIAN_MAX_EVENT_BYTES)`;
+}
+
+/** The pool key a send to `inbox` commits under: the START's id, a dot, then the inbox's name. */
+function sendKey(state: RunState, inbox: string): string {
+  return `${state.flow.startId}.${inbox}`;
+}
+
+/** The element type `T` of the START's top-level `Inbox(T)` param `name`, or `null` when it declares none. */
+function inboxElementType(state: RunState, name: string): Type | null {
+  const start = state.flow.nodes.get(state.flow.startId);
+  const type = (start?.params ?? []).find((param) => param.name === name)?.contract?.type;
+  return type !== undefined && isInboxType(type) ? type.element! : null;
+}
+
+/**
+ * Prepare a host's close of the top-level inbox `inbox`: later sends are refused, takes still read
+ * what is queued, and a take already waiting on it with nothing assigned is answered.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @returns The canonical `InboxClosedRecord` and its plan, with no observers; `null` when the
+ *   inbox is already closed.
+ * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
+ *   such inbox.
+ */
+export function prepareInboxClosed(state: RunState, inbox: string): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareInboxClosed expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  requireDeliverable(state);
+  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  if (state.waits.inboxes.get(inbox)?.closed === true) return null;
+  return prepareRecord(state, new InboxClosedRecord(inbox));
+}
+
+/**
+ * Prepare a host's cancel: `run_cancelled` ends the run, closing its open calls; every later record
+ * is refused.
+ *
+ * @param state The run's state.
+ * @returns The canonical `RunCancelledRecord` and its plan; its observers are `RunCancelled`, then
+ *   a `CallClosed` for each open host call (takes and sleeps get none).
+ * @throws TypeError when `state` has the wrong type.
+ * @throws DeliveryRefused `ended` once the run has a terminal result (a second cancel among them),
+ *   then `not_started` before its run start is complete.
+ */
+export function prepareRunCancelled(state: RunState): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunCancelled expects a RunState");
+  requireDeliverable(state);
+  return prepareRecord(state, new RunCancelledRecord());
+}
+
+/**
+ * Prepare ending the run failed at quiescence with nodes waiting, once a route proved END
+ * unreachable: whatever the waiting nodes do, the run can't succeed.
+ *
+ * @param state The run's state.
+ * @returns The canonical `RunFailedRecord` holding the terminal-unreachable failure, and its plan;
+ *   its observers are `RunFailed`, then a `CallClosed` for each open host call.
+ * @throws TypeError when `state` has the wrong type.
+ * @throws RangeError when no route proved END unreachable, or the run isn't quiescent with nodes
+ *   waiting and none wakeable.
+ */
+export function prepareRunFailed(state: RunState): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunFailed expects a RunState");
+  requireInitializedNonterminal(state);
+  const failure = state.terminalUnreachableFailure;
+  if (failure === null) throw new RangeError("RunFailed requires a route that proved END unreachable");
+  return prepareRecord(state, new RunFailedRecord(failure));
+}
+
+/**
+ * Prepare a host's answer to the pending host call `callId`: the `tool_result` step its node
+ * shapes (`Node.waitResultStep`), on that node, whether it waits or still runs.
+ *
+ * @param state The run's state.
+ * @param callId The call's id, as its `pending` step names it.
+ * @param result The answer: `{output}` or `{error}`.
+ * @returns The canonical `NodeStepRecord` and its plan, with no observers; `null` when the call
+ *   is already answered with exactly this step (a host's repeat).
+ * @throws TypeError when `state` or `callId` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
+ *   has the id (its node settled, or its handler hasn't returned `pending()`); `not_host_call` for
+ *   a take or sleep; `call_settled` (with the call's state) for an answered, timed-out or closed
+ *   call, unless it is an identical repeat; `invalid_value` when the node refuses the answer (the
+ *   `TypeCheckError` is the cause); `too_large` when the step is over the run's
+ *   `MAX_EVENT_BYTES`.
+ */
+export function prepareComplete(state: RunState, callId: string, result: CompleteResult): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareComplete expects a RunState");
+  if (typeof callId !== "string") throw new TypeError("call_id must be a string");
+  requireDeliverable(state);
+  const call = state.waits.calls.get(callId);
+  if (call === undefined) throw new DeliveryRefused("unknown_call", `the run has no pending call ${reprText(callId)}`);
+  if (call.tool === TAKE || call.tool === SLEEP) {
+    throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a ${call.tool}, which the run settles itself`);
+  }
+  const node = state.flow.nodes.get(call.nodeId)!;
+  const view = callView(state, call);
+  if (call.state !== "open") {
+    if (call.state === "answered" && sameStep(shapedRepeat(node, view, result), view.result)) return null;
+    const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
+    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${why}`, { callState: call.state });
+  }
+  let step: JsonObject;
+  try {
+    step = node.waitResultStep(view, result);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new DeliveryRefused("invalid_value", `call ${reprText(callId)} refuses the answer: ${error.message}`, { cause: error });
+  }
+  const size = eventBytes(step);
+  if (size > state.runDefaults.maxEventBytes) {
+    throw new DeliveryRefused("too_large", eventTooLarge(`the answer to ${reprText(callId)}`, size, state));
+  }
+  return prepareNodeStep(state, call.nodeId, step);
+}
+
+/** The step `node` shapes for a repeated answer, or `null` when it refuses the answer. */
+function shapedRepeat(node: Node, view: CallView, result: CompleteResult): JsonObject | null {
+  try {
+    return node.waitResultStep(view, result);
+  } catch (error) {
+    if (error instanceof TypeCheckError) return null;
+    throw error;
+  }
+}
+
+/** Whether two steps have the same canonical JSON; `null` matches nothing. */
+function sameStep(a: Readonly<JsonObject> | null, b: Readonly<JsonObject> | null): boolean {
+  return a !== null && b !== null && logJson(canonicalSeed(a)[0]) === logJson(canonicalSeed(b)[0]);
+}
+
+/** `call` as its node reads it: its state, closing reason, answer and deadline. */
+function callView(state: RunState, call: Call): CallView {
+  return Object.freeze({
+    callId: call.callId,
+    tool: call.tool,
+    state: call.state,
+    closedReason: call.closedReason,
+    result: callResultStep(state, call.callId),
+    deadline: call.deadline,
+  });
+}
+
+/**
+ * Return the `tool_result` step that answered the registered call `callId`, as its node recorded
+ * it; `null` when the call is unknown or no step answered it (it is open, closed, timed out, or a
+ * take answered by its events).
+ */
+export function callResultStep(state: RunState, callId: string): Readonly<JsonObject> | null {
+  const call = state.waits.calls.get(callId);
+  if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
+  const steps = state.nodeSteps.get(call.nodeId) ?? [];
+  return (
+    steps.findLast((step) => step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey) ?? null
+  );
+}
+
+/**
  * Commit the run start's commits from `pool`, right after `RunStarted`: its system values in key
  * order, then its START inputs.
  *
@@ -1137,6 +1469,7 @@ export function preparePoolCommit(
   if (commitAs === "") throw new NodeDataError(new RangeError("commit_as must be non-empty when supplied"));
   requireInitializedNonterminal(state);
   requireCommittingNode(state, nodeId);
+  requireValueCommitNode(state, nodeId);
 
   const node = state.flow.nodes.get(nodeId)!;
   const nodeTarget: unknown = node.commitAs;
@@ -1169,6 +1502,28 @@ export function preparePoolCommit(
 }
 
 /**
+ * Prepare an in-flight take node's commit of the events it takes, `commit`, under its target. Its
+ * success (`prepareNodeSucceeded`, with no `output`) rebuilds the value `{events, closed}` from
+ * the inbox store.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight and no pending commit.
+ * @param nodeId The take node.
+ * @param commit The inbox, the send seqs it consumes in order, and whether it saw the inbox closed.
+ * @returns The canonical `PoolCommitRecord` and its plan, with no observers.
+ * @throws TypeError when `state` or `nodeId` has the wrong type.
+ * @throws RangeError when the node isn't an in-flight take, or the commit isn't the one the take's
+ *   call or the inbox allows (see `validateTakeCommit`).
+ */
+export function prepareTakeCommit(state: RunState, nodeId: string, commit: TakeCommit): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareTakeCommit expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  requireInitializedNonterminal(state);
+  const node = state.flow.nodes.get(nodeId);
+  if (node === undefined) throw new RangeError(`take node ${reprText(nodeId)} does not exist in the flow`);
+  return prepareRecord(state, new PoolCommitRecord(nodeId, node.commitAs ?? nodeId, null, { take: commit }));
+}
+
+/**
  * Prepare accepting an in-flight node's pending commit and its newly ready successors.
  *
  * @param state An initialized nonterminal state with `nodeId` in flight and its commit pending.
@@ -1195,10 +1550,11 @@ export function prepareNodeSucceeded(
   requireSucceedingNode(state, nodeId);
   const pending = state.pendingCommits.get(nodeId);
   if (pending === undefined) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} has no pending pool_commit`);
-  if (pending.valueJson === null && !Object.hasOwn(options, "output")) {
+  if (pending.valueJson === null && pending.take === null && !Object.hasOwn(options, "output")) {
     throw new TypeError(`NodeSucceeded of derived node ${reprText(nodeId)} needs the value it evaluated to (output)`);
   }
-  const derived = pending.valueJson === null || pending.spawner !== null;
+  // A take commit holds no value either, but its node isn't derived: its capture is recorded.
+  const derived = (pending.valueJson === null && pending.take === null) || pending.spawner !== null;
   return prepareSuccessTransition(
     state,
     new NodeSucceededRecord(nodeId, pending.seq, {
@@ -1273,12 +1629,14 @@ export function prepareNodeFailed(
 /**
  * Prepare a recovery segment from the state's ordered unfinished starts.
  *
- * The retry list comes only from the insertion-ordered `state.inFlight`; the caller chooses only
- * the worker count of the new segment.
+ * The retry list comes only from the insertion-ordered `state.inFlight` (a waiting node isn't in
+ * flight, so it isn't retried), and the closed calls are the retried agents' open calls; the
+ * caller chooses only the worker count of the new segment.
  *
  * @param state An initialized nonterminal state rebuilt through a complete log prefix.
  * @param options.numWorkers The exact non-negative worker count; zero selects serial execution.
- * @returns The canonical `RunResumedRecord`, whose retries keep dispatch order.
+ * @returns The canonical `RunResumedRecord`, whose retries keep dispatch order, and its observers:
+ *   `RunResumed`, then a `CallClosed` for each closed call.
  * @throws TypeError when `state` has the wrong type or the worker count isn't a safe integer.
  * @throws RangeError when the worker count is negative, or the state is uninitialized or terminal.
  */
@@ -1288,7 +1646,7 @@ export function prepareRunResumed(state: RunState, options: { numWorkers: number
   if (!Number.isSafeInteger(numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
   if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
   requireInitializedNonterminal(state);
-  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers));
+  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers, retriedAgentCalls(state)));
 }
 
 /**
@@ -1308,6 +1666,64 @@ export function prepareRunStopped(state: RunState, reason: RunStopReason, messag
   if (!isExactly(state, RunState)) throw new TypeError("prepareRunStopped expects a RunState");
   requireInitializedNonterminal(state);
   return prepareRecord(state, new RunStoppedRecord(reason, message, [...state.inFlight]));
+}
+
+/**
+ * Prepare moving an in-flight node to the waiting set: it holds no worker until `node_woken`.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight and no pending commit.
+ * @param nodeId The node whose evaluation ended waiting.
+ * @param options.callIds Every call the node waits on: each open call it registered since its
+ *   last wake, and the call `waits` registers.
+ * @param options.waits The take or sleep call this record registers, at most one; none by default.
+ * @returns The canonical `NodeWaitingRecord`, its plan and its `NodeWaiting` observer.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws RangeError when the record breaks a wait rule (see `validateNodeWaiting`).
+ */
+export function prepareNodeWaiting(
+  state: RunState,
+  nodeId: string,
+  options: { callIds: readonly string[]; waits?: readonly WaitEntry[] },
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWaiting expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  return prepareRecord(state, new NodeWaitingRecord(nodeId, options.callIds, { waits: options.waits ?? [] }));
+}
+
+/**
+ * Prepare moving a waiting node back in flight, timing out `timedOut` (calls whose deadline the
+ * engine saw pass; the reducer reads no clock).
+ *
+ * @param state An initialized nonterminal state in which `nodeId` waits.
+ * @param nodeId The waiting node.
+ * @param timedOut Open calls of the node with a deadline; none by default.
+ * @returns The canonical `NodeWokenRecord`, its plan and its observers: `NodeWoken`, then a
+ *   `CallClosed` for each timed-out host call.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws RangeError when the node isn't waiting, a timed-out id isn't an open call of it with a
+ *   deadline, or it still waits on an open call.
+ */
+export function prepareNodeWoken(state: RunState, nodeId: string, timedOut: readonly string[] = []): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWoken expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  return prepareRecord(state, new NodeWokenRecord(nodeId, timedOut));
+}
+
+/**
+ * Prepare recording that the run waits: nothing runs or is ready, and every unsettled node waits
+ * on an open call.
+ *
+ * @returns The canonical `RunWaitingRecord` naming the waiting nodes in `node_waiting` order, its
+ *   plan and its `RunWaiting` observer.
+ * @throws TypeError when `state` has the wrong type.
+ * @throws RangeError when a node is in flight or ready, none waits, one is wakeable, or the last
+ *   frontier record is already a `run_waiting`.
+ */
+export function prepareRunWaiting(state: RunState): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunWaiting expects a RunState");
+  requireInitializedNonterminal(state);
+  requireWaitingQuiescence(state, "RunWaiting");
+  return prepareRecord(state, new RunWaitingRecord([...state.waits.waiting.keys()]));
 }
 
 /** The post-terminal records `prepareRecord` hands to the backward reducer. */
@@ -1348,10 +1764,18 @@ export function prepareRecord(
   requireInitializedNonterminal(state);
 
   if (isExactly(record, PoolCommitRecord)) {
-    if (record.take !== null) throw new TypeError("unsupported pool_commit form for state preparation: take");
     if (!state.inputsCommitted) {
       validateInitialCommit(state, record);
       return prepareCommitTransition(state, record, true);
+    }
+    if (record.take !== null) {
+      validateTakeCommit(state, record);
+      return prepareCommitTransition(state, record, false);
+    }
+    // `<START>.<name>` can't be a node id (ids hold no dot), so the prefix alone picks a send.
+    if (record.key.startsWith(sendKey(state, ""))) {
+      validateSend(state, record);
+      return prepareCommitTransition(state, record, false, false, true);
     }
     // A key the flow doesn't hold yet is a child START the spawner's expansion is about to add.
     const expansion = !state.flow.nodes.has(record.key) && state.flow.nodes.get(record.nodeId)?.isSpawner === true;
@@ -1361,6 +1785,9 @@ export function prepareRecord(
   }
   if (!state.inputsCommitted) {
     throw new RangeError("the run start is incomplete: only its pool_commit records may follow RunStarted");
+  }
+  if (isExactly(record, RunCancelledRecord) || isExactly(record, RunFailedRecord)) {
+    return prepareEndingTransition(state, record);
   }
   if (isExactly(record, NodeSucceededRecord)) {
     validateSuccessCommit(state, record);
@@ -1385,6 +1812,14 @@ export function prepareRecord(
     validateNodeStep(state, record);
   } else if (isExactly(record, RunStoppedRecord)) {
     validateRunStopped(state, record);
+  } else if (isExactly(record, NodeWaitingRecord)) {
+    validateNodeWaiting(state, record);
+  } else if (isExactly(record, NodeWokenRecord)) {
+    validateNodeWoken(state, record);
+  } else if (isExactly(record, RunWaitingRecord)) {
+    validateRunWaiting(state, record);
+  } else if (isExactly(record, InboxClosedRecord)) {
+    validateInboxClosed(state, record);
   } else {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
@@ -1404,8 +1839,13 @@ export function prepareRecord(
     observers = [new NodeStarted({ nodeId: canonical.nodeId })];
   } else if (isExactly(canonical, RunResumedRecord)) {
     validateRunResumed(state, canonical);
-    delta = { kind: "resumed", retryNodeIds: canonical.retryNodeIds, numWorkers: canonical.numWorkers };
-    observers = [new RunResumed()];
+    delta = {
+      kind: "resumed",
+      retryNodeIds: canonical.retryNodeIds,
+      numWorkers: canonical.numWorkers,
+      closedCalls: canonical.closedCalls,
+    };
+    observers = [new RunResumed(), ...canonical.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(canonical, NodeStepRecord)) {
     validateNodeStep(state, canonical);
     // The decoded copy keeps the applied step apart from the returned record.
@@ -1415,6 +1855,26 @@ export function prepareRecord(
   } else if (isExactly(canonical, RunStoppedRecord)) {
     validateRunStopped(state, canonical);
     delta = { kind: "stopped", nodeIds: canonical.nodeIds };
+    observers = [];
+  } else if (isExactly(canonical, NodeWaitingRecord)) {
+    validateNodeWaiting(state, canonical);
+    delta = { kind: "waiting", nodeId: canonical.nodeId };
+    observers = [new NodeWaiting({ nodeId: canonical.nodeId, callIds: canonical.callIds })];
+  } else if (isExactly(canonical, NodeWokenRecord)) {
+    validateNodeWoken(state, canonical);
+    const closedCalls = hostCalls(state, canonical.timedOut);
+    delta = { kind: "woken", nodeId: canonical.nodeId, closedCalls };
+    observers = [
+      new NodeWoken({ nodeId: canonical.nodeId, timedOut: canonical.timedOut }),
+      ...closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
+    ];
+  } else if (isExactly(canonical, RunWaitingRecord)) {
+    validateRunWaiting(state, canonical);
+    delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
+    observers = [new RunWaiting({ nodeIds: canonical.nodeIds })];
+  } else if (isExactly(canonical, InboxClosedRecord)) {
+    validateInboxClosed(state, canonical);
+    delta = { kind: "inboxClosed", inbox: canonical.inbox };
     observers = [];
   } else {
     // An exhaustive codec invariant.
@@ -1438,12 +1898,16 @@ export function prepareRecord(
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
 }
 
-/** Freeze one commit's plan and its canonical public record; `initial` for a run-start commit. */
+/**
+ * Freeze one commit's plan and its canonical public record; `initial` for a run-start commit,
+ * `expansion` for a spawner's commit for a child START, `send` for a send to an inbox.
+ */
 function prepareCommitTransition(
   state: RunState,
   record: PoolCommitRecord,
   initial: boolean,
   expansion = false,
+  send = false,
 ): PreparedTransition {
   const runId = state.runId;
   // Established by the initialized-state check.
@@ -1468,8 +1932,10 @@ function prepareCommitTransition(
     key: canonical.key,
     valueJson: canonical.value === null ? null : logJson(canonical.value),
     from: canonical.from,
+    take: canonical.take,
     initial,
     expansion,
+    send,
   });
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
 }
@@ -1487,7 +1953,10 @@ function prepareSuccessTransition(
   // only for a run that learns, since its value was admitted with the expansion.
   let capture =
     pending.spawner !== null && state.trace !== null ? rebuildDerivedRecord(state, record.nodeId, new Map()).capture : null;
-  if (pending.valueJson === null) {
+  if (pending.take !== null) {
+    // A take commit holds pointers; its value is the events it consumed, rebuilt from the inbox store.
+    pending = { ...pending, valueJson: takeValueJson(state, pending) };
+  } else if (pending.valueJson === null) {
     // A derived commit: the pool now holds what its binding read.
     const rebuilt = rebuildCommit(state, record.nodeId, pending.key, pending.from!);
     const valueJson = rebuilt.valueJson;
@@ -1641,6 +2110,7 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
   if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeFailedRecord is not in canonical wire form");
 
   const failure = canonical.failure;
+  const closedCalls = openHostCalls(state);
   const startId = state.flow.startId;
   const endId = state.flow.endId;
   const plan: FailurePlan = Object.freeze({
@@ -1654,8 +2124,52 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
     endNode: state.flow.nodes.get(endId) ?? null,
     traceDelta: prepareRecordTrace(state, envelope, { terminalSucceeded: false, terminalFailure: failure }),
     failure,
+    closedCalls,
   });
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, failureObservers(failure));
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, failureObservers(failure, closedCalls));
+}
+
+/**
+ * Freeze one ending record, a cancel or a failure at quiescence with nodes waiting, and its
+ * canonical public record.
+ */
+function prepareEndingTransition(state: RunState, record: RunCancelledRecord | RunFailedRecord): PreparedTransition {
+  if (isExactly(record, RunFailedRecord)) validateRunFailed(state, record);
+  const runId = state.runId;
+  // Established by the initialized-state check.
+  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
+  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
+  const envelope = decodeRecord(envelopeJson);
+  const canonical = envelope.record;
+  if (!isExactly(canonical, RunCancelledRecord) && !isExactly(canonical, RunFailedRecord)) {
+    throw new TypeError("ending envelope decoded to a different record kind");
+  }
+  const failure = isExactly(canonical, RunFailedRecord) ? canonical.failure : null;
+  const closedCalls = openHostCalls(state);
+  const startId = state.flow.startId;
+  const endId = state.flow.endId;
+  const plan: EndingPlan = Object.freeze({
+    kind: "ending",
+    originatingState: state,
+    originatingFlow: state.flow,
+    envelopeJson,
+    startId,
+    startNode: state.flow.nodes.get(startId)!,
+    endId,
+    endNode: state.flow.nodes.get(endId) ?? null,
+    traceDelta: prepareRecordTrace(state, envelope),
+    failure,
+    closedCalls,
+  });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, materializeEnding(plan).observers);
+}
+
+/** The open host calls of the run, in registration order: those a terminal record closes. */
+function openHostCalls(state: RunState): string[] {
+  return hostCalls(
+    state,
+    [...state.waits.calls.values()].filter((call) => call.state === "open").map((call) => call.callId),
+  );
 }
 
 /**
@@ -2053,6 +2567,7 @@ const PLAN_KINDS: ReadonlySet<string> = new Set([
   "success",
   "route",
   "failure",
+  "ending",
   "growth",
   "backward",
 ]);
@@ -2081,6 +2596,7 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
   const traceDelta = prepared._plan.traceDelta;
   if (kind === "backward") requirePostterminalTraceDelta(state, traceDelta);
   else if (kind === "frontier") requireFrontierTraceDelta(state, prepared);
+  else if (kind === "ending") requireEndingTraceDelta(state, prepared);
   if (traceDelta !== null) traceDelta.validateOrigin(state.trace);
   let observers: readonly RunEvent[];
   switch (prepared._plan.kind) {
@@ -2102,6 +2618,9 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
     case "failure":
       observers = commitFailure(log, state, prepared);
       break;
+    case "ending":
+      observers = commitEnding(log, state, prepared);
+      break;
     case "growth":
       observers = commitGrowth(log, state, prepared);
       break;
@@ -2112,6 +2631,8 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
       throw new TypeError("unsupported prepared transition plan");
   }
   if (traceDelta !== null) state.trace = traceDelta.apply();
+  // Backward records come after the terminal result and change no wait.
+  if (kind !== "backward") applyWaitsRecord(state.waits, { seq: prepared.expectedSequence, record: prepared.record });
   return observers;
 }
 
@@ -2218,7 +2739,9 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
     delta.sequence !== prepared.expectedSequence ||
     delta.initialized !== null ||
     delta.started !== null ||
-    delta.resumed !== false
+    delta.resumed !== false ||
+    delta.parked !== null ||
+    delta.unparked !== null
   ) {
     throw new RangeError("outcome trace cannot change initialization or dispatch authority");
   }
@@ -2433,7 +2956,8 @@ function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransi
 
 /**
  * Validate, append and apply one pool commit: a run-start commit writes the pool at once (the
- * START inputs' also make START ready); a node's waits on the node for its success.
+ * START inputs' also make START ready); a send enters the inbox store at once; a node's waits on
+ * the node for its success.
  */
 function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
@@ -2453,12 +2977,15 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   const input = startInputs ? (canonicalSeed(value!.toObject())[1] as JsonObject) : null;
 
   appendAndVerify(log, prepared);
-  if (!plan.initial) {
+  if (plan.send) {
+    state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
+  } else if (!plan.initial) {
     const pending: PendingCommit = {
       seq: prepared.expectedSequence,
       key: plan.key,
       valueJson: plan.valueJson,
       from: plan.from,
+      take: plan.take,
       spawner: plan.expansion ? plan.nodeId : null,
       admitted: false,
     };
@@ -2478,7 +3005,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   return [];
 }
 
-/** Validate, append and apply one sparse dispatch, recovery, step or stop delta. */
+/** Validate, append and apply one sparse dispatch, recovery, step, stop, wait, wake, run-wait or close delta. */
 function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
   if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
@@ -2488,10 +3015,14 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       isExactly(record, NodeStartedRecord) ||
       isExactly(record, RunResumedRecord) ||
       isExactly(record, NodeStepRecord) ||
-      isExactly(record, RunStoppedRecord)
+      isExactly(record, RunStoppedRecord) ||
+      isExactly(record, NodeWaitingRecord) ||
+      isExactly(record, NodeWokenRecord) ||
+      isExactly(record, RunWaitingRecord) ||
+      isExactly(record, InboxClosedRecord)
     )
   ) {
-    throw new TypeError("frontier plan requires a dispatch, resume, step or stop record");
+    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake, run-wait or close record");
   }
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
@@ -2510,7 +3041,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     ) {
       throw new RangeError("frontier resume delta disagrees with its record");
     }
-    observers = [new RunResumed()];
+    observers = [new RunResumed(), ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(record, NodeStepRecord) && delta.kind === "step") {
     if (delta.nodeId !== record.nodeId || logJson(delta.step) !== logJson(record.step)) {
       throw new RangeError("frontier step delta disagrees with its record");
@@ -2520,6 +3051,21 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     if (!sameItems(delta.nodeIds, record.nodeIds)) {
       throw new RangeError("frontier stop delta disagrees with its record");
     }
+    observers = [];
+  } else if (isExactly(record, NodeWaitingRecord) && delta.kind === "waiting") {
+    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wait delta disagrees with its record");
+    observers = [new NodeWaiting({ nodeId: record.nodeId, callIds: record.callIds })];
+  } else if (isExactly(record, NodeWokenRecord) && delta.kind === "woken") {
+    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wake delta disagrees with its record");
+    observers = [
+      new NodeWoken({ nodeId: record.nodeId, timedOut: record.timedOut }),
+      ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
+    ];
+  } else if (isExactly(record, RunWaitingRecord) && delta.kind === "runWaiting") {
+    if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
+    observers = [new RunWaiting({ nodeIds: record.nodeIds })];
+  } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
+    if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
     observers = [];
   } else {
     throw new TypeError("frontier record and prevalidated delta disagree");
@@ -2560,6 +3106,20 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     case "stopped":
       state.lastStopSequence = prepared.expectedSequence;
       break;
+    case "waiting":
+      // The waits fold moves it to the waiting set; its start count, steps and calls stay.
+      state.inFlight.delete(delta.nodeId);
+      state.acceptedStarts.delete(delta.nodeId);
+      break;
+    case "woken":
+      // The wake is the invocation's start from here on, so a later crash counts; the start count
+      // doesn't move, since no new start was recorded.
+      state.inFlight.add(delta.nodeId);
+      state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
+      break;
+    case "runWaiting":
+    case "inboxClosed":
+      break;
   }
   state.nextSequence = prepared.expectedSequence + 1;
   return observers;
@@ -2593,6 +3153,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.inFlight.delete(delta.nodeId);
   state.acceptedStarts.delete(delta.nodeId);
   forgetNodeSteps(state, delta.nodeId);
+  for (const seq of delta.consumedEvents) state.inboxEvents.delete(seq);
   for (const nodeId of delta.newlyReadyIds) state.ready.push(nodeId);
   if (apply.terminal !== null) state.result = apply.terminal.result;
   state.nextSequence = prepared.expectedSequence + 1;
@@ -2658,7 +3219,7 @@ function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransitio
   if (record.failure !== plan.failure) throw new RangeError("failure record and prevalidated authority disagree");
   const nodeId: unknown = plan.failure.nodeId;
   if (typeof nodeId !== "string" || !nodeId) throw new RangeError("failure plan has no executing node");
-  const apply = materializeFailure(plan.failure);
+  const apply = materializeFailure(plan.failure, plan.closedCalls);
 
   appendAndVerify(log, prepared);
   state.nodeState.set(nodeId, NodeState.TAKEN);
@@ -2666,6 +3227,29 @@ function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.acceptedStarts.delete(nodeId);
   state.pendingCommits.delete(nodeId);
   forgetNodeSteps(state, nodeId);
+  state.result = apply.result;
+  state.nextSequence = prepared.expectedSequence + 1;
+  return apply.observers;
+}
+
+/** Validate, append and install one ending record: the run's terminal result. */
+function commitEnding(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
+  const plan = prepared._plan;
+  if (plan.kind !== "ending") throw new TypeError("ending commit requires an ending plan");
+  const record = prepared.record;
+  if (!isExactly(record, RunCancelledRecord) && !isExactly(record, RunFailedRecord)) {
+    throw new TypeError("ending plan requires a RunCancelledRecord or RunFailedRecord");
+  }
+  requirePreparedOrigin(state, plan);
+  requireInitializedNonterminal(state);
+  requireAuthorityCoordinates(log, state, prepared, true);
+  requireUnchangedRecord(prepared, plan.envelopeJson);
+  if ((isExactly(record, RunFailedRecord) ? record.failure : null) !== plan.failure) {
+    throw new RangeError("ending record and prevalidated failure disagree");
+  }
+  const apply = materializeEnding(plan);
+
+  appendAndVerify(log, prepared);
   state.result = apply.result;
   state.nextSequence = prepared.expectedSequence + 1;
   return apply.observers;
@@ -2709,7 +3293,9 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
     delta.originatingTrace !== state.trace ||
     !Number.isSafeInteger(delta.sequence) ||
     delta.sequence !== state.nextSequence ||
-    delta.resumed !== false
+    delta.resumed !== false ||
+    delta.parked !== null ||
+    delta.unparked !== null
   ) {
     throw new RangeError(message);
   }
@@ -2737,7 +3323,7 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
   }
 }
 
-/** Permit only the canonical dispatch, resume, step or stop trace change before append. */
+/** Permit only the canonical dispatch, resume, step, stop, wait, wake, run-wait or close trace change before append. */
 function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition): void {
   const delta = prepared._plan.traceDelta;
   const record = prepared.record;
@@ -2772,12 +3358,26 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace step must only advance the accepted sequence");
     }
-  } else if (isExactly(record, RunStoppedRecord)) {
+  } else if (isExactly(record, RunStoppedRecord) || isExactly(record, RunWaitingRecord) || isExactly(record, InboxClosedRecord)) {
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace stop must only advance the accepted sequence");
     }
+  } else if (isExactly(record, NodeWaitingRecord)) {
+    if (delta.started !== null || delta.resumed !== false || delta.parked !== record.nodeId) {
+      throw new RangeError("frontier trace wait must park its node's start");
+    }
+  } else if (isExactly(record, NodeWokenRecord)) {
+    if (delta.started !== null || delta.resumed !== false || delta.unparked !== record.nodeId) {
+      throw new RangeError("frontier trace wake must bring back its node's parked start");
+    }
   } else {
-    throw new RangeError("frontier trace requires a dispatch, resume, step or stop record");
+    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait or close record");
+  }
+  if (!isExactly(record, NodeWaitingRecord) && delta.parked !== null) {
+    throw new RangeError("only a wait can park a start");
+  }
+  if (!isExactly(record, NodeWokenRecord) && delta.unparked !== null) {
+    throw new RangeError("only a wake can bring back a parked start");
   }
   const singles = [
     delta.initialized,
@@ -2799,6 +3399,61 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     lists.some((values) => !Array.isArray(values) || values.length !== 0)
   ) {
     throw new RangeError("frontier trace cannot change outcome or terminal history");
+  }
+}
+
+/**
+ * Permit only an ending's trace change before append: the sequence, plus for a `run_failed` the
+ * failed terminal from the causal route occurrence.
+ */
+function requireEndingTraceDelta(state: RunState, prepared: PreparedTransition): void {
+  const delta = prepared._plan.traceDelta;
+  const trace = state.trace;
+  if (trace === null) {
+    if (delta !== null) throw new RangeError("an unretained ending cannot carry a trace delta");
+    return;
+  }
+  if (!isExactly(delta, TraceDelta) || delta.originatingTrace !== trace || delta.sequence !== state.nextSequence) {
+    throw new RangeError("ending trace delta requires its exact accepted sequence");
+  }
+  const singles = [
+    delta.initialized,
+    delta.started,
+    delta.parked,
+    delta.unparked,
+    delta.occurrence,
+    delta.handler,
+    delta.material,
+    delta.writer,
+    delta.systemValue,
+    delta.consumedConnection,
+    delta.boundaryUpdate,
+    delta.rootStartSource,
+    delta.rootWriter,
+    delta.causalRouteSource,
+  ];
+  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
+  if (
+    delta.resumed !== false ||
+    singles.some((value) => value !== null) ||
+    lists.some((values) => !Array.isArray(values) || values.length !== 0)
+  ) {
+    throw new RangeError("ending trace can only install its terminal");
+  }
+  const record = prepared.record;
+  if (!isExactly(record, RunFailedRecord)) {
+    if (delta.terminal !== null) throw new RangeError("a cancel installs no terminal trace");
+    return;
+  }
+  const terminal = delta.terminal;
+  if (
+    !isExactly(terminal, TraceTerminal) ||
+    terminal.succeeded ||
+    trace.causalRouteSource === null ||
+    !sameOptional(terminal.source, trace.causalRouteSource, sameSource) ||
+    !sameOptional(terminal.failure, record.failure, sameFailure)
+  ) {
+    throw new RangeError("a run failure's terminal trace disagrees with its causal route occurrence");
   }
 }
 
@@ -2983,6 +3638,9 @@ function requireInitialized(state: RunState): void {
   ) {
     throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
   }
+  if ([...state.waits.waiting.keys()].some((nodeId) => state.inFlight.has(nodeId) || !state.nodeStarts.has(nodeId))) {
+    throw new RangeError("a waiting node must have a start count and not be in flight");
+  }
   if (
     [...state.crashedAttempts].some(
       ([nodeId, count]) => typeof nodeId !== "string" || !Number.isSafeInteger(count) || count < 1,
@@ -3023,6 +3681,9 @@ function requireInitialized(state: RunState): void {
       state.trace.nextSequence !== state.nextSequence
     ) {
       throw new RangeError("run-state trace disagrees with recorded authority");
+    }
+    if (!sameIds(state.trace._parked, state.waits.waiting.keys())) {
+      throw new RangeError("run-state trace parks other starts than the waiting nodes");
     }
   } else if (state.trace !== null) {
     throw new RangeError("trace requires recorded learning");
@@ -3105,13 +3766,23 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
       throw new RangeError(`RunResumed retry node ${reprText(nodeId)} must have UNKNOWN disposition`);
     }
   }
-  // No record registers a call yet, so a resume has no open call to close.
-  if (record.closedCalls.length > 0) {
+  const closedCalls = retriedAgentCalls(state);
+  if (!sameItems(record.closedCalls, closedCalls)) {
     throw new RangeError(
       "RunResumedRecord closed_calls must exactly equal the retried nodes' open calls: " +
-        `expected [], found ${writeAsText([...record.closedCalls])}`,
+        `expected ${writeAsText(closedCalls)}, found ${writeAsText([...record.closedCalls])}`,
     );
   }
+}
+
+/**
+ * The open calls a resume closes, in registration order: those of retried (in-flight) nodes that
+ * make no direct host tool call, the agents'. A TOOL node's re-run reuses its call instead.
+ */
+function retriedAgentCalls(state: RunState): string[] {
+  return [...state.waits.calls.values()]
+    .filter((call) => call.state === "open" && state.inFlight.has(call.nodeId) && state.flow.nodes.get(call.nodeId)?.hostToolCall() === null)
+    .map((call) => call.callId);
 }
 
 /** Require a stop record to name the exact ordered in-flight nodes. */
@@ -3137,7 +3808,154 @@ function validateRunStopped(state: RunState, record: RunStoppedRecord): void {
   }
 }
 
-/** Require a step record to name an existing unknown in-flight node and be its next step. */
+/** The host calls among `callIds`: the registered calls whose tool is neither take nor sleep, in order. */
+function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
+  return [...callIds].filter((callId) => {
+    const tool = state.waits.calls.get(callId)?.tool;
+    return tool !== undefined && tool !== TAKE && tool !== SLEEP;
+  });
+}
+
+/**
+ * Require a wait record to move an in-flight node with no pending commit to the waiting set: its
+ * `waits` entry (a take or sleep TOOL node's own call, not yet registered; a take's inbox declared,
+ * open and with nothing unread a take may read), and `call_ids` naming exactly calls of the node
+ * registered since its last wake, not closed, including every open one.
+ */
+function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
+  const { nodeId } = record;
+  const node = state.flow.nodes.get(nodeId);
+  if (node === undefined) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} does not exist in the flow`);
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeWaiting node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} is not in-flight`);
+  requireNoPendingCommit(state, nodeId, "NodeWaiting");
+  if (record.steerInbox !== null) throw new RangeError("NodeWaiting steer_inbox is only for agents, which don't wait yet");
+  const w = state.waits;
+  const toolId = node.hostToolCall()?.toolId ?? null;
+  for (const entry of record.waits) {
+    if (toolId !== TAKE && toolId !== SLEEP) {
+      throw new RangeError(`NodeWaiting node ${reprText(nodeId)} registers a wait but is neither a take nor a sleep`);
+    }
+    if (entry.tool !== toolId) {
+      throw new RangeError(`NodeWaiting wait entry tool ${reprText(entry.tool)} isn't the node's tool ${reprText(toolId)}`);
+    }
+    if (entry.callId !== toolCallId(state.runId!, nodeId)) {
+      throw new RangeError(`NodeWaiting wait entry call_id ${reprText(entry.callId)} isn't the node's call id`);
+    }
+    if (w.calls.has(entry.callId)) {
+      throw new RangeError(`call ${reprText(entry.callId)} is already registered; it belongs to its node until the node settles`);
+    }
+    if (entry.inbox !== null) {
+      if (inboxElementType(state, entry.inbox) === null) {
+        throw new RangeError(`NodeWaiting wait entry inbox ${reprText(entry.inbox)} is no inbox the START declares`);
+      }
+      if (w.inboxes.get(entry.inbox)?.closed === true) {
+        throw new RangeError(`a take can't wait on closed inbox ${reprText(entry.inbox)}`);
+      }
+      if (availableUnread(w, entry.inbox).length > 0) {
+        throw new RangeError(`a take can't wait while inbox ${reprText(entry.inbox)} holds unread events it may read`);
+      }
+    }
+  }
+  const registering = new Set(record.waits.map((entry) => entry.callId));
+  const lastWoken = w._lastWoken.get(nodeId);
+  for (const callId of record.callIds) {
+    if (registering.has(callId)) continue;
+    const call = w.calls.get(callId);
+    if (call === undefined) throw new RangeError(`NodeWaiting call ${reprText(callId)} is not registered`);
+    if (call.nodeId !== nodeId) {
+      throw new RangeError(`NodeWaiting call ${reprText(callId)} belongs to node ${reprText(call.nodeId)}`);
+    }
+    if (lastWoken !== undefined && call.seq < lastWoken) {
+      throw new RangeError(`NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken`);
+    }
+    if (call.state === "closed") throw new RangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
+  }
+  for (const call of nodeCalls(w, nodeId)) {
+    if (call.state === "open" && !record.callIds.includes(call.callId)) {
+      throw new RangeError(`NodeWaiting must name the node's open call ${reprText(call.callId)}`);
+    }
+  }
+}
+
+/**
+ * Require a wake record to name a waiting node that is wakeable once its `timed_out` calls (open
+ * calls of the node with a deadline) time out.
+ */
+function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
+  const { nodeId } = record;
+  const w = state.waits;
+  const waiting = w.waiting.get(nodeId);
+  if (waiting === undefined) throw new RangeError(`NodeWoken node ${reprText(nodeId)} is not waiting`);
+  for (const callId of record.timedOut) {
+    const call = w.calls.get(callId);
+    if (call === undefined || call.nodeId !== nodeId || call.state !== "open" || call.deadline === null) {
+      throw new RangeError(`NodeWoken timed_out ${reprText(callId)} isn't an open call of the node with a deadline`);
+    }
+  }
+  const timedOut = new Set(record.timedOut);
+  const open = waiting.callIds.find((callId) => !timedOut.has(callId) && w.calls.get(callId)?.state === "open");
+  if (open !== undefined && !w.interrupts.has(nodeId)) {
+    throw new RangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
+  }
+}
+
+/** Require a close record to name an open inbox the START declares. */
+function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
+  if (inboxElementType(state, record.inbox) === null) {
+    throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is no inbox the START declares`);
+  }
+  if (state.waits.inboxes.get(record.inbox)?.closed === true) {
+    throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is already closed`);
+  }
+}
+
+/**
+ * Require a run failure at quiescence with nodes waiting and none wakeable, holding the failure of
+ * the route that proved END unreachable.
+ */
+function validateRunFailed(state: RunState, record: RunFailedRecord): void {
+  requireWaitingQuiescence(state, "RunFailed");
+  const latch = state.terminalUnreachableFailure;
+  if (latch === null) throw new RangeError("RunFailed requires a route that proved END unreachable");
+  if (!sameFailure(record.failure, latch)) {
+    throw new RangeError("RunFailedRecord failure must be the failure of the route that proved END unreachable");
+  }
+}
+
+/** Require quiescence with nodes waiting: none in flight or ready, at least one waiting, none wakeable. */
+function requireWaitingQuiescence(state: RunState, kind: string): void {
+  if (state.inFlight.size > 0 || state.ready.length > 0) throw new RangeError(`${kind} requires no node in flight or ready`);
+  if (state.waits.waiting.size === 0) throw new RangeError(`${kind} requires a waiting node`);
+  const wakeable = wakeableNodes(state.waits);
+  if (wakeable.length > 0) throw new RangeError(`${kind} while node ${reprText(wakeable[0]!)} is wakeable`);
+}
+
+/**
+ * Require a run-wait record at quiescence: nothing in flight or ready, waiting nodes named in
+ * `node_waiting` order, none wakeable, and no `run_waiting` as the last frontier record (nothing
+ * could have changed since).
+ */
+function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
+  const w = state.waits;
+  requireWaitingQuiescence(state, "RunWaiting");
+  const expected = [...w.waiting.keys()];
+  if (!sameItems(record.nodeIds, expected)) {
+    throw new RangeError(
+      "RunWaitingRecord node_ids must exactly equal the waiting nodes in order: " +
+        `expected ${writeAsText(expected)}, found ${writeAsText([...record.nodeIds])}`,
+    );
+  }
+  if (w.lastFrontier === "run_waiting") throw new RangeError("RunWaiting follows a RunWaiting with nothing changed");
+}
+
+/**
+ * Require a step record to name an existing unknown node, in flight or waiting, and be its next
+ * step. A `pending` step registers a host call; a `tool_result` for a registered call answers it.
+ * A waiting node records only a `tool_result` answering one of its open calls.
+ */
 function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const nodeId: unknown = record.nodeId;
   if (typeof nodeId !== "string") throw new TypeError("NodeStepRecord node_id must be a string");
@@ -3147,11 +3965,86 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
     throw new RangeError(`NodeStep node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
+  const waiting = state.waits.waiting.has(nodeId);
+  if (!state.inFlight.has(nodeId) && !waiting) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
   const expected = (state.nodeSteps.get(nodeId)?.length ?? 0) + 1;
   if (record.n !== expected) {
     throw new RangeError(`node step n is not dense: node ${reprText(nodeId)} step ${record.n}, expected ${expected}`);
   }
+  const step = record.step;
+  if (step["kind"] === "tool_result") {
+    validateToolResultStep(state, nodeId, step, waiting);
+  } else if (waiting) {
+    throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
+  } else if (step["kind"] === "pending") {
+    validatePendingStep(state, nodeId, step);
+  }
+}
+
+/** The steps' fields only an AGENT's `pending` step holds. */
+const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index"] as const;
+
+/**
+ * Require a running node's `pending` step to register its own host call: the node makes a host
+ * tool call that isn't a take or sleep, `tool` is its tool, `call_id` its TOOL call id, not yet
+ * registered; no agent fields; a `deadline` only on an `ask`, as a record time; `arguments` an
+ * object; and the whole step within the run's `MAX_EVENT_BYTES`.
+ */
+function validatePendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  const toolId = state.flow.nodes.get(nodeId)!.hostToolCall()?.toolId ?? null;
+  if (toolId === null) throw new RangeError(`a pending step on node ${reprText(nodeId)}, which calls no host tool`);
+  if (toolId === TAKE || toolId === SLEEP) {
+    throw new RangeError(`a pending step on node ${reprText(nodeId)}, whose ${toolId} the engine decides`);
+  }
+  const { call_id: callId, tool } = step;
+  if (tool !== toolId) throw new RangeError(`pending tool ${writeAsText(tool ?? null)} isn't node ${reprText(nodeId)}'s tool ${reprText(toolId)}`);
+  if (callId !== toolCallId(state.runId!, nodeId)) {
+    throw new RangeError(`pending call_id ${writeAsText(callId ?? null)} isn't node ${reprText(nodeId)}'s call id`);
+  }
+  for (const field of AGENT_PENDING_FIELDS) {
+    if (Object.hasOwn(step, field)) throw new RangeError(`a TOOL node's pending step holds no ${field}`);
+  }
+  if (Object.hasOwn(step, "deadline")) {
+    if (tool !== ASK) throw new RangeError(`a pending ${reprText(tool)} call has no deadline; only ask times out`);
+    const deadline = step["deadline"];
+    if (typeof deadline !== "string") throw new RangeError("pending deadline must be a record time");
+    requireRecordTime(deadline, "pending deadline");
+  }
+  if (!isRecord(step["arguments"])) throw new RangeError("pending arguments must be an object");
+  const size = eventBytes(step);
+  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the pending step of ${reprText(callId)}`, size, state));
+  if (state.waits.calls.has(callId)) {
+    throw new RangeError(`call ${reprText(callId)} is already registered; it belongs to its node until the node settles`);
+  }
+}
+
+/**
+ * Require a `tool_result` step for a registered call (its `tool_call_id ?? call_id` is the call's
+ * result key) to answer an open host call of this node (never a take or sleep, which the run
+ * settles itself), within the run's `MAX_EVENT_BYTES`. A result no
+ * call registered (an agent's) is the node's own detail, refused only on a waiting node.
+ */
+function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
+  const key = typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"];
+  const call = [...state.waits.calls.values()].find((each) => each.resultKey === key);
+  if (call === undefined) {
+    if (waiting) {
+      throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
+    }
+    return;
+  }
+  if (call.nodeId !== nodeId) {
+    throw new RangeError(`tool_result for call ${reprText(call.callId)} of node ${reprText(call.nodeId)}, not ${reprText(nodeId)}`);
+  }
+  if (call.tool === TAKE || call.tool === SLEEP) {
+    throw new RangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
+  }
+  if (call.state !== "open") {
+    const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
+    throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${why}`);
+  }
+  const size = eventBytes(step);
+  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
 }
 
 /**
@@ -3176,6 +4069,93 @@ function requireCommittingNode(state: RunState, nodeId: string): void {
   const expansion = pendingExpansion(state, nodeId);
   if (expansion.length > 0) {
     throw new RangeError(`pool_commit node ${reprText(nodeId)} has pending expansion commits only its expansion admits`);
+  }
+}
+
+/** Refuse a value commit by a take node, which commits the events it took (a take commit). */
+function requireValueCommitNode(state: RunState, nodeId: string): void {
+  if (state.flow.nodes.get(nodeId)!.hostToolCall()?.toolId === TAKE) {
+    throw new RangeError(`take node ${reprText(nodeId)} commits the events it took, not a value`);
+  }
+}
+
+/**
+ * Validate a take commit by an in-flight take node with no pending commit, under its target. A node
+ * holding its take call commits what the call settled: its assigned events, closed when its inbox is
+ * closed with nothing left a take may read; or, timed out, nothing. A node holding none commits
+ * inline: the oldest event a take may read (`availableUnread`) or all of them, closed when its
+ * inbox is closed and it takes them all; with none available, nothing, closed as its inbox is. An
+ * inline commit of nothing on an open inbox is a timeout the reducer can't check, so it is accepted
+ * on the engine's word.
+ *
+ * @throws RangeError otherwise.
+ */
+function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
+  const { nodeId } = record;
+  const take = record.take!;
+  requireCommittingNode(state, nodeId);
+  const node = state.flow.nodes.get(nodeId)!;
+  if (node.hostToolCall()?.toolId !== TAKE) throw new RangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
+  const target = node.commitAs ?? nodeId;
+  if (record.key !== target) {
+    throw new RangeError(`the take commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(target)}`);
+  }
+  if (inboxElementType(state, take.inbox) === null) {
+    throw new RangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, no inbox the START declares`);
+  }
+  const w = state.waits;
+  const closed = w.inboxes.get(take.inbox)?.closed ?? false;
+  const held = w.calls.get(toolCallId(state.runId!, nodeId));
+  let events: readonly number[];
+  let expectedClosed: boolean;
+  if (held !== undefined) {
+    if (held.inbox !== take.inbox) {
+      throw new RangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, but its call reads ${writeAsText(held.inbox)}`);
+    }
+    if (held.state === "open" || held.state === "closed") {
+      throw new RangeError(`take node ${reprText(nodeId)} commits from its call, which is ${held.state}`);
+    }
+    events = held.state === "timed_out" ? [] : held.assigned;
+    expectedClosed = held.state === "answered" && closed && availableUnread(w, take.inbox).length === 0;
+  } else {
+    const available = availableUnread(w, take.inbox);
+    const k = take.events.length;
+    const counted = available.length === 0 ? k === 0 : k === 1 || k === available.length;
+    events = counted ? available.slice(0, k) : available;
+    expectedClosed = closed && k === available.length;
+  }
+  if (take.events.length !== events.length || take.events.some((seq, index) => seq !== events[index])) {
+    throw new RangeError(
+      `the take commit of ${reprText(nodeId)} must consume ${writeAsText([...events])}` +
+        `${held === undefined ? " (the oldest event a take may read, or all of them)" : ""}, found ${writeAsText([...take.events])}`,
+    );
+  }
+  if (take.closed !== expectedClosed) {
+    throw new RangeError(`the take commit of ${reprText(nodeId)} must hold closed ${expectedClosed}`);
+  }
+}
+
+/**
+ * Rebuild a take commit's value, `{events, closed}`, from the inbox store, checked against its
+ * target's contract.
+ *
+ * @throws RangeError when a consumed send's value is gone, or the contract refuses the value
+ *   (sends are checked against their inbox's type, so this means the flow and the log disagree).
+ */
+function takeValueJson(state: RunState, pending: PendingCommit): string {
+  const take = pending.take!;
+  const events = take.events.map((seq) => {
+    const value = state.inboxEvents.get(seq);
+    if (value === undefined) throw new RangeError(`the take commit at seq ${pending.seq} names send ${seq}, which the run doesn't hold`);
+    return value.toObject();
+  });
+  try {
+    return committedText(state, pending.key, { events, closed: take.closed });
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new RangeError(`the take commit at seq ${pending.seq} rebuilds to a value its target refuses: ${error.message}`, {
+      cause: error,
+    });
   }
 }
 
@@ -4103,6 +5083,7 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
  */
 function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   requireCommittingNode(state, record.nodeId);
+  requireValueCommitNode(state, record.nodeId);
   const targetNode = state.flow.nodes.get(record.key);
   if (targetNode === undefined) {
     throw new RangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
@@ -4142,6 +5123,29 @@ function validateExpansionCommit(state: RunState, record: PoolCommitRecord): voi
     throw new RangeError(`child START ${reprText(record.key)} already has a pending expansion commit`);
   }
   if (record.from === null) throw new RangeError(`the expansion commit for ${reprText(record.key)} holds no from`);
+}
+
+/**
+ * Validate a send: a commit by the START under `<START>.<name>` for a top-level `Inbox(T)` param,
+ * holding a value canonical for `T` and within the run's `MAX_EVENT_BYTES`, to an open inbox.
+ *
+ * @throws RangeError otherwise (a `TypeCheckError` when the value fails `T`).
+ */
+function validateSend(state: RunState, record: PoolCommitRecord): void {
+  const name = record.key.slice(sendKey(state, "").length);
+  if (record.nodeId !== state.flow.startId) {
+    throw new RangeError(`a send to ${reprText(record.key)} must name the START, not ${reprText(record.nodeId)}`);
+  }
+  const element = inboxElementType(state, name);
+  if (element === null) throw new RangeError(`send key ${reprText(record.key)} names no inbox the START declares`);
+  if (record.value === null) throw new RangeError(`a send to ${reprText(name)} holds its value`);
+  if (state.waits.inboxes.get(name)?.closed === true) throw new RangeError(`inbox ${reprText(name)} is closed`);
+  const [wire] = canonicalTyped(TypedValue.fromWire(record.value), element);
+  if (logJson(wire) !== logJson(record.value)) {
+    throw new RangeError(`the send to ${reprText(name)} isn't canonical for the inbox's type`);
+  }
+  const size = eventBytes(record.value.value);
+  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the send to ${reprText(name)}`, size, state));
 }
 
 /**
@@ -4231,6 +5235,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
     edgeHeads: Object.freeze(edgeHeads),
     newlyReadyIds: Object.freeze(newlyReadyIds),
     observerCommitAs: target === record.nodeId ? null : target,
+    consumedEvents: pending.take?.events ?? [],
   });
 }
 
@@ -4251,12 +5256,14 @@ function prepareTerminalDelta(
     terminalUnreachableFailure: Failure | null;
   },
 ): TerminalDelta | null {
+  // A waiting node blocks quiescence as an in-flight one does.
   if (
     state.result !== null ||
     state.ready.length > 0 ||
     outcome.newlyReadyIds.length > 0 ||
     state.inFlight.size !== 1 ||
-    !state.inFlight.has(outcome.completingNodeId)
+    !state.inFlight.has(outcome.completingNodeId) ||
+    state.waits.waiting.size > 0
   ) {
     return null;
   }
@@ -5164,9 +6171,13 @@ function materializeTerminal(delta: TerminalDelta): TerminalApply {
   return { result: terminalObserver(delta), observer: terminalObserver(delta) };
 }
 
-/** Build the ordered observers, sharing one immutable failure. */
-function failureObservers(failure: Failure): RunEvent[] {
-  return [new NodeFailed({ failure }), new RunFailed({ failure })];
+/** Build the ordered observers, sharing one immutable failure, then one per closed host call. */
+function failureObservers(failure: Failure, closedCalls: readonly string[]): RunEvent[] {
+  return [
+    new NodeFailed({ failure }),
+    new RunFailed({ failure }),
+    ...closedCalls.map((callId) => new CallClosed({ callId, reason: "failed" })),
+  ];
 }
 
 /** The detached values one failure commit installs, all built before the durable append. */
@@ -5176,8 +6187,25 @@ interface FailureApply {
 }
 
 /** Build independent state and callback values before the durable append. */
-function materializeFailure(failure: Failure): FailureApply {
-  return { result: new RunFailed({ failure }), observers: failureObservers(failure) };
+function materializeFailure(failure: Failure, closedCalls: readonly string[]): FailureApply {
+  return { result: new RunFailed({ failure }), observers: failureObservers(failure, closedCalls) };
+}
+
+/** The detached values one ending installs, all built before the durable append. */
+interface EndingApply {
+  result: RunCancelled | RunFailed;
+  observers: readonly RunEvent[];
+}
+
+/** Build the ending's state result and its observers: the result event, then one per closed host call. */
+function materializeEnding(plan: EndingPlan): EndingApply {
+  const failure = plan.failure;
+  const reason = failure === null ? "cancelled" : "failed";
+  const event = () => (failure === null ? new RunCancelled() : new RunFailed({ failure }));
+  return {
+    result: event(),
+    observers: [event(), ...plan.closedCalls.map((callId) => new CallClosed({ callId, reason }))],
+  };
 }
 
 /** Build one independent canonical expansion observer. */

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { BUILTIN } from "../../src/defaults.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 
 const record = () => 1;
@@ -10,6 +11,9 @@ test("NodeSteps carries the node's calls and the run's event limit", () => {
   const steps = new NodeSteps(1, [], record, [view], 64);
   expect([steps.calls, steps.maxEventBytes]).toEqual([[view], 64]);
   expect(Object.isFrozen(steps.calls) && Object.isFrozen(steps.calls[0])).toBe(true);
+});
+test("NodeSteps built outside a run caps events at YIAN_MAX_EVENT_BYTES's built-in value", () => {
+  expect(new NodeSteps(1, [], record).maxEventBytes).toBe(BUILTIN.maxEventBytes);
 });
 test.each<[unknown, number]>([[{}, 1], [[], 0], [[], 1.5]])("NodeSteps refuses calls %p with limit %p", (calls, limit) => {
   expect(() => new NodeSteps(1, [], record, calls as never, limit)).toThrow();

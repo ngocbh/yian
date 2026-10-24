@@ -208,6 +208,7 @@ These entries exist only in TS yian; Python yian neither reads nor records them.
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
 | `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
 | `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from a stdio MCP server |
+| `YIAN_MAX_EVENT_BYTES` | input cap | 1,048,576 | 1 or more | Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes |
 
 A value of 300 or more for either model timeout takes effect only on Bun: Node's fetch
 has its own 300-second limits, which run whether or not yian is reading. yian's two

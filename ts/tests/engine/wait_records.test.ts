@@ -25,7 +25,6 @@ import {
   requireRecordTime,
   RunCancelledRecord,
   RunFailedRecord,
-  type RunRecord,
   RunResumedRecord,
   RunWaitingRecord,
   SCHEMA_VERSION,
@@ -338,26 +337,6 @@ test("a fresh RunState holds an empty waits fold and no inbox events", () => {
   }
   expect(state.waits.lastFrontier).toBeNull();
   expect(state.inboxEvents.size).toBe(0);
-});
-
-test.each<[string, () => RunRecord]>([
-  ["NodeWaitingRecord", () => new NodeWaitingRecord("work", ["r/work"])],
-  ["NodeWokenRecord", () => new NodeWokenRecord("work")],
-  ["RunWaitingRecord", () => new RunWaitingRecord(["work"])],
-  ["InboxClosedRecord", () => new InboxClosedRecord("msgs")],
-  ["RunCancelledRecord", () => new RunCancelledRecord()],
-  ["RunFailedRecord", () => new RunFailedRecord(FAILURE)],
-])("the reducer doesn't prepare a %s yet", (name, build) => {
-  const { state, log } = initializedAndStarted(flow());
-  commitStartSuccess(state, log);
-  expectError(() => prepareRecord(state, build()), TypeError, `unsupported run record for state preparation: ${name}`);
-});
-
-test("the reducer doesn't prepare a take commit yet", () => {
-  const { state, log } = initializedAndStarted(flow());
-  commitStartSuccess(state, log);
-  const commit = new PoolCommitRecord("work", "work", null, { take: { inbox: "msgs", events: [], closed: true } });
-  expectError(() => prepareRecord(state, commit), TypeError, "unsupported pool_commit form for state preparation: take");
 });
 
 test("a state whose waits fold was replaced is refused", () => {

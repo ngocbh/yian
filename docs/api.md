@@ -2984,8 +2984,14 @@ index or the log.
   read again from the start. A run folder with no log, or a log with no complete record yet, has
   no row; a row whose log is gone is deleted.
 - A log the update can't read (another schema, a damaged line, a first record that isn't the
-  folder's run's `run_started`) raises a warning (`process.emitWarning`) and keeps its row as it
-  was.
+  folder's run's `run_started`, or a file error such as no permission (`EACCES`) or a `log.jsonl`
+  that is a directory) raises a warning (`process.emitWarning`) and keeps its row as it was. A
+  run folder reached through a symlink counts.
+- A row keeps the run's record scan (nodes in flight, the last stop, crashed counts, the END's
+  success and the seqs of the records that decide a failure), the one `inspectRun` folds without a
+  flow, and `status` is read from it, so the index and `inspectRun` read a status by the same
+  rules. The table has no status column. The index file is created with mode `0600`, since it
+  holds every run's result.
 - An update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take
   turns. It waits up to `timeoutMs` (default 5000) for another builder, then throws
   `RunIndexBusyError` ("run index PATH is locked by another update; gave up after N ms"). It is

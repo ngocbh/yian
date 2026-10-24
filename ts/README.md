@@ -1207,8 +1207,9 @@ Node 22, and so does every unit test; a change keeps both green.
   the line to the message.
 - `src/runtime/run_index.ts` (TS-only) holds the run index, `<runs>/index.sqlite`: `updateRunIndex`
   folds each run folder's log into one row from the byte offset the row reached
-  (`iterRunRecords`), keeping the record scan's nodes in flight and flags in a `scan` column so
-  the stored status follows `inspectRun`'s no-flow rules across updates; `readRunIndex` puts
+  (`iterRunRecords`), keeping the run scan (`RunScan`: plain JSON data, folded one record at a
+  time by `foldRunScan`, read by `scanStatus`) in a `scan` column. `inspectRun`'s record scan is a
+  loop over the same `foldRunScan`, so both read a status by one set of rules. `readRunIndex` puts
   `running` on top while a writer holds a run's lock. One `BEGIN IMMEDIATE` transaction with a busy
   timeout serializes builders. Never imported by the reducer or the engine.
 - `src/runtime/trace.ts` holds the retained trace of a learnable run (`RetainedTrace`: accepted

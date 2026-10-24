@@ -29,6 +29,7 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { openSqlite, withWarnings } from "../../src/platform.ts";
 import { inspectRun, readRunIndex, RunIndexBusyError, type RunIndexRow, runLogPath, updateRunIndex } from "../../src/run.ts";
+import { emptyRunScan, foldRunScan, scanStatus } from "../../src/runtime/run_index.ts";
 import {
   JsonlRunLog,
   NodeFailedRecord,
@@ -40,6 +41,7 @@ import {
   RunResumedRecord,
   RunStartedRecord,
   RunStoppedRecord,
+  readRunLog,
 } from "../../src/runtime/log.ts";
 import type { TypedValue } from "../../src/typesys/values.ts";
 
@@ -467,4 +469,83 @@ console.log("done");
     for (const row of rows) expect(row.status).toBe(statuses[Number(row.runId.slice(4)) % 3]!);
     expect(existsSync(join(runs, "index.sqlite"))).toBe(true);
   }, 90_000);
+});
+
+describe("the run scan, shared by inspectRun and the index", () => {
+  /** Fold every record of the log at `path` into a fresh scan. */
+  function scanOf(path: string) {
+    const scan = emptyRunScan();
+    for (const envelope of readRunLog(path)) foldRunScan(scan, envelope);
+    return scan;
+  }
+
+  test("plain data: nodes in flight by start seq, the last stop, crashed counts and deciding seqs", () => {
+    const runs = freshRuns();
+    const unreachable = new Failure({ code: "graph.terminal_unreachable", message: "", nodeId: "gate" });
+    writeRun(runs, "run-1", (log) => {
+      start(log);
+      log.append(new NodeStartedRecord("a"));
+      log.append(new NodeStartedRecord("b"));
+      log.append(new RunStoppedRecord("signal", "SIGINT", ["a", "b"]));
+      log.append(new RunResumedRecord(["a", "b"], 0));
+      log.append(new NodeStartedRecord("b"));
+      log.append(new NodeStartedRecord("gate"));
+      // A node started again while in flight keeps its place, as a Map key does.
+      log.append(new NodeStartedRecord("b"));
+      log.append(new NodeRoutedRecord("gate", "no", { terminalFailure: unreachable }));
+    });
+    const path = join(runs, "run-1", "log.jsonl");
+    const scan = scanOf(path);
+    // The resume came after a stop that covered both starts, so it counts no crashed attempt.
+    expect(scan).toEqual({
+      inFlight: [["b", 8]],
+      lastStop: null,
+      endSucceeded: false,
+      crashed: [],
+      nodeFailureSeq: null,
+      unreachableSeq: 9,
+    });
+    expect(JSON.parse(JSON.stringify(scan))).toEqual(scan);
+    expect(scanStatus(scan)).toBe("crashed");
+    const inspection = inspectRun(path);
+    expect([inspection.status, inspection.inFlight]).toEqual(["crashed", ["b"]]);
+    expect([...inspection.crashedAttempts]).toEqual([["b", 1]]);
+  });
+
+  test("a resume after a crash counts the attempts it retries, as inspectRun does", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", (log) => {
+      start(log);
+      log.append(new NodeStartedRecord("a"));
+      log.append(new NodeStartedRecord("b"));
+      log.append(new RunResumedRecord(["a", "b"], 0));
+      log.append(new NodeStartedRecord("a"));
+      log.append(new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "a" })));
+    });
+    const path = join(runs, "run-1", "log.jsonl");
+    const scan = scanOf(path);
+    expect(scan.crashed).toEqual([
+      ["a", 1],
+      ["b", 1],
+    ]);
+    expect([scan.nodeFailureSeq, scanStatus(scan)]).toEqual([6, "failed"]);
+    const inspection = inspectRun(path);
+    expect([...inspection.crashedAttempts]).toEqual(scan.crashed);
+    expect(inspection.failure?.message).toBe("boom");
+  });
+
+  test("the index stores the scan, not a status column", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", stoppedRun);
+    updateRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"), { readonly: true });
+    try {
+      const columns = db.prepare("PRAGMA table_info(runs)").all().map((row) => row["name"]);
+      expect(columns).not.toContain("status");
+      const stored = db.prepare("SELECT scan FROM runs").get()!;
+      expect(JSON.parse(stored["scan"] as string)).toEqual(scanOf(join(runs, "run-1", "log.jsonl")));
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -3,10 +3,13 @@
  *
  * The logs are the only source of truth; the index is a view built from them. `updateRunIndex`
  * reads each log on from the byte offset its row reached, so it may lag the logs but never leads
- * them, and deleting the index and building it again gives the same rows. The stored status comes
- * from the records alone; `readRunIndex` puts `running` on top while a writer holds a run's lock.
+ * them, and deleting the index and building it again gives the same rows. A row keeps the run
+ * scan (`RunScan`, folded by `foldRunScan`, read by `scanStatus`), which `inspectRun` folds too, so
+ * both read a status from the records by one set of rules; `readRunIndex` puts `running` on top
+ * while a writer holds a run's lock.
  *
- * Knows about: compile (the END id), diagnostics, platform, runtime/log, typesys.
+ * Knows about: compile (the END id), diagnostics, platform, runtime/log, runtime/state
+ * (`addCrashedAttempts`), typesys.
  */
 
 import fs from "node:fs";
@@ -31,8 +34,10 @@ import {
   runRecordOffsets,
   RunResumedRecord,
   RunStartedRecord,
+  type RunRecord,
   RunStoppedRecord,
 } from "./log.ts";
+import { addCrashedAttempts } from "./state.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
@@ -43,12 +48,12 @@ const INDEX_VERSION = 1;
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
 
-// `scan` holds the builder's carried state (see `RunScan`), so an update goes on where the last
-// one stopped and the stored status follows the same rules as `inspectRun`'s record scan.
+// `scan` holds the record scan (`RunScan`, as `scanJson` writes it), so an update goes on where the
+// last one stopped. The status is read from it (`scanStatus`), the rules `inspectRun` uses, so no
+// column holds a status that could drift from them.
 const SCHEMA = `CREATE TABLE runs (
   run_id TEXT PRIMARY KEY,
   flow TEXT,
-  status TEXT NOT NULL,
   started_at TEXT NOT NULL,
   ended_at TEXT,
   parent_run_id TEXT,
@@ -65,7 +70,6 @@ const SCHEMA = `CREATE TABLE runs (
 const COLUMNS = [
   "run_id",
   "flow",
-  "status",
   "started_at",
   "ended_at",
   "parent_run_id",
@@ -82,7 +86,7 @@ const COLUMNS = [
 const SQLITE_BUSY = 5;
 
 /** A run's status in the index; `running` is only ever put on top at read time. */
-export type RunIndexStatus = "running" | "succeeded" | "failed" | "stopped" | "crashed";
+export type RunIndexStatus = "running" | ReturnType<typeof scanStatus>;
 
 /** One run as the index holds it. */
 export interface RunIndexRow {
@@ -126,18 +130,119 @@ export class RunIndexBusyError extends Error {
   override name = "RunIndexBusyError";
 }
 
-/** What the builder carries from one update to the next, beyond the row's columns. */
-interface RunScan {
-  /** The nodes started and not settled, in start order. */
-  inFlight: string[];
+/**
+ * What the records of a run log show about where it stands, folded one record at a time
+ * (`foldRunScan`) by `inspectRun` and by the run index, which stores it between updates. Plain
+ * JSON data: numbers are record seqs or counts.
+ */
+export interface RunScan {
+  /** `[node id, start seq]` of each node started and not settled, in first-start order. */
+  inFlight: [string, number][];
+  /** The seq of the last `RunStopped` since the last `RunResumed`, or `null`. */
+  lastStop: number | null;
   /** Whether the top-level END succeeded. */
   endSucceeded: boolean;
-  /** Whether a node failed. */
-  nodeFailed: boolean;
-  /** Whether a route proved END unreachable. */
-  unreachable: boolean;
-  /** Whether the last segment was stopped. */
-  stopped: boolean;
+  /** `[node id, count]`: the attempts the run's resumes retried after a crash, in first-count order. */
+  crashed: [string, number][];
+  /** The seq of the first `NodeFailed`, whose failure ends the run, or `null`. */
+  nodeFailureSeq: number | null;
+  /** The seq of the first `NodeRouted` that proved END unreachable, or `null`. */
+  unreachableSeq: number | null;
+}
+
+/** Return the scan of a log with no record. */
+export function emptyRunScan(): RunScan {
+  return { inFlight: [], lastStop: null, endSucceeded: false, crashed: [], nodeFailureSeq: null, unreachableSeq: null };
+}
+
+/**
+ * Fold the record `envelope` holds into `scan`, in place, as the reducer derives starts, outcomes,
+ * stops and resumes: a start puts its node in flight (a node already in flight keeps its place),
+ * an outcome settles it, a stop is remembered until the next resume, and a resume counts the
+ * attempts no stop covers (`addCrashedAttempts`) and retries every node in flight.
+ */
+export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; readonly record: RunRecord }): void {
+  const { seq, record } = envelope;
+  const settle = (node: string) => {
+    scan.inFlight = scan.inFlight.filter(([id]) => id !== node);
+  };
+  if (record instanceof NodeStartedRecord) {
+    const entry = scan.inFlight.find(([id]) => id === record.nodeId);
+    if (entry === undefined) scan.inFlight.push([record.nodeId, seq]);
+    else entry[1] = seq;
+  } else if (record instanceof NodeSucceededRecord) {
+    settle(record.nodeId);
+    if (record.nodeId === END_ID) scan.endSucceeded = true;
+  } else if (record instanceof NodeRoutedRecord) {
+    settle(record.nodeId);
+    if (record.terminalFailure !== null) scan.unreachableSeq ??= seq;
+  } else if (record instanceof NodeExpandedRecord) {
+    settle(record.spawnerId);
+  } else if (record instanceof NodeFailedRecord) {
+    settle(record.failure.nodeId!);
+    scan.nodeFailureSeq ??= seq;
+  } else if (record instanceof RunStoppedRecord) {
+    scan.lastStop = seq;
+  } else if (record instanceof RunResumedRecord) {
+    // The resume retries exactly the nodes in flight.
+    const counts = new Map(scan.crashed);
+    addCrashedAttempts(counts, new Map(scan.inFlight), scan.lastStop);
+    scan.crashed = [...counts];
+    scan.inFlight = [];
+    scan.lastStop = null;
+  }
+}
+
+/**
+ * Return where the scanned records leave the run, as `inspectRun` reads it without a flow: a node
+ * failure, or a route that proved END unreachable with nothing in flight, is `failed`; the
+ * top-level END's success with nothing in flight is `succeeded`; then `stopped` when the last
+ * segment was stopped, else `crashed`. The records don't hold the ready nodes, so a node still
+ * ready is missed.
+ */
+export function scanStatus(scan: RunScan): "succeeded" | "failed" | "stopped" | "crashed" {
+  const idle = scan.inFlight.length === 0;
+  // A node failure ends the run at once, ahead of a pending unreachable END.
+  if (scan.nodeFailureSeq !== null || (idle && scan.unreachableSeq !== null)) return "failed";
+  if (idle && scan.endSucceeded) return "succeeded";
+  return scan.lastStop === null ? "crashed" : "stopped";
+}
+
+/** Return a deep copy of `scan`. */
+function copyScan(scan: RunScan): RunScan {
+  return {
+    ...scan,
+    inFlight: scan.inFlight.map(([id, seq]) => [id, seq]),
+    crashed: scan.crashed.map(([id, count]) => [id, count]),
+  };
+}
+
+/** Return `scan` as a run-log line (`logJson`, its numbers as ints). */
+function scanJson(scan: RunScan): string {
+  const int = (n: number | null) => (n === null ? null : BigInt(n));
+  return logJson({
+    inFlight: scan.inFlight.map(([id, seq]) => [id, BigInt(seq)]),
+    lastStop: int(scan.lastStop),
+    endSucceeded: scan.endSucceeded,
+    crashed: scan.crashed.map(([id, count]) => [id, BigInt(count)]),
+    nodeFailureSeq: int(scan.nodeFailureSeq),
+    unreachableSeq: int(scan.unreachableSeq),
+  });
+}
+
+/** Return the scan `scanJson` wrote. */
+function scanFromJson(text: string): RunScan {
+  const data = parseJson(text, "codec") as Record<string, unknown>;
+  const num = (value: unknown) => (value === null ? null : Number(value));
+  const pairs = (value: unknown) => (value as [string, bigint][]).map(([id, n]): [string, number] => [id, Number(n)]);
+  return {
+    inFlight: pairs(data["inFlight"]),
+    lastStop: num(data["lastStop"]),
+    endSucceeded: data["endSucceeded"] === true,
+    crashed: pairs(data["crashed"]),
+    nodeFailureSeq: num(data["nodeFailureSeq"]),
+    unreachableSeq: num(data["unreachableSeq"]),
+  };
 }
 
 /** A row while it is built. */
@@ -286,7 +391,7 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
   }
   return rows.map((columns) => {
     const { scan, ...row } = fromColumns(columns);
-    let status = statusOf(scan);
+    let status: RunIndexStatus = scanStatus(scan);
     if ((status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
       status = "running";
     }
@@ -340,7 +445,7 @@ function busyOr(error: unknown, path: string, timeoutMs: number): unknown {
  */
 function readRun(log: string, runId: string, saved: Building | null): Building | null {
   const continuing = saved === null ? {} : { afterOffset: saved.offset, runId, afterSeq: saved.lastSeq };
-  let row: Building | null = saved === null ? null : { ...saved, scan: { ...saved.scan, inFlight: [...saved.scan.inFlight] } };
+  let row: Building | null = saved === null ? null : { ...saved, scan: copyScan(saved.scan) };
   let lastAt: string | null = null;
   // The values of the top-level END's commits read in this pass, by seq; one read earlier is
   // found again through the offsets.
@@ -365,47 +470,23 @@ function readRun(log: string, runId: string, saved: Building | null): Building |
         cacheReadTokens: 0,
         reasoningTokens: 0,
         offset: 0,
-        scan: { inFlight: [], endSucceeded: false, nodeFailed: false, unreachable: false, stopped: false },
+        scan: emptyRunScan(),
       };
     }
     row.lastSeq = entry.seq;
     row.offset = entry.end;
     lastAt = entry.at;
-    const { scan } = row;
-    const settle = (node: string) => {
-      scan.inFlight = scan.inFlight.filter((id) => id !== node);
-    };
-    if (record instanceof NodeStartedRecord) {
-      settle(record.nodeId);
-      scan.inFlight.push(record.nodeId);
-    } else if (record instanceof NodeStepRecord) {
+    foldRunScan(row.scan, entry.envelope);
+    if (record instanceof NodeStepRecord) {
       addUsage(row, record.step);
     } else if (record instanceof PoolCommitRecord) {
       if (record.nodeId === END_ID) endCommits.set(entry.seq, record.value === null ? null : logJson(record.value.value));
-    } else if (record instanceof NodeSucceededRecord) {
-      settle(record.nodeId);
-      if (record.nodeId === END_ID) {
-        scan.endSucceeded = true;
-        row.result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit);
-      }
-    } else if (record instanceof NodeRoutedRecord) {
-      settle(record.nodeId);
-      if (record.terminalFailure !== null) scan.unreachable = true;
-    } else if (record instanceof NodeExpandedRecord) {
-      settle(record.spawnerId);
-    } else if (record instanceof NodeFailedRecord) {
-      settle(record.failure.nodeId!);
-      scan.nodeFailed = true;
-    } else if (record instanceof RunStoppedRecord) {
-      scan.stopped = true;
-    } else if (record instanceof RunResumedRecord) {
-      // The resume retries exactly the nodes in flight.
-      scan.inFlight = [];
-      scan.stopped = false;
+    } else if (record instanceof NodeSucceededRecord && record.nodeId === END_ID) {
+      row.result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit);
     }
   }
   if (row !== null && lastAt !== null) {
-    const status = statusOf(row.scan);
+    const status = scanStatus(row.scan);
     row.endedAt = status === "succeeded" || status === "failed" ? lastAt : null;
   }
   return row;
@@ -434,25 +515,11 @@ function committedValue(log: string, seq: number): string | null {
   throw new RangeError(`the log has no record at seq ${seq}`);
 }
 
-/**
- * Return the status the records show, as `inspectRun` reads it without a flow: a node failure, or
- * a route that proved END unreachable with nothing in flight, is `failed`; the top-level END's
- * success with nothing in flight is `succeeded`; then `stopped` or `crashed`.
- */
-function statusOf(scan: RunScan): RunIndexStatus {
-  const idle = scan.inFlight.length === 0;
-  if (scan.nodeFailed || (idle && scan.unreachable)) return "failed";
-  if (idle && scan.endSucceeded) return "succeeded";
-  return scan.stopped ? "stopped" : "crashed";
-}
-
 /** Return a row's column values, in `COLUMNS` order. */
 function toColumns(row: Building): (string | number | null)[] {
-  const { scan } = row;
   return [
     row.runId,
     row.flow,
-    statusOf(scan),
     row.startedAt,
     row.endedAt,
     row.parentRunId,
@@ -463,19 +530,12 @@ function toColumns(row: Building): (string | number | null)[] {
     row.cacheReadTokens,
     row.reasoningTokens,
     row.offset,
-    logJson({
-      in_flight: scan.inFlight,
-      end_succeeded: scan.endSucceeded,
-      node_failed: scan.nodeFailed,
-      unreachable: scan.unreachable,
-      stopped: scan.stopped,
-    }),
+    scanJson(row.scan),
   ];
 }
 
 /** Return the row a `SELECT *` gave. */
 function fromColumns(columns: SqliteRow): Building {
-  const scan = parseJson(columns["scan"] as string, "codec") as Record<string, unknown>;
   return {
     runId: columns["run_id"] as string,
     flow: columns["flow"] as string | null,
@@ -489,12 +549,6 @@ function fromColumns(columns: SqliteRow): Building {
     cacheReadTokens: columns["cache_read_tokens"] as number,
     reasoningTokens: columns["reasoning_tokens"] as number,
     offset: columns["offset"] as number,
-    scan: {
-      inFlight: scan["in_flight"] as string[],
-      endSucceeded: scan["end_succeeded"] === true,
-      nodeFailed: scan["node_failed"] === true,
-      unreachable: scan["unreachable"] === true,
-      stopped: scan["stopped"] === true,
-    },
+    scan: scanFromJson(columns["scan"] as string),
   };
 }

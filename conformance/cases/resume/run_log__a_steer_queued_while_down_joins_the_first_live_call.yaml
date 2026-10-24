@@ -1,0 +1,159 @@
+# TS-only: Python reruns an AGENT from its start on resume.
+# A steer reaches the inbox while lookup runs (its first call); the crash refuses lookup's
+# tool_result, so the first run never reads the steer. The resumed agent replays the reply and
+# reads no steer while it replays; it closes lookup's call as `crashed`, then drains the inbox,
+# and the steer joins the first live request after the closer's result (its `request` below).
+kind: resume
+rules: [run-log]
+flow: |
+  id: replay-steer
+  name: replay_steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      steerable: true
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  steering:
+    chat:
+      - after:
+          tool_call: 1
+        steer: [only the 2024 rows]
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties: {topic: {type: string}}
+        required: [topic]
+      results:
+        - return: found a
+  models:
+    chat:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts:
+              - {type: tool_call, id: call-1, name: lookup, arguments: {topic: a}}
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts:
+              - {type: text, text: Done with 2024.}
+          request:
+            messages:
+              - format: yian.message.v1
+                role: system
+                parts: [{type: text, text: Help.}]
+              - format: yian.message.v1
+                role: user
+                parts: [{type: text, text: Help the user.}]
+              - format: yian.message.v1
+                role: assistant
+                parts:
+                  - {type: tool_call, id: call-1, name: lookup, arguments: {topic: a}}
+              - format: yian.message.v1
+                role: tool
+                parts:
+                  - type: tool_result
+                    call_id: call-1
+                    name: lookup
+                    content: The tool call was interrupted; its outcome is unknown. Check its effect before retrying.
+                    is_error: true
+              - format: yian.message.v1
+                role: user
+                parts: [{type: text, text: only the 2024 rows}]
+            tools:
+              - name: lookup
+                description: Look up a topic.
+                parameters:
+                  type: object
+                  properties: {topic: {type: string}}
+                  required: [topic]
+  crash_after_record: 9
+expect:
+  output: {status: succeeded, output: Done with 2024.}
+  tool_calls:
+    lookup: [{args: {topic: a}, attempt: 1, call_id: r1/chat/1/0, node: chat}]
+  trace:
+    - - run_started
+      - null
+      - effective_llm_by_static_path:
+          chat:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: missing
+            model: gpt-5.5
+            provider: openai
+        learnable: false
+        num_workers: 0
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, chat]
+    - - node_step
+      - chat
+      - n: 1
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - arguments: {topic: a}
+                id: call-1
+                name: lookup
+                type: tool_call
+            role: assistant
+          purpose: chat
+          request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
+          response_id: null
+          usage: null
+    - [run_resumed, null, {num_workers: 0, retry_node_ids: [chat]}]
+    - [node_started, chat]
+    - - node_step
+      - chat
+      - n: 2
+        step:
+          call_id: call-1
+          closed: crashed
+          is_error: true
+          kind: tool_result
+          output: The tool call was interrupted; its outcome is unknown. Check its effect before retrying.
+    - - node_step
+      - chat
+      - n: 3
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - {text: Done with 2024., type: text}
+            role: assistant
+          purpose: chat
+          request_sha256: c5301af91695942088bd406c8544a9545e0357ee30f286b0bdd3fe8eec85203f
+          response_id: null
+          usage: null
+    - [pool_commit, chat, {value: Done with 2024.}]
+    - [node_succeeded, chat, {commit: 14}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: Done with 2024.}]
+    - [node_succeeded, __end__, {commit: 17}]
+  stream:
+    - {chunk: Done with 2024., exchange_id: <id:1>, final: false, key: text, node_id: chat}
+    - {chunk: '', exchange_id: <id:1>, final: true, key: text, node_id: chat}

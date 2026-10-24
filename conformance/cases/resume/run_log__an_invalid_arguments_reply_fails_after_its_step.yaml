@@ -1,0 +1,99 @@
+# TS-only: Python reruns an AGENT from its start on resume.
+# The agent's reply calls lookup with arguments nested deeper than YIAN_MAX_VALUE_NESTING allows;
+# its model_call is written (record 9), then the crash cuts the run before the node's failure.
+# The resumed agent replays the reply and fails at the same check, calling no model.
+kind: resume
+rules: [run-log]
+flow: |
+  id: replay-invalid-arguments
+  name: replay_invalid_arguments
+  nodes:
+    research:
+      kind: agent
+      tools: [lookup]
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Look up x."
+  output: ${research.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MAX_VALUE_NESTING: '3'}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties: {q: {type: object}}
+        required: [q]
+      results: []
+  models:
+    research:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts:
+              - type: tool_call
+                id: c1
+                name: lookup
+                raw_arguments: '{"q": {"a": {"b": {"c": {"d": 1}}}}}'
+  crash_after_record: 9
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: "tool call 'lookup' arguments at q.a.b: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)"
+      node: research
+      frames: [{label: flow.yaml, range: [4, 3, 4, 11]}]
+  trace:
+    - - run_started
+      - null
+      - defaults: {MAX_VALUE_NESTING: 3}
+        effective_llm_by_static_path:
+          research:
+            model: gpt-5.5
+            provider: openai
+            _connection:
+              method: api_key
+              source: environment
+              endpoint: https://api.openai.com/v1
+        learnable: false
+        num_workers: 0
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, research]
+    - - node_step
+      - research
+      - n: 1
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - id: c1
+                name: lookup
+                raw_arguments: '{"q": {"a": {"b": {"c": {"d": 1}}}}}'
+                type: tool_call
+            role: assistant
+          purpose: chat
+          request_sha256: c87d6e747d2a44c71039fa17a2075b8613888a88e085964a9e2dda9ac1b5449d
+          response_id: null
+          usage: null
+    - [run_resumed, null, {num_workers: 0, retry_node_ids: [research]}]
+    - [node_started, research]
+    - - node_failed
+      - research
+      - failure:
+          code: node.execute
+          message: "tool call 'lookup' arguments at q.a.b: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)"
+          frames:
+            - {label: flow.yaml, range: [4, 3, 4, 11]}
+          node: research
+  stream: []

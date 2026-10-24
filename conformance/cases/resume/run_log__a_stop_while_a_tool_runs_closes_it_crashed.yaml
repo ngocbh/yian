@@ -1,0 +1,123 @@
+# TS-only: Python reruns an AGENT from its start on resume.
+# The host stops the run while lookup runs (its first call), so lookup's result is never
+# written. The resumed agent replays the reply, and closes the call it can't know the outcome of
+# with a `crashed` tool_result (an error the model reads as "outcome unknown") instead of
+# running it again; the next call reads that result.
+kind: resume
+rules: [run-log]
+flow: |
+  id: replay-stop-in-tool
+  name: replay_stop_in_tool
+  nodes:
+    research:
+      kind: agent
+      tools: [lookup]
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Look up x."
+  output: ${research.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties: {q: {type: string}}
+        required: [q]
+      # Called once, before the stop.
+      results:
+        - return: X1
+  models:
+    research:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "lookup's outcome is unknown"}]
+  stop:
+    research: {after: {tool_call: 1}}
+expect:
+  output: {status: succeeded, output: "lookup's outcome is unknown"}
+  tool_calls:
+    lookup: [{args: {q: x}, attempt: 1, call_id: r1/research/1/0, node: research}]
+  trace:
+    - - run_started
+      - null
+      - effective_llm_by_static_path:
+          research:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: environment
+            model: gpt-5.5
+            provider: openai
+        learnable: false
+        num_workers: 0
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, research]
+    - - node_step
+      - research
+      - n: 1
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - arguments: {q: x}
+                id: c1
+                name: lookup
+                type: tool_call
+            role: assistant
+          purpose: chat
+          request_sha256: 2a88ec7e550ecf7decec738ef550bce3f635cab265c5ff8bb506f4183b7e3b8d
+          response_id: null
+          usage: null
+    - [run_stopped, null, {node_ids: [research], reason: signal}]
+    - [run_resumed, null, {num_workers: 0, retry_node_ids: [research]}]
+    - [node_started, research]
+    - - node_step
+      - research
+      - n: 2
+        step:
+          call_id: c1
+          closed: crashed
+          is_error: true
+          kind: tool_result
+          output: The tool call was interrupted; its outcome is unknown. Check its effect before retrying.
+    - - node_step
+      - research
+      - n: 3
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - {text: lookup's outcome is unknown, type: text}
+            role: assistant
+          purpose: chat
+          request_sha256: f8e79db54f8108155ff4f1da9312128adc1e472ac8adea3691d139bb61e7a4b2
+          response_id: null
+          usage: null
+    - [pool_commit, research, {value: lookup's outcome is unknown}]
+    - [node_succeeded, research, {commit: 15}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: lookup's outcome is unknown}]
+    - [node_succeeded, __end__, {commit: 18}]
+  stream:
+    - {chunk: lookup's outcome is unknown, exchange_id: <id:1>, final: false, key: text, node_id: research}
+    - {chunk: '', exchange_id: <id:1>, final: true, key: text, node_id: research}

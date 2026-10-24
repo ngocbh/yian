@@ -68,7 +68,8 @@ import {
   validateOutputContract,
 } from "../nodes/contracts.ts";
 import { eventBytes, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
-import { VariablePool } from "../typesys/pool.ts";
+import { messagesKey, VariablePool } from "../typesys/pool.ts";
+import { newMessagesType } from "../typesys/types.ts";
 import {
   isInboxType,
   isRecord,
@@ -363,6 +364,8 @@ export class RunState {
    * go when the node's outcome is applied.
    */
   nodeSteps = new Map<string, readonly JsonObject[]>();
+  /** The seq of each step in `nodeSteps`, by node, index for index. */
+  nodeStepSeqs = new Map<string, readonly number[]>();
   /**
    * The number of accepted starts of each node that a later `RunResumed` retried with no
    * `RunStopped` covering them. Log history by node id: never decremented, and kept after the
@@ -417,6 +420,11 @@ export class RunState {
    * `NodeSucceeded` applies it to the pool; a resume drops it, and the node writes a new one.
    */
   pendingCommits = new Map<string, PendingCommit>();
+  /**
+   * The messages commit of each in-flight node that no success has accepted yet, with its rebuilt
+   * value. The node's `NodeSucceeded` applies it with its output; a resume drops it.
+   */
+  pendingMessages = new Map<string, PendingMessages>();
   /**
    * The seq of the accepted `PoolCommitRecord` that last wrote each pool name: a store key, or
    * `system.<name>` for a system value. Set when a commit is applied, deleted with its pool entry,
@@ -515,6 +523,16 @@ export interface PendingCommit {
    * doesn't exist yet, and a resume drops the commit with its spawner's retry.
    */
   readonly admitted: boolean;
+}
+
+/** A messages commit waiting for its node's success, kept under the node's id. */
+export interface PendingMessages {
+  /** The seq of the messages `PoolCommitRecord`. */
+  readonly seq: number;
+  /** The pool key the messages are written under, `messagesKey(<node>)`. */
+  readonly key: string;
+  /** The rebuilt `list(Message)` value's canonical typed wire text. */
+  readonly valueJson: string;
 }
 
 /**
@@ -660,19 +678,25 @@ export function rebuildGrowth(
 }
 
 /**
- * The value a prepared record accepts, for a reader folding a log (`foldRunLog`): a run-start
- * commit's or a send's own value, or for a success, its commit's value (rebuilt for a derived or
- * take commit), with the commit's seq; `null` for any other record.
+ * The values a prepared record accepts, for a reader folding a log (`foldRunLog`), each with the
+ * seq of the commit that holds it: a run-start commit's or a send's own value; for a success, its
+ * commit's value (rebuilt for a derived or take commit), then its messages commit's value (rebuilt
+ * from the node's steps) when it accepts one; none for any other record.
  */
-export function acceptedCommit(prepared: PreparedTransition): { seq: number; value: TypedValue } | null {
+export function acceptedCommits(prepared: PreparedTransition): readonly { seq: number; value: TypedValue }[] {
   const plan = prepared._plan;
   // A run-start commit and a send always hold their values, and apply at once.
   if (plan.kind === "commit" && (plan.initial || plan.send)) {
-    return { seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) };
+    return [{ seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) }];
   }
-  if (plan.kind !== "success") return null;
+  if (plan.kind !== "success") return [];
   const seq = (prepared.record as NodeSucceededRecord).commit;
-  return { seq, value: normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson)) };
+  const accepted = [{ seq, value: normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson)) }];
+  const messages = plan.delta.messages;
+  if (messages !== null) {
+    accepted.push({ seq: messages.seq, value: normalizeTypedFiles(newMessagesType(), decodeTyped(messages.valueJson)) });
+  }
+  return accepted;
 }
 
 /**
@@ -842,6 +866,8 @@ interface CommitPlan extends PlanAnchors {
   readonly expansion: boolean;
   /** Whether this is a send to a START inbox, which applies at once to the inbox store. */
   readonly send: boolean;
+  /** A messages commit's rebuilt value, as canonical typed wire text; `null` for any other commit. */
+  readonly messagesJson: string | null;
 }
 
 /** One dispatch, resume, step, stop, wait, wake, run wait or inbox close. */
@@ -870,6 +896,8 @@ interface SuccessDelta {
   readonly observerCommitAs: string | null;
   /** The sends a take commit consumed, whose values leave the inbox store. */
   readonly consumedEvents: readonly number[];
+  /** The node's messages commit this success also accepts, or `null`. */
+  readonly messages: PendingMessages | null;
 }
 
 /**
@@ -1565,9 +1593,34 @@ export function prepareNodeSucceeded(
     state,
     new NodeSucceededRecord(nodeId, pending.seq, {
       forwardCapture: derived ? null : (options.forwardCapture ?? null),
+      messages: state.pendingMessages.get(nodeId)?.seq ?? null,
     }),
     Object.hasOwn(options, "output") ? { output: options.output } : null,
   );
+}
+
+/**
+ * Prepare a messages commit: the seqs of the steps `nodeId`'s new messages are made of
+ * (`Node.messageSteps`), written after its output commit and before the success that accepts both.
+ * The reducer rebuilds the value (`Node.rebuildMessages`) now, so a rebuild that fails appends
+ * nothing.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight and its output commit
+ *   pending.
+ * @param nodeId The exact id of the executing node; its kind produces messages.
+ * @returns The canonical `PoolCommitRecord` under `messagesKey(nodeId)` holding `steps`, and its
+ *   plan, with no observers.
+ * @throws TypeError when `state` or `nodeId` has the wrong type.
+ * @throws RangeError as `validateMessagesCommit`.
+ */
+export function prepareMessagesCommit(state: RunState, nodeId: string): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareMessagesCommit expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  requireInitializedNonterminal(state);
+  if (state.flow.nodes.get(nodeId)?.producesMessages !== true) {
+    throw new RangeError(`a messages commit by node ${reprText(nodeId)}, which produces no messages`);
+  }
+  return prepareRecord(state, new PoolCommitRecord(nodeId, messagesKey(nodeId), null, { steps: messageStepSeqs(state, nodeId) }));
 }
 
 /**
@@ -1774,6 +1827,9 @@ export function prepareRecord(
       validateInitialCommit(state, record);
       return prepareCommitTransition(state, record, true);
     }
+    if (record.steps !== null) {
+      return prepareCommitTransition(state, record, false, false, false, validateMessagesCommit(state, record));
+    }
     if (record.take !== null) {
       validateTakeCommit(state, record);
       return prepareCommitTransition(state, record, false);
@@ -1916,6 +1972,7 @@ function prepareCommitTransition(
   initial: boolean,
   expansion = false,
   send = false,
+  messagesJson: string | null = null,
 ): PreparedTransition {
   const runId = state.runId;
   // Established by the initialized-state check.
@@ -1944,6 +2001,7 @@ function prepareCommitTransition(
     initial,
     expansion,
     send,
+    messagesJson,
   });
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
 }
@@ -1955,6 +2013,9 @@ function prepareSuccessTransition(
   live: { readonly output: unknown } | null = null,
 ): PreparedTransition {
   validateLearnedScope(state, record.nodeId);
+  if (state.flow.nodes.get(record.nodeId)!.producesMessages && !state.pendingMessages.has(record.nodeId)) {
+    throw new RangeError(`node_succeeded of ${reprText(record.nodeId)} has no messages commit to accept`);
+  }
   // The caller checked that the record names the node's pending commit.
   let pending = state.pendingCommits.get(record.nodeId)!;
   // A derived record's capture is rebuilt with its value; a child START's, from its constant wiring,
@@ -2012,6 +2073,7 @@ function prepareSuccessTransition(
       terminalFailure: terminal?.failure ?? null,
       writerFiles: files,
       committed: { key: delta.commitTarget, valueJson: delta.valueJson },
+      messages: delta.messages,
       capture,
     }),
     delta,
@@ -2806,8 +2868,21 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
   } else if (delta.writer !== null) {
     throw new RangeError("only an accepted output can install a physical trace writer");
   }
+  // An accepted messages commit is a second writer, sourced at that commit.
+  const messages = plan.kind === "success" ? plan.delta.messages : null;
+  const messagesSource = messages === null ? null : new SourceRef(state.runId!, messages.seq);
+  const messagesWriter =
+    messages === null ? null : new SourceEntry(messagesSource, prepared.expectedSequence, messages.valueJson, newMessagesType());
+  if ((delta.messagesWriter?.[0] ?? null) !== (messages?.key ?? null)) {
+    throw new RangeError("physical trace messages writer disagrees with the accepted messages commit");
+  }
+  if (occurrence.messagesSource !== null) validateSource(occurrence.messagesSource);
+  if (!sameOptional(occurrence.messagesSource, messagesSource, sameSource)) {
+    throw new RangeError("physical trace occurrence disagrees with the accepted messages commit");
+  }
   const entries = [
     [delta.writer?.[1] ?? null, writer, "physical trace writer"],
+    [delta.messagesWriter?.[1] ?? null, messagesWriter, "physical trace messages writer"],
     [delta.rootWriter, rootWriter, "terminal trace root writer"],
   ] as const;
   for (const [actual, expected, label] of entries) {
@@ -3002,6 +3077,9 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   appendAndVerify(log, prepared);
   if (plan.send) {
     state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
+  } else if (plan.messagesJson !== null) {
+    const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson };
+    state.pendingMessages.set(plan.nodeId, Object.freeze(pending));
   } else if (!plan.initial) {
     const pending: PendingCommit = {
       seq: prepared.expectedSequence,
@@ -3118,12 +3196,18 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       for (const [nodeId, pending] of state.pendingCommits) {
         if (!pending.admitted) state.pendingCommits.delete(nodeId);
       }
+      // A retried node writes its messages commit again; the orphan stays in the log, unread.
+      state.pendingMessages.clear();
       state.numWorkers = delta.numWorkers;
       break;
     case "step":
       state.nodeSteps.set(
         delta.nodeId,
         Object.freeze([...(state.nodeSteps.get(delta.nodeId) ?? []), delta.step]),
+      );
+      state.nodeStepSeqs.set(
+        delta.nodeId,
+        Object.freeze([...(state.nodeStepSeqs.get(delta.nodeId) ?? []), prepared.expectedSequence]),
       );
       break;
     case "stopped":
@@ -3161,7 +3245,12 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   requireOutcomeTraceScope(state, prepared);
   requireOutcomeTraceTerminal(state, prepared);
   const delta = plan.delta;
-  if (record.nodeId !== delta.nodeId || state.pendingCommits.get(record.nodeId)?.seq !== record.commit) {
+  if (
+    record.nodeId !== delta.nodeId ||
+    state.pendingCommits.get(record.nodeId)?.seq !== record.commit ||
+    (state.pendingMessages.get(record.nodeId)?.seq ?? null) !== record.messages ||
+    (delta.messages?.seq ?? null) !== record.messages
+  ) {
     throw new RangeError("success record and prevalidated delta disagree");
   }
   const apply = materializeSuccess(plan);
@@ -3170,6 +3259,11 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.pool.store.set(delta.commitTarget, apply.value);
   state.producers.set(delta.commitTarget, record.commit);
   state.pendingCommits.delete(delta.nodeId);
+  if (delta.messages !== null) {
+    state.pool.store.set(delta.messages.key, apply.messagesValue!);
+    state.producers.set(delta.messages.key, delta.messages.seq);
+    state.pendingMessages.delete(delta.nodeId);
+  }
   state.nodeState.set(delta.nodeId, NodeState.TAKEN);
   for (const edgeId of delta.outgoingEdgeIds) state.edgeState.set(edgeId, NodeState.TAKEN);
   for (const nodeId of delta.edgeHeads) dropUnknownIncoming(state, nodeId);
@@ -3329,6 +3423,7 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
     delta.handler,
     delta.material,
     delta.writer,
+    delta.messagesWriter,
     delta.systemValue,
     delta.consumedConnection,
     delta.boundaryUpdate,
@@ -3408,6 +3503,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     delta.handler,
     delta.material,
     delta.writer,
+    delta.messagesWriter,
     delta.systemValue,
     delta.consumedConnection,
     delta.boundaryUpdate,
@@ -3448,6 +3544,7 @@ function requireEndingTraceDelta(state: RunState, prepared: PreparedTransition):
     delta.handler,
     delta.material,
     delta.writer,
+    delta.messagesWriter,
     delta.systemValue,
     delta.consumedConnection,
     delta.boundaryUpdate,
@@ -3616,7 +3713,9 @@ function requireInitialized(state: RunState): void {
     isExactly(state.acceptedStarts, Map) &&
     isExactly(state.nodeStarts, Map) &&
     isExactly(state.nodeSteps, Map) &&
+    isExactly(state.nodeStepSeqs, Map) &&
     isExactly(state.pendingCommits, Map) &&
+    isExactly(state.pendingMessages, Map) &&
     isExactly(state.producers, Map) &&
     isExactly(state.crashedAttempts, Map) &&
     isExactly(state.depth, Map) &&
@@ -3657,7 +3756,14 @@ function requireInitialized(state: RunState): void {
     ) ||
     [...state.pendingCommits].some(([nodeId, pending]) =>
       pending.admitted ? state.nodeState.get(nodeId) !== NodeState.UNKNOWN : !state.inFlight.has(pending.spawner ?? nodeId),
-    )
+    ) ||
+    state.nodeStepSeqs.size !== state.nodeSteps.size ||
+    [...state.nodeStepSeqs].some(([nodeId, seqs]) => state.nodeSteps.get(nodeId)?.length !== seqs.length) ||
+    // A messages commit follows its node's own output commit, which its success accepts with it.
+    [...state.pendingMessages.keys()].some((nodeId) => {
+      const output = state.pendingCommits.get(nodeId);
+      return !state.inFlight.has(nodeId) || output === undefined || output.spawner !== null;
+    })
   ) {
     throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
   }
@@ -4179,6 +4285,7 @@ function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | unde
 function forgetNodeSteps(state: RunState, nodeId: string): void {
   if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
   state.nodeSteps.delete(nodeId);
+  state.nodeStepSeqs.delete(nodeId);
 }
 
 /** Require an existing unknown node in the in-flight frontier, with no pending commit. */
@@ -5229,6 +5336,72 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
 }
 
 /**
+ * The seqs of the steps `nodeId`'s new messages are made of: the `n`s its node picks from its
+ * recorded steps (`Node.messageSteps`), each mapped to its record's seq.
+ *
+ * @throws RangeError when the node picks a step it didn't record.
+ */
+function messageStepSeqs(state: RunState, nodeId: string): number[] {
+  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  return state.flow.nodes.get(nodeId)!.messageSteps(state.nodeSteps.get(nodeId) ?? []).map((n) => {
+    const seq = Number.isSafeInteger(n) ? seqs[n - 1] : undefined;
+    if (seq === undefined) throw new RangeError(`node ${reprText(nodeId)} picked step ${n}, which it didn't record`);
+    return seq;
+  });
+}
+
+/**
+ * Validate a messages commit and rebuild its value: its node produces messages and is in flight,
+ * the key is `messagesKey(<node>)`, it follows the node's own output commit and is the first since,
+ * and `steps` are exactly the seqs the node picks (`messageStepSeqs`).
+ *
+ * @returns The rebuilt `list(Message)` value's canonical typed wire text.
+ * @throws RangeError otherwise, or when the picked steps rebuild to a value `list(Message)`
+ *   refuses.
+ */
+function validateMessagesCommit(state: RunState, record: PoolCommitRecord): string {
+  const { nodeId } = record;
+  const node = state.flow.nodes.get(nodeId);
+  if (node?.producesMessages !== true) {
+    throw new RangeError(`a messages commit by node ${reprText(nodeId)}, which produces no messages`);
+  }
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN || !state.inFlight.has(nodeId)) {
+    throw new RangeError(`pool_commit node ${reprText(nodeId)} is not in flight`);
+  }
+  if (record.key !== messagesKey(nodeId)) {
+    throw new RangeError(
+      `the messages commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(messagesKey(nodeId))}`,
+    );
+  }
+  const output = state.pendingCommits.get(nodeId);
+  if (output === undefined || output.spawner !== null || output.take !== null || output.valueJson === null) {
+    throw new RangeError(`the messages commit of ${reprText(nodeId)} must follow its output commit`);
+  }
+  const pending = state.pendingMessages.get(nodeId);
+  if (pending !== undefined) {
+    throw new RangeError(`node ${reprText(nodeId)} already has a pending messages commit at seq ${pending.seq}`);
+  }
+  const expected = messageStepSeqs(state, nodeId);
+  if (!sameItems(record.steps!, expected)) {
+    throw new RangeError(
+      `the messages commit of ${reprText(nodeId)} must name steps [${expected.join(", ")}], found [${record.steps!.join(", ")}]`,
+    );
+  }
+  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  const bodies = state.nodeSteps.get(nodeId) ?? [];
+  const picked = record.steps!.map((seq) => bodies[seqs.indexOf(seq)]!);
+  try {
+    const [wire] = canonicalTyped(node.rebuildMessages(picked, decodeTyped(output.valueJson)), newMessagesType());
+    return logJson(wire);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new RangeError(`the messages of ${reprText(nodeId)} rebuild to a value list(Message) refuses: ${error.message}`, {
+      cause: error,
+    });
+  }
+}
+
+/**
  * Validate one of a spawner's expansion commits, a commit by a spawner under a key the flow doesn't
  * hold yet: the spawner is in flight with no commit of its own pending, the commit holds `from`,
  * and its child START `key` has no commit pending yet.
@@ -5285,6 +5458,13 @@ function validateSuccessCommit(state: RunState, record: NodeSucceededRecord): vo
     throw new RangeError(
       `node_succeeded of ${reprText(record.nodeId)} names commit ${record.commit}, ` +
         `not its pending pool_commit ${pending === undefined ? "(none)" : pending.seq}`,
+    );
+  }
+  const messages = state.pendingMessages.get(record.nodeId)?.seq ?? null;
+  if (record.messages !== messages) {
+    throw new RangeError(
+      `node_succeeded of ${reprText(record.nodeId)} names messages ${record.messages ?? "(none)"}, ` +
+        `not its pending messages commit ${messages ?? "(none)"}`,
     );
   }
 }
@@ -5360,6 +5540,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
     newlyReadyIds: Object.freeze(newlyReadyIds),
     observerCommitAs: target === record.nodeId ? null : target,
     consumedEvents: pending.take?.events ?? [],
+    messages: state.pendingMessages.get(record.nodeId) ?? null,
   });
 }
 
@@ -6040,7 +6221,9 @@ function requirePristine(state: RunState): void {
     state.acceptedStarts.size === 0 &&
     state.nodeStarts.size === 0 &&
     state.nodeSteps.size === 0 &&
+    state.nodeStepSeqs.size === 0 &&
     state.pendingCommits.size === 0 &&
+    state.pendingMessages.size === 0 &&
     state.producers.size === 0 &&
     state.inputsCommitted === false &&
     state.crashedAttempts.size === 0 &&
@@ -6232,6 +6415,8 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
 /** The detached values one success commit installs, all built before the durable append. */
 interface SuccessApply {
   value: TypedValue;
+  /** The node's new messages, when the success accepts a messages commit. */
+  messagesValue: TypedValue | null;
   terminal: TerminalApply | null;
   observers: readonly RunEvent[];
 }
@@ -6239,13 +6424,15 @@ interface SuccessApply {
 /** Decode independent pool, observer and terminal copies before append. */
 function materializeSuccess(plan: SuccessPlan): SuccessApply {
   const value = normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson));
+  const messages = plan.delta.messages;
+  const messagesValue = messages === null ? null : normalizeTypedFiles(newMessagesType(), decodeTyped(messages.valueJson));
   const observerValue = normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson)).toObject();
   const terminal = plan.terminal !== null ? materializeTerminal(plan.terminal) : null;
   const observers: RunEvent[] = [
     new NodeSucceeded({ nodeId: plan.delta.nodeId, output: observerValue, commitAs: plan.delta.observerCommitAs }),
   ];
   if (terminal !== null) observers.push(terminal.observer);
-  return { value, terminal, observers };
+  return { value, messagesValue, terminal, observers };
 }
 
 /** The detached values one route commit installs, all built before the durable append. */
@@ -6447,6 +6634,8 @@ function applyGrowth(
       state.unknownIncoming.delete(nodeId);
       state.pool.store.delete(nodeId);
       state.producers.delete(nodeId);
+      state.pool.store.delete(messagesKey(nodeId));
+      state.producers.delete(messagesKey(nodeId));
       state.depth.delete(nodeId);
       state.wiringOverrides.delete(nodeId);
       state.growthOwner.delete(nodeId);

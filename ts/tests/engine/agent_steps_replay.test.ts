@@ -210,8 +210,9 @@ function sentResults(model: ScriptedModel, index: number): ToolResultPart[] {
 
 /**
  * The log at `path` as comparable entries: run_resumed records and the later starts of `writer`
- * left out, record and step times masked, a success's commit given as its commit's entry, and a
- * capture source's `execution_seq` as the kind and node of the record it names.
+ * left out, record and step times masked, a success's commit and messages commit given as their
+ * entries, a messages commit's steps as the steps they name, and a capture source's
+ * `execution_seq` as the kind and node of the record it names.
  */
 function comparable(path: string): unknown[] {
   let started = false;
@@ -231,6 +232,12 @@ function comparable(path: string): unknown[] {
       delete step["first_token_at"];
     }
     if (kind === "node_succeeded") copy["commit"] = logJson(entry(bySeq.get(copy["commit"] as bigint)!) as JsonObject);
+    if (kind === "node_succeeded" && copy["messages"] !== null) {
+      copy["messages"] = logJson(entry(bySeq.get(copy["messages"] as bigint)!) as JsonObject);
+    }
+    if (kind === "pool_commit" && Array.isArray(copy["steps"])) {
+      copy["steps"] = (copy["steps"] as bigint[]).map((seq) => logJson(entry(bySeq.get(seq)!) as JsonObject));
+    }
     const named = (value: unknown): void => {
       if (typeof value !== "object" || value === null) return;
       const record = value as Record<string, unknown>;
@@ -485,6 +492,7 @@ test("a crash while tools run closes each call with no result lazily, without ru
     "tool_result 2",
     "tool_result 3",
     "model_call 4",
+    "pool_commit",
     "pool_commit",
     "node_succeeded",
     "node_started",

@@ -113,6 +113,7 @@ import {
   prepareExpansionCommit,
   prepareNodeStarted,
   prepareNodeSucceeded,
+  prepareMessagesCommit,
   preparePoolCommit,
   prepareRecord,
   type PreparedTransition,
@@ -1126,9 +1127,10 @@ export function initializedAndStarted(
 }
 
 /**
- * Commit `output` as in-flight `nodeId`'s pool commit (under `options.commitAs` when given), then
- * prepare the success that accepts it, with the other `options`. A derived node's value is the one
- * its binding rebuilds, whatever `output` is.
+ * Commit `output` as in-flight `nodeId`'s pool commit (under `options.commitAs` when given), and
+ * for a node that produces messages its messages commit, then prepare the success that accepts
+ * them, with the other `options`. A derived node's value is the one its binding rebuilds, whatever
+ * `output` is.
  */
 export function prepareOutput(
   log: RunLog,
@@ -1144,6 +1146,7 @@ export function prepareOutput(
   if (!state.pendingCommits.has(nodeId)) {
     const from = isDerivedCommit(state, nodeId) ? new Map(state.producers) : null;
     commitPrepared(log, state, preparePoolCommit(state, nodeId, output, { commitAs, from }));
+    if (state.flow.nodes.get(nodeId)!.producesMessages) commitPrepared(log, state, prepareMessagesCommit(state, nodeId));
   }
   const pending = state.pendingCommits.get(nodeId)!;
   if (pending.valueJson === null) {

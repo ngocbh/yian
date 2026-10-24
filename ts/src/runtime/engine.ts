@@ -72,6 +72,7 @@ import {
   prepareNodeRouted,
   prepareNodeStarted,
   prepareNodeStep,
+  prepareMessagesCommit,
   prepareNodeSucceeded,
   prepareNodeWaiting,
   prepareNodeWoken,
@@ -712,9 +713,10 @@ export class FlowEngine {
         const failure = this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers);
         return commitPrepared(this.log, state, failure);
       }
-      // The output is written before the success that accepts it: a crash between the two leaves
-      // an orphan commit, and the node reruns.
+      // The output, then the node's messages, then the success that accepts both, with nothing
+      // between: a crash before the success leaves orphan commits, and the node reruns.
       commitPrepared(this.log, state, commit);
+      if (state.flow.nodes.get(nodeId)!.producesMessages) commitPrepared(this.log, state, prepareMessagesCommit(state, nodeId));
       prepared = prepareNodeSucceeded(state, nodeId, { ...carriers, output: outcome.value });
     } else if (outcome instanceof Route) {
       try {

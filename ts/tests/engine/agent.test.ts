@@ -1266,6 +1266,7 @@ describe("model_call steps through the engine", () => {
       "model_call 1",
       "model_call 2",
       "PoolCommitRecord",
+      "PoolCommitRecord",
       "NodeSucceededRecord",
     ]);
     const [failed, succeeded] = chatSteps(built);
@@ -1310,6 +1311,7 @@ describe("model_call steps through the engine", () => {
       "NodeStartedRecord",
       "llm_config 3",
       "model_call 4",
+      "PoolCommitRecord",
       "PoolCommitRecord",
       "NodeSucceededRecord",
     ]);

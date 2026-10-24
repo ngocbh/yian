@@ -199,6 +199,7 @@ test("an AGENT writes each model call, then each of its tool results, before the
     "tool_result 7",
     "model_call 8",
     "PoolCommitRecord",
+    "PoolCommitRecord",
     "NodeSucceededRecord",
   ]);
   const written = steps(log);

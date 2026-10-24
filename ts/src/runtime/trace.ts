@@ -52,7 +52,8 @@ import {
   sameOptional,
 } from "../nodes/contracts.ts";
 import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
-import type { VariablePool } from "../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES, type VariablePool } from "../typesys/pool.ts";
+import { newMessagesType } from "../typesys/types.ts";
 import {
   fieldOf,
   isList,
@@ -166,7 +167,10 @@ export function captureBindings(bindings: BindingCapture, backward: BackwardCapt
  * does; `null` reads the value as stored.
  */
 export class SourceEntry {
-  /** The producer's accepted start, or `null` for an initial pool value without one. */
+  /**
+   * The producer's accepted start; for an AGENT's new messages, its messages commit; `null` for an
+   * initial pool value without one.
+   */
   readonly source: SourceRef | null;
   /** The sequence of the record that accepted the value. */
   readonly outcomeSeq: number;
@@ -297,6 +301,8 @@ export class TraceOccurrence {
   readonly seed: JsonValue | null;
   /** The node's recorded steps across its starts, in order; read-only by contract. */
   readonly steps: readonly ValueRecord[];
+  /** The source of the occurrence's new messages (an AGENT's success), or `null`. */
+  readonly messagesSource: SourceRef | null;
   /** The forward capture as accepted; `capture` reads it with its text rebuilt. */
   readonly #capture: ForwardCapture;
   /** Binds the node again, or `null` when none was given. */
@@ -319,6 +325,7 @@ export class TraceOccurrence {
    * @param options.hiddenInputs The bound inputs its node keeps from models; defaults to none.
    * @param options.seed An expansion's canonical seed; defaults to `null`.
    * @param options.steps The node's recorded steps; defaults to none.
+   * @param options.messagesSource The source of the node's new messages; defaults to `null`.
    * @param options.capture The occurrence's forward capture; defaults to the record's.
    * @param options.rebind Binds the node again, which rebuilds the bound inputs; `null` (the
    *   default) leaves `boundInputs` unreadable.
@@ -341,6 +348,7 @@ export class TraceOccurrence {
       hiddenInputs?: ReadonlySet<string>;
       seed?: JsonValue | null;
       steps?: readonly ValueRecord[];
+      messagesSource?: SourceRef | null;
       capture?: ForwardCapture | null;
       rebind?: (() => ReboundOccurrence) | null;
       fillsText?: boolean;
@@ -352,6 +360,7 @@ export class TraceOccurrence {
       hiddenInputs = new Set<string>(),
       seed = null,
       steps = [],
+      messagesSource = null,
       capture = null,
       rebind = null,
       fillsText = false,
@@ -374,6 +383,7 @@ export class TraceOccurrence {
     this.hiddenInputs = new Set(hiddenInputs);
     this.seed = seed === null ? null : canonicalSeed(seed)[0];
     this.steps = Object.freeze([...steps]);
+    this.messagesSource = messagesSource;
     Object.freeze(this);
   }
 
@@ -981,6 +991,8 @@ export interface TraceDeltaFields {
   material?: MaterialHandler | null;
   /** The accepted output's commit target and its source entry. */
   writer?: readonly [string, SourceEntry] | null;
+  /** An AGENT's new messages: their pool name and source entry. */
+  messagesWriter?: readonly [string, SourceEntry] | null;
   /** A system value the run start commits: its name and canonical typed log text. */
   systemValue?: readonly [string, string] | null;
   /** The current names an expansion retires. */
@@ -1027,6 +1039,8 @@ export class TraceDelta {
   readonly material: MaterialHandler | null;
   /** The accepted output's commit target and its source entry, or `null`. */
   readonly writer: readonly [string, SourceEntry] | null;
+  /** An AGENT's new messages: their pool name and source entry, or `null`. */
+  readonly messagesWriter: readonly [string, SourceEntry] | null;
   /** A system value the run start commits: its name and canonical typed log text, or `null`. */
   readonly systemValue: readonly [string, string] | null;
   /** The current names an expansion retires. */
@@ -1061,6 +1075,7 @@ export class TraceDelta {
     this.handler = fields.handler ?? null;
     this.material = fields.material ?? null;
     this.writer = frozenPair(fields.writer ?? null);
+    this.messagesWriter = frozenPair(fields.messagesWriter ?? null);
     this.systemValue = frozenPair(fields.systemValue ?? null);
     this.pruneIds = Object.freeze([...(fields.pruneIds ?? [])]);
     const connections = fields.connections ?? [];
@@ -1134,6 +1149,7 @@ export class TraceDelta {
     }
     for (const nodeId of this.pruneIds) {
       trace._currentWriters.delete(nodeId);
+      trace._currentWriters.delete(messagesKey(nodeId));
       trace._pendingConnections.delete(nodeId);
       trace.currentBoundaries.delete(nodeId);
     }
@@ -1144,10 +1160,12 @@ export class TraceDelta {
       trace.currentBoundaries.set(boundary.startId, Object.freeze([index, "startSource"] as const));
       trace.currentBoundaries.set(boundary.endId, Object.freeze([index, "endSource"] as const));
     }
-    if (this.writer !== null) {
-      const [target, entry] = this.writer;
+    // An outcome's writer always has its occurrence's source, the START inputs' source 0, and new
+    // messages their messages commit.
+    for (const writer of [this.writer, this.messagesWriter]) {
+      if (writer === null) continue;
+      const [target, entry] = writer;
       trace._currentWriters.set(target, entry);
-      // An outcome's writer always has its occurrence's source, and the START inputs' source 0.
       trace._sources.set(sourceKey(entry.source!), entry);
       trace._sourceNames.set(sourceKey(entry.source!), target);
     }
@@ -1174,8 +1192,9 @@ export const SYSTEM_PREFIX = "system.";
 
 /**
  * Parse a `${path}` lookup into the pool name it reads and the field path inside that value, or
- * `null` for a miss: `<id>.output...` reads `<id>` when `holds(id)`, `input...` the START's value
- * (`startId`) and `system.<key>` the system value `system.<key>`, which is read whole.
+ * `null` for a miss: `<id>.output...` reads `<id>` when `holds(id)`, `<id>.new_messages...` reads
+ * `messagesKey(<id>)` when it is held, `input...` the START's value (`startId`) and
+ * `system.<key>` the system value `system.<key>`, which is read whole.
  *
  * @throws ExpressionError when a dotted segment of `path` is empty.
  */
@@ -1188,6 +1207,7 @@ export function sourcePath(
   if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
   const [head, ...rest] = parts as [string, ...string[]];
   if (holds(head) && rest[0] === "output") return { name: head, projection: rest.slice(1) };
+  if (rest[0] === NEW_MESSAGES && holds(messagesKey(head))) return { name: messagesKey(head), projection: rest.slice(1) };
   if (head === "input" && rest.length) return { name: startId, projection: rest };
   if (head === "system" && rest.length) return { name: `${SYSTEM_PREFIX}${rest[0]}`, projection: [] };
   return null;
@@ -1245,6 +1265,8 @@ export interface PrepareTraceOptions {
   writerFiles?: Type | null;
   /** An accepted success's commit: its pool key and canonical typed value text. */
   committed?: { readonly key: string; readonly valueJson: string } | null;
+  /** An accepted success's messages commit: its pool key, seq and canonical typed value text. */
+  messages?: { readonly key: string; readonly seq: number; readonly valueJson: string } | null;
   /** Whether a `PoolCommitRecord` is one of the run start's commits, which apply at once. */
   initialCommit?: boolean;
   /** An accepted expansion's canonical seed, which its record leaves out. */
@@ -1301,6 +1323,7 @@ export function prepareTrace(
     terminalFailure = null,
     writerFiles = null,
     committed = null,
+    messages = null,
     initialCommit = false,
     seed = null,
     steps = [],
@@ -1411,6 +1434,7 @@ export function prepareTrace(
     hiddenInputs: node.modelHiddenInputs(),
     seed,
     steps,
+    messagesSource: messages === null ? null : new SourceRef(envelope.runId, messages.seq),
     capture,
     rebind: rebinder !== null ? rebind : bound ? null : () => ({ inputs: null, capture, inputRoute }),
     fillsText: fillsText && rebinder !== null,
@@ -1472,6 +1496,10 @@ export function prepareTrace(
   const writer = isExactly(record, NodeSucceededRecord)
     ? ([committed!.key, new SourceEntry(source, envelope.seq, committed!.valueJson, writerFiles)] as const)
     : null;
+  const messagesWriter =
+    isExactly(record, NodeSucceededRecord) && messages !== null
+      ? ([messages.key, new SourceEntry(occurrence.messagesSource, envelope.seq, messages.valueJson, newMessagesType())] as const)
+      : null;
   const rootWriter = writer !== null && writer[0] === trace.endId ? writer[1] : null;
   const causalRouteSource =
     isExactly(record, NodeRoutedRecord) && record.terminalFailure !== null && trace.causalRouteSource === null
@@ -1507,6 +1535,7 @@ export function prepareTrace(
     handler,
     material,
     writer,
+    messagesWriter,
     pruneIds: isExactly(record, NodeExpandedRecord) ? retiredIds : [],
     connections: [...connections].map(([nodeId, fields]) => [nodeId, new SeedRoutes(source, fields)] as const),
     consumedConnection: candidates === null ? null : [node.id, candidates],

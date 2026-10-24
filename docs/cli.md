@@ -9,7 +9,7 @@ yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memor
 yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--quiet] [--verbose] [--engine-trace] [--json]
 yian check [--root DIR] FLOW.yaml... [--json]
 yian skills check DIR... [--json]
-yian status LOG [--json]
+yian status [LOG] [--json]
 yian --licenses
 yian --version
 yian config check [--json] < llm_config.json
@@ -18,7 +18,8 @@ yian models (--auth-file F | --provider P [--base-url URL]) [--timeout S] [--jso
 ```
 
 `yian check` loads flows without running them, `yian skills check` checks skill
-directories, `yian status` (TS yian only) reports where the run in a run log stands,
+directories, `yian status` (TS yian only) reports where the run in a run log stands, or lists
+the runs in `~/.yian/runs`,
 `yian config check` checks an `llm_config` layer, `yian providers`
 lists the providers, `yian models` lists the models a login or a key offers,
 `yian --licenses` (TS yian only) prints the notices of what yian bundles, and
@@ -666,6 +667,7 @@ Schema `conformance/schema/cli.schema.json` in the repository.
 | `yian auth openai --method subscription --login device --json` | JSON lines: `{"format", "event", ...}` | sign-in failed |
 | `yian run FLOW ... --json` (fresh or `--resume`) | `{"format", "status", ...}` | the run failed |
 | `yian status LOG --json` (TS yian only) | `{"format", "status", "in_flight", "crashed_attempts"}` | the log can't be read |
+| `yian status --json` (TS yian only) | `{"format", "runs"}` | the run index can't be updated |
 
 Every document follows these rules:
 
@@ -986,6 +988,23 @@ It exits 0 whatever the status. A log it can't read (empty, damaged, not a run l
 exits 1 with a `run.setup` error document; a missing LOG is a usage error (exit 2). Without
 `--json`, it prints `status: STATUS`, then `in flight: ID, ...` and
 `crashed attempts: ID=N, ...` when there are any.
+
+`yian status` with no LOG lists the runs in `~/.yian/runs`. It first updates the run index,
+`~/.yian/runs/index.sqlite` (see [the run index](api.md#the-run-index-with-updaterunindex)), which
+every `yian run` whose log is in `~/.yian/runs` also updates when it ends (a run with `--log`
+elsewhere isn't indexed). The index is rebuilt from the logs, so it is safe to delete. As text, it
+prints a header and one line per run, oldest first: run id, status, start time and flow file (`-`
+for a flow built in code), and nothing when there are no runs. A run's status is read as `yian
+status LOG` reads it. With `--json`:
+
+```json
+{"format": "yian.cli.v1", "runs": [{"run_id": "4f1c...", "flow": "/home/ada/flows/climate.yaml", "status": "succeeded", "started_at": "2026-10-23T14:02:11.123Z", "ended_at": "2026-10-23T14:02:15.456Z", "parent_run_id": null, "last_seq": 12, "result": {"summary": "..."}, "input_tokens": 1200, "output_tokens": 300, "cache_read_tokens": 0, "reasoning_tokens": 0}]}
+```
+
+`result` is the run's output once it succeeded, else `null`, and the token counts sum every model
+call, failed attempts included. A log it can't read is a `warning:` line on stderr and keeps its
+last row. An index another update holds for more than 5 seconds, or one that isn't a database,
+exits 1 with a `run.setup` error document.
 
 ## Exit codes
 

@@ -2957,6 +2957,57 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 
+### The run index with `updateRunIndex`
+
+Changed (TS yian): a runs folder that holds one folder per run (`runLogPath`) can keep a run index,
+`<runsDir>/index.sqlite`, with one row per run. `updateRunIndex(runsDir, { timeoutMs })` (from
+`yian/run`) builds it and brings it up to date; `readRunIndex(runsDir, { timeoutMs })` returns its
+rows as `RunIndexRow`s, by start time then run id. The logs stay the only source of truth: the
+index may lag them but never leads them, and deleting it and updating again gives the same rows.
+A host keeps only its own facts about a run, keyed by `run_id`, and reads the run's facts from the
+index or the log.
+
+| Field | Meaning |
+|---|---|
+| `runId` | the run's id, its folder's name |
+| `flow` | the path of the flow file the run started from (`run_started.flow`), or `null` for a flow built in code |
+| `status` | `succeeded`, `failed`, `stopped` or `crashed`, read from the records as `inspectRun` reads them without a flow; `running` in place of `stopped` or `crashed` while a writer holds the log's lock |
+| `startedAt`, `endedAt` | the `at` of `run_started`; the `at` of the log's last record for a `succeeded` or `failed` run, else `null` |
+| `parentRunId` | `run_started.parent`'s run id, or `null` |
+| `lastSeq`, `offset` | the seq of the last record read, and the byte offset just past it |
+| `result` | the value of the top-level END's `pool_commit` as `logJson` text, `null` until the END succeeded |
+| `inputTokens`, `outputTokens`, `cacheReadTokens`, `reasoningTokens` | sums over every `model_call` step's `usage`, failed attempts included |
+
+- An update reads each `<runsDir>/<run_id>/log.jsonl` on from its row's `offset` with
+  `iterRunRecords` (`afterOffset`, `runId`, `afterSeq`), and doesn't open a log that hasn't grown.
+  A log that no longer continues what was read (`RunLogChangedError`: truncated or replaced) is
+  read again from the start. A run folder with no log, or a log with no complete record yet, has
+  no row; a row whose log is gone is deleted.
+- A log the update can't read (another schema, a damaged line, a first record that isn't the
+  folder's run's `run_started`) raises a warning (`process.emitWarning`) and keeps its row as it
+  was.
+- An update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take
+  turns. It waits up to `timeoutMs` (default 5000) for another builder, then throws
+  `RunIndexBusyError` ("run index PATH is locked by another update; gave up after N ms"). It is
+  synchronous and blocks its thread while it waits and reads, so a server calls it off its main
+  thread. A missing `runsDir` throws `ENOENT`.
+- A read probes each `stopped` or `crashed` run's lock (`isRunLogLocked`) every time, so a resumed
+  run reads `running` before any update, and a run whose process died reads `crashed` at once. A
+  missing index reads as `[]`.
+- The index has its own layout version (`PRAGMA user_version`); an update drops an index of
+  another version and builds it again, and a read gives `[]` until then.
+
+```ts
+import { readRunIndex, updateRunIndex } from "@ngocbh/yian/run";
+
+updateRunIndex(runsDir); // after a run ends, say
+for (const run of readRunIndex(runsDir)) show(run.runId, run.status, run.startedAt, run.inputTokens);
+```
+
+The CLI keeps the index of `~/.yian/runs`: see [Run status](cli.md#run-status).
+
+No Python counterpart.
+
 ### Reading values from a run log
 
 Changed (TS yian): for hosts that read run-log values, `yian/run` exports the codec the log writes
@@ -3124,7 +3175,9 @@ host gets the same layout under its own runs folder from `runLogPath(runsDir, ru
 (`@ngocbh/yian/run`), which makes the new folder `<runsDir>/<runId>` (an existing one
 is refused) and returns its `log.jsonl` path. A run's folder is the folder that holds its log, and the files the run writes
 beside the log (its lock file and media files) go only there. A host that passes a `log` path
-of its own must keep one run per folder; Yian doesn't check it.
+of its own must keep one run per folder; Yian doesn't check it. The runs folder's `index.sqlite` is the run index
+([`updateRunIndex`](#the-run-index-with-updaterunindex)); `yian run` updates the index of
+`~/.yian/runs` when a run whose log is there ends.
 
 Changed (TS yian): a `yian.message.v1` media part may hold a file reference,
 `{"type": "media", "mime": ..., "file": {"uri": ..., "mime": ..., "name": ...}}`, in

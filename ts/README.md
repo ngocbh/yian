@@ -98,7 +98,7 @@ are internal: they serve the CLI and yian's own code, and may change without not
 | Import | Names |
 |---|---|
 | `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
@@ -123,7 +123,8 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   values keep their own keys.
 - **Promises.** `loadFlow`, `runFlow`, `resumeFlow`, `result.backward`, `buildMemories`,
   `invokeTool` and `McpServer`'s `open` and `close` return Promises; their errors are rejections.
-  `inspectRun`, `iterRunRecords`, `runRecordOffsets`, `loadSkills` and `loadSkillDir` are synchronous.
+  `inspectRun`, `iterRunRecords`, `runRecordOffsets`, `updateRunIndex`, `readRunIndex`, `loadSkills`
+  and `loadSkillDir` are synchronous.
 - **Numbers.** Ints in yian values are `bigint` and floats are `number`: `result.output`,
   `result.input` and event payloads hold `3n`, not `3`. Values a host passes in (`inputs`,
   `llmConfig`, feedback, a tool's result) go through host intake: a whole `number` within ±(2^53−1)
@@ -306,6 +307,8 @@ resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
 loadRecordedFlow(log: string, options?: { env?: (name: string) => string | undefined; codeRoot?: string | null }): Promise<ComposedFlow | null>
 foldRunLog(log: string, options?: { env?: (name: string) => string | undefined; flow?: ComposedFlow | null }): Promise<FoldedRun>
 inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: string) => string | undefined }): RunInspection
+updateRunIndex(runsDir: string, options?: { timeoutMs?: number }): void
+readRunIndex(runsDir: string, options?: { timeoutMs?: number }): RunIndexRow[]
 ```
 
 `resumeFlow` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
@@ -375,6 +378,16 @@ const back = TypedValue.fromWire(parseJson(text, "codec"));
 ```
 
 See [Reading values from a run log][docs/api.md#reading-values-from-a-run-log].
+
+`updateRunIndex(runsDir)` keeps `<runsDir>/index.sqlite`, one row per run folder
+`<runsDir>/<run_id>/log.jsonl`: run id, flow file, status, start and end times, parent run, last
+seq, result (the top-level END's value as `logJson` text) and token sums over every `model_call`
+step, failed attempts included. It reads each log on from the byte offset its row reached, reads a
+truncated or replaced log again from the start, and serializes builders in one `BEGIN IMMEDIATE`
+transaction that waits at most `timeoutMs` (default 5000) and then throws `RunIndexBusyError`.
+`readRunIndex(runsDir)` returns the rows, with `running` in place of a `stopped` or `crashed`
+status while a writer holds the run's lock. The index may lag the logs, never leads them, and can
+be deleted and rebuilt. See [The run index][docs/api.md#the-run-index-with-updaterunindex].
 
 ## Tools
 
@@ -656,6 +669,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/api.md#runresult]: https://github.com/ngocbh/yian/blob/main/docs/api.md#runresult
 [docs/api.md#skills]: https://github.com/ngocbh/yian/blob/main/docs/api.md#skills
 [docs/api.md#steering]: https://github.com/ngocbh/yian/blob/main/docs/api.md#steering
+[docs/api.md#the-run-index-with-updaterunindex]: https://github.com/ngocbh/yian/blob/main/docs/api.md#the-run-index-with-updaterunindex
 [docs/api.md#tool-context]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-context
 [docs/api.md#tool-groups]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-groups
 [docs/api.md#tool-retries]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-retries
@@ -1191,6 +1205,12 @@ Node 22, and so does every unit test; a change keeps both green.
 - Changed: a schema the reader can't read throws `RunLogSchemaError` (a `RangeError`, `schema`
   the number named), where Python raises `ValueError`; the decoders keep its class when they add
   the line to the message.
+- `src/runtime/run_index.ts` (TS-only) holds the run index, `<runs>/index.sqlite`: `updateRunIndex`
+  folds each run folder's log into one row from the byte offset the row reached
+  (`iterRunRecords`), keeping the record scan's nodes in flight and flags in a `scan` column so
+  the stored status follows `inspectRun`'s no-flow rules across updates; `readRunIndex` puts
+  `running` on top while a writer holds a run's lock. One `BEGIN IMMEDIATE` transaction with a busy
+  timeout serializes builders. Never imported by the reducer or the engine.
 - `src/runtime/trace.ts` holds the retained trace of a learnable run (`RetainedTrace`: accepted
   sources, occurrences, current writers, boundaries and the terminal). `prepareTrace` checks one
   record against the trace and returns a frozen `TraceDelta`; the caller applies it
@@ -1426,7 +1446,8 @@ START is ready after the START inputs' commit; a success walks its
 - `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, wired to
   `loadFlow`, `runFlow` (fresh), `loadRecordedFlow` and `resumeFlow` (`--resume`, which takes no
   flow file and runs the recorded flow, with the recorded-key checks),
-  `loadSkillDir` and `inspectRun`; the diagnostic boxes, the banner, progress on stderr and
+  `loadSkillDir`, `inspectRun`, and `updateRunIndex` and `readRunIndex` (`yian status` with no
+  log; `yian run` updates the index of `~/.yian/runs` when a run there ends); the diagnostic boxes, the banner, progress on stderr and
   `stopOnSignals` (SIGINT, SIGTERM and SIGHUP stop a run; exit 130).
 - A stop aborts the run's controller with a `HostStop` (`utils.ts`) naming the signal; Ctrl-C at
   a prompt is a `HostStop("SIGINT")`.

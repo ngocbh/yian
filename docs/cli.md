@@ -999,8 +999,12 @@ for a flow built in code), and nothing when there are no runs. A run's status is
 status LOG` reads it. With `--json`:
 
 ```json
-{"format": "yian.cli.v1", "runs": [{"run_id": "4f1c...", "flow": "/home/ada/flows/climate.yaml", "status": "succeeded", "started_at": "2026-10-23T14:02:11.123Z", "ended_at": "2026-10-23T14:02:15.456Z", "parent_run_id": null, "last_seq": 12, "result": {"summary": "..."}, "input_tokens": 1200, "output_tokens": 300, "cache_read_tokens": 0, "reasoning_tokens": 0}]}
+{"format": "yian.cli.v1", "runs": [{"run_id": "4f1c...", "flow": "/home/ada/flows/climate.yaml", "status": "succeeded", "started_at": "2026-10-23T14:02:11.123Z", "ended_at": "2026-10-23T14:02:15.456Z", "parent_run_id": null, "last_seq": 12, "result": {"summary": "..."}, "input_tokens": 1200, "output_tokens": 300, "cache_read_tokens": 0, "reasoning_tokens": 0, "ready": false, "wake_at": null}]}
 ```
+
+For a `waiting` run, `ready` says whether `--resume` would make progress now (a waiting node has
+every call it waits on settled) and `wake_at` is when a deadline comes due; they are `false` and
+`null` for any other status.
 
 `result` is the run's output once it succeeded, else `null`, and the token counts sum every model
 call, failed attempts included. A log it can't read is a `warning:` line on stderr and keeps its

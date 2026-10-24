@@ -446,7 +446,8 @@ const list = (element: TypeExpr): TypeExpr => ({ kind: "list", element });
 const optional = (inner: TypeExpr): TypeExpr => ({ kind: "optional", inner });
 const literal = (...tags: string[]): TypeExpr => ({ kind: "enum", tags });
 const union = (...members: TypeExpr[]): TypeExpr => ({ kind: "union", members });
-const DICT: TypeExpr = { kind: "dict" };
+/** A parsed `dict(K, V)`, which keeps `K` and `V` only to refuse an inbox inside. */
+const dict = (key: TypeExpr, value: TypeExpr): TypeExpr => ({ kind: "dict", args: [key, value] });
 
 const UNBALANCED =
   "unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; " +
@@ -531,8 +532,8 @@ describe("parseType", () => {
     ["float(..-1.5)", scalar("float", [null, -1.5])],
     ["int( 0 .. )", scalar("int", [0n, null])],
     ["int(+4..4)", scalar("int", [4n, 4n])],
-    ["dict(str, int)", DICT],
-    ["Dict(str, Buy)", DICT],
+    ["dict(str, int)", dict(scalar("str"), scalar("int"))],
+    ["Dict(str, Buy)", dict(scalar("str"), ref("Buy"))],
     ["Any", scalar("Any")],
     ["None", scalar("None")],
     ["none", scalar("None")],

@@ -191,7 +191,7 @@ class ScriptNode extends Node {
   readonly kind = NodeKind.CODE;
   override readonly needsSteps = true;
   override readonly needsLiveEvents = true;
-  override needsSteering = true;
+  override readsSteerInbox = true;
   readonly body: (caps: NodeCaps) => unknown;
 
   constructor(nodeId: string, body: (caps: NodeCaps) => unknown) {

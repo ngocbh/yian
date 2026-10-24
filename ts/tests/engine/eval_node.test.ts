@@ -499,7 +499,7 @@ class TraitCapsNode extends CapsNode {
   override readonly kind = NodeKind.AGENT;
   override readonly needsTools = true;
   override readonly needsSteps = true;
-  override readonly needsSteering = true;
+  override readonly readsSteerInbox = true;
 }
 
 /** The scheduler, random-draw and run-folder options, malformed, with the error each rejects with. */

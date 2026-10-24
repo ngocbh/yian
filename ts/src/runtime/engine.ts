@@ -112,7 +112,7 @@ export interface FlowEngineOptions {
   /** The run's host-supplied skills, passed to nodes declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
   /**
-   * The run's host inbox, passed to nodes declaring `needsSteering`; a method that throws, or
+   * The run's host inbox, passed to nodes declaring `readsSteerInbox`; a method that throws, or
    * returns a promise that rejects, stops the run with that error.
    */
   steering?: Steering | null;

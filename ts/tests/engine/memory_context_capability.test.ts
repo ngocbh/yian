@@ -38,7 +38,7 @@ class Consumer extends Node {
   readonly kind = NodeKind.CODE;
   override readonly needsMemoryContext = true;
   override readonly needsLiveEvents = true;
-  override readonly needsSteering = true;
+  override readonly readsSteerInbox = true;
   readonly body: (open: Open, caps: NodeCaps) => NodeResult | Promise<NodeResult>;
 
   constructor(body: (open: Open, caps: NodeCaps) => NodeResult | Promise<NodeResult>) {

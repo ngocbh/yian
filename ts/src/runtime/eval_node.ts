@@ -500,7 +500,7 @@ export interface EvalNodeOptions {
   sourceResolver?: SourceResolver | null;
   /** The run's tool set, delivered only to a node declaring `needsTools`. */
   tools?: ToolSet | null;
-  /** The run's host inbox, delivered only to a node declaring `needsSteering`. */
+  /** The run's host inbox, delivered only to a node declaring `readsSteerInbox`. */
   steering?: Steering | null;
   /** The run's environment and model builder, delivered only to a node declaring `needsModels`. */
   models?: ModelAccess | null;
@@ -813,7 +813,7 @@ async function evaluateNode(
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
   if (models !== null && node.needsModels === true) caps.models = models;
-  if (steering !== null && node.needsSteering === true) {
+  if (steering !== null && node.readsSteerInbox === true) {
     caps.steering = new SteeringCapability(steering, onFault, pending, isClosed);
   }
   if (steps !== null && node.needsSteps === true) {

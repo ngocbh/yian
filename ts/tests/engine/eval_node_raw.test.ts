@@ -616,7 +616,7 @@ describe("the steering capability", () => {
 
     class SteeredNode extends Node {
       readonly kind = NodeKind.CODE;
-      override needsSteering = true;
+      override readsSteerInbox = true;
 
       override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
         try {
@@ -645,7 +645,7 @@ describe("the steering capability", () => {
   /** A node that runs `body` over its steering, then returns. */
   class DrainNode extends Node {
     readonly kind = NodeKind.CODE;
-    override needsSteering = true;
+    override readsSteerInbox = true;
     override needsLiveEvents = true;
     readonly body: (caps: NodeCaps, nodeId: string) => Promise<void> | void;
 

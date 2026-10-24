@@ -502,7 +502,7 @@ export class AgentNode extends Node {
       throw new TypeError(`AGENT node ${reprText(nodeId)}: steerable must be a bool`);
     }
     this.steerable = steerable;
-    this.needsSteering = steerable;
+    this.readsSteerInbox = steerable;
     this.llmConfigLabel = null;
     this.wiresLlmConfig = false;
     this.llmValueTypes = [];

@@ -76,9 +76,9 @@ test("agent node rejects a non-bool steerable", () => {
   expect(() => new AgentNode("chat", { prompt: "p", steerable: 1 as unknown as boolean })).toThrow(TypeError);
 });
 
-test("needsSteering follows steerable", () => {
-  expect(new AgentNode("chat", { prompt: "p", steerable: true }).needsSteering).toBe(true);
-  expect(new AgentNode("chat", { prompt: "p" }).needsSteering).toBe(false);
+test("readsSteerInbox follows steerable", () => {
+  expect(new AgentNode("chat", { prompt: "p", steerable: true }).readsSteerInbox).toBe(true);
+  expect(new AgentNode("chat", { prompt: "p" }).readsSteerInbox).toBe(false);
 });
 
 test("steerable is identity but false is not", () => {

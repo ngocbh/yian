@@ -94,7 +94,7 @@ const IGNORED_NODE_FIELDS = [
   "needsLiveEvents",
   "needsSteps",
   "wakesWithoutWorker",
-  "needsSteering",
+  "readsSteerInbox",
   "needsModels",
   "derived",
   "producesMessages",

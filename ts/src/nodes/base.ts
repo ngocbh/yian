@@ -832,20 +832,38 @@ export class CapabilityFault extends Error {
 }
 
 /**
- * A host inbox read by a running steerable node, keyed by its node id.
+ * The host's interrupt signal for a node reading a steer inbox, keyed by its node id.
  *
  * The id is the node's expanded id: an expanded LOOP or MAP node has its own id per occurrence.
- * Steering is push-based: the host aborts the node's interrupt signal to stop its loop and
- * return now. `drain` may return the queued steer messages or a promise of them; the node awaits
- * it between its effects.
- * The interrupt signal is separate from the node's own `caps.signal`, so an interrupt never
- * aborts a running tool.
+ * The host aborts the node's interrupt signal to stop its loop and return now. The signal is
+ * separate from the node's own `caps.signal`, so an interrupt never aborts a running tool.
  */
 export interface Steering {
   /** The signal the host aborts to interrupt node `nodeId` (its expanded id). */
   interruptSignal(nodeId: string): AbortSignal;
   /** Remove and return the steer messages queued for `nodeId`, oldest first. */
   drain(nodeId: string): readonly string[] | Promise<readonly string[]>;
+}
+
+/** One read of a node's steer inbox: the `steer` step's `n`, the sends it consumed (their seqs) and their values, oldest first. */
+export interface SteerRead {
+  readonly n: number;
+  readonly from: readonly number[];
+  readonly values: readonly Value[];
+}
+
+/**
+ * A node's steer inbox for one evaluation, which the engine opens (`NodeCaps.openSteerInbox`).
+ * `read` is zero-wait: it consumes every event queued now, records them as one `steer` step, and
+ * returns them; with nothing queued it records nothing and returns `null`.
+ */
+export interface SteerInbox {
+  /** The top-level inbox read. */
+  readonly inbox: string;
+  /** Whether a `read` now would consume anything. */
+  queued(): boolean;
+  /** @throws CapabilityFault when the run refuses the step; the node signal's reason once it stopped. */
+  read(): SteerRead | null;
 }
 
 /**
@@ -914,8 +932,13 @@ export interface NodeCaps {
    * rendered prompt; supplied to a node that declares `needsMemoryContext`.
    */
   readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
-  /** The host inbox; supplied to a node that declares `needsSteering`. */
+  /** The host's interrupt signal; supplied to a node that declares `readsSteerInbox`. */
   readonly steering?: Steering;
+  /**
+   * Opens the node's steer inbox; supplied to a node declaring `readsSteerInbox` when the engine
+   * supplies steps. Opening registers the node as reading `inbox` until its outcome commits.
+   */
+  readonly openSteerInbox?: (inbox: string) => SteerInbox;
   /** The run's environment and model builder; supplied to a node that declares `needsModels`. */
   readonly models?: ModelAccess;
 }
@@ -1011,10 +1034,11 @@ export abstract class Node {
    */
   readonly producesMessages: boolean = false;
   /**
-   * Declares "I read the host's steering inbox": the evaluator supplies steering only when the
-   * run boundary injected it and this is set. Writable: AGENT sets it from its `steerable:` flag.
+   * Declares "I read a steer inbox": the evaluator supplies `openSteerInbox`, and the host's
+   * interrupt signal when the run boundary injected one. Writable: AGENT sets it from
+   * `steer_inbox:`.
    */
-  needsSteering: boolean = false;
+  readsSteerInbox: boolean = false;
   /**
    * Declares "I call models": the evaluator supplies the run's model access only when the run
    * boundary injected it and this is set, so a run's environment and model builder never leak

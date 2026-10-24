@@ -1735,7 +1735,8 @@ export function prepareRunStopped(state: RunState, reason: RunStopReason, messag
  * @param state An initialized nonterminal state with `nodeId` in flight and no pending commit.
  * @param nodeId The node whose evaluation ended waiting.
  * @param options.callIds Every call the node waits on: each open call it registered since its
- *   last wake, and the call `waits` registers.
+ *   last wake or that was still open at it (a timeout wake leaves the others open), and the call
+ *   `waits` registers.
  * @param options.waits The take or sleep call this record registers, at most one; none by default.
  * @param options.steerInbox The steer inbox the node opened, which an interrupt of that inbox
  *   reaches while it waits; none by default.
@@ -1768,7 +1769,7 @@ export function prepareNodeWaiting(
  *   `CallClosed` for each timed-out host call.
  * @throws TypeError when an argument has the wrong type.
  * @throws RangeError when the node isn't waiting, a timed-out id isn't an open call of it with a
- *   deadline, or it still waits on an open call.
+ *   deadline, or, with no `timedOut` and no interrupt, it still waits on an open call.
  */
 export function prepareNodeWoken(state: RunState, nodeId: string, timedOut: readonly string[] = []): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWoken expects a RunState");
@@ -3957,8 +3958,8 @@ function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
  * Require a wait record to move an in-flight node with no pending commit to the waiting set: its
  * `waits` entry (a take or sleep TOOL node's own call, not yet registered; a take's inbox declared,
  * open and with nothing unread a take may read), and `call_ids` naming exactly calls of the node
- * registered since its last wake, not closed, including every open one. A `steer_inbox` names a
- * declared top-level inbox, on a node that reads a steer inbox.
+ * registered since its last wake or still open at it, not closed, including every open one. A
+ * `steer_inbox` names a declared top-level inbox, on a node that reads a steer inbox.
  */
 function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
   const { nodeId } = record;
@@ -4013,8 +4014,19 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
     if (call.nodeId !== nodeId) {
       throw new RangeError(`NodeWaiting call ${reprText(callId)} belongs to node ${reprText(call.nodeId)}`);
     }
-    if (lastWoken !== undefined && call.seq < lastWoken) {
-      throw new RangeError(`NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken`);
+    // A call registered before the last wake may be waited on again only if it was still open at
+    // that wake (a timeout wake leaves the node's other calls open): open now, or answered by a
+    // result after the wake. A closed one is refused below.
+    const settledByWake =
+      lastWoken !== undefined &&
+      call.seq < lastWoken &&
+      call.state !== "open" &&
+      call.state !== "closed" &&
+      !(call.state === "answered" && call.resultSeq !== null && call.resultSeq > lastWoken);
+    if (settledByWake) {
+      throw new RangeError(
+        `NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken and had settled by then`,
+      );
     }
     if (call.state === "closed") throw new RangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
   }
@@ -4026,8 +4038,10 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
 }
 
 /**
- * Require a wake record to name a waiting node that is wakeable once its `timed_out` calls (open
- * calls of the node with a deadline) time out.
+ * Require a wake record to name a waiting node whose `timed_out` calls are open calls of the node
+ * with a deadline. A wake with no `timed_out` (by answers) needs every call it waits on settled,
+ * unless an interrupt names the node; a timeout wake may leave the node's other calls open (the
+ * reducer reads no clock: the engine decides which calls are due).
  */
 function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
   const { nodeId } = record;
@@ -4040,9 +4054,9 @@ function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
       throw new RangeError(`NodeWoken timed_out ${reprText(callId)} isn't an open call of the node with a deadline`);
     }
   }
-  const timedOut = new Set(record.timedOut);
-  const open = waiting.callIds.find((callId) => !timedOut.has(callId) && w.calls.get(callId)?.state === "open");
-  if (open !== undefined && !w.interrupts.has(nodeId)) {
+  // A wake by answers needs every call settled; a timeout wake may leave the node's other calls open.
+  const open = waiting.callIds.find((callId) => w.calls.get(callId)?.state === "open");
+  if (record.timedOut.length === 0 && open !== undefined && !w.interrupts.has(nodeId)) {
     throw new RangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
   }
 }

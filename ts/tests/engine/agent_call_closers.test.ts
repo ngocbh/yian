@@ -17,11 +17,11 @@ import { type Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ASK_TIMED_OUT_RESULT, closerResult, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
-import { advance, complete, pendingCalls, runFlow } from "../../src/run.ts";
+import { advance, complete, inspectRun, pendingCalls, runFlow } from "../../src/run.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
-import { tool } from "../../src/tools/function_tools.ts";
+import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
 import { gateTool, handClock } from "./inbox_fixtures.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -376,4 +376,170 @@ test("an answer completed before the deadline wins", async () => {
   expect(wakes(log)).toEqual([[]]);
   expect(closers(log)).toEqual([]);
   expect(sentResults(m, 0)).toEqual([["c1", "yes", false]]);
+});
+
+const HOLD_CALL = "r/agent/1/1";
+
+/** A `hold` host tool whose handler always pends. */
+const holdTool = () => ({ hold: hostTool("hold", () => pending()) });
+
+test("an ask timing out beside an open call closes at its deadline; the agent waits again", async () => {
+  const hold = holdTool();
+  const log = await waitingOnAsk("30m", [["hold", {}, "c2"]], hold);
+  const events: RunEvent[] = [];
+  const quiet = scripted();
+  const rewait = await advance(resumeOf(log, quiet, () => pending(), START + 31 * MINUTE, events, hold));
+
+  expect(rewait.status, rewait.failure?.message).toBe("waiting");
+  expect(wakes(log)).toEqual([[CALL]]);
+  expect(closedEvents(events)).toEqual([[CALL, "timed_out"]]);
+  // The closer, then a new wait on the rest: no model call.
+  expect(kinds(log).slice(-5)).toEqual(["run_waiting", "node_woken", "tool_result", "node_waiting", "run_waiting"]);
+  expect(quiet.requests).toHaveLength(0);
+  expect(rewait.waits.map((w) => w.callId)).toEqual([HOLD_CALL]);
+  expect(pendingCalls(log).map((call) => call.callId)).toEqual([HOLD_CALL]);
+  const refused = await complete(log, CALL, { output: "yes" }).catch((error: unknown) => error);
+  expect((refused as DeliveryRefused).reason).toBe("call_settled");
+
+  await complete(log, HOLD_CALL, { output: "held" });
+  const m = scripted(textReply("done"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 40 * MINUTE, undefined, hold));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(m.requests).toHaveLength(1);
+  expect(sentResults(m, 0)).toEqual([
+    ["c1", "timed out: no answer", true],
+    ["c2", "held", false],
+  ]);
+  expect(closers(log)).toEqual(["timed_out"]);
+});
+
+test("the other call answered first: the timeout wake settles the reply and the model goes on", async () => {
+  const hold = holdTool();
+  const log = await waitingOnAsk("30m", [["hold", {}, "c2"]], hold);
+  await complete(log, HOLD_CALL, { output: "held" });
+  // The ask is still open, so the node still waits.
+  expect((await advance(resumeOf(log, scripted(), () => pending(), START + 10 * MINUTE, undefined, hold))).status).toBe("waiting");
+  const m = scripted(textReply("done"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 31 * MINUTE, undefined, hold));
+
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(wakes(log)).toEqual([[CALL]]);
+  expect(sentResults(m, 0)).toEqual([
+    ["c1", "timed out: no answer", true],
+    ["c2", "held", false],
+  ]);
+});
+
+test("two asks with different deadlines close one at a time", async () => {
+  const log = await waitingOnAsk("10m", [["ask_user", { question: "Really?", timeout: "30m" }, "c2"]]);
+  expect(inspectRun(log).wakeAt).toBe("2026-10-24T10:10:00.000Z");
+  const first = await advance(resumeOf(log, scripted(), () => pending(), START + 11 * MINUTE));
+  expect(first.status, first.failure?.message).toBe("waiting");
+  expect(inspectRun(log).wakeAt).toBe("2026-10-24T10:30:00.000Z");
+  const m = scripted(textReply("done"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 31 * MINUTE));
+
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(wakes(log)).toEqual([[CALL], [HOLD_CALL]]);
+  expect(closers(log)).toEqual(["timed_out", "timed_out"]);
+  expect(sentResults(m, 0)).toEqual([
+    ["c1", "timed out: no answer", true],
+    ["c2", "timed out: no answer", true],
+  ]);
+});
+
+test("the other call answered while the woken agent replays: the re-wait names it and wakes at once", async () => {
+  let log = "";
+  let replaying = false;
+  // `hold`'s argument check runs again in the replay; there the host's answer lands mid-evaluation.
+  const hold = {
+    hold: new FunctionTool({
+      name: "hold",
+      description: "hold.",
+      parametersJsonSchema: { type: "object", properties: {} },
+      parametersValidator: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: async (value: unknown) => {
+            if (replaying) {
+              replaying = false;
+              await complete(log, HOLD_CALL, { output: "held" });
+            }
+            return { value };
+          },
+        },
+      },
+      execute: () => pending(),
+    }),
+  };
+  log = await waitingOnAsk("30m", [["hold", {}, "c2"]], hold);
+  replaying = true;
+  const m = scripted(textReply("done"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 31 * MINUTE, undefined, hold));
+
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(wakes(log)).toEqual([[CALL], []]);
+  expect(m.requests).toHaveLength(1);
+  expect(sentResults(m, 0)).toEqual([
+    ["c1", "timed out: no answer", true],
+    ["c2", "held", false],
+  ]);
+});
+
+test("with one worker, a due agent waits for the slot without spinning the dispatcher", async () => {
+  const gate = gateTool();
+  const clock = handClock(START);
+  const flow = `
+id: pooled
+name: pooled
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    prompt: go
+    tools: [ask_user]
+  slow:
+    kind: tool
+    tool_id: gate
+output: \${agent.output}
+`;
+  const m = scripted(callReply(["ask_user", { question: "q", timeout: "1m" }, "c1"]), textReply("done"));
+  const log = freshLog();
+  const running = runFlow(await loadFlow(flow), {}, {
+    ...options(log, m, () => pending(), clock, undefined, { gate: gate.tool }),
+    numWorkers: 1,
+  });
+  await gate.entered; // the agent waits on its ask; slow holds the one slot
+  clock.set(START + 2 * MINUTE);
+  // A macrotask: a dispatcher spinning on microtasks would starve it, and the run would never end.
+  setTimeout(() => gate.release(), 20);
+  const result = await running;
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const entries = records(log);
+  const at = (kind: string, node: string) =>
+    entries.findIndex((entry) => entry.kind === kind && (entry.record as { nodeId?: string }).nodeId === node);
+  expect(at("node_succeeded", "slow")).toBeLessThan(at("node_woken", "agent"));
+  expect(wakes(log)).toEqual([[CALL]]);
+}, 5000);
+
+test("a crash between the timeout wake and the closer: the closer says timed_out, the open call crashed", async () => {
+  const hold = holdTool();
+  const log = await waitingOnAsk("30m", [["hold", {}, "c2"]], hold);
+  await crashAfter(records(log).length + 1, () =>
+    advance(resumeOf(log, scripted(), () => pending(), START + 31 * MINUTE, undefined, hold)),
+  );
+  expect(kinds(log).at(-1)).toBe("node_woken");
+  const m = scripted(textReply("done"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 32 * MINUTE, undefined, hold));
+
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
+  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([HOLD_CALL]);
+  expect(closers(log)).toEqual(["timed_out", "crashed"]);
+  expect(sentResults(m, 0)).toEqual([
+    ["c1", "timed out: no answer", true],
+    ["c2", TOOL_OUTCOME_UNKNOWN, true],
+  ]);
 });

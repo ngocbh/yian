@@ -603,7 +603,8 @@ function deadlineMs(call: Call): number | null {
 
 /**
  * Return, by waiting node in waiting order, the open calls whose deadline is at or before
- * `nowMs`, for each node whose other calls are all settled, so timing these out makes it wakeable.
+ * `nowMs`. A waiting node is due once any open call it waits on is past its deadline; the wake
+ * times those calls out, and its other calls may stay open.
  */
 export function dueTimeouts(w: WaitsState, nowMs: number): ReadonlyMap<string, readonly string[]> {
   const due = new Map<string, readonly string[]>();
@@ -613,7 +614,7 @@ export function dueTimeouts(w: WaitsState, nowMs: number): ReadonlyMap<string, r
       const ms = deadlineMs(call);
       return ms !== null && ms <= nowMs;
     });
-    if (past.length > 0 && past.length === open.length) due.set(nodeId, past.map((call) => call.callId));
+    if (past.length > 0) due.set(nodeId, past.map((call) => call.callId));
   }
   return due;
 }

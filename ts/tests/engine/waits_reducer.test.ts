@@ -496,7 +496,7 @@ describe("pending and tool_result steps", () => {
       "closed",
       "timed_out",
     ]);
-    expect(() => prepareNodeWaiting(state, "ask", { callIds: [call("ask")] })).toThrow(/before the node's last node_woken/);
+    expect(() => prepareNodeWaiting(state, "ask", { callIds: [call("ask")] })).toThrow(/was closed \(timed_out\)/);
     expect(() => prepareNodeStep(state, "ask", resultStep("ask"))).toThrow(/closed/);
   });
 });

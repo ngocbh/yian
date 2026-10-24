@@ -833,8 +833,8 @@ export class FlowEngine {
   }
 
   /**
-   * Keep one scheduler sleep for the earliest open deadline of a waiting node; it nudges the
-   * dispatcher. `blocked` says a wakeable node waits for a worker slot.
+   * Keep one scheduler sleep for the earliest open deadline of a waiting node, at which that node
+   * is due; it nudges the dispatcher. `blocked` says a wakeable node waits for a worker slot.
    */
   #armTimer(blocked = false): void {
     const at = wakeAt(this.state.waits);
@@ -845,10 +845,9 @@ export class FlowEngine {
     const now = scheduler.now();
     const ms = recordTimeMs(at, "deadline") - now;
     if (ms <= 0) {
-      // The deadline passed since the dispatcher last looked: wake it now. A past deadline that
-      // isn't due waits on its node's other calls, and a timer for it would only spin.
-      // A due node that waits for a worker slot is looked at again once the next completion frees
-      // one, so nudging now would only spin.
+      // A deadline passed since the dispatcher last looked: wake its node now. A due node that
+      // waits for a worker slot is looked at again once the next completion frees one, so nudging
+      // now would only spin.
       if (!blocked && dueTimeouts(this.state.waits, now).size > 0) this.#queue?.nudge();
       return;
     }

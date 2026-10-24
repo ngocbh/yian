@@ -307,10 +307,12 @@ test("dueTimeouts names the waiting nodes a timeout would make wakeable", () => 
     pending("ask", 1, "r/ask/1", { deadline: T9 }),
     new NodeWaitingRecord("ask", ["r/ask/1"]),
   );
-  // heard has an assigned event, so it is answered, never due; agent has another open call that isn't due.
-  expect(dueTimeouts(w, NOW)).toEqual(new Map([["nap", ["r/nap"]], ["ask", ["r/ask/1"]]]));
+  // heard has an assigned event, so it is answered, never due; agent's r/a/0 is past due, and its
+  // other open call doesn't hold the wake back.
+  const due = new Map([["nap", ["r/nap"]], ["agent", ["r/a/0"]], ["ask", ["r/ask/1"]]]);
+  expect(dueTimeouts(w, NOW)).toEqual(due);
   expect(dueTimeouts(w, Date.UTC(2026, 9, 24, 8))).toEqual(new Map());
-  expect(dueTimeouts(w, Date.parse(T9))).toEqual(new Map([["nap", ["r/nap"]], ["ask", ["r/ask/1"]]]));
+  expect(dueTimeouts(w, Date.parse(T9))).toEqual(due);
 });
 
 test("wakeAt is the earliest open deadline of a waiting node", () => {

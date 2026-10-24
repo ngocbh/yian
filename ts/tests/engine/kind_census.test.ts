@@ -57,8 +57,6 @@ const NODE_KINDS = new Set([
   "code",
   "tool",
   "case",
-  "human_input",
-  "wait",
   "loop",
   "start",
   "end",
@@ -188,7 +186,7 @@ describe("kind census", () => {
     expect(count('const { kind } = node;\nif (kind === "agent") {}')).toBe(1);
     expect(dispatchLines('switch (node.kind) {\n  case "case":\n    break;\n}')).toEqual(new Set([2]));
     expect(count("if (NodeKind.MAP === k || x instanceof MapExpansion) {}")).toBe(1);
-    expect(count('a = NodeKind.CALL;\nb = SPAWNER_KINDS;\nif (kind == "wait") {}')).toBe(3);
+    expect(count('a = NodeKind.CALL;\nb = SPAWNER_KINDS;\nif (kind == "loop") {}')).toBe(3);
   });
 
   test("the detector skips imports, comments, strings and other sums", () => {

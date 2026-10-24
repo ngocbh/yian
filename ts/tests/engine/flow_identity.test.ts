@@ -92,8 +92,8 @@
  *   schema as an ask row; an ask's prompt and questions are inputs, identity through its wiring
  *   like the WAIT `until` row's (now a `sleep`'s). In
  *   `test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel` an ask's title
- *   (its `name:`) is display metadata, as on every TOOL node, so it changes no fingerprint where
- *   Python's HUMAN_INPUT title does.
+ *   (its `node_name:`) is identity, as Python's HUMAN_INPUT title is; another tool's is display
+ *   metadata.
  * - Node, wiring and type tables are `Map`s, so "shuffle mapping order" rebuilds `Map`s and
  *   records in reverse insertion order. Carriers are frozen: Python's `replace(param, ...)` builds
  *   a new `Parameter`, and `object.__setattr__(carrier, "future_field", True)` is a forged carrier

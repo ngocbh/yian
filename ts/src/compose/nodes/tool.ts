@@ -16,7 +16,6 @@ import { typeRelation } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.ts";
-import { siteLabel } from "../../nodes/human_input/node.ts";
 import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
@@ -46,6 +45,7 @@ import {
   rangeAt,
   rejectNonText,
   siteKey,
+  siteLabel,
 } from "./base.ts";
 
 /** The fields `ToolDescriptor`'s constructor takes: the common ones and the TOOL's own. */
@@ -258,7 +258,7 @@ export class ToolDescriptor extends NodeDescriptor {
       this.checkAskInputs(ctx);
       this.wireDuration(ctx, wiring, "timeout");
       node.outputContract = this.outputContract(ctx);
-      // A questions ask with no declared answer gets a free-form record, as human_input does.
+      // A questions ask with no declared answer gets a free-form record.
       const asksQuestions = [QUESTIONS_INPUT, "questions"].some((name) => Object.hasOwn(this.inputs, name));
       if (node.outputContract === null && (asksQuestions || this.adaptiveQuestions !== null)) {
         node.outputContract = new ValueContract(Type.scalar(ValueKind.OBJECT));
@@ -526,7 +526,7 @@ export const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config
 /**
  * Check an authored `adaptive_questions:` block's keys and brief, before the template parse.
  *
- * @param label The node's kind or tool id as messages name it, such as `kind=human_input`.
+ * @param label The node's kind or tool id as messages name it, such as `tool_id: ask`.
  * @throws LoadError when the block authors `mode:` or a key other than `prompt`/`llm_config`/
  *   `retries` (at the key), or its brief is not text or holds a lone surrogate (at the brief).
  */
@@ -583,7 +583,7 @@ export function recordAdaptiveRanges(desc: NodeDescriptor, cursor: SourceCursor)
  * Check a parsed `adaptive_questions:` block: a mapping with its own `prompt:` (the LLM brief)
  * and a valid `retries:`.
  *
- * @param label The node's kind or tool id as messages name it, such as `kind=human_input`.
+ * @param label The node's kind or tool id as messages name it, such as `tool_id: ask`.
  * @throws LoadError at `range` for the first rule broken.
  */
 export function checkAdaptiveFields(

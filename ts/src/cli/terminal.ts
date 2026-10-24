@@ -487,7 +487,7 @@ export class Terminal {
 
   /**
    * The run's ask handler (an `AskUserHandler` from tools/registry.ts): asks `request` in one
-   * turn and returns the answer. A question set (`questions`, the HUMAN_INPUT node's
+   * turn and returns the answer. A question set (`questions`, an `ask` node's
    * `QuestionSpec`s) answers a record keyed by header; `options` a single choice; otherwise a
    * free-text prompt. `answerSchema` isn't used.
    *
@@ -1022,7 +1022,7 @@ async function askQuestion(run: RunWidget, question: Omit<QuestionSpec, "header"
 }
 
 /**
- * Answer one ask_user request inside a turn: a question set (the HUMAN_INPUT node's `QuestionSpec`s)
+ * Answer one ask request inside a turn: a question set (an `ask` node's `QuestionSpec`s)
  * opens with the panel and asks each question under its rule, answering a record keyed by header;
  * `options` are one choice; otherwise a text prompt labelled with the question.
  */

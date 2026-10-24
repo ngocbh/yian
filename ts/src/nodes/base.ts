@@ -91,10 +91,6 @@ export const NodeKind = {
   CODE: "code",
   TOOL: "tool",
   CASE: "case",
-  /** Blocks through the host-owned `ask_user` tool. */
-  HUMAN_INPUT: "human_input",
-  /** Authorable: blocks until an absolute UTC date or datetime. */
-  WAIT: "wait",
   /** Authorable: iterates a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`). */
   LOOP: "loop",
   /** Internal-only: the loader-synthesized input boundary (parameter binding). */
@@ -418,8 +414,7 @@ export function parseNamedCondition(
 }
 
 /**
- * Check one prompt template's `${...}` spans, prefixing an error with `subject`. AGENT and
- * HUMAN_INPUT use it.
+ * Check one prompt template's `${...}` spans, prefixing an error with `subject`. AGENT uses it.
  *
  * @throws ExpressionError `<subject>: <error>`, with the template error as its `cause`.
  */
@@ -990,8 +985,7 @@ export abstract class Node {
   readonly needsSkills: boolean = false;
   /**
    * Declares "I look up or invoke tools": the evaluator supplies the run's own tool set, so
-   * per-run tools and the per-run `ask_user` handler never leak between runs. TOOL, HUMAN_INPUT
-   * and AGENT opt in.
+   * per-run tools and the per-run ask handler never leak between runs. TOOL and AGENT opt in.
    */
   readonly needsTools: boolean = false;
   /**
@@ -1298,8 +1292,8 @@ export abstract class Node {
   }
 
   /**
-   * Check every prompt template this node renders. The base renders none; AGENT and HUMAN_INPUT
-   * override this. An override throws `ExpressionError` when a template's `${...}` span doesn't
+   * Check every prompt template this node renders. The base renders none; AGENT overrides
+   * this. An override throws `ExpressionError` when a template's `${...}` span doesn't
    * parse, calls `isinstance` or a function that isn't a builtin, or calls a builtin with
    * arguments it doesn't take; the message names the node and the field.
    *

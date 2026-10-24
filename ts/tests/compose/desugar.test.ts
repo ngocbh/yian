@@ -5,9 +5,9 @@
  * Each desugar pass rewrites a flow's parsed descriptors into ordinary descriptors and bindings. A
  * synth node a pass mints locates at the SITE it desugared from (the `call(...)` directive's own
  * binding line, not the host node header), so its downstream errors caret the author's actual
- * source. The exception is `adaptive_questions`, whose synth composer genuinely SHARES the gate's
- * inputs verbatim and so inherits the gate's `range`/`fieldRanges`, except that the brief's range
- * replaces the gate's `prompt:` range.
+ * source. The exception is `adaptive_questions`, whose synth composer genuinely SHARES the ask's
+ * inputs verbatim and so inherits the ask's `range`/`fieldRanges`, except that the brief's range
+ * is its `prompt:` range.
  *
  * Ported: the inline-call rows (`test_desugar_inline_calls_locate_at_their_binding_site`,
  * `test_inline_call_error_uses_binding_range`, `test_inline_output_error_uses_section_range`,
@@ -34,8 +34,8 @@ import { type NodeDescriptor, siteKey } from "../../src/compose/nodes/base.ts";
 import type { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
-import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
+import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
@@ -165,13 +165,12 @@ test("inline map scalar over does not use the range of an input named over", () 
 });
 
 test("desugar adaptive questions preserves ranges", () => {
-  // An adaptive human_input gate lifts a synth composer agent (`<gate>__compose`). The synth agent
-  // inherits the gate node's range/fieldRanges, but its `prompt:` is the brief, so it locates at
-  // the brief and is named as the gate's field.
+  // An adaptive ask lifts a synth composer agent (`<ask>__compose`). The synth agent inherits the
+  // ask node's range/fieldRanges, but its `prompt:` is the brief, so it locates at the brief and is
+  // named as the ask's field.
   const text =
     "id: f\nname: f\nnodes:\n" +
-    "  ask:\n    kind: human_input\n" +
-    "    prompt: Pick one\n" +
+    "  ask:\n    kind: tool\n    tool_id: ask\n" +
     "    adaptive_questions:\n      prompt: Ask about ${input.topic}\n" +
     "      llm_config: {model: m}\n" +
     "    input:\n      topic: ${input.topic}\n" +
@@ -191,7 +190,6 @@ test("desugar adaptive questions preserves ranges", () => {
       [siteKey("field", "llm_config"), llmConfig],
     ]),
   );
-  expect(brief).not.toEqual(gate.fieldRanges.get(siteKey("field", "prompt"))!);
   expect(composer.fieldLabels).toEqual(
     new Map([
       ["prompt", "node 'ask' adaptive_questions.prompt"],
@@ -203,8 +201,9 @@ test("desugar adaptive questions preserves ranges", () => {
 });
 
 test("desugar adaptive questions without source", () => {
-  const gate = new HumanInputDescriptor({
+  const gate = new ToolDescriptor({
     id: "ask",
+    toolId: "ask",
     inputs: { topic: "${input.topic}" },
     adaptiveQuestions: { prompt: "Q", llm_config: { model: "m" } },
   });

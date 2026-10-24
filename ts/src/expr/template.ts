@@ -28,7 +28,7 @@
  * span), and the per-occurrence condition reads (`conditionReads`, `rewriteConditionReads`),
  * which tell a gate which data edge each reference would take as a binding.
  *
- * This module also owns the strict AGENT/HUMAN_INPUT prompt renderer (`renderTemplateRecord`)
+ * This module also owns the strict AGENT prompt renderer (`renderTemplateRecord`)
  * and its compile-time companion (`promptRefs`), which lists the inputs a prompt reads and
  * rejects a call to anything but a formatting builtin. A prompt is not a binding (it reads inputs
  * already bound to its node and mints no edge), but it is a `${...}` template and reuses this
@@ -644,7 +644,7 @@ export function rewriteConditionReads(
 }
 
 /**
- * Render a strict AGENT / HUMAN_INPUT prompt against its node's bound input record.
+ * Render a strict AGENT prompt against its node's bound input record.
  *
  * Each `${...}` span is an expression whose references resolve against `record` (the node's
  * declared inputs; the pool namespaces aren't in scope), and whose calls run the `TEMPLATE_FNS`

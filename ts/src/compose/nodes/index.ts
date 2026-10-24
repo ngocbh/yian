@@ -17,9 +17,7 @@
 import type { NodeDescriptor } from "./base.ts";
 import { AgentDescriptor } from "./agent.ts";
 import { CodeDescriptor } from "./code.ts";
-import { HumanInputDescriptor } from "./human_input.ts";
 import { ToolDescriptor } from "./tool.ts";
-import { WaitDescriptor } from "./wait.ts";
 import { CallDescriptor } from "./call.ts";
 import { CaseDescriptor } from "./case.ts";
 import { LoopDescriptor } from "./loop.ts";
@@ -36,8 +34,6 @@ export const DESCRIPTORS: readonly DescriptorClass[] = [
   AgentDescriptor,
   CodeDescriptor,
   ToolDescriptor,
-  WaitDescriptor,
-  HumanInputDescriptor,
   CaseDescriptor,
   CallDescriptor,
   MapDescriptor,
@@ -58,4 +54,6 @@ export const BINDING_FIELDS: ReadonlyMap<string, readonly string[]> = new Map(
  */
 export const REMOVED_KINDS: ReadonlyMap<string, string> = new Map([
   ["model", "serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)"],
+  ["human_input", "ask a person with kind: tool, tool_id: ask (input: prompt, questions, timeout)"],
+  ["wait", "wait with kind: tool, tool_id: sleep (input: until or for)"],
 ]);

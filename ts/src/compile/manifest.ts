@@ -38,12 +38,10 @@ import {
   ValueTemplate,
 } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
-import { HumanInputNode } from "../nodes/human_input/node.ts";
 import { LoopNode } from "../nodes/loop/node.ts";
 import { MapNode } from "../nodes/map/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { ToolNode } from "../nodes/tool/node.ts";
-import { WaitNode } from "../nodes/wait/node.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../typesys/json.ts";
 import {
   canonicalUnionOrder,
@@ -59,8 +57,8 @@ import {
 import { CompiledFlow, Edge, Flow, FlowOutput, validateGrowthMetadata } from "./model.ts";
 
 // Fields common to every concrete Node. Most are emitted below, `kind` among them; title is emitted
-// only for HUMAN_INPUT and a TOOL `ask`, which send it to the person asked, because other nodes use
-// it as display metadata; types only when non-empty.
+// only for a TOOL `ask`, which sends it to the person asked, because other nodes use it as display
+// metadata; types only when non-empty.
 // Keeping both sets explicit is the fail-loud field policy.
 const COMMON_NODE_FIELDS = [
   "id",
@@ -120,10 +118,6 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   [NodeKind.CODE]: ["code"],
   [NodeKind.TOOL]: ["toolId", "retries", "answerSchema"],
   [NodeKind.CASE]: ["cases"],
-  [NodeKind.HUMAN_INPUT]: ["prompt", "answerSchema", "questions", "questionsInput"],
-  // WAIT's execution identity is its required flow-owned `until` wiring; the node owns no
-  // additional constructor state.
-  [NodeKind.WAIT]: [],
   [NodeKind.CALL]: ["flowId", "flowVersion", "child"],
   [NodeKind.MAP]: ["flowId", "flowVersion", "child"],
   [NodeKind.LOOP]: [
@@ -160,8 +154,6 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
   [NodeKind.TOOL]: ["inputTypes"],
   [NodeKind.CASE]: [],
-  [NodeKind.HUMAN_INPUT]: [],
-  [NodeKind.WAIT]: [],
   // `childInputs` duplicates the recursive child's START signature.
   [NodeKind.CALL]: ["childInputs"],
   // `parallel` is retained by the authoring model but runtime concurrency uses the worker count.
@@ -175,8 +167,6 @@ const KIND_CLASSES: Readonly<Record<string, abstract new (...args: never[]) => N
   [NodeKind.CODE]: CodeNode,
   [NodeKind.TOOL]: ToolNode,
   [NodeKind.CASE]: CaseNode,
-  [NodeKind.HUMAN_INPUT]: HumanInputNode,
-  [NodeKind.WAIT]: WaitNode,
   [NodeKind.CALL]: CallNode,
   [NodeKind.MAP]: MapNode,
   [NodeKind.LOOP]: LoopNode,
@@ -880,19 +870,6 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       manifest.cases = cases.map((branch, index) => caseManifest(branch, ctx, `${path}.cases[${index}]`));
       break;
     }
-    case NodeKind.HUMAN_INPUT: {
-      const human = node as HumanInputNode;
-      manifest.answer_schema = canonicalValue(human.answerSchema, ctx, `${path}.answerSchema`);
-      manifest.prompt = canonicalValue(human.prompt, ctx, `${path}.prompt`);
-      manifest.questions = canonicalValue(human.questions, ctx, `${path}.questions`);
-      manifest.questions_input = canonicalValue(human.questionsInput, ctx, `${path}.questionsInput`);
-      manifest.title = canonicalValue(human.title, ctx, `${path}.title`);
-      break;
-    }
-    case NodeKind.WAIT:
-      // WAIT owns no constructor state; its absolute deadline is canonicalized through the flow's
-      // ordinary wiring manifest.
-      break;
     case NodeKind.CALL:
     case NodeKind.MAP:
     case NodeKind.LOOP: {

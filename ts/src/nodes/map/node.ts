@@ -5,8 +5,8 @@
  * different typed drivers: a `CallNode` applies a callable once (`'a flow -> 'b`); a `MapNode`
  * maps it over a list (`list['a] -> list['b]`). The discriminator is the kind (`NodeKind.MAP`):
  * `MapNode` carries no `over` field and no `${...}` source on the node. The `over` source rides
- * `flow.wiring[id].over` (as WAIT's absolute `until` does), pre-resolved into `inputs.over` by the
- * engine's evaluator through `bindReserved` before `run`.
+ * `flow.wiring[id].over`, pre-resolved into `inputs.over` by the engine's evaluator through
+ * `bindReserved` before `run`.
  *
  * `run` resolves to one seed-first `Grow` carrying the raw list of per-element records. The
  * compile-owned injected builder constructs the MAP fan-in, and the generic growth reducer

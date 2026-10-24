@@ -3608,7 +3608,8 @@ asks, a flow whose AGENT grants `ask_user` fails before the run starts, and
 Changed (TS yian): the handler is `(request, ctx) => answer`, always given the call's
 `ToolContext` second, and may return a Promise. `request` is camelCase, `{ question,
 options, questions, answerSchema, title, nodeId }`, with `null` for an absent field;
-`invokeTrusted("ask_user", ...)` takes the same keys. Each item of `questions` is a parsed
+`invokeTrusted("ask_user", ...)` takes only `question` and `options`; the other fields come
+from a TOOL `ask` node, through the same handler. Each item of `questions` is a parsed
 spec `{ question, header, options: [{ label, description }], multiSelect }` with defaults
 filled. There is no signature check: any function is accepted as the handler.
 

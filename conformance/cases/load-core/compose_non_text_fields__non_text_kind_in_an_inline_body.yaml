@@ -1,4 +1,5 @@
 kind: load
+rules: [messages]
 flow: |
   id: f
   name: f
@@ -13,6 +14,14 @@ flow: |
       output: ${echo.output}
   output: ${a.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''echo'': `kind:` must be text, but YAML read it as a list; write one of agent, call, case, code, loop, map, tool'
+      frames:
+      - label: flow.yaml
+        range: [8, 15, 8, 18]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

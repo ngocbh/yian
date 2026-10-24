@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
+import type { Node } from "../../src/nodes/base.ts";
 import { FakeHost, inboxEngine, inboxFlow, recordNames } from "./inbox_fixtures.ts";
 import { engine, graph, RecordNode, rejected } from "./run_state_fixtures.ts";
 
@@ -115,4 +116,104 @@ test("a sleep whose output contract refuses null fails contract.output", async (
   const events = await run.run();
   expect(events.at(-1)).toBeInstanceOf(RunFailed);
   expect((events.at(-1) as RunFailed).failure.code).toBe("contract.output");
+});
+
+import { NodeWoken, RunWaiting } from "../../src/events.ts";
+import { NodeWokenRecord, RunWaitingRecord } from "../../src/runtime/log.ts";
+import { DeliveryRefused } from "../../src/runtime/state.ts";
+import { FakeHost as Host, GateNode } from "./inbox_fixtures.ts";
+
+/** The index of the first record in `run`'s log matching `match`. */
+function indexOf(run: ReturnType<typeof inboxEngine>, match: (record: unknown) => boolean): number {
+  const at = run.log.records().findIndex((entry) => match(entry.record));
+  if (at < 0) throw new Error("no such record");
+  return at;
+}
+const succeededOf = (nodeId: string) => (record: unknown) => record instanceof NodeSucceededRecord && record.nodeId === nodeId;
+const waitingOf = (nodeId: string) => (record: unknown) => record instanceof NodeWaitingRecord && record.nodeId === nodeId;
+const wokenOf = (nodeId: string) => (record: unknown) => record instanceof NodeWokenRecord && record.nodeId === nodeId;
+
+/** START fans out to `first` then `second` (in that order), both feeding END. */
+const pairFlow = (first: Node, second: Node, inboxes: readonly string[] = []) =>
+  inboxFlow(inboxes, [first, second], [[START_ID, first.id], [START_ID, second.id], [first.id, END_ID], [second.id, END_ID]]);
+
+test("a due sleep wakes only after the running node settles", async () => {
+  const clock = handClock(T0);
+  const slow = new GateNode("slow");
+  const run = inboxEngine(pairFlow(new FakeSleep("nap", 1), slow), { scheduler: clock });
+  const running = run.run();
+  await slow.started;
+  clock.set(T0 + 2000);
+  slow.release();
+  const events = await running;
+  const waited = indexOf(run, waitingOf("nap"));
+  const settled = indexOf(run, succeededOf("slow"));
+  const woken = indexOf(run, wokenOf("nap"));
+  expect(waited < settled && settled < woken).toBe(true);
+  expect((run.log.records()[woken]!.record as NodeWokenRecord).timedOut).toEqual(["run-123/nap"]);
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+test("serial live wake: a complete while a sibling runs wakes the host call after it", async () => {
+  const ask = new Host("ask");
+  const slow = new GateNode("slow");
+  const run = inboxEngine(pairFlow(ask, slow), { scheduler: handClock(T0) });
+  const running = run.run();
+  await slow.started;
+  run.deliver({ kind: "complete", callId: ask.callId, result: { output: "yes" } });
+  slow.release();
+  const events = await running;
+  const woken = indexOf(run, wokenOf("ask"));
+  expect(indexOf(run, succeededOf("slow")) < woken).toBe(true);
+  expect((run.log.records()[woken]!.record as NodeWokenRecord).timedOut).toEqual([]);
+  expect(run.state.pool.get("ask")).toBe("yes");
+  expect(ask.handlerCalls).toBe(1);
+  expect(recordNames(run.log)).not.toContain("RunResumedRecord");
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+test("a complete for an ask closed by its timeout is call_settled, closed", async () => {
+  const clock = handClock(T0);
+  const ask = new Host("ask", { tool: "ask", deadlineAt: T0 + 1000 });
+  const gate = new GateNode("gate");
+  let refused: unknown = null;
+  const run: ReturnType<typeof inboxEngine> = inboxEngine(pairFlow(ask, gate), {
+    scheduler: clock,
+    onEvent: (event: RunEvent) => {
+      if (!(event instanceof NodeWoken) || event.nodeId !== "ask") return;
+      try {
+        run.deliver({ kind: "complete", callId: ask.callId, result: { output: "late" } });
+      } catch (error) {
+        refused = error;
+      }
+    },
+  });
+  const running = run.run();
+  await gate.started;
+  clock.set(T0 + 2000);
+  gate.release();
+  const events = await running;
+  expect(refused).toBeInstanceOf(DeliveryRefused);
+  expect([(refused as DeliveryRefused).reason, (refused as DeliveryRefused).callState]).toEqual(["call_settled", "closed"]);
+  expect(run.state.pool.get("ask")).toBeNull();
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+test("a send made from onEvent(RunWaiting) still wakes the take in the same run()", async () => {
+  const run: ReturnType<typeof inboxEngine> = inboxEngine(takeFlow(), {
+    onEvent: (event: RunEvent) => {
+      if (event instanceof RunWaiting) run.deliver({ kind: "send", inbox: "m", event: "hi" });
+    },
+  });
+  const events = await run.run();
+  const waitingAt = indexOf(run, (record) => record instanceof RunWaitingRecord);
+  expect(recordNames(run.log).slice(waitingAt, waitingAt + 5)).toEqual([
+    "RunWaitingRecord",
+    "PoolCommitRecord",
+    "NodeWokenRecord",
+    "PoolCommitRecord",
+    "NodeSucceededRecord",
+  ]);
+  expect(run.state.pool.get("heard")).toEqual({ events: ["hi"], closed: false });
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
 });

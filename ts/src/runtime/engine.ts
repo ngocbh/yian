@@ -66,6 +66,7 @@ import {
   prepareNodeStep,
   prepareNodeSucceeded,
   prepareNodeWaiting,
+  prepareNodeWoken,
   preparePoolCommit,
   prepareRunCancelled,
   prepareRunFailed,
@@ -78,7 +79,7 @@ import {
   resolveFromPool,
 } from "./state.ts";
 import { captureBindings, sourcePath } from "./trace.ts";
-import { decideWait, nodeCalls } from "./waits.ts";
+import { decideWait, dueTimeouts, isWakeable, nodeCalls } from "./waits.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -481,13 +482,20 @@ export class FlowEngine {
     try {
       while (state.result === null) {
         signal.throwIfAborted();
-        if (state.ready.length === 0) {
+        const woken = this.#nextWake();
+        let nodeId: string;
+        if (woken !== null) {
+          nodeId = woken.nodeId;
+          this.#publish(commitPrepared(log, state, prepareNodeWoken(state, nodeId, woken.timedOut)), events);
+        } else if (state.ready.length > 0) {
+          nodeId = state.ready[0]!;
+          this.#publish(commitPrepared(log, state, prepareNodeStarted(state, nodeId)), events);
+        } else {
           this.#quiesce(events);
-          break;
+          // A delivery made from the run_waiting observer can leave work; then go on.
+          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) break;
+          continue;
         }
-        const nodeId = state.ready[0]!;
-        const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
-        this.#publish(started, events);
         signal.throwIfAborted();
         const evaluated = await this.#startEvaluation(nodeId);
         signal.throwIfAborted();
@@ -707,6 +715,17 @@ export class FlowEngine {
     // The decision left is to wait. It isn't compared by name: "wait" is still a node kind, and the
     // kind census counts that comparison.
     return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry] }));
+  }
+
+  /** The oldest waiting node that is wakeable or has a due call, with its due calls; else null. */
+  #nextWake(): { readonly nodeId: string; readonly timedOut: readonly string[] } | null {
+    const w = this.state.waits;
+    const due = dueTimeouts(w, this.#now());
+    for (const nodeId of w.waiting.keys()) {
+      const timedOut = due.get(nodeId);
+      if (timedOut !== undefined || isWakeable(w, nodeId)) return { nodeId, timedOut: timedOut ?? [] };
+    }
+    return null;
   }
 
   /** The engine's clock: the scheduler's, as the run log's record times are. */

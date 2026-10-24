@@ -305,9 +305,13 @@ test(
   SLOW,
 );
 
-for (const [key, message] of [
-  ["ask_user", 'tools["ask_user"] must be a handler function'],
-  ["", "tool ids in tools must be non-empty strings"],
+for (const [key, kind, message] of [
+  ["ask_user", TypeError, 'tools["ask_user"] must be a handler function'],
+  ["ask", TypeError, 'tools["ask"] must be a handler function'],
+  ["take", RangeError, 'tools["take"]: the name is reserved by yian'],
+  ["sleep", RangeError, 'tools["sleep"]: the name is reserved by yian'],
+  ["load_skill", RangeError, 'tools["load_skill"]: the name is reserved by yian'],
+  ["", TypeError, "tool ids in tools must be non-empty strings"],
 ] as const) {
   test(
     `test_a_server_under_a_bad_key_fails_before_it_starts (${JSON.stringify(key)})`,
@@ -315,7 +319,7 @@ for (const [key, message] of [
       const file = marker();
       const server = fake("--marker", file);
       const error = await rejection(run(await toolFlow("echo", '{text: "hi"}'), { [key]: server }));
-      expect(error).toBeInstanceOf(TypeError);
+      expect(error).toBeInstanceOf(kind);
       expect(error.message).toContain(message);
       expect(existsSync(file)).toBe(false);
       await expectClosed(server);

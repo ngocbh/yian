@@ -45,8 +45,8 @@ export { ASK, ASK_USER };
 /** Maps tool id to the `FunctionTool` registered under it. */
 export const TOOL_REGISTRY = new Map<string, FunctionTool>();
 
-// Names no host tool may take: the engine built-ins, the run's ask slot and the skills tool.
-const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([TAKE, SLEEP, ASK, ASK_USER, LOAD_SKILL]);
+/** Names no host tool may take: the engine built-ins, the run's ask slot and the skills tool. */
+export const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([TAKE, SLEEP, ASK, ASK_USER, LOAD_SKILL]);
 const ASK_HINT = "pass tools: {...registeredTools(), ask: handler} to runFlow or advance";
 
 /** Return why a reserved name is reserved, for a refusal message. */

@@ -150,7 +150,7 @@ import {
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
-import { type ToolEntry, ToolSet } from "./tools/registry.ts";
+import { RESERVED_TOOL_NAMES, type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
@@ -2465,8 +2465,9 @@ function otherRunError(key: string, options?: ErrorOptions): RangeError {
 /**
  * Split the run's tools into the entries that need no opening and the unopened servers.
  *
- * An unopened server under a key `ToolSet` rejects (empty, or `ask_user`) stays with the other
- * entries, so `ToolSet` throws its usual error before any server starts.
+ * An unopened server under a key `ToolSet` rejects (empty, or a reserved name: `take`, `sleep`,
+ * `ask`, `ask_user`, `load_skill`) stays with the other entries, so `ToolSet` throws its usual error
+ * before any server starts.
  *
  * @param tools The `tools` option of `runFlow`. Anything other than a record is returned as is,
  *   for `ToolSet` to reject.
@@ -2483,7 +2484,7 @@ function splitRunServers(
   const unopened: [string, McpServer][] = [];
   for (const key of Object.keys(tools)) {
     const entry = tools[key]!;
-    if (!isMcpServer(entry) || key === "" || key === "ask_user") {
+    if (!isMcpServer(entry) || key === "" || RESERVED_TOOL_NAMES.has(key)) {
       others[key] = entry;
     } else if (entry.isOpen) {
       if (entry.openedByRun) throw otherRunError(key);

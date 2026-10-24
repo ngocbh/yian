@@ -1,0 +1,25 @@
+# TS-only: a take's output type is inferred from its inbox.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.m}
+        take: all
+    first:
+      kind: code
+      input:
+        events: !list(str) ${heard.output.events}
+        closed: !bool ${heard.output.closed}
+      code: return inputs.events
+      output: list(str)
+  output: ${first.output}
+expect:
+  load: ok

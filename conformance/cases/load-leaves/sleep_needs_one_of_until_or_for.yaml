@@ -1,0 +1,22 @@
+# TS-only: a sleep takes exactly one of until: and for:.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    nap:
+      kind: tool
+      tool_id: sleep
+      input:
+        until: 2026-05-21
+        for: 90s
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'nap' (tool_id: sleep): sleep takes until: or for:, exactly one"
+      frames:
+      - label: flow.yaml
+        range: [8, 7, 10, 1]

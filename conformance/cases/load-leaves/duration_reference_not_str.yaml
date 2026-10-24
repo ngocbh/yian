@@ -1,0 +1,23 @@
+# TS-only: a duration from a reference must be typed str.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    n: !int
+  nodes:
+    nap:
+      kind: tool
+      tool_id: sleep
+      input:
+        for: ${input.n}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'nap' (tool_id: sleep) input 'for': a duration reference must be typed str (tag it: `for: !str ${...}`)"
+      frames:
+      - label: flow.yaml
+        range: [10, 12, 10, 22]

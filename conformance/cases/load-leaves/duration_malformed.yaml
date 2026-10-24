@@ -1,0 +1,21 @@
+# TS-only: a duration is a positive integer and a unit.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    nap:
+      kind: tool
+      tool_id: sleep
+      input:
+        for: 1.5h
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'nap' (tool_id: sleep) input 'for': a duration is a positive integer and a unit (90s | 30m | 24h | 2d)"
+      frames:
+      - label: flow.yaml
+        range: [8, 12, 8, 16]

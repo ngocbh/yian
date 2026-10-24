@@ -1,0 +1,36 @@
+# TS-only: the chat shape: a loop carries the inbox into each turn, which takes from it.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: chat
+  name: chat
+  input:
+    owner_messages: !Inbox(str)
+  defs:
+    turn:
+      input:
+        all_messages: !list(str)
+        closed: !bool
+        owner_messages: !Inbox(str)
+      nodes:
+        heard:
+          kind: tool
+          tool_id: take
+          input:
+            from: ${input.owner_messages}
+            take: all
+      output:
+        all_messages: ${input.all_messages + heard.output.events}
+        closed: ${heard.output.closed}
+  nodes:
+    chat:
+      kind: loop
+      call: turn
+      input:
+        all_messages: []
+        closed: false
+        owner_messages: ${input.owner_messages}
+      while: "not closed"
+  output: ${chat.output.all_messages}
+expect:
+  load: ok

@@ -1,0 +1,22 @@
+# TS-only: an ask's literal questions are checked at load.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    q:
+      kind: tool
+      tool_id: ask
+      input:
+        questions:
+          - header: Ship
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'q' (tool_id: ask) input 'questions': question[0] is invalid: missing key(s) [\"question\"]"
+      frames:
+      - label: flow.yaml
+        range: [9, 9, 10, 1]

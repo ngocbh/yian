@@ -1,0 +1,22 @@
+# TS-only: the host owns retries of an ask.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    q:
+      kind: tool
+      tool_id: ask
+      retries: 1
+      input:
+        prompt: Ship it?
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'q' (tool_id: ask): `retries:` doesn't apply to ask: the host owns retries of a call it holds"
+      frames:
+      - label: flow.yaml
+        range: [7, 14, 7, 15]

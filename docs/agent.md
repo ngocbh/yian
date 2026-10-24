@@ -252,7 +252,7 @@ evaluation trace records the text as the call's tool result, like any other.
 | `long_term_memory:` plus host `memory=build_memories(flow)` | Supplies one memory context: recalled notes become labelled system sections (`{"index", "memory", "text"}`); a session memory contributes structured prior messages. |
 | `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages; an AGENT with `tools:` or `skills:` runs the tool loop, and one without them makes one model call. A name may be a host-filled tool group, which expands to its tools. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
-| Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
+| Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` or `Optional(str)` remains free text. |
 | `steerable: true` plus host `steering=` | Sends the host's queued steer messages as `HumanMessage`s with the next model request, and stops the node on a host interrupt (a streamed reply is cut); the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steerable). |
 | `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 

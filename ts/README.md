@@ -782,7 +782,8 @@ modules it imports, so packages bundled into the binary aren't visible to it.
 The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
 `yian --help` lists its commands, and `yian --version` prints the version. `yian chat FLOW` is a
 terminal host for a flow with an `Inbox(str)` or `Inbox(Message)` input: it sends each line you type
-and advances the run ([`docs/cli.md`][docs/cli.md], "Chatting with a flow"). yian's warnings (an
+and advances the run, and Ctrl-C while a reply runs calls `interrupt` ([`docs/cli.md`][docs/cli.md],
+"Chatting with a flow"). yian's warnings (an
 unknown model, TLS checks off, ...) reach a library host through `process.emitWarning`
 (`process.on("warning")`); the CLI prints them as `warning:` lines.
 

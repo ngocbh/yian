@@ -3004,7 +3004,7 @@ on a waiting or cancelled one it raises `RangeError`.
 ### Host calls: `send`, `complete`, `close`, `interrupt`, `cancel` and `pendingCalls`
 
 New (TS yian): a host reaches a run through its log path, whether this process is moving the run
-or nobody is:
+or nobody is (for a whole host loop, see [A chat host](#a-chat-host-ts-yian)):
 
 ```ts
 import { advance, cancel, close, complete, DeliveryRefused, interrupt, pendingCalls, RunBusyError, send } from "@ngocbh/yian";
@@ -3312,6 +3312,49 @@ callback throws or rejects, the engine lets the nodes in flight wind down and ap
 naming them, with `reason` `signal` or `callback`. It isn't terminal: the stopped nodes are still
 in flight, a resume retries them after its `RunResumed`, and they aren't counted as crashed.
 Between the stop and that resume only those nodes' steps are appended.
+
+### A chat host (TS yian)
+
+A host drives [`examples/chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat) with the host
+calls alone: start the run, then per owner message `send` it and `advance`; `interrupt` cuts a
+streaming reply, `pendingCalls` and `complete` answer a tool call that pends, and `close` ends
+the chat (`cancel` throws the run away instead). `yian chat` is such a host
+([CLI](cli.md#chatting-with-a-flow-yian-chat)).
+
+```ts
+import { readFileSync } from "node:fs";
+import { advance, close, complete, loadFlow, pendingCalls, runFlow, send } from "@ngocbh/yian";
+
+const user = (text: string) => ({ role: "user", parts: [{ type: "text", text }] });
+const flow = await loadFlow(readFileSync("examples/chat.yaml", "utf8"), { searchPaths: ["examples"] });
+const log = "chat.jsonl";
+const options = { tools: myTools, onStream: show };    // `myTools` only if the flow grants tools
+let result = await runFlow(flow, {}, { log, ...options });  // waits at the first take
+
+for await (const text of ownerMessages()) {
+  await send(log, "owner_messages", user(text));       // a turn's message
+  result = await advance({ log, ...options });          // the reply; the next take waits
+  while (pendingCalls(log).length > 0) {                // a host tool that returned pending()
+    for (const call of pendingCalls(log)) await complete(log, call.callId, { output: await answer(call) });
+    result = await advance({ log, ...options });        // the woken reply goes on
+  }
+}
+await close(log, "owner_messages");                     // the last take gets closed: true
+result = await advance({ log, ...options });            // succeeded; result.output is the history
+```
+
+- **Steering.** A `send` made while `advance` runs goes to the live engine; the reply reads it
+  before its next model call (a `steer` step), and one sent during its final answer gets one
+  more model call. A send between turns waits for the next take.
+- **Interrupting.** `interrupt(log, "owner_messages")` from another task (a Ctrl-C handler, or
+  `onStream`) cuts the running reply: its output is null (`Optional(str)`), its
+  `new_messages` end with the user message `[interrupted by the user]`, the `NodeSucceeded`
+  event says `interrupted: true`, and `advance` returns `waiting` at the next take.
+- **A crash.** The log is the state: after the process dies, `advance` resumes it (a call
+  answered before the crash is replayed, one in flight is closed as `crashed`), and the chat goes
+  on with `send` and `advance`.
+- **The output** is `{summary, history}`, the history a flat `list(Message)` of what was said,
+  the replies, their tool calls and results, the steers read and the interrupt markers.
 
 ### Reading a run log with `inspectRun`
 

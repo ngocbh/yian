@@ -568,7 +568,7 @@ For example:
   `node_succeeded` that names its seq. A commit no success names (a crash between the two) stays
   in the log and its node reran. The run start's times (`system.now`, `system.today`) leave out
   their `value`.
-- A derived commit (TS schema 15) holds no `value` but `from`: each pool name its binding read,
+- A derived commit (TS schema 16) holds no `value` but `from`: each pool name its binding read,
   to the seq of the `pool_commit` that wrote it; replay rebuilds the value. Derived commits are a non-top `__end__`'s, the stopping LOOP
   driver's, and the expansion's: before `node_expanded`, the spawner writes one per START of the
   fragment (its own, then each child flow's), keyed by the child START, with the spawner's

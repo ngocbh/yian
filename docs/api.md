@@ -2311,14 +2311,14 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 15, and readers accept only schema 15. The schema
+Changed (TS yian): records use schema 16, and readers accept only schema 16. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 14 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 15 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
-writes were `pool_commit` records, before node steps were numbered, or before an unfinished
-backward attempt was `backward.unfinished`) with "run log schema N predates schema 15 and is
-not supported", and any other schema with "unsupported run-record schema: N" (a float token
-shows as `15.0`); the "predates" message for schemas 7
+writes were `pool_commit` records, before node steps were numbered, before an unfinished
+backward attempt was `backward.unfinished`, or before derived commits held `from` pointers)
+with "run log schema N predates schema 16 and is not supported", and any other schema with
+"unsupported run-record schema: N" (a float token shows as `16.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2393,7 +2393,7 @@ at once, and START is ready only after the last.
   Read the record at seq `k`, such as the commit a success names, with
   `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
 
-Changed (TS yian, schema 15): a derived commit holds no value, only `from`, `{node_id, key,
+Changed (TS yian, schema 16): a derived commit holds no value, only `from`, `{node_id, key,
 from}`: `from` maps each pool name its binding read to the seq of the `pool_commit` that wrote it
 (a run input or `system.<name>` to its run-start commit), and every seq names a `pool_commit`.
 Derived commits are a `derived` node's (START, END, LOOP, CALL, MAP), except the top-level START's
@@ -2913,7 +2913,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 15); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 16); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

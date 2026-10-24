@@ -1,0 +1,48 @@
+# TS-only: the agent's first model call fails with a 503 and is retried (YIAN_MODEL_RETRIES=1);
+# the failed attempt is a step, but the messages commit names only the reply that arrived.
+kind: run
+rules: [run-log]
+python_skip: "the messages commit is TS-only (#1081)"
+flow: |
+  id: retried
+  name: retried
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MODEL_RETRIES: '1'}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise: {class: InternalServerError, status: 503, message: The server is temporarily unavailable}
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: A line.}]
+  jitter: [0.0]
+expect:
+  output: {status: succeeded, output: A line.}
+  trace:
+    - [run_started, null, {defaults: {MODEL_RETRIES: 1}, effective_llm_by_static_path: {write: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: environment, endpoint: https://api.openai.com/v1}}}, learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, write]
+    - [node_step, write, {n: 1, step: {error: {kind: server, message: The server is temporarily unavailable}, kind: model_call, model: gpt-5.5, output: null, purpose: chat, request_sha256: 61d71014ca3090c0a6f8753602c207b5143734596ea410b26a367279a943b9f2, retry_in: 0.5, usage: null}}]
+    - [node_step, write, {n: 2, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: A line., type: text}], role: assistant}, purpose: chat, request_sha256: 61d71014ca3090c0a6f8753602c207b5143734596ea410b26a367279a943b9f2, response_id: null, usage: null}}]
+    - [pool_commit, write, {value: A line.}]
+    - [pool_commit, write, {key: write.new_messages, steps: [10]}]
+    - [node_succeeded, write, {commit: 11, messages: 12}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: A line.}]
+    - [node_succeeded, __end__, {commit: 15}]

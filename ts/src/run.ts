@@ -11,7 +11,7 @@
  *
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `advance` (Python's
  * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and
- * `Steering` (`nodes/base.ts`). Hosts reach a run by its log through `send`, `complete`, `close`,
+ * `Steering` (`nodes/base.ts`). Hosts reach a run by its log through `send`, `complete`, `close`, `interrupt`,
  * `cancel` and `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
  * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
@@ -71,7 +71,7 @@ import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
-import { RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
+import { CallClosed, RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import type { FeedbackValue } from "./expr/lineage.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
@@ -1963,14 +1963,14 @@ export interface DeliveryOptions {
  * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
  * the entry. `before` sees the state just before the delivery, synchronously.
  *
- * @returns The appended record's seq, or `null` for a no-op.
+ * @returns The appended record's seq (`null` for a no-op) and its observers.
  */
 async function deliverTo(
   log: string,
   op: DeliveryOp,
   options: DeliveryOptions,
   before: (state: RunState) => void = () => {},
-): Promise<number | null> {
+): Promise<{ readonly seq: number | null; readonly events: readonly RunEvent[] }> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
@@ -1985,7 +1985,7 @@ async function deliverTo(
     const want = { codeRoot: codeRoot === null ? null : resolve(codeRoot), hostFlow };
     const found = await liveOrHold(key, (engine) => {
       before(engine.state);
-      return engine.deliver(op).seq;
+      return engine.deliver(op);
     });
     if ("delivered" in found) return found.delivered;
     const runHold = found.hold;
@@ -2006,9 +2006,9 @@ async function deliverTo(
       keep = () => idleRun(state, flow, key, opened, { ...want, ...credentials });
       before(state);
       const prepared = prepareDelivery(state, op);
-      if (prepared === null) return null;
-      commitPrepared(authority, state, prepared);
-      return prepared.expectedSequence;
+      if (prepared === null) return { seq: null, events: [] };
+      const events = commitPrepared(authority, state, prepared);
+      return { seq: prepared.expectedSequence, events };
     } catch (error) {
       primary = { error };
       throw error;
@@ -2054,7 +2054,7 @@ async function deliverTo(
  */
 export async function send(log: string, inbox: string, event: unknown, options: DeliveryOptions = {}): Promise<number> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  return (await deliverTo(log, { kind: "send", inbox, event }, options))!;
+  return (await deliverTo(log, { kind: "send", inbox, event }, options)).seq!;
 }
 
 /**
@@ -2091,7 +2091,7 @@ export async function complete(
     ((Object.hasOwn(fields, "output") && fields.output !== undefined) ||
       (Object.hasOwn(fields, "error") && typeof fields.error === "string"));
   if (!shaped) throw new TypeError("a complete's result must be {output} or {error: string}");
-  return deliverTo(log, { kind: "complete", callId, result }, options);
+  return (await deliverTo(log, { kind: "complete", callId, result }, options)).seq;
 }
 
 /**
@@ -2110,7 +2110,7 @@ export async function complete(
  */
 export async function close(log: string, inbox: string, options: DeliveryOptions = {}): Promise<number | null> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  return deliverTo(log, { kind: "close", inbox }, options);
+  return (await deliverTo(log, { kind: "close", inbox }, options)).seq;
 }
 
 /**
@@ -2132,6 +2132,36 @@ export async function cancel(log: string, options: DeliveryOptions = {}): Promis
     open = openHostCalls(state.waits, (call) => stateArguments(state, call));
   });
   return open;
+}
+
+/**
+ * Interrupt the agents reading the top-level inbox `inbox` as their steer inbox: each one's
+ * current reply is cut and its result is null, which its declared output decides (`Optional(...)`
+ * succeeds with null; anything else, no `output:` included, fails `agent.interrupted`). The
+ * interrupt closes their open calls (`CallClosed {reason: "interrupted"}`), so a later `complete`
+ * of one is refused. A live engine cuts a running reply at once; a waiting agent honors it when the
+ * run next moves. Queued steers stay in the inbox. Delivered as `send` is; offline only waiting
+ * agents are named (a crashed run's agents aren't known without an engine), so `advance` a crashed
+ * run first.
+ *
+ * @param log The run's JSONL log.
+ * @param inbox The name of one of the flow's `Inbox(T)` inputs.
+ * @param options See `DeliveryOptions`.
+ * @returns The open host calls the interrupt closed, as `pendingCalls` listed them; `[]` when no
+ *   agent reads `inbox` (nothing is appended).
+ * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
+ *   result, `not_started`, or `unknown_inbox`.
+ * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ */
+export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  let open: readonly PendingCall[] = [];
+  const { events } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
+    open = openHostCalls(state.waits, (call) => stateArguments(state, call));
+  });
+  const closed = new Set(events.flatMap((event) => (event instanceof CallClosed ? [event.callId] : [])));
+  return open.filter((call) => closed.has(call.callId));
 }
 
 /** One open host call of a run, as `pendingCalls` lists it. */

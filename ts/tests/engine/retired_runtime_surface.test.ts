@@ -180,6 +180,7 @@ test("the package root exports exactly its documented root list plus the memory 
     send: run.send,
     complete: run.complete,
     close: run.close,
+    interrupt: run.interrupt,
     cancel: run.cancel,
     pendingCalls: run.pendingCalls,
     RunBusyError: run.RunBusyError,

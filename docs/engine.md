@@ -256,6 +256,21 @@ apply in log order, so the pool then holds exactly what the binding read; no seq
 kept. A growth's seed is rebuilt the same way from its commits' `from`, before its prune applies,
 and checked by `topology_digest`. A child START names its expansion commit in its success.
 
+Changed (TS yian): a node can wait without holding a worker. `node_waiting` moves it out of the
+in-flight set into the waiting set, on the calls it waits on (a take, a sleep, or a host call its
+`pending` step registered), and `node_woken` moves it back once they are settled; a waiting node's
+start count, steps and calls stay. A waiting run is not a crashed one: `run_waiting` marks a
+quiescence with nodes waiting, and a later crash leaves those nodes waiting, since a resume
+retries only the running ones. A woken node that crashes is retried and counts a crashed attempt,
+and its re-run reuses its calls (a call belongs to its node until the node settles), so a take
+commits what its call settled and a host call isn't registered twice. An inline take's events
+leave the unread queue only when its success is accepted, so a crash between its commit and its
+success leaves an orphan commit: the resume drops it, its events are unread again and go first to
+takes already waiting, and the re-run decides over the current queue. A waiting node blocks the
+terminal result as an in-flight one does; when END is unreachable while nodes wait, the run ends
+with `run_failed` at quiescence, and a host's cancel ends it with `run_cancelled`. See
+[Authoritative run logs](api.md#authoritative-run-logs).
+
 `RunStartedRecord` holds the complete effective model map of the agents resolved at
 run start. An agent whose `llm_config` reads a value known only when it runs (see
 [Values in `llm_config`](syntax.md#values-in-llm_config)) is in the optional

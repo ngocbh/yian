@@ -2481,8 +2481,56 @@ inbox, events, closed}`: the seqs of the send commits it consumed, in order, and
 the inbox closed; its success rebuilds the value from those sends. The reducer reads two step
 bodies, a TOOL's `pending` step `{kind: "pending", call_id, tool, arguments, deadline?}` and its
 answering `tool_result` step `{kind: "tool_result", call_id, output}` or `{..., error: {type,
-message}}`; any other step stays opaque. Deadlines are record times. The reducer doesn't apply
-the new kinds yet: it refuses them, and a `run_resumed` that closes a call.
+message}}`; any other step stays opaque. Deadlines are record times.
+
+The run reducer applies them with these rules, live and on replay (a broken rule is a
+`RangeError`):
+
+- A send is a `pool_commit` by the START under `<START>.<name>` for a top-level `Inbox(T)` input,
+  after the run start: its value must be canonical for `T`, its run-log JSON at most
+  `YIAN_MAX_EVENT_BYTES` (1 MiB; UTF-8 bytes of `logJson`), and the inbox open. It applies at once
+  and never touches the pool: the value enters the run's inbox store and the event goes to the
+  oldest take waiting on the inbox, or stays unread, in log order.
+- A TOOL node that calls a host tool (not `take` or `sleep`) registers its call with a `pending`
+  step: `tool` is its tool, `call_id` its call id, no agent fields, `deadline` only on `ask`, and
+  the whole step within `YIAN_MAX_EVENT_BYTES`. A second `pending` for a call the node holds is
+  refused: a call belongs to its node until the node settles. A `tool_result` for a registered
+  call must answer an open call of its own node (an answered, timed-out or closed one is refused);
+  a result no call registered, such as an agent's, stays the node's own detail.
+- `node_waiting` moves an in-flight node with no pending commit to the waiting set. Its `waits`
+  entry is a take or sleep node's own call, not yet registered; a take may wait only on an open
+  inbox with nothing unread it may read. `call_ids` names calls of the node registered since its
+  last wake (in this start or an earlier one, so a restart can wait on the call it registered
+  before a crash) and not closed, including every open one. `node_woken` needs a waiting node
+  whose calls are all settled once its `timed_out` calls (open calls with a deadline; the
+  reducer reads no clock) time out; the wake is the node's accepted start from then on.
+  `run_waiting` needs nothing in flight or ready, every waiting node named in order, none
+  wakeable, and no `run_waiting` as the last frontier record. A waiting node holds no worker,
+  isn't retried by a resume, and keeps the run from ending, as an in-flight node does.
+- A take commit is checked against the node's take call: a node that waited commits the events
+  assigned to its call (closed when its inbox is closed with nothing left a take may read), or
+  nothing after a timeout. A take with no call commits inline: the oldest unread event that no
+  other pending take commit holds, or all of them, closed when its inbox is closed and it takes
+  the last; with none, nothing. Its success rebuilds `{events, closed}` from the inbox store,
+  checks it against the node's output contract, and drops the consumed values. A resume drops an
+  orphan take commit; its events are unread again and go first to takes already waiting.
+- `inbox_closed` closes a declared, open inbox; a take waiting on it with nothing assigned is
+  answered and commits `{events: [], closed: true}`. `run_cancelled` ends the run;
+  `run_failed` ends it at quiescence with nodes waiting, none wakeable, once a route proved END
+  unreachable, holding that failure. Both close every open call, and, being terminal, refuse
+  every later record. `run_resumed.closed_calls` must be the retried agents' open calls, `[]`
+  while only TOOL nodes register calls. The reducer publishes `CallClosed` for each host call it
+  closes: a timed-out `ask` in `node_woken`, a resume's closed calls, `run_cancelled`,
+  `run_failed` and a `node_failed`; takes and sleeps get none.
+
+A host delivery (a send, an answer to a pending call, a close or a cancel) that the run refuses
+appends nothing and throws `DeliveryRefused`, a `RangeError` whose `reason` says why, checked in
+this order: `ended` (the run has a terminal result, a second cancel among them), `not_started`
+(its run start is incomplete), then for a send `unknown_inbox`, `inbox_closed`, `invalid_value`
+(the `TypeCheckError` is its `cause`) and `too_large`; for an answer `unknown_call`,
+`not_host_call` (a take or sleep), `call_settled` (with the call's state in `callState`),
+`invalid_value` and `too_large`; for a close `unknown_inbox`. An identical repeat of an answer,
+and a second close, are no-ops.
 
 Changed (TS yian, schema 16): a derived commit holds no value, only `from`, `{node_id, key,
 from}`: `from` maps each pool name its binding read to the seq of the `pool_commit` that wrote it
@@ -2511,8 +2559,8 @@ non-learnable runs, so both write the same `from`.
   is a derived value, recorded as `from`.
 - `foldRunLog(log, { env, flow, codeRoot })` (from `yian/run`) replays a log through the run
   reducer and returns `{flow, records}`, each record with the `TypedValue` an accepted
-  `pool_commit` writes (held, or rebuilt from `from`), `null` for an orphan commit and any other
-  record. It is how a host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`.
+  `pool_commit` writes (held, a send's included; rebuilt from `from`; or, for a take commit, the
+  `{events, closed}` its success rebuilds), `null` for an orphan commit and any other record. It is how a host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`.
   A log whose flow was built in code needs `flow`. With `codeRoot`, it refuses a recorded CODE
   reference whose file's real path is now outside it with `LoadError` before the replay, as
   `advance` does; a run whose flow was built in code ignores it.

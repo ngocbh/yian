@@ -55,7 +55,7 @@
  * appends past a record); a `RunStopped` covers its in-flight nodes; resumed then crashed again
  * counts 2, and the count stays after the node finishes; a locked log (a `JsonlRunLog` held open)
  * is `running` with the recorded counts only; END succeeded with another node ready but unstarted
- * reads `succeeded` without the flow and `interrupted` with it; a finished pooled failure has
+ * reads `succeeded` without the flow and `crashed` with it; a finished pooled failure has
  * nothing in flight and adds nothing; a missing log throws `ENOENT`, and an empty log no writer
  * holds is refused; a route that proved END unreachable reads `failed`; the replay with the flow
  * checks the recorded `YIAN_*` values against the given `env` (the records alone don't); the run
@@ -1145,7 +1145,7 @@ test("inspectRun counts the node in flight at a crash once", async () => {
   const before = readFileSync(path);
 
   expect(inspectBoth(path, flow)).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: ["work"],
     crashedAttempts: new Map([["work", 1]]),
   });
@@ -1184,7 +1184,7 @@ test("inspectRun: resumed then crashed again counts 2, and the count stays after
   await crashAfter(11, () => resume(flow, { log: path }));
 
   expect(inspectBoth(path, flow)).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: ["work"],
     crashedAttempts: new Map([["work", 2]]),
   });
@@ -1206,7 +1206,7 @@ test("inspectRun: a locked log is running, with the recorded counts only", async
   } finally {
     held.close();
   }
-  expect(inspectRun(path).status).toBe("interrupted");
+  expect(inspectRun(path).status).toBe("crashed");
 });
 
 test("inspectRun: END succeeded with another node ready but unstarted is succeeded without the flow only", async () => {
@@ -1227,7 +1227,7 @@ test("inspectRun: END succeeded with another node ready but unstarted is succeed
 
   expect(progressOf(inspectRun(path))).toEqual({ status: "succeeded", inFlight: [], crashedAttempts: new Map() });
   expect(progressOf(inspectRun(path, { flow, env: hostEnv(dir) }))).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: [],
     crashedAttempts: new Map(),
   });
@@ -1294,13 +1294,13 @@ test("inspectRun replays with the run's env", async () => {
   await crashAfter(9, () => run(flow, {}, { log: path, numWorkers: 0, env }));
 
   expect(progressOf(inspectRun(path, { flow, env }))).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: ["work"],
     crashedAttempts: new Map([["work", 1]]),
   });
   expect(thrownBy(() => inspectRun(path, { flow, env: hostEnv(dir) }))).toBeInstanceOf(DefaultsMismatchError);
   // Reading without the flow doesn't check the recorded values.
-  expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("interrupted");
+  expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("crashed");
 });
 
 test("inspectRun reads the run id, schema, fingerprint, learnable flag and last seq, with and without the flow", async () => {
@@ -1419,7 +1419,7 @@ test("a resume keeps the recorded times and stamps its own records from its cloc
   const flow = await load(WORK_FLOW);
   await crashAfter(9, () => run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) }));
   const crashed = inspectRun(path);
-  expect([crashed.status, crashed.startedAt, crashed.endedAt]).toEqual(["interrupted", "2026-10-20T14:00:00.000Z", null]);
+  expect([crashed.status, crashed.startedAt, crashed.endedAt]).toEqual(["crashed", "2026-10-20T14:00:00.000Z", null]);
   const before = readRunLog(path);
 
   const result = await resume(flow, { log: path, scheduler: virtualScheduler(octoberTwentieth(16, 30)) });

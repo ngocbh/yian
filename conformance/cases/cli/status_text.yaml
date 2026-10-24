@@ -1,4 +1,4 @@
-# The text form: the status, then the nodes in flight and the interrupted attempts.
+# The text form: the status, then the nodes in flight and the crashed attempts.
 kind: cli
 python_skip: "yian status is TS-only"
 files:
@@ -16,5 +16,5 @@ files:
 args: [status, run.jsonl]
 expect:
   exit: 0
-  stdout: "status: interrupted\nin flight: a, b\ninterrupted attempts: a=1, b=1\n"
+  stdout: "status: crashed\nin flight: a, b\ncrashed attempts: a=1, b=1\n"
   stderr: ""

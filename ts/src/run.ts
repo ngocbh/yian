@@ -1440,13 +1440,13 @@ export function runLogPath(runsDir: string, runId: string): string {
 }
 
 /** Where a run log stands, as `inspectRun` reads it. */
-export type RunStatus = "running" | "succeeded" | "failed" | "stopped" | "interrupted";
+export type RunStatus = "running" | "succeeded" | "failed" | "stopped" | "crashed";
 
 /** What `inspectRun` reads from one run log. */
 export interface RunInspection {
   /**
    * `running` while a writer holds the log's lock; `succeeded` or `failed` once the run finished;
-   * `stopped` when the host stopped the last segment; otherwise `interrupted` (the process ended
+   * `stopped` when the host stopped the last segment; otherwise `crashed` (the process ended
    * without a stop). A run that isn't running or finished can be resumed.
    */
   readonly status: RunStatus;
@@ -1551,9 +1551,9 @@ export function inspectRun(
   let status: RunStatus;
   if (running) status = "running";
   else if (finished !== null) status = finished;
-  else status = lastStop === null ? "interrupted" : "stopped";
+  else status = lastStop === null ? "crashed" : "stopped";
   // A running run's attempts are still running, and a finished run's are abandoned.
-  if (status === "interrupted" || status === "stopped") addCrashedAttempts(crashed, starts, lastStop);
+  if (status === "crashed" || status === "stopped") addCrashedAttempts(crashed, starts, lastStop);
   const inFlight = status === "succeeded" || status === "failed" ? [] : [...starts.keys()];
   const { started } = scan;
   return {

@@ -1714,9 +1714,9 @@ export async function check(
  * Report where the run recorded in the run log `log` stands (`inspectRun`), without appending to
  * it or taking its lock; returns the exit code.
  *
- * As text, a `status: <status>` line on stdout, then `in flight: <ids>` and `interrupted attempts:
+ * As text, a `status: <status>` line on stdout, then `in flight: <ids>` and `crashed attempts:
  * <id>=<n>` lines when there are any; with `json`, one document with `status`, `in_flight` (in
- * start order) and `interrupted_attempts`. A log that isn't a readable run log (empty, damaged,
+ * start order) and `crashed_attempts`. A log that isn't a readable run log (empty, damaged,
  * not a run log, unreadable) prints its message on stderr and exits 1 (`run.setup`).
  */
 export async function status(log: string, { json }: { json: boolean }, io: CliIo): Promise<number> {
@@ -1739,14 +1739,14 @@ export async function status(log: string, { json }: { json: boolean }, io: CliIo
   if (json) {
     // `printJson` writes a number as a float and a `bigint` as an int.
     const counts = Object.fromEntries([...crashedAttempts].map(([node, n]) => [node, BigInt(n)]));
-    await printJson({ status: runStatus, in_flight: inFlight, interrupted_attempts: counts }, io.stdout);
+    await printJson({ status: runStatus, in_flight: inFlight, crashed_attempts: counts }, io.stdout);
     return 0;
   }
   let text = `status: ${runStatus}\n`;
   if (inFlight.length > 0) text += `in flight: ${inFlight.join(", ")}\n`;
   if (crashedAttempts.size > 0) {
     const counts = [...crashedAttempts].map(([node, n]) => `${node}=${n}`);
-    text += `interrupted attempts: ${counts.join(", ")}\n`;
+    text += `crashed attempts: ${counts.join(", ")}\n`;
   }
   await io.stdout.write(text);
   return 0;

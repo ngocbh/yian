@@ -324,14 +324,14 @@
       }
     },
     "status_document": {
-      "description": "`yian status LOG --json` (TS only): where the run in the log stands, read without appending or taking the writer's lock. status is running while a writer holds the log's lock; succeeded or failed once the run finished; stopped when the host stopped its last segment; else interrupted (the process ended mid-run). in_flight lists the nodes started and not settled, in start order (empty for a finished run). interrupted_attempts maps a node id to the attempts a resume retried, or would retry, as interrupted.",
+      "description": "`yian status LOG --json` (TS only): where the run in the log stands, read without appending or taking the writer's lock. status is running while a writer holds the log's lock; succeeded or failed once the run finished; stopped when the host stopped its last segment; else crashed (the process ended mid-run). in_flight lists the nodes started and not settled, in start order (empty for a finished run). crashed_attempts maps a node id to the attempts a resume retried, or would retry, after a crash.",
       "type": "object",
-      "required": ["format", "status", "in_flight", "interrupted_attempts"],
+      "required": ["format", "status", "in_flight", "crashed_attempts"],
       "properties": {
         "format": {"$ref": "#/$defs/format"},
-        "status": {"enum": ["running", "stopped", "interrupted", "succeeded", "failed"]},
+        "status": {"enum": ["running", "stopped", "crashed", "succeeded", "failed"]},
         "in_flight": {"type": "array", "items": {"type": "string"}},
-        "interrupted_attempts": {
+        "crashed_attempts": {
           "type": "object",
           "additionalProperties": {"type": "integer", "minimum": 0}
         }

@@ -672,7 +672,7 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
       ["first", 1],
       ["second", 1],
     ]);
-    const expected = { status: "interrupted" as const, inFlight: ["first", "second"], crashedAttempts: counts };
+    const expected = { status: "crashed" as const, inFlight: ["first", "second"], crashedAttempts: counts };
     expect(progressOf(inspectRun(path))).toEqual(expected);
     expect(progressOf(inspectRun(path, { flow, env }))).toEqual(expected);
 

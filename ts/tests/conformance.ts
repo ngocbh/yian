@@ -2785,7 +2785,7 @@ async function checkInvariants(
   const first = envelopes[0]!;
   const started = first.record as RunStartedRecord;
   const expected = {
-    status: finished ?? (state.lastStopSequence === null ? "interrupted" : "stopped"),
+    status: finished ?? (state.lastStopSequence === null ? "crashed" : "stopped"),
     inFlight: finished === null ? [...state.acceptedStarts.keys()] : [],
     crashedAttempts: Object.fromEntries(counts),
     runId: first.runId,

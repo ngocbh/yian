@@ -594,7 +594,7 @@ test("a request that doesn't match the recorded digest is a host fault; the run 
   expect(model.requests.length).toBe(0);
   // Only the resume's own start is written: no step, no failure.
   expect(kinds(log, before)).toEqual(["run_resumed", "node_started"]);
-  expect(inspectRun(log).status).toBe("interrupted");
+  expect(inspectRun(log).status).toBe("crashed");
   writeFileSync(log, readFileSync(log, "utf8").replace(forged, digest));
   const resumed = await resume(log, model, { tools });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");

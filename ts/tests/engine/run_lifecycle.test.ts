@@ -50,7 +50,7 @@
  *   from `scheduler`. TS records the stop as `run_stopped`, and nothing is named `RunAborted`.
  *
  * TS-only: a resume after a crash publishes `RunResumed` then one `NodeAttemptResumed` per retried
- * node with its interrupted count (2 after a second crash), and the result holds the counts; a
+ * node with its crashed count (2 after a second crash), and the result holds the counts; a
  * TOOL cut between its `failed` and `started` steps resumes with the next attempt; a resume with
  * an aborted signal rejects with its reason before the lock is taken.
  *
@@ -58,7 +58,7 @@
  * route) run in a child process of the runtime running the test, a script written to a temp dir;
  * the child is killed with SIGKILL once the log holds k+1 lines, for each k that is a slow node's
  * `node_started` (the child's CODE bodies wait 1 s, so the kill lands while that node runs). The
- * records-only `inspectRun` then reads `interrupted` with the killed node in flight, counted once,
+ * records-only `inspectRun` then reads `crashed` with the killed node in flight, counted once,
  * and `resumeFlow` in the test process gives an uncut run's output and node outcomes
  * (`node_succeeded`, `node_routed`, `node_failed`, by node and value or handle).
  *
@@ -1271,7 +1271,7 @@ describe("the SIGKILL platform sweep", () => {
           // The kill landed while the node ran: its start is the last record.
           expect(lineCount(log)).toBe(k + 1);
           expect(progressOf(inspectRun(log))).toEqual({
-            status: "interrupted",
+            status: "crashed",
             inFlight: [nodeId],
             crashedAttempts: new Map([[nodeId, 1]]),
           });

@@ -249,6 +249,10 @@ run before appending any record.
   `error` and no final chunk, then streams the next attempt under the next `n`.
   A structured reply that fails the output check finishes its call without
   `error`; the correction is a new call.
+- Changed (TS yian): `live` — a `LiveChannel` that gets each appended record and
+  each AGENT model call's start, chunks and end as plain-JSON frames, and keeps
+  the calls in flight for a late viewer (see
+  [Authoritative run logs](#authoritative-run-logs)).
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults (`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`,
   then the logins saved by `yian auth`) are captured at initialization. There is no
@@ -2559,6 +2563,21 @@ on replay. Each `step` is a JSON object with a string `kind`:
 
 A tool call's idempotency key (`ToolContext.callId`) is `<run id>/<node>/<n>/<index>`, `n` the
 reply's `model_call` step.
+
+Changed (TS yian): a run's live channel is separate from the log. `runFlow`'s and `resumeFlow`'s
+`live` option takes a `LiveChannel`, which sends plain-JSON frames (the log's snake_case keys) to
+each subscriber: `{type: "record", seq, line}` for each record, its line exactly as appended, once
+the append returned (`node_step` included); and `{type: "start", node, n, model, purpose,
+started_at}`, `{type: "chunk", node, n, index, text}` and `{type: "end", node, n, error}` for each
+AGENT model call attempt, named by the step its record becomes, its chunks numbered from 0
+(`error` is the error's name; a failed attempt's record comes first). Records never reach
+`on_event`, and frames never enter the log. `snapshot()` gives `{last_seq, calls: [{node, n,
+chunks, next_index}]}`: the last record's seq and each call in flight, one per `(node, n)`, so
+parallel calls stay apart; a call leaves it when its step record is appended, when it ends with an
+error, or when its node settles. A late viewer subscribes, reads the log to its end, takes the
+snapshot, then follows, skipping records at or below `last_seq` and chunks below a call's
+`next_index`. A host forwards frames to other processes over its own channel; yian ships no
+transport.
 
 ## Durable recovery with `resume_flow`
 

@@ -192,6 +192,7 @@ A failed flow resolves with `status: "failed"`; host, callback and log errors re
 | `numWorkers` | `number`; `0` runs serially | `8` |
 | `onEvent` | `EventHook`, `(event) => unknown` | `null` |
 | `onStream` | `StreamHook`, `(chunk) => unknown` | `null` |
+| `live` | `LiveChannel` (see [Following a run live](#following-a-run-live)) | `null` |
 | `llmConfig` | record, the outer `llm_config` layer | `null` |
 | `memory` | `Map` of memory key to backend, usually a `MemoryRegistry` | `null` |
 | `learnable` | `boolean`: keep the run for `result.backward` | `false` |
@@ -258,6 +259,37 @@ values inside are left as they are (ints as `bigint`, `Infinity`), so `JSON.stri
 replacer for them. Meanings: the `on_event` and `on_stream` items of
 [`run_flow`][docs/api.md#run_flow].
 
+### Following a run live
+
+```ts
+const live = new LiveChannel();
+const stop = live.subscribe((frame: LiveFrame) => send(logJson(frame)));
+await runFlow(flow, inputs, { log, live });
+```
+
+A `LiveChannel` (exported by `@ngocbh/yian/run`, with `LiveFrame`, `LiveSnapshot` and `LiveCall`)
+is a run's live channel, passed as `runFlow`'s or `resumeFlow`'s `live`. Its frames are plain JSON
+with the log's snake_case keys, so a host can send them anywhere with `logJson`:
+
+- `{type: "record", seq, line}`: a line exactly as the log appended it, sent once the append
+  returned, `run_started` and every `node_step` included; decode it with the log's own reader. A
+  resumed run sends only the records it appends.
+- `{type: "start", node, n, model, purpose, started_at}`, `{type: "chunk", node, n, index, text}`
+  and `{type: "end", node, n, error}`: one AGENT model call attempt, named by the step it becomes
+  (`node` + `n`, as `StreamChunk` and the call events name it), its text chunks numbered by `index`
+  from 0. `error` is the error's name, as on `ModelCallFinished`; a failed attempt's record, with
+  its scrubbed message, comes first.
+
+Records never reach `onEvent`, and frames never enter the log. `subscribe(fn)` returns the function
+that stops it; a subscriber that throws ends the run as a host fault. `snapshot()` returns
+`{last_seq, calls: [{node, n, chunks, next_index}]}`: the seq of the last record (`-1` before any)
+and each call in flight with its chunks so far. The channel keeps one buffer per call, so calls of
+parallel nodes (a MAP's items) stay apart; a call leaves it when its step record is appended, when
+it ends with an error, or when its node settles (a stop). A late viewer subscribes, reads the log to
+its end with `iterRunRecords`, takes `snapshot()`, then follows the frames, skipping records at or
+below `last_seq` and chunks below a call's `next_index`. Getting frames to another process is the
+host's job: it sends them over its own channel.
+
 ## Recovering and inspecting runs
 
 ```ts
@@ -268,7 +300,7 @@ inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: str
 ```
 
 `resumeFlow` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
-`onEvent`, `onStream`, `memory`, `tools`, `skills`, `steering`, `context`, `signal`, `env`,
+`onEvent`, `onStream`, `live`, `memory`, `tools`, `skills`, `steering`, `context`, `signal`, `env`,
 `scheduler`, `random` and `models`, plus `loadFlow`'s `codeRoot`, and `apiKey` and `headers` for
 a run started with `llmConfig.api_key`. It runs the flow `RunStarted` recorded, compiled from the
 recorded flow files; `flow` is only for a run whose flow was built in code (`RunStarted.flow` is
@@ -1233,7 +1265,7 @@ START is ready after the START inputs' commit; a success walks its
   memory runtime's admission callback, `(scope, request, { signal }) => Promise<MemoryContext>`.
 - `src/runtime/engine.ts` holds `FlowEngine`, the only writer of a `RunState` while it runs. `new
   FlowEngine(state, log, { growBuilder, numWorkers, onEvent, onStream, memoryContextOpener, tools,
-  skills, steering })` borrows a state and log already initialized to the same sequence; `run()`
+  skills, steering, live })` borrows a state and log already initialized to the same sequence; `run()`
   starts the head of `ready`, evaluates it, commits the outcome (a refused output, route or growth
   becomes a `contract.*` failure) and publishes each record's observers to `onEvent`, until the state
   has a result, and resolves to those observers. A node failure is a result; any other error aborts
@@ -1247,7 +1279,13 @@ START is ready after the START inputs' commit; a success walks its
   discarded, every running node is awaited, and `run()` rejects with the initiating error. Each
   evaluation runs in a fresh `AsyncResource`, so `AsyncLocalStorage` stores set inside a node stay in
   it. `resumedAttemptEvents(state, record)` builds the `NodeAttemptResumed` events a resume publishes
-  after `RunResumed`.
+  after `RunResumed`. With `live`, each model call's `ModelCallStarted`, text chunks and
+  `ModelCallFinished` also go to the channel, and a node's calls leave it when the node settles.
+- `src/runtime/live.ts` holds `LiveChannel` (see [Following a run live](#following-a-run-live)):
+  `record`, `start`, `chunk`, `end` and `settle` update the calls in flight, one per `(node, n)`,
+  then send the frame to each subscriber; `record` decodes a line only while a call is in flight,
+  to drop the call a `node_step` closes. `wrap(log)` gives the run boundary a log whose appends also
+  reach the channel, its `last_seq` starting at the records the log already holds.
 - `src/runtime/memory_runtime.ts` holds `MemoryRuntime`: `open` validates the table, origins,
   registry and snapshots, opens one session per key in key order and captures the snapshots;
   `openContext(scope, recall, { signal })` recalls each scope key outer to local, keeps non-empty

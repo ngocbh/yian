@@ -28,7 +28,7 @@
  * then caps.
  */
 
-import { encodeBody, mergeRequestBody } from "../body.ts";
+import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { ProviderError } from "../errors.ts";
 import {
@@ -126,16 +126,17 @@ export class OllamaChat implements NdjsonProtocol {
    * there is one, `messages`, and `tools` (`[]` with none), then the block merged over them.
    *
    * Every message is sent in place. A system or user message is `{role, content}`, its text parts
-   * joined with `"\n"`. An assistant message is `{role, content, thinking, tool_calls}`: its text
-   * parts joined with `"\n"`, its reasoning texts joined with `""`, and each call in part order as
-   * `{id, function: {name, arguments}}`, the arguments copied (`{}` for an invalid call); refusal
-   * parts are not sent. Reasoning goes back only when every reasoning record on the message reads
-   * back for this protocol, provider, model and account; otherwise none of it is sent and
-   * `onReplayDegraded` is called once for the message with the first reason in part order. A
-   * reasoning part without a payload is never sent and signals nothing. A tool message is one
-   * `{role: "tool", content, tool_name, tool_call_id}` per result; `isError` is not sent. An empty
-   * `content`, `thinking` and call list are left out, so an empty assistant message is
-   * `{role: "assistant"}`.
+   * joined with `"\n"`; a user message's author is sent as the author wrapper, each tag on its own
+   * line, and the author tag is escaped in user and tool text. An assistant message is
+   * `{role, content, thinking, tool_calls}`: its text parts joined with `"\n"`, its reasoning
+   * texts joined with `""`, and each call in part order as `{id, function: {name, arguments}}`,
+   * the arguments copied (`{}` for an invalid call); refusal parts are not sent. Reasoning goes
+   * back only when every reasoning record on the message reads back for this protocol, provider, model and
+   * account; otherwise none of it is sent and `onReplayDegraded` is called once for the message
+   * with the first reason in part order. A reasoning part without a payload is never sent and
+   * signals nothing. A tool message is one `{role: "tool", content, tool_name, tool_call_id}` per
+   * result; `isError` is not sent. An empty `content`, `thinking` and call list are left out, so an
+   * empty assistant message is `{role: "assistant"}`.
    *
    * Each tool is `{type: "function", function: {name, description, parameters}}`, the parameters
    * copied as written; `strict`, the tool choice and `parallelToolCalls` are not sent. The block
@@ -150,7 +151,7 @@ export class OllamaChat implements NdjsonProtocol {
       throw new TypeError(NO_MEDIA);
     }
     const messages: JsonObject[] = [];
-    for (const message of request.messages) {
+    for (const message of request.messages.map((each) => withAuthorWrapper(each))) {
       if (message.role === "tool") messages.push(...message.parts.map(toolMessage));
       else if (message.role === "assistant") messages.push(this.#assistant(message));
       else messages.push(withContent({ role: message.role }, joinedText(message)));

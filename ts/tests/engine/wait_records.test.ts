@@ -1,8 +1,9 @@
 /**
  * The inbox and wait record kinds (`node_waiting`, `node_woken`, `run_waiting`, `inbox_closed`,
  * `run_cancelled`, `run_failed`), the take form of `pool_commit`, and the record-time exports:
- * their constructors' checks and their canonical wire. TS-only: Python yian has no inbox or
- * suspension records.
+ * their constructors' checks and their canonical wire; the waits fold's empty state on a fresh
+ * `RunState`, and the reducer refusing the new kinds until it applies them. TS-only: Python yian
+ * has no inbox or suspension records.
  */
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -24,10 +25,14 @@ import {
   requireRecordTime,
   RunCancelledRecord,
   RunFailedRecord,
+  type RunRecord,
   RunWaitingRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { prepareRecord, RunState } from "../../src/runtime/state.ts";
+import { WaitsState } from "../../src/runtime/waits.ts";
 import { logJson } from "../../src/typesys/json.ts";
+import { commitStartSuccess, flow, initializedAndStarted } from "./run_state_fixtures.ts";
 
 const DEADLINE = "2026-10-24T09:00:00.000Z";
 const take = { callId: "r/heard", tool: "take", inbox: "msgs", mode: "one", deadline: null } as const;
@@ -314,5 +319,50 @@ test("the record-time helpers are exported", () => {
     () => requireRecordTime("tomorrow"),
     RangeError,
     "run-record envelope at must be a UTC time such as 2026-10-20T14:02:11.123Z, found 'tomorrow'",
+  );
+});
+
+test("a fresh RunState holds an empty waits fold and no inbox events", () => {
+  const state = new RunState(flow());
+  expect(state.waits).toBeInstanceOf(WaitsState);
+  for (const map of [state.waits.waiting, state.waits.calls, state.waits.inboxes, state.waits.interrupts, state.waits.starts]) {
+    expect(map.size).toBe(0);
+  }
+  expect(state.waits.lastFrontier).toBeNull();
+  expect(state.waits.lastStop).toBeNull();
+  expect([state.waits.endSucceeded, state.waits.unreachable, state.waits.nodeFailed, state.waits.runFailed, state.waits.cancelled]).toEqual([
+    false, false, false, false, false,
+  ]);
+  expect(state.inboxEvents.size).toBe(0);
+});
+
+test.each<[string, () => RunRecord]>([
+  ["NodeWaitingRecord", () => new NodeWaitingRecord("work", ["r/work"])],
+  ["NodeWokenRecord", () => new NodeWokenRecord("work")],
+  ["RunWaitingRecord", () => new RunWaitingRecord(["work"])],
+  ["InboxClosedRecord", () => new InboxClosedRecord("msgs")],
+  ["RunCancelledRecord", () => new RunCancelledRecord()],
+  ["RunFailedRecord", () => new RunFailedRecord(FAILURE)],
+])("the reducer doesn't prepare a %s yet", (name, build) => {
+  const { state, log } = initializedAndStarted(flow());
+  commitStartSuccess(state, log);
+  expectError(() => prepareRecord(state, build()), TypeError, `unsupported run record for state preparation: ${name}`);
+});
+
+test("the reducer doesn't prepare a take commit yet", () => {
+  const { state, log } = initializedAndStarted(flow());
+  commitStartSuccess(state, log);
+  const commit = new PoolCommitRecord("work", "work", null, { take: { inbox: "msgs", events: [], closed: true } });
+  expectError(() => prepareRecord(state, commit), TypeError, "unsupported pool_commit form for state preparation: take");
+});
+
+test("a state whose waits fold was replaced is refused", () => {
+  const { state, log } = initializedAndStarted(flow());
+  commitStartSuccess(state, log);
+  (state as { waits: unknown }).waits = {};
+  expectError(
+    () => prepareRecord(state, new NodeStartedRecord("work")),
+    RangeError,
+    "transition requires initialized reducer containers",
   );
 });

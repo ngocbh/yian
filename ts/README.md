@@ -1253,6 +1253,10 @@ Node 22, and so does every unit test; a change keeps both green.
   loop over the same `foldRunScan`, so both read a status by one set of rules. `readRunIndex` puts
   `running` on top while a writer holds a run's lock. One `BEGIN IMMEDIATE` transaction with a busy
   timeout serializes builders. Never imported by the reducer or the engine.
+- `src/runtime/waits.ts` (TS-only) holds the waits state a run's records build (`WaitsState`: the
+  waiting nodes, registered calls, inboxes, and the records-only facts a status reads), which
+  `RunState.waits` carries; `RunState.inboxEvents` holds each send's value by seq. The reducer
+  doesn't apply the inbox and wait records yet: it refuses them.
 - `src/runtime/trace.ts` holds the retained trace of a learnable run (`RetainedTrace`: accepted
   sources, occurrences, current writers, boundaries and the terminal). `prepareTrace` checks one
   record against the trace and returns a frozen `TraceDelta`; the caller applies it

@@ -2578,15 +2578,17 @@ comes before its `end` frame), when its node settles, or when a `node_failed` or
 record ends the run. A late viewer calls `follow(fn)`, which
 sends `{type: "snapshot", snapshot}`, then every later frame, the two taken in one synchronous
 turn; it reads the log up to `last_seq` (possibly async), then applies the frames that came
-meanwhile and follows. Every frame after the snapshot is new to it, so it skips nothing. The stream is ephemeral: a subscriber that throws is dropped and reported
-(`onSubscriberError`, a warning by default) and never affects the run. A host forwards frames to
+meanwhile and follows. Every frame after the snapshot is new to it, so it skips nothing. The
+stream is ephemeral: a subscriber that throws is dropped and reported (`onSubscriberError`, a
+warning by default) and never affects the run. A host forwards frames to
 other processes over its own channel; yian ships no transport. On the reading side, a `LiveView`
 folds a run: `LiveView.from(records, snapshot)` takes the log's records up to the snapshot's
 `last_seq` (later ones are ignored) and the snapshot, and `apply(frame)` folds each later frame,
 giving `lastSeq` and `calls()` (`{node, n, text, nextIndex}` per call in flight, one buffer per
-`(node, n)`). A duplicate (a record at or below `lastSeq`, the start of a call in flight, a chunk
-below its call's `nextIndex`) changes nothing; a call goes with its step record, an error `end`,
-or its node's `node_succeeded`, and every call goes on `node_failed` or `run_stopped`. `apply`
+`(node, n)`). Frames must arrive in the order they were sent. A duplicate (a record at or below
+`lastSeq`, the start of a call in flight, a chunk below its call's `nextIndex`) changes nothing; a
+call goes with its step record or an error `end`, and every call goes on `node_failed` or
+`run_stopped`. `apply`
 returns `false` on a gap (a skipped seq, a skipped chunk index, or a chunk of a call not in
 flight), and the host asks `follow` again. It never reads files; a host drops the view when the
 run ends.

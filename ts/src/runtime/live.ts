@@ -9,9 +9,10 @@
  *
  * The channel keeps the chunks of each call in flight, one buffer per `(node, n)`, so the calls of
  * parallel nodes stay apart. A call's buffer goes when its step record is appended (a failed
- * attempt's too, before its end frame), when its node settles, or when a record ends the run. A late viewer calls `follow`, which
- * sends the snapshot, then every later frame; it reads the log up to the snapshot's `last_seq` (this
- * may be async), then applies the frames that came meanwhile and follows. Every frame after the
+ * attempt's too, before its end frame), when its node settles, or when a record ends the run. A
+ * late viewer calls `follow`, which sends the snapshot, then every later frame; it reads the log up
+ * to the snapshot's `last_seq` (this may be async), then applies the frames that came meanwhile and
+ * follows. Every frame after the
  * snapshot is new to it: records continue after `last_seq` and each call's chunks after its
  * `next_index`, so it skips nothing. Yian ships no transport: a host sends the frames over its own
  * channel, and the reading side folds them with a `LiveView`.
@@ -29,7 +30,6 @@ import {
   encodeRecord,
   NodeFailedRecord,
   NodeStepRecord,
-  NodeSucceededRecord,
   type RecordEnvelope,
   type RunLog,
   RunStoppedRecord,
@@ -242,12 +242,13 @@ export interface LiveViewCall {
  *
  * A host that serves viewers in another process keeps one per run, built from the log up to a
  * `follow` snapshot's `last_seq` plus that snapshot, then fed every later frame. It never reads
- * files: the host gives it records. A record at or below `lastSeq`, the start of a call in flight, or
- * a chunk below its call's next index is a duplicate and changes nothing; a record past the next
- * seq, a chunk past its call's next index, or a chunk of a call not in flight is a gap: `apply`
- * returns false and changes nothing, and the host asks `follow` again. A call goes when its step
- * record arrives, when it ends with an error, or when its node's success arrives; a node failure or
- * a run stop ends the run and drops every call. A run that ends without either (a host fault, or its
+ * files: the host gives it records, and frames in the order they were sent (a duplicate start
+ * delivered after its call's step record would bring the call back). A record at or below
+ * `lastSeq`, the start of a call in flight, or a chunk below its call's next index is a duplicate
+ * and changes nothing; a record past the next seq, a chunk past its call's next index, or a chunk of
+ * a call not in flight is a gap: `apply` returns false and changes nothing, and the host asks
+ * `follow` again. A call goes when its step record arrives or when it ends with an error; a node
+ * failure or a run stop ends the run and drops every call. A run that ends without either (a host fault, or its
  * process gone) sends nothing more, so the host drops the view when the run ends.
  */
 export class LiveView {
@@ -313,7 +314,6 @@ export class LiveView {
         const { record } = decodeRecord(frame.line);
         this.#lastSeq = frame.seq;
         if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
-        else if (record instanceof NodeSucceededRecord) this.#calls.delete(record.nodeId);
         else if (record instanceof NodeFailedRecord || record instanceof RunStoppedRecord) this.#calls.clear();
         return true;
       }

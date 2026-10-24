@@ -110,7 +110,6 @@ nodes:
 output: \${each.output}
 `;
 
-
 /** A fresh run log path in its own folder. */
 export function runLog(): string {
   return join(mkdtempSync(join(tmpdir(), "yian-live-channel-")), "log.jsonl");

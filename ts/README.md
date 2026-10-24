@@ -307,17 +307,19 @@ Yian ships no transport: the host carries frames over its own channel, and Yian 
    channel.
 2. The serving host keeps a `LiveView` per run: `LiveView.from(iterRunRecords(log), snapshot)`,
    then `view.apply(frame)` for each later frame, including those that came while it read the log.
-3. A viewer gets the log up to `view.lastSeq` and `view.calls()` (`{node, n, text, nextIndex}`
-   each), then the frames.
-4. `apply` returning `false` is a gap (a record or chunk went missing): ask `follow` again and
-   rebuild the view.
+3. For a new viewer, the serving host takes `view.lastSeq` and `view.calls()` (`{node, n, text,
+   nextIndex}` each) and registers the viewer for later frames in the same synchronous turn; the
+   viewer gets the log up to that seq and those calls, then the frames.
+4. `apply` returning `false` is a gap (a record or chunk went missing): stop the old `follow`,
+   ask `follow` again and rebuild the view.
 
 `LiveView` (exported with `LiveViewCall`) never reads files. `from` reads only each record's `seq`
 and ignores records past `last_seq`, which the frames bring again; it throws `RangeError` unless the
-records run from seq 0 to `last_seq`. `apply` folds one frame: a record at or below `lastSeq`, the
-start of a call in flight, or a chunk below its call's `nextIndex` is a duplicate and changes
-nothing; a chunk of a call not in flight is a gap. A call goes when its step record arrives, when
-it ends with an error, or when its node's `node_succeeded` arrives, and every call goes on
+records run from seq 0 to `last_seq`. Frames must arrive in the order they were sent: a duplicate
+`start` delivered after its call's step record would bring the call back. `apply` folds one frame:
+a record at or below `lastSeq`, the start of a call in flight, or a chunk below its call's
+`nextIndex` is a duplicate and changes nothing; a chunk of a call not in flight is a gap. A call
+goes when its step record arrives or when it ends with an error, and every call goes on
 `node_failed` or `run_stopped`, which end the run. A run that ends without either (a host fault,
 or its process gone) sends nothing more, so the host drops the view when the run ends. Each call
 has its own buffer, keyed by `(node, n)`, so a MAP's parallel calls stay apart, and a late

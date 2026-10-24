@@ -14,7 +14,13 @@ import { expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { Failure } from "../../src/diagnostics.ts";
-import { LiveChannel, type LiveFollowFrame, type LiveFrame, type LiveSnapshot, LiveView } from "../../src/runtime/live.ts";
+import {
+  LiveChannel,
+  type LiveFollowFrame,
+  type LiveFrame,
+  type LiveSnapshot,
+  LiveView,
+} from "../../src/runtime/live.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -23,7 +29,6 @@ import {
   NodeFailedRecord,
   NodeStartedRecord,
   NodeStepRecord,
-  NodeSucceededRecord,
   type RunRecord,
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
@@ -220,18 +225,14 @@ test("a gap in records or chunks returns false and changes nothing", () => {
   expect(view.calls()).toEqual([{ node: "a", n: 1, text: "x", nextIndex: 1 }]);
 });
 
-test("a node's success drops its calls; a node's failure or a run stop drops every call", () => {
+test("a node's failure or a run stop drops every call", () => {
   const failed = new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "a" }));
-  for (const [ending, left] of [
-    [new NodeSucceededRecord("a", 1), ["b"]],
-    [failed, []],
-    [new RunStoppedRecord("signal", "stopped", ["a", "b"]), []],
-  ] as const) {
+  for (const ending of [failed, new RunStoppedRecord("signal", "stopped", ["a", "b"])]) {
     const { frame } = recording();
     const view = LiveView.from([], { last_seq: -1, calls: [] });
     for (const next of [start("a", 1), start("a", 2), start("b", 1)]) view.apply(next);
     expect(view.apply(frame(ending))).toBe(true);
-    expect(view.calls().map((call) => call.node)).toEqual([...left]);
+    expect(view.calls()).toEqual([]);
   }
 });
 
@@ -286,7 +287,9 @@ async function followLate(
     if (gapAt !== null || drop(frame)) return;
     if (frame.type === "record") {
       const { record } = decodeRecord(frame.line);
-      const call = view!.calls().find((c) => record instanceof NodeStepRecord && c.node === record.nodeId && c.n === record.n);
+      const call = view!
+        .calls()
+        .find((c) => record instanceof NodeStepRecord && c.node === record.nodeId && c.n === record.n);
       if (call !== undefined && frame.seq > view!.lastSeq) settled.set(key(call.node, call.n), call.text);
     }
     if (!view!.apply(frame)) {
@@ -394,14 +397,14 @@ test("a view in another process follows two parallel calls through a pipe", asyn
   try {
     const next = jsonLines(child);
     let done: unknown = null;
-    /** Read lines until one of type `until`; return the frames among them, keeping `done` aside. */
-    const read = async (until: string): Promise<LiveFollowFrame[]> => {
+    /** Read lines until one of type `stopAt`; return the frames among them, keeping `done` aside. */
+    const read = async (stopAt: string): Promise<LiveFollowFrame[]> => {
       const frames: LiveFollowFrame[] = [];
       for (let line = await next(); ; line = await next()) {
         const { type } = line as { type: string };
         if (type === "done") done = line;
         else if (type !== "ack") frames.push(line as LiveFollowFrame);
-        if (type === until) return frames;
+        if (type === stopAt) return frames;
       }
     };
     /** Send `command`; return the frames the child sent before its ack. */
@@ -433,7 +436,9 @@ test("a view in another process follows two parallel calls through a pipe", asyn
       expect(view.apply(frame)).toBe(true);
     };
     for (const frame of buffered) apply(frame as LiveFrame);
-    for (const topic of ["b", "b", "a", "a"]) for (const frame of await send(`release ${topic}`)) apply(frame as LiveFrame);
+    for (const topic of ["b", "b", "a", "a"]) {
+      for (const frame of await send(`release ${topic}`)) apply(frame as LiveFrame);
+    }
     // The run ends after the last record, maybe before the last ack.
     if (done === null) for (const frame of await read("done")) apply(frame as LiveFrame);
     expect(done).toEqual({ type: "done", status: "succeeded" });

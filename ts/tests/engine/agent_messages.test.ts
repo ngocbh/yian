@@ -74,6 +74,19 @@ describe("conversion", () => {
     expect(() => toModelMessage(value)).toThrow("parts[0].arguments: a tool call needs arguments or raw_arguments");
   });
 
+  test("author goes to the model message and back", () => {
+    const value: Message = { role: "user", author: "ana", parts: [{ type: "text", text: "Hi" }] };
+    const model = toModelMessage(value);
+    expect(model.author).toBe("ana");
+    expect(fromModelMessage(model)).toEqual(value);
+  });
+
+  test("an empty author is refused", () => {
+    expect(() => toModelMessage({ role: "user", author: "", parts: [{ type: "text", text: "Hi" }] })).toThrow(
+      "author: expected a non-empty string",
+    );
+  });
+
   test.each([
     ["a system message", new ModelMessage({ role: "system", parts: [new TextPart("x")] }), "a Message can't be a system message"],
     ["inline media", new ModelMessage({ role: "user", parts: [new MediaPart({ mime: "image/png", data: "AA==" })] }), "parts[0]: a Message holds media only as a run-folder file"],
@@ -109,9 +122,8 @@ describe("agreement with message.schema.json", () => {
   const partFields = (tag: string) =>
     [...parts.find((p) => p.fields!.get("type")!.tags!.has(tag))!.fields!.keys()].sort();
 
-  test("every key a model message may hold has a field in Message", () => {
-    const keys = Object.keys(SCHEMA.properties).filter((key) => key !== "format");
-    expect(keys.filter((key) => !message.fields!.has(key))).toEqual([]);
+  test("Message has exactly the schema's message keys", () => {
+    expect([...message.fields!.keys()].sort()).toEqual(Object.keys(SCHEMA.properties).filter((key) => key !== "format").sort());
   });
 
   test.each(["text", "reasoning", "refusal", "tool_call", "tool_result", "media"])("the %s part has the schema's keys", (tag) => {

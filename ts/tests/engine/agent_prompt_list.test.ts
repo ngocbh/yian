@@ -343,3 +343,9 @@ test("a spliced Gemini-style history repeating yian_call_0 across turns passes",
   const { model } = await run(agent(CHAT), history);
   expect(model.requests[0]!.messages).toHaveLength(9);
 });
+
+test("a spliced Message's author reaches the request", async () => {
+  const history = [{ role: "user", author: "ana", parts: [{ type: "text", text: "Hi" }] }];
+  const { model } = await run(agent(CHAT), history);
+  expect(model.requests[0]!.messages[1]!.toJSON().author).toBe("ana");
+});

@@ -67,7 +67,7 @@ function present(fields: Readonly<Record<string, unknown>>): Record<string, unkn
  * @throws MessageFormatError naming the path (e.g. `parts[0].arguments`) of a value the model message refuses.
  */
 export function toModelMessage(value: Message): ModelMessage {
-  const { author: _author, parts, ...rest } = value;
+  const { parts, ...rest } = value;
   return ModelMessage.fromJSON({ format: MESSAGE_FORMAT, ...present(rest), parts: parts.map((part) => present(part)) });
 }
 

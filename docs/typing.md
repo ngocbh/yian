@@ -513,7 +513,7 @@ An AGENT list prompt splices it with all its parts (see
 |---|---|---|
 | `role` | `Literal(user, assistant, tool)` | Who sent it. There is no `system` role: the system prompt is the agent's own. |
 | `parts` | `list(<part>)` | The content, in order. |
-| `author` | `Optional(str)` | Who wrote it; non-empty when set. |
+| `author` | `Optional(str)` | Who wrote it, when that isn't the flow's user or the model; non-empty when set. Model routes send only a user message's author, in an `<authored_message>` wrapper. |
 | `protocol` | `Optional(str)` | Opaque replay data a model reply carries: the protocol that produced it. Keep it; don't write it. |
 | `provider_payload` | `Optional(object)` | Opaque provider data at the message level. Keep it; don't write it. |
 

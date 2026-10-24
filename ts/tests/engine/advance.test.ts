@@ -5,7 +5,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
@@ -173,4 +173,247 @@ test("advance on a cancelled log returns cancelled", async () => {
 test("advance on a missing log rejects with ENOENT", async () => {
   const error = await rejected(advance({ log: join(ROOT, "missing.jsonl"), env: NO_ENV }));
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+});
+
+import { realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
+import { spyOn } from "bun:test";
+
+import { loadFlow } from "../../src/compose/loader.ts";
+import { LoadError } from "../../src/compose/helpers/errors.ts";
+import { NodeStarted, type RunEvent, RunStarted } from "../../src/events.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { lockFile } from "../../src/platform.ts";
+import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
+import { reply, runWith, serving } from "./run_state_fixtures.ts";
+
+const BUSY = (log: string) => `run log ${log} is locked by another writer (is the run still active?)`;
+
+/** START fans out to host call `ask` and gate `gate`, both feeding END. */
+function gateFlow(): ComposedFlow {
+  return new ComposedFlow(
+    graph(
+      [new ToolNode("ask", { toolId: "lookup" }), new ToolNode("gate", { toolId: "gate" })],
+      [["__start__", "ask"], ["__start__", "gate"], ["ask", "__end__"], ["gate", "__end__"]],
+    ),
+  );
+}
+
+test("an in-process advance while runFlow moves the run is busy", async () => {
+  const log = freshLog();
+  const flow = gateFlow();
+  const gate = gateTool();
+  const tools = { lookup: pendingTool(), gate: gate.tool };
+  let attempt: Promise<unknown> = Promise.resolve(null);
+  const running = runFlow(flow, {}, {
+    log,
+    env: NO_ENV,
+    tools,
+    numWorkers: 0,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeStarted && event.nodeId === "gate") attempt = rejected(advance({ log, flow, tools, env: NO_ENV }));
+    },
+  });
+  await gate.entered;
+  expect(((await attempt) as Error).message).toBe(BUSY(resolve(log)));
+  gate.release();
+  expect((await running).status).toBe("waiting");
+});
+
+test("a second advance waits for the first and then reads its result", async () => {
+  const { log, flow, tools, callId } = await waitingRun();
+  completeByHand(log, flow, callId, { output: "yes" });
+  const aEntered = Promise.withResolvers<void>();
+  const aGate = Promise.withResolvers<void>();
+  const a = advance({
+    log,
+    flow,
+    tools,
+    env: NO_ENV,
+    checkLlmConfigs: async () => {
+      aEntered.resolve();
+      await aGate.promise;
+    },
+  });
+  await aEntered.promise;
+  const b = advance({ log, flow, tools, env: NO_ENV });
+  aGate.resolve();
+  expect((await a).status).toBe("succeeded");
+  const length = readRunLog(log).length;
+  const second = await b;
+  expect([second.status, second.events]).toEqual(["succeeded", []]);
+  expect(readRunLog(log)).toHaveLength(length);
+});
+
+test("an advance from onEvent(RunStarted) waits for runFlow, not on the lock", async () => {
+  const log = freshLog();
+  const flow = hostFlow();
+  const tools = { lookup: pendingTool() };
+  let attempt: Promise<Awaited<ReturnType<typeof advance>>> | null = null;
+  const result = await runFlow(flow, {}, {
+    log,
+    env: NO_ENV,
+    tools,
+    numWorkers: 0,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof RunStarted) attempt = advance({ log, flow, tools, env: NO_ENV });
+    },
+  });
+  expect(result.status).toBe("waiting");
+  const advanced = await attempt!;
+  expect([advanced.status, advanced.events]).toEqual(["waiting", []]);
+});
+
+test("a process-local run ends waiting and resolves", async () => {
+  const result = await runFlow(hostFlow(), {}, { log: null, env: NO_ENV, tools: { lookup: pendingTool() } });
+  expect([result.status, result.log]).toEqual(["waiting", null]);
+});
+
+test("a bad option holds nothing", async () => {
+  const { log, flow, tools } = await waitingRun();
+  expect(await rejected(advance({ log, flow: 3 as never, env: NO_ENV }))).toBeInstanceOf(TypeError);
+  expect((await advance({ log, flow, tools, env: NO_ENV })).status).toBe("waiting");
+});
+
+test("a busy refusal releases the hold", async () => {
+  const { log, flow, tools } = await waitingRun();
+  const holder = lockFile(`${realpathSync(log)}.lock`);
+  try {
+    expect(((await rejected(advance({ log, flow, tools, env: NO_ENV }))) as Error).message).toBe(BUSY(resolve(log)));
+  } finally {
+    holder.release();
+  }
+  expect((await advance({ log, flow, tools, env: NO_ENV })).status).toBe("waiting");
+});
+
+test("a log-close failure releases the hold and the lock", async () => {
+  const { log, flow, tools } = await waitingRun();
+  const close = JsonlRunLog.prototype.close;
+  const failure = new Error("close failed");
+  const spy = spyOn(JsonlRunLog.prototype, "close").mockImplementationOnce(function (this: JsonlRunLog) {
+    close.call(this);
+    throw failure;
+  });
+  try {
+    expect(await rejected(advance({ log, flow, tools, env: NO_ENV }))).toBe(failure);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(isRunLogLocked(log)).toBe(false);
+  expect((await advance({ log, flow, tools, env: NO_ENV })).status).toBe("waiting");
+});
+
+const MEMORY_FLOW = `id: episodic-history
+name: episodic_history
+input:
+  topic: !str
+nodes:
+  answer:
+    kind: agent
+    long_term_memory:
+      episodic:
+        type: episodic
+        config:
+          max_episodes: 4
+          recall_limit: 2
+    input:
+      topic: "\${input.topic}"
+    prompt: Explain \${topic}.
+    output: str
+output: \${answer.output}
+`;
+
+test("a memory-close failure releases the hold and the lock", async () => {
+  const vars = new Map([
+    ["YIAN_DEFAULT_PROVIDER", "openai"],
+    ["YIAN_DEFAULT_MODEL", "test-model"],
+  ]);
+  const env = (name: string) => vars.get(name) ?? NO_ENV(name);
+  const flow = await loadFlow(MEMORY_FLOW);
+  const model = new ScriptedModel([reply("an answer")]);
+  const memory = new Map([["episodic", new EpisodicMemory()]]);
+  const log = freshLog();
+  const failure = new Error("memory close failed");
+  const spy = spyOn(MemoryRuntime.prototype, "close").mockImplementationOnce(() => Promise.reject(failure));
+  try {
+    expect(await rejected(runWith(flow, { topic: "queues" }, memory, model, { log, env }))).toBe(failure);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(isRunLogLocked(log)).toBe(false);
+  const read = await advance({ log, memory, models: serving(model), env });
+  expect(read.status).toBe("succeeded");
+});
+
+/** Write, in a fresh folder, a flow whose CODE node runs `./fn.ts:up`, then a TOOL `ask` calling `lookup`. */
+async function codeHostFlow(root: string): Promise<{ dir: string; flow: ComposedFlow }> {
+  const dir = join(root, "flows");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "fn.ts"), "export function up(inputs: Record<string, any>): string {\n  return `up:${inputs.q}`;\n}\n");
+  const text = [
+    "id: root",
+    "name: root",
+    "nodes:",
+    "  up:",
+    "    kind: code",
+    "    code: ./fn.ts:up",
+    "    input:",
+    "      q: hi",
+    "    output: str",
+    "  ask:",
+    "    kind: tool",
+    "    tool_id: lookup",
+    "    input:",
+    "      q: ${up.output}",
+    "output: ${ask.output}",
+    "",
+  ].join("\n");
+  writeFileSync(join(dir, "flow.yaml"), text);
+  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml" }) };
+}
+
+/** `lookup` taking `q`, whose handler returns `pending()`. */
+function lookupQ(): FunctionTool {
+  return new FunctionTool({
+    name: "lookup",
+    description: "looks something up later",
+    parametersJsonSchema: { type: "object", properties: { q: { type: "string" } } },
+    execute: () => pending(),
+  });
+}
+
+test("a waiting run's registry entry saves the recompile until the log changes", async () => {
+  const root = mkdtempSync(join(ROOT, "hit-"));
+  const { dir, flow } = await codeHostFlow(root);
+  const log = freshLog();
+  const tools = { lookup: lookupQ() };
+  const first = await runFlow(flow, {}, { log, env: NO_ENV, tools });
+  expect(first.status).toBe("waiting");
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, tools, env: NO_ENV })).status).toBe("waiting");
+  completeByHand(log, flow, `${first.runId}/ask`, { output: "yes" });
+  // The outside append changed the log: the miss recompiles, and the CODE file is gone.
+  expect(await rejected(advance({ log, tools, env: NO_ENV }))).toBeInstanceOf(LoadError);
+});
+
+test("advance with codeRoot refuses a CODE file outside it; runFlow's entry has no code root, so it recompiles", async () => {
+  const root = mkdtempSync(join(ROOT, "root-"));
+  const out = mkdtempSync(join(ROOT, "out-"));
+  const { dir, flow } = await codeHostFlow(root);
+  const log = freshLog();
+  const tools = { lookup: lookupQ() };
+  expect((await runFlow(flow, {}, { log, env: NO_ENV, tools })).status).toBe("waiting");
+  const code = readFileSync(join(dir, "fn.ts"));
+  renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
+  symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
+  const before = readFileSync(log);
+  const error = await rejected(advance({ log, tools, env: NO_ENV, codeRoot: root }));
+  expect(error).toBeInstanceOf(LoadError);
+  expect((error as Error).message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+  expect(readFileSync(log).equals(before)).toBe(true);
+  unlinkSync(join(dir, "fn.ts"));
+  writeFileSync(join(dir, "fn.ts"), code);
+  expect((await advance({ log, tools, env: NO_ENV, codeRoot: root })).status).toBe("waiting");
 });

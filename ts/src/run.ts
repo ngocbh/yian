@@ -36,7 +36,7 @@
 
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "./compile/execution_layout.ts";
@@ -1253,6 +1253,8 @@ async function startRun(
 
   let authority: RunLog | null = null;
   let primary: { error: unknown } | null = null;
+  let runHold: RunHold | null = null;
+  let keep: () => IdleRun | null = () => null;
   try {
     // The result reads its files through the contract a CALL of this flow gets.
     const state = new RunState(privateFlow, { resultContract: childSignature(flow).output });
@@ -1286,6 +1288,17 @@ async function startRun(
       locator === null
         ? new MemoryRunLog(canonicalRunId, { clock })
         : JsonlRunLog.create(locator, canonicalRunId, { clock });
+    if (locator !== null) {
+      // The file's real path, as `advance` resolves it: `create` made a new regular file, so only
+      // its folder can be a link.
+      const key = join(realpathSync(dirname(locator)), basename(locator));
+      // `create` was exclusive, so an entry under this path is stale.
+      runHold = hold(key, null);
+      const opened = authority as JsonlRunLog;
+      const hostFlow = flow.source === null ? flow : null;
+      const credentials = { apiKey, headers };
+      keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: null, ...credentials });
+    }
     // Every append goes through the live channel's wrapper; the authority itself is kept and closed.
     const appender = live === null ? authority : live.wrap(authority);
     const observers = commitPrepared(appender, state, preparedStart);
@@ -1315,7 +1328,10 @@ async function startRun(
     });
     const events: RunEvent[] = [];
     publishBoundaryObservers(observers, events, onEvent, (error) => engine.stopForCallback(error));
-    events.push(...(await engine.run()));
+    const running = engine.run();
+    // Deliveries waiting on the hold reach the engine from here on.
+    runHold?.live(engine);
+    events.push(...(await running));
     const handle = retainedHandle(retainedProgram, state, authority, memory, {
       locator,
       apiKey,
@@ -1329,7 +1345,7 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    await closeRunResources(memoryRuntime, authority, primary);
+    await closeAndRelease({ servers: [], memoryRuntime, authority, primary, hold: runHold, keep });
   }
 }
 
@@ -2965,28 +2981,6 @@ async function openRunServers(
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
   for (const server of servers) await server.close();
-}
-
-/**
- * Close memory then the log while preserving one initiating error: with no `primary`, the first
- * close error is thrown, later ones noted on it; with one, each is noted on it.
- */
-async function closeRunResources(
-  memoryRuntime: MemoryRuntime | null,
-  log: RunLog | null,
-  primary: { error: unknown } | null,
-): Promise<void> {
-  let pending = primary;
-  if (memoryRuntime !== null) {
-    try {
-      await memoryRuntime.close();
-    } catch (cleanupError) {
-      if (pending === null) pending = { error: cleanupError };
-      else noteCleanupError(pending.error, "memory-session close", cleanupError);
-    }
-  }
-  if (log !== null) closeOwnedLog(log, pending);
-  if (primary === null && pending !== null) throw pending.error;
 }
 
 /** Note a cleanup error on the initiating error, when it can take a note, without changing control. */

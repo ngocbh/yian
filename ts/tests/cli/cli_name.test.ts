@@ -40,7 +40,7 @@ describe("yian help", () => {
     expect(stdout()).toContain("Usage: yian [OPTIONS] COMMAND [ARGS]...");
     expect(stdout()).toContain("Run agent flows from the command line.");
     expect(stdout()).toMatch(/^ {2}skills +Check skill directories\.$/m);
-    expect(stdout()).toMatch(/^ {2}chat +Chat with a flow: each line you type is sent to its Inbox\(str\) input\./m);
+    expect(stdout()).toMatch(/^ {2}chat +Chat with a flow: each line you type is sent to its Inbox\(str\) or Inbox\(Message\) input\./m);
   });
 
   test("yian chat --help prints its usage and options", async () => {

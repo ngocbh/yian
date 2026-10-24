@@ -1,6 +1,6 @@
 /**
- * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` input and
- * advances the run.
+ * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
+ * `Inbox(Message)` input and advances the run.
  *
  * The chat starts the flow, then loops while the run waits: read a line, `send` it, `advance`.
  * The engine holds no prompt and the run holds no worker between turns, and an `advance` finishes
@@ -27,7 +27,8 @@ import { recordTimeMs } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
-import { canonicalTypeLabel, isInboxType, type Value, writeAsText } from "../typesys/values.ts";
+import { builtinType } from "../typesys/types.ts";
+import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import {
   defaultRunLogPath,
   ensureProviderKeys,
@@ -74,31 +75,48 @@ export interface ChatDeps {
 const HINT = "(Ctrl-C again to cancel the run; /exit to finish it)";
 const EXIT_LINES = new Set(["/exit", "/quit"]);
 
+/** The inbox lines go to: its name, and whether it takes messages (`Inbox(Message)`) or text. */
+interface LineInbox {
+  name: string;
+  message: boolean;
+}
+
 /**
- * Return the name of the `Inbox(str)` input lines go to: `chosen`, or the flow's only one.
+ * Return the `Inbox(str)` or `Inbox(Message)` input lines go to: `chosen`, or the flow's only one.
  *
  * @throws {UsageError} When the flow has none, several and `chosen` is absent, or `chosen` isn't
  *   one of them.
  */
-function pickInbox(flow: ComposedFlow, chosen: string | undefined): string {
-  const names = flow.input
-    .filter((param) => {
-      const type = param.contract?.type ?? null;
-      return isInboxType(type) && canonicalTypeLabel(type!.element!) === "str";
-    })
-    .map((param) => param.name);
+function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
+  const inboxes = flow.input.flatMap((param): LineInbox[] => {
+    const type = param.contract?.type ?? null;
+    if (!isInboxType(type)) return [];
+    if (canonicalTypeLabel(type!.element!) === "str") return [{ name: param.name, message: false }];
+    return typeEquals(type!.element!, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
+  });
+  const names = inboxes.map((inbox) => inbox.name);
   const id = flow.compiled.flowId ?? flow.name;
   if (names.length === 0) {
-    throw new UsageError(`flow '${id}' has no Inbox(str) input; yian chat sends each line to one`);
+    throw new UsageError(`flow '${id}' has no Inbox(str) or Inbox(Message) input; yian chat sends each line to one`);
   }
   if (chosen !== undefined) {
-    if (names.includes(chosen)) return chosen;
-    throw new UsageError(`--inbox '${chosen}' is not one of the flow's Inbox(str) inputs (${names.join(", ")})`);
+    const picked = inboxes.find((inbox) => inbox.name === chosen);
+    if (picked !== undefined) return picked;
+    throw new UsageError(
+      `--inbox '${chosen}' is not one of the flow's Inbox(str) or Inbox(Message) inputs (${names.join(", ")})`,
+    );
   }
   if (names.length > 1) {
-    throw new UsageError(`flow '${id}' has several Inbox(str) inputs (${names.join(", ")}); pick one with --inbox`);
+    throw new UsageError(
+      `flow '${id}' has several Inbox(str) or Inbox(Message) inputs (${names.join(", ")}); pick one with --inbox`,
+    );
   }
-  return names[0]!;
+  return inboxes[0]!;
+}
+
+/** Return the inbox event a typed line becomes: the line, or a user message holding it as text. */
+function lineEvent(line: string, message: boolean): string | Record<string, unknown> {
+  return message ? { role: "user", parts: [{ type: "text", text: line }] } : line;
 }
 
 /**
@@ -115,7 +133,8 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
 
 /**
  * Chat with the flow at `flowPath`: start it, send each line typed at the `You:` prompt to its
- * one `Inbox(str)` input (or `options.inbox`), and advance the run after each send, printing the
+ * one `Inbox(str)` or `Inbox(Message)` input (or `options.inbox`; a `Message` inbox gets the line
+ * as a user message holding it as text), and advance the run after each send, printing the
  * output of each node named `reply` on stdout as it finishes; returns the exit code.
  *
  * `/exit`, `/quit` or the end of input closes the inbox; the run finishes, `session ended` goes to
@@ -134,8 +153,8 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * builds no memories. A host failure prints `chat failed: <message>` and exits 1.
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
- *   one `Inbox(str)` input to pick; for an input the flow doesn't declare (the inbox included);
- *   off a TTY, for missing required inputs.
+ *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
+ *   (the inbox included); off a TTY, for missing required inputs.
  */
 export async function chat(flowPath: string, options: ChatOptions, io: CliIo, deps: ChatDeps = {}): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
@@ -346,12 +365,12 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         continue;
       }
       if ("eof" in read || EXIT_LINES.has(read.value.trim())) {
-        await close(path, inbox, { env: env.read });
+        await close(path, inbox.name, { env: env.read });
         closed = true;
       } else {
         interrupts = 0;
         try {
-          await send(path, inbox, read.value, { env: env.read });
+          await send(path, inbox.name, lineEvent(read.value, inbox.message), { env: env.read });
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) throw error;
           await io.stderr.write(`not sent: ${error.message}\n`);

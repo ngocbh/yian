@@ -1,6 +1,6 @@
 /**
- * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` input and
- * advances the run. Driven in process on a scripted stdin (a fake TTY where keys matter), the
+ * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
+ * `Inbox(Message)` input and advances the run. Driven in process on a scripted stdin (a fake TTY where keys matter), the
  * run's clock virtual and its signals a test emitter, so no model, timer or real signal is needed.
  * TS-only: Python's `yian chat` blocks inside a live `human_input` and has no inboxes.
  */
@@ -504,34 +504,58 @@ describe("yian chat's inbox and inputs", () => {
   };
 
   test(
-    "a flow with no Inbox(str) input is a usage error",
+    "a flow with no Inbox(str) or Inbox(Message) input is a usage error",
     async () => {
       const none = await cli([flowFile(bare({}))]);
       expect(none.code).toBe(2);
-      expect(none.stderr).toContain("flow 'f' has no Inbox(str) input; yian chat sends each line to one");
+      expect(none.stderr).toContain(
+        "flow 'f' has no Inbox(str) or Inbox(Message) input; yian chat sends each line to one",
+      );
       // An Inbox(int) isn't a candidate.
       const ints = await cli([flowFile(bare({ n: "int" }))]);
       expect(ints.code).toBe(2);
-      expect(ints.stderr).toContain("flow 'f' has no Inbox(str) input");
+      expect(ints.stderr).toContain("flow 'f' has no Inbox(str) or Inbox(Message) input");
     },
     TIMEOUT,
   );
 
   test(
-    "several Inbox(str) inputs need --inbox, which must name one",
+    "several Inbox(str) or Inbox(Message) inputs need --inbox, which must name one",
     async () => {
-      const flow = flowFile(bare({ a: "str", b: "str", c: "int" }));
+      const flow = flowFile(bare({ a: "str", b: "Message", c: "int" }));
       const several = await cli([flow]);
       expect(several.code).toBe(2);
-      expect(several.stderr).toContain("flow 'f' has several Inbox(str) inputs (a, b); pick one with --inbox");
+      expect(several.stderr).toContain(
+        "flow 'f' has several Inbox(str) or Inbox(Message) inputs (a, b); pick one with --inbox",
+      );
       const wrong = await cli([flow, "--inbox", "c"]);
       expect(wrong.code).toBe(2);
-      expect(wrong.stderr).toContain("--inbox 'c' is not one of the flow's Inbox(str) inputs (a, b)");
+      expect(wrong.stderr).toContain("--inbox 'c' is not one of the flow's Inbox(str) or Inbox(Message) inputs (a, b)");
       // A chosen inbox goes on to the run. The end of input closes it, and the takes of the other
       // inboxes, which nothing can send to, leave the run waiting.
       const picked = await cli([flow, "--inbox", "b"]);
       expect(picked.code).toBe(0);
       expect(picked.stderr).toContain("run waiting: take_a (take), take_c (take)");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an Inbox(Message) input takes each line as a user message",
+    async () => {
+      const messageEcho = turnFlow(ECHO_REPLY.replace('inputs["events"]', 'inputs["events"].map((m) => m.parts[0].text)'))
+        .replaceAll("Inbox(str)", "Inbox(Message)")
+        .replace("said: !list(str)", "said: !list(Message)");
+      const { io, stdin, stdout } = chatIo();
+      stdin.write("hi\n/exit\n");
+      const { code, log } = await runChat(flowFile(messageEcho), io);
+      expect([code, stdout()]).toEqual([0, "echo: hi\necho: \n"]);
+      const sent = records(log).filter(
+        (record) => record instanceof PoolCommitRecord && record.key === "__start__.messages",
+      );
+      expect(sent.map((record) => (record as PoolCommitRecord).value)).toEqual([
+        { kind: "object", value: { role: "user", parts: [{ type: "text", text: "hi" }] } },
+      ]);
     },
     TIMEOUT,
   );
@@ -565,7 +589,7 @@ describe("yian chat's inbox and inputs", () => {
   );
 });
 
-/** The chat example: one model call per turn, the history carried by bindings. */
+/** The chat example (an `Inbox(Message)`): one model call per turn, the history carried by bindings. */
 const EXAMPLE_CHAT = fileURLToPath(new URL("../../../examples/chat.yaml", import.meta.url));
 
 /** A one-word ("7") chat-completions stream. */

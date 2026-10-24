@@ -174,12 +174,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     spec: {
       name: "chat",
       summary:
-        "Chat with a flow: each line you type is sent to its Inbox(str) input. Opens no MCP " +
-        "servers and loads no skills.",
+        "Chat with a flow: each line you type is sent to its Inbox(str) or Inbox(Message) input. " +
+        "Opens no MCP servers and loads no skills.",
       positionals: [
         {
           name: "flow",
-          help: "Path to a flow .yaml with an Inbox(str) input",
+          help: "Path to a flow .yaml with an Inbox(str) or Inbox(Message) input",
           path: { exists: true, dir: false, readable: true },
         },
       ],
@@ -187,7 +187,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
         {
           name: "inbox",
           type: "string",
-          help: "The Inbox(str) input to send lines to, when the flow has several.",
+          help: "The Inbox(str) or Inbox(Message) input to send lines to, when the flow has several.",
         },
         { name: "input", short: "i", type: "string", multiple: true, help: "Another input as k=v (repeatable)." },
         {

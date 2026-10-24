@@ -2685,7 +2685,7 @@ export function routeFromPayload(payload: unknown): ValueRoute {
  * @throws RangeError when an evaluated key names no captured route, besides `routePayload`'s
  *   errors.
  */
-function capturePayload(capture: ForwardCapture): JsonObject {
+export function capturePayload(capture: ForwardCapture): JsonObject {
   const route = routePayload(capture.route);
   // `evaluatedKeys` is a `Set`, which stays mutable inside a frozen capture, so it is the one
   // field checked again.

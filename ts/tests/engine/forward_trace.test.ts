@@ -1155,7 +1155,7 @@ function installOccurrence(trace: RetainedTrace, record: OutcomeRecord): TraceOc
   const capture = record.forwardCapture!;
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
   const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
-    rebind: () => ({ v: 1n }),
+    rebind: () => ({ inputs: { v: 1n }, capture, inputRoute: capture.route }),
   });
   trace._occurrences.push(occurrence);
   trace.occurrenceBySource.set(sourceKey(occurrence.source), occurrence);
@@ -1673,7 +1673,7 @@ test("prepareTrace and apply build the trace record by record", () => {
   let given: [ReadonlyMap<string, number>, ReboundSource] | null = null;
   const rebinder: Rebinder = (sources, resolve) => {
     given = [new Map(sources), resolve("__start__", 0)];
-    return { v: 1n };
+    return { capture: new BindingCapture({ v: 1n }, ValueRoute.record([]), new Set()), failure: null };
   };
   expect(step(trace, succeeded, node, { writerFiles: files, rebinder })).toBe(trace);
   const source = new SourceRef(RUN, 2);
@@ -4635,4 +4635,132 @@ test("a replayed derived record holding a forward capture is refused (TS-only)",
   } finally {
     reopened[Symbol.dispose]();
   }
+});
+
+/**
+ * A greeting whose CODE node and top-level END each bind a template with literal text, which
+ * records an interpolation route. With no `nick`, `shout`'s binding fails after `line`.
+ */
+const GREET = `
+id: greet
+name: greet
+input: {name: !str, nick: !Optional(str) null}
+nodes:
+  shout:
+    kind: code
+    input: {line: "Hello, \${input.name}!", nick: '\${input.nick :? "no nick"}'}
+    output: str
+    code: return inputs['line']
+output: "\${shout.output} (\${input.name})"
+`;
+
+/** The first interpolation route in `route`, depth first. */
+function interpolationIn(route: ValueRoute): ValueRoute | null {
+  if (route.kind === "interpolation") return route;
+  for (const child of route.children) {
+    const found = interpolationIn(child);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/** Run `GREET` learnable with `nick` into a fresh log; return the log's path. */
+async function greetLog(name: string, nick: string | null): Promise<string> {
+  const log = join(boundDir, `${name}.jsonl`);
+  const greet = await loadFlow(GREET, { sourceLabel: "flow.yaml" });
+  await runFlow(greet, { name: "Ann", nick }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
+  return log;
+}
+
+/** Replay the run log at `log` and return its trace's occurrences by node id. */
+async function replayedOccurrences(log: string): Promise<(nodeId: string) => TraceOccurrence> {
+  const greet = await loadFlow(GREET, { sourceLabel: "flow.yaml" });
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(greet, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
+  }
+  return (nodeId) => trace.occurrences.find((occurrence) => occurrence.nodeId === nodeId)!;
+}
+
+/** Rewrite the `value_json` of every interpolation route in the log at `log` with `rewrite`. */
+function rewriteInterpolations(log: string, rewrite: (text: unknown) => unknown): void {
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(visit);
+    else if (value !== null && typeof value === "object") {
+      const wire = value as Wire;
+      if (wire["kind"] === "interpolation") wire["value_json"] = rewrite(wire["value_json"]);
+      Object.values(wire).forEach(visit);
+    }
+  };
+  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);
+  lines.forEach(visit);
+  writeFileSync(log, `${lines.map((line) => logJson(line)).join("\n")}\n`);
+}
+
+test("an interpolation route's text is rebuilt by binding its node again, not read from the record (TS-only)", async () => {
+  const log = await greetLog("greet", "A");
+  // Same-length texts, so the recorded spans still fit.
+  rewriteInterpolations(log, (text) => (typeof text === "string" ? text.replaceAll("Ann", "Bob") : text));
+  const of = await replayedOccurrences(log);
+  for (const [nodeId, text] of [
+    ["shout", "Hello, Ann!"],
+    ["__end__", "Hello, Ann! (Ann)"],
+  ] as const) {
+    const occurrence = of(nodeId);
+    expect(interpolationIn(occurrence.capture.route)!.valueJson).toBe(JSON.stringify(text));
+    expect(interpolationIn(occurrence.inputRoute)!.valueJson).toBe(JSON.stringify(text));
+  }
+});
+
+test("a binding that didn't finish rebuilds the interpolation route it collected first (TS-only)", async () => {
+  const log = await greetLog("greet-failed", null);
+  rewriteInterpolations(log, (text) => (typeof text === "string" ? text.replaceAll("Ann", "Bob") : text));
+  const of = await replayedOccurrences(log);
+  const shout = of("shout");
+  expect(shout.record).toBeInstanceOf(NodeFailedRecord);
+  expect(shout.boundInputs).toBeNull();
+  expect(shout.capture.route.names).toEqual(["line"]);
+  expect(interpolationIn(shout.capture.route)!.valueJson).toBe(JSON.stringify("Hello, Ann!"));
+});
+
+/** A MAP whose item binding renders a template, and fails on an item that is null. */
+const LABELS = `
+id: labels
+name: labels
+input: {xs: !list(Optional(str))}
+defs:
+  label:
+    input: {line: !str, x: !str}
+    nodes:
+      echo: {kind: code, input: {line: "\${input.line}"}, output: str, code: "return inputs['line']"}
+    output: \${echo.output}
+nodes:
+  each: {kind: map, over: "\${input.xs}", call: label, input: {line: "Item \${item}.", x: '\${item :? "no item"}'}}
+output: \${each.output}
+`;
+
+test("a MAP whose item binding failed rebuilds each item's interpolation route (TS-only)", async () => {
+  const log = join(boundDir, "labels.jsonl");
+  const labels = await loadFlow(LABELS, { sourceLabel: "flow.yaml" });
+  const result = await runFlow(labels, { xs: ["a", null] }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
+  expect(result.status).toBe("failed");
+  // Same-length texts, so the recorded spans still fit.
+  rewriteInterpolations(log, (text) => (typeof text === "string" ? text.replaceAll("Item", "Itxm") : text));
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(labels, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
+  }
+  const each = trace.occurrences.find((occurrence) => occurrence.nodeId === "each")!;
+  expect(each.record).toBeInstanceOf(NodeFailedRecord);
+  expect(each.boundInputs).toBeNull();
+  expect(each.capture.items.map(([index, item]) => [index, interpolationIn(item.route)!.valueJson])).toEqual([
+    [0, JSON.stringify("Item a.")],
+    [1, JSON.stringify("Item .")],
+  ]);
 });

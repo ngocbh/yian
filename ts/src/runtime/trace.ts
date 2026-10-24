@@ -109,16 +109,26 @@ export interface ReboundSource {
 }
 
 /**
- * Bind an occurrence's node again from the values `resolve` gives for its sources
- * (`rebindInputs`, over the node and wiring it ran with), returning the bound inputs. `route` is
- * the occurrence's capture route, which holds whole any reserved value its hook resolved without
- * the binder.
+ * Bind an occurrence's node again from the values `resolve` gives for its sources (`rebind`, over
+ * the node and wiring it ran with), returning the capture it collects (the bound inputs and
+ * routes) and, for a binding that doesn't finish, its `BindingError`. `route` is the occurrence's
+ * capture route, which holds whole any reserved value its hook resolved without the binder.
  */
 export type Rebinder = (
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   route: ValueRoute,
-) => Record<string, unknown>;
+) => { capture: BindingCapture; failure: BindingError | null };
+
+/** What binding an occurrence's node again rebuilds (`TraceOccurrence`). */
+export interface ReboundOccurrence {
+  /** The canonical bound inputs, or `null` for a failure at a binding stage. */
+  readonly inputs: JsonObject | null;
+  /** The forward capture, each interpolation route's text rebuilt. */
+  readonly capture: ForwardCapture;
+  /** The effective input route over that capture. */
+  readonly inputRoute: ValueRoute;
+}
 
 /** @internal Decode a typed value from its canonical log text, a fresh copy. */
 export function decodeTyped(text: string): TypedValue {
@@ -264,7 +274,8 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
  * outcome payload. `hiddenInputs` names the bound inputs that node keeps from models, so memory
  * episodes leave them out. `steps` are the steps the node recorded across its starts, which
  * learning reads (`occurrenceMaterial`). `capture` is the record's forward capture, or the one
- * rebuilt for a derived record; `boundInputs` are rebuilt from its route on first read.
+ * rebuilt for a derived record. `boundInputs`, and the interpolation routes' text in `capture`
+ * and `inputRoute`, are rebuilt by binding the node again on the first read.
  */
 export class TraceOccurrence {
   /** The occurrence's accepted start. */
@@ -277,8 +288,8 @@ export class TraceOccurrence {
   readonly recordJson: string;
   /** The envelope decoded from `recordJson`, a frozen copy independent of the caller's. */
   readonly envelope: RecordEnvelope;
-  /** The effective input route: the captured route joined with pending seed routes. */
-  readonly inputRoute: ValueRoute;
+  /** The effective input route as accepted; `inputRoute` reads it with its text rebuilt. */
+  readonly #inputRoute: ValueRoute;
   /** The receiver's memory keys and occurrence path, if it has memory. */
   readonly memoryScope: MemoryScope | null;
   /** The bound inputs the node keeps from models; a private copy, read-only by contract. */
@@ -287,12 +298,12 @@ export class TraceOccurrence {
   readonly seed: JsonValue | null;
   /** The node's recorded steps across its starts, in order; read-only by contract. */
   readonly steps: readonly ValueRecord[];
-  /** The occurrence's forward capture: its record's, or the one rebuilt for a derived record. */
-  readonly capture: ForwardCapture;
-  /** Rebuilds the bound inputs, or `null` when none was given. */
-  readonly #rebind: (() => JsonObject | null) | null;
-  /** The rebuilt bound inputs, `undefined` until first read. */
-  #bound: JsonObject | null | undefined = undefined;
+  /** The forward capture as accepted; `capture` reads it with its text rebuilt. */
+  readonly #capture: ForwardCapture;
+  /** Binds the node again, or `null` when none was given. */
+  readonly #rebind: (() => ReboundOccurrence) | null;
+  /** What binding the node again gave, once read. */
+  #rebound: ReboundOccurrence | null = null;
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
@@ -301,9 +312,12 @@ export class TraceOccurrence {
    * @param options.hiddenInputs The bound inputs its node keeps from models; defaults to none.
    * @param options.seed An expansion's canonical seed; defaults to `null`.
    * @param options.steps The node's recorded steps; defaults to none.
+   * @param inputRoute The effective input route: the captured route joined with pending seed
+   *   routes.
    * @param options.capture The occurrence's forward capture; defaults to the record's.
-   * @param options.rebind Rebuilds the bound inputs (`reboundInputs`); `null` (the default)
-   *   leaves `boundInputs` unreadable.
+   * @param options.rebind Binds the node again, which rebuilds the bound inputs and the
+   *   interpolation routes' text; `null` (the default) leaves `boundInputs` unreadable and the
+   *   routes as given.
    * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
    *   `null` or exactly a `MemoryScope`, or there is no capture.
    */
@@ -319,7 +333,7 @@ export class TraceOccurrence {
       seed?: JsonValue | null;
       steps?: readonly ValueRecord[];
       capture?: ForwardCapture | null;
-      rebind?: (() => JsonObject | null) | null;
+      rebind?: (() => ReboundOccurrence) | null;
     } = {},
   ) {
     const {
@@ -337,9 +351,9 @@ export class TraceOccurrence {
     this.envelope = decodeRecord(this.recordJson);
     const held = capture ?? (this.envelope.record as OutcomeRecord).forwardCapture;
     if (!isExactly(held, ForwardCapture)) throw new TypeError("a trace occurrence requires its forward capture");
-    this.capture = held;
+    this.#capture = held;
     this.#rebind = rebind;
-    this.inputRoute = inputRoute;
+    this.#inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
     this.seed = seed === null ? null : canonicalSeed(seed)[0];
@@ -354,40 +368,61 @@ export class TraceOccurrence {
   }
 
   /**
+   * The occurrence's forward capture: its record's, or the one rebuilt for a derived record, with
+   * each interpolation route's text rebuilt by binding the node again.
+   *
+   * @throws RangeError as `boundInputs`, or when binding again collects routes of another shape.
+   */
+  get capture(): ForwardCapture {
+    return this.#rebind === null ? this.#capture : this.#reboundOccurrence().capture;
+  }
+
+  /**
+   * The effective input route: the captured route joined with pending seed routes, with each
+   * interpolation route's text rebuilt as in `capture`.
+   *
+   * @throws RangeError as `capture`.
+   */
+  get inputRoute(): ValueRoute {
+    return this.#rebind === null ? this.#inputRoute : this.#reboundOccurrence().inputRoute;
+  }
+
+  /**
    * The bound inputs, canonical JSON rebuilt by binding the node again from the values its route
-   * read (`reboundInputs`), or `null` for a failure at a binding stage, whose binding didn't
+   * read (`reboundCapture`), or `null` for a failure at a binding stage, whose binding didn't
    * finish. Built on the first read.
    *
-   * @throws RangeError when the occurrence was made without a rebinder, or as `reboundInputs`.
+   * @throws RangeError when the occurrence was made without a rebinder, a route source has no
+   *   accepted producer, or a finished binding no longer finishes (the `BindingError` as
+   *   `cause`): the log and the flow disagree.
    */
   get boundInputs(): JsonObject | null {
-    if (this.#bound === undefined) {
-      if (this.#rebind === null) throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its bound inputs`);
-      this.#bound = this.#rebind();
-    }
-    return this.#bound;
+    if (this.#rebind === null) throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its bound inputs`);
+    return this.#reboundOccurrence().inputs;
+  }
+
+  /** What binding the node again gives, bound on the first read. */
+  #reboundOccurrence(): ReboundOccurrence {
+    this.#rebound ??= this.#rebind!();
+    return this.#rebound;
   }
 }
 
 /**
- * Rebuild an occurrence's bound inputs: bind its node again (`rebindInputs`) from the values its capture
- * route read, each looked up in the trace's history by the producer the route names
- * (`traceResolver`), so it works after the pool has moved on. The run's system values are added
- * whole, since the route names no producer for them.
+ * Bind an occurrence's node again (`rebind`) from the values its capture route read, each looked
+ * up in the trace's history by the producer the route names (`traceResolver`), so it works after
+ * the pool has moved on. The run's system values are added whole, since the route names no
+ * producer for them.
  *
- * Only an occurrence whose binding finished is rebound: a failure at a binding stage has no
- * bound inputs.
- *
- * @returns The canonical bound inputs.
- * @throws RangeError when a route source has no accepted producer, or the binding no longer
- *   finishes (the `BindingError` as `cause`): the log and the flow disagree.
+ * @returns What the rebinder returns: the capture binding again collects, and the `BindingError`
+ *   of a binding that doesn't finish.
+ * @throws RangeError when a route source has no accepted producer.
  */
-export function reboundInputs(
+export function reboundCapture(
   trace: RetainedTrace,
-  nodeId: string,
   route: ValueRoute,
   rebind: Rebinder,
-): JsonObject {
+): { capture: BindingCapture; failure: BindingError | null } {
   const sources = new Map<string, number>();
   // System values never change within a run, so their seq isn't checked (`traceResolver`).
   for (const key of trace.system.keys()) sources.set(`${SYSTEM_PREFIX}${key}`, 0);
@@ -403,14 +438,93 @@ export function reboundInputs(
     // One binding reads each pool name from its one current producer.
     sources.set(name, seq);
   }
-  let inputs: Record<string, unknown>;
-  try {
-    inputs = rebind(sources, traceResolver(trace), route);
-  } catch (error) {
-    if (!(error instanceof BindingError)) throw error;
-    throw new RangeError(`the bound inputs of ${reprText(nodeId)} don't rebuild: ${error.message}`, { cause: error });
+  return rebind(sources, traceResolver(trace), route);
+}
+
+/**
+ * Return the canonical bound inputs of `nodeId`'s finished binding, bound again as `rebound`.
+ *
+ * @throws RangeError when the binding no longer finishes (the `BindingError` as `cause`): the log
+ *   and the flow disagree.
+ */
+function finishedInputs(nodeId: string, rebound: { capture: BindingCapture; failure: BindingError | null }): JsonObject {
+  const { capture, failure } = rebound;
+  if (failure !== null) {
+    throw new RangeError(`the bound inputs of ${reprText(nodeId)} don't rebuild: ${failure.message}`, { cause: failure });
   }
-  return canonicalSeed(inputs)[1] as JsonObject;
+  return canonicalSeed(capture.boundInputs)[1] as JsonObject;
+}
+
+/** Whether `capture`'s route, or an item's, holds an interpolation route. */
+function holdsInterpolation(capture: ForwardCapture): boolean {
+  const pending = [capture.route];
+  while (pending.length > 0) {
+    const route = pending.pop()!;
+    if (route.kind === "interpolation") return true;
+    pending.push(...route.children);
+  }
+  return capture.items.some(([, item]) => holdsInterpolation(item));
+}
+
+/**
+ * Return `capture` with each interpolation route's text taken from `binding`, the capture binding
+ * its node again collects: inputs matched by name, items by index, everything inside by position.
+ * Everything else stays as recorded.
+ *
+ * @throws RangeError when `binding` lacks an input or item, or has a route of another shape.
+ */
+function withInterpolationText(capture: ForwardCapture, binding: BindingCapture): ForwardCapture {
+  const { route } = capture;
+  const again = binding.route;
+  const fields = route.names.map((name, index) => {
+    const at = again.names.indexOf(name);
+    if (at < 0) throw new RangeError(`binding again collects no input ${reprText(name)}`);
+    return [name, withRouteText(route.children[index]!, again.children[at]!)] as const;
+  });
+  const items = capture.items.map(([index, item]) => {
+    const rebound = binding.items.find(([at]) => at === index);
+    if (rebound === undefined) throw new RangeError(`binding again collects no item ${index}`);
+    return [index, withInterpolationText(item, rebound[1])] as const;
+  });
+  const unchanged = fields.every(([, child], index) => child === route.children[index]);
+  return new ForwardCapture(unchanged ? route : ValueRoute.record(fields), {
+    evaluatedKeys: capture.evaluatedKeys,
+    items,
+    scope: capture.scope,
+    nodeData: capture.nodeData,
+    inputNames: capture.inputNames,
+    variableNames: capture.variableNames,
+  });
+}
+
+/**
+ * Return `route` with each interpolation route's text taken from the route at its position in
+ * `again`; `route` itself when it holds none.
+ *
+ * @throws RangeError when `again` has another kind or number of children at some position.
+ */
+function withRouteText(route: ValueRoute, again: ValueRoute): ValueRoute {
+  if (route.kind !== again.kind || route.children.length !== again.children.length) {
+    throw new RangeError(`binding again collects a ${again.kind} route where the record has a ${route.kind} route`);
+  }
+  const children = route.children.map((child, index) => withRouteText(child, again.children[index]!));
+  if (route.kind === "interpolation") return route.with({ valueJson: again.valueJson, children });
+  return children.every((child, index) => child === route.children[index]) ? route : route.with({ children });
+}
+
+/**
+ * Join `capture`'s route with an owner's pending seed routes: each field the capture didn't
+ * evaluate here takes the seed route given for it.
+ */
+function joinSeedRoutes(capture: ForwardCapture, seeds: SeedRoutes | null): ValueRoute {
+  if (seeds === null) return capture.route;
+  const fields = new Map(seeds.fields);
+  return ValueRoute.record(
+    capture.route.names.map((name, index) => {
+      const route = capture.route.children[index]!;
+      return [name, capture.evaluatedKeys.has(name) ? route : (fields.get(name) ?? route)] as const;
+    }),
+  );
 }
 
 /**
@@ -1229,24 +1343,27 @@ export function prepareTrace(
   }
   const source = new SourceRef(envelope.runId, trace._started.get(node.id)!);
   const candidates = trace._pendingConnections.get(node.id) ?? null;
-  let inputRoute = capture.route;
-  if (candidates !== null) {
-    const fields = new Map(candidates.fields);
-    inputRoute = ValueRoute.record(
-      capture.route.names.map((name, index) => {
-        const route = capture.route.children[index]!;
-        return [name, capture.evaluatedKeys.has(name) ? route : (fields.get(name) ?? route)] as const;
-      }),
-    );
-  }
+  const inputRoute = joinSeedRoutes(capture, candidates);
   validateSources(trace, inputRoute, envelope.seq);
+  // A derived record's capture is rebuilt whole with its value; a recorded one's interpolation
+  // routes get their text by binding the node again, which learning does on its first read. A
+  // failure at a binding stage bound no inputs, so it is bound again only for that text.
+  const fillsText = rebuilt === null && holdsInterpolation(capture);
+  const bound = !unbound(record);
+  const rebind = (): ReboundOccurrence => {
+    const rebound = bound || fillsText ? reboundCapture(trace, capture.route, rebinder!) : null;
+    const inputs = bound ? finishedInputs(node.id, rebound!) : null;
+    if (!fillsText) return { inputs, capture, inputRoute };
+    const filled = withInterpolationText(capture, rebound!.capture);
+    return { inputs, capture: filled, inputRoute: joinSeedRoutes(filled, candidates) };
+  };
   const occurrence = new TraceOccurrence(source, node.id, envelope.seq, envelope, inputRoute, {
     memoryScope: node.memoryScope,
     hiddenInputs: node.modelHiddenInputs(),
     seed,
     steps,
     capture,
-    rebind: unbound(record) ? () => null : rebinder === null ? null : () => reboundInputs(trace, node.id, capture.route, rebinder),
+    rebind: rebinder !== null ? rebind : bound ? null : () => ({ inputs: null, capture, inputRoute }),
   });
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);

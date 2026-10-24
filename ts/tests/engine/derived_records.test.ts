@@ -504,7 +504,7 @@ test("decoding refuses a pool_commit with both forms and a node_expanded with a 
     `"run_id":"r1","schema":${SCHEMA_VERSION},"seq":9}`;
   expect(() => decodeRecord(commit)).toThrow(RangeError);
   const expanded =
-    `{"at":"2026-01-01T00:00:00.000Z","kind":"node_expanded","payload":{"evidence":null,"forward_capture":null,"prune_ids":[],` +
+    `{"at":"2026-01-01T00:00:00.000Z","kind":"node_expanded","payload":{"forward_capture":null,"prune_ids":[],` +
     `"seed":{},"spawner_id":"s","topology_digest":"${"a".repeat(64)}"},"run_id":"r1","schema":${SCHEMA_VERSION},"seq":9}`;
   expect(() => decodeRecord(expanded)).toThrow('extra=["seed"]');
 });

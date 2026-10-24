@@ -10,13 +10,25 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
-import { AgentNode, type PromptItem } from "../../src/nodes/agent/node.ts";
+import { type AgentPrompt, AgentNode, type PromptItem } from "../../src/nodes/agent/node.ts";
 import { type NodeCaps, Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
+import type { Skill } from "../../src/skills/catalog.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { callReply, rejected, serving, textReply } from "./run_state_fixtures.ts";
+
+/** The node's private render, which `forward` and `learningMaterial` share. */
+function renderPrompt(
+  node: AgentNode,
+  inputs: Readonly<Record<string, unknown>>,
+  skills: ReadonlyMap<string, Skill> | null,
+): AgentPrompt {
+  type Inputs = Readonly<Record<string, unknown>>;
+  type Render = { renderPrompt(inputs: Inputs, skills: ReadonlyMap<string, Skill> | null): AgentPrompt };
+  return (node as unknown as Render).renderPrompt(inputs, skills);
+}
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -184,24 +196,19 @@ test("a rendered list with no message fails the node", async () => {
   expect(error).toEqual(new ExpressionError("node 'reply' prompt: the rendered list holds no message"));
 });
 
-test("recall, evidence and the render capture read the list's text forms", async () => {
+test("recall, learning and the render capture read the list's text forms", async () => {
   const recalled: string[] = [];
-  const recorded: string[] = [];
   const captures: Readonly<Record<string, unknown>>[] = [];
   await run(agent(CHAT), HISTORY, {
     openMemoryContext: async (_system, prompt) => {
       recalled.push(prompt);
       return new MemoryContext();
     },
-    evaluationTrace: {
-      recordPrompt: (_system, prompt) => void recorded.push(prompt),
-      recordInteraction: () => {},
-    },
     captureRender: (captured) => void captures.push(captured),
   });
 
   expect(recalled).toEqual(["Now: again"]);
-  expect(recorded).toEqual(["Now: again"]);
+  expect(renderPrompt(agent(CHAT), { history: HISTORY, message: "again" }, null).promptText).toBe("Now: again");
   expect(captures).toHaveLength(1);
   expect(captures[0]!["prompt_template"]).toBe(logJson(["${history}", { user: "Now: ${message}" }]));
   expect(captures[0]!["rendered_prompt"]).toBe(

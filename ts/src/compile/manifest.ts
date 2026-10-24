@@ -91,7 +91,6 @@ const IGNORED_NODE_FIELDS = [
   "isLoop",
   "needsMemoryContext",
   "needsSkills",
-  "needsEvaluationTrace",
   "needsRenderCapture",
   "needsTools",
   "needsLiveEvents",

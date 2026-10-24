@@ -6,7 +6,7 @@
  * the append-only dispatcher's evaluation seam: it binds the record, pre-resolves reserved keys,
  * builds the trait-gated capabilities, runs the node through its assert-owning `run` template,
  * and resolves to an `EvaluatedOutcome` holding exactly `Output | Route | Grow | Pending |
- * EvaluationFailure` plus optional evidence and input capture. It publishes no observers; durable
+ * EvaluationFailure` plus optional input capture. It publishes no observers; durable
  * observer order belongs to the dispatcher.
  *
  * An expected rejection is classified where its operation occurs: binding evaluation, supplied
@@ -24,15 +24,12 @@ import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnost
 import { ResolvedValue, type SourceRef, ValueRoute } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import {
-  EvaluationEvidence,
-  type EvaluationTrace,
   type JsonObject,
   MemoryContext,
   MemoryRecallError,
   MemoryScope,
   MemorySection,
   RecallContext,
-  type VisibleInteraction,
 } from "../memory/contracts.ts";
 import {
   AssertionStageError,
@@ -296,7 +293,7 @@ export class SteeringCapability implements Steering {
 export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 
 /**
- * One raw worker outcome with frozen evidence and optional backward capture. Frozen.
+ * One raw worker outcome with its optional binding and backward capture. Frozen.
  *
  * Binding values and routes travel with the common inventories and static material, as separate
  * lower binding and runtime carriers. Neither is accepted history until the dispatcher records
@@ -304,22 +301,20 @@ export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
  */
 export class EvaluatedOutcome {
   readonly outcome: WorkerOutcome;
-  readonly evidence: EvaluationEvidence | null;
   readonly bindings: BindingCapture | null;
   readonly backwardCapture: BackwardCapture | null;
 
   /**
-   * Require one closed raw outcome and exact optional evidence and captures; the backward capture
-   * is checked again by rebuilding it.
+   * Require one closed raw outcome and exact optional captures; the backward capture is checked
+   * again by rebuilding it.
    *
-   * @throws TypeError for an outcome outside `WorkerOutcome`, or evidence or a capture that isn't
-   *   exactly its class.
+   * @throws TypeError for an outcome outside `WorkerOutcome`, or a capture that isn't exactly its
+   *   class.
    * @throws RangeError when only one of `bindings` and `backwardCapture` is present, or as
    *   `BackwardCapture` refuses the capture.
    */
   constructor(
     outcome: WorkerOutcome,
-    evidence: EvaluationEvidence | null,
     bindings: BindingCapture | null = null,
     backwardCapture: BackwardCapture | null = null,
   ) {
@@ -333,9 +328,6 @@ export class EvaluatedOutcome {
       )
     ) {
       throw new TypeError("outcome must be a WorkerOutcome");
-    }
-    if (evidence !== null && !isExactly(evidence, EvaluationEvidence)) {
-      throw new TypeError("evidence must be an EvaluationEvidence or null");
     }
     if (bindings !== null && !isExactly(bindings, BindingCapture)) {
       throw new TypeError("bindings must be a BindingCapture or null");
@@ -351,116 +343,10 @@ export class EvaluatedOutcome {
       throw new RangeError("binding capture and backward invocation metadata must be retained together");
     }
     this.outcome = outcome;
-    this.evidence = evidence;
     this.bindings = bindings;
     this.backwardCapture = backwardCapture;
     Object.freeze(this);
   }
-}
-
-/** The invocation's write-only trace, frozen once into evidence when the evaluation settles. */
-class EvaluationTraceCollector implements EvaluationTrace {
-  readonly #scope: MemoryScope | null;
-  #boundInputs: JsonObject | null = null;
-  #baseSystemPrompt: string | null = null;
-  #prompt: string | null = null;
-  #memorySections: readonly MemorySection[] = [];
-  readonly #interactions: VisibleInteraction[] = [];
-  #promptRecorded = false;
-  #frozen = false;
-
-  constructor(scope: MemoryScope | null) {
-    this.#scope = scope;
-  }
-
-  /**
-   * Keep the evaluator's canonical input snapshot taken before the node runs; inputs evidence
-   * refuses are dropped.
-   *
-   * @throws Error once the trace is frozen.
-   */
-  setBoundInputs(boundInputs: JsonObject): void {
-    this.#requireOpen();
-    try {
-      this.#boundInputs = new EvaluationEvidence(this.#scope, boundInputs, null, null).boundInputs;
-    } catch (error) {
-      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-      // Evidence is observational: the run log can carry values the memory JSON boundary refuses.
-      this.#boundInputs = null;
-    }
-  }
-
-  /**
-   * Record the one visible prompt and its ordered memory sections; a prompt evidence refuses is
-   * ignored, but still counts as the one prompt.
-   *
-   * @throws Error once the trace is frozen, or for a second prompt.
-   */
-  recordPrompt(baseSystemPrompt: string, prompt: string, memorySections: readonly MemorySection[] = []): void {
-    this.#requireOpen();
-    if (this.#promptRecorded) throw new Error("evaluation trace prompt was already recorded");
-    this.#promptRecorded = true;
-    let evidence: EvaluationEvidence;
-    try {
-      evidence = new EvaluationEvidence(this.#scope, null, baseSystemPrompt, prompt, memorySections);
-    } catch (error) {
-      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-      // The model already received this prompt, so a trace refusal mustn't fail the node.
-      return;
-    }
-    this.#baseSystemPrompt = evidence.baseSystemPrompt;
-    this.#prompt = evidence.prompt;
-    this.#memorySections = evidence.memorySections;
-  }
-
-  /**
-   * Append one exact visible interaction.
-   *
-   * @throws Error once the trace is frozen.
-   * @throws TypeError or RangeError as `EvaluationEvidence` refuses the interaction.
-   */
-  recordInteraction(interaction: VisibleInteraction): void {
-    this.#requireOpen();
-    this.#interactions.push(new EvaluationEvidence(this.#scope, null, null, null, [], [interaction]).interactions[0]!);
-  }
-
-  /**
-   * Close the trace and return its evidence.
-   *
-   * @throws Error when the trace is already frozen.
-   */
-  freeze(): EvaluationEvidence {
-    this.#requireOpen();
-    this.#frozen = true;
-    return new EvaluationEvidence(
-      this.#scope,
-      this.#boundInputs,
-      this.#baseSystemPrompt,
-      this.#prompt,
-      this.#memorySections,
-      this.#interactions,
-    );
-  }
-
-  /** Refuse a write once the evaluator froze the trace. */
-  #requireOpen(): void {
-    if (this.#frozen) throw new Error("evaluation trace is already frozen");
-  }
-}
-
-/**
- * Return a trace for a node declaring `needsEvaluationTrace` while evidence capture is on, else
- * `null`.
- *
- * @throws TypeError when the node's `memoryScope` is neither `null` nor exactly a `MemoryScope`.
- */
-function newEvaluationTrace(node: Node, captureEvidence: boolean): EvaluationTraceCollector | null {
-  if (!captureEvidence || node.needsEvaluationTrace !== true) return null;
-  const scope = node.memoryScope;
-  if (scope !== null && !isExactly(scope, MemoryScope)) {
-    throw new TypeError("node memory_scope must be an exact MemoryScope or null");
-  }
-  return new EvaluationTraceCollector(scope);
 }
 
 /**
@@ -601,8 +487,6 @@ export interface EvalNodeOptions {
   emitStream?: NodeCaps["emitStream"] | null;
   /** The transient model and tool call observer sink, received and closed as `emitStream` is. */
   emitEvent?: NodeCaps["emitEvent"] | null;
-  /** Whether to capture visible evidence from a node declaring `needsEvaluationTrace`. */
-  captureEvidence?: boolean;
   /** Whether to retain the bound input values, their routes and the backward capture. */
   captureBindings?: boolean;
   /**
@@ -646,17 +530,15 @@ export interface EvalNodeOptions {
  * @param flow The flow whose wiring holds the node's sources; `null` is empty wiring.
  * @param pool The pool the sources read.
  * @param options The capabilities and captures; see `EvalNodeOptions`.
- * @returns The outcome, with evidence and captures when asked for.
+ * @returns The outcome, with captures when asked for.
  * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink,
  *   steering inbox, including a `drain` promise the node dropped, a refused or failing render
  *   capture, a repeated memory context open or a failing opener, a `CapabilityFault` from
  *   `steps.record`), whatever the node then returned or threw.
- * @throws TypeError when a node declaring `needsMemoryContext`, or `needsEvaluationTrace` while
- *   capturing evidence, has a `memoryScope` that isn't exactly a `MemoryScope`; Error when a
+ * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
+ *   exactly a `MemoryScope`; Error when a
  *   memory context node's scope has memories and no opener was injected.
- * @throws TypeError, RangeError or the value's own error when evidence capture can't canonicalize
- *   the visible bound inputs of an unscoped node; the body hasn't run.
  * @throws TypeError, RangeError or the hook's own error when capturing bindings and the input
  *   inventory, `boundLlmConfig` or `captureBackwardContext` fails, or their material isn't JSON;
  *   the body hasn't run.
@@ -677,7 +559,6 @@ export async function evalNode(
     wiringOverride = null,
     emitStream = null,
     emitEvent = null,
-    captureEvidence = false,
     captureBindings = false,
     memoryContextOpener = null,
     skills = null,
@@ -694,7 +575,6 @@ export async function evalNode(
   } = options;
   requireSteering(steering);
   requireModels(models);
-  if (typeof captureEvidence !== "boolean") throw new TypeError("capture_evidence must be a bool");
   if (typeof captureBindings !== "boolean") throw new TypeError("capture_bindings must be a bool");
   if (emitStream !== null && typeof emitStream !== "function") {
     throw new TypeError("emit_stream must be callable or null");
@@ -733,8 +613,6 @@ export async function evalNode(
   if (runDir !== null && typeof runDir !== "string") throw new TypeError("run_dir must be a string or null");
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
-  const trace = newEvaluationTrace(node, captureEvidence);
-  let evidence: EvaluationEvidence | null = null;
   const collector = captureBindings ? new BindingCollector() : null;
   let backwardCapture = captureBindings
     ? new BackwardCapture({
@@ -780,7 +658,7 @@ export async function evalNode(
   };
 
   /**
-   * Freeze the node's one actual render publication, apart from its visible evidence.
+   * Freeze the node's one actual render publication.
    *
    * @throws Error once the node and its capability promises have settled.
    * @throws CapabilityFault carrying any other refusal or fault.
@@ -811,13 +689,10 @@ export async function evalNode(
   };
 
   /**
-   * Close the render capture and freeze the trace once the outcome is decided, so a later write is
-   * refused.
+   * Close the render capture once the outcome is decided, so a later write is refused.
    */
   const closeCaptures = (): void => {
-    if (capturesClosed) return;
     capturesClosed = true;
-    evidence = trace?.freeze() ?? null;
   };
 
   let outcome: WorkerOutcome;
@@ -832,7 +707,6 @@ export async function evalNode(
       captureInputs: captureBindings ? captureInputs : null,
       captureRender: captureBindings && node.needsRenderCapture === true ? captureRender : null,
       closeCaptures,
-      trace,
       memoryScope,
       memoryContextOpener,
       sourceResolver,
@@ -849,7 +723,7 @@ export async function evalNode(
     // The escape paths (a binder fault, a failing input capture) never reach the evaluator's close.
     closeCaptures();
   }
-  return new EvaluatedOutcome(outcome, evidence, collector?.freeze() ?? null, backwardCapture);
+  return new EvaluatedOutcome(outcome, collector?.freeze() ?? null, backwardCapture);
 }
 
 /** Bind and run one node, resolving to one normalized result. */
@@ -871,8 +745,6 @@ async function evaluateNode(
     captureRender: NonNullable<NodeCaps["captureRender"]> | null;
     /** Closes the captures once the node and its capability promises have settled. */
     closeCaptures: () => void;
-    /** The trace a node declaring `needsEvaluationTrace` receives, when capturing evidence. */
-    trace: EvaluationTraceCollector | null;
     /** The memory scope of a node declaring `needsMemoryContext`, else `null`. */
     memoryScope: MemoryScope | null;
     memoryContextOpener: MemoryContextOpener | null;
@@ -888,8 +760,7 @@ async function evaluateNode(
     onFault: ((original: unknown) => void) | null;
   },
 ): Promise<WorkerOutcome> {
-  const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, trace, sourceResolver } =
-    context;
+  const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, sourceResolver } = context;
   const { memoryScope, memoryContextOpener } = context;
   const { emitStream, emitEvent, skills, tools, steering, models, steps, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
@@ -953,9 +824,9 @@ async function evaluateNode(
   if (scoped && memoryContextOpener === null) {
     throw new Error(`scoped node ${reprText(node.id)} requires an injected memory context callback`);
   }
-  // The visible bound inputs, for the recall context and the evidence snapshot.
+  // The visible bound inputs, for the recall context.
   let canonicalInputs: JsonObject | null = null;
-  if (scoped || trace !== null) {
+  if (scoped) {
     const hidden = node.modelHiddenInputs();
     const visible = Object.fromEntries(Object.entries(record).filter(([name]) => !hidden.has(name)));
     try {
@@ -963,11 +834,9 @@ async function evaluateNode(
       if (!isRecord(value)) throw new TypeError("bound node inputs did not canonicalize to an exact record");
       canonicalInputs = value as JsonObject;
     } catch (error) {
-      // The recall capability owns the rejection of its query context; evidence just omits the
-      // inputs.
-      if (!scoped || !(error instanceof TypeError || error instanceof RangeError)) throw error;
+      // The recall capability owns the rejection of its query context.
+      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
     }
-    if (canonicalInputs !== null) trace?.setBoundInputs(canonicalInputs);
   }
 
   // The first fault any capability raised. A node can catch the fault it was thrown, so the
@@ -1035,14 +904,6 @@ async function evaluateNode(
         throw error;
       }
     };
-  }
-  if (trace !== null) {
-    // A view, so node code can't freeze the collector or replace its inputs snapshot.
-    caps.evaluationTrace = Object.freeze({
-      recordPrompt: (baseSystemPrompt: string, prompt: string, memorySections?: readonly MemorySection[]) =>
-        trace.recordPrompt(baseSystemPrompt, prompt, memorySections),
-      recordInteraction: (interaction: VisibleInteraction) => trace.recordInteraction(interaction),
-    });
   }
   if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();

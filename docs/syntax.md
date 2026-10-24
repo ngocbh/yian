@@ -1944,7 +1944,7 @@ nodes:
   item it came from. For an unanswered call, that is the item holding the assistant message that
   made the call.
 - A spliced media part fails the node, because no model route sends media yet.
-- Memory recall and evidence read the last message's text as the prompt. The render capture
+- Memory recall and learning read the last message's text as the prompt. The render capture
   (and so AGENT backward) holds the list as JSON text: the authored items as the template, the
   `{role, text}` messages, and each spliced `Message` in its JSON form without `protocol` or
   `provider_payload`, as the rendered prompt.
@@ -2499,8 +2499,8 @@ output: ${reply.output}
   round, and structured generation.
 - It is part of the flow's identity. Changing it changes the flow fingerprint, so a
   run log cannot be resumed with a different system prompt. With `learnable=True`,
-  the rendered text is recorded with the node's evidence, so backward learning
-  sees what the model saw.
+  backward learning sees what the model saw: TS yian renders it again from the
+  recorded flow and checks it against the request digest each model call recorded.
 - A compact single-node flow accepts `system_prompt:` at the top level.
 - There is no flow-level default; set it on each AGENT node that needs one.
 

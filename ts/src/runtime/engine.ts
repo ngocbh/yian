@@ -469,7 +469,6 @@ export class FlowEngine {
     const reads = this.#reads.get(nodeId) ?? new Map<string, number>();
     this.#reads.delete(nodeId);
     const carriers: OutcomeCarriers = {
-      evidence: evaluated.evidence,
       // A learnable state evaluated with binding capture on, so both captures are present.
       forwardCapture: state.learnable ? captureBindings(evaluated.bindings!, evaluated.backwardCapture!) : null,
     };
@@ -597,7 +596,6 @@ export class FlowEngine {
         signal: nodeController.signal,
         emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
-        captureEvidence: state.learnable,
         captureBindings: state.learnable || derived,
         effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
         sourceResolver,

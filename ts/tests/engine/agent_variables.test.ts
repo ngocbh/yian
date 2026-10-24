@@ -57,8 +57,9 @@ import type { ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { Node, NodeKind, Output } from "../../src/nodes/base.ts";
+import { type MaterialCaps, Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
@@ -445,6 +446,26 @@ test("nullable variable defaults follow the existing strict prompt rules", async
   expect((error as Error).message).toMatch(/unresolved reference \$\{note\}/);
   expect(models.prompts).toHaveLength(2);
   expect(node.variables[0]!.default).toBeNull();
+});
+
+/** What learning gives `learningMaterial`: no skills or tools, no model, and `recall` for recall. */
+function materialCaps(recall: () => Promise<MemoryContext> = async () => new MemoryContext()): MaterialCaps {
+  return { skills: new Map(), toolSpecs: () => [], models: null, openMemoryContext: recall };
+}
+
+test("learning: a variable colliding with an input refuses the rebuild; another RangeError is a fault", async () => {
+  const node = new AgentNode("writer", { prompt: "${tone}", variables: variables("tone: !str concise\n") });
+  const steps = [{ kind: "model_call" }];
+
+  const refused = await node.learningMaterial({ tone: "input" }, steps, materialCaps());
+  expect(refused.prompt).toBeNull();
+  expect(refused.digestOk).toBe(false);
+
+  const fault = new RangeError("broken recall");
+  const failing = materialCaps(async () => {
+    throw fault;
+  });
+  expect(await rejected(node.learningMaterial({}, steps, failing))).toBe(fault);
 });
 
 test.each([

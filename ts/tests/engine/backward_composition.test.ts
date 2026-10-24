@@ -46,7 +46,6 @@ import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
   BackwardStartedRecord,
-  evidencePayload,
   JsonlRunLog,
   MemoryCommitRequestedRecord,
   NodeStartedRecord,
@@ -465,8 +464,7 @@ output:
     expect(data["effective_llm_config"]).toEqual(selected);
     expect(selected["provider"]).toBe(direct ? "openai" : "deepseek");
     expect(selected[selected["provider"] as string]).toEqual({ temperature: direct ? 0.1 : 0.8 });
-    expect(occurrence.record.evidence).not.toBeNull();
-    expect(occurrence.record.evidence!.prompt).toBe(data["rendered_prompt"] as string);
+    expect(occurrence.steps.map((step) => step["kind"])).toEqual(["model_call"]);
   }
 
   const priorBody = trace.occurrences.filter((item) => {
@@ -519,9 +517,12 @@ output:
       },
     }),
   );
-  expect(backwardChats).toHaveLength(acceptedAgents.size);
+  // Learning also builds each agent's forward model, uncalled, to read its structured plan off.
+  const called = backwardChats.filter(([, chat]) => chat.requests.length > 0);
+  expect(backwardChats).toHaveLength(2 * acceptedAgents.size);
+  expect(called).toHaveLength(acceptedAgents.size);
   const seen: number[] = [];
-  for (const [config, chat] of backwardChats) {
+  for (const [config, chat] of called) {
     expect(chat.requests).toHaveLength(1);
     expect(chat.requests[0]!.tools).toEqual([]);
     const forward = material(chat)["forward"];
@@ -533,7 +534,11 @@ output:
     for (const key of ["prompt_template", "rendered_prompt", "variables", "variable_domains"]) {
       expect(forward[key]).toEqual(asJson(capture.nodeData![key]));
     }
-    expect(forward["evaluation_evidence"]).toEqual(asJson(evidencePayload(occurrence.record.evidence)));
+    // Rebuilt from the occurrence's steps, render and recall.
+    const evidence = forward["evaluation_evidence"] as Record<string, unknown>;
+    expect(evidence["prompt"]).toBe(forward["rendered_prompt"]);
+    expect(evidence["bound_inputs"]).toEqual(forward["inputs"]);
+    expect(evidence["interactions"]).toHaveLength(1);
     expect(config).toEqual(legacyConnectionConfig(capture.nodeData!["effective_llm_config"] as Record<string, unknown>));
     seen.push(occurrence.source.executionSeq);
   }
@@ -553,7 +558,7 @@ output:
   expect(recovered.backwardOutcome).toEqual(outcome);
   expect(recovered.output).toEqual(result.output);
   expect(readFileSync(path)).toEqual(after);
-  expect(access.configs).toHaveLength(12);
+  expect(access.configs).toHaveLength(18);
 });
 
 test("concat repeat and opaque routes cross public call without reevaluation", async () => {
@@ -711,7 +716,9 @@ output: \${invoke.output | unused.output}
       expect(agentStarts).toHaveLength(1);
       const agentSequence = agentStarts[0]!.seq;
       expect(authors[0]!.seq).toBeGreaterThan(agentSequence);
-      expect((authors[0]!.record as NodeSucceededRecord).evidence!.memorySections).toHaveLength(3);
+      // The agent recalled all three memories' sections.
+      const system = forwardChat.requests[0]!.messages[0]!.text();
+      expect([1, 2, 3, 4].map((index) => system.includes(`"index":${index}`))).toEqual([true, true, true, false]);
 
       // Each learner receives only its own memory's context despite inherited recall/evidence.
       let backwardChat!: ScriptedModel;

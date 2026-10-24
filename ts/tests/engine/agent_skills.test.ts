@@ -34,9 +34,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext, ToolCallInteraction, ToolResultInteraction } from "../../src/memory/contracts.ts";
+import { MemoryContext } from "../../src/memory/contracts.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { type AgentPrompt, AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
@@ -46,6 +46,17 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { drive, nodeFlow, serving, textReply } from "./run_state_fixtures.ts";
+
+/** The node's private render, which `forward` and `learningMaterial` share. */
+function renderPrompt(
+  node: AgentNode,
+  inputs: Readonly<Record<string, unknown>>,
+  skills: ReadonlyMap<string, Skill> | null,
+): AgentPrompt {
+  type Inputs = Readonly<Record<string, unknown>>;
+  type Render = { renderPrompt(inputs: Inputs, skills: ReadonlyMap<string, Skill> | null): AgentPrompt };
+  return (node as unknown as Render).renderPrompt(inputs, skills);
+}
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -224,7 +235,6 @@ test("granted skills are listed and loaded on demand", async () => {
   const evaluated = await evalNode(node, nodeFlow(node), new VariablePool(), {
     models: serving(model),
     skills: SKILLS,
-    captureEvidence: true,
   });
 
   expect(evaluated.outcome).toEqual(new Output("reviewed"));
@@ -235,10 +245,8 @@ test("granted skills are listed and loaded on demand", async () => {
   expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual([LOAD_SKILL]);
   expect(lastResult(model.requests[1]!.messages)).toBe("Read references/style.md first.");
   expect(lastResult(model.requests[2]!.messages)).toBe("Prefer small diffs.\n");
-  const evidence = evaluated.evidence!;
-  expect(evidence.baseSystemPrompt).toBe(expectedSystem);
-  expect(evidence.interactions).toContainEqual(new ToolCallInteraction(LOAD_SKILL, { name: "review" }));
-  expect(evidence.interactions).toContainEqual(new ToolResultInteraction(LOAD_SKILL, "Prefer small diffs.\n"));
+  // Learning renders the same system prompt from the skills the run recorded.
+  expect(renderPrompt(node, {}, SKILLS).baseSystemPrompt).toBe(expectedSystem);
 });
 
 test("skills with structured output still run the tool loop", async () => {

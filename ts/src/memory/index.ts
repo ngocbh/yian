@@ -12,15 +12,14 @@
  * `contracts.ts` owns that vocabulary: the memory JSON snapshot types, the per-declaration shape
  * check (`checkMemoryDeclaration`, with `MEMORY_IDENTIFIER_PATTERN` and
  * `BUILTIN_MEMORY_CONFIG_KEYS`), node scopes and their occurrence paths, the setup and operation
- * failures, recorded snapshots, the host memory objects (`Memory`, its run `MemorySession`,
- * and `isMemory`, which stands in for Python's `isinstance` check against the runtime-checkable
+ * failures, recorded snapshots, the host memory objects (`Memory`, its run `MemorySession`, and
+ * `isMemory`, which stands in for Python's `isinstance` check against the runtime-checkable
  * `Memory` protocol), and the learning results (`MemoryMutation`, `LearningFailure`,
- * `PolicyCommitOutcome`, `LearningResult`), the visible evidence of one node outcome
- * (`EvaluationEvidence`, `MemorySection`, and the `VisibleInteraction` carriers
- * `ModelTextInteraction`, `ModelValueInteraction`, `ToolCallInteraction`,
- * `ToolResultInteraction`), the learning inputs (`MemoryEpisode` with its
- * `MemoryEpisodeStatus`, and `LearnContext`), and the recall carriers (`RecallContext`,
- * `MemoryContent`, `MemoryContext`, `MemoryRecallError`, and the engine's `EvaluationTrace`).
+ * `PolicyCommitOutcome`, `LearningResult`), what a learner sees of an AGENT invocation
+ * (`MemorySection`, and the `VisibleInteraction` carriers `ModelTextInteraction`,
+ * `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`), the learning inputs
+ * (`MemoryEpisode` with its `MemoryEpisodeStatus`, and `LearnContext`), and the recall carriers
+ * (`RecallContext`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`).
  * TS yian has no session memory and no conversation contracts: chat history is a LOOP-carried
  * value. The declaration origin traversal and rewrite, the mutation batch check
  * `validateMutations` and the feedback snapshot `freezeFeedback` aren't re-exported (Python keeps
@@ -42,7 +41,6 @@
  */
 
 export type {
-  EvaluationTrace,
   JsonObject,
   JsonScalar,
   JsonValue,
@@ -57,7 +55,6 @@ export {
   BUILTIN_MEMORY_CONFIG_KEYS,
   checkMemoryDeclaration,
   DeclSite,
-  EvaluationEvidence,
   isMemory,
   LearnContext,
   LearningFailure,

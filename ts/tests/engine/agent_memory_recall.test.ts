@@ -21,6 +21,8 @@
  * `ToolSet`, where Python patches `ToolSet.resolve`; the model answers without calling it.
  * `test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled` binds a `Set`, which is
  * not a yian value.
+ * TS records no evidence (learning reads the steps), so the trace parity and evidence checks of
+ * those tests are not ported.
  * `test_invalid_recall_context_becomes_sanitized_typed_node_failure` binds its lone-surrogate text
  * through `bindReserved`, since the TS pool refuses it.
  * `test_scoped_agent_without_recall_callback_is_a_setup_error` rejects with an `Error` (Python:
@@ -134,14 +136,13 @@ test.each([false, true])("no memory keeps the existing system prompt byte for by
   expect((evaluated.outcome as Output).value).toBe("done");
   expect(model.requests).toHaveLength(1);
   expect(systemText(model)).toBe(DEFAULT_SYSTEM);
-  expect(evaluated.evidence).toBeNull();
 });
 
 test.each([
   [false, false],
   [false, true],
   [true, false],
-])("recall sections reach every agent path in order, with trace parity (tools: %p, structured: %p)", async (tools, structured) => {
+])("recall sections reach every agent path in order (tools: %p, structured: %p)", async (tools, structured) => {
   const model = new ScriptedModel([reply(structured ? '{"value": 7}' : "done")], CONFIG);
   const models = access(model);
   const { node, pool, flow } = topicAgent({ structured, tools });
@@ -156,7 +157,6 @@ test.each([
   const evaluated = await evalNode(node, flow, pool, {
     models,
     tools: noopTools(),
-    captureEvidence: true,
     memoryContextOpener: opener(recall),
   });
 
@@ -176,10 +176,6 @@ test.each([
       '{"index":1,"memory":"outer","text":"outer facts"},' +
       '{"index":2,"memory":"local","text":"local facts"}]}',
   );
-  const evidence = evaluated.evidence!;
-  expect(evidence.baseSystemPrompt).toBe(DEFAULT_SYSTEM);
-  expect(evidence.prompt).toBe("Answer Ada");
-  expect(evidence.memorySections).toEqual(sections);
 });
 
 test("an invalid recall context becomes a sanitized typed node failure", async () => {
@@ -209,7 +205,7 @@ test("an invalid recall context becomes a sanitized typed node failure", async (
   expect(models.built).toBe(0);
 });
 
-test("uncanonical recall inputs remain typed when evidence is enabled", async () => {
+test("uncanonical recall inputs remain typed", async () => {
   class UncanonicalInputAgent extends AgentNode {
     override bindReserved(): Record<string, unknown> {
       return { bad: new Set([1, 2]) };
@@ -220,13 +216,11 @@ test("uncanonical recall inputs remain typed when evidence is enabled", async ()
   const models = access(new ScriptedModel([], CONFIG));
   const evaluated = await evalNode(node, nodeFlow(node), new VariablePool(), {
     models,
-    captureEvidence: true,
     memoryContextOpener: opener(() => []),
   });
   expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
   const { failure } = evaluated.outcome as EvaluationFailure;
   expect([failure.causeType, failure.message]).toEqual(["MemoryRecallError", "memory recall context is invalid"]);
-  expect(evaluated.evidence!.boundInputs).toBeNull();
   expect(models.built).toBe(0);
 });
 

@@ -377,6 +377,8 @@ type BackwardHandleFields = {
   readonly models: ModelAccess;
   /** The run's clock, which the backward records' times are read from. */
   readonly clock: () => number;
+  /** Expands the run's tool groups, which learning rebuilds requests with; `null` reads grants as tool names. */
+  readonly expandTools: ((ids: readonly string[]) => readonly string[]) | null;
 };
 
 // The fields are declared once, in `BackwardHandleFields`, and merged into the class.
@@ -452,7 +454,12 @@ class BackwardHandle {
           });
         };
         const onEvent = options.onEvent ?? undefined;
-        return await driveBackward(state, authority, feedback, { openMemory, models: this.models, onEvent });
+        return await driveBackward(state, authority, feedback, {
+          openMemory,
+          models: this.models,
+          onEvent,
+          expandTools: this.expandTools,
+        });
       } catch (error) {
         primary = { error };
         throw error;
@@ -1043,6 +1050,7 @@ async function startRun(
       env,
       models,
       clock,
+      expandTools: (ids) => runTools.expand(ids),
     });
     return resultFromState(state, log, events, handle);
   } catch (error) {
@@ -1283,7 +1291,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       }
       const models = options.models ?? defaultModelAccess(env);
       const retainedProgram = state.learnable ? copyGraph(flow.compiled) : null;
-      const retain = (): BackwardHandle | null =>
+      const retain = (runTools: ToolSet | null): BackwardHandle | null =>
         retainedHandle(retainedProgram, state, authority, options.memory ?? null, {
           locator,
           apiKey,
@@ -1291,8 +1299,10 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
           env,
           models,
           clock,
+          expandTools: runTools === null ? null : (ids) => runTools.expand(ids),
         });
-      if (state.result !== null) return resultFromState(state, log, [], retain());
+      // A finished run opens no tools, so its grants are read as tool names.
+      if (state.result !== null) return resultFromState(state, log, [], retain(null));
       if (start.yianVersion !== VERSION) {
         warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
       }
@@ -1367,7 +1377,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const lead = [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
       publishBoundaryObservers(lead, events, options.onEvent ?? null, (error) => engine.stopForCallback(error));
       events.push(...(await engine.run()));
-      return resultFromState(state, log, events, retain());
+      return resultFromState(state, log, events, retain(runTools));
     } catch (error) {
       primary = { error };
       throw error;
@@ -2407,7 +2417,9 @@ function retainedHandle(
   state: RunState,
   log: RunLog,
   memory: ReadonlyMap<string, Memory> | null,
-  options: Pick<BackwardHandleFields, "apiKey" | "headers" | "env" | "models" | "clock"> & { locator: string | null },
+  options: Pick<BackwardHandleFields, "apiKey" | "headers" | "env" | "models" | "clock" | "expandTools"> & {
+    locator: string | null;
+  },
 ): BackwardHandle | null {
   if (program === null) return null;
   return new BackwardHandle({
@@ -2422,6 +2434,7 @@ function retainedHandle(
     env: options.env,
     models: options.models,
     clock: options.clock,
+    expandTools: options.expandTools,
   });
 }
 

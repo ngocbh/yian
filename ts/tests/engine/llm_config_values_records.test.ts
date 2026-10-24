@@ -21,8 +21,8 @@
  * - Spies patch `AgentNode.prototype.bindReserved` and the producer's prototype `backward`; the
  *   drift row patches `bindReserved` to throw the `BindingError` Python's patched
  *   `call_time_config` raises. Resume errors are `RangeError`s where Python raises `ValueError`.
- * - WAIT and MAP inherit `modelHiddenInputs` from `Node`'s prototype and hold
- *   `needsEvaluationTrace: false` on an instance (Python's class attributes).
+ * - WAIT and MAP inherit `modelHiddenInputs` and `learningMaterial` from `Node`'s prototype
+ *   (Python's class attributes).
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -398,9 +398,8 @@ test("a learnable host key call time run records no secret", async () => {
     .map((entry) => entry.payload);
   expect(succeeded).toHaveLength(1);
   const capture = JSON.stringify(succeeded[0]!["forward_capture"]);
-  const evidence = JSON.stringify(succeeded[0]!["evidence"]);
   expect(capture).toContain("gpt-picked");
-  for (const text of [JSON.stringify(nonEmpty[0]), capture, evidence, readFileSync(log, "utf8")]) {
+  for (const text of [JSON.stringify(nonEmpty[0]), capture, readFileSync(log, "utf8")]) {
     expect(text).not.toContain("sk-host-secret");
     expect(text).not.toContain("tenant-secret");
   }
@@ -418,14 +417,15 @@ test("llm config is not model visible", async () => {
     .filter((entry) => entry.kind === "node_succeeded" && entry.payload["node_id"] === "chat")
     .map((entry) => entry.payload);
   expect(succeeded).toHaveLength(1);
-  expect(succeeded[0]!["evidence"]["bound_inputs"]).toEqual({});
   // The bound record keeps it, so backward and resume read what ran.
   expect(succeeded[0]!["forward_capture"]["bound_inputs"]["__llm_config"]["model"]).toBe("gpt-picked");
   const forward = model.requests.length;
   expect((await result.backward("Shorter.")).status).toBe("succeeded");
   const calls = model.requests.slice(forward);
   expect(calls).toHaveLength(1);
+  // What the learner reads of the invocation (its evaluation evidence) leaves it out.
   const last = textOf(calls[0]!.messages.at(-1)!);
+  expect(last).toContain("evaluation_evidence");
   expect(last).not.toContain("__llm_config");
   expect(last).not.toContain("gpt-picked");
 });
@@ -497,10 +497,10 @@ test("only an agent with the key hides it from the model", async () => {
   expect(flow.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set(["__llm_config"]));
   const fixed = await loadFlow(PICKED.replace("{model: '${pick.output}'}", "{model: m1}"), { env });
   expect(fixed.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set());
-  // WAIT and MAP keep their reserved inputs; neither records evidence.
+  // WAIT and MAP keep their reserved inputs; neither shows a learner a prompt.
   for (const node of [new WaitNode("w"), new MapNode("m", { flowId: "f" })]) {
     expect(Object.getPrototypeOf(node).modelHiddenInputs).toBe(Node.prototype.modelHiddenInputs);
-    expect(node.needsEvaluationTrace).toBe(false);
+    expect(Object.getPrototypeOf(node).learningMaterial).toBe(Node.prototype.learningMaterial);
   }
 });
 

@@ -60,8 +60,9 @@
  * refusal written in the reply, once the corrections are spent, is an `OutputInvalidError` with no
  * path; a value check message reads `structured output at <path>:`; a reply whose value nests past
  * `YIAN_MAX_VALUE_NESTING` is corrected naming the path, then fails with no path, and a value
- * exactly at the limit passes (the wrapper is not a level); the native strategy records the value
- * in the evaluation trace, the prompt strategy every reply's text; `retry` is called once per
+ * exactly at the limit passes (the wrapper is not a level); rebuilt from the recorded steps
+ * (`structuredMaterial`), learning sees the native strategy's value and the prompt strategy's every
+ * reply's text, and every recorded request matches; `retry` is called once per
  * structured call, so a transport retry of a later call reports that call.
  */
 
@@ -90,12 +91,12 @@ import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { MissingToolCallError, StructuredOutputError } from "../../src/llm/structured.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import type { EvaluationTrace, VisibleInteraction } from "../../src/memory/contracts.ts";
 import { ModelTextInteraction, ModelValueInteraction } from "../../src/memory/contracts.ts";
 import {
   generateStructured,
   isContractPath,
   OutputInvalidError,
+  structuredMaterial,
 } from "../../src/nodes/agent/structured.ts";
 import { AgentSteps } from "../../src/nodes/agent/context.ts";
 import type { LiveSinks } from "../../src/nodes/agent/live.ts";
@@ -405,18 +406,23 @@ describe("TS-only", () => {
     );
   });
 
-  test("the native strategy records the value, the prompt strategy every reply's text", async () => {
-    const recorded: VisibleInteraction[] = [];
-    const trace: EvaluationTrace = {
-      recordPrompt: () => undefined,
-      recordInteraction: (interaction) => void recorded.push(interaction),
+  test("learning shows the native strategy's value, the prompt strategy's every reply's text", async () => {
+    /** Run `generateStructured` on `model`, recording its steps, then rebuild what learning reads of them. */
+    const rebuild = async (model: ScriptedModel, retries: number) => {
+      const recorded: ValueRecord[] = [];
+      const record = (step: ValueRecord) => recorded.push(step);
+      const steps = new AgentSteps(new NodeSteps(1, [], record), () => 0, null, (error) => error, "agent");
+      await generateStructured(model, [], INT, { retries, steps });
+      return structuredMaterial(model, [], INT, recorded);
     };
-    await generateStructured(scripted([text('{"value": 3}')]), [], INT, { evaluationTrace: trace });
-    expect(recorded).toEqual([new ModelValueInteraction(3n)]);
-    recorded.length = 0;
-    const prompted = scripted([text("x"), text('{"value": 4}')], PROMPTED);
-    await generateStructured(prompted, [], INT, { retries: 1, evaluationTrace: trace });
-    expect(recorded).toEqual([new ModelTextInteraction("x"), new ModelTextInteraction('{"value": 4}')]);
+    expect(await rebuild(scripted([text('{"value": 3}')]), 0)).toEqual({
+      interactions: [new ModelValueInteraction(3n)],
+      digestOk: true,
+    });
+    expect(await rebuild(scripted([text("x"), text('{"value": 4}')], PROMPTED), 1)).toEqual({
+      interactions: [new ModelTextInteraction("x"), new ModelTextInteraction('{"value": 4}')],
+      digestOk: true,
+    });
   });
 });
 

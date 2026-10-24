@@ -60,7 +60,6 @@ import {
 import * as memoryPackage from "../../src/memory/index.ts";
 // Unused on purpose: the typecheck fails if the facade stops exporting one of these types.
 import type {
-  EvaluationTrace,
   JsonObject,
   JsonScalar,
   JsonValue,
@@ -389,7 +388,6 @@ test("the package doc and exports describe keyed memories", () => {
   expect(Object.keys(memoryPackage)).toEqual([
     "BUILTIN_MEMORY_CONFIG_KEYS",
     "DeclSite",
-    "EvaluationEvidence",
     "LearnContext",
     "LearningFailure",
     "LearningResult",

@@ -35,7 +35,6 @@ import { ModelCallFinished, ModelCallStarted, ToolCallFinished, ToolCallStarted 
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { type EvaluationTrace, type VisibleInteraction } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
@@ -152,11 +151,6 @@ test("a stop cutting a tool's argument check short is the stop", async () => {
   };
   const ran: unknown[] = [];
   const events: unknown[] = [];
-  const interactions: VisibleInteraction[] = [];
-  const evaluationTrace: EvaluationTrace = {
-    recordPrompt: () => {},
-    recordInteraction: (interaction) => void interactions.push(interaction),
-  };
   const node = new AgentNode("writer", { prompt: "hi", llmConfig: CONFIG, tools: ["lookup"] });
   const run = node.forward(
     {},
@@ -165,13 +159,11 @@ test("a stop cutting a tool's argument check short is the stop", async () => {
       tools: lookupTools((args) => ran.push(args), validator),
       signal: stop.signal,
       emitEvent: (event) => void events.push(event),
-      evaluationTrace,
     },
   );
   expect(await rejected(run)).toBe(stop.signal.reason);
   expect(ran).toEqual([]);
   expect(events.some((event) => event instanceof ToolCallStarted)).toBe(false);
-  expect(interactions).toEqual([]);
 });
 
 /** An AGENT `writer` granted `lookup`. */

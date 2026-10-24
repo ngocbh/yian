@@ -10,25 +10,24 @@
  * run `MemorySession`), their typed failures and their recorded snapshots; and the learning result
  * carriers (`MemoryMutation` with its batch check `validateMutations`, `LearningFailure`,
  * `PolicyCommitOutcome`, `LearningResult`), frozen and holding their carriers by reference; and
- * the visible evidence accepted with a node outcome (`EvaluationEvidence`, with its recalled
- * `MemorySection` values and the visible model and tool interactions), the accepted episodes
- * (`MemoryEpisode`) and one memory's learning batch (`LearnContext`, with its feedback snapshot
- * `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
- * the scope, snapshot, spec, operation failure and learning carriers (`sameMemoryScope`,
- * `sameMemorySnapshotEnvelope`, `sameMemorySpec`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
+ * what a learner sees of an AGENT invocation (its recalled `MemorySection` values and the visible
+ * model and tool interactions), the accepted episodes (`MemoryEpisode`) and one memory's learning
+ * batch (`LearnContext`, with its feedback snapshot `freezeFeedback`), whose JSON follows the yian
+ * value number rule; and the value comparisons of the scope, snapshot, spec, operation failure and
+ * learning carriers (`sameMemoryScope`, `sameMemorySnapshotEnvelope`, `sameMemorySpec`,
+ * `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
  * `samePolicyCommitOutcome`, `sameLearningResult`). It also holds the recall carriers
  * (`RecallContext`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`), and the host
- * interfaces: `Memory` and its run `MemorySession` (`recall`, `learn`, `commit`), and the engine's
- * `EvaluationTrace` sink. A host interface method may return a value or a promise, and yian always
- * awaits it; the `snapshot` read and `EvaluationTrace` stay synchronous. It imports only
- * `diagnostics` and `defaults`.
+ * interfaces: `Memory` and its run `MemorySession` (`recall`, `learn`, `commit`). A host interface
+ * method may return a value or a promise, and yian always awaits it; the `snapshot` read stays
+ * synchronous. It imports only `diagnostics` and `defaults`.
  */
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 
 /**
- * One JSON scalar: an int is a `bigint`, a float a `number`, finite except in the evidence values,
+ * One JSON scalar: an int is a `bigint`, a float a `number`, finite except in the interactions,
  * the episodes and the learn feedback, which may hold `±Infinity`.
  */
 export type JsonScalar = null | boolean | bigint | number | string;
@@ -197,8 +196,8 @@ function freezeJson(
  * floats, well-formed strings, plain arrays and plain objects with string keys, copied into frozen
  * arrays and frozen objects whose keys are inserted in code-unit order. With `limitNesting` (the
  * default, for configs) it nests at most `current().maxValueNesting` container levels. With
- * `valueNumbers` (for evidence values) numbers follow the yian value rule instead: NaN refused,
- * `±Infinity` kept, `-0` copied as `0`.
+ * `valueNumbers` (for interaction and episode values) numbers follow the yian value rule instead:
+ * NaN refused, `±Infinity` kept, `-0` copied as `0`.
  *
  * @throws TypeError when `value` isn't a plain object, holds a non-JSON value, or has a symbol key.
  * @throws RangeError for a refused number, a lone surrogate, a cycle, or nesting past the limit.
@@ -213,7 +212,7 @@ export function freezeJsonObject(
   return freezeJson(value, name, limit, options.valueNumbers ?? false) as JsonObject;
 }
 
-/** Validate and copy one evidence JSON value at any depth under the yian value number rule. */
+/** Validate and copy one interaction or episode JSON value at any depth under the value number rule. */
 function freezeEvidenceJson(value: unknown, name: string): JsonValue {
   return freezeJson(value, name, Number.POSITIVE_INFINITY, true);
 }
@@ -919,76 +918,6 @@ function requireInteractions(value: unknown): readonly VisibleInteraction[] {
     }
   }
   return Object.freeze([...(value as VisibleInteraction[])]);
-}
-
-/** Source-neutral visible evidence accepted with one node outcome. Frozen. */
-export class EvaluationEvidence {
-  /** The node's memory scope, or `null` when the node has none. */
-  readonly scope: MemoryScope | null;
-  /** The deep-frozen bound inputs, or `null` when binding or safe capture was unavailable. */
-  readonly boundInputs: JsonObject | null;
-  /** The AGENT's base system prompt; present exactly when `prompt` is. */
-  readonly baseSystemPrompt: string | null;
-  readonly prompt: string | null;
-  /** The recalled sections, unique by memory and in `scope.memories` order. */
-  readonly memorySections: readonly MemorySection[];
-  readonly interactions: readonly VisibleInteraction[];
-
-  /**
-   * Validate the visible inputs, prompts, sections and interactions, in that order; the arrays are
-   * copied and their carriers kept by reference, and `boundInputs` is copied under the yian value
-   * number rule, at any depth.
-   *
-   * @throws TypeError for a `scope` that isn't exactly a `MemoryScope`, `boundInputs` that aren't
-   *   an exact JSON object, a prompt that isn't a string, an array that isn't an array, or an item
-   *   that isn't exactly a `MemorySection` or one of the visible interactions.
-   * @throws RangeError for a bad JSON value, one prompt without the other, a lone surrogate, or
-   *   sections that repeat a memory, name one outside `scope.memories` or leave its order.
-   */
-  constructor(
-    scope: MemoryScope | null,
-    boundInputs: unknown,
-    baseSystemPrompt: string | null,
-    prompt: string | null,
-    memorySections: readonly MemorySection[] = [],
-    interactions: readonly VisibleInteraction[] = [],
-  ) {
-    if (scope !== null && !isExactly(scope, MemoryScope)) throw new TypeError("scope must be a MemoryScope or null");
-    this.scope = scope;
-    if (boundInputs !== null && !isPlainObject(boundInputs)) {
-      throw new TypeError("bound_inputs must be an exact JSON object or null");
-    }
-    this.boundInputs =
-      boundInputs === null
-        ? null
-        : freezeValueObject(boundInputs, "bound_inputs");
-    if ((baseSystemPrompt === null) !== (prompt === null)) {
-      throw new RangeError("base_system_prompt and prompt must both be present or absent");
-    }
-    this.baseSystemPrompt =
-      baseSystemPrompt === null ? null : requireString(baseSystemPrompt, "base_system_prompt", false);
-    this.prompt = prompt === null ? null : requireString(prompt, "prompt", false);
-
-    if (!isPlainArray(memorySections)) throw new TypeError("memory_sections must be an array");
-    const stackPositions = new Map((scope?.memories ?? []).map((key, index) => [key, index]));
-    const seen = new Set<string>();
-    let previous = -1;
-    let ordered = true;
-    for (const section of memorySections) {
-      if (!isExactly(section, MemorySection)) throw new TypeError("memory_sections items must be MemorySection values");
-      if (seen.has(section.memory)) throw new RangeError("memory_sections memory values must be unique");
-      const position = stackPositions.get(section.memory);
-      if (position === undefined) throw new RangeError("memory_sections memories must appear in scope.memories");
-      seen.add(section.memory);
-      // Checked after the loop, as Python does, so a later unknown or repeated section wins.
-      if (position < previous) ordered = false;
-      previous = position;
-    }
-    if (!ordered) throw new RangeError("memory_sections must follow scope.memories order");
-    this.memorySections = Object.freeze([...memorySections]);
-    this.interactions = requireInteractions(interactions);
-    Object.freeze(this);
-  }
 }
 
 /** Copy one exact JSON object at any depth under the yian value number rule. */
@@ -1813,20 +1742,6 @@ export class MemoryContext {
     this.sections = Object.freeze([...sections]);
     Object.freeze(this);
   }
-}
-
-/**
- * Write-only sink for visible evidence from one AGENT invocation.
- *
- * Implementations accept only the exact carriers of this module. It has no read surface: the
- * evaluator freezes the invocation's trace into durable evidence. The engine implements it, so its
- * methods are synchronous.
- */
-export interface EvaluationTrace {
-  /** Record the one visible model prompt of an AGENT invocation; no memory sections by default. */
-  recordPrompt(baseSystemPrompt: string, prompt: string, memorySections?: readonly MemorySection[]): void;
-  /** Append one exact visible model or tool interaction. */
-  recordInteraction(interaction: VisibleInteraction): void;
 }
 
 /**

@@ -1462,6 +1462,32 @@ or the framework instruction when the node has none, with any skill listing.
 Tool interactions in that evidence are inert data. No prompt/default/recall is evaluated again, and variable feedback does not
 update variables, model configuration, or the graph.
 
+Changed (TS yian): learning reads steps. No outcome record holds evidence. Each backward attempt
+rebuilds what a learner sees of an AGENT invocation (AGENT backward's evaluation evidence, and a
+memory episode's prompts, memory sections and interactions) from the run log: the prompt from the
+recorded flow and skills (no node runs), the memory sections by recalling against the recorded
+snapshots, and the interactions from the invocation's `model_call` and `tool_result` steps.
+Interactions follow step order: each reply's text when it calls no tool, else its calls, then
+their results in call order, so two calls that ran one at a time read call A, call B, result A,
+result B. A structured agent's model is built, never called, to read its structured-output plan,
+and a grant of a tool group is expanded with the run's tools.
+
+Every request rebuilt from them is checked against the `request_sha256` its step recorded. When
+one differs, learning reads no prompt, memory sections or interactions of that invocation: AGENT
+backward still runs, with `evaluation_evidence` set to `null`, and its memory episodes keep their
+inputs, output and feedback. Each such invocation is reported to `onEvent` as a `ReplayDegraded`
+with reason `rebuilt_request_differs`. Besides a changed flow or skill, that happens when the
+render or recall fails now, when a structured agent's model can't be built now, and when a tool
+group can't be expanded: `run_started` records no group membership, and a finished run that
+`advance` reopened opens no tools, so its grants are read as tool names.
+
+Since recall is rebuilt, it must give the same text each time for the same snapshot and context.
+A custom memory's `recall`, and the `rewriteQuery()` a subclass of `EpisodicMemory` or
+`ReflectiveMemory` overrides, must return the same result for the same `RecallContext` every time.
+Otherwise a rebuilt request can differ from the recorded one: each occurrence the memory is scoped
+to whose request differs loses its prompt, memory sections and interactions in learning, and is
+reported as `rebuilt_request_differs`.
+
 Known callback/result failures return a failed outcome without partial root
 feedback. A later learner or commit failure retains already completed feedback.
 Host errors, cancellation, setup errors, and log faults propagate while leaving
@@ -2327,20 +2353,21 @@ reads its steps back. A log holding one can't be read by a yian version from bef
 the record existed. The four node
 outcome records carry canonical forward inputs and routes when the recorded
 run has `learnable=True`; `learnable=False` omits that capture. Optional model/tool
-evaluation evidence is separate. Terminal success
+evaluation evidence is separate (TS yian records none: learning reads the steps). Terminal success
 or failure is derived from node transitions. `NodeFailedRecord` stores
 the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 16, and readers accept only schema 16. The schema
+Changed (TS yian): records use schema 17, and readers accept only schema 17. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 15 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 16 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
-backward attempt was `backward.unfinished`, or before derived commits held `from` pointers)
-with "run log schema N predates schema 16 and is not supported", and any other schema with
-"unsupported run-record schema: N" (a float token shows as `16.0`); the "predates" message for schemas 7
+backward attempt was `backward.unfinished`, before derived commits held `from` pointers, or
+before outcome records dropped `evidence`)
+with "run log schema N predates schema 17 and is not supported", and any other schema with
+"unsupported run-record schema: N" (a float token shows as `17.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2390,7 +2417,7 @@ Changed (TS yian): every write to the variable pool is its own record, `PoolComm
 value goes under (Python's `commit_target`: the node itself, or for a CALL's child END and a
 stopping LOOP driver, their spawner), and `kind`/`value` are the typed value's wire form, so int
 and float, `Any` and files stay apart. `NodeSucceededRecord` holds no value: its payload is
-`{node_id, commit, evidence, forward_capture}`, where `commit` is the seq of the node's
+`{node_id, commit, forward_capture}`, where `commit` is the seq of the node's
 `pool_commit` it accepts. `RunStartedRecord` holds no `initial_pool`: the run start is
 `run_started`, then a `pool_commit` per system value (`system.now`, `system.run_id`,
 `system.today`, in key order, keyed `system.<name>`, a name no node id can take), then the START
@@ -2972,7 +2999,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `advance` reads (schema 16); a line of another schema raises
+- It reads every schema `advance` reads (schema 17); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

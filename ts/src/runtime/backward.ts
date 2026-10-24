@@ -13,10 +13,14 @@
  */
 
 import { reprText } from "../diagnostics.ts";
+import { ReplayDegraded } from "../events.ts";
 import { type FeedbackValue, sameSource, sourceKey } from "../expr/lineage.ts";
+import { ToolSpec } from "../llm/messages.ts";
 import {
   LearningFailure,
+  MemoryContext,
   MemoryOperationFailure,
+  RecallContext,
   sameMemorySnapshotEnvelope,
   sameMemorySpec,
 } from "../memory/contracts.ts";
@@ -25,9 +29,11 @@ import {
   type BackwardOptions,
   BackwardResult,
   copyBackwardValue,
+  type LearningMaterial,
   markerMessage,
   validateBackwardResult,
 } from "../nodes/base.ts";
+import { Skill } from "../skills/catalog.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
@@ -57,7 +63,7 @@ import {
 } from "./log.ts";
 import { LearningProposalError, MemoryRuntime } from "./memory_runtime.ts";
 import { commitPrepared, prepareRecord, RunState } from "./state.ts";
-import type { RetainedTrace } from "./trace.ts";
+import { occurrenceMaterial, type RetainedTrace, type TraceOccurrence, visibleInputs } from "./trace.ts";
 
 /** @internal A callback or result-contract failure attributed to one occurrence; forward state is unchanged. */
 export class BackwardComputeError extends Error {
@@ -121,9 +127,10 @@ function computeFailure(context: BackwardContext, code: string, error: unknown):
 export async function computeBackward(
   trace: RetainedTrace,
   rootFeedback: FeedbackValue,
-  options: { cache?: ContextCache | null } & BackwardOptions = {},
+  options: { cache?: ContextCache | null; materials?: LearningMaterials | null } & BackwardOptions = {},
 ): Promise<[BackwardResult, readonly AttributedBackwardResult[]]> {
   const { models, onEvent } = options;
+  const materials = options.materials ?? new Map<string, LearningMaterial>();
   const cache = options.cache ?? new ContextCache(trace);
   const [pending, directRoot] = seedBackward(trace, rootFeedback);
   const occurrences = trace.occurrences;
@@ -141,6 +148,7 @@ export async function computeBackward(
     // Trace lookups stay outside the callback's `try`: their faults aren't the callback's.
     const context = trace.backwardContext(source, {
       downstreamContext: messages.map((message, i) => materializeContext(message, i, cache)),
+      material: materials.get(sourceKey(source)) ?? null,
     });
     const received = messages.map((item) => item.feedback);
     const feedback = Object.freeze(received.map((message) => copyBackwardValue(message, "feedback") as FeedbackValue));
@@ -211,21 +219,104 @@ function finishBackward(
   return state.backwardState.finished!.outcome;
 }
 
+/** Each accepted occurrence's learning material by its source's `sourceKey`; one without any is absent. */
+export type LearningMaterials = ReadonlyMap<string, LearningMaterial>;
+
+/**
+ * Rebuild each accepted occurrence's learning material once for a backward pass
+ * (`occurrenceMaterial`), from the run's recorded skills and tool specs and, for an occurrence
+ * with memories, a recall against `memory`, opened on the recorded snapshots.
+ *
+ * An occurrence whose rebuilt requests don't match its recorded digests has no material, so
+ * learning reads no prompt, memory sections or interactions of it (its backward context's
+ * `_evaluation_evidence` is `null`, and its episodes keep their inputs, output and feedback). It
+ * is reported as a `ReplayDegraded` naming its node (reason `rebuilt_request_differs`). Besides a
+ * changed request, a render or recall that fails now, a structured model that can't be built and
+ * a tool group that can't be expanded fail the check too.
+ *
+ * @param options `memory` recalls for scoped occurrences (`null` recalls nothing); `models`
+ *   builds a structured call's model to read its plan off; `expandTools` expands the run's tool
+ *   groups (`null` reads each grant as a tool name); `onEvent` receives the reports.
+ */
+export async function learningMaterials(
+  state: RunState,
+  options: {
+    memory: MemoryRuntime | null;
+    models: BackwardOptions["models"] | null;
+    expandTools: ((ids: readonly string[]) => readonly string[]) | null;
+    onEvent: BackwardOptions["onEvent"] | null;
+  },
+): Promise<LearningMaterials> {
+  const { memory, models, expandTools, onEvent } = options;
+  const trace = state.trace!;
+  const skills = new Map(
+    Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
+      name,
+      new Skill({ name, description, instructions }),
+    ]),
+  );
+  const toolSpecs = (ids: readonly string[]): ToolSpec[] | null => {
+    const specs: ToolSpec[] = [];
+    for (const name of expandTools === null ? ids : expandTools(ids)) {
+      if (!Object.hasOwn(state.recordedTools, name)) return null;
+      const { description, parameters } = state.recordedTools[name]!;
+      specs.push(new ToolSpec({ name, description, parameters }));
+    }
+    return specs;
+  };
+  // Recalls for `occurrence` against the recorded snapshots, as its run did.
+  const recallFor =
+    (occurrence: TraceOccurrence) =>
+    async (baseSystemPrompt: string, prompt: string): Promise<MemoryContext> => {
+      const scope = occurrence.memoryScope;
+      if (scope === null || scope.memories.length === 0 || memory === null) return new MemoryContext();
+      const recall = new RecallContext(baseSystemPrompt, prompt, visibleInputs(occurrence) ?? {}, scope.staticPath);
+      return await memory.openContext(scope, recall, { signal: new AbortController().signal });
+    };
+  const materials = new Map<string, LearningMaterial>();
+  for (const occurrence of trace.occurrences) {
+    const material = await occurrenceMaterial(trace, occurrence.source, {
+      skills,
+      toolSpecs,
+      models: models ?? null,
+      openMemoryContext: recallFor(occurrence),
+    });
+    if (material === null) continue;
+    if (!material.digestOk) {
+      onEvent?.(new ReplayDegraded({ nodeId: occurrence.nodeId, reason: "rebuilt_request_differs" }));
+      continue;
+    }
+    materials.set(sourceKey(occurrence.source), material);
+  }
+  return materials;
+}
+
 /** Compute once, stage every memory, then request and observe each memory key in order. */
 async function driveOpenedBackward(
   state: RunState,
   log: RunLog,
   memory: MemoryRuntime | null,
-  options: BackwardOptions,
+  options: BackwardOptions & { expandTools: ((ids: readonly string[]) => readonly string[]) | null },
 ): Promise<BackwardOutcome> {
   const started = state.backwardState.started!;
   const attemptId = started.attemptId;
   const trace = state.trace!;
   const cache = new ContextCache(trace);
+  const materials = await learningMaterials(state, {
+    memory,
+    models: options.models ?? null,
+    expandTools: options.expandTools,
+    onEvent: options.onEvent ?? null,
+  });
   let root: BackwardResult;
   let attributed: readonly AttributedBackwardResult[];
   try {
-    [root, attributed] = await computeBackward(trace, started.feedback, { cache, ...options });
+    [root, attributed] = await computeBackward(trace, started.feedback, {
+      cache,
+      materials,
+      models: options.models,
+      onEvent: options.onEvent,
+    });
   } catch (error) {
     if (!(error instanceof BackwardComputeError)) throw error;
     return finishBackward(
@@ -244,7 +335,7 @@ async function driveOpenedBackward(
       started.feedback,
       root,
       attributed,
-      { cache },
+      { cache, materials },
     );
     proposals = memory === null ? [] : await memory.proposeLearning(contexts);
   } catch (error) {
@@ -346,7 +437,10 @@ export async function driveBackward(
   state: RunState,
   log: RunLog,
   rootFeedback: FeedbackValue,
-  options: { openMemory?: (() => MemoryRuntime | Promise<MemoryRuntime>) | null } & BackwardOptions = {},
+  options: {
+    openMemory?: (() => MemoryRuntime | Promise<MemoryRuntime>) | null;
+    expandTools?: ((ids: readonly string[]) => readonly string[]) | null;
+  } & BackwardOptions = {},
 ): Promise<BackwardOutcome> {
   if (!isExactly(state, RunState) || !isRunLog(log)) {
     throw new TypeError("backward driving requires a RunState and RunLog");
@@ -383,7 +477,11 @@ export async function driveBackward(
     }
     acceptBackward(state, log, first);
     if (unfinished) acceptBackward(state, log, started);
-    return await driveOpenedBackward(state, log, memory, { models: options.models, onEvent: options.onEvent });
+    return await driveOpenedBackward(state, log, memory, {
+      models: options.models,
+      onEvent: options.onEvent,
+      expandTools: options.expandTools ?? null,
+    });
   } catch (error) {
     primary = { error };
     throw error;

@@ -41,7 +41,13 @@ import {
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import type { EvaluationTrace, MemoryContext, MemoryScope } from "../memory/contracts.ts";
+import type { ToolSpec } from "../llm/messages.ts";
+import type {
+  MemoryContext,
+  MemoryScope,
+  MemorySection,
+  VisibleInteraction,
+} from "../memory/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
@@ -601,6 +607,35 @@ export interface BackwardOptions {
   readonly onEvent?: (event: ModelCallRetried | ReplayDegraded) => void;
 }
 
+/** What learning reads about one accepted invocation, rebuilt from its recorded steps. */
+export interface LearningMaterial {
+  /** The model's replies and tool calls, then each reply's tool results in call order. */
+  readonly interactions: readonly VisibleInteraction[];
+  /** The system prompt before memory sections; `null` when the invocation never called its model. */
+  readonly baseSystemPrompt: string | null;
+  /** The prompt's last message's text; `null` exactly when `baseSystemPrompt` is. */
+  readonly prompt: string | null;
+  /** The recalled memory sections the model saw. */
+  readonly memorySections: readonly MemorySection[];
+  /** Whether every recorded model call's `request_sha256` matched its rebuilt request. */
+  readonly digestOk: boolean;
+}
+
+/** What a node rebuilding its `LearningMaterial` reads beyond its inputs and steps. */
+export interface MaterialCaps {
+  /** The skills the run recorded, by name. */
+  readonly skills: ReadonlyMap<string, Skill>;
+  /**
+   * The specs of the tools `ids` grant, groups expanded, in the order the run bound them, as the
+   * run recorded them; `null` when a grant can't be resolved.
+   */
+  readonly toolSpecs: (ids: readonly string[]) => readonly ToolSpec[] | null;
+  /** Builds the invocation's model to read its request settings off; never called. */
+  readonly models: ModelAccess | null;
+  /** Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does. */
+  readonly openMemoryContext: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+}
+
 /**
  * Validate every feedback channel before routing any input message.
  *
@@ -879,11 +914,6 @@ export interface NodeCaps {
     event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
   ) => void;
   /**
-   * The invocation's write-only evidence sink; supplied to a node that declares
-   * `needsEvaluationTrace` while evidence capture is on.
-   */
-  readonly evaluationTrace?: EvaluationTrace;
-  /**
    * Opens the invocation's memory context once, from the visible base system prompt and the
    * rendered prompt; supplied to a node that declares `needsMemoryContext`.
    */
@@ -960,12 +990,6 @@ export abstract class Node {
    * the run boundary injected them and this is set. AGENT is the only built-in kind that opts in.
    */
   readonly needsSkills: boolean = false;
-  /**
-   * Declares "I can emit visible prompt, model and tool evidence": the evaluator supplies a
-   * write-only invocation-local trace only when evidence capture is on and this is set. AGENT is
-   * the only built-in kind that opts in.
-   */
-  readonly needsEvaluationTrace: boolean = false;
   /**
    * Declares "I can publish actual render locals for retained backward context": the evaluator
    * supplies a single-write capture callable only during retention.
@@ -1500,7 +1524,7 @@ export abstract class Node {
   }
 
   /**
-   * Return the bound inputs a model never sees (neither recalled on nor shown as evidence). They
+   * Return the bound inputs a model never sees (neither recalled on nor shown to a learner). They
    * stay in the bound record, so backward and resume read what ran. Empty by default.
    */
   modelHiddenInputs(): ReadonlySet<string> {
@@ -1538,6 +1562,22 @@ export abstract class Node {
     options?: BackwardOptions,
   ): BackwardResult | Promise<BackwardResult> {
     return new BackwardResult();
+  }
+
+  /**
+   * Rebuild what learning reads about one accepted invocation of this node.
+   *
+   * @param inputs The invocation's bound inputs as recorded, or `null` when none were.
+   * @param steps The steps the node recorded across its starts, in order.
+   * @param caps The run's recorded skills and tool specs, model access and recall.
+   * @returns `null` by default: the node shows a learner no prompt or model interactions.
+   */
+  learningMaterial(
+    inputs: Readonly<Record<string, unknown>> | null,
+    steps: readonly ValueRecord[],
+    caps: MaterialCaps,
+  ): Promise<LearningMaterial | null> {
+    return Promise.resolve(null);
   }
 
   /**

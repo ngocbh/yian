@@ -23,11 +23,21 @@
 import { compareCodeUnits, Failure } from "../diagnostics.ts";
 import { ExpressionError } from "../expr/expressions.ts";
 import { type FeedbackValue, ResolvedValue, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
-import { MemoryScope } from "../memory/index.ts";
+import {
+  type MemoryOccurrenceSegment,
+  MemoryScope,
+  type MemorySection,
+  ModelTextInteraction,
+  ModelValueInteraction,
+  ToolCallInteraction,
+  type VisibleInteraction,
+} from "../memory/index.ts";
 import {
   BackwardContext,
   type BackwardOptions,
   type BackwardResult,
+  type LearningMaterial,
+  type MaterialCaps,
   type Node,
   retainFailure,
   validateDeclaredNames,
@@ -41,7 +51,7 @@ import {
   sameItems,
   sameOptional,
 } from "../nodes/contracts.ts";
-import { type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
   fieldOf,
@@ -52,13 +62,13 @@ import {
   TypedValue,
   typeEquals,
   type Value,
+  type ValueRecord,
 } from "../typesys/values.ts";
 import { BackwardCapture, ForwardCapture, validateSource } from "./contracts.ts";
 import {
   canonicalSeed,
   decodeRecord,
   encodeRecord,
-  evidencePayload,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -79,6 +89,13 @@ type BackwardHandler = (
   feedback: readonly FeedbackValue[],
   options?: BackwardOptions,
 ) => BackwardResult | Promise<BackwardResult>;
+
+/** A node's bound `learningMaterial`, kept in the trace's private index. */
+type MaterialHandler = (
+  inputs: Readonly<Record<string, unknown>> | null,
+  steps: readonly ValueRecord[],
+  caps: MaterialCaps,
+) => Promise<LearningMaterial | null>;
 
 /** @internal Decode a typed value from its canonical log text, a fresh copy. */
 export function decodeTyped(text: string): TypedValue {
@@ -222,7 +239,8 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
  * Private memory ownership is detached from the physical node before pruning. Replay reconstructs
  * it from that node; it never replaces execution scope or adds memory ownership to the accepted
  * outcome payload. `hiddenInputs` names the bound inputs that node keeps from models, so memory
- * episodes leave them out.
+ * episodes leave them out. `steps` are the steps the node recorded across its starts, which
+ * learning reads (`occurrenceMaterial`).
  */
 export class TraceOccurrence {
   /** The occurrence's accepted start. */
@@ -243,6 +261,8 @@ export class TraceOccurrence {
   readonly hiddenInputs: ReadonlySet<string>;
   /** An expansion's canonical seed, which its record leaves out; `null` for another outcome. */
   readonly seed: JsonValue | null;
+  /** The node's recorded steps across its starts, in order; read-only by contract. */
+  readonly steps: readonly ValueRecord[];
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
@@ -259,6 +279,7 @@ export class TraceOccurrence {
     memoryScope: MemoryScope | null = null,
     hiddenInputs: ReadonlySet<string> = new Set(),
     seed: JsonValue | null = null,
+    steps: readonly ValueRecord[] = [],
   ) {
     this.source = source;
     this.nodeId = nodeId;
@@ -269,6 +290,7 @@ export class TraceOccurrence {
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
     this.seed = seed === null ? null : canonicalSeed(seed)[0];
+    this.steps = Object.freeze([...steps]);
     Object.freeze(this);
   }
 
@@ -391,6 +413,8 @@ export class RetainedTrace {
   _started = new Map<string, number>();
   /** @internal Bound backward handlers by occurrence `sourceKey`. */
   _backwardHandlers = new Map<string, BackwardHandler>();
+  /** @internal Bound learning material builders by occurrence `sourceKey`. */
+  _materialHandlers = new Map<string, MaterialHandler>();
   /** @internal System values as canonical typed log text, by key. */
   system = new Map<string, string>();
   /** @internal Unconsumed child seed routes by target node id. */
@@ -485,21 +509,25 @@ export class RetainedTrace {
   /**
    * Build detached context from accepted invocation facts without calling hooks.
    *
-   * The node data gains the reserved `_evaluation_evidence` entry, holding only the accepted
-   * record's evidence.
+   * The node data gains the reserved `_evaluation_evidence` entry: what the occurrence showed its
+   * model, built from `options.material` (`evaluationEvidence`), or `null` without one.
    *
    * @param source The accepted start of an executed occurrence.
    * @param options.downstreamContext Transient attribution materialized by a caller, copied with
    *   the other context values; defaults to empty.
+   * @param options.material The occurrence's learning material (`occurrenceMaterial`), if any.
    * @throws RangeError when the occurrence or its accepted output source is absent, the captured
    *   node data already holds `_evaluation_evidence`, or a value breaks the context contract.
    * @throws TypeError when supplied context material breaks the context contract.
    */
   backwardContext(
     source: SourceRef,
-    options: { downstreamContext?: readonly Readonly<Record<string, unknown>>[] } = {},
+    options: {
+      downstreamContext?: readonly Readonly<Record<string, unknown>>[];
+      material?: LearningMaterial | null;
+    } = {},
   ): BackwardContext {
-    const { downstreamContext = [] } = options;
+    const { downstreamContext = [], material = null } = options;
     const occurrence = this.occurrence(source);
     const record = occurrence.record;
     // An accepted outcome holds its forward capture while learning.
@@ -522,7 +550,7 @@ export class RetainedTrace {
       runId: source.runId,
       nodeId: occurrence.nodeId,
       nodeStartedSeq: source.executionSeq,
-      nodeData: { ...captured, _evaluation_evidence: evidencePayload(record.evidence) },
+      nodeData: { ...captured, _evaluation_evidence: evaluationEvidence(occurrence, material) },
       downstreamContext,
     });
   }
@@ -561,6 +589,88 @@ export class RetainedTrace {
   }
 }
 
+/**
+ * Return the bound inputs `occurrence` showed models: its recorded bound inputs without the ones
+ * its node keeps from models, or `null` when none were recorded.
+ */
+export function visibleInputs(occurrence: TraceOccurrence): JsonObject | null {
+  // An accepted outcome holds its forward capture while learning.
+  const inputs = occurrence.record.forwardCapture!.boundInputs as JsonObject | null;
+  if (inputs === null || occurrence.hiddenInputs.size === 0) return inputs;
+  return Object.fromEntries(Object.entries(inputs).filter(([name]) => !occurrence.hiddenInputs.has(name)));
+}
+
+/**
+ * Return what AGENT backward reads as `_evaluation_evidence`: the occurrence's memory scope and
+ * visible bound inputs, and `material`'s prompts, memory sections and interactions; `null` without
+ * material.
+ */
+export function evaluationEvidence(occurrence: TraceOccurrence, material: LearningMaterial | null): JsonObject | null {
+  if (material === null) return null;
+  const scope = occurrence.memoryScope;
+  return {
+    scope: scope === null ? null : scopePayload(scope),
+    bound_inputs: visibleInputs(occurrence),
+    base_system_prompt: material.baseSystemPrompt,
+    prompt: material.prompt,
+    memory_sections: material.memorySections.map(memorySectionPayload),
+    interactions: material.interactions.map(interactionPayload),
+  };
+}
+
+/** Encode one memory scope as `_evaluation_evidence` holds it. */
+function scopePayload(scope: MemoryScope): JsonObject {
+  const segment = (item: MemoryOccurrenceSegment): JsonObject => ({
+    kind: item.kind,
+    static_path: [...item.staticPath],
+    index: BigInt(item.index),
+  });
+  return {
+    static_path: [...scope.staticPath],
+    memories: [...scope.memories],
+    occurrence_path: scope.occurrencePath.map(segment),
+  };
+}
+
+/** Encode one recalled memory section as `_evaluation_evidence` holds it. */
+function memorySectionPayload(section: MemorySection): JsonObject {
+  return { memory: section.memory, text: section.text };
+}
+
+/** Encode one visible interaction as `_evaluation_evidence` holds it. */
+function interactionPayload(interaction: VisibleInteraction): JsonObject {
+  // Memory's JSON types are the read-only form of the same frozen values.
+  if (interaction instanceof ModelTextInteraction) return { kind: "model_text", text: interaction.text };
+  if (interaction instanceof ModelValueInteraction) {
+    return { kind: "model_value", value: interaction.value as JsonValue };
+  }
+  if (interaction instanceof ToolCallInteraction) {
+    return { kind: "tool_call", name: interaction.name, arguments: interaction.arguments as JsonObject };
+  }
+  return { kind: "tool_result", name: interaction.name, text: interaction.text };
+}
+
+/**
+ * Rebuild what learning reads about one accepted occurrence: its node's `learningMaterial` over
+ * its recorded bound inputs and steps.
+ *
+ * @param source The accepted start of an executed occurrence.
+ * @param caps The run's recorded skills and tool specs, model access and recall.
+ * @returns The material, or `null` for a node that shows a learner none.
+ * @throws RangeError when no accepted occurrence has this identity; what the node's hook throws.
+ */
+export async function occurrenceMaterial(
+  trace: RetainedTrace,
+  source: SourceRef,
+  caps: MaterialCaps,
+): Promise<LearningMaterial | null> {
+  const occurrence = trace.occurrence(source);
+  const build = trace._materialHandlers.get(sourceKey(source))!;
+  // An accepted outcome holds its forward capture while learning.
+  const inputs = occurrence.record.forwardCapture!.boundInputs;
+  return await build(inputs, occurrence.steps, caps);
+}
+
 /** The optional parts of a `TraceDelta`; each defaults to `null`, `false` or an empty array. */
 export interface TraceDeltaFields {
   /** The trace a learnable RunStarted creates. */
@@ -573,6 +683,8 @@ export interface TraceDeltaFields {
   occurrence?: TraceOccurrence | null;
   /** The occurrence node's bound backward handler. */
   handler?: BackwardHandler | null;
+  /** The occurrence node's bound learning material builder. */
+  material?: MaterialHandler | null;
   /** The accepted output's commit target and its source entry. */
   writer?: readonly [string, SourceEntry] | null;
   /** A system value the run start commits: its name and canonical typed log text. */
@@ -613,6 +725,8 @@ export class TraceDelta {
   readonly occurrence: TraceOccurrence | null;
   /** The occurrence node's bound backward handler, or `null`. */
   readonly handler: BackwardHandler | null;
+  /** The occurrence node's bound learning material builder, or `null`. */
+  readonly material: MaterialHandler | null;
   /** The accepted output's commit target and its source entry, or `null`. */
   readonly writer: readonly [string, SourceEntry] | null;
   /** A system value the run start commits: its name and canonical typed log text, or `null`. */
@@ -645,6 +759,7 @@ export class TraceDelta {
     this.resumed = fields.resumed ?? false;
     this.occurrence = fields.occurrence ?? null;
     this.handler = fields.handler ?? null;
+    this.material = fields.material ?? null;
     this.writer = frozenPair(fields.writer ?? null);
     this.systemValue = frozenPair(fields.systemValue ?? null);
     this.pruneIds = Object.freeze([...(fields.pruneIds ?? [])]);
@@ -699,6 +814,7 @@ export class TraceDelta {
       trace._occurrences.push(this.occurrence);
       trace.occurrenceBySource.set(key, this.occurrence);
       trace._backwardHandlers.set(key, this.handler!);
+      trace._materialHandlers.set(key, this.material!);
       trace._started.delete(this.occurrence.nodeId);
       trace.currentBoundaries.delete(this.occurrence.nodeId);
     }
@@ -823,6 +939,8 @@ export interface PrepareTraceOptions {
   initialCommit?: boolean;
   /** An accepted expansion's canonical seed, which its record leaves out. */
   seed?: JsonValue | null;
+  /** The executing node's recorded steps across its starts, which a learnable occurrence keeps. */
+  steps?: readonly ValueRecord[];
 }
 
 /**
@@ -863,6 +981,7 @@ export function prepareTrace(
     committed = null,
     initialCommit = false,
     seed = null,
+    steps = [],
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -945,6 +1064,7 @@ export function prepareTrace(
     node.memoryScope,
     node.modelHiddenInputs(),
     seed,
+    steps,
   );
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);
@@ -985,6 +1105,8 @@ export function prepareTrace(
   }
   if (typeof node.backward !== "function") throw new TypeError("node backward handler must be callable");
   const handler: BackwardHandler = node.backward.bind(node);
+  if (typeof node.learningMaterial !== "function") throw new TypeError("node learningMaterial must be callable");
+  const material: MaterialHandler = node.learningMaterial.bind(node);
   if (isExactly(record, NodeSucceededRecord) && committed === null) {
     throw new RangeError("an accepted success requires its commit");
   }
@@ -1024,6 +1146,7 @@ export function prepareTrace(
   return new TraceDelta(trace, envelope.seq, {
     occurrence,
     handler,
+    material,
     writer,
     pruneIds: isExactly(record, NodeExpandedRecord) ? retiredIds : [],
     connections: [...connections].map(([nodeId, fields]) => [nodeId, new SeedRoutes(source, fields)] as const),

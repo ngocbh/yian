@@ -899,7 +899,9 @@ log is created, `run_flow` raises:
 - `ValueError` when a group tool is named `ask_user` or `load_skill`. The
   `ask_user` handler stays the top-level `tools["ask_user"]` entry, and an AGENT
   that grants `ask_user` next to groups gets that handler. `load_skill` is bound
-  by granting skills.
+  by granting skills. Changed (TS yian): the reserved names are `take`, `sleep`,
+  `ask`, `ask_user` and `load_skill`, and the handler is the top-level
+  `tools["ask"]` entry ([Blocking human interaction](#blocking-human-interaction)).
 
 Groups may overlap: the same tool object (or the same bound method) can sit in
 several groups, as when one permission set shares `web_search` with another. An
@@ -3238,6 +3240,22 @@ escapes in tool output sent as text (no literal `<` reaches the model), and syst
 which are never escaped, so a flow must not put untrusted text there.
 
 ## Blocking human interaction
+
+Changed (TS yian): the run's ask slot is `tools.ask`; `tools.ask_user` is its old name, and
+passing both is a `TypeError`. The slot takes an `AskHandler` `(request, ctx) => answer`, or an
+`AskTool` `{ handler, inputs, required? }` whose `inputs` (JSON Schema properties) declare extra
+inputs a TOOL `ask` node may pass; an extra may not reuse a name of yian's own `ask` surface
+(`prompt`, `questions`, `timeout`, `__questions`, `answerSchema`, `title`, `nodeId`,
+`deadline`). The one handler serves the AGENT's `ask_user` tool, whose model surface is
+unchanged, and the TOOL built-in `ask`. It receives an `AskRequest`: the six fields below plus
+`callId` (the call's id, the same on every re-run of a TOOL `ask`, so a host can dedupe by it),
+`deadline` (when a TOOL `ask` with a `timeout` times out, as a record time; else `null`) and
+`extra` (the declared extras the call passed, by name; `{}` when none). A run without a handler
+fails with `no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to
+runFlow or advance`. `take`, `sleep`, `ask`, `ask_user` and `load_skill` are reserved: no
+registered tool, `tools` key (other than the ask slot), group tool or MCP server may take one.
+`pending()`, exported from the package root, is the marker a host handler returns when the
+answer comes later; yian passes it through unchecked.
 
 An authored `human_input` node and an AGENT node granted `tools: [ask_user]` call the
 run's `ask_user` handler synchronously. A library host passes the handler with each

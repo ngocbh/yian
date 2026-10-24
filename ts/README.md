@@ -97,17 +97,17 @@ are internal: they serve the CLI and yian's own code, and may change without not
 
 | Import | Names |
 |---|---|
-| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `advance`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
+| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `advance`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `pending`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
 | `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
-| `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
+| `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskHandler`, `AskRequest`, `AskTool`, `AskUserHandler`, `AskUserRequest`, `pending`, `isPending`, `PendingMarker`, `TAKE`, `SLEEP`, `ASK`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
 | `@ngocbh/yian/llm_clients` | for hosts that set up providers: `LLMConfig`, `LLM_CONFIG_KEYS`, `SUPPORTED_LLM_PROVIDERS`, `LLMProvider`, `ValidationError`, `Issue`, `azureResourceEndpoint`; `listModels`, `ListModelsOptions`, `ModelListError`; `AuthStore`, `AuthStoreOptions`, `AuthState`, `ProviderSelection`, `Credentials`, `ApiKeyCredentials`, `OAuthCredentials`; `OpenAIAuth`, `AuthRequest`, `AuthRequestOptions`, `HttpResponse`, `AuthError` |
 
 `Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `AdvanceOptions`, `RunInspection`,
 `RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `StorageKind`, `Value`, `ValueRecord`,
-`JsonValue`, `JsonObject`, `JsonMode`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`,
-`CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`, `StandardIssue`,
+`JsonValue`, `JsonObject`, `JsonMode`, `ToolEntry`, `AskHandler`, `AskRequest`, `AskTool`,
+`AskUserHandler`, `AskUserRequest`, `PendingMarker`, `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`, `StandardIssue`,
 `StandardResult`, `ToolErrorKind`, `MarkdownStore`, `FileLock`, `FileLockReason`, `Sqlite`,
 `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `LLMProvider`, `Issue`,
 `ListModelsOptions`, `AuthStoreOptions`, `AuthState`, `Credentials`, `AuthRequest` and
@@ -451,9 +451,19 @@ The tools a run sees: without `tools`, the process registry; with `tools`, exact
   reads; `set.invoke(toolId, args, options)` and `set.invokeTrusted(toolId, args, options)` validate
   first. `InvokeOptions` holds `node`, `callId`, `attempt` and `signal`.
 - A `ToolEntry` is a `FunctionTool`, an array of them (a [tool group][docs/api.md#tool-groups]), an
-  `McpServer` (a group of its tools), or, under the key `ask_user`, an `AskUserHandler`
-  `(request, ctx) => answer` ([Blocking human interaction][docs/api.md#blocking-human-interaction]).
-  A flow that uses registered tools and asks passes `{ ...registeredTools(), ask_user: handler }`.
+  `McpServer` (a group of its tools), or, under the key `ask` (`ask_user` is its old name), an
+  `AskHandler` `(request, ctx) => answer` or an `AskTool` `{ handler, inputs, required? }` that
+  declares the extra inputs a TOOL `ask` may pass ([Blocking human
+  interaction][docs/api.md#blocking-human-interaction]). The one handler serves the AGENT's
+  `ask_user` tool and the TOOL built-in `ask`, and gets an `AskRequest`: `question`, `options`,
+  `questions`, `answerSchema`, `title`, `nodeId`, `callId`, `deadline` and `extra`. A flow that uses
+  registered tools and asks passes `{ ...registeredTools(), ask: handler }`.
+- `take`, `sleep`, `ask`, `ask_user` and `load_skill` are reserved: `registerTool`, a `tools` key
+  (other than the ask slot), a group tool and an MCP server can't take one. `take` and `sleep` are
+  engine built-ins a TOOL node reaches with `tool_id:`.
+- `pending()` returns the marker a host handler returns when its answer comes later;
+  `isPending(value)` reads its brand. `ToolSet` passes the marker through without an output
+  check.
 
 ### MCP servers
 
@@ -829,8 +839,8 @@ Node 22, and so does every unit test; a change keeps both green.
 
 - `src/tools/` imports no engine or front-end layer (`nodes`, `compile`, `compose`, `runtime`,
   `run`, `cli`); `index.ts` is its public face.
-- A host tool is a `FunctionTool` (`execute(args, ctx)`, sync or async); a run's `ask_user`
-  handler is wrapped into one, so a `ToolSet` holds only `FunctionTool`s.
+- A host tool is a `FunctionTool` (`execute(args, ctx)`, sync or async); a run's ask handler is
+  wrapped into two, `ask_user` and `ask`, so a `ToolSet` holds only `FunctionTool`s.
 - Tool errors, `FunctionTool`, `McpServer` and the MCP errors are recognized by `Symbol.for`
   brands, never by `instanceof`, so a tool built against another copy of yian works.
   `toolErrorKinds`, the tool error guards (`isPermanentToolError`, ...) and `isMcpError` read
@@ -846,6 +856,7 @@ Node 22, and so does every unit test; a change keeps both green.
   `invoke(toolId, args)` validates first.
 - `invoke` returns the tool's result raw, awaited, with `undefined` read as `null`, unless the
   tool declares an output: then it checks the result and returns the checked value in host form.
+  A `pending()` marker (a `Symbol.for` brand) comes back unchanged and unchecked.
   The callers run value intake on it at their own boundaries (`contract.output`).
 - Intake (`fromHost`) refuses getters, setters and Proxies, so no host code runs while it reads
   a value and the value checked is the value recorded.
@@ -1455,7 +1466,7 @@ START is ready after the START inputs' commit; a success walks its
 ### CLI
 
 - `src/cli/terminal.ts` holds `Terminal`, the host terminal a run prompts on: `askUser` (the
-  run's `ask_user` handler), `askText`, `askChoice`, `promptInputs` (the missing flow inputs) and
+  run's ask handler), `askText`, `askChoice`, `promptInputs` (the missing flow inputs) and
   `close`. Prompts take turns in one FIFO and draw on stderr; `onStop` hears Ctrl-C or the end of
   input, which close the terminal, and `onActive` hears a turn take and give back the terminal.
   A call the closed terminal ends throws `TerminalStopped`, or the signal's reason once it

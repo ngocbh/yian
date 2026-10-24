@@ -115,9 +115,12 @@ expect:
   - - pool_commit
     - chat
     - value: done
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages, steps: [10]}
   - - node_succeeded
     - chat
-    - {commit: 11}
+    - {commit: 11, messages: 12}
   - [node_started, heard]
   - - pool_commit
     - heard
@@ -126,7 +129,7 @@ expect:
       inbox: notes
   - - node_succeeded
     - heard
-    - {commit: 14}
+    - {commit: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -135,7 +138,7 @@ expect:
         heard: [for the take]
   - - node_succeeded
     - __end__
-    - {commit: 17}
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted

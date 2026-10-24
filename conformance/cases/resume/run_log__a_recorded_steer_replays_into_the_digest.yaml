@@ -178,10 +178,11 @@ expect:
           response_id: null
           usage: null
     - [pool_commit, chat, {value: Done with 2024.}]
-    - [node_succeeded, chat, {commit: 16}]
+    - [pool_commit, chat, {key: chat.new_messages, steps: [9, 11, 12, 15]}]
+    - [node_succeeded, chat, {commit: 16, messages: 17}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: Done with 2024.}]
-    - [node_succeeded, __end__, {commit: 19}]
+    - [node_succeeded, __end__, {commit: 20}]
   stream:
     - {chunk: Done with 2024., final: false, key: text, node_id: chat, n: 4, index: 0}
     - {chunk: '', final: true, key: text, node_id: chat, n: 4, index: 1}

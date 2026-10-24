@@ -169,13 +169,16 @@ expect:
   - - pool_commit
     - chat
     - {value: done}
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages, steps: [9, 11, 12, 13]}
   - - node_succeeded
     - chat
-    - {commit: 14}
+    - {commit: 14, messages: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - {value: done}
   - - node_succeeded
     - __end__
-    - {commit: 17}
+    - {commit: 18}

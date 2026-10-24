@@ -91,7 +91,7 @@ const CONFIG_STEP = "effective_llm_config";
 /** The `kind` of the step a call-time agent records its config in. */
 const CONFIG_STEP_KIND = "llm_config";
 
-/** Whether an AGENT output contract is plain text: none, or an untagged `str`. */
+/** Whether an AGENT output contract is plain text: none, or an untagged `str`, nullable or not (`Optional(str)`). */
 export function isTextOutput(contract: OutputContract | null): boolean {
   return (
     contract === null ||

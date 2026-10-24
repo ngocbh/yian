@@ -2,11 +2,12 @@
  * Structured AGENT output: derive the JSON Schema of a declared `output:` Type and generate a
  * value that conforms to it.
  *
- * An AGENT declares `output:` as a typed `Type`. For a bare `str` the agent stays a text
- * producer: `typeToSchema` returns `null` and the AGENT loop takes the plain-text path. For any
- * constrained or richer type (a `Literal(...)` variant, record, union, scalar `int`/`float`/`bool`,
- * or list) it returns the JSON Schema the model is asked to fill: what Python yian's pydantic model
- * emits (`model_json_schema()`), with ints as `bigint`.
+ * An AGENT declares `output:` as a typed `Type`. For an untagged `str`, nullable or not (`str`,
+ * `Optional(str)`), the agent stays a text producer: `typeToSchema` returns `null` and the AGENT
+ * loop takes the plain-text path. For any constrained or richer type (a `Literal(...)` variant,
+ * record, union, scalar `int`/`float`/`bool`, or list) it returns the JSON Schema the model is
+ * asked to fill: what Python yian's pydantic model emits (`model_json_schema()`), with ints as
+ * `bigint`.
  *
  * Scalars and lists can't be a top-level schema on their own, so they are wrapped in a
  * single-field object (`ScalarWrapper` with `value`, `ListWrapper` with `items`), and so is a

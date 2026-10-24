@@ -542,7 +542,8 @@ function skippedOperandIn(
  * @param known The level's node ids; a reference to anything else (an input, `item`, `system`) is
  *   never skipped.
  * @returns The operand is null when every producer of one set is skipped. A `null` literal gives
- *   one empty set (always null); an operand that is never null from a skip gives no sets.
+ *   one empty set (always null); a slice gives its base's sets; an operand that is never null
+ *   from a skip gives no sets.
  */
 function nullGroups(operand: ExprNode, known: ReadonlySet<string>): Set<string>[] {
   if (operand instanceof Token) return operand.type === "NULL" ? [new Set()] : [];
@@ -568,6 +569,8 @@ function nullGroups(operand: ExprNode, known: ReadonlySet<string>): Set<string>[
     }
     return combined;
   }
+  // A slice of null is a miss, so it is null whenever its base is.
+  if (operand.data === "subscript") return nullGroups(operand.children[0]!, known);
   return [];
 }
 
@@ -632,11 +635,14 @@ function defaultHint(operand: ExprNode): string {
 /**
  * Return source text for an operand that may be null: a reference or a `|`/`:-` group.
  *
- * @param operand A reference, a wrapped reference, `null`, or a coalesce or default of them.
+ * @param operand A reference, a wrapped reference, `null`, a slice of one (printed as its base),
+ *   or a coalesce or default of them.
  * @returns The operand's text; a group is parenthesized.
  */
 function operandText(operand: ExprNode): string {
   if (operand instanceof Token) return String(operand);
+  // A slice prints its base, the value that may be null.
+  if (operand.data === "subscript") return operandText(operand.children[0]!);
   const parts = directReferenceParts(operand);
   if (parts !== null) return parts.join(".");
   const joiner = operand.data === "coalesce" ? " | " : " :- ";

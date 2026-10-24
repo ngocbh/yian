@@ -182,9 +182,9 @@ test("an untagged input in a definition shows the tag", async () => {
   await loadErrorAt(text, "flow input 'qty': write the type as a tag: `qty: !int`", "      qty: int");
 });
 
-const MESSAGE_REGISTRY = readTypedefs({ Message: { role: "str", content: "str" } });
+const MESSAGE_REGISTRY = readTypedefs({ ChatMsg: { role: "str", content: "str" } });
 
-/** Read `text`'s `input:` declarations against the `Message` typedef. */
+/** Read `text`'s `input:` declarations against the `ChatMsg` typedef. */
 const flowInputs = (text: string) => parametersFromYaml(text, MESSAGE_REGISTRY);
 
 /** Read `text`'s `variables:` declarations as agent variables. */
@@ -195,8 +195,8 @@ describe("untagged declarations", () => {
   test.each([
     ["qty: int", "flow input 'qty': write the type as a tag: `qty: !int`"],
     [
-      "history: list[Message] = []",
-      "flow input 'history': write the type as a tag: `history: !list(Message) []`",
+      "history: list[ChatMsg] = []",
+      "flow input 'history': write the type as a tag: `history: !list(ChatMsg) []`",
     ],
     ["n: int = 3", "flow input 'n': write the type as a tag: `n: !int 3`"],
     ["o: Optional[str]", "flow input 'o': write the type as a tag: `o: !Optional(str)`"],

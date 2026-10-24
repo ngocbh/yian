@@ -1,4 +1,5 @@
 # TS writes the missing-field list in the text form (rules: messages); Python's wording in python_expect.
+# Renamed from tests/compose/test_tagged_inputs.py:44's Message: TS yian reserves Message as a built-in type.
 kind: load
 rules: [messages]
 flow: |
@@ -6,7 +7,7 @@ flow: |
   name: tagged_inputs
   typedefs:
     Cfg: {kind: Literal(cfg), a: int}
-    Message: {role: str, content: str}
+    ChatMsg: {role: str, content: str}
   input:
     qty: !int
     cfg: !Cfg {a: 1}
@@ -18,7 +19,7 @@ python_flow: |
   name: tagged_inputs
   typedefs:
     Cfg: {kind: Literal(cfg), a: int}
-    Message: {role: str, content: str}
+    ChatMsg: {role: str, content: str}
   input:
     qty: !int
     cfg: !Cfg {a: 1}

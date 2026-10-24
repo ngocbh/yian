@@ -34,6 +34,8 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import * as typesys from "../../src/typesys/index.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import {
+  BUILTIN_TYPE_NAMES,
+  builtinType,
   formatTypeExpr,
   legacyRespelling,
   parseType,
@@ -51,6 +53,7 @@ import {
   buildValueAs,
   canonicalTypeLabel,
   canonicalUnionOrder,
+  FileRef,
   listKindForElement,
   Type,
   TypeCheckError,
@@ -1467,4 +1470,50 @@ test.each<{ id: string; path: string[] }>([
     path,
     new SourceRange(...((frame["range"] as bigint[]).map(Number) as [number, number, number, number])),
   ]);
+});
+
+describe("the built-in Message type", () => {
+  const MESSAGE = () => typeFor("Message", new Map());
+
+  test("any registry resolves Message, list(Message) and Optional(Message)", () => {
+    const message = MESSAGE();
+    expect(message.kind).toBe(ValueKind.OBJECT);
+    expect([...message.fields!.keys()]).toEqual(["role", "parts", "author", "protocol", "provider_payload"]);
+    expect([...message.required!].sort()).toEqual(["parts", "role"]);
+    expect([...message.fields!.get("role")!.tags!]).toEqual(["user", "assistant", "tool"]);
+    const list = typeFor("list(Message)", new Map());
+    expect(list.kind).toBe(ValueKind.LIST_OBJECT);
+    expect(list.element).toBe(message); // one memoized Type
+    expect(typeFor("Optional(Message)", new Map()).nullable).toBe(true);
+    expect(typeLevels(message)).toBe(3);
+    expect(BUILTIN_TYPE_NAMES.has("Message")).toBe(true);
+    expect(builtinType("Text")).toBeNull(); // part records are private
+  });
+
+  test("a value with every part kind checks; the file's JSON form becomes a FileRef", () => {
+    const value = {
+      role: "assistant",
+      author: null,
+      parts: [
+        { type: "reasoning", text: "think", provider_payload: { kind: "anthropic_messages", v: 1n, provider: "anthropic", model: "m", signature: "s" } },
+        { type: "text", text: "Reading." },
+        { type: "tool_call", id: "c1", name: "read_file", arguments: { path: "a.txt" } },
+        { type: "tool_result", call_id: "c1", name: "read_file", content: "hi", is_error: true },
+        { type: "refusal", text: "" },
+        { type: "media", mime: "image/png", file: { uri: "media/x.png", mime: "image/png", name: null } },
+      ],
+    };
+    const built = buildValueAs(MESSAGE(), value).value as { parts: { file?: unknown }[] };
+    expect(FileRef.isFileRef(built.parts[5]!.file)).toBe(true);
+  });
+
+  test.each([
+    ["a system role", { role: "system", parts: [] }],
+    ["an unknown part type", { role: "user", parts: [{ type: "image", url: "x" }] }],
+    ["an inline media part", { role: "user", parts: [{ type: "media", mime: "image/png", data: "AA==" }] }],
+    ["an extra key", { role: "user", parts: [], text: "hi" }],
+    ["a missing role", { parts: [] }],
+  ])("%s is refused", (_, value) => {
+    expect(() => buildValueAs(MESSAGE(), value)).toThrow(TypeCheckError);
+  });
 });

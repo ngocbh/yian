@@ -405,7 +405,7 @@ arguments; flow `output:` fields and a single `output: !T ${...}`; agent
 ```yaml
 input:
   qty: !int                          # required
-  history: !list(Message) []         # default []
+  history: !list(Message) []         # default []; Message is built in
   model: !Optional(str)              # may be omitted; gives null
   note: !Optional(str) null          # default null
 ```

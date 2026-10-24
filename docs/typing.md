@@ -502,6 +502,46 @@ A value with `${...}` nested in a record or list is inferred structurally, field
 field, so each field keeps its type. A record that omits a required single-value
 `Literal` field is not filled in; the check fails and names the field.
 
+## The built-in Message type
+
+TS yian. `Message` is a built-in record type that every flow can name wherever a type goes: a
+tag (`!list(Message)`), a flow, CODE or END `output:`, and a typedef field, alias or union member.
+An AGENT list prompt splices it with all its parts (see
+[A list prompt](syntax.md#a-list-prompt)). Its fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `role` | `Literal(user, assistant, tool)` | Who sent it. There is no `system` role: the system prompt is the agent's own. |
+| `parts` | `list(<part>)` | The content, in order. |
+| `author` | `Optional(str)` | Who wrote it, when that isn't the flow's user or the model; non-empty when set. Model routes send only a user message's author, in an `<authored_message>` wrapper. |
+| `protocol` | `Optional(str)` | Opaque replay data a model reply carries: the protocol that produced it. Keep it; don't write it. |
+| `provider_payload` | `Optional(object)` | Opaque provider data at the message level. Keep it; don't write it. |
+
+Each part is a record told apart by its `type`, and each may carry an opaque
+`provider_payload: Optional(object)`. Reasoning and payload parts keep their replay record
+(protocol, provider, model) inside it.
+
+| `type` | Fields |
+|---|---|
+| `text` | `text: str` |
+| `reasoning` | `text: str` |
+| `refusal` | `text: str` |
+| `tool_call` | `id: str`, `name: str`, `arguments: Optional(object)`, `raw_arguments: Optional(str)` |
+| `tool_result` | `call_id: str`, `name: str`, `content: str`, `is_error: Optional(bool)` |
+| `media` | `mime: str`, `file: file`, `name: Optional(str)` |
+
+- **Media** is a `file` in the run's `media` folder. Inline or URL media has no `Message` form,
+  and no model route sends media yet, so a spliced media part fails the node.
+- **The name** is reserved: a typedef named `Message` is a load error. The part names aren't
+  reserved. There is no `Message(...)` constructor and no `isinstance(x, Message)` yet. An AGENT
+  can't output a `Message`, since a model can't write a `file`.
+- **Storage:** a `Message` is stored as `object`, and a list of them as `list[object]`. Its files
+  are restored by the commit target's contract (see
+  [`VariablePool`](#variablepool-the-runs-typed-value-store)).
+- **Labels:** the canonical label of a `Message` type is the expanded record.
+- **Nesting:** a `Message` adds three levels (the message, its parts list and a part) above a tool
+  call's `arguments`, and counts three levels toward a typedef that names it.
+
 ## Authored contract origins
 
 Compose compiles each authored root- or `defs:`-level flow input into a `Parameter`

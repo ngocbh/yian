@@ -29,7 +29,7 @@ expect:
     - code: compose.load
       message: |-
         flow has unresolved references:
-          node 'reply' prompt[0]: ${history} is `str`, which can't hold messages; splice a record with `role` and `text: str`, or a list of them
+          node 'reply' prompt[0]: ${history} is `str`, which can't hold messages; splice a `Message`, a record with `role` and `text: str`, or a list of them
       frames:
       - label: flow.yaml
         range: [19, 9, 19, 19]

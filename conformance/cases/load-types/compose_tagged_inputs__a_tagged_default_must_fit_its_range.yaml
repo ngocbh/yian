@@ -1,10 +1,11 @@
+# Renamed from tests/compose/test_tagged_inputs.py:44's Message: TS yian reserves Message as a built-in type.
 kind: load
 flow: |
   id: tagged_inputs
   name: tagged_inputs
   typedefs:
     Cfg: {kind: Literal(cfg), a: int}
-    Message: {role: str, content: str}
+    ChatMsg: {role: str, content: str}
   input:
     qty: !int
     n: !int(1..12) 13
@@ -16,7 +17,7 @@ python_flow: |
   name: tagged_inputs
   typedefs:
     Cfg: {kind: Literal(cfg), a: int}
-    Message: {role: str, content: str}
+    ChatMsg: {role: str, content: str}
   input:
     qty: !int
     n: !int(1..12) 13

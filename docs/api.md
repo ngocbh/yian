@@ -53,6 +53,14 @@ These names are exported from the top-level `yian` package:
 The MCP names (`mcp_server`, `McpServer`, and the `McpError` classes) live in
 `yian.tools` (see [MCP servers](#mcp-servers)).
 
+TS yian also exports, from the package root and from `yian/run`, the built-in
+[`Message`](typing.md#the-built-in-message-type) value: the types `Message` and `MessagePart`;
+`checkMessage(value)`, which checks a value against the built-in type and reads each file's JSON
+form back as a `FileRef`; and `checkConversation(messages)` with its `ConversationError`, the
+conversation shape every model route can send (see
+[Reading values from a run log](#reading-values-from-a-run-log)). Python yian has no public
+message type.
+
 Recovery, the result type, and the steering protocol live in `yian.run`:
 
 ```python
@@ -2943,6 +2951,20 @@ The `json` conformance group (`conformance/cases/json/`) specifies the form, for
 - Plain `JSON.parse` reads `logJson` text, but loses ints past 2^53 and reads `±Infinity` as the
   tag object and an escaped record with its `$record` wrapper.
 - `yian/run` imports `node:` modules, so it is for server-side hosts, not browsers.
+
+A [`Message`](typing.md#the-built-in-message-type) value, or a list of them, decodes as `object`
+or `list[object]`, with each file as its mapping. `checkMessage` reads one back with its files:
+
+```ts
+const typed = TypedValue.fromWire({ kind, value });          // list[object]; files are mappings
+const history = (typed.value as unknown[]).map(checkMessage); // Message[], files as FileRef
+```
+
+`checkMessage` throws a `RangeError` (a `TypeCheckError`) naming the path of the first part that
+doesn't fit. A host that builds a history itself can check its `Message` values with
+`checkConversation(messages)`, which throws a `ConversationError` whose `index` names the
+offending message and `reason` says why: a broken conversation rule, or a field the model
+message refuses (such as an empty `author`).
 
 No Python counterpart: Python yian's run log refuses infinity and writes no tags, so Python hosts
 read values with `json` and `yian.typesys.TypedValue`.

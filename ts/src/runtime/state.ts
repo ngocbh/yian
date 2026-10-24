@@ -1500,8 +1500,10 @@ function prepareSuccessTransition(
   validateLearnedScope(state, record.nodeId);
   // The caller checked that the record names the node's pending commit.
   let pending = state.pendingCommits.get(record.nodeId)!;
-  // A derived record's capture is rebuilt with its value; a child START's, from its constant wiring.
-  let capture = pending.spawner !== null ? rebuildDerivedRecord(state, record.nodeId, new Map()).capture : null;
+  // A derived record's capture is rebuilt with its value; a child START's, from its constant wiring,
+  // only for a run that learns, since its value was admitted with the expansion.
+  let capture =
+    pending.spawner !== null && state.trace !== null ? rebuildDerivedRecord(state, record.nodeId, new Map()).capture : null;
   if (pending.valueJson === null) {
     // A derived commit: the pool now holds what its binding read.
     const rebuilt = rebuildCommit(state, record.nodeId, pending.key, pending.from!);

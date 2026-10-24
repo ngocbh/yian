@@ -625,3 +625,25 @@ test("a spawner whose growth doesn't rebuild from its from fails the run at its 
     spy.mockRestore();
   }
 });
+
+test("a run that doesn't learn rebuilds no child START capture", async () => {
+  /** How often a child START's `forward` runs over the chat, learnable or not. */
+  const childStarts = async (learnable: boolean): Promise<number> => {
+    let calls = 0;
+    const forward = StartNode.prototype.forward;
+    const spy = spyOn(StartNode.prototype, "forward").mockImplementation(function (this: StartNode, ...args) {
+      if (/^chat#\d+\/__start__$/.test(this.id)) calls += 1;
+      return forward.apply(this, args);
+    });
+    try {
+      const result = await runFlow(CHAT_FLOW!, {}, chatOptions(freshLog(), learnable));
+      expect(result.status).toBe("succeeded");
+    } finally {
+      spy.mockRestore();
+    }
+    return calls;
+  };
+  // A learnable run rebuilds each child START's capture when its success is accepted, once per
+  // turn; a run that doesn't learn has no trace to give it to.
+  expect(await childStarts(true)).toBe((await childStarts(false)) + 3);
+});

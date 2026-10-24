@@ -5,11 +5,14 @@
  * Each turn's message is sent to the run's `messages` inbox and the run advanced; closing the
  * inbox ends it.
  *
- * Each turn's AGENT outputs only its reply, and `respond`'s output binding appends the turn's two
- * messages to the history. The bindings' values (each turn's END, the expansion's child STARTs,
- * the stopping LOOP driver) are derived commits holding `from` pointers, not the history, so a
- * turn adds about the same bytes however long the conversation is. A learnable run's forward
- * captures hold routes, not the bound inputs or the rendered prompt, which learning rebuilds.
+ * Each turn's AGENT outputs only its reply, and the turn's output binding appends the turn to
+ * `compacted.output.history`. Each turn also adds the `compacted` expansion (START and END are
+ * derived; CASE records only a handle); 100- and 200-character turns (24,000 characters in 80
+ * turns) never reach compact_history's 32,000-character budget, so nothing folds. The bindings'
+ * values (each turn's END, the expansions' child STARTs, the stopping LOOP driver) are derived
+ * commits holding `from` pointers, not the history, so a turn adds about the same bytes however
+ * long the conversation is. A learnable run's forward captures hold routes, not the bound inputs
+ * or the rendered prompt, which learning rebuilds.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -49,7 +52,7 @@ async function logBytes(turns: number, learnable: boolean): Promise<number> {
   await close(log, "messages", { env: NO_ENV });
   result = await advance({ log, env: NO_ENV, numWorkers: 0, models });
   expect(result.status).toBe("succeeded");
-  expect((result.output as unknown[]).length).toBe(2 * turns);
+  expect((result.output as { history: unknown[] }).history.length).toBe(2 * turns);
   return statSync(log).size;
 }
 

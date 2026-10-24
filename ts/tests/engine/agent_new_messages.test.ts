@@ -29,7 +29,7 @@ import {
   workFeedback,
 } from "../../src/runtime/learning.ts";
 import { growthIndex } from "../../src/runtime/state.ts";
-import { foldRunLog, replayRunLog, runFlow } from "../../src/run.ts";
+import { advance, foldRunLog, replayRunLog, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
@@ -370,4 +370,68 @@ test("takeOccurrenceMessages adds the messages sent to an AGENT's new messages, 
   expect(end.messagesSource).toBeNull();
   addMessage(pending, end.source, new BackwardMessage("x", attribution(2), [1]));
   expect(takeOccurrenceMessages(pending, end).map((message) => message.feedback)).toEqual(["x"]);
+});
+
+/** The reply of an AGENT backward call: no feedback for inputs or variables, `self` for itself. */
+const backwardReply = (self: string[] = []) =>
+  textReply(JSON.stringify({ input_feedback: {}, self_feedback: self, variable_feedback: {} }));
+
+/** Run `text` learnably with a tool-less agent replying "hi", then its backward over `feedback`. */
+async function learn(text: string, feedback: unknown) {
+  const model = new ScriptedModel([textReply("hi"), backwardReply(["ok"])], CONFIG);
+  const { result, log } = await run(model, text.replace("tools: [lookup]", "tools: []"), { learnable: true });
+  const outcome = await result.backward(feedback as never);
+  expect(outcome.status, JSON.stringify(outcome.failure)).toBe("succeeded");
+  expect(model.requests).toHaveLength(2);
+  const prompt = model.requests[1]!.messages.map((message) => message.text()).join("\n");
+  const payload = JSON.parse(prompt.slice(prompt.indexOf('{"forward"'))) as { forward: { node_id: string }; feedback: unknown[] };
+  expect(payload.forward.node_id).toBe("reply");
+  return { received: payload.feedback, outcome, log };
+}
+
+const MESSAGES_ONLY = `
+id: f
+name: f
+nodes:
+  reply:
+    kind: agent
+    tools: [lookup]
+    prompt: hi
+    output: str
+output: \${reply.new_messages}
+`;
+
+test("feedback on a flow output bound to reply.new_messages reaches the agent's backward as text", async () => {
+  const { received } = await learn(MESSAGES_ONLY, [{ parts: [{ text: "too curt" }] }]);
+  expect(received).toEqual(["new_messages[0].parts[0].text: too curt"]);
+});
+
+test("text feedback on it reaches the backward unchanged", async () => {
+  const { received } = await learn(MESSAGES_ONLY, "too curt");
+  expect(received).toEqual(["too curt"]);
+});
+
+test("feedback on both .output and .new_messages reaches one backward call with both messages in order", async () => {
+  // END sends its inputs' feedback in input order: `history`, then `answer`.
+  const { received } = await learn(TOP, { answer: "wrong", history: "rambling" });
+  expect(received).toEqual(["rambling", "wrong"]);
+});
+
+test("a reopened run with feedback on new_messages replays its backward, and learns again identically", async () => {
+  const feedback = [{ parts: [{ text: "too curt" }] }];
+  const { log, outcome } = await learn(MESSAGES_ONLY, feedback);
+  const model = new ScriptedModel([backwardReply(["ok"])], CONFIG);
+  const reopened = await advance({
+    log,
+    tools: TOOLS,
+    env: (name) => (name === "YIAN_MODEL_RETRIES" ? "0" : NO_ENV(name)),
+    scheduler: virtualScheduler(START + 60_000),
+    models: serving(model),
+  });
+  // Replay validates the recorded attempt's transfers, the routed work feedback included.
+  expect(reopened.backwardOutcome).toEqual(outcome);
+  const again = await reopened.backward(feedback as never);
+  expect(again.status, JSON.stringify(again.failure)).toBe("succeeded");
+  const prompt = model.requests[0]!.messages.map((message) => message.text()).join("\n");
+  expect(JSON.parse(prompt.slice(prompt.indexOf('{"forward"'))).feedback).toEqual(["new_messages[0].parts[0].text: too curt"]);
 });

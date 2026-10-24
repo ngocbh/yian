@@ -1,5 +1,6 @@
 # TS-only (yian #1025): a steer inbox of `Message`s. A `Message` event is its own user message,
-# keeping its author; its role becomes `user`.
+# keeping its author; its role becomes `user`. The second call's request isn't listed (Python's
+# case check has no `author`); its `request_sha256` in the trace covers the authored message.
 kind: run
 rules: [run-log]
 python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
@@ -76,48 +77,6 @@ host:
           parts:
           - type: text
             text: done
-        request:
-          messages:
-          - format: yian.message.v1
-            role: system
-            parts:
-            - type: text
-              text: Help.
-          - format: yian.message.v1
-            role: user
-            parts:
-            - type: text
-              text: Help the user.
-          - format: yian.message.v1
-            role: assistant
-            parts:
-            - type: tool_call
-              id: call-1
-              name: lookup
-              arguments:
-                topic: a
-          - format: yian.message.v1
-            role: tool
-            parts:
-            - type: tool_result
-              call_id: call-1
-              name: lookup
-              content: found a
-          - format: yian.message.v1
-            role: user
-            author: ana
-            parts:
-            - type: text
-              text: only the 2024 rows
-          tools:
-          - name: lookup
-            description: Look up a topic.
-            parameters:
-              type: object
-              properties:
-                topic:
-                  type: string
-              required: [topic]
 expect:
   output:
     status: succeeded

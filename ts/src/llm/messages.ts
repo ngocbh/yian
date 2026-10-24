@@ -19,7 +19,7 @@ export const MESSAGE_FORMAT = "yian.message.v1";
 export type Role = "system" | "user" | "assistant" | "tool";
 
 const ROLES: ReadonlySet<unknown> = new Set(["system", "user", "assistant", "tool"]);
-const MESSAGE_KEYS: ReadonlySet<string> = new Set(["format", "role", "parts", "protocol", "provider_payload"]);
+const MESSAGE_KEYS: ReadonlySet<string> = new Set(["format", "role", "parts", "author", "protocol", "provider_payload"]);
 const PLAIN_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const UNPAIRED_SURROGATE = "string has an unpaired surrogate";
 const SYMBOL_KEY = "object key is symbol, not string";
@@ -639,6 +639,7 @@ const PART_READERS: ReadonlyMap<string, PartReader> = new Map<string, PartReader
 const OBJECT_KEYS: ReadonlySet<string> = new Set(["provider_payload", "arguments", "file"]);
 // Keys `toJSON` omits when `null`, so an explicit `null` is not JSON `toJSON` writes.
 const NULLABLE_KEYS: ReadonlySet<string> = new Set([
+  "author",
   "protocol",
   "provider_payload",
   "data",
@@ -692,6 +693,11 @@ export class Message {
   /** The content, a frozen copy of the array given. */
   readonly parts: readonly Part[];
   /**
+   * Who wrote the message, when it isn't the flow's user or the model: a person or agent name.
+   * Any role may carry it; adapters send only a user message's author.
+   */
+  readonly author: string | null;
+  /**
    * Protocol id of the adapter that produced this message, e.g. `openai_responses` or
    * `catalog:<provider>`. Every provider payload in the message belongs to it, so an adapter
    * can drop foreign payloads after a model switch.
@@ -703,19 +709,22 @@ export class Message {
   constructor(options: {
     role: Role;
     parts: readonly Part[];
+    author?: string | null;
     protocol?: string | null;
     providerPayload?: JsonObject | null;
   }) {
     if (!ROLES.has(options.role)) throw new MessageFormatError("role", "expected system, user, assistant or tool");
     this.role = options.role;
     this.parts = frozenArray(options.parts, "parts", isPart, "a part");
+    this.author = optionalString(options.author, "author");
+    if (this.author === "") throw new MessageFormatError("author", "expected a non-empty string");
     this.protocol = optionalString(options.protocol, "protocol");
     this.providerPayload = optionalObject(options.providerPayload, "provider_payload");
   }
 
   /**
-   * Return the message as `yian.message.v1` JSON: `format`, `role`, `parts`, then `protocol` and
-   * `provider_payload` unless `null`. Payloads are copies, so changing the result leaves the
+   * Return the message as `yian.message.v1` JSON: `format`, `role`, `parts`, then `author`,
+   * `protocol` and `provider_payload` unless `null`. Payloads are copies, so changing the result leaves the
    * message unchanged.
    */
   toJSON(): JsonObject {
@@ -724,6 +733,7 @@ export class Message {
       role: this.role,
       parts: this.parts.map((part) => part.toJSON()),
     };
+    if (this.author !== null) data["author"] = this.author;
     if (this.protocol !== null) data["protocol"] = this.protocol;
     if (this.providerPayload !== null) data["provider_payload"] = copyJson(this.providerPayload);
     return data;
@@ -755,12 +765,13 @@ export class Message {
     if (!Array.isArray(rawParts)) {
       throw new MessageFormatError("parts", `expected an array, got ${typeName(rawParts)}`);
     }
-    refuseNulls(record, ["protocol", "provider_payload"], "");
+    refuseNulls(record, ["author", "protocol", "provider_payload"], "");
     const parts: Part[] = [];
     for (let i = 0; i < rawParts.length; i++) parts.push(partFromJSON(rawParts[i], `parts[${i}]`));
     return new Message({
       role: record["role"] as Role,
       parts,
+      author: record["author"] as string,
       protocol: record["protocol"] as string,
       providerPayload: record["provider_payload"] as JsonObject,
     });

@@ -190,6 +190,46 @@ describe("round trip", () => {
   });
 });
 
+describe("author", () => {
+  const authored = () => new Message({ role: "user", parts: [new TextPart("hi")], author: "alice" });
+
+  test("round-trips, written after parts and before protocol", () => {
+    const data = authored().toJSON();
+    expect(Object.keys(data)).toEqual(["format", "role", "parts", "author"]);
+    expect(Message.fromJSON(data)).toEqual(authored());
+    expect(throughCodec(authored())).toEqual(authored());
+    const both = new Message({ role: "user", parts: [], author: "alice", protocol: "p" });
+    expect(Object.keys(both.toJSON())).toEqual(["format", "role", "parts", "author", "protocol"]);
+  });
+
+  test("is null and left out when not given", () => {
+    const message = new Message({ role: "user", parts: [new TextPart("hi")] });
+    expect(message.author).toBeNull();
+    expect("author" in message.toJSON()).toBe(false);
+  });
+
+  test("any role may carry it", () => {
+    for (const role of ["system", "user", "assistant", "tool"] as const) {
+      const parts = role === "tool" ? [new ToolResultPart({ callId: "c", name: "f", content: "r" })] : [new TextPart("x")];
+      expect(new Message({ role, parts, author: "a" }).author).toBe("a");
+    }
+  });
+
+  test.each([
+    ["an empty author", "", "author: expected a non-empty string"],
+    ["a non-string author", 3, "author: expected string, got number"],
+    ["an unpaired surrogate", "\ud800", "author: string has an unpaired surrogate"],
+  ])("refuses %s", (_, value, message) => {
+    expect(formatError(() => new Message({ role: "user", parts: [], author: bad(value) })).message).toBe(message);
+  });
+
+  test("strict decode refuses an explicit null or an empty author", () => {
+    const data = authored().toJSON() as Data;
+    expect(errorPath({ ...data, author: null })).toBe("author");
+    expect(errorPath({ ...data, author: "" })).toBe("author");
+  });
+});
+
 describe("strict decode", () => {
   test("an unknown top-level key", () => {
     const data = canonical();
@@ -344,6 +384,7 @@ describe("strict decode", () => {
     const cases: [(data: Data) => void, string, string][] = [
       [(data) => (data["protocol"] = null), "protocol", "expected string, got null"],
       [(data) => (data["provider_payload"] = null), "provider_payload", "expected an object, got null"],
+      [(data) => (data["author"] = null), "author", "expected string, got null"],
       [
         (data) => (data["parts"][0]["provider_payload"] = null),
         "parts[0].provider_payload",

@@ -854,8 +854,8 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
   );
 });
 
-/** The `./code-worker` entry. Typed string so tsc doesn't resolve it to dist/, missing before a build. */
-const CODE_WORKER: string = "@ngocbh/yian/code-worker";
+/** The `./code-worker` entry's import name. */
+const CODE_WORKER = "@ngocbh/yian/code-worker";
 const WORKER_BUILT = join(ROOT, "dist/src/nodes/code/worker.js");
 
 /**
@@ -956,7 +956,7 @@ describe("the code-worker entry", () => {
     async () => {
       const result = await runBinary(workdir(CODE_FILES), ["flow.yaml"], { binary: compileHost(false) });
       expect(lastLine(result.stdout), context(result)).toStartWith("failed");
-      expect(result.stdout).toContain("CODE worker failed");
+      expect(result.stdout).toContain("CODE worker failed: Cannot find module");
     },
     HOST_TEST_LIMIT,
   );

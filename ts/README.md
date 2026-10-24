@@ -693,7 +693,8 @@ Cannot find module ...`. The entry is a one-line shim:
 import "@ngocbh/yian/code-worker";
 ```
 
-Place it at `nodes/code/worker.ts` relative to the deepest directory holding every entry: with
+With `bun build` or esbuild, place it at `nodes/code/worker.ts` relative to the deepest directory
+holding every entry: with
 `src/main.ts` as the host's entry, the shim is `src/nodes/code/worker.ts`. An extra entry outside
 that directory moves the root and breaks the lookup, and so does naming yian's own worker file as
 the entry instead of a shim. With `bun build --compile`, pass both entries and both no-autoload

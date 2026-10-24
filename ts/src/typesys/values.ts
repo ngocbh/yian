@@ -2419,6 +2419,12 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
     return new TypedValue(isList(json) ? ValueKind.LIST_ANY : inferScalarKind(json)!, json);
   }
 
+  // Named by its label, since the bare kind `inbox` isn't a type an author can write.
+  if (typ.kind === ValueKind.INBOX && !scalarMatches(typ.kind, value)) {
+    const label = canonicalTypeLabel(typ);
+    throw new TypeCheckError(`${valueRepr(value)} does not match declared type ${label}`, { path });
+  }
+
   return buildScalarOrList(typ.kind, value, path);
 }
 

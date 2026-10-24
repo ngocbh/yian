@@ -116,6 +116,12 @@ describe("inbox at the write boundary", () => {
     },
   );
 
+  test("the refusal names the declared Inbox(T)", () => {
+    expect(() => buildValueAs(inboxType(STR), "m")).toThrow(
+      '"m" does not match declared type Inbox(str)',
+    );
+  });
+
   test.each([[ValueKind.ANY], [ValueKind.OBJECT]])("%p refuses a handle", (kind) => {
     expect(() => buildValueAs(kind, ref)).toThrow(TypeCheckError);
   });

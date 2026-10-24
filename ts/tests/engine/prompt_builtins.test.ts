@@ -15,6 +15,10 @@
  * `test_prompt_default_fires_in_a_running_flow` runs through `loadFlow` and `runFlow`, on an
  * AGENT's prompt (a scripted model) where Python's is a HUMAN_INPUT node's (TS yian has no
  * HUMAN_INPUT kind).
+ *
+ * TS-only: `len`, the one shipped builtin that isn't text (`int`); `SHIPPED_BUILTINS`, which no
+ * typedef can be named after (typedef names are PascalCase); and a host's own `len`, which is
+ * neither the shipped one's result type nor refused in a prompt.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -23,6 +27,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import {
   builtinResultType,
   registerTemplateFn,
+  SHIPPED_BUILTINS,
   TEMPLATE_FNS,
   type TemplateFn,
   type TemplateParam,
@@ -34,6 +39,7 @@ import type { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/index.ts";
+import { readTypedefs } from "../../src/typesys/types.ts";
 import { assembleText, loadError } from "../compose/declarations.ts";
 import { NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
@@ -316,4 +322,24 @@ test("an unknown name has no result type", () => {
 test("a host override has no result type", () => {
   standIn("upper", [{ name: "s" }], (s) => ({ f: s }));
   expect(builtinResultType("upper")).toBeNull();
+});
+
+test("len returns int, the other shipped builtins str", () => {
+  expect(builtinResultType("len")).toEqual(Type.scalar(ValueKind.INTEGER));
+  expect(builtinResultType("join")).toEqual(Type.scalar(ValueKind.STRING));
+});
+
+test("no typedef may take a shipped builtin's name (typedef names are PascalCase)", () => {
+  expect(SHIPPED_BUILTINS).toEqual(["render_as_json", "join", "upper", "lower", "len"]);
+  for (const name of SHIPPED_BUILTINS) {
+    expect(() => readTypedefs({ [name]: { a: "str" } })).toThrow(
+      `typedef name '${name}' must be PascalCase (an uppercase identifier)`,
+    );
+  }
+});
+
+test("a host's own len is not the shipped one: a prompt may call it, and it has no result type", () => {
+  standIn("len", [{ name: "s" }], (s) => String(s));
+  expect(() => promptRefs("${len(t)}")).not.toThrow();
+  expect(builtinResultType("len")).toBeNull();
 });

@@ -1,0 +1,33 @@
+kind: load
+python_skip: "TS-only: len() and list slicing (#1086)"
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Rec: {a: str}
+    Rec3: {a: str, b: Optional(str)}
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)'}
+    Order: Union(Buy, Sell)
+  input:
+    s: !str
+    r: !Rec
+  nodes:
+    step:
+      kind: code
+      input:
+        x: ${input.s}
+      output: Rec
+      code: "return ({a: \"x\"})"
+  output:
+    o: ${len(input.s).f}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: reference ${len(...).f} reads field 'f' on type int, which has no fields
+      frames:
+      - label: flow.yaml
+        range: [20, 3, 21, 1]

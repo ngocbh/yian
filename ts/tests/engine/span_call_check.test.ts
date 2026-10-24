@@ -4,7 +4,8 @@
  * the same check through `promptRefs`.
  *
  * Added for TS: the unknown-prompt-function message in full, which pins the order of the builtin
- * names and that no test registration leaks into `TEMPLATE_FNS`.
+ * names and that no test registration leaks into `TEMPLATE_FNS`; and that a prompt can't call
+ * `len`, which computes rather than formats.
  */
 
 import { expect, test } from "bun:test";
@@ -81,6 +82,14 @@ test("a prompt's unknown function lists the builtins in order", () => {
   expectError(
     () => promptRefs("${nosuch(t)}"),
     "unknown prompt function 'nosuch'; prompts call only formatting builtins (join, lower, render_as_json, upper); " +
+      "build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding",
+  );
+});
+
+test("len is not a prompt function", () => {
+  expectError(
+    () => promptRefs("${len(t)}"),
+    "unknown prompt function 'len'; prompts call only formatting builtins (join, lower, render_as_json, upper); " +
       "build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding",
   );
 });

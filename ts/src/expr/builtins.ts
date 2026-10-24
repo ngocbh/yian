@@ -3,17 +3,18 @@
  *
  * A `${...}` span may be a plain reference (`${name}`) or a builtin call
  * (`${ render_as_json(briefs, 4) }`). `TEMPLATE_FNS` maps a builtin name to a pure value-to-value
- * function. The unified evaluator in `expressions.ts` dispatches every call through it, so
- * builtins work in prompts, bindings and conditions; a prompt calls them against the node's
- * already-bound declared inputs.
+ * function. The unified evaluator in `expressions.ts` dispatches every call through it, so every
+ * builtin works in bindings and conditions; a prompt calls only the formatting ones (all but
+ * `len`, see `isNonPromptBuiltin`), against the node's already-bound declared inputs.
  *
- * This is a deliberate, bounded bend of the "all computation is a node" law: builtins are
- * read-only formatting and produce no graph node or edge. See `docs/expressions.md`.
+ * This is a deliberate, bounded bend of the "all computation is a node" law: builtins are pure
+ * and read-only (formatting, plus `len`, which measures), and produce no graph node or edge. See
+ * `docs/expressions.md`.
  *
  * A builtin is a host callback: it declares its parameters, so a call's arguments are checked
- * (`bindArguments`) before it runs, and it receives yian values. Four ship here
- * (`render_as_json`, `join`, `upper`, `lower`); `builtinResultType` gives the type a shipped
- * builtin always returns, so the loader can reject a field read on its result.
+ * (`bindArguments`) before it runs, and it receives yian values. Five ship here
+ * (`render_as_json`, `join`, `upper`, `lower`, `len`); `builtinResultType` gives the type a
+ * shipped builtin always returns, so the loader can reject a field read on its result.
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `Type`, `ValueKind`, `fromHost`,
  * `valueRepr`, `writeAsText`, `writeAsJson`) and `diagnostics` (`reprText`). Never imports: `expressions`,
@@ -168,14 +169,44 @@ registerTemplateFn("join", { params: [{ name: "value" }, { name: "sep", default:
 registerTemplateFn("upper", { params: [{ name: "s" }], call: (s) => requireText("upper", s).toUpperCase() });
 registerTemplateFn("lower", { params: [{ name: "s" }], call: (s) => requireText("lower", s).toLowerCase() });
 
-// Every builtin shipped here returns text. Keyed by the stored entry, so a host that registers
-// another function under one of these names gets no result type.
-const SHIPPED = new Set(["render_as_json", "join", "upper", "lower"].map((name) => TEMPLATE_FNS.get(name)));
+/** Return the length of text (code points, as Python's `len`) or of a list (items). */
+function len(value: Value): bigint {
+  rejectNull("len", value, "[]");
+  if (typeof value === "string") return BigInt([...value].length);
+  if (Array.isArray(value)) return BigInt(value.length);
+  throw new TypeError(`len() takes str or list, got ${kindName(value)}`);
+}
+registerTemplateFn("len", { params: [{ name: "obj" }], call: len });
+
+// The shipped builtins that compute rather than format, keyed by the stored entry as `SHIPPED`
+// is, so a host that registers its own function under one of these names isn't refused.
+const NON_PROMPT_BUILTINS = new Set([TEMPLATE_FNS.get("len")!]);
 
 /**
- * Return the type builtin `name` always returns: `str` for a builtin shipped here, `null` for an
- * unknown name or a host function registered under the name.
+ * Return whether `name` names a shipped builtin a prompt can't call (`len`): it computes a value,
+ * which belongs in an input binding. Bindings and conditions can call it.
+ */
+export function isNonPromptBuiltin(name: string): boolean {
+  const fn = TEMPLATE_FNS.get(name);
+  return fn !== undefined && NON_PROMPT_BUILTINS.has(fn);
+}
+
+/** The builtins yian ships, by name; a typedef can't take one (typedef names are PascalCase). */
+export const SHIPPED_BUILTINS: readonly string[] = ["render_as_json", "join", "upper", "lower", "len"];
+
+// Each shipped builtin's result type, keyed by the stored entry, so a host that registers another
+// function under a shipped name gets no result type.
+const SHIPPED = new Map<TemplateFn | undefined, Type>(
+  SHIPPED_BUILTINS.map((name) => [
+    TEMPLATE_FNS.get(name),
+    Type.scalar(name === "len" ? ValueKind.INTEGER : ValueKind.STRING),
+  ]),
+);
+
+/**
+ * Return the type builtin `name` always returns: `int` for the shipped `len`, `str` for the other
+ * builtins shipped here, `null` for an unknown name or a host function registered under the name.
  */
 export function builtinResultType(name: string): Type | null {
-  return SHIPPED.has(TEMPLATE_FNS.get(name)) ? Type.scalar(ValueKind.STRING) : null;
+  return SHIPPED.get(TEMPLATE_FNS.get(name)) ?? null;
 }

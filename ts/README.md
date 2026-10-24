@@ -913,16 +913,25 @@ Node 22, and so does every unit test; a change keeps both green.
 - Changed (TS yian): an AGENT `prompt:` may be a list of messages (see [A list
   prompt][docs/syntax.md#a-list-prompt]). `AgentNode.prompt` is the template text or a
   `PromptItem[]` (`{role: "user" | "assistant", text}` or `{splice: <name>}`); compose reads the
-  list and ranges each item at `siteKey("field", "prompt[<i>]")`. `forward` renders it into
-  `AgentRunContext.messages` (a text prompt is one user message) and `promptText`, the last
-  message's text, which recall and evidence read; the loop sends `[system, ...ctx.messages]`. A
-  chat carries its history as a LOOP field and splices it before the new user message:
+  list and ranges each item at `siteKey("field", "prompt[<i>]")`. A splice takes a built-in
+  `Message` (sent with all its parts) or a `{role, text}` record, or a list of them. `forward`
+  renders it into `AgentRunContext.messages` (a text prompt is one user message) and
+  `promptText`, the last message's text, which recall and evidence read; the rendered list must
+  pass `checkConversation` before any model is built, and the loop sends
+  `[system, ...ctx.messages]`. A chat carries its history as a LOOP field and splices it before
+  the new user message:
 
   ```yaml
   prompt:
-    - ${history}          # a !list(Msg) input, Msg = {role: Literal(user, assistant), text: str}
+    - ${history}          # a !list(Message) input, or !list(Msg) with Msg = {role: Literal(user, assistant), text: str}
     - user: ${message}
   ```
+- `src/nodes/agent/messages.ts` holds the built-in `Message` value (`Message`, `MessagePart`,
+  `checkMessage`), its conversion to and from the model message (`toModelMessage`,
+  `fromModelMessage`, through `llm/messages.ts`' strict `yian.message.v1` reader), and
+  `checkConversation`, the conversation shape every model route can send. The type itself is
+  written in yian's type syntax in `typesys/types.ts` (`builtinType`), which `resolveType` falls
+  back to when a flow's registry lacks the name.
 - An AGENT writes its steps through `AgentSteps` (`src/nodes/agent/context.ts`), before acting
   on them: each model call, chat or structured, as a `model_call` step once it returns (`callModel`
   in `live.ts`; a failed attempt too, its error scrubbed as the node's failure is; a call a stop cut

@@ -49,6 +49,8 @@
  * - A list comprehension: `list_comp[elem, clause, ...]`, clauses in source order, each
  *   `comp_for[NAME, iterable, SOURCE]` (`SOURCE` holds the iterable's source text, for runtime
  *   messages) or `comp_if[cond]`. It counts one nesting level, like a list; its clauses add none.
+ *   After the scoping pass a variable read is `comp_var[NAME, trailer*]`, which adds none, like a
+ *   plain reference.
  *
  * A chain of one level is one node, and author parentheses start a new one. A level with one
  * operand makes no node and parentheses make none, so a lone literal is a bare `Token`. The
@@ -85,6 +87,18 @@
  * `xs[n - 1:-1]` are slices. Inside parentheses, a call or a list within a bound, `:-` and `:?`
  * are the escapes as elsewhere, so a default in a bound is written `xs[(n :- 0):]`.
  *
+ * ## Comprehension scoping
+ *
+ * Every parse ends with a pass that turns each read of a comprehension variable into a
+ * `comp_var`, so the walkers that look for `refcall` reads (edges, name checks, guards, CASE
+ * renames) skip variables with no change and still see the outer reads around them. Scoping is
+ * lexical, as in Python: a variable is in scope in the elem and in the clauses after its own
+ * `for`, nested comprehensions included, and the first iterable runs in the enclosing scope. A
+ * variable may share a name with a node, an input, a typedef or a builtin; a call is never a
+ * variable read, nor is `isinstance`'s type name. The parser refuses a target that is a keyword,
+ * `input`, `system`, `item`, `output` or starts with `__` (generated locals use that prefix), and
+ * a `for` that rebinds a name already bound in its own or an enclosing comprehension.
+ *
  * ## Why the parser is iterative
  *
  * Expressions nest deeply (thousands of parentheses must parse, and thousands of nested
@@ -96,7 +110,7 @@
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 // expressions.ts imports this module too, so each uses the other's exports only inside functions.
-import { ExpressionError, ISINSTANCE } from "./expressions.ts";
+import { ExpressionError, ISINSTANCE, valueArgs } from "./expressions.ts";
 
 /** A terminal of the parse: its type, its source text, and where it sits in the text. */
 export class Token {
@@ -368,6 +382,12 @@ const COMP_FOR_ONLY = "`for` makes a list comprehension only: write `[x for x in
 const COMP_CONDITIONAL = "conditional expressions (`a if c else b`) aren't supported yet";
 const COMP_TARGET = "a comprehension's `for` takes a name, then `in`";
 const COMP_ESCAPE = "a comprehension's iterable and `if` stop before `:-`, `:?` and `|`; write `(a :- [])`";
+const COMP_RESERVED = (name: string) =>
+  `${reprText(name)} can't be a comprehension variable: input, system, item, output and names starting with __ are reserved`;
+const COMP_REBOUND = (name: string) => `comprehension variable ${reprText(name)} is already bound here; rename one`;
+// Names a variable would hide from the engine: the scopes every flow reads, and the `__` prefix
+// that generated locals (a CASE's `__rN`) use.
+const COMP_RESERVED_NAMES: ReadonlySet<string> = new Set(["input", "system", "item", "output"]);
 // The escapes sit below `or`, and a comprehension's iterable and condition are Python's `or_test`.
 const ESCAPES: ReadonlySet<string> = new Set(["|", ":-", ":?"]);
 
@@ -404,6 +424,7 @@ function readTarget(cursor: Cursor, frame: CompFrame): void {
   if (EXPRESSION_KEYWORDS.has(name.value) || name.value === "for" || name.value === "if" || /[#/]/.test(name.value)) {
     cursor.fail(name.startPos, COMP_TARGET);
   }
+  if (COMP_RESERVED_NAMES.has(name.value) || name.value.startsWith("__")) cursor.fail(name.startPos, COMP_RESERVED(name.value));
   cursor.pos = name.endPos;
   cursor.skip();
   if (lexAt(cursor.text, cursor.pos, [IN]) === null) cursor.fail(name.endPos, COMP_TARGET);
@@ -559,7 +580,7 @@ function parseRaw(text: string): ExprNode {
     }
     if (cursor.atEnd()) {
       value = reduce(stack, value, 0);
-      if (stack.length === 0) return value;
+      if (stack.length === 0) return scopeComprehensions(value, cursor);
       cursor.fail(text.length);
     }
     // Scan for the nearest bracket only when a colon is next: a scan per operator would make a
@@ -656,6 +677,58 @@ function parseRaw(text: string): ExprNode {
       cursor.fail(token.startPos);
     }
   }
+}
+
+/**
+ * Turn each read of a comprehension variable in `root` into `comp_var[NAME, trailer*]`, in place,
+ * and return `root`.
+ *
+ * A variable is in scope in its comprehension's elem and in every clause after its own `for`,
+ * nested comprehensions included, but not in its own or an earlier iterable: the first iterable
+ * runs in the enclosing scope, as in Python. Only a reference with no call suffix is a read, and
+ * `isinstance`'s type name is not one. So every walker that matches `refcall` skips variables
+ * with no change. Iterative, as the parser is.
+ *
+ * @throws {ParseError} If a `for` rebinds a name already bound there.
+ */
+function scopeComprehensions(root: ExprNode, cursor: Cursor): ExprNode {
+  if (!(root instanceof Tree)) return root;
+  const stack: [Tree, ReadonlySet<string>][] = [[root, new Set()]];
+  const visit = (parent: Tree, i: number, scope: ReadonlySet<string>): void => {
+    const child = parent.children[i];
+    if (!(child instanceof Tree)) return;
+    if (child.data === "refcall" && scope.has(String(child.children[0])) && callSuffixOf(child) === undefined) {
+      parent.children[i] = new Tree("comp_var", child.children);
+    } else {
+      stack.push([child, scope]);
+    }
+  };
+  while (stack.length > 0) {
+    const [node, scope] = stack.pop()!;
+    if (node.data === "list_comp") {
+      let bound = scope;
+      for (const clause of node.children.slice(1) as Tree[]) {
+        if (clause.data === "comp_for") {
+          const target = clause.children[0] as Token;
+          if (bound.has(target.value)) cursor.fail(target.startPos, COMP_REBOUND(target.value));
+          visit(clause, 1, bound);
+          bound = new Set([...bound, target.value]);
+        } else {
+          visit(clause, 0, bound);
+        }
+      }
+      visit(node, 0, bound);
+      continue;
+    }
+    const callSuffix = node.data === "refcall" ? callSuffixOf(node) : undefined;
+    if (callSuffix !== undefined) {
+      const args = valueArgs(String(node.children[0]), callSuffix);
+      for (let i = 0; i < args.length; i++) visit(callSuffix, i, scope);
+      continue;
+    }
+    for (let i = 0; i < node.children.length; i++) visit(node, i, scope);
+  }
+  return root;
 }
 
 const RESERVED_REFERENCE_ROOTS: ReadonlySet<string> = new Set(["and", "or", "not", "in"]);
@@ -826,6 +899,7 @@ const WRAPPER_NODES: ReadonlySet<string> = new Set([
   "omitted",
   "comp_for",
   "comp_if",
+  "comp_var",
 ]);
 
 /**

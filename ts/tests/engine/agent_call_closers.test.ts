@@ -23,7 +23,7 @@ import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
-import { gateTool } from "./inbox_fixtures.ts";
+import { gateTool, handClock } from "./inbox_fixtures.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { callReply, crashAfter, serving, textReply } from "./run_state_fixtures.ts";
 
@@ -296,4 +296,84 @@ test("a malformed timeout is the call's error result; the handler isn't called",
   expect(sentResults(m, 1)).toEqual([
     ["c1", "ask_user timeout: a duration is a positive integer and a unit (90s | 30m | 24h | 2d); write 30s", true],
   ]);
+});
+
+/** A run whose agent waits on an `ask_user` with `timeout` (and the calls `more` adds to the reply). */
+async function waitingOnAsk(timeout = "30m", more: Parameters<typeof callReply> = [], extra: Record<string, ToolEntry> = {}) {
+  const m = scripted(callReply(["ask_user", { question: "Ship?", timeout }, "c1"], ...more));
+  const log = freshLog();
+  const result = await runFlow(await loadFlow(FLOW_WITH(extra)), {}, options(log, m, () => pending(), START, undefined, extra));
+  expect(result.status, result.failure?.message).toBe("waiting");
+  return log;
+}
+
+/** The `timed_out` of each `node_woken` in the log. */
+const wakes = (log: string) =>
+  records(log).flatMap(({ kind, record }) => (kind === "node_woken" ? [[...(record as { timedOut: string[] }).timedOut]] : []));
+
+test("at the deadline the agent wakes timed_out, reads 'timed out: no answer', and goes on", async () => {
+  const log = await waitingOnAsk();
+  // Before the deadline, advance appends nothing.
+  const before = records(log).length;
+  expect((await advance(resumeOf(log, scripted(), () => pending(), START + 29 * MINUTE))).status).toBe("waiting");
+  expect(records(log)).toHaveLength(before);
+
+  const events: RunEvent[] = [];
+  const m = scripted(textReply("nobody answered"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 31 * MINUTE, events));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(wakes(log)).toEqual([[CALL]]);
+  expect(closedEvents(events)).toEqual([[CALL, "timed_out"]]);
+  expect(closers(log)).toEqual(["timed_out"]);
+  expect(sentResults(m, 0)).toEqual([["c1", "timed out: no answer", true]]);
+});
+
+test("a complete after the timeout's wake is refused; the closer still says timed_out after a crash", async () => {
+  const log = await waitingOnAsk();
+  await crashAfter(records(log).length + 1, () => advance(resumeOf(log, scripted(), () => pending(), START + 31 * MINUTE)));
+  expect(kinds(log).at(-1)).toBe("node_woken");
+
+  const refused = await complete(log, CALL, { output: "yes" }).catch((error: unknown) => error);
+  expect((refused as DeliveryRefused).reason).toBe("call_settled");
+  const m = scripted(textReply("nobody answered"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 32 * MINUTE));
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
+  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([]);
+  expect(closers(log)).toEqual(["timed_out"]);
+  expect(sentResults(m, 0)).toEqual([["c1", "timed out: no answer", true]]);
+});
+
+test("a deadline that passes while the agent still runs takes effect when it waits: woken at once", async () => {
+  const gate = gateTool();
+  const clock = handClock(START);
+  const m = scripted(callReply(["ask_user", { question: "q", timeout: "1m" }, "c1"], ["gate", {}, "c2"]), textReply("ok"));
+  const log = freshLog();
+  const extra = { gate: gate.tool };
+  const running = runFlow(await loadFlow(FLOW_WITH(extra)), {}, options(log, m, () => pending(), clock, undefined, extra));
+  await gate.entered;
+  clock.set(START + 2 * MINUTE);
+  gate.release();
+  const result = await running;
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const all = kinds(log);
+  expect(all.indexOf("node_woken")).toBe(all.indexOf("node_waiting") + 1);
+  expect(wakes(log)).toEqual([[CALL]]);
+  expect(sentResults(m, 1)).toEqual([
+    ["c1", "timed out: no answer", true],
+    ["c2", "opened", false],
+  ]);
+});
+
+test("an answer completed before the deadline wins", async () => {
+  const log = await waitingOnAsk();
+  await complete(log, CALL, { output: "yes" });
+  const m = scripted(textReply("shipped"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 31 * MINUTE));
+
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(wakes(log)).toEqual([[]]);
+  expect(closers(log)).toEqual([]);
+  expect(sentResults(m, 0)).toEqual([["c1", "yes", false]]);
 });

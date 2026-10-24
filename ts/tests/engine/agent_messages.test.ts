@@ -11,7 +11,8 @@ import {
   MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
 } from "../../src/llm/messages.ts";
 import { checkMessage, fromModelMessage, type Message, toModelMessage } from "../../src/nodes/agent/messages.ts";
-import { FileRef, TypeCheckError } from "../../src/typesys/values.ts";
+import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { FileRef, TypeCheckError, TypedValue, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 
 const FILE = { uri: "media/abc.png", mime: "image/png", name: null };
 
@@ -76,4 +77,23 @@ describe("conversion", () => {
   ])("%s has no Message form", (_, message, text) => {
     expect(() => fromModelMessage(message)).toThrow(new TypeError(text));
   });
+});
+
+test("a Message and a list of them survive the run log's codec; checkMessage restores the files", () => {
+  const values = history().map(fromModelMessage);
+  for (const value of values) {
+    const wire = new TypedValue(ValueKind.OBJECT, value as unknown as ValueRecord).toWire();
+    expect(checkMessage(TypedValue.fromWire(parseJson(logJson(wire), "codec")).value)).toEqual(value);
+  }
+  const listWire = new TypedValue(ValueKind.LIST_OBJECT, values as unknown as ValueRecord[]).toWire();
+  const list = TypedValue.fromWire(parseJson(logJson(listWire), "codec"));
+  const restored = (list.value as unknown[]).map(checkMessage);
+  expect(restored).toEqual(values);
+  // `toEqual` doesn't tell a FileRef from its mapping, so check the class itself.
+  const fileOf = (message: Message): unknown => (message.parts[0] as { file: unknown }).file;
+  expect(FileRef.isFileRef(fileOf(restored[2]!))).toBe(true);
+  // Undecoded, the file is its mapping, which is why a reader calls checkMessage.
+  const undecoded = fileOf((list.value as Message[])[2]!);
+  expect(FileRef.isFileRef(undecoded)).toBe(false);
+  expect(undecoded).toEqual(FILE);
 });

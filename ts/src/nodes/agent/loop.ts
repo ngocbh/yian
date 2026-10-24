@@ -12,7 +12,9 @@
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
  * (`AgentSteps`). A resumed start replays them: each recorded reply is taken in place of its model
  * call, and each tool call with a recorded result gets it without running; a replayed call with no
- * result is closed as `crashed`, its outcome unknown. Live calls follow the last recorded one.
+ * result is closed with the word of the record that closed it (`crashed` when none did: its
+ * outcome is unknown), or pended again while the run still holds it open. Live calls follow the
+ * last recorded one.
  *
  * A tool call whose handler returns `pending()` is written as a `pending` step, which registers it
  * with the run under its call id `<run>/<node>/<n>/<index>`; the reply's other calls still run, and
@@ -81,7 +83,7 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, TOOL_OUTCOME_UNKNOWN, toolText } from "./memory.ts";
+import { closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
 import { steerMessages } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
@@ -460,11 +462,14 @@ interface ReplayedCall {
 
 /**
  * Give a replayed reply's tool calls their results without running any, appending a tool message
- * per call in call order. A call keeps the result an earlier start recorded. A call with none (its
- * run was cut off before its result was written) is checked as live: a failed check fails the
- * node as live; otherwise it is closed, its `tool_result` step written as `crashed`, an error
- * reading `TOOL_OUTCOME_UNKNOWN`. Unparsed calls are not in `turn.calls`, so they get nothing, as
- * live.
+ * per call in call order. A call keeps the result an earlier start recorded. A call with none is
+ * checked as live: a failed check fails the node as live. Otherwise a call the run still holds
+ * open (it pended and waits on, beside a sibling a deadline closed) is pended again, with no
+ * closer and no handler call, and gets no tool message: the loop then returns `Pending`. Any other
+ * call is closed with the word of the record that closed it (`closerResult`: `timed_out` for an
+ * ask whose deadline passed), `crashed` when none did (its run was cut off before its result),
+ * the closer written as its `tool_result` step. Unparsed calls are not in `turn.calls`, so they get
+ * nothing, as live.
  *
  * Every call is checked, so the calls form the groups they formed live and their results commit
  * in the same order; a call with a recorded result keeps it whatever its check says now.
@@ -498,8 +503,15 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
         commit();
         return await failCall(turn, call, index, check);
       }
-      result = { output: TOOL_OUTCOME_UNKNOWN, isError: true, closed: "crashed" };
-      steps.toolResult({ callId: call.id, startedAt: null, output: result.output, isError: true, closed: "crashed" });
+      const callId = agentCallId(turn, index);
+      const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
+      if (callId !== undefined && view?.state === "open") {
+        turn.pended.set(index, callId);
+        continue;
+      }
+      const { output, closed } = closerResult(view?.closedReason === "timed_out" ? "timed_out" : "crashed");
+      result = { output, isError: true, closed };
+      steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     }
     if ("planned" in check && check.safe) {
       group.push({ call, result });
@@ -572,8 +584,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // and a resumed start numbers its steps after the recorded ones, so a key never names two
   // calls that ran: a reply a crash cut before its `model_call` was written ran no tool. Outside a
   // run (no run id) the tool set gives each call a fresh id.
-  const runId = toolset.runId;
-  const callId = runId ? `${runId}/${ctx.nodeId}/${turn.n}/${index}` : undefined;
+  const callId = agentCallId(turn, index);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
   return { planned: { call, index, callId, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
@@ -726,6 +737,12 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     signal?.removeEventListener("abort", relay);
   }
   return false;
+}
+
+/** The yian id of call `index` of the turn's reply, `<run>/<node>/<n>/<index>`; `undefined` outside a run. */
+function agentCallId(turn: ToolTurn, index: number): string | undefined {
+  const runId = turn.toolset.runId;
+  return runId ? `${runId}/${turn.ctx.nodeId}/${turn.n}/${index}` : undefined;
 }
 
 /** The node's stop signal: the context's, else the tool set's run signal. */

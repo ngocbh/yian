@@ -20,6 +20,7 @@ import { MediaPart, Message, NamedTool, type Part, Request, Response, TextPart, 
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { MemoryContext } from "../../memory/contracts.ts";
 import { type Scheduler, warn } from "../../platform.ts";
+import type { CloserReason } from "./memory.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
@@ -154,9 +155,9 @@ export interface ToolResultFields {
   /**
    * Set only on a result yian wrote in place of running the call: `skipped` for one a host
    * interrupt skipped, `crashed` for one a resume closed because its run was cut off before its
-   * result.
+   * result, `timed_out` for an `ask_user` whose deadline passed.
    */
-  readonly closed?: "skipped" | "crashed";
+  readonly closed?: "skipped" | CloserReason;
 }
 
 /** A recorded step and its `n`. */
@@ -169,7 +170,7 @@ interface NumberedStep {
 export interface RecordedResult {
   readonly output: string;
   readonly isError: boolean;
-  /** `skipped` or `crashed` for a result yian wrote in place of running the call, else `null`. */
+  /** `skipped`, `crashed` or `timed_out` for a result yian wrote in place of running the call, else `null`. */
   readonly closed: string | null;
 }
 

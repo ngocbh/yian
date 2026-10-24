@@ -5,7 +5,8 @@
  * Ported: `test_example_loads_and_compiles` (one test per `examples/*.yaml`, loaded with the
  * examples directory as the search path), `test_examples_present` and
  * `test_debate_agents_are_tool_free`. TS-only: the shape of `human-approval.yaml`'s `ask` gate,
- * and `chat.yaml` on its `Inbox(str)` input, run end to end on a scripted model.
+ * `chat.yaml` on its `Inbox(str)` input, run end to end on a scripted model, and
+ * `compact_history.yaml` alone (pass-through, `keep`, a failed summary).
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -15,13 +16,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { advance, close, runFlow, send } from "../../src/run.ts";
 import { ASK } from "../../src/tools/context.ts";
 import { isInboxType, ValueKind } from "../../src/typesys/values.ts";
-import { NO_ENV, serving, textReply } from "../engine/run_state_fixtures.ts";
+import { NO_ENV, PromptModel, serving, textReply } from "../engine/run_state_fixtures.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
 const EXAMPLES = readdirSync(EXAMPLES_DIR)
@@ -110,3 +112,57 @@ test("chat joins the messages one take reads with newlines before the model sees
     { role: "assistant", text: "ok" },
   ]);
 }, 30_000);
+
+const config = { provider: "anthropic", model: "claude-test" };
+const opts = { env: NO_ENV, numWorkers: 0, llmConfig: config };
+const turn = (u: string, a: string) => [
+  { role: "user", text: u },
+  { role: "assistant", text: a },
+];
+
+test("compact_history passes through under budget with no model call", async () => {
+  const flow = await load("compact_history.yaml");
+  const history = [turn("hi", "hello")];
+  const result = await runFlow(flow, { summary: "s", history }, { ...opts, models: serving(new ScriptedModel([], config)) });
+  expect(result.output).toEqual({ summary: "s", history });
+});
+
+test("compact_history keeps up to `keep` turns even over budget", async () => {
+  const flow = await load("compact_history.yaml");
+  const history = [turn("a1", "b1"), turn("a2", "b2"), turn("a3", "b3")]; // over budget 10, 3 <= keep 4
+  const result = await runFlow(
+    flow,
+    { summary: "s", history, budget: 10n },
+    { ...opts, models: serving(new ScriptedModel([], config)) },
+  );
+  expect(result.output).toEqual({ summary: "s", history });
+});
+
+test.each([
+  [0n, 0],
+  [1n, 1],
+  [-1n, 0],
+])("compact_history over budget with keep %p keeps %p turns", async (keep, kept) => {
+  const flow = await load("compact_history.yaml");
+  const model = new PromptModel({ reply: "unused", summary: "S" });
+  const history = [turn("a1", "b1"), turn("a2", "b2"), turn("a3", "b3")];
+  const result = await runFlow(flow, { summary: "old", history, budget: 1n, keep }, { ...opts, models: serving(model) });
+  expect(result.output).toEqual({ summary: "S", history: history.slice(history.length - kept) });
+  // The summarizer saw the old summary and exactly the folded turns, as `role: text` lines.
+  const prompt = model.requests[0]!.messages.at(-1)!.text();
+  expect(prompt).toContain("old");
+  for (const t of history.slice(0, history.length - kept)) expect(prompt).toContain(`user: ${t[0]!.text}`);
+  for (const t of history.slice(history.length - kept)) expect(prompt).not.toContain(`user: ${t[0]!.text}`);
+});
+
+test("a failed summary fails the run with the provider's code", async () => {
+  const flow = await load("compact_history.yaml");
+  const model = new ScriptedModel([new ProviderError("auth", "unauthorized", { status: 401 })], config);
+  const result = await runFlow(
+    flow,
+    { summary: "", history: [turn("a", "b")], budget: 1n, keep: 0n },
+    { ...opts, models: serving(model) },
+  );
+  expect(result.status).toBe("failed");
+  expect(result.failure!.code).toBe("provider.auth");
+});

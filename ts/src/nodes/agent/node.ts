@@ -485,10 +485,12 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Reject a steerable agent whose output contract is not plain text. The contract is assigned
-   * after construction, so this is checked here as well as at YAML load.
+   * Reject a steerable agent whose output contract is not plain text (none, `str`, or
+   * `Optional(str)`). The contract is assigned after construction, so this is checked here as well
+   * as at YAML load.
    *
-   * @throws RangeError when the agent is steerable and its output isn't an untagged `str`.
+   * @throws RangeError when the agent is steerable and its output isn't an untagged `str` or
+   *   `Optional(str)`.
    */
   override validateExecutionSetup(): void {
     super.validateExecutionSetup();

@@ -70,7 +70,8 @@
  * set when it begins, ends the wait at once with an empty `ReplyInterrupted` and no second
  * attempt, leaving no sleep pending, and a stop during the wait still rejects with the stop;
  * through the engine, an interrupt during a later model call's retry wait (on the run's scheduler)
- * ends the loop with `""` and no retry attempt, leaving no sleep pending.
+ * ends the loop with `""` and no retry attempt, leaving no sleep pending. A hand-built steerable
+ * agent with an `Optional(str)` output runs (pin).
  * Interrupts around concurrent tool groups are in `agent_tool_groups.test.ts`.
  */
 
@@ -112,7 +113,7 @@ import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
-import type { Steering } from "../../src/nodes/base.ts";
+import { Output, type Steering } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { runFlow } from "../../src/run.ts";
@@ -327,6 +328,13 @@ test("python built steerable agent with structured output fails before the model
   const evaluated = drive(node, { steering: new Inbox({}, ["chat"]), models: serving(model) });
   await expect(evaluated).rejects.toThrow("AGENT node 'chat': steerable needs `str` output");
   expect(model.requests).toEqual([]);
+});
+
+test("a Python-built steerable agent with an Optional(str) output runs", async () => {
+  const node = new AgentNode("chat", { prompt: "hi", llmConfig: CONFIG, steerable: true });
+  node.outputContract = new ValueContract(new Type({ kind: ValueKind.STRING, nullable: true }));
+  const model = new ScriptedModel([reply("ok")], CONFIG);
+  expect(await drive(node, { steering: new Inbox(), models: serving(model) })).toEqual(new Output("ok"));
 });
 
 test.each([

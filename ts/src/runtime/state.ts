@@ -124,6 +124,7 @@ import {
   RunWaitingRecord,
   requireRecordTime,
   SCHEMA_VERSION,
+  type TakeCommit,
   type WaitEntry,
 } from "./log.ts";
 import {
@@ -495,12 +496,14 @@ export interface PendingCommit {
   /** The pool key the value is written under. */
   readonly key: string;
   /**
-   * The value's canonical typed wire text; `null` for a derived commit until the success that
-   * accepts it (for an expansion commit, its spawner's `NodeExpanded`) rebuilds the value.
+   * The value's canonical typed wire text; `null` for a derived or take commit until the success
+   * that accepts it (for an expansion commit, its spawner's `NodeExpanded`) rebuilds the value.
    */
   readonly valueJson: string | null;
   /** A derived commit's sources (`PoolCommitRecord.from`), else `null`. */
   readonly from: ReadonlyMap<string, number> | null;
+  /** A take commit's inbox and consumed sends (`PoolCommitRecord.take`), else `null`. */
+  readonly take: TakeCommit | null;
   /** The spawner whose expansion wrote this commit for a child START, else `null`. */
   readonly spawner: string | null;
   /**
@@ -817,9 +820,10 @@ interface CommitPlan extends PlanAnchors {
   readonly kind: "commit";
   readonly nodeId: string;
   readonly key: string;
-  /** The value's canonical typed wire text, or `null` for a derived commit. */
+  /** The value's canonical typed wire text, or `null` for a derived or take commit. */
   readonly valueJson: string | null;
   readonly from: ReadonlyMap<string, number> | null;
+  readonly take: TakeCommit | null;
   readonly initial: boolean;
   /** Whether this is an expansion's commit for a child START, which waits under its key. */
   readonly expansion: boolean;
@@ -850,6 +854,8 @@ interface SuccessDelta {
   readonly edgeHeads: readonly string[];
   readonly newlyReadyIds: readonly string[];
   readonly observerCommitAs: string | null;
+  /** The sends a take commit consumed, whose values leave the inbox store. */
+  readonly consumedEvents: readonly number[];
 }
 
 /**
@@ -1372,6 +1378,7 @@ export function preparePoolCommit(
   if (commitAs === "") throw new NodeDataError(new RangeError("commit_as must be non-empty when supplied"));
   requireInitializedNonterminal(state);
   requireCommittingNode(state, nodeId);
+  requireValueCommitNode(state, nodeId);
 
   const node = state.flow.nodes.get(nodeId)!;
   const nodeTarget: unknown = node.commitAs;
@@ -1404,6 +1411,28 @@ export function preparePoolCommit(
 }
 
 /**
+ * Prepare an in-flight take node's commit of the events it takes, `commit`, under its target. Its
+ * success (`prepareNodeSucceeded`, with no `output`) rebuilds the value `{events, closed}` from
+ * the inbox store.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight and no pending commit.
+ * @param nodeId The take node.
+ * @param commit The inbox, the send seqs it consumes in order, and whether it saw the inbox closed.
+ * @returns The canonical `PoolCommitRecord` and its plan, with no observers.
+ * @throws TypeError when `state` or `nodeId` has the wrong type.
+ * @throws RangeError when the node isn't an in-flight take, or the commit isn't the one the take's
+ *   call or the inbox allows (see `validateTakeCommit`).
+ */
+export function prepareTakeCommit(state: RunState, nodeId: string, commit: TakeCommit): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareTakeCommit expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  requireInitializedNonterminal(state);
+  const node = state.flow.nodes.get(nodeId);
+  if (node === undefined) throw new RangeError(`take node ${reprText(nodeId)} does not exist in the flow`);
+  return prepareRecord(state, new PoolCommitRecord(nodeId, node.commitAs ?? nodeId, null, { take: commit }));
+}
+
+/**
  * Prepare accepting an in-flight node's pending commit and its newly ready successors.
  *
  * @param state An initialized nonterminal state with `nodeId` in flight and its commit pending.
@@ -1430,10 +1459,11 @@ export function prepareNodeSucceeded(
   requireSucceedingNode(state, nodeId);
   const pending = state.pendingCommits.get(nodeId);
   if (pending === undefined) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} has no pending pool_commit`);
-  if (pending.valueJson === null && !Object.hasOwn(options, "output")) {
+  if (pending.valueJson === null && pending.take === null && !Object.hasOwn(options, "output")) {
     throw new TypeError(`NodeSucceeded of derived node ${reprText(nodeId)} needs the value it evaluated to (output)`);
   }
-  const derived = pending.valueJson === null || pending.spawner !== null;
+  // A take commit holds no value either, but its node isn't derived: its capture is recorded.
+  const derived = (pending.valueJson === null && pending.take === null) || pending.spawner !== null;
   return prepareSuccessTransition(
     state,
     new NodeSucceededRecord(nodeId, pending.seq, {
@@ -1641,10 +1671,13 @@ export function prepareRecord(
   requireInitializedNonterminal(state);
 
   if (isExactly(record, PoolCommitRecord)) {
-    if (record.take !== null) throw new TypeError("unsupported pool_commit form for state preparation: take");
     if (!state.inputsCommitted) {
       validateInitialCommit(state, record);
       return prepareCommitTransition(state, record, true);
+    }
+    if (record.take !== null) {
+      validateTakeCommit(state, record);
+      return prepareCommitTransition(state, record, false);
     }
     // `<START>.<name>` can't be a node id (ids hold no dot), so the prefix alone picks a send.
     if (record.key.startsWith(sendKey(state, ""))) {
@@ -1792,6 +1825,7 @@ function prepareCommitTransition(
     key: canonical.key,
     valueJson: canonical.value === null ? null : logJson(canonical.value),
     from: canonical.from,
+    take: canonical.take,
     initial,
     expansion,
     send,
@@ -1812,7 +1846,10 @@ function prepareSuccessTransition(
   // only for a run that learns, since its value was admitted with the expansion.
   let capture =
     pending.spawner !== null && state.trace !== null ? rebuildDerivedRecord(state, record.nodeId, new Map()).capture : null;
-  if (pending.valueJson === null) {
+  if (pending.take !== null) {
+    // A take commit holds pointers; its value is the events it consumed, rebuilt from the inbox store.
+    pending = { ...pending, valueJson: takeValueJson(state, pending) };
+  } else if (pending.valueJson === null) {
     // A derived commit: the pool now holds what its binding read.
     const rebuilt = rebuildCommit(state, record.nodeId, pending.key, pending.from!);
     const valueJson = rebuilt.valueJson;
@@ -2791,6 +2828,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
       key: plan.key,
       valueJson: plan.valueJson,
       from: plan.from,
+      take: plan.take,
       spawner: plan.expansion ? plan.nodeId : null,
       admitted: false,
     };
@@ -2953,6 +2991,7 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   state.inFlight.delete(delta.nodeId);
   state.acceptedStarts.delete(delta.nodeId);
   forgetNodeSteps(state, delta.nodeId);
+  for (const seq of delta.consumedEvents) state.inboxEvents.delete(seq);
   for (const nodeId of delta.newlyReadyIds) state.ready.push(nodeId);
   if (apply.terminal !== null) state.result = apply.terminal.result;
   state.nextSequence = prepared.expectedSequence + 1;
@@ -3753,6 +3792,93 @@ function requireCommittingNode(state: RunState, nodeId: string): void {
   const expansion = pendingExpansion(state, nodeId);
   if (expansion.length > 0) {
     throw new RangeError(`pool_commit node ${reprText(nodeId)} has pending expansion commits only its expansion admits`);
+  }
+}
+
+/** Refuse a value commit by a take node, which commits the events it took (a take commit). */
+function requireValueCommitNode(state: RunState, nodeId: string): void {
+  if (state.flow.nodes.get(nodeId)!.hostToolCall()?.toolId === TAKE) {
+    throw new RangeError(`take node ${reprText(nodeId)} commits the events it took, not a value`);
+  }
+}
+
+/**
+ * Validate a take commit by an in-flight take node with no pending commit, under its target. A node
+ * holding its take call commits what the call settled: its assigned events, closed when its inbox is
+ * closed with nothing left a take may read; or, timed out, nothing. A node holding none commits
+ * inline: the oldest event a take may read (`availableUnread`) or all of them, closed when its
+ * inbox is closed and it takes them all; with none available, nothing, closed as its inbox is. An
+ * inline commit of nothing on an open inbox is a timeout the reducer can't check, so it is accepted
+ * on the engine's word.
+ *
+ * @throws RangeError otherwise.
+ */
+function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
+  const { nodeId } = record;
+  const take = record.take!;
+  requireCommittingNode(state, nodeId);
+  const node = state.flow.nodes.get(nodeId)!;
+  if (node.hostToolCall()?.toolId !== TAKE) throw new RangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
+  const target = node.commitAs ?? nodeId;
+  if (record.key !== target) {
+    throw new RangeError(`the take commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(target)}`);
+  }
+  if (inboxElementType(state, take.inbox) === null) {
+    throw new RangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, no inbox the START declares`);
+  }
+  const w = state.waits;
+  const closed = w.inboxes.get(take.inbox)?.closed ?? false;
+  const held = w.calls.get(toolCallId(state.runId!, nodeId));
+  let events: readonly number[];
+  let expectedClosed: boolean;
+  if (held !== undefined) {
+    if (held.inbox !== take.inbox) {
+      throw new RangeError(`the take commit of ${reprText(nodeId)} reads ${reprText(take.inbox)}, but its call reads ${writeAsText(held.inbox)}`);
+    }
+    if (held.state === "open" || held.state === "closed") {
+      throw new RangeError(`take node ${reprText(nodeId)} commits from its call, which is ${held.state}`);
+    }
+    events = held.state === "timed_out" ? [] : held.assigned;
+    expectedClosed = held.state === "answered" && closed && availableUnread(w, take.inbox).length === 0;
+  } else {
+    const available = availableUnread(w, take.inbox);
+    const k = take.events.length;
+    const counted = available.length === 0 ? k === 0 : k === 1 || k === available.length;
+    events = counted ? available.slice(0, k) : available;
+    expectedClosed = closed && k === available.length;
+  }
+  if (take.events.length !== events.length || take.events.some((seq, index) => seq !== events[index])) {
+    throw new RangeError(
+      `the take commit of ${reprText(nodeId)} must consume ${writeAsText([...events])}` +
+        `${held === undefined ? " (the oldest event a take may read, or all of them)" : ""}, found ${writeAsText([...take.events])}`,
+    );
+  }
+  if (take.closed !== expectedClosed) {
+    throw new RangeError(`the take commit of ${reprText(nodeId)} must hold closed ${expectedClosed}`);
+  }
+}
+
+/**
+ * Rebuild a take commit's value, `{events, closed}`, from the inbox store, checked against its
+ * target's contract.
+ *
+ * @throws RangeError when a consumed send's value is gone, or the contract refuses the value
+ *   (sends are checked against their inbox's type, so this means the flow and the log disagree).
+ */
+function takeValueJson(state: RunState, pending: PendingCommit): string {
+  const take = pending.take!;
+  const events = take.events.map((seq) => {
+    const value = state.inboxEvents.get(seq);
+    if (value === undefined) throw new RangeError(`the take commit at seq ${pending.seq} names send ${seq}, which the run doesn't hold`);
+    return value.toObject();
+  });
+  try {
+    return committedText(state, pending.key, { events, closed: take.closed });
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new RangeError(`the take commit at seq ${pending.seq} rebuilds to a value its target refuses: ${error.message}`, {
+      cause: error,
+    });
   }
 }
 
@@ -4680,6 +4806,7 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
  */
 function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   requireCommittingNode(state, record.nodeId);
+  requireValueCommitNode(state, record.nodeId);
   const targetNode = state.flow.nodes.get(record.key);
   if (targetNode === undefined) {
     throw new RangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
@@ -4831,6 +4958,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
     edgeHeads: Object.freeze(edgeHeads),
     newlyReadyIds: Object.freeze(newlyReadyIds),
     observerCommitAs: target === record.nodeId ? null : target,
+    consumedEvents: pending.take?.events ?? [],
   });
 }
 

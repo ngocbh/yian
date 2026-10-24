@@ -19,6 +19,7 @@ import {
   PoolCommitRecord,
   type RunLog,
   RunWaitingRecord,
+  type TakeCommit,
   type WaitEntry,
 } from "../../src/runtime/log.ts";
 import {
@@ -28,6 +29,7 @@ import {
   prepareComplete,
   prepareNodeStarted,
   prepareNodeStep,
+  prepareNodeSucceeded,
   prepareNodeWaiting,
   prepareNodeWoken,
   preparePoolCommit,
@@ -37,11 +39,13 @@ import {
   prepareRunStarted,
   prepareRunWaiting,
   prepareSend,
+  prepareTakeCommit,
   RunState,
 } from "../../src/runtime/state.ts";
 import { TraceDelta } from "../../src/runtime/trace.ts";
 import { wakeableNodes } from "../../src/runtime/waits.ts";
 import { eventBytes, type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { typeFor } from "../../src/typesys/types.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { expectUnchanged, FINGERPRINT, FIXED_CLOCK, RUN_ID, snapshot, startData } from "./run_state_fixtures.ts";
 import { call, MSGS, paramFlow, started, succeed, tool, waitFlow, work } from "./waits_fixtures.ts";
@@ -545,5 +549,125 @@ describe("complete", () => {
       call_id: call("ask"),
       error: { type: "CompletedError", message: "nobody knows" },
     });
+  });
+});
+
+const OTHERS = new Parameter("others", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });
+
+/** A take commit of `events` from `inbox` (default `msgs`). */
+function takeOf(events: readonly number[], closed = false, inbox = "msgs"): TakeCommit {
+  return { inbox, events, closed };
+}
+
+/** Commit `node`'s take commit and its success; return the commit's seq. */
+function takeAndSucceed(log: RunLog, state: RunState, node: string, take: TakeCommit): number {
+  const seq = commit(log, state, prepareTakeCommit(state, node, take));
+  commitPrepared(log, state, prepareNodeSucceeded(state, node, { forwardCapture: null }));
+  return seq;
+}
+
+describe("the take commit", () => {
+  test("a woken take commits its assigned events; its success rebuilds the value from the inbox store", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take")));
+    start(log, state, "heard");
+    wait(log, state, "heard", takeEntry("heard"));
+    const s = send(log, state, "hi");
+    commitPrepared(log, state, prepareNodeWoken(state, "heard"));
+    const seq = takeAndSucceed(log, state, "heard", takeOf([s]));
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: ["hi"], closed: false });
+    expect(state.producers.get("heard")).toBe(seq);
+    expect(state.inboxEvents.has(s)).toBe(false);
+    expect(state.waits.calls.size).toBe(0);
+    expect(state.waits.inboxes.get("msgs")!.unread).toEqual([]);
+  });
+
+  test("a woken take commits exactly what its call settled", () => {
+    const { log, state } = started(paramFlow([MSGS, OTHERS], tool("heard", "take")));
+    start(log, state, "heard");
+    wait(log, state, "heard", takeEntry("heard"));
+    const first = send(log, state, "hi");
+    const later = send(log, state, "again");
+    commitPrepared(log, state, prepareNodeWoken(state, "heard"));
+    for (const take of [takeOf([]), takeOf([later]), takeOf([first, later]), takeOf([first], true), takeOf([first], false, "others")]) {
+      expect(() => prepareTakeCommit(state, "heard", take)).toThrow(RangeError);
+    }
+    expect(() => prepareRecord(state, new PoolCommitRecord("heard", "elsewhere", null, { take: takeOf([first]) }))).toThrow(
+      /not 'heard'/,
+    );
+    takeAndSucceed(log, state, "heard", takeOf([first]));
+    expect(state.waits.inboxes.get("msgs")!.unread).toEqual([later]);
+  });
+
+  test("a timed-out take commits nothing, whatever arrived after", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take")));
+    start(log, state, "heard");
+    wait(log, state, "heard", takeEntry("heard", { deadline: DEADLINE }));
+    commitPrepared(log, state, prepareNodeWoken(state, "heard", [call("heard")]));
+    const late = send(log, state, "late");
+    expect(() => prepareTakeCommit(state, "heard", takeOf([late]))).toThrow(RangeError);
+    takeAndSucceed(log, state, "heard", takeOf([]));
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: [], closed: false });
+    expect(state.waits.inboxes.get("msgs")!.unread).toEqual([late]);
+  });
+
+  test("an inline take commits the oldest event a take may read or all of them; its events leave unread at its success", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take")));
+    const seqs = [send(log, state, "a"), send(log, state, "b"), send(log, state, "c")];
+    start(log, state, "heard");
+    for (const take of [takeOf(seqs.slice(0, 2)), takeOf([seqs[1]!]), takeOf([]), takeOf([seqs[0]!], true)]) {
+      expect(() => prepareTakeCommit(state, "heard", take)).toThrow(RangeError);
+    }
+    commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([seqs[0]!])));
+    expect(state.waits.inboxes.get("msgs")!.unread).toEqual(seqs);
+    commitPrepared(log, state, prepareNodeSucceeded(state, "heard", { forwardCapture: null }));
+    expect(state.waits.inboxes.get("msgs")!.unread).toEqual(seqs.slice(1));
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: ["a"], closed: false });
+  });
+
+  test("an inline take of nothing is accepted only with nothing to read, closed as the inbox is", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take")));
+    start(log, state, "heard");
+    expect(() => prepareTakeCommit(state, "heard", takeOf([], true))).toThrow(/closed false/);
+    takeAndSucceed(log, state, "heard", takeOf([]));
+  });
+
+  test("an inline take commit holds its events: a second one can't name them", () => {
+    const { log, state } = started(waitFlow(tool("a", "take"), tool("b", "take")));
+    start(log, state, "a");
+    start(log, state, "b");
+    const s = send(log, state, "hi");
+    commitPrepared(log, state, prepareTakeCommit(state, "a", takeOf([s])));
+    expect(() => prepareTakeCommit(state, "b", takeOf([s]))).toThrow(RangeError);
+    commitPrepared(log, state, prepareTakeCommit(state, "b", takeOf([])));
+  });
+
+  test("a take commit by another node, or a value commit by a take, is refused", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take"), tool("ask", "ask")));
+    start(log, state, "heard");
+    start(log, state, "ask");
+    expect(() => prepareTakeCommit(state, "ask", takeOf([]))).toThrow(/which is no take/);
+    expect(() => preparePoolCommit(state, "heard", { events: [], closed: false })).toThrow(/commits the events it took/);
+    expect(() =>
+      prepareRecord(state, new PoolCommitRecord("heard", "heard", { kind: "object", value: { events: [], closed: false } })),
+    ).toThrow(/commits the events it took/);
+  });
+
+  test("a rebuilt value its target's contract refuses is a RangeError at the success", () => {
+    const strict = tool("heard", "take");
+    strict.outputContract = new ValueContract(
+      new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([
+          ["events", typeFor("list(int)", new Map())],
+          ["closed", Type.scalar(ValueKind.BOOLEAN)],
+        ]),
+        required: new Set(["events", "closed"]),
+      }),
+    );
+    const { log, state } = started(waitFlow(strict));
+    const s = send(log, state, "hi");
+    start(log, state, "heard");
+    commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([s])));
+    expect(() => prepareNodeSucceeded(state, "heard", { forwardCapture: null })).toThrow(/rebuilds to a value its target refuses/);
   });
 });

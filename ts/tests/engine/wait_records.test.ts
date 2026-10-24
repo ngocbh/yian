@@ -350,13 +350,6 @@ test.each<[string, () => RunRecord]>([
   expectError(() => prepareRecord(state, build()), TypeError, `unsupported run record for state preparation: ${name}`);
 });
 
-test("the reducer doesn't prepare a take commit yet", () => {
-  const { state, log } = initializedAndStarted(flow());
-  commitStartSuccess(state, log);
-  const commit = new PoolCommitRecord("work", "work", null, { take: { inbox: "msgs", events: [], closed: true } });
-  expectError(() => prepareRecord(state, commit), TypeError, "unsupported pool_commit form for state preparation: take");
-});
-
 test("a state whose waits fold was replaced is refused", () => {
   const { state, log } = initializedAndStarted(flow());
   commitStartSuccess(state, log);

@@ -7,6 +7,7 @@ prints the output.
 ```console
 yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace] [--json]
 yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--quiet] [--verbose] [--engine-trace] [--json]
+yian chat FLOW.yaml [--inbox NAME] [--inputs inputs.json] [--input k=v]... [--log PATH] [-w N] [--provider NAME] [--model NAME] [--engine-trace]
 yian check [--root DIR] FLOW.yaml... [--json]
 yian skills check DIR... [--json]
 yian status [LOG] [--json]
@@ -17,7 +18,9 @@ yian providers [--json]
 yian models (--auth-file F | --provider P [--base-url URL]) [--timeout S] [--json]
 ```
 
-`yian check` loads flows without running them, `yian skills check` checks skill
+`yian chat` (TS yian; see [Chatting with a flow](#chatting-with-a-flow-yian-chat)) sends each
+line you type to a flow's `Inbox(str)` input, `yian check` loads flows without running them,
+`yian skills check` checks skill
 directories, `yian status` (TS yian only) reports where the run in a run log stands, or lists
 the runs in `~/.yian/runs`,
 `yian config check` checks an `llm_config` layer, `yian providers`
@@ -265,6 +268,10 @@ step fails, or a failure after terminal EOF) ends the session: `yian chat` print
 
 `yian chat` and its `run_flow` tool supply no long-term memory: memories a
 flow declares stay off, and session conversations are not kept.
+
+Changed (TS yian): `yian chat` runs one durable run per session and never restarts a failed
+turn; a failed run ends the chat with its diagnostic, and its log can be read with `yian
+status`. See [Chatting with a flow](#chatting-with-a-flow-yian-chat).
 
 ## Memory and storage
 
@@ -617,6 +624,56 @@ In the bundled yian chat, Ctrl-C also reaches a WAIT inside the `run_flow`
 flow-op tool. The nested run uses a one-way child stop signal: host cancellation
 flows into it, but an ordinary nested failure remains a `FAILED` tool result and
 does not cancel the surrounding conversation.
+
+Changed (TS yian): `yian chat` has no bundled flow and no `run_flow` tool; see
+[Chatting with a flow](#chatting-with-a-flow-yian-chat).
+
+## Chatting with a flow (`yian chat`)
+
+TS yian only. `yian chat FLOW.yaml` starts a durable run of a flow with an `Inbox(str)` input
+and sends each line you type to it, as the host calls `send` and `advance` do
+([API](api.md)). For example:
+
+```console
+yian chat examples/chat.yaml
+```
+
+- **The inbox.** The flow needs exactly one top-level `Inbox(str)` input, or `--inbox NAME` to
+  pick one when it declares several. A flow with none is a usage error; an `Inbox(int)` or other
+  element type doesn't count. Other inputs come from `--input`/`--inputs` as in `yian run`, and
+  missing required ones are prompted for on a TTY; the inbox is never prompted for and can't be
+  supplied.
+- **Turns.** The chat starts the run, and each time it waits, shows a `> You:` prompt on stderr.
+  A line is sent to the inbox and the run is advanced; lines typed while the run moves wait for
+  the next prompt. The output of every node named `reply`, at any depth, prints on stdout as it
+  finishes; the flow's final output isn't printed. A line the inbox refuses (too large for
+  `YIAN_MAX_EVENT_BYTES`, say) prints `not sent: <reason>` and the chat goes on.
+- **Ending.** `/exit`, `/quit` or the end of input (Ctrl-D) closes the inbox: takes still get what
+  was queued, the flow finishes normally, `session ended` goes to stderr and the chat exits `0`.
+  If the run still waits after that with no deadline to wake it (a take on another inbox), the
+  chat prints what it waits on and how to continue (`yian run --resume LOG`), and exits `0`.
+- **Ctrl-C.** The first Ctrl-C (at the prompt, or SIGINT while the run moves) prints
+  `(Ctrl-C again to cancel the run; /exit to finish it)`. A second one in a row cancels the run
+  (`run_cancelled`: no output, no learning), prints `chat cancelled` and exits `130`; a line sent
+  in between resets the count. SIGTERM or SIGHUP stops the run instead, leaving its log
+  resumable: `chat stopped; the run is in LOG`, exit `130`. Ctrl-C at an `ask` prompt stops the
+  run the same way.
+- **Timers.** While the prompt is up, the chat advances the run when its earliest deadline
+  (`wakeAt`) passes, so a `sleep` or a `take` timeout fires on time without a new line.
+- **Asks.** An `ask` node prompts at the terminal while the run moves, with the handler `yian
+  run` uses, so it never pends.
+- **Failures.** A failed run prints its diagnostic on stderr and exits `1`; the chat doesn't
+  restart it. A host failure (a locked log, say) prints `chat failed: <message>` and exits `1`.
+  Usage errors exit `2`.
+
+`yian chat` opens no MCP servers, loads no skills and builds no memories: a flow that needs an
+MCP tool or a skill fails at run start with the usual unknown-tool message (`yian run` serves
+those flows). Its log is `--log PATH`, else `~/.yian/runs/<run_id>/log.jsonl`, and the path
+prints on stderr when the run starts.
+
+Changed from Python's `yian chat`: there is no bundled assistant flow, so FLOW is required, and
+no `--workspace`; Python's chat blocks inside a live `human_input`, while TS's is a host over the
+durable run, and a failed turn ends the chat instead of restarting from the transcript.
 
 ## Output and progress
 

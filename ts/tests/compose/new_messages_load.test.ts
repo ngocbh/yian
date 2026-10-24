@@ -133,3 +133,50 @@ test("an llm_config source reading reply.new_messages is refused with the same m
   expect(message).toContain("llm_config");
   expect(message).toContain("reads new_messages, which only an AGENT node has");
 });
+
+/** A flow whose agent `reply` runs only when `input.go`, with output `${output}`. */
+const MAYBE_SKIPPED = (output: string) => `
+id: f
+name: f
+input:
+  go: !bool
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "\${input.go}"
+        then: reply
+    else: other
+  reply:
+    kind: agent
+    prompt: hi
+    output: str
+  other:
+    kind: code
+    code: return 1
+    output: int
+output: ${output}
+`;
+
+test("a maybe-skipped agent's new_messages is null unless the read has a default", async () => {
+  // As for `.output`, a flow output reading only a maybe-skipped agent gets the null default.
+  const bare = await loadFlow(MAYBE_SKIPPED("${reply.new_messages}"));
+  expect(bare.compiled.outputs.map((output) => output.binding.source)).toEqual(["${reply.new_messages:-null}"]);
+  const defaulted = await loadFlow(MAYBE_SKIPPED("${reply.new_messages :- []}"));
+  expect(defaulted.compiled.outputs.map((output) => output.binding.source)).toEqual(["${reply.new_messages :- []}"]);
+});
+
+test("a typed !list(Message) input takes a maybe-skipped agent's new_messages with :- []", async () => {
+  await loadFlow(
+    MAYBE_SKIPPED("${reader.output}").replace(
+      "output: ${reader.output}",
+      `  reader:
+    kind: code
+    input:
+      history: !list(Message) \${reply.new_messages :- []}
+    output: int
+    code: return inputs['history'].length
+output: \${reader.output}`,
+    ),
+  );
+});

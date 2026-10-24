@@ -1,6 +1,6 @@
 /**
  * How an AGENT uses memory: recalled notes framed into the system prompt, and the text the model
- * reads for a tool result, a reported tool error or a skipped call.
+ * reads for a tool result, a reported tool error, a skipped call or a call cut off by a crash.
  *
  * Python's `nodes/agent/memory.py` also records model and tool effects into a session memory's
  * transcript and projects that history for the model; TS yian has no session memory, so an
@@ -40,6 +40,10 @@ export function systemPromptWithMemory(base: string, sections: readonly MemorySe
 
 /** The result the model reads for a tool call a host interrupt skipped. */
 export const SKIPPED_TOOL_RESULT = "Not run: interrupted by the user.";
+
+/** The result the model reads for a tool call whose run a crash or a stop cut off before its result. */
+export const TOOL_OUTCOME_UNKNOWN =
+  "The tool call was interrupted; its outcome is unknown. Check its effect before retrying.";
 
 /**
  * Return a tool result as the text the model reads: text as itself, any other value in the text

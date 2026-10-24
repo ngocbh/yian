@@ -219,20 +219,14 @@ test("end to end: listing, load, escape and resume", async () => {
   expect((refused as Error).message).toContain("no skills= mapping was passed");
   expect(readFileSync(log)).toEqual(before);
 
-  const second = new ScriptedModel(
-    [
-      loadCall({ name: "code-review" }, "a"),
-      loadCall({ name: "code-review", path: "references/checklist.md" }, "b"),
-      textReply("looks good"),
-    ],
-    PLAIN_CONFIG,
-  );
+  // The two recorded calls and their `load_skill` results replay; only the third call is made.
+  const second = new ScriptedModel([textReply("looks good")], PLAIN_CONFIG);
   const resumed = await resumeWith(await loadFlow(FLOW), log, null, second, { skills: loadSkills([skillRoot]) });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");
   expect(resumed.output).toBe("looks good");
-  expect(second.requests[2]!.messages).toEqual(first.requests[2]!.messages);
+  expect(second.requests[0]!.messages).toEqual(first.requests[2]!.messages);
   const records = readRunLog(log).map((envelope) => envelope.record);
   const review = (kind: typeof NodeStartedRecord | typeof NodeSucceededRecord) =>
     records.filter((record) => record instanceof kind && record.nodeId === "review").length;

@@ -136,8 +136,9 @@ test("auth failure inside loop reaches run result", async () => {
   expect(result.failure!.causeType).toBe("ProviderError");
 });
 
-test("tool calling agent in loop retries whole node after process loss", async () => {
-  // A fresh flow and model retry the one namespaced AGENT the lost process left started.
+test("tool calling agent in loop replays its recorded steps after process loss", async () => {
+  // The one namespaced AGENT the lost process left started runs again and replays the steps it
+  // recorded: neither the model nor the tool is called again (TS-only; Python reruns the node).
   const path = join(dir, "agent-loop.jsonl");
   const seen: unknown[] = [];
   const tools = { ping: ping(seen) };
@@ -170,7 +171,7 @@ test("tool calling agent in loop retries whole node after process loss", async (
   expect(prefix.filter((r) => r instanceof NodeSucceededRecord && r.nodeId.endsWith("/reply")).length).toBe(1);
   expect(seen).toEqual([{}, {}]);
 
-  const recoveredModel = new ScriptedModel([toolCall("ping", {}, "turn-2-retry"), textReply("turn2")], CONFIG);
+  const recoveredModel = new ScriptedModel([], CONFIG);
   const recoveredEvents: RunEvent[] = [];
   const recovered = await resumeFlow({
     log: path,
@@ -180,13 +181,14 @@ test("tool calling agent in loop retries whole node after process loss", async (
     env: hostEnv(dir),
   });
   expect(recovered.status, recovered.failure?.message).toBe("succeeded");
-  expect(recovered.output).toBe("s|turn1|turn2");
+  expect(recovered.output).toBe("s|turn1|lost");
+  expect(recoveredModel.requests).toEqual([]);
   expect(recovered.runId).toBe("agent-loop-recovery");
-  // Only the re-executed AGENT publishes fresh in-loop observers; none are replayed.
+  // No in-loop observer is published: the re-executed AGENT replays its calls.
   expect(recovered.events).toEqual(
     recoveredEvents.filter((event) => !IN_LOOP_EVENTS.some((type) => event instanceof type)),
   );
-  expect(seen).toEqual([{}, {}, {}]);
+  expect(seen).toEqual([{}, {}]);
   const records = readRunLog(path).map((envelope) => envelope.record);
   expect(records.filter((r) => r instanceof RunResumedRecord)).toEqual([new RunResumedRecord([retryId], 8)]);
   expect(records.filter((r) => r instanceof NodeStartedRecord && r.nodeId === retryId).length).toBe(2);
@@ -214,5 +216,5 @@ test("tool calling agent in loop retries whole node after process loss", async (
   expect(terminal.events).toEqual([]);
   expect(terminalEvents).toEqual([]);
   expect(readFileSync(path).equals(before)).toBe(true);
-  expect(seen).toEqual([{}, {}, {}]);
+  expect(seen).toEqual([{}, {}]);
 });

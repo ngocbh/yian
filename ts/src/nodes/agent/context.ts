@@ -2,9 +2,9 @@
  * Process-local context for one AGENT invocation, the steps it records, and the run files its
  * replies' media go to.
  *
- * Knows about:   events, llm errors, llm messages, llm_clients factory, memory contracts,
- *                nodes/base, nodes/contracts, platform, skills, tools, typesys, node's crypto and
- *                node's fs.
+ * Knows about:   diagnostics, events, llm errors, llm messages, llm_clients factory, memory
+ *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, node's
+ *                crypto and node's fs.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -13,9 +13,10 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, unli
 import { readFile, realpath } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
+import { reprText } from "../../diagnostics.ts";
 import type { ModelCallPurpose } from "../../events.ts";
 import { ProviderError } from "../../llm/errors.ts";
-import { MediaPart, Message, NamedTool, type Part, Request, type Usage } from "../../llm/messages.ts";
+import { MediaPart, Message, NamedTool, type Part, Request, Response, Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { EvaluationTrace, MemoryContext } from "../../memory/contracts.ts";
 import type { Scheduler } from "../../platform.ts";
@@ -23,7 +24,7 @@ import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
-import type { NodeCaps, Steering } from "../base.ts";
+import { CapabilityFault, type NodeCaps, type Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 
 /** The system prompt of an AGENT that authors none. */
@@ -150,8 +151,33 @@ export interface ToolResultFields {
   /** The text the model reads, exactly as its `ToolResultPart` holds it. */
   readonly output: string;
   readonly isError: boolean;
-  /** Set only on a result yian wrote in place of running the call: one a host interrupt skipped. */
-  readonly closed?: "skipped";
+  /**
+   * Set only on a result yian wrote in place of running the call: `skipped` for one a host
+   * interrupt skipped, `crashed` for one a resume closed because its run was cut off before its
+   * result.
+   */
+  readonly closed?: "skipped" | "crashed";
+}
+
+/** A recorded step and its `n`. */
+interface NumberedStep {
+  readonly n: number;
+  readonly step: ValueRecord;
+}
+
+/** A tool call's result as an earlier start recorded it. */
+export interface RecordedResult {
+  readonly output: string;
+  readonly isError: boolean;
+  /** `skipped` or `crashed` for a result yian wrote in place of running the call, else `null`. */
+  readonly closed: string | null;
+}
+
+/** Attempts of a model call that an earlier start made and lost: their count, and the last one's wait. */
+export interface PriorAttempts {
+  readonly attempts: number;
+  /** Seconds to wait before the next attempt. */
+  readonly retryIn: number;
 }
 
 /**
@@ -159,6 +185,13 @@ export interface ToolResultFields {
  * `kind`: `model_call` for a model call that returned or an attempt that failed, `tool_result`
  * for a tool call's result. Each write returns the step's `n`, as the engine committed it. Without
  * engine steps (direct loop tests) it records nothing and numbers the steps itself.
+ *
+ * It also replays what earlier starts recorded (`NodeSteps.prior`), in order: each successful
+ * `model_call` is one logical call to take back (`takeRecorded`) in place of calling the model,
+ * the failed attempts before it belong to it, and failed attempts after the last one are the next
+ * live call's (`priorAttempts`). Each `tool_result` is found by its call id (`recordedResult`).
+ * Steps of any other kind (`llm_config`, or a kind this version doesn't know) are not the loop's
+ * and are skipped.
  */
 export class AgentSteps {
   /** The run's folder, where reply media is stored; `null` without a log. */
@@ -166,24 +199,122 @@ export class AgentSteps {
   readonly #steps: NodeSteps | undefined;
   readonly #clock: () => number;
   readonly #scrub: (error: unknown) => unknown;
+  readonly #nodeId: string;
   #count = 0;
+  /** The recorded logical calls, each its failed attempts then its reply. */
+  readonly #calls: (readonly NumberedStep[])[] = [];
+  /** How many of `#calls` were taken. */
+  #taken = 0;
+  /** The failed attempts recorded after the last reply. */
+  #trailing: readonly NumberedStep[];
+  readonly #results = new Map<string, ValueRecord>();
 
   /**
    * @param steps This start's engine steps, or `undefined` to record nothing.
    * @param clock Epoch milliseconds, read for each recorded time.
    * @param runDir The run's folder, or `null`.
    * @param scrub Returns an error with every credential the call may have sent redacted.
+   * @param nodeId The node, which a replay mismatch names.
    */
   constructor(
     steps: NodeSteps | undefined,
     clock: () => number,
     runDir: string | null,
     scrub: (error: unknown) => unknown,
+    nodeId: string,
   ) {
     this.#steps = steps;
     this.#clock = clock;
     this.runDir = runDir;
     this.#scrub = scrub;
+    this.#nodeId = nodeId;
+    let attempts: NumberedStep[] = [];
+    // Steps are numbered densely from 1 across the node's starts, so a step's `n` is its place.
+    for (const [index, step] of (steps?.prior ?? []).entries()) {
+      if (step["kind"] === "model_call") {
+        attempts.push({ n: index + 1, step });
+        if (!Object.hasOwn(step, "error")) {
+          this.#calls.push(attempts);
+          attempts = [];
+        }
+      } else if (step["kind"] === "tool_result") {
+        this.#results.set(step["call_id"] as string, step);
+      }
+    }
+    this.#trailing = attempts;
+  }
+
+  /** Whether a recorded reply is still to be taken, so the loop is replaying. */
+  replaying(): boolean {
+    return this.#taken < this.#calls.length;
+  }
+
+  /**
+   * Take the next recorded reply, in place of a model call for `purpose` whose request has digest
+   * `digest`.
+   *
+   * @returns The reply as recorded (media in file form) and its step's `n`; `null` once every
+   *   recorded reply was taken.
+   * @throws CapabilityFault carrying a RangeError when the reply or an attempt before it recorded
+   *   another purpose or digest: the host or the yian version rebuilds a different request, so
+   *   the recorded reply doesn't answer it. Nothing is taken or written; the run stays resumable.
+   */
+  takeRecorded(purpose: string, digest: string): { response: Response; n: number } | null {
+    const call = this.#calls[this.#taken];
+    if (call === undefined) return null;
+    this.#check(call, purpose, digest);
+    this.#taken += 1;
+    const { n, step } = call.at(-1)!;
+    return { response: recordedResponse(step), n };
+  }
+
+  /**
+   * Take the failed attempts recorded after the last reply, for the first live call (`purpose`,
+   * digest `digest`) to continue: their count, and the last one's `retry_in` (`0` when it wasn't
+   * to be retried, so the call is tried again at once).
+   *
+   * @returns `null` while replaying, without such attempts, or once they were taken.
+   * @throws CapabilityFault as `takeRecorded`.
+   */
+  priorAttempts(purpose: string, digest: string): PriorAttempts | null {
+    if (this.replaying() || this.#trailing.length === 0) return null;
+    const trailing = this.#trailing;
+    this.#check(trailing, purpose, digest);
+    this.#trailing = [];
+    const retryIn = trailing.at(-1)!.step["retry_in"];
+    // A whole number of seconds reads back from the log as an int.
+    return { attempts: trailing.length, retryIn: retryIn == null ? 0 : Number(retryIn) };
+  }
+
+  /** Return the result an earlier start recorded for tool call `callId`, or `null`. */
+  recordedResult(callId: string): RecordedResult | null {
+    const step = this.#results.get(callId);
+    if (step === undefined) return null;
+    const closed = step["closed"];
+    return {
+      output: step["output"] as string,
+      isError: step["is_error"] === true,
+      closed: typeof closed === "string" ? closed : null,
+    };
+  }
+
+  /** Throw the replay mismatch fault unless each of `steps` recorded `purpose` and `digest`. */
+  #check(steps: readonly NumberedStep[], purpose: string, digest: string): void {
+    for (const { n, step } of steps) {
+      for (const [field, rebuilt] of [
+        ["purpose", purpose],
+        ["request_sha256", digest],
+      ] as const) {
+        const recorded = step[field];
+        if (recorded === rebuilt) continue;
+        throw new CapabilityFault(
+          new RangeError(
+            `node ${reprText(this.#nodeId)} step ${n}: recorded ${field} ${String(recorded)}, rebuilt ${rebuilt}; ` +
+              "resume with the host that started the run",
+          ),
+        );
+      }
+    }
   }
 
   /** Return the clock's reading, in epoch milliseconds. */
@@ -298,6 +429,58 @@ function errorStep(error: unknown): { kind: string; message: string } {
   return { kind: jsonSafeText(kind), message: jsonSafeText(message) };
 }
 
+/** Return the reply a successful `model_call` step recorded, as a `Response`. */
+function recordedResponse(step: ValueRecord): Response {
+  const usage = step["usage"] as ValueRecord | null;
+  const count = (value: unknown) => (value == null ? null : Number(value));
+  return new Response({
+    message: Message.fromJSON(step["output"]),
+    usage:
+      usage === null
+        ? null
+        : new Usage({
+            inputTokens: Number(usage["input_tokens"]),
+            outputTokens: Number(usage["output_tokens"]),
+            // The step doesn't record the total; the provider's is the sum of these two.
+            totalTokens: Number(usage["input_tokens"]) + Number(usage["output_tokens"]),
+            cacheReadTokens: count(usage["cache_read_tokens"]),
+            reasoningTokens: count(usage["reasoning_tokens"]),
+          }),
+    finishReason: step["finish"] as string | null,
+    responseId: step["response_id"] as string | null,
+  });
+}
+
+/** Unwind before starting another external effect once the host stopped the invocation. */
+export function checkStopped(ctx: Pick<AgentRunContext, "signal">): void {
+  ctx.signal?.throwIfAborted();
+}
+
+/** Return the signal the host aborts to interrupt this node; `undefined` without an inbox. */
+export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering">): AbortSignal | undefined {
+  return ctx.steering?.interruptSignal(ctx.nodeId);
+}
+
+// --------------------------------------------------------------------------------------- //
+// Steers. They aren't recorded yet, so two rules keep a resumed AGENT's replay matching its log:
+// a replaying loop reads no steers (they join the first live call), and a request's digest leaves
+// the steer messages out (a steer read before a crash is lost, and the replayed request lacks
+// it). A recorded steer step, which replay feeds back and the digest includes, replaces both;
+// keep them here, together.
+// --------------------------------------------------------------------------------------- //
+
+/**
+ * Take the host's queued steer messages for this node, awaiting a promised answer; none without
+ * an inbox, and none while `steps` is replaying, so they stay queued for the first live call.
+ */
+export async function drainSteers(
+  ctx: Pick<AgentRunContext, "nodeId" | "steering">,
+  steps: AgentSteps,
+): Promise<string[]> {
+  if (ctx.steering === undefined || steps.replaying()) return [];
+  return [...(await ctx.steering.drain(ctx.nodeId))];
+}
+
 /**
  * Return the digest a `model_call` step records for `request`: the SHA-256 of the `logJson` text
  * (canonical layout; ints of any size, so a long int argument hashes) of its messages (`steers`
@@ -322,23 +505,9 @@ export function requestSha256(request: Request, steers: ReadonlySet<Message>): s
   return createHash("sha256").update(logJson(json), "utf8").digest("hex");
 }
 
-/** Unwind before starting another external effect once the host stopped the invocation. */
-export function checkStopped(ctx: Pick<AgentRunContext, "signal">): void {
-  ctx.signal?.throwIfAborted();
-}
-
-/**
- * Take the host's queued steer messages for this node, awaiting a promised answer; none without
- * an inbox.
- */
-export async function drainSteers(ctx: Pick<AgentRunContext, "nodeId" | "steering">): Promise<string[]> {
-  return ctx.steering === undefined ? [] : [...(await ctx.steering.drain(ctx.nodeId))];
-}
-
-/** Return the signal the host aborts to interrupt this node; `undefined` without an inbox. */
-export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering">): AbortSignal | undefined {
-  return ctx.steering?.interruptSignal(ctx.nodeId);
-}
+// --------------------------------------------------------------------------------------- //
+// Media files
+// --------------------------------------------------------------------------------------- //
 
 // The extensions of the media types models send; any other type is stored as `.bin`.
 const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([

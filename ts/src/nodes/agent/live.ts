@@ -4,8 +4,9 @@
  *
  * Chunks and events go to evaluator-supplied sinks and nowhere else; the reply is the same with
  * or without sinks. The call itself is written to the node's steps (`AgentSteps`) once it returns,
- * before anything acts on it; nothing is replayed on resume yet. Every call streams on the wire; a
- * chat reply's text reaches the host only when a stream sink exists.
+ * before anything acts on it, and a resumed start takes a recorded reply back in place of the call,
+ * publishing nothing. Every live call streams on the wire; a chat reply's text reaches the host
+ * only when a stream sink exists.
  *
  * A model call retries under `YIAN_MODEL_RETRIES` and publishes one bracket per attempt: each
  * attempt's `ModelCallStarted`, its chunks, then its `ModelCallFinished`. A finished event with
@@ -41,7 +42,14 @@ import type { JsonObject } from "../../typesys/json.ts";
 import type { Value } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps } from "../base.ts";
 import { copyValue } from "../binding.ts";
-import { type AgentRunContext, type AgentSteps, fileToInline, inlineToFile, type RetrySettings } from "./context.ts";
+import {
+  type AgentRunContext,
+  type AgentSteps,
+  fileToInline,
+  inlineToFile,
+  type PriorAttempts,
+  type RetrySettings,
+} from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 
 /** The stream key of AGENT reply text. */
@@ -132,6 +140,12 @@ export function errorName(error: unknown): string {
  * or any error once `signal` aborted, passes through untouched with nothing more emitted. Sinks
  * throw `CapabilityFault` (the evaluator wraps them); any other sink error counts as a model failure.
  *
+ * With `record`, a reply an earlier start recorded for this call is returned first, as recorded,
+ * with nothing emitted or written (`AgentSteps.takeRecorded`); a recorded reply a host interrupt
+ * cut throws `ReplyInterrupted` with its text. The first live call after the replay continues the
+ * failed attempts recorded after the last reply: it waits the last one's `retry_in` and numbers
+ * its attempts after them (`AgentSteps.priorAttempts`).
+ *
  * With `record`, the request goes to the model with its file media inlined (`fileToInline`), and
  * the call is written before anything acts on it: each failed attempt, before its
  * `ModelCallFinished`, with its wait (`retry_in`, `null` when it isn't retried), what arrived and
@@ -151,10 +165,11 @@ export function errorName(error: unknown): string {
  * @param options `purpose` and `exchangeId` go on every event; `signal` stops the call;
  *   `interrupt` is the host's interrupt signal; `retry`'s `scheduler` and `random` run the retry
  *   waits; `record` holds the steps to write to and the request's digest (`requestSha256`).
- * @returns The successful attempt's reply, its media in file form with `record`, and with
- *   `record` the `n` of the reply's `model_call` step (`null` without).
+ * @returns The successful attempt's reply, its media in file form with `record`; with `record`
+ *   the `n` of the reply's `model_call` step (`null` without); and whether the reply was replayed.
  * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
  *   reply and `null` usage for a cut wait; it is never marked.
+ * @throws CapabilityFault when a recorded call's purpose or digest differs from this one's.
  */
 export async function callModel(
   live: LiveSinks | null,
@@ -168,8 +183,19 @@ export async function callModel(
     retry?: RetrySettings;
     record?: { steps: AgentSteps; digest: string };
   },
-): Promise<{ response: Response; n: number | null }> {
+): Promise<{ response: Response; n: number | null; replayed: boolean }> {
   const { purpose, exchangeId, signal, interrupt, retry = {}, record } = options;
+  let prior: PriorAttempts | undefined;
+  if (record !== undefined) {
+    const recorded = record.steps.takeRecorded(purpose, record.digest);
+    if (recorded !== null) {
+      const { response, n } = recorded;
+      // A reply a host interrupt cut ends the call as that interrupt did.
+      if (response.finishReason === "interrupted") throw new ReplyInterrupted(response.message, usageOf(response));
+      return { response, n, replayed: true };
+    }
+    prior = record.steps.priorAttempts(purpose, record.digest) ?? undefined;
+  }
   const { scheduler = realScheduler, random } = retry;
   const emitEvent = live?.emitEvent ?? null;
   const emitStream = purpose === "chat" ? (live?.emitStream ?? null) : null;
@@ -200,6 +226,7 @@ export async function callModel(
     response = await callWithRetries(model, sent, {
       signal,
       random,
+      prior,
       scheduler: interrupt === undefined ? scheduler : interruptible(scheduler, interrupt, () => (waiting = true)),
       onAttempt: (k) => {
         attempt = k;
@@ -265,7 +292,7 @@ export async function callModel(
     response = new Response({ message: reply, usage: used, finishReason, responseId });
   }
   emitEvent?.(new ModelCallFinished({ ...identity, usage: usageOf(response), attempt }));
-  return { response, n };
+  return { response, n, replayed: false };
 }
 
 /**

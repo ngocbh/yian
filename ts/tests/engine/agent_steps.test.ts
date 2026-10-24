@@ -309,10 +309,11 @@ test("a resumed AGENT's tool call gets an idempotency key no earlier start used"
     tools: { save },
     env: retriesEnv(0),
     scheduler: virtualScheduler(START),
-    models: serving(new ScriptedModel(replies(), CONFIG)),
+    // The first reply and its result replay; the next live reply calls `save` again.
+    models: serving(new ScriptedModel([calls(["call-b", "save", "b"]), textReply("done")], CONFIG)),
   });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  // Steps outlive the first start, so the resumed reply is step 3 and its key is new.
+  // Steps outlive the first start, so the live reply is step 3 and its key is new.
   expect(keys).toEqual(["r/writer/1/0", "r/writer/3/0"]);
 });
 
@@ -563,7 +564,7 @@ function recordingSteps(prior: ValueRecord[] = []): { steps: AgentSteps; recorde
     if (error instanceof Error) error.message = error.message.replaceAll("secret", "[REDACTED]");
     return error;
   };
-  return { steps: new AgentSteps(nodeSteps, () => START, null, scrub), recorded };
+  return { steps: new AgentSteps(nodeSteps, () => START, null, scrub, "writer"), recorded };
 }
 
 test("AgentSteps writes model_call and tool_result payloads and returns each n", () => {
@@ -632,7 +633,7 @@ test("AgentSteps scrubs a failed call's error and names its kind", () => {
 });
 
 test("AgentSteps without node steps records nothing and still numbers its steps", () => {
-  const steps = new AgentSteps(undefined, () => START, null, (error) => error);
+  const steps = new AgentSteps(undefined, () => START, null, (error) => error, "writer");
   expect(steps.toolResult({ callId: "c1", startedAt: null, output: "x", isError: false })).toBe(1);
   expect(steps.toolResult({ callId: "c2", startedAt: null, output: "y", isError: false })).toBe(2);
 });

@@ -5,7 +5,7 @@
  * (bind the inputs from the pool) and the write (the dispatcher stores `Output`). `evalNode` is
  * the append-only dispatcher's evaluation seam: it binds the record, pre-resolves reserved keys,
  * builds the trait-gated capabilities, runs the node through its assert-owning `run` template,
- * and resolves to an `EvaluatedOutcome` holding exactly `Output | Route | Grow |
+ * and resolves to an `EvaluatedOutcome` holding exactly `Output | Route | Grow | Pending |
  * EvaluationFailure` plus optional evidence and input capture. It publishes no observers; durable
  * observer order belongs to the dispatcher.
  *
@@ -46,6 +46,7 @@ import {
   type NodeCaps,
   type NodeResult,
   Output,
+  Pending,
   Route,
   type Steering,
 } from "../nodes/base.ts";
@@ -292,7 +293,7 @@ export class SteeringCapability implements Steering {
 }
 
 /** The closed raw worker result the append-only dispatcher consumes. */
-export type WorkerOutcome = Output | Route | Grow | EvaluationFailure;
+export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 
 /**
  * One raw worker outcome with frozen evidence and optional backward capture. Frozen.
@@ -327,6 +328,7 @@ export class EvaluatedOutcome {
         outcome instanceof Output ||
         outcome instanceof Route ||
         outcome instanceof Grow ||
+        outcome instanceof Pending ||
         outcome instanceof EvaluationFailure
       )
     ) {
@@ -622,8 +624,8 @@ export interface EvalNodeOptions {
   models?: ModelAccess | null;
   /**
    * This start's steps from the engine, delivered only to a node declaring `needsSteps` as a
-   * `NodeSteps` over the same `starts` and `prior`; a `CapabilityFault` its `record` throws is a
-   * capability fault of this evaluation. The node's `record` closes when the outcome is decided.
+   * `NodeSteps` over the same `starts`, `prior`, `calls` and `maxEventBytes`; a `CapabilityFault`
+   * its `record` throws is a capability fault of this evaluation. The node's `record` closes when the outcome is decided.
    */
   steps?: NodeSteps | null;
   /**
@@ -1061,7 +1063,7 @@ async function evaluateNode(
   if (steps !== null && node.needsSteps === true) {
     // The engine's recorder throws its faults as capability faults; a node can catch one, so the
     // evaluator keeps it as it keeps the other capabilities' faults.
-    caps.steps = new NodeSteps(steps.starts, steps.prior, (step, options) => {
+    const recordStep: NodeSteps["record"] = (step, options) => {
       if (closed) throw new CapabilityFault(new Error("node steps capability is closed"));
       try {
         return steps.record(step, options);
@@ -1069,7 +1071,8 @@ async function evaluateNode(
         if (error instanceof CapabilityFault) onFault(error);
         throw error;
       }
-    });
+    };
+    caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes);
   }
 
   let result: unknown;
@@ -1110,7 +1113,7 @@ async function evaluateNode(
 
 /** Return the error of a result outside `NodeResult` or a `Grow` from a non-spawner, else `null`. */
 function resultContractError(node: Node, result: unknown): Error | null {
-  if (!(result instanceof Output || result instanceof Route || result instanceof Grow)) {
+  if (!(result instanceof Output || result instanceof Route || result instanceof Grow || result instanceof Pending)) {
     return new Error(`node ${reprText(node.id)} run() returned ${jsTypeName(result)}, not a NodeResult`);
   }
   if (result instanceof Grow && !node.isSpawner) {

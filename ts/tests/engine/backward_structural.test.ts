@@ -474,6 +474,15 @@ test("the pre-assert check validates the node's setup first, as the run template
   expect(() => new BareNode("bare").preAssertsHold({})).toThrow(new Error("node 'bare' (BareNode) defines no forward"));
 });
 
+test.each([
+  ["a static key", { settings: "rendered" }, "the render cannot replace static node data: settings"],
+  ["the model config", { effective_llm_config: {} }, "effective_llm_config belongs to the run's model config"],
+])("the node data rebuild refuses a render holding %s", (_label, render, message) => {
+  const node = new CaptureNode();
+  node.renderCapture = () => render;
+  expect(() => rebuildNodeData(node, { topic: "reefs", limit: 4n }, {})).toThrow(new RangeError(message));
+});
+
 test("custom run captures its inputs at its existing pre-run boundary", async () => {
   class CustomRun extends CaptureNode {
     override async run(inputs: Readonly<Record<string, unknown>>): Promise<NodeResult> {

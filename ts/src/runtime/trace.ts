@@ -324,8 +324,8 @@ export class TraceOccurrence {
    *   default) leaves `boundInputs` unreadable.
    * @param options.fillsText Whether `rebind` also rebuilds the capture's interpolation text,
    *   which `capture` and `inputRoute` then read; defaults to `false` (they give it as held).
-   * @param options.nodeData Rebuilds the node data from the node and its bound inputs; `null`
-   *   (the default) leaves `nodeData` unreadable.
+   * @param options.nodeDataRebuilder Rebuilds the node data from the node and its bound inputs;
+   *   `null` (the default) leaves `nodeData` unreadable.
    * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
    *   `null` or exactly a `MemoryScope`, or there is no capture.
    * @throws RangeError when `fillsText` is given without `rebind`.
@@ -344,7 +344,7 @@ export class TraceOccurrence {
       capture?: ForwardCapture | null;
       rebind?: (() => ReboundOccurrence) | null;
       fillsText?: boolean;
-      nodeData?: (() => JsonObject) | null;
+      nodeDataRebuilder?: (() => JsonObject) | null;
     } = {},
   ) {
     const {
@@ -355,7 +355,7 @@ export class TraceOccurrence {
       capture = null,
       rebind = null,
       fillsText = false,
-      nodeData = null,
+      nodeDataRebuilder = null,
     } = options;
     if (fillsText && rebind === null) throw new RangeError("rebuilding interpolation text requires a rebinder");
     this.source = source;
@@ -368,7 +368,7 @@ export class TraceOccurrence {
     this.#capture = held;
     this.#rebind = rebind;
     this.#fillsText = fillsText;
-    this.#rebuildNodeData = nodeData;
+    this.#rebuildNodeData = nodeDataRebuilder;
     this.#inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
@@ -424,8 +424,9 @@ export class TraceOccurrence {
    * node and its bound inputs (`rebuildNodeData`): its static material and, for a node whose
    * `forward` rendered, the render and the model config it used. Built on the first read.
    *
-   * @throws RangeError when the occurrence was made without a rebuilder, as `boundInputs`, or when
-   *   the run recorded no model config for the node.
+   * @throws RangeError when the occurrence was made without a rebuilder, as `boundInputs` (a
+   *   finished binding whose bound inputs don't rebuild included), or when the run recorded no
+   *   model config for the node.
    */
   get nodeData(): JsonObject {
     if (this.#rebuildNodeData === null) {
@@ -1254,8 +1255,11 @@ export interface PrepareTraceOptions {
   capture?: ForwardCapture | null;
   /** Binds the executing node again, which rebuilds the occurrence's bound inputs. */
   rebinder?: Rebinder | null;
-  /** Rebuilds the executing node's node data from its bound inputs (`null` for none). */
-  nodeData?: ((inputs: Readonly<Record<string, unknown>> | null) => JsonObject) | null;
+  /**
+   * Rebuilds the executing node's node data from its bound inputs (`null` for none); a finished
+   * binding needs `rebinder` too.
+   */
+  nodeDataRebuilder?: ((inputs: Readonly<Record<string, unknown>> | null) => JsonObject) | null;
 }
 
 /**
@@ -1302,7 +1306,7 @@ export function prepareTrace(
     steps = [],
     capture: rebuilt = null,
     rebinder = null,
-    nodeData: rebuildNodeData = null,
+    nodeDataRebuilder: rebuildNodeData = null,
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -1389,6 +1393,9 @@ export function prepareTrace(
   // failure at a binding stage bound no inputs, so it is bound again only for that text.
   const fillsText = rebuilt === null && holdsInterpolation(capture);
   const bound = !unbound(record);
+  if (bound && rebuildNodeData !== null && rebinder === null) {
+    throw new RangeError("rebuilding the node data of a finished binding requires a rebinder");
+  }
   let again: { capture: BindingCapture; failure: BindingError | null } | null = null;
   const bindAgain = () => (again ??= reboundCapture(trace, capture.route, rebinder!));
   const rebind = (): ReboundOccurrence => {
@@ -1407,13 +1414,14 @@ export function prepareTrace(
     capture,
     rebind: rebinder !== null ? rebind : bound ? null : () => ({ inputs: null, capture, inputRoute }),
     fillsText: fillsText && rebinder !== null,
-    nodeData:
+    nodeDataRebuilder:
       rebuildNodeData === null
         ? null
         : () => {
             if (!bound) return rebuildNodeData(null);
             const rebound = bindAgain();
             finishedInputs(node.id, rebound);
+            // The typed values, not `finishedInputs`' canonical JSON: the render needs them as bound.
             return rebuildNodeData(rebound.capture.boundInputs);
           },
   });

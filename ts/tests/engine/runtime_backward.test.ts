@@ -525,7 +525,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
     const options: PrepareTraceOptions = {};
     if (record instanceof NodeSucceededRecord) {
       options.rebinder = fixedRebinder(inputs.get(record.nodeId)!);
-      options.nodeData = fixedNodeData(nodeData.get(record.nodeId)!);
+      options.nodeDataRebuilder = fixedNodeData(nodeData.get(record.nodeId)!);
       const commit = envelopes[record.commit]!.record as PoolCommitRecord;
       options.committed = { key: commit.key, valueJson: logJson(commit.value) };
       if (record.nodeId === END_ID) {

@@ -2654,7 +2654,7 @@ function prepareRecordTrace(
   return prepareTrace(state.trace, envelope, node, {
     ...options,
     rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
-    nodeData: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
+    nodeDataRebuilder: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
     steps: nodeId === null ? [] : (state.nodeSteps.get(nodeId) ?? []),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
@@ -2676,8 +2676,10 @@ function nodeRebinder(state: RunState, node: Node): Rebinder {
 
 /**
  * Return what rebuilds `node`'s node data from its bound inputs (`rebuildNodeData`), with the
- * model configs the run recorded, kept for learning, which runs after an expansion may have pruned
- * the node from the flow.
+ * model configs the run recorded.
+ *
+ * It holds the node itself, since learning runs after an expansion may have pruned the node from
+ * the flow.
  */
 function nodeDataRebuilder(
   state: RunState,

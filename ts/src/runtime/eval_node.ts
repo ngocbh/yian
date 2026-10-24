@@ -933,7 +933,8 @@ export function nodeBackwardCapture(node: Node): BackwardCapture {
  * @returns Canonical JSON.
  * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
  *   isn't JSON, and the hooks' own errors.
- * @throws RangeError when the node renders and the run's map has no entry for its static path.
+ * @throws RangeError when the node renders and the run's map has no entry for its static path, or
+ *   its render holds `effective_llm_config` or a key of its static material.
  */
 export function rebuildNodeData(
   node: Node,
@@ -946,6 +947,11 @@ export function rebuildNodeData(
   const data: Record<string, unknown> = { ...captured };
   const render = node.renderCapture(inputs);
   if (render !== null && node.preAssertsHold(inputs)) {
+    if (Object.hasOwn(render, "effective_llm_config")) {
+      throw new RangeError("effective_llm_config belongs to the run's model config");
+    }
+    const replaced = Object.keys(render).filter((key) => Object.hasOwn(data, key));
+    if (replaced.length > 0) throw new RangeError(`the render cannot replace static node data: ${replaced.join(", ")}`);
     Object.assign(data, render, { effective_llm_config: invocationLlmConfig(node, inputs, effectiveLlmByStaticPath) });
   }
   return canonicalSeed(data)[1] as WireObject;

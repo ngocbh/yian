@@ -1501,12 +1501,12 @@ export abstract class Node {
   }
 
   /**
-   * Return static backward material before this invocation runs.
+   * Return the node's static backward material.
    *
    * This pure hook reads authored layout only: it doesn't resolve defaults, render prompts or
-   * run the body. Input and variable names are captured separately. With retention on, the base
-   * `run` template calls it after defaults and before the assertions or the body; a kind that
-   * overrides `run` keeps the evaluator's pre-run boundary.
+   * run the body. Input and variable names are captured separately. No evaluation calls it:
+   * learning does, when it first reads an occurrence's node data (`rebuildNodeData`), for an
+   * invocation whose binding finished.
    *
    * @returns JSON material (infinity is a value; NaN is refused), empty by default. The reserved
    *   `input_output_paths` record addresses declared inputs by paths of string fields or

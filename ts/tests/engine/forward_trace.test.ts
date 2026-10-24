@@ -1054,7 +1054,7 @@ function installOccurrence(trace: RetainedTrace, record: OutcomeRecord, nodeData
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
   const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
     rebind: () => ({ inputs: { v: 1n }, capture, inputRoute: capture.route }),
-    nodeData: () => nodeData,
+    nodeDataRebuilder: () => nodeData,
   });
   trace._occurrences.push(occurrence);
   trace.occurrenceBySource.set(sourceKey(occurrence.source), occurrence);
@@ -1573,11 +1573,18 @@ test("prepareTrace and apply build the trace record by record", () => {
     return { capture: new BindingCapture({ v: 1n }, ValueRoute.record([]), new Set()), failure: null };
   };
   const rebuiltFrom: unknown[] = [];
-  const nodeData = (inputs: Readonly<Record<string, unknown>> | null) => {
+  const nodeDataRebuilder = (inputs: Readonly<Record<string, unknown>> | null) => {
     rebuiltFrom.push(inputs);
     return { k: "rebuilt" };
   };
-  expect(step(trace, succeeded, node, { writerFiles: files, rebinder, nodeData })).toBe(trace);
+  // Node data needs the bound inputs, so a finished binding with no rebinder can't rebuild it.
+  expectError(
+    () => step(trace, succeeded, node, { writerFiles: files, nodeDataRebuilder }),
+    RangeError,
+    "rebuilding the node data of a finished binding requires a rebinder",
+  );
+  expect(trace.occurrences).toHaveLength(0);
+  expect(step(trace, succeeded, node, { writerFiles: files, rebinder, nodeDataRebuilder })).toBe(trace);
   const source = new SourceRef(RUN, 2);
   const occurrence = trace.occurrences[0]!;
   expect(occurrence.source).toEqual(source);

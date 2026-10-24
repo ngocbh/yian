@@ -211,7 +211,7 @@ test("declared variable inventory preserves canonical declarations", () => {
   expect(new AgentNode("empty").declaredVariables()).toEqual([]);
 });
 
-test("a retained agent captures its actual render locals once", async () => {
+test("a retained agent's node data is its render locals, rendered again", async () => {
   const llmConfig = { provider: "openai", model: "chosen", openai: { temperature: 0.8 } };
   const node = new AgentNode("writer", {
     prompt: "${instruction}: ${topic}; ${count}/${count}",

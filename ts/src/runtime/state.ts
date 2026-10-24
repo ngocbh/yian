@@ -4001,13 +4001,18 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
 const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index"] as const;
 
 /**
- * Require a running node's `pending` step to register its own host call: the node makes a host
- * tool call that isn't a take or sleep, `tool` is its tool, `call_id` its TOOL call id, not yet
+ * Require a running node's `pending` step to register its own host call. An AGENT's is checked by
+ * `validateAgentPendingStep`. Otherwise the node makes a host tool call that isn't a take or sleep, `tool` is its tool, `call_id` its TOOL call id, not yet
  * registered; no agent fields; a `deadline` only on an `ask`, as a record time; `arguments` an
  * object; and the whole step within the run's `MAX_EVENT_BYTES`.
  */
 function validatePendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
-  const toolId = state.flow.nodes.get(nodeId)!.hostToolCall()?.toolId ?? null;
+  const node = state.flow.nodes.get(nodeId)!;
+  if (node.hostToolCall() === null && node.grantedTools().length > 0) {
+    validateAgentPendingStep(state, nodeId, step);
+    return;
+  }
+  const toolId = node.hostToolCall()?.toolId ?? null;
   if (toolId === null) throw new RangeError(`a pending step on node ${reprText(nodeId)}, which calls no host tool`);
   if (toolId === TAKE || toolId === SLEEP) {
     throw new RangeError(`a pending step on node ${reprText(nodeId)}, whose ${toolId} the engine decides`);
@@ -4027,11 +4032,61 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
     requireRecordTime(deadline, "pending deadline");
   }
   if (!isRecord(step["arguments"])) throw new RangeError("pending arguments must be an object");
+  requireNewPendingCall(state, callId, step);
+}
+
+/**
+ * Require an AGENT's `pending` step to register a call of its latest reply: `tool` a granted
+ * tool's name, neither take nor sleep; `tool_call_id` the provider's id; `reply` the `n` of the
+ * node's latest `model_call` step and `index` the call's place among its runnable calls, which
+ * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply) and no
+ * `deadline`; not yet registered, and within the run's `MAX_EVENT_BYTES`.
+ */
+function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  const { call_id: callId, tool, tool_call_id: toolCallIdOf } = step;
+  if (typeof tool !== "string" || tool === "" || tool === TAKE || tool === SLEEP) {
+    throw new RangeError(`an agent's pending tool must name a host tool, got ${writeAsText(tool ?? null)}`);
+  }
+  if (typeof toolCallIdOf !== "string" || toolCallIdOf === "") {
+    throw new RangeError("an agent's pending tool_call_id must be a non-empty string");
+  }
+  const index = stepInt(step["index"]);
+  if (index === null || index < 0) throw new RangeError("an agent's pending index must be an int of at least 0");
+  const reply = stepInt(step["reply"]);
+  const latest = latestReply(state, nodeId);
+  if (reply === null || reply !== latest) {
+    throw new RangeError(
+      `an agent's pending reply must be node ${reprText(nodeId)}'s latest model_call step ${latest ?? "(none)"}, ` +
+        `got ${writeAsText(step["reply"] ?? null)}`,
+    );
+  }
+  if (callId !== `${state.runId}/${nodeId}/${reply}/${index}`) {
+    throw new RangeError(`pending call_id ${writeAsText(callId ?? null)} isn't call ${index} of node ${reprText(nodeId)}'s reply ${reply}`);
+  }
+  if (Object.hasOwn(step, "arguments")) throw new RangeError("an agent's pending step holds no arguments; they are in its reply");
+  if (Object.hasOwn(step, "deadline")) throw new RangeError("an agent's pending step has no deadline");
+  requireNewPendingCall(state, callId, step);
+}
+
+/** Require a `pending` step within the run's `MAX_EVENT_BYTES` whose call isn't registered yet. */
+function requireNewPendingCall(state: RunState, callId: string, step: Readonly<JsonObject>): void {
   const size = eventBytes(step);
   if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the pending step of ${reprText(callId)}`, size, state));
   if (state.waits.calls.has(callId)) {
     throw new RangeError(`call ${reprText(callId)} is already registered; it belongs to its node until the node settles`);
   }
+}
+
+/** A step field's int (a recorded int reads back as a bigint), or `null` when it isn't a safe int. */
+function stepInt(value: unknown): number | null {
+  const n = typeof value === "bigint" ? Number(value) : value;
+  return typeof n === "number" && Number.isSafeInteger(n) ? n : null;
+}
+
+/** The `n` of `nodeId`'s latest `model_call` step, or `null` before any. */
+function latestReply(state: RunState, nodeId: string): number | null {
+  const at = (state.nodeSteps.get(nodeId) ?? []).findLastIndex((step) => step["kind"] === "model_call");
+  return at < 0 ? null : at + 1;
 }
 
 /**

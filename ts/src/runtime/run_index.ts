@@ -48,7 +48,7 @@ import { applyWaitsRecord, type WaitInfo, type WaitsJson, WaitsState, wakeableNo
 const INDEX_FILE = "index.sqlite";
 
 /** The index layout's version, kept in `PRAGMA user_version`; an index of another is rebuilt. */
-const INDEX_VERSION = 2;
+const INDEX_VERSION = 3;
 
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;

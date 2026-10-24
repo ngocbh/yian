@@ -447,8 +447,8 @@ test.each(Object.entries(WAIT_LOGS))("the fold resumes from its JSON form at eve
 
 test.each<[string, unknown, string]>([
   ["not an object", [], "waits JSON must be an object"],
-  ["a missing key", { ...new WaitsState().toJSON(), calls: undefined }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes"],
-  ["an extra key", { ...new WaitsState().toJSON(), starts: [] }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes"],
+  ["a missing key", { ...new WaitsState().toJSON(), calls: undefined }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes and replies"],
+  ["an extra key", { ...new WaitsState().toJSON(), starts: [] }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes and replies"],
   ["a map that isn't entries", { ...new WaitsState().toJSON(), calls: {} }, "waits JSON calls must be an array of [key, value] entries"],
   ["an entry with a non-text key", { ...new WaitsState().toJSON(), interrupts: [[1, 2]] }, "waits JSON interrupts must be an array of [key, value] entries"],
   ["a seq that isn't an integer", { ...new WaitsState().toJSON(), lastWoken: [["a", "3"]] }, "waits JSON lastWoken 'a' must be an integer"],

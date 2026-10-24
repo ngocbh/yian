@@ -6,7 +6,9 @@
  * tool calls, and one `tool` message per tool result. Every call streams. The vendors differ in
  * a few request rules, which `ChatOptions` holds per route: DeepSeek gets earlier reasoning back
  * as `reasoning_content`, MiniMax's reasoning models get `reasoning_split`, some models refuse a
- * named tool choice, and most Azure deployments refuse `parallel_tool_calls`.
+ * named tool choice, and most Azure deployments refuse `parallel_tool_calls`. A user message's
+ * author is folded into its first and last texts as the author wrapper (`name` is built, but no
+ * route sends it).
  *
  * Replies stream text, reasoning and tool calls as deltas; a refusal is collected into one part.
  * A call without an id gets one (`yian_call_<n>`). The finish is held until the stream ends, so
@@ -20,7 +22,7 @@
  */
 
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
-import { encodeBody, mergeRequestBody } from "../body.ts";
+import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { getCapabilities } from "../capabilities.ts";
 import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
 import {
@@ -128,6 +130,11 @@ export interface ChatOptions {
   readonly sendParallelToolCalls: boolean;
   /** Send `stream_options: {include_usage: true}`, so the stream reports usage. */
   readonly streamUsage: boolean;
+  /**
+   * Send a user message's author as `name`, on routes known to read it; other Chat Completions
+   * servers may drop the field silently, so they get the author wrapper instead.
+   */
+  readonly messageName: boolean;
 }
 
 /**
@@ -152,8 +159,14 @@ export function chatOptions(provider: string, model: string): ChatOptions {
     // kept so today's requests stay the same.
     sendParallelToolCalls: !azure || model === "gpt-4o",
     streamUsage: true,
+    // Off on every route: the wrapper attributes the same way everywhere, and some servers drop
+    // `name` silently.
+    messageName: false,
   });
 }
+
+// The conservative `name` pattern Chat Completions accepts; other authors go in the wrapper.
+const NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** What `OpenAIChat` is built from. */
 export interface OpenAIChatOptions {
@@ -202,6 +215,10 @@ export class OpenAIChat implements SseProtocol {
    * route reports usage) `stream_options`, then the tools, the tool choice and
    * `parallel_tool_calls` as the route allows, then `response_format` when the request sets
    * `outputFormat`, then `reasoning_split` when the route needs it, then the provider block.
+   *
+   * A user message's author goes as `name` when the route sends it and the author matches
+   * `^[A-Za-z0-9_-]{1,64}$`, and otherwise as the author wrapper folded into its first and last
+   * texts; the author tag is escaped in user and tool text.
    *
    * On a route that echoes reasoning, an assistant message holding a reasoning record that
    * can't be used is sent without that reasoning, and `onReplayDegraded` is called once for it;
@@ -408,13 +425,20 @@ export class OpenAIChat implements SseProtocol {
     const requireReasoning = this.options.echoReasoningContent && request.tools.length > 0;
     const rendered: JsonObject[] = [];
     for (const message of request.messages) {
-      if (message.role === "system" || message.role === "user") {
-        const item = inputMessage(message);
-        if (item !== null) rendered.push(item);
-      } else if (message.role === "assistant") {
-        rendered.push(this.#assistant(message, requireReasoning));
+      const native =
+        this.options.messageName && message.role === "user" && message.author !== null && NAME.test(message.author);
+      // Folded inline, so a one-text message still goes as a string.
+      const shown = withAuthorWrapper(message, { wrap: !native, inline: true });
+      if (shown.role === "system" || shown.role === "user") {
+        const item = inputMessage(shown);
+        if (item !== null) {
+          if (native) item["name"] = message.author;
+          rendered.push(item);
+        }
+      } else if (shown.role === "assistant") {
+        rendered.push(this.#assistant(shown, requireReasoning));
       } else {
-        for (const part of message.parts) {
+        for (const part of shown.parts) {
           if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
           if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(part, message.role));
           // Chat Completions has no error flag; the error text is the content.

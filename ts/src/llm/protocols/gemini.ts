@@ -18,7 +18,8 @@
  * Each streamed chunk is a whole `GenerateContentResponse`, of which the first candidate is read.
  * Text and thought pieces stream as deltas and join into one text or reasoning part until a call,
  * a switch between thought and text, or a second signature starts another, with dense part
- * indexes; a part whose wire parts carried a thought signature gets a replay record holding it.
+ * indexes; a part whose wire parts carried a thought signature gets a replay record holding it,
+ * and an unsigned thought an envelope-only one.
  * A call arrives whole, as one delta, with `yian_call_<n>` as its id when Gemini sends none or
  * repeats one. Usage counts merge field by field across chunks, and the finish comes at the end of
  * the stream. A reply that failed, was refused, blocked or ended early raises `ProviderError`; an
@@ -26,7 +27,7 @@
  * credentials and then caps.
  */
 
-import { encodeBody, mergeRequestBody } from "../body.ts";
+import { encodeBody, escapeAuthorTagsInJson, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import { kindForStatus, ProviderError } from "../errors.ts";
 import { type Event, Finish, PartDone, ReasoningDelta, TextDelta, ToolCallDelta, UsageReport } from "../events.ts";
@@ -161,6 +162,9 @@ export class Gemini implements SseProtocol {
    * refusal parts are not sent, and a message rendering no part is skipped. A trailing assistant
    * message goes as written.
    *
+   * A user message's author is sent as the author wrapper, one text part per tag. The author tag
+   * is escaped in user text and tool results, and again in a result's decoded JSON.
+   *
    * A text or call part's replay record puts its `thoughtSignature` on its part (an empty text
    * part is sent only with one). When any of a message's records can't be used, none of its
    * signatures is sent and `onReplayDegraded` is called once with the first reason in part order;
@@ -180,7 +184,7 @@ export class Gemini implements SseProtocol {
    *   cannot carry.
    */
   buildBody(request: Request): JsonObject {
-    const [system, contents] = this.#contents(request.messages);
+    const [system, contents] = this.#contents(request.messages.map((message) => withAuthorWrapper(message)));
     const body: JsonObject = { contents };
     if (system.length > 0) body["systemInstruction"] = { parts: system };
     if (request.tools.length > 0) {
@@ -326,12 +330,14 @@ export class Gemini implements SseProtocol {
     yield new Finish({ reason, responseId, protocol: PROTOCOL, providerPayload });
   }
 
-  /** Build a streamed part, with a record of its signature when it has one. */
+  /**
+   * Build a streamed part, with a record of its signature when it has one; an unsigned thought
+   * gets an envelope-only record, so every reasoning part names the route that wrote it.
+   */
   #part(part: Streamed): Part {
     const record = part.signature === null ? null : replayRecord(this.#key, { thought_signature: part.signature });
-    if (part.kind !== "call") {
-      return part.kind === "text" ? new TextPart(part.text, record) : new ReasoningPart(part.text, record);
-    }
+    if (part.kind === "reasoning") return new ReasoningPart(part.text, record ?? replayRecord(this.#key, {}));
+    if (part.kind !== "call") return new TextPart(part.text, record);
     const { id, name, args, rawArguments } = part;
     return new ToolCallPart({ id, name, arguments: args, rawArguments, providerPayload: record });
   }
@@ -515,7 +521,7 @@ function functionResponse(part: Part): JsonObject {
 /**
  * Return a tool result's `response`: its text read as plain JSON when that is an object, else
  * `{output: <the value>}`, or `{output: <the text>}` when the text is not plain JSON (Gemini
- * takes only an object here).
+ * takes only an object here). The author tag is escaped in the decoded strings and keys.
  */
 function toolResponse(content: string): JsonObject {
   let value: JsonValue;
@@ -525,6 +531,8 @@ function toolResponse(content: string): JsonObject {
     if (error instanceof JSONDecodeError) return { output: content };
     throw error;
   }
+  // The text was escaped as text, but a JSON escape such as `\u003c` decodes to a literal `<`.
+  value = escapeAuthorTagsInJson(value);
   return isPlainObject(value) ? value : { output: value };
 }
 

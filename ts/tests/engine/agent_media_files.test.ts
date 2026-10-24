@@ -143,6 +143,19 @@ test("inlineToFile returns a message without inline media, or any message withou
   expect(inlineToFile(inline, null)).toBe(inline);
 });
 
+test("fileToInline and inlineToFile keep a message's author", async () => {
+  const dir = folder();
+  const ref = writeRunFile(dir, PNG, "image/png");
+  const user = new Message({
+    role: "user",
+    parts: [new TextPart("look"), new MediaPart({ mime: "image/png", file: ref })],
+    author: "alice",
+  });
+  expect((await fileToInline(new Request({ messages: [user] }), dir)).messages[0]!.author).toBe("alice");
+  const reply = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: DATA })], author: "bot" });
+  expect(inlineToFile(reply, dir).author).toBe("bot");
+});
+
 test("inlineToFile refuses inline data that isn't base64, storing nothing", () => {
   const dir = folder();
   for (const data of ["not base64!", "a-b_"]) {

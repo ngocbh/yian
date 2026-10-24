@@ -13,6 +13,7 @@
       "type": "array",
       "items": {"$ref": "#/$defs/part"}
     },
+    "author": {"type": "string", "minLength": 1, "description": "Who wrote the message when it isn't the flow's user or the model: a person or agent name. Any role may carry it; adapters send only a user message's author (wrapped in <authored_message author=\"...\"> ... </authored_message> text). Left out when there is none."},
     "protocol": {"type": "string", "description": "The protocol id of the adapter that produced the message, e.g. openai_responses or catalog:<provider>. Every provider payload in the message belongs to it."},
     "provider_payload": {"$ref": "#/$defs/provider_payload"}
   },

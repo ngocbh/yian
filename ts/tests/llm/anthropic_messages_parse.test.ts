@@ -371,7 +371,7 @@ describe("deltas and parts", () => {
     const starts: JsonObject[] = [{ type: "thinking" }, { type: "thinking", thinking: null, signature: null }];
     for (const content of starts) {
       const out = await parse(reply([blockStart(0n, content), blockStop(0n)]));
-      expect(out).toEqual([new PartDone(0, new ReasoningPart("", null)), ...END]);
+      expect(out).toEqual([new PartDone(0, new ReasoningPart("", replayRecord(KEY, {}))), ...END]);
     }
   });
 
@@ -397,7 +397,7 @@ describe("deltas and parts", () => {
     expect(parts).toEqual([thought("Hm.", "SIG-1")]);
   });
 
-  test("a thinking block whose signature stays empty has no payload", async () => {
+  test("a thinking block whose signature stays empty carries its route's envelope-only record", async () => {
     const parts = await partsOf(
       reply([
         blockStart(0n, { type: "thinking", thinking: "", signature: "" }),
@@ -405,7 +405,7 @@ describe("deltas and parts", () => {
         blockStop(0n),
       ]),
     );
-    expect(parts).toEqual([new ReasoningPart("Hm.")]);
+    expect(parts).toEqual([new ReasoningPart("Hm.", replayRecord(KEY, {}))]);
   });
 
   test("an omitted-display block, a signature only, is an empty reasoning part with its record", async () => {
@@ -423,10 +423,10 @@ describe("deltas and parts", () => {
     expect(partsDone(out)).toEqual([new PartDone(0, thought("", "SIG-1")), new PartDone(1, new TextPart("Hi"))]);
   });
 
-  test("redacted data goes in the record; empty data gives no payload", async () => {
+  test("redacted data goes in the record; empty data gives an envelope-only record", async () => {
     expect(await partsOf(reply([blockStart(0n, REDACTED), blockStop(0n)]))).toEqual([redactedPart("REDACTED-DATA-1")]);
     expect(await partsOf(reply([blockStart(0n, { type: "redacted_thinking", data: "" }), blockStop(0n)]))).toEqual([
-      new ReasoningPart(""),
+      new ReasoningPart("", replayRecord(KEY, {})),
     ]);
   });
 

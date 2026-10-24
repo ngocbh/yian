@@ -763,7 +763,9 @@ Node 22, and so does every unit test; a change keeps both green.
 - Messages are `yian.message.v1` (`../conformance/schema/message.schema.json`). Provider payloads
   are opaque JSON, holding the versioned replay records of design 7.5 (`replayRecord`,
   `readReplayRecord` in `src/llm/messages.ts`); a record that doesn't match the request is
-  left out, never an error.
+  left out, never an error. Every reasoning part carries a replay record; a user message's
+  `author` is rendered per adapter (`withAuthorWrapper`, `escapeAuthorTagsInJson` in
+  `src/llm/body.ts`).
 - Every model call streams. A call ends with exactly one `Finish`, its last event, or a thrown
   `ProviderError`, whose `kind` is a stable error kind (failure codes are assigned above
   `llm/`) and whose `retryable` is set when it is built. Any other error is a defect and is

@@ -202,7 +202,11 @@ run before appending any record.
   (`node_id`, `reason`) is in-loop too: the AGENT's model left out replay state
   it couldn't send back (another provider's or account's reasoning, an unknown
   record version), while the replayed turns' text and tool calls were still
-  sent. It arrives once per reason per node start.
+  sent. It arrives once per reason per node start. Every reasoning part an
+  adapter produces is tagged with the route that wrote it; after a switch of
+  protocol, provider, model (on Anthropic any Claude model may replay) or
+  account, that reasoning and its signatures and ids are left out, never turned
+  into text.
   Changed (TS yian): `ModelCallRetried` (`node_id`, `consumer`, `attempt`,
   `error: {kind, message}`, `retry_in`) reports a model call outside a forward
   node that failed with a retryable error and is sent again after `retry_in`
@@ -2493,8 +2497,9 @@ on replay. Each `step` is a JSON object with a string `kind`:
   such as `rate_limit`, else the error's class; the message scrubbed of every credential the call
   may have sent) and `retry_in` (the wait in seconds before the retry, `null` when it isn't
   retried) in place of `response_id` and `finish`. A call a stop or abort cut writes nothing.
-  `request_sha256` is the SHA-256 of the request's messages, tools, tool choice, parallel tool
-  calls and output format, as `logJson` text, with the steers the AGENT read left out. Media
+  `request_sha256` is the SHA-256 of the request's messages (each message's `author` included),
+  tools, tool choice, parallel tool calls and output format, as `logJson` text, with the steers
+  the AGENT read left out. Media
   in a reply is never inline: its bytes are stored as `media/<sha256>.<ext>` beside the run's
   log, `output` holds the file reference, and the request (and its digest) holds that form;
   only the request sent to the provider has the bytes inline.
@@ -3049,6 +3054,25 @@ references. A request sent to a provider gets the bytes inline again, read from 
 folder; a `uri` that names no path inside the run's `media` folder, as written or with
 symlinks followed (a symlinked `media` folder included), is refused. Nothing writes media files yet: the AGENT will store the media in its replies this
 way.
+
+Changed (TS yian): a `yian.message.v1` message may carry `author`, a non-empty string naming who
+wrote it when that isn't the flow's user or the model (a person or an agent). Any role may carry
+it, but adapters send only a user message's author. On every route the message's parts are sent
+inside a closed `<authored_message author="NAME">` … `</authored_message>` wrapper, `NAME`
+XML-escaped; on Chat Completions the tags are folded into the first and last text, so a one-text
+message is still a string. Chat Completions `name` is not sent. An unauthored user message
+is not wrapped: text outside every wrapper is the flow's own user. An authored message with no
+text goes unchanged. In every user and tool text, each opening of the tag (`<authored_message` or
+`</authored_message`, in any case, and with whitespace, `\`, `/` or invisible format or
+default-ignorable characters after `<`, so `<\/authored_message>` too) has its `<` escaped as
+`&lt;`. So does a `<` that ends a text with only such characters and the start of the name after
+it, since the next part or a merged next message could finish the tag. Gemini escapes the tool
+JSON it decodes as well, so a message body or a tool's output can't forge a wrapper. Since
+user text is always escaped, a flow that wants to explain the `<authored_message>` convention to
+the model must do so in its system prompt. Not covered: lookalike tags (a fullwidth `＜`, a
+character inside the name, `authored-message`), a model that reads `&lt;` as `<`, `\u003c`-style
+escapes in tool output sent as text (no literal `<` reaches the model), and system prompts,
+which are never escaped, so a flow must not put untrusted text there.
 
 ## Blocking human interaction
 

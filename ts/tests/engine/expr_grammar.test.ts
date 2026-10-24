@@ -828,6 +828,25 @@ describe("subscripts", () => {
     expect(list.children.map(kindOf)).toEqual(["default_expr"]);
   });
 
+  test("a long chain of prefixes parses in linear time", () => {
+    // Each `-` stays a pending frame, so a parse that scanned the stack per operator would be
+    // quadratic. Compare 8x the terms against the fastest of three runs each, which keeps the
+    // check about growth, not about the machine's speed.
+    const fastest = (terms: number) => {
+      const text = Array(terms).fill("-a").join(" ** ");
+      let best = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const start = performance.now();
+        expect(() => parseExpr(text)).toThrow("expression nests deeper than");
+        best = Math.min(best, performance.now() - start);
+      }
+      return best;
+    };
+    const small = fastest(4096);
+    // Linear growth gives about 8x; quadratic gives about 64x.
+    expect(fastest(32768) / Math.max(small, 1)).toBeLessThan(24);
+  });
+
   test.each([
     ["f(x)[1:]", "refcall"],
     ["(xs + ys)[1:]", "sum"],

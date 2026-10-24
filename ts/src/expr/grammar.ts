@@ -339,7 +339,8 @@ type ChainFrame = Extract<Frame, { kind: "chain" }>;
 type CallFrame = Extract<Frame, { kind: "call" }>;
 type SubscriptFrame = Extract<Frame, { kind: "subscript" }>;
 
-const OMITTED = (): Tree => new Tree("omitted", []);
+/** A new tree for an omitted slice bound. */
+const omitted = (): Tree => new Tree("omitted", []);
 
 const SLICE_REQUIRED = "inside a slice, `:` ends a bound; write `(a :? b)` for a required value";
 const SLICE_STEP = "slices take no step; for a default in a bound, use parentheses: `xs[(n :- 0):]`";
@@ -357,7 +358,7 @@ function afterColon(cursor: Cursor, stack: Frame[], frame: SubscriptFrame): Tree
   if (cursor.peek(":")) cursor.fail(cursor.pos, SLICE_STEP);
   if (!cursor.accept("]")) return null;
   stack.pop();
-  return subscriptTree(frame, OMITTED());
+  return subscriptTree(frame, omitted());
 }
 
 /** The precedence level of each binary operator, by token type. */
@@ -508,14 +509,17 @@ function parseRaw(text: string): ExprNode {
       if (stack.length === 0) return value;
       cursor.fail(text.length);
     }
-    const token = cursor.next(nearestBracket(stack)?.kind === "subscript" ? OPERATOR_IN_SLICE : OPERATOR);
+    // Scan for the nearest bracket only when a colon is next: a scan per operator would make a
+    // long chain of pending prefixes quadratic.
+    const inSlice = cursor.peek(":") && nearestBracket(stack)?.kind === "subscript";
+    const token = cursor.next(inSlice ? OPERATOR_IN_SLICE : OPERATOR);
     if (token.type === "[") {
       // Before any reduce, so the subscript binds to the bare operand, tighter than `-` and `**`.
       const frame: SubscriptFrame = { kind: "subscript", base: value, lower: null, open: token.startPos };
       stack.push(frame);
       value = null;
       if (cursor.accept(":")) {
-        frame.lower = OMITTED();
+        frame.lower = omitted();
         value = afterColon(cursor, stack, frame);
       }
       continue;

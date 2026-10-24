@@ -99,7 +99,7 @@ import {
   sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry } from "./memory_host.ts";
-import type { BackwardOptions, Node, Steering } from "./nodes/base.ts";
+import type { BackwardOptions, CompleteResult, Node, Steering } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
   type HostToolCall,
@@ -124,8 +124,11 @@ import {
   JsonlRunLog,
   RunLogChangedError,
   MemoryRunLog,
+  NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
+  NodeStepRecord,
+  NodeSucceededRecord,
   readRunLog,
   type RecordedSkill,
   type RecordedTool,
@@ -133,12 +136,23 @@ import {
   type RunLog,
   type RunLogEntry,
   RunFailedRecord,
+  type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
-import { dueTimeouts, unreadEvents, type WaitInfo, type WaitsState, wakeableNodes, wakeAt, waitInfos } from "./runtime/waits.ts";
+import {
+  applyWaitsRecord,
+  type Call,
+  dueTimeouts,
+  unreadEvents,
+  type WaitInfo,
+  WaitsState,
+  wakeableNodes,
+  wakeAt,
+  waitInfos,
+} from "./runtime/waits.ts";
 import {
   acceptedCommit,
   addCrashedAttempts,
@@ -156,7 +170,7 @@ import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
 import { RESERVED_TOOL_NAMES, type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
-import { logJson } from "./typesys/json.ts";
+import { type JsonObject, logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
 import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
 import {
@@ -2017,6 +2031,159 @@ async function deliverTo(
 export async function send(log: string, inbox: string, event: unknown, options: DeliveryOptions = {}): Promise<number> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   return (await deliverTo(log, { kind: "send", inbox, event }, options))!;
+}
+
+/**
+ * Answer the pending host call `callId` of the run at `log` with `result`: its node wakes to it
+ * when the run next moves. Delivered as `send` is.
+ *
+ * @param log The run's JSONL log.
+ * @param callId The call's id, as `pendingCalls` lists it.
+ * @param result `{output}`, checked against the tool's output type (an `ask`'s answer can't be
+ *   null), or `{error}`, final for the call.
+ * @param options See `DeliveryOptions`.
+ * @returns The answer's seq, or `null` when the call is already answered with exactly this result.
+ * @throws TypeError when `callId` isn't a string, `result` isn't `{output}` or `{error: string}`,
+ *   or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
+ *   result, `unknown_call` (no such call, its node settled, or its handler hasn't returned
+ *   `pending()`), `not_host_call` for a take or sleep, `call_settled` (with `callState`) for an
+ *   answered, timed-out or closed call, `invalid_value` (the `TypeCheckError` is the cause) or
+ *   `too_large`.
+ * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ */
+export async function complete(
+  log: string,
+  callId: string,
+  result: CompleteResult,
+  options: DeliveryOptions = {},
+): Promise<number | null> {
+  if (typeof callId !== "string") throw new TypeError("callId must be a string");
+  const shaped =
+    isRecord(result) &&
+    Object.keys(result).length === 1 &&
+    (Object.hasOwn(result, "output") || (Object.hasOwn(result, "error") && typeof result.error === "string"));
+  if (!shaped) throw new TypeError("a complete's result must be {output} or {error: string}");
+  return deliverTo(log, { kind: "complete", callId, result }, options);
+}
+
+/**
+ * Close the top-level inbox `inbox` of the run at `log`: later sends are refused, takes still read
+ * what is queued, and a take waiting on it with nothing to read gets `{events: [], closed: true}`
+ * when the run next moves. Delivered as `send` is.
+ *
+ * @param log The run's JSONL log.
+ * @param inbox The name of one of the flow's `Inbox(T)` inputs.
+ * @param options See `DeliveryOptions`.
+ * @returns The close's seq, or `null` when the inbox is already closed.
+ * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
+ *   result, or `unknown_inbox`.
+ * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ */
+export async function close(log: string, inbox: string, options: DeliveryOptions = {}): Promise<number | null> {
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  return deliverTo(log, { kind: "close", inbox }, options);
+}
+
+/**
+ * Cancel the run at `log`: `run_cancelled` ends it, closing its open calls, with no output and no
+ * learning. A live engine aborts its running nodes and publishes `CallClosed {reason:
+ * "cancelled"}` for each open host call. Delivered as `send` is.
+ *
+ * @param log The run's JSONL log.
+ * @param options See `DeliveryOptions`.
+ * @returns The open host calls the cancel closed, as `pendingCalls` listed them.
+ * @throws TypeError when `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
+ *   result (a second cancel among them).
+ * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ */
+export async function cancel(log: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
+  let open: readonly PendingCall[] = [];
+  await deliverTo(log, { kind: "cancel" }, options, (state) => {
+    open = openHostCalls(state.waits, (call) => stateArguments(state, call));
+  });
+  return open;
+}
+
+/** One open host call of a run, as `pendingCalls` lists it. */
+export interface PendingCall {
+  /** The id `complete` answers it by. */
+  readonly callId: string;
+  /** The id of the node that made it. */
+  readonly node: string;
+  /** The tool's id (`"ask"`, or a host tool's). */
+  readonly tool: string;
+  /** The arguments its `pending` step recorded, or `null` when it recorded none. */
+  readonly arguments: JsonObject | null;
+  /** The seq of its `pending` step. */
+  readonly pendingSeq: number;
+  /** When it times out, as a record time, or `null` when it doesn't. */
+  readonly deadline: string | null;
+}
+
+/**
+ * List the open host calls (not takes or sleeps) of the run at `log`, in the order they were made,
+ * from one pass over its records. It takes no lock, so it reads a log another writer holds; a
+ * call leaves the list once it is answered, timed out or closed. Hosts rebuild their open asks
+ * from it.
+ *
+ * @throws RangeError when the log is empty or doesn't start with `RunStarted`, besides
+ *   `iterRunRecords`' errors.
+ * @throws Error (code `ENOENT`) when `log` doesn't exist.
+ */
+export function pendingCalls(log: string): readonly PendingCall[] {
+  const waits = new WaitsState();
+  // Each unsettled call's recorded arguments; a settled node's calls leave the fold, so theirs go.
+  const args = new Map<string, JsonObject>();
+  let first = true;
+  for (const { envelope } of iterRunRecords(log)) {
+    if (first && !(envelope.record instanceof RunStartedRecord)) {
+      throw new RangeError(`run log ${log} doesn't start with run_started`);
+    }
+    first = false;
+    applyWaitsRecord(waits, envelope);
+    const record = envelope.record;
+    if (record instanceof NodeStepRecord && record.step["kind"] === "pending") {
+      args.set(String(record.step["call_id"]), record.step["arguments"] as JsonObject);
+    } else if (isOutcomeRecord(record)) {
+      for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
+    }
+  }
+  if (first) throw new RangeError(`cannot read an empty run log: ${log}`);
+  return openHostCalls(waits, (call) => args.get(call.callId) ?? null);
+}
+
+/** Whether `record` settles a node: its success, route, expansion or failure. */
+function isOutcomeRecord(record: RunRecord): boolean {
+  return (
+    record instanceof NodeSucceededRecord ||
+    record instanceof NodeRoutedRecord ||
+    record instanceof NodeExpandedRecord ||
+    record instanceof NodeFailedRecord
+  );
+}
+
+/** The open host calls of `waits`, in registration order, with the arguments `argumentsOf` reads. */
+function openHostCalls(waits: WaitsState, argumentsOf: (call: Call) => JsonObject | null): PendingCall[] {
+  return [...waits.calls.values()]
+    .filter((call) => call.state === "open" && call.pendingSeq !== null && call.tool !== TAKE && call.tool !== SLEEP)
+    .map((call) => ({
+      callId: call.callId,
+      node: call.nodeId,
+      tool: call.tool,
+      arguments: argumentsOf(call),
+      pendingSeq: call.pendingSeq!,
+      deadline: call.deadline,
+    }));
+}
+
+/** The arguments of `call`'s `pending` step among its node's steps in `state`, or `null`. */
+function stateArguments(state: RunState, call: Call): JsonObject | null {
+  const steps = state.nodeSteps.get(call.nodeId) ?? [];
+  const step = steps.find((entry) => entry["kind"] === "pending" && entry["call_id"] === call.callId);
+  return step === undefined ? null : ((step["arguments"] as JsonObject | undefined) ?? null);
 }
 
 /**

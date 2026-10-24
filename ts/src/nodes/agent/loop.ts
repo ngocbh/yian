@@ -86,7 +86,7 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
-import { steerMessages } from "./messages.ts";
+import { type SteerRender, steerMessages } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
 
@@ -184,13 +184,20 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
   let reply: Message | null = null;
   const onDrop = (event: number, part: number) =>
     warn(`node ${reprText(ctx.nodeId)}: steer event ${event} part ${part} is media, which no route sends yet; dropped`);
+  // The events are already consumed, so a render that fails for one sends its default text instead.
+  const onFallback = (event: number, error: unknown) =>
+    warn(
+      `node ${reprText(ctx.nodeId)}: steer event ${event} didn't render (${error instanceof Error ? error.message : String(error)}); ` +
+        "sent as is",
+    );
+  const steerOptions = { render: ctx.renderSteer ?? null, onDrop, onFallback };
 
   while (true) {
     checkStopped(ctx);
     if (interruptRequested(interrupt, steps)) return interrupted(reply);
     // Steers join only here, never between a reply's tool calls and their results. The read is
     // synchronous, so neither a stop nor an interrupt lands between it and the model call.
-    for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, onDrop));
+    for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
     const request = new Request({ messages, tools: bound });
     let called: Awaited<ReturnType<typeof callModel>>;
     try {
@@ -296,7 +303,8 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
  *   (no chat request then matches); `structured` builds the model the structured calls read
  *   their plan off and gives the output type, or `null` when it can't (no structured request
  *   then matches); `baseSystemPrompt` is the system prompt without recalled memory, which each
- *   request's digest reads in place of the system message (`digestRequest`).
+ *   request's digest reads in place of the system message (`digestRequest`); `renderSteer` is
+ *   the agent's steer render, which steer steps render through as the live loop did.
  * @returns The interactions, and whether every recorded request matched.
  */
 export async function stepsMaterial(
@@ -306,6 +314,7 @@ export async function stepsMaterial(
     tools: readonly ToolSpec[] | null;
     structured: () => Promise<{ model: ChatModel; typ: Type } | null>;
     baseSystemPrompt: string | null;
+    renderSteer?: SteerRender | null;
   },
 ): Promise<{ interactions: VisibleInteraction[]; digestOk: boolean }> {
   const messages = [...options.messages];
@@ -341,7 +350,7 @@ export async function stepsMaterial(
         digestOk = false;
         break;
       }
-      messages.push(...steerMessages(values));
+      messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
       continue;
     }
     if (step["kind"] !== "model_call") continue;

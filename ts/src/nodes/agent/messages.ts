@@ -127,18 +127,51 @@ function steerParts(message: Message, onDrop: (part: number) => void): TextPart[
   return parts;
 }
 
+/** Renders one steer event to text: an AGENT's `render:` template over `${event}`. */
+export type SteerRender = (value: unknown) => string;
+
+/** How `steerMessages` renders a read, and who hears what it drops or falls back on. */
+export interface SteerMessageOptions {
+  /** The event renderer; `null` or omitted for the default rendering. */
+  readonly render?: SteerRender | null;
+  /** Hears each media part a `Message` event drops: the event's and the part's index. */
+  readonly onDrop?: (event: number, part: number) => void;
+  /** Hears each event whose `render` threw, which got its default rendering instead. */
+  readonly onFallback?: (event: number, error: unknown) => void;
+}
+
+/** The text parts an event's default rendering gives inside one message. */
+function defaultParts(value: unknown, onDrop: (part: number) => void): TextPart[] {
+  const message = typeof value === "string" ? null : asMessage(value);
+  if (message === null) return [new TextPart(writeAsText(value as Value))];
+  const parts = steerParts(message, onDrop);
+  return parts.length > 0 ? parts : [new TextPart(writeAsText(value as Value))];
+}
+
 /**
- * Return the model messages one steer read sends: each `Message` event (a value `checkMessage`
- * accepts) as a user message keeping its author, parts a user message can't carry turned into
- * text and media dropped (`onDrop(event, part)` hears each drop); each run of other events as one
- * user message with a text part per event (a `str` as is, anything else in its text form,
- * `writeAsText`). A `Message` left with no part holds its event's text form. Never throws: the
- * events are already consumed when it runs.
+ * Return the model messages one steer read sends. Without a render: each `Message` event (a value
+ * `checkMessage` accepts) as a user message keeping its author, parts a user message can't carry
+ * turned into text and media dropped (`onDrop(event, part)` hears each drop); each run of other
+ * events as one user message with a text part per event (a `str` as is, anything else in its text
+ * form, `writeAsText`). A `Message` left with no part holds its event's text form. With a render,
+ * the read is one user message with one text part per event, `render(event)`, `Message` events
+ * included; an event whose render throws gets its default rendering's parts there instead
+ * (`onFallback(event, error)` hears it). Never throws: the events are already consumed when it
+ * runs.
  */
-export function steerMessages(
-  values: readonly unknown[],
-  onDrop: (event: number, part: number) => void = () => {},
-): ModelMessage[] {
+export function steerMessages(values: readonly unknown[], options: SteerMessageOptions = {}): ModelMessage[] {
+  const { render = null, onDrop = () => {}, onFallback = () => {} } = options;
+  if (render !== null) {
+    const parts = values.flatMap((value, event) => {
+      try {
+        return [new TextPart(render(value))];
+      } catch (error) {
+        onFallback(event, error);
+        return defaultParts(value, (part) => onDrop(event, part));
+      }
+    });
+    return parts.length > 0 ? [new ModelMessage({ role: "user", parts })] : [];
+  }
   const messages: ModelMessage[] = [];
   let run: TextPart[] = [];
   const flush = (): void => {
@@ -152,9 +185,8 @@ export function steerMessages(
       return;
     }
     flush();
-    const parts = steerParts(message, (part) => onDrop(event, part));
-    if (parts.length === 0) parts.push(new TextPart(writeAsText(value as Value)));
     // An empty author can't be sent; the message goes without it.
+    const parts = defaultParts(value, (part) => onDrop(event, part));
     messages.push(new ModelMessage({ role: "user", parts, author: message.author || null }));
   });
   flush();
@@ -306,11 +338,17 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
  * read: after the previous reply's results, before the next reply.
  *
  * @param output The node's output value, read only for a structured call.
+ * @param render The agent's steer render, which steer events render through as the live loop
+ *   rendered them.
  * @returns The `list(Message)` value.
  * @throws RangeError when a structured call is given with no output value, or a steer step
  *   without its values.
  */
-export function rebuildMessages(steps: readonly Readonly<JsonObject>[], output: TypedValue | null): TypedValue {
+export function rebuildMessages(
+  steps: readonly Readonly<JsonObject>[],
+  output: TypedValue | null,
+  render: SteerRender | null = null,
+): TypedValue {
   const messages: Message[] = [];
   let reply: ModelMessage | null = null;
   let results = new Map<string, Readonly<JsonObject>>();
@@ -343,7 +381,7 @@ export function rebuildMessages(steps: readonly Readonly<JsonObject>[], output: 
       flush();
       const values = step["values"];
       if (!Array.isArray(values)) throw new RangeError("a steer step without its values");
-      for (const message of steerMessages(values)) messages.push(fromModelMessage(message));
+      for (const message of steerMessages(values, { render })) messages.push(fromModelMessage(message));
       continue;
     }
     if (step["kind"] !== "model_call") continue;

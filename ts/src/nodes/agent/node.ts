@@ -103,6 +103,7 @@ import {
   type Message,
   messageSteps,
   rebuildMessages,
+  type SteerRender,
   toModelMessage,
 } from "./messages.ts";
 import { OutputInvalidError } from "./structured.ts";
@@ -670,6 +671,12 @@ export class AgentNode extends Node {
     return isRecord(config) ? config : null;
   }
 
+  /** Render one steer event through this agent's `render:` template over `${event}`; `null` without one. */
+  private steerRenderer(): SteerRender | null {
+    const template = this.steerRender;
+    return template === null ? null : (value) => renderTemplateRecord(template, { event: value } as ValueRecord);
+  }
+
   /** Pick the steps of this agent's new messages (see `messageSteps` in `messages.ts`). */
   override messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
     return messageSteps(steps);
@@ -677,7 +684,7 @@ export class AgentNode extends Node {
 
   /** Rebuild this agent's new messages (see `rebuildMessages` in `messages.ts`). */
   override rebuildMessages(steps: readonly Readonly<JsonObject>[], output: TypedValue | null): TypedValue {
-    return rebuildMessages(steps, output);
+    return rebuildMessages(steps, output, this.steerRenderer());
   }
 
   /**
@@ -886,6 +893,7 @@ export class AgentNode extends Node {
       skills: options.skills,
       steering: caps.steering,
       steerInbox: options.steerInbox,
+      renderSteer: this.steerRenderer() ?? undefined,
       models: options.models,
       sent: () => [],
       steps: caps.steps,
@@ -1235,6 +1243,7 @@ export class AgentNode extends Node {
       tools,
       structured,
       baseSystemPrompt: rendered.baseSystemPrompt,
+      renderSteer: this.steerRenderer(),
     });
     return {
       interactions,

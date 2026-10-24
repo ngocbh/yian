@@ -24,6 +24,7 @@ import {
   unionField,
   unionTagFields,
 } from "../typesys/index.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import {
   fileFieldType,
   hasFile,
@@ -1127,6 +1128,21 @@ export class HostToolCall {
   }
 }
 
+/** One of the node's calls, as the engine reads it from the run state. Frozen. */
+export interface CallView {
+  readonly callId: string;
+  readonly tool: string;
+  readonly state: "open" | "answered" | "timed_out" | "closed";
+  readonly closedReason: "crashed" | "interrupted" | "timed_out" | "cancelled" | "failed" | null;
+  /** The answering `tool_result` step's body, once the call is answered. */
+  readonly result: Readonly<JsonObject> | null;
+  /** The call's deadline as a UTC record time, or null when it has none. */
+  readonly deadline: string | null;
+}
+
+// The YIAN_MAX_EVENT_BYTES default; the engine passes the run's recorded value.
+const DEFAULT_MAX_EVENT_BYTES = 1024 * 1024;
+
 /**
  * The durable steps one start of a node reads and records, from the engine. Frozen.
  *
@@ -1168,20 +1184,31 @@ export class NodeSteps {
    * mid-commit.
    */
   readonly record: (step: ValueRecord, options?: { settled?: boolean }) => number;
+  /**
+   * The node's calls from the run state, read before the node registers anything: a node that
+   * holds a call reuses it.
+   */
+  readonly calls: readonly CallView[];
+  /** The run's recorded cap on one event's canonical JSON; a node's `pending` arguments must fit it. */
+  readonly maxEventBytes: number;
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
 
   /**
-   * Check the field types and that the current start is counted; `prior` is copied.
+   * Check the field types and that the current start is counted; `prior` and `calls` are
+   * copied, each call frozen.
    *
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, or `record` isn't a function.
-   * @throws RangeError when `starts` is less than 1.
+   *   records, `record` isn't a function, or `calls` isn't an array.
+   * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
+   *   integer.
    */
   constructor(
     starts: number,
     prior: readonly ValueRecord[],
     record: (step: ValueRecord, options?: { settled?: boolean }) => number,
+    calls: readonly CallView[] = [],
+    maxEventBytes: number = DEFAULT_MAX_EVENT_BYTES,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
@@ -1189,8 +1216,14 @@ export class NodeSteps {
       throw new TypeError("prior must be an array of records");
     }
     if (typeof record !== "function") throw new TypeError("record must be callable");
+    if (!Array.isArray(calls)) throw new TypeError("calls must be an array");
+    if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
+      throw new RangeError("maxEventBytes must be a positive int");
+    }
     this.starts = starts;
     this.prior = Object.freeze([...prior]);
+    this.calls = Object.freeze(calls.map((call) => Object.freeze({ ...call })));
+    this.maxEventBytes = maxEventBytes;
     this.#next = prior.length + 1;
     this.record = (step, options) => {
       const n = record(step, options);

@@ -436,8 +436,8 @@ export class FlowEngine {
     if (this.#looping) {
       this.#publish(observers, this.#events);
     } else {
+      // Nothing reads the run's events once the loop has ended; only the host sees these.
       for (const observer of observers) {
-        this.#events.push(observer);
         const returned = this.onEvent?.(observer);
         // The loop has ended, so a rejection has no run to stop.
         if (returned instanceof Promise) returned.then(undefined, () => {});
@@ -935,11 +935,12 @@ export class FlowEngine {
     this.#callHost(callback, item);
   }
 
-  /** Pass each post-durable observer to `onEvent`, then add it to the run's events. */
+  /** Add each post-durable observer to the run's events, then pass it to `onEvent`. */
   #publish(observers: readonly RunEvent[], events: RunEvent[]): void {
     for (const observer of observers) {
-      if (this.onEvent !== null) this.#callHost(this.onEvent, observer);
+      // Added first, so a delivery the callback makes lands after it, in log order.
       events.push(observer);
+      if (this.onEvent !== null) this.#callHost(this.onEvent, observer);
     }
   }
 

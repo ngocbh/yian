@@ -4,7 +4,7 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { CallClosed, NodeWaiting, type RunEvent, RunCancelled, RunWaiting } from "../../src/events.ts";
 import { PoolCommitRecord } from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
-import { FakeHost, GateNode, inboxEngine, inboxFlow, recordNames } from "./inbox_fixtures.ts";
+import { FakeHost, FakeTake, GateNode, inboxEngine, inboxFlow, recordNames } from "./inbox_fixtures.ts";
 
 /** A run whose host call `ask` waits, with inbox `m` declared, already resolved waiting. */
 async function waitingRun() {
@@ -125,4 +125,18 @@ test("after the loop has ended, a rejection from onEvent's promise is ignored", 
     process.off("unhandledRejection", onUnhandled);
   }
   expect(unhandled).toEqual([]);
+});
+
+test("an observer's delivery keeps run()'s events in log order, ending with the terminal", async () => {
+  const run: ReturnType<typeof inboxEngine> = inboxEngine(
+    inboxFlow(["m"], [new FakeTake("heard", "m")], [[START_ID, "heard"], ["heard", END_ID]]),
+    {
+      onEvent: (event: RunEvent) => {
+        if (event instanceof RunWaiting) run.deliver({ kind: "cancel" });
+      },
+    },
+  );
+  const events = await run.run();
+  expect(events.slice(-3).map((event) => event.constructor.name)).toEqual(["NodeWaiting", "RunWaiting", "RunCancelled"]);
+  expect(recordNames(run.log).slice(-3)).toEqual(["NodeWaitingRecord", "RunWaitingRecord", "RunCancelledRecord"]);
 });

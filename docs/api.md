@@ -2478,8 +2478,8 @@ Changed (TS yian, schema 22): an AGENT's success writes three records with nothi
 its output `pool_commit`, then a messages commit, then `node_succeeded`, which names both. The
 messages commit, `pool_commit {node_id, key: "<node>.new_messages", steps: [seq, ...]}`, holds no
 value but `steps`: the seqs of the agent's own steps its new messages are made of, ascending:
-each chat `model_call` whose reply arrived, every `tool_result`, and for a structured agent its
-accepted structured call (the node's last `model_call`, when it is structured, has no `error` and
+each chat `model_call` whose reply arrived, every `tool_result`, every `steer` read, and for a
+structured agent its accepted structured call (the node's last `model_call`, when it is structured, has no `error` and
 wasn't cut). Failed attempts, `llm_config` steps and earlier structured attempts are left out.
 `node_succeeded` gains `messages`, the messages commit's seq (`null` for every other node; always
 on the wire). The reducer derives `steps` itself (`Node.messageSteps`, which picks step `n`s that
@@ -2489,7 +2489,10 @@ that names none. It rebuilds the value, a `list(Message)` (`Node.rebuildMessages
 commit is prepared, so a value that doesn't rebuild appends nothing: each reply as recorded, then
 one `tool` message per call it answered, in the reply's call order (results are recorded in
 finish order). A tool call with no result (its arguments didn't parse, or a host interrupt cut its
-reply) is left out, so every tool call in the value has a result; so is media that isn't a
+reply) is left out, so every tool call in the value has a result. Each `steer` read joins where
+it was read, after the previous reply's results, as the user messages the request held: one per
+`Message` event, keeping its author, and one for each run of other events, a text part per event
+(the reducer reads the events from the run's sends). Left out too is media that isn't a
 run-folder file (a run without a log keeps a reply's media inline; the agent warns when it records
 such a reply), and a message left with no parts. A structured agent's value ends with one
 assistant message holding its final value as JSON text; the recorded structured reply (an

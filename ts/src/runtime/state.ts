@@ -5471,7 +5471,8 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
     );
   }
   const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
-  const bodies = state.nodeSteps.get(nodeId) ?? [];
+  // A steer step's events are rebuilt into messages, so it needs its values.
+  const bodies = stepsWithSteerValues(state, nodeId) as unknown as readonly Readonly<JsonObject>[];
   const picked = record.steps!.map((seq) => bodies[seqs.indexOf(seq)]!);
   try {
     const [wire] = canonicalTyped(node.rebuildMessages(picked, decodeTyped(output.valueJson)), newMessagesType());

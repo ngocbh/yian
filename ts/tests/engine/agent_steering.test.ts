@@ -81,7 +81,7 @@ import { join } from "node:path";
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
-import { type CompiledFlow, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { type CompiledFlow, copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import {
@@ -121,16 +121,16 @@ import { MemoryContext } from "../../src/memory/contracts.ts";
 import { runFlow, send } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { NodeStepRecord } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareSend } from "../../src/runtime/state.ts";
+import { commitPrepared, prepareSend, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { unreadEvents } from "../../src/runtime/waits.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { Scheduler } from "../../src/platform.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import type { JsonObject } from "../../src/typesys/json.ts";
+import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { InboxRef, inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
 import { inboxEngine } from "./inbox_fixtures.ts";
-import { CrashAt, crashes, drive, graph, NO_ENV, rejected, resumeWith, runWith, serving } from "./run_state_fixtures.ts";
+import { CrashAt, crashes, drive, graph, NO_ENV, noGrowth, rejected, resumeWith, runWith, serving } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -417,6 +417,31 @@ test("steers are sent as one user message per read at the top of each iteration"
   const steps = running!.log.records().flatMap(({ record }) => (record instanceof NodeStepRecord ? [record.step["kind"]] : []));
   expect(steps).toEqual(["steer", "model_call", "tool_result", "steer", "model_call"]);
   expect(unread()).toEqual([]);
+});
+
+test("the agent's new messages hold each steer read where it joined, and replay rebuilds them", async () => {
+  const lookup = lookupTool((topic) => {
+    steer("only the 2024 rows");
+    steer("and cite them");
+    return `found ${topic}`;
+  });
+  const model = new ScriptedModel([reply("", ["lookup", { topic: "a" }, "call-1"]), reply("done")], CONFIG);
+  const flow = chatFlow({ tools: ["lookup"] });
+  expect(await run(flow, model, { tools: new ToolSet({ lookup }), before: ["use dataset B"] })).toBe("done");
+  const value = running!.state.pool.store.get("chat.new_messages")!;
+  const shape = (value.toObject() as { role: string; parts: { type: string; text?: string }[] }[]).map((message) => [
+    message.role,
+    message.parts.map((part) => part.text ?? part.type),
+  ]);
+  expect(shape).toEqual([
+    ["user", ["use dataset B"]],
+    ["assistant", ["tool_call"]],
+    ["tool", ["tool_result"]],
+    ["user", ["only the 2024 rows", "and cite them"]],
+    ["assistant", ["done"]],
+  ]);
+  const replayed = replayRecords(new RunState(copyGraph(flow)), running!.log.records(), { growBuilder: noGrowth });
+  expect(logJson(replayed.pool.store.get("chat.new_messages")!.toWire())).toBe(logJson(value.toWire()));
 });
 
 test("a steer queued between two calls of a reply joins after both results", async () => {

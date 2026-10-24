@@ -406,4 +406,44 @@ describe("an AGENT's new messages", () => {
   test("no steps give the empty list", () => {
     expect(rebuildMessages([], null).toObject()).toEqual([]);
   });
+
+  // A `steer` step as the reducer hands it over: `values` attached from the inbox store.
+  const steerStep = (values: unknown[]): JsonObject =>
+    ({ kind: "steer", inbox: "notes", from: values.map((_, index) => BigInt(index + 1)), values }) as unknown as JsonObject;
+
+  test("messageSteps picks every steer step, in place", () => {
+    const steered = [steerStep(["a"]), replyStep(calling("a")), resultStep("a", "A"), steerStep(["b"]), replyStep(saying("done"))];
+    expect(messageSteps(steered)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("a steer read joins where it was read: after the reply's results, before the next reply", () => {
+    const steered = [steerStep(["first"]), replyStep(calling("a")), resultStep("a", "A"), steerStep(["b", "c"]), replyStep(saying("done"))];
+    const messages = rebuildMessages(steered, null).toObject() as Message[];
+    expect(messages).toEqual([
+      { role: "user", parts: [{ type: "text", text: "first" }] },
+      { role: "assistant", parts: [callPart("a")] },
+      { role: "tool", parts: [resultPart("a", "A")] },
+      { role: "user", parts: [{ type: "text", text: "b" }, { type: "text", text: "c" }] },
+      { role: "assistant", parts: [{ type: "text", text: "done" }] },
+    ] as unknown as Message[]);
+    checkConversation(messages);
+  });
+
+  test("k Message events are k user messages, each with its author; the other events of a read are one", () => {
+    const ada = { role: "user", author: "ada", parts: [{ type: "text", text: "from ada" }] };
+    const bob = { role: "assistant", author: "bob", parts: [{ type: "text", text: "from bob" }] };
+    const messages = rebuildMessages([steerStep(["x", ada, bob, "y", "z"]), replyStep(saying("ok"))], null).toObject();
+    expect(messages).toEqual([
+      { role: "user", parts: [{ type: "text", text: "x" }] },
+      { role: "user", author: "ada", parts: [{ type: "text", text: "from ada" }] },
+      { role: "user", author: "bob", parts: [{ type: "text", text: "from bob" }] },
+      { role: "user", parts: [{ type: "text", text: "y" }, { type: "text", text: "z" }] },
+      { role: "assistant", parts: [{ type: "text", text: "ok" }] },
+    ]);
+  });
+
+  test("a steer step without its values is refused", () => {
+    const bare = { kind: "steer", inbox: "notes", from: [1n] } as unknown as JsonObject;
+    expect(() => rebuildMessages([bare], null)).toThrow(new RangeError("a steer step without its values"));
+  });
 });

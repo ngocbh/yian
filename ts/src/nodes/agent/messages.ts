@@ -276,9 +276,9 @@ function isStructured(purpose: unknown): boolean {
 
 /**
  * Return the `n`s of the AGENT steps its new messages are made of: each chat `model_call` whose
- * reply arrived, every `tool_result`, and the accepted structured reply (the last `model_call`,
- * when it is a structured call with no error that wasn't cut), in order. Failed attempts, earlier
- * structured calls and steps of any other kind are left out.
+ * reply arrived, every `tool_result`, every `steer` read, and the accepted structured reply (the
+ * last `model_call`, when it is a structured call with no error that wasn't cut), in order. Failed
+ * attempts, earlier structured calls and steps of any other kind are left out.
  *
  * @param steps The agent's recorded steps across its starts; step `n` is `steps[n - 1]`.
  */
@@ -289,7 +289,7 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
     const arrived = step["kind"] === "model_call" && !Object.hasOwn(step, "error");
     const chat = arrived && step["purpose"] === "chat";
     const accepted = arrived && index === last && isStructured(step["purpose"]) && step["finish"] !== "interrupted";
-    if (chat || accepted || step["kind"] === "tool_result") picked.push(index + 1);
+    if (chat || accepted || step["kind"] === "tool_result" || step["kind"] === "steer") picked.push(index + 1);
   });
   return picked;
 }
@@ -301,11 +301,14 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
  * was cut) is left out, so every tool call has a result; so is media held inline, which only a
  * run without a folder keeps. A message left with no parts is left out. The accepted structured
  * call becomes one assistant message holding `output` as JSON text; its recorded reply (an
- * internal output-tool call, or the raw JSON) isn't shown.
+ * internal output-tool call, or the raw JSON) isn't shown. A `steer` step, which carries the
+ * events it read as `values`, adds the user messages `steerMessages` makes of them where it was
+ * read: after the previous reply's results, before the next reply.
  *
  * @param output The node's output value, read only for a structured call.
  * @returns The `list(Message)` value.
- * @throws RangeError when a structured call is given with no output value.
+ * @throws RangeError when a structured call is given with no output value, or a steer step
+ *   without its values.
  */
 export function rebuildMessages(steps: readonly Readonly<JsonObject>[], output: TypedValue | null): TypedValue {
   const messages: Message[] = [];
@@ -334,6 +337,13 @@ export function rebuildMessages(steps: readonly Readonly<JsonObject>[], output: 
   for (const step of steps) {
     if (step["kind"] === "tool_result") {
       results.set(step["call_id"] as string, step);
+      continue;
+    }
+    if (step["kind"] === "steer") {
+      flush();
+      const values = step["values"];
+      if (!Array.isArray(values)) throw new RangeError("a steer step without its values");
+      for (const message of steerMessages(values)) messages.push(fromModelMessage(message));
       continue;
     }
     if (step["kind"] !== "model_call") continue;

@@ -42,7 +42,7 @@ import type { Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
 import { advance, runFlow } from "../../src/run.ts";
-import { virtualScheduler } from "../../src/platform.ts";
+import { virtualScheduler, withWarnings } from "../../src/platform.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
@@ -549,6 +549,32 @@ test("a reply's media is a run file; the model_call and the next request hold it
   });
   expect(second!["request_sha256"]).toBe(requestSha256(filed, new Set()));
   expect(second!["request_sha256"]).not.toBe(requestSha256(model.requests[1]!, new Set()));
+});
+
+test("a run without a folder warns that a reply's inline media is left out of new_messages", async () => {
+  const pictured = () =>
+    new Response({
+      message: new Message({ role: "assistant", parts: [new TextPart("see"), new MediaPart({ mime: "image/png", data: PNG })] }),
+      finishReason: "stop",
+    });
+  for (const log of [null, runLog()]) {
+    const warnings: string[] = [];
+    const flow = await loadFlow(flowText([]));
+    const options = {
+      llmConfig: CONFIG,
+      env: retriesEnv(0),
+      scheduler: virtualScheduler(START),
+      models: serving(new ScriptedModel([pictured()], CONFIG)),
+      log,
+    };
+    const result = await withWarnings((message) => warnings.push(message), () => runFlow(flow, {}, options));
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    expect(warnings).toEqual(
+      log === null
+        ? ["node 'writer' replied with media that isn't a run-folder file (a run without a log keeps it inline); new_messages leaves it out"]
+        : [],
+    );
+  }
 });
 
 // --- AgentSteps alone --- //

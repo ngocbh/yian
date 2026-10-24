@@ -39,7 +39,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext, MemoryScope, MemorySection, type RecallContext } from "../../src/memory/contracts.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { AgentNode, renderAgentPrompt } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { advance, runFlow } from "../../src/run.ts";
@@ -170,6 +170,29 @@ test("skills append after the authored prompt and recall skips them", async () =
 
   expect(seen).toEqual(["You review code."]);
   expect(systems(model)).toEqual([systemPromptWithSkills("You review code.", [skill])]);
+});
+
+test.each([
+  ["a text prompt", "Hi ${name}" as const],
+  ["a list prompt", [{ splice: "history" }, { role: "user", text: "Now: ${name}" }] as const],
+])("renderAgentPrompt returns what forward sends (%s)", async (_label, prompt) => {
+  const model = scripted("done");
+  const skill = new Skill({ name: "review", description: "Review code changes.", instructions: "Read the diff." });
+  const skills = new Map([["review", skill]]);
+  const node = new AgentNode("agent", { prompt, systemPrompt: "You are ${name}.", llmConfig: CONFIG, skills: ["review"] });
+  node.params = [new Parameter("name", { required: true }), new Parameter("history", { required: false })];
+  const inputs = { name: "Ada", history: [{ role: "user", text: "earlier" }, { role: "assistant", text: "noted" }] };
+
+  expect(await node.forward(inputs, { skills, models: serving(model) })).toEqual(new Output("done"));
+  const rendered = renderAgentPrompt(node, inputs, skills);
+
+  const [system, ...sent] = model.requests[0]!.messages;
+  expect(rendered.baseSystemPrompt).toBe(system!.text());
+  expect(rendered.baseSystemPrompt).toBe(systemPromptWithSkills("You are Ada.", [skill]));
+  expect(rendered.systemPrompt).toBe("You are Ada.");
+  expect(rendered.messages.map((message) => message.toJSON())).toEqual(sent.map((message) => message.toJSON()));
+  expect(rendered.promptText).toBe(sent.at(-1)!.text());
+  expect(rendered.skills).toEqual([skill]);
 });
 
 test.each([false, true])("an omitted system prompt keeps DEFAULT_SYSTEM (tools: %p)", async (tools) => {

@@ -592,10 +592,12 @@ throws `SkillError`. See [Skills][docs/api.md#skills].
 
 ## Steering
 
-`steering` is an object with `interruptSignal(nodeId)`, returning an `AbortSignal` the host aborts
-to interrupt that AGENT node, and `drain(nodeId)`, returning the queued steer messages (or a promise
-of them). It reaches AGENT nodes authored `steerable: true`; pass the same inbox to `advance`.
-See [Steering][docs/api.md#steering].
+An AGENT authored `steer_inbox: ${input.<name>}` reads steers from that `Inbox(...)` input before
+each model call; the host sends them with `send(log, "<name>", event)`. Each read is a recorded
+`steer {inbox, from}` step, which a resumed run replays. `steering` is an object with
+`interruptSignal(nodeId)`, returning an `AbortSignal` the host aborts to interrupt that AGENT
+node; it reaches AGENT nodes with a `steer_inbox:`. Pass the same object to `advance`. See
+[Steering][docs/api.md#steering].
 
 ## Provider setup
 
@@ -1110,8 +1112,8 @@ Node 22, and so does every unit test; a change keeps both green.
   agent (`callTime` set) also records its config as an `llm_config` step.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
   the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`,
-  `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent authored
-  `steerable: true`). It records nothing for learning; the backward driver rebuilds what learning
+  `openMemoryContext`, `openSteerInbox`, the engine's steer inbox, and `steering`, the host's
+  interrupt signal, both given only to an agent with a `steer_inbox:`). It records nothing for learning; the backward driver rebuilds what learning
   reads from its steps (`AgentNode.learningMaterial`), and the node data AGENT backward reads from
   its render (`renderCapture`, the same pure render as `forward`).
 - AGENT `forward` (`node.ts` → `loop.ts` `runAgent` → `structured.ts` `generateStructured` or

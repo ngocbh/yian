@@ -1575,8 +1575,7 @@ result stays in the loop's message history, the evidence, and any logs.
 
 ## Steering
 
-An AGENT authored `steerable: true` (see
-[Steering a running agent](syntax.md#steering-a-running-agent-steerable)) reads a
+An AGENT authored `steerable: true` (Python yian; TS yian reads a `steer_inbox:`, below) reads a
 host inbox while its tool loop runs. The inbox is any object with two methods:
 
 ```python
@@ -1640,23 +1639,37 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   nodes replay without reading it.
 - `yian.run.Steering` is the matching `typing.Protocol`.
 
-Changed (TS yian): the inbox is push-based. In place of `interrupted(node_id)`,
-`interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that
-node. `drain(nodeId)` returns the queued messages or a promise of them, and the node
-awaits it between its effects. Only the main thread reads the inbox (CODE bodies run on
-worker threads but never see it), so it needs no lock. The `Steering` interface lives in
-`nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
+Changed (TS yian): an AGENT reads steers from a declared inbox, `steer_inbox: ${input.<name>}`
+(see [Steering a running agent](syntax.md#steering-a-running-agent-steer_inbox)), and the
+host sends them like any event: `send(log, "<name>", event)`, through the live engine while the
+run moves, or under the log's lock while it is down. `steering` holds only the interrupt:
+`interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that node (an
+object without it is a `TypeError` before any record is written). Only the main thread reads
+it (CODE bodies run on worker threads but never see it), so it needs no lock. The `Steering`
+interface lives in `nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
 
-Also changed (TS yian): every model call streams, so the interrupt is read before each later
-text chunk of every chat call, and a host without `onStream` can cut a reply too; a reply
-whose text had all arrived is kept whole. So an interrupt during a reply's reasoning or
-tool-call stream takes effect at its next text chunk, or once the reply is complete. An interrupt during the wait before retrying a failed model
-call ends the wait at once, and the node succeeds with no new text (`""`, the cut call's
-empty reply). Steers are awaited at the top of each iteration only, and an interrupt that lands while
-an async `drain` settles stops the node before the next model call. A reply's tool calls
-are checked for an interrupt before each call's check, before each group, and before the
-node fails at a call whose check failed (see
-[Tool context](#tool-context)), and a group that is running finishes.
+- **Steers.** Before each model call, after the previous reply's tool results, the agent reads
+  everything queued in its inbox in one zero-wait read, through the engine. The read appends a
+  `steer {inbox, from: [<send seq>, ...]}` node step (exactly these keys) and its events join
+  the request: one user message per read, a text part per event, and a `Message` event as its
+  own user message keeping its `author`. Nothing queued: no step. `from` is the whole unread
+  queue; the run reducer refuses any other. The consumed events leave the inbox's unread
+  queue at the step, and their values stay in the run state until the agent settles.
+- **Replay.** A resumed agent gets each recorded steer back with its values, from the run state,
+  before the call it preceded, so the request is rebuilt as sent. `request_sha256` hashes every
+  message, steers included. A send made while the run was down is read by the first live call.
+- **Run log.** A reader sees the `steer` step like any node step; `foldRunLog` gives each send
+  in `from` as the `pool_commit` holding its value. Readers skip step kinds they don't know.
+- **Interrupts.** An interrupt is read at the top of each iteration, before the steer read, so
+  an honored interrupt leaves queued steers unread in the inbox. Every model call streams, so
+  the interrupt is read before each later text chunk of every chat call, and a host without
+  `onStream` can cut a reply too; a reply whose text had all arrived is kept whole. So an
+  interrupt during a reply's reasoning or tool-call stream takes effect at its next text
+  chunk, or once the reply is complete. An interrupt during the wait before retrying a failed
+  model call ends the wait at once, and the node succeeds with no new text (`""`, the cut
+  call's empty reply). A reply's tool calls are checked for an interrupt before each call's
+  check, before each group, and before the node fails at a call whose check failed (see
+  [Tool context](#tool-context)), and a group that is running finishes.
 
 ## Injecting agent memory
 

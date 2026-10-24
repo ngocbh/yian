@@ -126,8 +126,8 @@ timestamp is a date, and a `<<:` merge key merges a mapping. Quoted and block (`
 The same rules apply to keys, to input and output defaults, to a tagged value
 (`!bool yes`), and to a bare `call(...)` argument. A `yes`/`no`/`on`/`off` where a
 `bool` is expected fails with the fix, such as "`yes` is text; write `true`": in a
-tagged binding or default, a call input, a value entry, `steerable:`, or `llm_config`
-`inherit:`, when the word is the whole value.
+tagged binding or default, a call input, a value entry, `steerable:` (Python yian), or
+`llm_config` `inherit:`, when the word is the whole value.
 
 Changed: a `yes`/`no`/`on`/`off` inside a list or record (`!list(bool) [true, no]`) used
 to get the fix too. It still fails, now without the fix; write `true`/`false` there.
@@ -2617,54 +2617,63 @@ each listed name must be in it; otherwise the run fails before it starts. An AGE
 with `skills:` runs the tool loop. `load_skill` is a reserved name: never list it in
 `tools:`.
 
-#### Steering a running agent — `steerable:`
+#### Steering a running agent — `steer_inbox:`
 
-`steerable: true` lets the host steer or interrupt a running AGENT, like
-pressing Esc or typing a follow-up in a coding-agent chat:
+`steer_inbox:` lets the host steer a running AGENT, like typing a follow-up in a
+coding-agent chat. The agent reads steers from one of the flow's `Inbox(...)`
+inputs, which the host fills with `send`; the host can also interrupt it:
 
 ```yaml
-worker:
-  kind: agent
-  steerable: true               # default false
-  tools: [search]
-  prompt: Research the question and answer it.
-  output: str                   # required: `str`, `Optional(str)`, or no `output:`
+input:
+  notes: !Inbox(str)
+nodes:
+  worker:
+    kind: agent
+    steer_inbox: ${input.notes}   # the lone ${input.<name>} of an Inbox input
+    tools: [search]
+    prompt: Research the question and answer it.
+    output: str                   # required: `str`, `Optional(str)`, or no `output:`
 ```
 
-- **Steer.** At the top of each loop iteration the node reads the messages the
-  host queued for it and sends each one to the model as a user message with the
-  next request. Steers never land between the results of one reply's tool calls.
-  A steer that arrives during the final model call is not read; it stays with the
-  host for the next input.
+- **Steer.** Before each model call, after the previous reply's tool calls
+  finish, the node reads everything queued in its inbox at once (a zero-wait read)
+  and sends it with that request. Steers never land between the results of one
+  reply's tool calls. Nothing queued: nothing is read. A closed inbox still gives
+  what is queued. The read is recorded as a `steer {inbox, from}` step, so a
+  resumed run replays it (see [API](api.md#steering)).
+- **Rendering.** One read is one user message: a `str` event is a text part, and
+  any other event its text form (records as Yian writes them). A `Message` event
+  (an `Inbox(Message)`) is its own user message, keeping its `author`; a message
+  with another role becomes a user message, its tool calls, results and reasoning
+  become text, and media is dropped with a warning.
 - **Interrupt.** The node checks for an interrupt at the top of each iteration,
   as each streamed chunk after the first arrives, and before each tool call. It
   then stops and **succeeds** with the text so far, so the flow or loop
   continues. A reply that already arrived is kept whole, including a streamed
   reply whose last chunk had arrived. Otherwise a streamed reply is cut at the
   last chunk shown. Tool calls it did not run get an error result ("Not run:
-  interrupted by the user."). Without streaming, an interrupt during a model
-  call takes effect when that call returns. An interrupt for a node that has
-  already finished is ignored.
-  Changed (TS yian): every model call streams, with or without a host stream
-  sink, so an interrupt during a call is read before each later text chunk, and a
-  reply whose text had all arrived is kept whole. In place of before each tool
-  call, the node checks before each call's check (its grant and arguments) and
-  before each group of calls that run together, and before failing at a call
-  whose check failed (see [API](api.md#tool-context));
-  a group of concurrency-safe calls that started finishes. An interrupt during
-  the wait before retrying a failed model call ends the wait at once, and the
-  node succeeds with `""`.
-- Session memory records steers with the model request that carried them, and
-  closes an interrupted turn as `interrupted`.
+  interrupted by the user."). An interrupt during a model call is read before
+  each later text chunk. In place of before each tool call, the node checks
+  before each call's check (its grant and arguments) and before each group of
+  calls that run together, and before failing at a call whose check failed (see
+  [API](api.md#tool-context)); a group of concurrency-safe calls that started
+  finishes. An interrupt during the wait before retrying a failed model call ends
+  the wait at once, and the node succeeds with `""`. An interrupt for a node that
+  has already finished is ignored. Steers the node never read stay in the inbox.
 - An AGENT without `tools:` or `skills:` makes one model call. Steers queued
   before it go with that request, and an interrupt cuts its streaming text reply
   at the last chunk shown.
 
-`steerable: true` is a load error on an AGENT whose output is anything but `str` or
-`Optional(str)`, because a structured value cannot be partial. A model question
-from `ask_user` is still answered through `ask_user`, not by a steer. Python hosts
-pass the inbox as `run_flow(..., steering=inbox)` (see [API](api.md#steering)); a
-node without `steerable: true` never reads it.
+`steer_inbox:` is a load error unless it is the lone `${input.<name>}` of an Inbox
+input, and on an AGENT whose output is anything but `str` or `Optional(str)`,
+because a structured value cannot be partial. An inbox read only by `steer_inbox:`
+counts as read. A model question from `ask_user` is still answered through
+`ask_user`, not by a steer. Hosts interrupt through the `steering` run option (see
+[API](api.md#steering)); a node without `steer_inbox:` never reads it.
+
+Changed (TS yian): `steerable: true` was replaced by `steer_inbox:`; `steerable:` is
+a load error that says how to move. Python yian keeps `steerable:` and its host
+inbox.
 
 ### `code` / `tool` — the other leaves
 

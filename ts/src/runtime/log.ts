@@ -1433,6 +1433,18 @@ export function formatRecordTime(ms: unknown): string {
  * @throws RangeError when it isn't such a time.
  */
 export function requireRecordTime(at: unknown, label = "run-record envelope at"): string {
+  recordTimeMs(at, label);
+  return at as string;
+}
+
+/**
+ * Return the record time `at` (see `requireRecordTime`) in epoch milliseconds. `label` names the
+ * time in errors.
+ *
+ * @throws TypeError when `at` isn't a string.
+ * @throws RangeError when it isn't a record time.
+ */
+export function recordTimeMs(at: unknown, label = "run-record envelope at"): number {
   if (typeof at !== "string") throw new TypeError(`${label} must be a string`);
   const parts = RECORD_TIME.exec(at)?.slice(1).map(Number);
   // Built field by field (`Date.parse` differs between engines); an out-of-range field rolls
@@ -1446,7 +1458,7 @@ export function requireRecordTime(at: unknown, label = "run-record envelope at")
   if (parts === undefined || date.toISOString() !== at) {
     throw new RangeError(`${label} must be a UTC time such as 2026-10-20T14:02:11.123Z, found ${reprText(at)}`);
   }
-  return at;
+  return date.getTime();
 }
 
 /**

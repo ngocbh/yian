@@ -1320,6 +1320,9 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
     startedAt: records[0]!.at,
     endedAt: records.at(-1)!.at,
     failure: null,
+    waits: [],
+    ready: false,
+    wakeAt: null,
   });
 
   const crashed = join(dir, "crash.jsonl");
@@ -1363,6 +1366,9 @@ test("inspectRun reads a running log with no record yet as running with nothing 
       startedAt: null,
       endedAt: null,
       failure: null,
+      waits: [],
+      ready: false,
+      wakeAt: null,
     });
   } finally {
     log[Symbol.dispose]();

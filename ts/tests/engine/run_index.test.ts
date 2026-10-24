@@ -29,18 +29,26 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { openSqlite, withWarnings } from "../../src/platform.ts";
 import { inspectRun, readRunIndex, RunIndexBusyError, type RunIndexRow, runLogPath, updateRunIndex } from "../../src/run.ts";
-import { emptyRunScan, foldRunScan, scanStatus } from "../../src/runtime/run_index.ts";
+import { emptyRunScan, foldRunScan, type RunScan, runScanFromJson, scanStatus } from "../../src/runtime/run_index.ts";
+import { WaitsState } from "../../src/runtime/waits.ts";
 import {
+  InboxClosedRecord,
   JsonlRunLog,
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
+  RunCancelledRecord,
+  RunFailedRecord,
+  type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
   RunStoppedRecord,
+  RunWaitingRecord,
   readRunLog,
 } from "../../src/runtime/log.ts";
 import type { TypedValue } from "../../src/typesys/values.ts";
@@ -522,15 +530,19 @@ describe("the run scan, shared by inspectRun and the index", () => {
     const path = join(runs, "run-1", "log.jsonl");
     const scan = scanOf(path);
     // The resume came after a stop that covered both starts, so it counts no crashed attempt.
-    expect(scan).toEqual({
+    expect({ ...scan, waits: null }).toEqual({
       inFlight: [["b", 8]],
       lastStop: null,
       endSucceeded: false,
       crashed: [],
       nodeFailureSeq: null,
       unreachableSeq: 9,
+      runFailureSeq: null,
+      cancelled: false,
+      waits: null,
     });
-    expect(JSON.parse(JSON.stringify(scan))).toEqual(scan);
+    expect(scan.waits.lastFrontier).toBe("node_routed");
+    expect(runScanFromJson(JSON.stringify(scan))).toEqual(scan);
     expect(scanStatus(scan)).toBe("crashed");
     const inspection = inspectRun(path);
     expect([inspection.status, inspection.inFlight]).toEqual(["crashed", ["b"]]);
@@ -568,9 +580,84 @@ describe("the run scan, shared by inspectRun and the index", () => {
       const columns = db.prepare("PRAGMA table_info(runs)").all().map((row) => row["name"]);
       expect(columns).not.toContain("status");
       const stored = db.prepare("SELECT scan FROM runs").get()!;
-      expect(JSON.parse(stored["scan"] as string)).toEqual(scanOf(join(runs, "run-1", "log.jsonl")));
+      expect(runScanFromJson(stored["scan"] as string)).toEqual(scanOf(join(runs, "run-1", "log.jsonl")));
     } finally {
       db.close();
     }
+  });
+
+  /** Fold `records` after the run start (seqs 0 and 1) into a fresh scan. */
+  function folded(...records: RunRecord[]): RunScan {
+    const scan = emptyRunScan();
+    const all = [runStarted(), new PoolCommitRecord(START_ID, START_ID, { kind: "object", value: {} }), ...records];
+    all.forEach((record, seq) => foldRunScan(scan, { seq, record }));
+    return scan;
+  }
+  const takeWait = (node: string) =>
+    new NodeWaitingRecord(node, [`r/${node}`], { waits: [{ callId: `r/${node}`, tool: "take", inbox: "msgs", mode: "one", deadline: null }] });
+  const send = (value: string) => new PoolCommitRecord(START_ID, `${START_ID}.msgs`, { kind: "str", value });
+  const unreachable = new Failure({ code: "graph.terminal_unreachable", message: "", nodeId: "gate" });
+  const endSuccess = [new NodeStartedRecord(END_ID), new PoolCommitRecord(END_ID, END_ID, { kind: "str", value: "x" })];
+
+  test("a waiting node leaves the nodes in flight; its wake puts it back at the wake's seq", () => {
+    const waiting = folded(new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"]));
+    expect(waiting.inFlight).toEqual([]);
+    expect(scanStatus(waiting)).toBe("waiting");
+    const woken = folded(new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"]), send("x"), new NodeWokenRecord("heard"));
+    expect(woken.inFlight).toEqual([["heard", 6]]);
+    expect(scanStatus(woken)).toBe("crashed");
+    // A crash while nodes wait retries only the running ones.
+    const resumed = folded(new NodeStartedRecord("a"), new NodeStartedRecord("heard"), takeWait("heard"), new RunResumedRecord(["a"], 0));
+    expect(resumed.crashed).toEqual([["a", 1]]);
+  });
+
+  test.each<[string, RunRecord[], ReturnType<typeof scanStatus>]>([
+    ["run_waiting after a wait", [new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"])], "waiting"],
+    ["run_waiting, then a resume", [new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"]), new RunResumedRecord([], 2)], "crashed"],
+    ["a stop after a wait", [new NodeStartedRecord("a"), new RunStoppedRecord("signal", "SIGINT", ["a"])], "stopped"],
+    [
+      "END succeeded while a node waits",
+      [new NodeStartedRecord("heard"), takeWait("heard"), ...endSuccess, new NodeSucceededRecord(END_ID, 5), new RunWaitingRecord(["heard"])],
+      "waiting",
+    ],
+    [
+      "END succeeded while a node waits, then a wake and the log ends",
+      [new NodeStartedRecord("heard"), takeWait("heard"), ...endSuccess, new NodeSucceededRecord(END_ID, 5), new RunWaitingRecord(["heard"]), send("x"), new NodeWokenRecord("heard")],
+      "crashed",
+    ],
+    [
+      "a route proves END unreachable while a node waits",
+      [new NodeStartedRecord("heard"), takeWait("heard"), new NodeStartedRecord("gate"), new NodeRoutedRecord("gate", "no", { terminalFailure: unreachable }), new RunWaitingRecord(["heard"])],
+      "waiting",
+    ],
+    [
+      "then run_failed",
+      [new NodeStartedRecord("heard"), takeWait("heard"), new NodeStartedRecord("gate"), new NodeRoutedRecord("gate", "no", { terminalFailure: unreachable }), new RunFailedRecord(unreachable)],
+      "failed",
+    ],
+    [
+      "a node failure, whatever else",
+      [new NodeStartedRecord("heard"), takeWait("heard"), new NodeStartedRecord("a"), new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "a" }))],
+      "failed",
+    ],
+    ["a cancel while a node waits", [new NodeStartedRecord("heard"), takeWait("heard"), new RunCancelledRecord()], "cancelled"],
+    ["a cancel after a close", [new NodeStartedRecord("heard"), takeWait("heard"), new InboxClosedRecord("msgs"), new RunCancelledRecord()], "cancelled"],
+    [
+      "END succeeded and END proved unreachable, nothing in flight",
+      [new NodeStartedRecord("gate"), new NodeRoutedRecord("gate", "no", { terminalFailure: unreachable }), ...endSuccess, new NodeSucceededRecord(END_ID, 5)],
+      "succeeded",
+    ],
+  ])("scanStatus: %s", (_name, records, status) => {
+    expect(scanStatus(folded(...records))).toBe(status);
+  });
+
+  test("the scan's waits fold round-trips through JSON", () => {
+    const scan = folded(new NodeStartedRecord("heard"), takeWait("heard"), send("x"), new RunWaitingRecord(["heard"]), new RunCancelledRecord());
+    expect(scan.waits).toBeInstanceOf(WaitsState);
+    const copy = runScanFromJson(JSON.stringify(scan));
+    expect(copy).toEqual(scan);
+    expect(copy.waits).toBeInstanceOf(WaitsState);
+    expect(copy.waits.calls.get("r/heard")).toMatchObject({ state: "answered", assigned: [4], closedReason: null });
+    expect(copy.waits.lastFrontier).toBe("run_waiting");
   });
 });

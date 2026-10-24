@@ -16,6 +16,9 @@
  * thread retires the worker. While a job runs the port doesn't keep the thread alive, so a body
  * awaiting a promise nothing can resolve ends the thread instead of hanging it.
  *
+ * Hosts that bundle yian import this module as `@ngocbh/yian/code-worker` for a bundle entry, so
+ * every effect must stay behind the `yianCodeWorker` check.
+ *
  * Values cross by structured clone, which drops a `FileRef`'s class, so a `FileRef` crosses as a
  * `Map` of its fields (no yian value holds a `Map`).
  *

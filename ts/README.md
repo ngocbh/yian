@@ -143,8 +143,8 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   reads `inputs`, and run on worker threads, so aborting the run (the `signal`, or one Ctrl-C of the
   CLI) ends even a body that never yields (see [`code` /
   `tool`][docs/syntax.md#code--tool--the-other-leaves] in the syntax guide). A host that bundles
-  yian (esbuild, webpack, `bun build`) must ship the worker as its own entry at
-  `nodes/code/worker.js` beside the bundle file, or every CODE call fails.
+  yian must ship the worker as its own entry at `nodes/code/worker.js` relative to the bundle file,
+  or every CODE call fails (see [Bundling yian](#bundling-yian)).
 - **Errors.** Python's `ValueError` is a `RangeError` or `TypeError`, and every yian error sets
   `error.name` to its class. Some errors a call can throw aren't exported (`TypeCheckError`,
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
@@ -684,7 +684,7 @@ extended result code with `sqliteErrorCode(error)` (`& 0xff` for the primary cod
 ## Bundling yian
 
 A CODE node runs its code on a worker thread started from yian's worker module. A host that bundles
-yian, with esbuild, webpack or `bun build`, must ship that worker as its own entry at
+yian (with `bun build`, or esbuild with ESM output) must ship that worker as its own entry at
 `nodes/code/worker.js` relative to the bundle file, else every CODE call fails `CODE worker failed:
 Cannot find module ...`. The entry is a one-line shim:
 
@@ -693,12 +693,12 @@ Cannot find module ...`. The entry is a one-line shim:
 import "@ngocbh/yian/code-worker";
 ```
 
-With `bun build` or esbuild, place it at `nodes/code/worker.ts` relative to the deepest directory
-holding every entry: with
+Place it at `nodes/code/worker.ts` relative to the deepest directory holding every entry: with
 `src/main.ts` as the host's entry, the shim is `src/nodes/code/worker.ts`. An extra entry outside
 that directory moves the root and breaks the lookup, and so does naming yian's own worker file as
-the entry instead of a shim. With `bun build --compile`, pass both entries and both no-autoload
-flags, as `bun run build:bin` builds yian's own binaries:
+the entry instead of a shim. With `bun build --compile`, pass both entries, as `bun run build:bin`
+builds yian's own binaries; the two no-autoload flags there keep the binary from reading a `.env`
+or `bunfig.toml` in its working directory:
 
 ```sh
 bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig \

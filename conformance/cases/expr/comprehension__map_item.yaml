@@ -1,0 +1,8 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+# `item` names the MAP scope, so it is the case's top-level `item`, not a value.
+expr: "[item.k + x for x in xs]"
+values: {xs: [1]}
+item: {k: 10}
+expect:
+  value: [11]

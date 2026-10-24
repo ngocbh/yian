@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "len(join([p.text for t in h for m in t for p in m.parts if p.type == \"text\"], \"\"))"
+values: {h: [[{role: user, parts: [{type: text, text: ab}, {type: image, uri: x}]}, {role: assistant, parts: [{type: text, text: cde}]}]]}
+expect:
+  value: 5

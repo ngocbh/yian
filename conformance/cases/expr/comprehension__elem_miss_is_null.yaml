@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[m.text for m in ms]"
+values: {ms: [{text: a}, {role: user}]}
+expect:
+  value: [a, null]

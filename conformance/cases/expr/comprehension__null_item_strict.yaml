@@ -1,0 +1,8 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+# A null item is returned as is, as in Python, and renders as yian's text form of null.
+template: "${[x for x in [null, 1]]}"
+mode: strict
+values: {xs: [1, 2, 3, 4]}
+expect:
+  value: "[null,1]"

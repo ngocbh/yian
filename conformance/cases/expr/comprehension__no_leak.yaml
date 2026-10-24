@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[[y for y in xs], y]"
+values: {xs: [1, 2, 3, 4]}
+expect:
+  value: [[1, 2, 3, 4], null]

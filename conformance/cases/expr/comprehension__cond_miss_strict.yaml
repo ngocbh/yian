@@ -1,0 +1,10 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+# A miss in a condition raises in a prompt, as any strict read does.
+template: "${[x.k for x in ms if x.flag]}"
+mode: strict
+values: {ms: [{k: 1, flag: true}, {k: 2}]}
+expect:
+  raises:
+    class: ExpressionError
+    message: "unresolved reference ${x.flag} in expression"

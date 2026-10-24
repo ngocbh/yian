@@ -14,6 +14,8 @@
  * `test_nested_default_span_rejected` run through `evalBinding` and `scanTemplate`. Python's `%`
  * formatting, repetition, overflow and digit-limit tests become the TS-era tables below;
  * `_Boom` (a value whose negation raises) has no counterpart, since a value is plain data.
+ *
+ * TS-only: a long list comprehension evaluates without recursion.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -964,3 +966,10 @@ function mulberry32(seed: number): () => number {
     return (t ^ (t >>> 14)) >>> 0;
   };
 }
+
+test("a comprehension with 5,000 if clauses evaluates without overflowing the stack", () => {
+  expect(evaluate(`[x for x in xs${" if true".repeat(5000)}]`, (path) => (path === "xs" ? [1n, 2n] : null))).toEqual([
+    1n,
+    2n,
+  ]);
+});

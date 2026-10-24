@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[len(len) for len in [\"ab\"]]"
+values: {xs: [1, 2, 3, 4]}
+expect:
+  value: [2]

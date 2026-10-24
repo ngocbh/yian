@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[[b for a in rows if a for b in a], [[c for c in r] for r in rows]]"
+values: {rows: [[1], [], [2, 3]]}
+expect:
+  value: [[1, 2, 3], [[1], [], [2, 3]]]

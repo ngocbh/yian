@@ -1,0 +1,8 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[x for x in n]"
+values: {n: null}
+expect:
+  raises:
+    class: ExpressionError
+    message: "comprehension `for x in n` iterates over null; give a default, e.g. `(n :- [])`"

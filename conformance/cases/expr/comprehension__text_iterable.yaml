@@ -1,0 +1,8 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[c for c in s]"
+values: {s: ab}
+expect:
+  raises:
+    class: ExpressionError
+    message: "comprehension `for c in s` takes a list, got str"

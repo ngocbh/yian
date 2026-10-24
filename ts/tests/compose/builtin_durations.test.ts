@@ -89,3 +89,9 @@ test.each([
   const text = sleepFlow(inputs).replace("  d: !datetime\n", "  d: !datetime\n  n: !int\n");
   expect(refused(text)).toContain(message);
 });
+
+test("a tagged literal duration is refused at the input", () => {
+  expect(refused(takeFlow("!str 5m"))).toContain(
+    "node 'heard' (tool_id: take) input 'timeout': a literal duration takes no tag; write `timeout: 5m`",
+  );
+});

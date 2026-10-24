@@ -336,7 +336,7 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /**
    * Check a sleep's inputs: exactly one of `until` and `for`. A literal `until` must be a date or
-   * datetime, and a reference to one must be able to hold a date, datetime or text.
+   * datetime, and a reference's type must not be disjoint from both `date` and `datetime`.
    *
    * @throws LoadError for any other input, both or neither, or a bad `until`.
    */
@@ -446,8 +446,8 @@ export class ToolDescriptor extends NodeDescriptor {
    * Rewrite duration input `name`'s wiring source, when present: a literal to its seconds (a
    * bigint); a reference stays as written once its type is `str`, and is parsed when the node runs.
    *
-   * @throws LoadError at the input for a malformed duration, a plain number, or a reference not
-   *   typed `str` (an unproven one included: tag it `!str`).
+   * @throws LoadError at the input for a malformed duration, a plain number, a tagged literal, or
+   *   a reference not typed `str` (an unproven one included: tag it `!str`).
    */
   private wireDuration(ctx: BuildContext, wiring: Map<string, unknown>, name: string): void {
     if (!wiring.has(name)) return;
@@ -455,6 +455,13 @@ export class ToolDescriptor extends NodeDescriptor {
     const range = this.inputRange(name);
     const literal = literalValue(bindingSource(wiring.get(name)));
     if (literal !== NOT_LITERAL) {
+      // A tag would check the expanded seconds against it, so refuse it here, where it reads clearly.
+      if (this.inputTypes.has(name)) {
+        const written = typeof literal === "string" ? literal : "24h";
+        throw ctx.diagnostics.error(`${subject}: a literal duration takes no tag; write \`${name}: ${written}\``, {
+          range,
+        });
+      }
       if (typeof literal !== "string") {
         const hint = typeof literal === "bigint" ? `; write ${literal}s` : "";
         throw ctx.diagnostics.error(`${subject}: a duration is text such as 24h, got ${valueRepr(literal)}${hint}`, {

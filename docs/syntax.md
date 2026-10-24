@@ -2852,7 +2852,7 @@ one fingerprint. A malformed duration fails at the input (`a duration is a posit
 and a unit (90s | 30m | 24h | 2d)`), and so does a plain number:
 `timeout: 86400` fails with ``a duration is text such as 24h, got 86400; write 86400s``. A
 duration from a `${...}` reference must be typed `str` (tag it: `timeout: !str ${...}`) and
-is read when the node runs.
+is read when the node runs. A literal duration takes no tag (`timeout: !str 5m` fails).
 
 The escalation example asks the lead, then the manager when the lead doesn't answer in a
 day. `to:` is this host's extra input:

@@ -830,8 +830,8 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Render the prompt once (`renderPrompt`), recall with it, and run the loop. Recall and learning read the last message's text. No invocation state
-   * is stored on the node.
+   * Render the prompt once (`renderPrompt`), recall with it, and run the loop. Recall and learning
+   * read the last message's text. No invocation state is stored on the node.
    *
    * A call-time agent's model config is its bound `__llm_config` with the run's host key and
    * header values joined when it is marked for the host key; any other agent uses its run's
@@ -1048,7 +1048,9 @@ export class AgentNode extends Node {
    * Use only the invocation material learning rebuilt for one tool-free backward call
    * (`backwardAgent`).
    *
-   * Live node fields are unused, except a host `api_key` and `headers` bound for the run.
+   * This call reads no live node field, except a host `api_key` and `headers` bound for the run;
+   * the node data it reads was rendered from this node when learning first read it
+   * (`TraceOccurrence.nodeData`), so a node changed before then changes it.
    *
    * @param context Accepted context, including the model configuration and the render
    *   components learning rebuilt (`TraceOccurrence.nodeData`); `_evaluation_evidence` is what

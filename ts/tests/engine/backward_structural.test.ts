@@ -464,6 +464,16 @@ test("static layout is rebuilt for a preassert failure after defaults", async ()
   });
 });
 
+test("the pre-assert check validates the node's setup first, as the run template does", () => {
+  const node = EndNode.value("end", { outputName: "result" });
+  node.params = [new Parameter("result")];
+  node.preAsserts = [new Assertion("result != null", "a result")];
+  expect(node.preAssertsHold({ result: 1n })).toBe(true);
+  expect(node.preAssertsHold({ result: null })).toBe(false);
+  // A body-less node fails its setup check before any pre-assert, so `forward` never ran.
+  expect(() => new BareNode("bare").preAssertsHold({})).toThrow(new Error("node 'bare' (BareNode) defines no forward"));
+});
+
 test("custom run captures its inputs at its existing pre-run boundary", async () => {
   class CustomRun extends CaptureNode {
     override async run(inputs: Readonly<Record<string, unknown>>): Promise<NodeResult> {

@@ -2679,7 +2679,10 @@ function nodeRebinder(state: RunState, node: Node): Rebinder {
  * model configs the run recorded, kept for learning, which runs after an expansion may have pruned
  * the node from the flow.
  */
-function nodeDataRebuilder(state: RunState, node: Node): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
+function nodeDataRebuilder(
+  state: RunState,
+  node: Node,
+): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
   const llm = state.effectiveLlmByStaticPath;
   return (inputs) => rebuildNodeData(node, inputs, llm);
 }

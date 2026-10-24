@@ -1529,9 +1529,12 @@ export abstract class Node {
 
   /**
    * Return whether the `run` template's pre-asserts hold for bound `inputs` (defaults applied), so
-   * the template calls `forward`.
+   * the template calls `forward`. The node's setup is validated first, as the template does.
+   *
+   * @throws as `validateExecutionSetup`.
    */
   preAssertsHold(inputs: Readonly<Record<string, unknown>>): boolean {
+    this.validateExecutionSetup();
     return this.failingAssertion("pre-assert", this.preAsserts, { ...inputs }) === null;
   }
 

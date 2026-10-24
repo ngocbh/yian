@@ -971,12 +971,13 @@ lock, so it works while the run is going.
 {"format": "yian.cli.v1", "status": "crashed", "in_flight": ["draft"], "crashed_attempts": {"draft": 1}}
 ```
 
-- `status` is `running` while a writer holds the log's lock; `succeeded` or `failed` once the run
-  finished; `stopped` when the host stopped its last segment (Ctrl-C or a signal); otherwise
-  `crashed`, when the process ended mid-run. A `stopped` or `crashed` run can be resumed with
-  `--resume`.
-- `in_flight` lists the nodes started and not settled, in start order; it is empty for a finished
-  run.
+- `status` is `running` while a writer holds the log's lock; `succeeded`, `failed` or `cancelled`
+  once the run ended; `waiting` when its last segment ended with every unsettled node waiting (on
+  a take, a sleep or a host call); `stopped` when the host stopped its last segment (Ctrl-C or a
+  signal); otherwise `crashed`, when the process ended mid-run. A `stopped` or `crashed` run can be
+  resumed with `--resume`.
+- `in_flight` lists the nodes started (or woken) and neither settled nor waiting, in start order;
+  it is empty for an ended run.
 - `crashed_attempts` maps a node id to the attempts a resume retried, or would retry, after a
   crash.
 

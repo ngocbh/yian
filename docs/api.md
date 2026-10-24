@@ -2940,23 +2940,32 @@ Between the stop and that resume only those nodes' steps are appended.
 
 Changed (TS yian): `inspectRun(log, { flow, env })` reads where the run in a log stands without
 changing the file or taking its lock, and returns `{ status, inFlight, crashedAttempts }`.
-`status` is `running` while a writer holds the log's lock, `succeeded` or `failed` once the run
-finished, `stopped` when the host stopped its last segment (a `RunStoppedRecord`), and otherwise
-`crashed`, the process having ended without a stop; a run that is neither running nor finished
-can be resumed. `inFlight` lists the nodes started and not settled, in start order (`[]` for a
-finished run), and `crashedAttempts` the attempts a resume counted after a crash, plus, for a
+`status` is `running` while a writer holds the log's lock, `succeeded`, `failed` or `cancelled`
+once the run ended, `waiting` when its last segment ended with every unsettled node waiting (on a
+take, a sleep or a host call; a `RunWaitingRecord`), `stopped` when the host stopped its last
+segment (a `RunStoppedRecord`), and otherwise `crashed`, the process having ended without a stop;
+a run that is neither running nor ended can be advanced. `inFlight` lists the nodes started (or
+woken) and neither settled nor waiting, in start order (`[]` for an ended run), and `crashedAttempts` the attempts a resume counted after a crash, plus, for a
 run that is neither running nor finished, one for each node in flight that no stop covers: what
 `advance` would count. With `flow`, the log is replayed as `advance` replays it, so the status
 is exact, and `env`'s `YIAN_*` values must match the recorded ones. Without it, the status is read
 from the records, which don't hold the ready nodes: a run whose process ended after the top-level
 END succeeded (or after a route proved END unreachable) but before a node already ready started
 reads as finished, though `advance` would still run that node. Pass the flow when you have it.
+Read from the records, a run ends `cancelled` on a cancel and `failed` on a node failure or a
+`RunFailedRecord`, whatever else is pending; END's success, then a route that proved END
+unreachable, end it only with nothing in flight and nothing waiting. For a `waiting` run, `waits`
+lists each waiting node's calls (`{ node, callId, tool, inbox, deadline, settled }`, oldest wait
+first), `ready` says whether some waiting node has every call it waits on settled, so `advance`
+makes progress now, and `wakeAt` is the earliest deadline of an open call of a waiting node, when
+`advance` times it out (`null` when none has one); for any other status they are `[]`, `false` and
+`null`.
 The result also holds `runId`, `schema`, `flowFingerprint` and `learnable` from the log's
 `RunStarted`, `lastSeq`, the seq of its last complete record, and `failure`, the `Failure` that
 ended a `failed` run (a node's failure, or the `graph.terminal_unreachable` failure of a route that
-proved END unreachable; `null` for any other status), so a host can list and label runs without
+proved END unreachable or of a `RunFailedRecord`; `null` for any other status), so a host can list and label runs without
 reading records. It also holds `startedAt`, the `at` of `RunStarted`, and `endedAt`, the `at` of the
-log's last record for a `succeeded` or `failed` run (`null` for any other status; a later backward
+log's last record for a `succeeded`, `failed` or `cancelled` run (`null` for any other status; a later backward
 attempt's records move it). The first five and `startedAt` are `null` only for a running log with no record yet. Without
 `flow`, the records are streamed with `iterRunRecords`, so memory is bounded by the largest
 record. An empty log with no writer raises `RangeError`, as does a log whose first record isn't
@@ -3034,8 +3043,8 @@ index or the log.
 |---|---|
 | `runId` | the run's id, its folder's name |
 | `flow` | the path of the flow file the run started from (`run_started.flow`), or `null` for a flow built in code |
-| `status` | `succeeded`, `failed`, `stopped` or `crashed`, read from the records as `inspectRun` reads them without a flow; `running` in place of `stopped` or `crashed` while a writer holds the log's lock |
-| `startedAt`, `endedAt` | the `at` of `run_started`; the `at` of the log's last record for a `succeeded` or `failed` run, else `null` |
+| `status` | `succeeded`, `failed`, `cancelled`, `waiting`, `stopped` or `crashed`, read from the records as `inspectRun` reads them without a flow; `running` in place of `waiting`, `stopped` or `crashed` while a writer holds the log's lock |
+| `startedAt`, `endedAt` | the `at` of `run_started`; the `at` of the log's last record for a `succeeded`, `failed` or `cancelled` run, else `null` |
 | `parentRunId` | `run_started.parent`'s run id, or `null` |
 | `lastSeq`, `offset` | the seq of the last record read, and the byte offset just past it |
 | `result` | the value of the top-level END's `pool_commit` as `logJson` text, `null` until the END succeeded |
@@ -3051,7 +3060,8 @@ index or the log.
   that is a directory) raises a warning (`process.emitWarning`) and keeps its row as it was. A
   run folder reached through a symlink counts.
 - A row keeps the run's record scan (nodes in flight, the last stop, crashed counts, the END's
-  success and the seqs of the records that decide a failure), the one `inspectRun` folds without a
+  success, the seqs of the records that decide a failure, a cancel, and the waits: waiting nodes,
+  their calls and the inboxes), the one `inspectRun` folds without a
   flow, and `status` is read from it, so the index and `inspectRun` read a status by the same
   rules. The table has no status column. The index file is created with mode `0600`, since it
   holds every run's result.
@@ -3060,9 +3070,9 @@ index or the log.
   `RunIndexBusyError` ("run index PATH is locked by another update; gave up after N ms"). It is
   synchronous and blocks its thread while it waits and reads, so a server calls it off its main
   thread. A missing `runsDir` throws `ENOENT`.
-- A read probes each `stopped` or `crashed` run's lock (`isRunLogLocked`) every time, so a resumed
-  run reads `running` before any update, and a run whose process died reads `crashed` at once.
-  Only those two are overlaid: a `succeeded` or `failed` row stays as it is while a writer still
+- A read probes each `waiting`, `stopped` or `crashed` run's lock (`isRunLogLocked`) every time, so
+  a resumed run reads `running` before any update, and a run whose process died reads `crashed` at
+  once. Only those three are overlaid: a `succeeded`, `failed` or `cancelled` row stays as it is while a writer still
   holds the lock (closing up, or a backward attempt), where `inspectRun` reads any locked log as
   `running`. A
   missing index reads as `[]`.

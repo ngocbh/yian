@@ -1,0 +1,26 @@
+# TS-only: a case `when:` can't read an inbox.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: ${input.m == null}
+          then: done
+    done: !int 1
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'route' cases[0].when from: ${input.m} is an inbox; it is read only whole, bound to a child's Inbox input (not inside text or an expression)
+      frames:
+      - label: flow.yaml
+        range: [9, 15, 9, 33]

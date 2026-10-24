@@ -1,0 +1,20 @@
+# TS-only: a flow output can't read an inbox.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes: {}
+  output: ${input.m}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: ${input.m} is an inbox; it is read only whole, bound to a child's Inbox input (take from it with `tool_id: take`)
+      frames:
+      - label: flow.yaml
+        range: [6, 9, 6, 19]

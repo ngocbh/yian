@@ -1,0 +1,25 @@
+# TS-only: a CODE input can't take an inbox; only a child's Inbox input can.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    greet:
+      kind: code
+      input:
+        text: ${input.m}
+      code: return inputs.text
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'greet' input 'text' from: ${input.m} is an inbox; it is read only whole, bound to a child's Inbox input (take from it with `tool_id: take`)
+      frames:
+      - label: flow.yaml
+        range: [9, 13, 9, 23]

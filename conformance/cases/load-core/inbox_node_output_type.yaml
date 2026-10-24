@@ -1,0 +1,20 @@
+# TS-only: a node output can't be an inbox.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    mint:
+      kind: code
+      output: Inbox(str)
+      code: return null
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'an output can''t be an inbox (`Inbox(...)` declares a flow input)'
+      frames:
+      - label: flow.yaml
+        range: [6, 13, 6, 23]

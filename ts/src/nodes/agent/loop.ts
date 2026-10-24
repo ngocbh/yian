@@ -54,9 +54,10 @@ import {
 import { realScheduler, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
-import { isPending } from "../../tools/context.ts";
-import { isReportedToolError } from "../../tools/errors.ts";
+import { ASK_USER, isPending } from "../../tools/context.ts";
+import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
+import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
 import { Output, Pending, type SteerInbox } from "../base.ts";
 import {
@@ -406,6 +407,8 @@ interface PlannedCall {
   readonly index: number;
   /** The call's yian id, which a `pending` step names; `undefined` outside a run or for `load_skill`. */
   readonly callId: string | undefined;
+  /** When an `ask_user` call times out (a record time), from the model's `timeout`; else `null`. */
+  readonly deadline: string | null;
   /** Run the call under its group's signal. */
   readonly invoke: (signal: AbortSignal) => Promise<unknown>;
 }
@@ -559,7 +562,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   if (skills.size > 0 && call.name === LOAD_SKILL) {
     // `load_skill` only reads the granted skills.
     const invoke = async () => invokeLoadSkill(skills, args);
-    return { planned: { call, index, callId: undefined, invoke }, safe: true };
+    return { planned: { call, index, callId: undefined, deadline: null, invoke }, safe: true };
   }
   if (!turn.granted.includes(call.name)) {
     const error = new AgentLoopError(
@@ -568,15 +571,29 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     );
     return { error, granted: false };
   }
+  // An ask's deadline is fixed before its handler runs, which gets it; the pending step records it.
+  let deadline: string | null = null;
+  if (call.name === ASK_USER && typeof args["timeout"] === "string") {
+    try {
+      deadline = formatRecordTime((ctx.scheduler ?? realScheduler).now() + parseDuration(args["timeout"]) * 1000);
+    } catch (error) {
+      if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
+      const reported = new ReportedToolError(`ask_user timeout: ${error.message}`);
+      return { planned: { call, index, callId: undefined, deadline: null, invoke: () => Promise.reject(reported) }, safe: false };
+    }
+  }
   let checked: CheckedCall;
   try {
-    checked = await toolset.validate(call.name, args, { signal: ctx.signal });
+    checked =
+      deadline === null
+        ? await toolset.validate(call.name, args, { signal: ctx.signal })
+        : await toolset.validateTrusted(call.name, { ...args, deadline }, { signal: ctx.signal });
   } catch (error) {
     // A check the stop cut short is the stop, not a failed check.
     checkNodeStopped(turn);
     // Python checks the arguments inside the call, where a reported error is the call's result.
     if (isReportedToolError(error)) {
-      return { planned: { call, index, callId: undefined, invoke: () => Promise.reject(error) }, safe: false };
+      return { planned: { call, index, callId: undefined, deadline: null, invoke: () => Promise.reject(error) }, safe: false };
     }
     return { error, granted: true };
   }
@@ -586,7 +603,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // run (no run id) the tool set gives each call a fresh id.
   const callId = agentCallId(turn, index);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
-  return { planned: { call, index, callId, invoke }, safe: toolset.isConcurrencySafe(checked) };
+  return { planned: { call, index, callId, deadline, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 
 /**
@@ -657,7 +674,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
    * `pending` step.
    */
   const settle = (planned: PlannedCall, startedAt: number, value: unknown, reported: boolean): ToolOutcome => {
-    const { call, index, callId } = planned;
+    const { call, index, callId, deadline } = planned;
     try {
       if (!reported && isPending(value)) {
         if (turn.interrupt !== undefined) {
@@ -674,7 +691,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
           );
         }
         if (!signal?.aborted) {
-          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index });
+          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index, deadline });
           turn.pended.set(index, callId);
         }
         return { pending: callId };

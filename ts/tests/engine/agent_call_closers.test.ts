@@ -259,3 +259,41 @@ test("two pended calls and a crash before node_waiting: both close, in call orde
     ["c2", TOOL_OUTCOME_UNKNOWN, true],
   ]);
 });
+
+test("an ask_user timeout stamps the deadline on the request and the pending step", async () => {
+  let deadline = null as string | null;
+  const m = scripted(callReply(["ask_user", { question: "Ship?", timeout: "30m" }, "c1"]));
+  const log = freshLog();
+  const result = await runFlow(await loadFlow(FLOW), {}, options(log, m, (request) => ((deadline = request.deadline), pending())));
+
+  expect(result.status, result.failure?.message).toBe("waiting");
+  expect(deadline).toBe("2026-10-24T10:30:00.000Z");
+  const step = records(log).find((entry) => kindOf(entry) === "pending")!.record as NodeStepRecord;
+  expect(step.step["deadline"]).toBe("2026-10-24T10:30:00.000Z");
+  expect(pendingCalls(log)[0]!.deadline).toBe("2026-10-24T10:30:00.000Z");
+  expect(result.waits[0]!.deadline).toBe("2026-10-24T10:30:00.000Z");
+});
+
+test("an ask_user answered inline gets its deadline too, and nothing is recorded", async () => {
+  let deadline = null as string | null;
+  const m = scripted(callReply(["ask_user", { question: "Ship?", timeout: "2h" }, "c1"]), textReply("ok"));
+  const log = freshLog();
+  const result = await runFlow(await loadFlow(FLOW), {}, options(log, m, (request) => ((deadline = request.deadline), "yes")));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(deadline).toBe("2026-10-24T12:00:00.000Z");
+  expect(kinds(log)).not.toContain("pending");
+  expect(sentResults(m, 1)).toEqual([["c1", "yes", false]]);
+});
+
+test("a malformed timeout is the call's error result; the handler isn't called", async () => {
+  let asked = 0;
+  const m = scripted(callReply(["ask_user", { question: "q", timeout: "30" }, "c1"]), textReply("ok"));
+  const result = await runFlow(await loadFlow(FLOW), {}, options(freshLog(), m, () => (asked++, "x")));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(asked).toBe(0);
+  expect(sentResults(m, 1)).toEqual([
+    ["c1", "ask_user timeout: a duration is a positive integer and a unit (90s | 30m | 24h | 2d); write 30s", true],
+  ]);
+});

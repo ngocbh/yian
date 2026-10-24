@@ -151,7 +151,7 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
-import { ASK, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
+import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import {
   applyWaitsRecord,
   availableUnread,
@@ -4211,8 +4211,9 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
  * Require an AGENT's `pending` step to register a call of its latest reply: `tool` a granted
  * tool's name, neither take nor sleep; `tool_call_id` the provider's id; `reply` the `n` of the
  * node's latest `model_call` step and `index` the call's place among its runnable calls, which
- * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply) and no
- * `deadline`; not yet registered, and within the run's `MAX_EVENT_BYTES`.
+ * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply); a
+ * `deadline` only on `ask_user`, as a record time; not yet registered, and within the run's
+ * `MAX_EVENT_BYTES`.
  */
 function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const { call_id: callId, tool, tool_call_id: toolCallIdOf } = step;
@@ -4239,7 +4240,12 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
   if (Object.hasOwn(step, "arguments")) {
     throw new RangeError("an agent's pending step holds no arguments; they are in its reply");
   }
-  if (Object.hasOwn(step, "deadline")) throw new RangeError("an agent's pending step has no deadline");
+  if (Object.hasOwn(step, "deadline")) {
+    if (tool !== ASK_USER) throw new RangeError(`an agent's pending ${reprText(tool)} call has no deadline; only ask_user times out`);
+    const deadline = step["deadline"];
+    if (typeof deadline !== "string") throw new RangeError("pending deadline must be a record time");
+    requireRecordTime(deadline, "pending deadline");
+  }
   requireNewPendingCall(state, callId, step);
 }
 

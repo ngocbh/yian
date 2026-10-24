@@ -96,6 +96,14 @@ describe("an agent's pending step", () => {
     expect(state.waits.waiting.get("a")!.callIds).toEqual([agentCall("a", 1, 0), agentCall("a", 1, 1)]);
   });
 
+  test("an ask_user's pending step may hold its deadline", () => {
+    const { log, state } = started(paramFlow([], agent("a")));
+    start(log, state, "a");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q", timeout: "1m" }]));
+    step(log, state, "a", { ...pendingOf("a", 1, 0, "c1"), deadline: "2026-10-21T00:00:00.000Z" });
+    expect(state.waits.calls.get(agentCall("a", 1, 0))!.deadline).toBe("2026-10-21T00:00:00.000Z");
+  });
+
   test("agent pending refusals", () => {
     const { log, state } = started(paramFlow([], agent("a"), agent("b")));
     start(log, state, "a");
@@ -110,7 +118,9 @@ describe("an agent's pending step", () => {
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), index: -1n });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), reply: 2n });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), arguments: {} });
-    refuse("a", { ...pendingOf("a", 1, 0, "c1"), deadline: "2026-10-21T00:00:00.000Z" });
+    // Only ask_user times out, and its deadline is a record time.
+    refuse("a", { ...pendingOf("a", 1, 0, "c1", "lookup"), deadline: "2026-10-21T00:00:00.000Z" });
+    refuse("a", { ...pendingOf("a", 1, 0, "c1"), deadline: "tomorrow" });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), tool: "take" });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), tool: "" });
     step(log, state, "a", result("c0", "x")); // a step after the reply: still the latest reply

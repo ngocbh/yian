@@ -1,0 +1,47 @@
+# A sleep's `until:` written as a list holding a `${...}` is refused at load: the value would be
+# a list, never a date or datetime.
+kind: load
+rules: [messages]
+flow: |
+  id: w
+  name: w
+  nodes:
+    a:
+      kind: code
+      code: return '2030-01-01'
+    w:
+      kind: tool
+      tool_id: sleep
+      input:
+        until:
+          - ${a.output}
+  output: ${w.output}
+python_flow: |2
+
+  id: w
+  name: w
+  nodes:
+    a:
+      kind: code
+      code: return '2030-01-01'
+    w:
+      kind: wait
+      until:
+        - ${a.output}
+  output: ${w.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is a list; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`"
+      frames:
+      - label: flow.yaml
+        range: [12, 9, 13, 1]
+python_expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'wait node ''w'' until: a value holding ${...} can''t be a list or mapping; write the list as an expression, e.g. `${[a.output, b.output]}`'
+      frames:
+      - label: flow.yaml
+        range: [11, 7, 12, 1]

@@ -15,7 +15,7 @@
 import { typeRelation } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.ts";
+import { bindingSource, isExactly, ValueContract, ValueTemplate } from "../../nodes/contracts.ts";
 import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
@@ -338,7 +338,8 @@ export class ToolDescriptor extends NodeDescriptor {
 
   /**
    * Check a sleep's inputs: exactly one of `until` and `for`. A literal `until` must be a date or
-   * datetime, and a reference's type must not be disjoint from both `date` and `datetime`.
+   * datetime, a reference's type must not be disjoint from both `date` and `datetime`, and a list
+   * or mapping holding `${...}` is refused.
    *
    * @throws LoadError for any other input, both or neither, or a bad `until`.
    */
@@ -370,7 +371,16 @@ export class ToolDescriptor extends NodeDescriptor {
       });
     }
     const typ = this.inputType(ctx, "until");
-    if (typ === null || typeRelation(typ, DATE) !== "disjoint" || typeRelation(typ, DATETIME) !== "disjoint") return;
+    if (typ === null) {
+      // A list or mapping holding `${...}` is unproven, yet it can never be a date or datetime.
+      const source = this.inputs["until"];
+      if (!(source instanceof ValueTemplate)) return;
+      const shape = isList(source.value) ? "a list" : "a mapping";
+      throw ctx.diagnostics.error(`${subject}: must be a date or datetime, but the value is ${shape}; ${UNTIL_FIX}`, {
+        range,
+      });
+    }
+    if (typeRelation(typ, DATE) !== "disjoint" || typeRelation(typ, DATETIME) !== "disjoint") return;
     throw ctx.diagnostics.error(
       `${subject}: must be a date or datetime, but the value is ${canonicalTypeLabel(typ)}; ${UNTIL_FIX}`,
       { range },

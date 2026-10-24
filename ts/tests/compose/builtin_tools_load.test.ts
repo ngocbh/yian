@@ -58,6 +58,17 @@ test.each([
   expect(refused(takeFlow(extra))).toContain(message);
 });
 
+// An untyped producer leaves the value's type unproven, but a container is never a date.
+test.each([
+  ["a list", "        - \${a.output}\n"],
+  ["a mapping", "        at: \${a.output}\n"],
+])("a sleep until written as %s holding a reference is refused", (shape, body) => {
+  const text =
+    "id: f\nname: f\nnodes:\n  a:\n    kind: code\n    code: return '2030-01-01'\n" +
+    `  t:\n    kind: tool\n    tool_id: sleep\n    input:\n      until:\n${body}output: null\n`;
+  expect(refused(text)).toContain(`input 'until': must be a date or datetime, but the value is ${shape}`);
+});
+
 test("sleep refuses output", () => {
   const text = toolFlow("sleep", "    input:\n      for: 90s\n    output: str\n");
   expect(refused(text)).toContain("sleep's output is None; remove `output:`");

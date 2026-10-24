@@ -174,10 +174,10 @@
     "NodeAttemptResumed": {
       "description": "A resume restarted a node.",
       "type": "object",
-      "required": ["node_id", "interrupted"],
+      "required": ["node_id", "crashed"],
       "properties": {
         "node_id": {"type": "string"},
-        "interrupted": {"type": "integer", "minimum": 0, "description": "How many of the node's attempts were interrupted, derived from the log; a deliberate stop doesn't count, so a node restarted only after stops has 0."}
+        "crashed": {"type": "integer", "minimum": 0, "description": "How many of the node's attempts crashed (started, with no outcome and no stop covering them), derived from the log; a deliberate stop doesn't count, so a node restarted only after stops has 0."}
       }
     },
     "ModelCallStarted": {

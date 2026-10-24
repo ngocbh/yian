@@ -1045,7 +1045,7 @@ export function roots(state: RunState): unknown[] {
     state.ready,
     state.inFlight,
     state.acceptedStarts,
-    state.interruptedAttempts,
+    state.crashedAttempts,
     state.depth,
     state.wiringOverrides,
     state.input,
@@ -1061,7 +1061,7 @@ export interface Snapshot {
 
 /**
  * Return `state`'s snapshot: `stateSnapshot` with the latch, start counts, steps,
- * interrupted-attempt counts and last stop sequence as well.
+ * crashed-attempt counts and last stop sequence as well.
  */
 export function snapshot(state: RunState): Snapshot {
   return {
@@ -1070,7 +1070,7 @@ export function snapshot(state: RunState): Snapshot {
       terminalUnreachableFailure: state.terminalUnreachableFailure,
       nodeStarts: [...state.nodeStarts],
       nodeSteps: [...state.nodeSteps],
-      interruptedAttempts: [...state.interruptedAttempts],
+      crashedAttempts: [...state.crashedAttempts],
       lastStopSequence: state.lastStopSequence,
     },
     roots: roots(state),
@@ -1796,9 +1796,9 @@ export function requiredEndFlow(loaded: ComposedFlow): ComposedFlow {
   });
 }
 
-/** The progress parts of an `inspectRun` result: its status, nodes in flight and interrupted counts. */
-export function progressOf({ status, inFlight, interruptedAttempts }: RunInspection) {
-  return { status, inFlight, interruptedAttempts };
+/** The progress parts of an `inspectRun` result: its status, nodes in flight and crashed counts. */
+export function progressOf({ status, inFlight, crashedAttempts }: RunInspection) {
+  return { status, inFlight, crashedAttempts };
 }
 
 // ---- Runs of one-AGENT flows over a scripted model, and `yian run` over a fake chat endpoint ----

@@ -158,15 +158,15 @@ function isRunLog(log: unknown): log is RunLog {
 
 /**
  * Return one `NodeAttemptResumed` per retried node of a committed `RunResumed`, in the record's
- * `retryNodeIds` order, each counting the node's attempts interrupted with no `RunStopped`. The run
- * boundary publishes them right after the `RunResumed` observers.
+ * `retryNodeIds` order, each counting the node's crashed attempts (no `RunStopped` covering them).
+ * The run boundary publishes them right after the `RunResumed` observers.
  *
  * @param state The state `record` was committed to.
  * @param record The committed `RunResumed` record.
  */
 export function resumedAttemptEvents(state: RunState, record: RunResumedRecord): NodeAttemptResumed[] {
   return record.retryNodeIds.map(
-    (nodeId) => new NodeAttemptResumed({ nodeId, interrupted: state.interruptedAttempts.get(nodeId) ?? 0 }),
+    (nodeId) => new NodeAttemptResumed({ nodeId, crashed: state.crashedAttempts.get(nodeId) ?? 0 }),
   );
 }
 

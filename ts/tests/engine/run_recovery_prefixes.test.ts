@@ -672,7 +672,7 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
       ["first", 1],
       ["second", 1],
     ]);
-    const expected = { status: "interrupted" as const, inFlight: ["first", "second"], interruptedAttempts: counts };
+    const expected = { status: "crashed" as const, inFlight: ["first", "second"], crashedAttempts: counts };
     expect(progressOf(inspectRun(path))).toEqual(expected);
     expect(progressOf(inspectRun(path, { flow, env }))).toEqual(expected);
 
@@ -681,10 +681,10 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
     expect(result.status).toBe("succeeded");
     expect(seen.slice(0, 3)).toEqual([
       new RunResumed(),
-      new NodeAttemptResumed({ nodeId: "first", interrupted: 1 }),
-      new NodeAttemptResumed({ nodeId: "second", interrupted: 1 }),
+      new NodeAttemptResumed({ nodeId: "first", crashed: 1 }),
+      new NodeAttemptResumed({ nodeId: "second", crashed: 1 }),
     ]);
-    expect(result.interruptedAttempts).toEqual(counts);
+    expect(result.crashedAttempts).toEqual(counts);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

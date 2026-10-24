@@ -230,7 +230,7 @@ test("a cut between a node's commit and its success reruns the node, leaving the
 
     // The orphan is ignored on replay: the pool holds what it held before the commit.
     const inspection = inspectRun(log, { flow, env: NO_ENV });
-    expect(inspection.status).toBe("interrupted");
+    expect(inspection.status).toBe("crashed");
     expect([...inspection.inFlight]).toContain(node);
     const replayed = (count: number) => replayRunLog(flow, MemoryRunLog.fromRecords(cutEnvelopes.slice(0, count)));
     const before = replayed(k).pool.store.get(key);

@@ -1,4 +1,4 @@
-# A finished run: succeeded, nothing in flight, no interrupted attempts.
+# A finished run: succeeded, nothing in flight, no crashed attempts.
 kind: cli
 python_skip: "yian status is TS-only"
 files:
@@ -27,4 +27,4 @@ expect:
     format: yian.cli.v1
     status: succeeded
     in_flight: []
-    interrupted_attempts: {}
+    crashed_attempts: {}

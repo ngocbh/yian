@@ -8,6 +8,8 @@
  * and `test_steerable_is_identity_but_false_is_not` (hand-built nodes where Python loads `_flow`).
  *
  * TS-only: the harvested cases of these errors, as `parseNodes` or `assemble` reads them.
+ * TS-only (pins): a steerable agent may declare an `Optional(str)` output, as a test and as the
+ * load case `compose_agent_steerable_yaml__a_steerable_optional_str_agent_loads`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -16,6 +18,7 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { Flow } from "../../src/compile/model.ts";
 import { forget } from "../../src/defaults.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
 import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
 
 afterEach(() => forget());
@@ -45,6 +48,13 @@ test("steerable reaches the agent node and defaults off", () => {
 
 test("steerable agent without declared output is text", () => {
   expect(chatOf(steerFlow("    steerable: true", "")).steerable).toBe(true);
+});
+
+test("a steerable agent may declare an Optional(str) output", () => {
+  const chat = chatOf(steerFlow("    steerable: true", "    output: Optional(str)"));
+  expect(chat.steerable).toBe(true);
+  expect(chat.outputContract).toBeInstanceOf(ValueContract);
+  expect((chat.outputContract as ValueContract).type.nullable).toBe(true);
 });
 
 test.each([
@@ -93,4 +103,5 @@ test.each<CaseRow>([
 
 test.each<CaseRow>([
   { id: "load-agent/compose_agent_steerable_yaml__steerable_needs_str_output", call: assembled },
+  { id: "load-agent/compose_agent_steerable_yaml__a_steerable_optional_str_agent_loads", call: assembled },
 ])("assemble: $id", runCase);

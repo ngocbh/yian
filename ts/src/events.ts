@@ -193,22 +193,22 @@ export class NodeExpanded {
 }
 
 /**
- * A resume restarted `nodeId`, whose attempts were interrupted `interrupted` times so
- * far. Hosts that resume automatically own any limit on restarts.
+ * A resume restarted `nodeId`, whose attempts crashed (no outcome, no stop covering them)
+ * `crashed` times so far. Hosts that resume automatically own any limit on restarts.
  */
 export class NodeAttemptResumed {
   readonly type = "NodeAttemptResumed" as const;
   readonly nodeId: string;
-  readonly interrupted: number;
+  readonly crashed: number;
 
-  constructor(options: { nodeId: string; interrupted: number }) {
+  constructor(options: { nodeId: string; crashed: number }) {
     this.nodeId = options.nodeId;
-    this.interrupted = options.interrupted;
+    this.crashed = options.crashed;
   }
 
   /** Return the data form. */
   toJSON() {
-    return { node_id: this.nodeId, interrupted: this.interrupted };
+    return { node_id: this.nodeId, crashed: this.crashed };
   }
 }
 

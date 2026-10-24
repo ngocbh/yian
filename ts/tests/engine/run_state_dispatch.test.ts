@@ -46,7 +46,7 @@
  *   text, not bytes; assigning a plan field is a `TypeError`, and the delta is frozen too.
  * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
  *   Python's `id()` values; it compares the pool as its wire object, keeps the terminal-unreachable
- *   latch as Python does, and adds the start counts, steps, interrupted-attempt counts and last
+ *   latch as Python does, and adds the start counts, steps, crashed-attempt counts and last
  *   stop sequence.
  *
  * TS-only (RunStopped): `prepareRunStopped` lists the in-flight nodes in dispatch order; its
@@ -60,7 +60,7 @@
  * and an expansion with a builder to the growth reducer, which checks the record's spawner before
  * anything else.
  *
- * TS-only (interrupted-attempt counts, which Python doesn't keep): each resume counts every retried
+ * TS-only (crashed-attempt counts, which Python doesn't keep): each resume counts every retried
  * start no stop covered; a stop covers the starts before it but not a later one, and two stops
  * cover everything before the second; a count survives the node's outcome; a resume clears the
  * last stop; `replayRecords` over the live log rebuilds the counts and the last stop.
@@ -910,19 +910,19 @@ test("a frontier plan holding an outcome record is refused", () => {
   expect(log.nextSequence).toBe(3);
 });
 
-// TS-only: interrupted-attempt counts.
+// TS-only: crashed-attempt counts.
 
 test("a resume counts each start it retries, once per resume", () => {
   const { state, log } = initialized();
   startFrontier(state, log, "first");
 
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
-  expect(state.interruptedAttempts).toEqual(new Map([["first", 1]]));
+  expect(state.crashedAttempts).toEqual(new Map([["first", 1]]));
   expect(state.ready).toEqual(["first"]);
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
 
-  expect(state.interruptedAttempts).toEqual(new Map([["first", 2]]));
+  expect(state.crashedAttempts).toEqual(new Map([["first", 2]]));
   expect(state.ready).toEqual(["first"]);
 });
 
@@ -934,7 +934,7 @@ test("a stop covers the starts before it, so their resume counts nothing", () =>
   expect(state.lastStopSequence).toBe(4);
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
 
-  expect(state.interruptedAttempts).toEqual(new Map());
+  expect(state.crashedAttempts).toEqual(new Map());
   expect(state.lastStopSequence).toBeNull();
   expect(state.ready).toEqual(["first"]);
 });
@@ -947,7 +947,7 @@ test("a start after a stop still counts, and the stopped one doesn't", () => {
 
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
 
-  expect(state.interruptedAttempts).toEqual(new Map([["second", 1]]));
+  expect(state.crashedAttempts).toEqual(new Map([["second", 1]]));
   expect(state.ready).toEqual(["first", "second"]);
 });
 
@@ -961,11 +961,11 @@ test("two stops in a row cover everything started before the second", () => {
 
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
 
-  expect(state.interruptedAttempts).toEqual(new Map());
+  expect(state.crashedAttempts).toEqual(new Map());
   expect(state.ready).toEqual(["first", "second"]);
 });
 
-test("an interrupted-attempt count survives the node's outcome, while its start count goes", () => {
+test("a crashed-attempt count survives the node's outcome, while its start count goes", () => {
   const { state, log } = initialized();
   startFrontier(state, log, "first");
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
@@ -974,7 +974,7 @@ test("an interrupted-attempt count survives the node's outcome, while its start 
   commitPrepared(log, state, prepareOutput(log, state, "first", {}));
 
   expect(state.nodeStarts.has("first")).toBe(false);
-  expect(state.interruptedAttempts).toEqual(new Map([["first", 1]]));
+  expect(state.crashedAttempts).toEqual(new Map([["first", 1]]));
   expect(state.ready).toEqual(["second"]);
 });
 
@@ -988,12 +988,12 @@ test("a resume clears the last stop, so an earlier segment's stop doesn't cover 
 
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
 
-  expect(state.interruptedAttempts).toEqual(new Map([["first", 1]]));
+  expect(state.crashedAttempts).toEqual(new Map([["first", 1]]));
   expect(state.lastStopSequence).toBeNull();
   expect(state.ready).toEqual(["first"]);
 });
 
-test("replayRecords rebuilds the interrupted-attempt counts and the last stop of a live log", () => {
+test("replayRecords rebuilds the crashed-attempt counts and the last stop of a live log", () => {
   const { state, log } = initializedAndStarted(fanoutFlow());
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
@@ -1004,7 +1004,7 @@ test("replayRecords rebuilds the interrupted-attempt counts and the last stop of
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
   commitPrepared(log, state, prepareRunStopped(state, "signal", ""));
-  expect(state.interruptedAttempts).toEqual(
+  expect(state.crashedAttempts).toEqual(
     new Map([
       ["first", 1],
       ["second", 1],

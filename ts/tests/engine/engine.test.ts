@@ -25,7 +25,7 @@
  *
  * TS-only: nothing ready before a terminal result is nonterminal quiescence. The node failure row
  * also checks that a failed run aborts its signal. `resumedAttemptEvents` (on a live state): a crash
- * before the resume counts one interrupted attempt, a `RunStopped` before it none, two crashes two,
+ * before the resume counts one crashed attempt, a `RunStopped` before it none, two crashes two,
  * and the events follow the record's `retryNodeIds`. Fixture sanity: `engine` records the memory
  * table, stacks and snapshots it is given in `RunStarted`, and `ownerEngine` scopes every node of a
  * flat flow under one root-owned memory.
@@ -460,18 +460,18 @@ function resumable() {
   ]));
 }
 
-test("resumedAttemptEvents counts a crash as one interrupted attempt", () => {
+test("resumedAttemptEvents counts a crash as one crashed attempt", () => {
   const { state, log } = resumable();
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   const resumed = prepareRunResumed(state, { numWorkers: 0 });
   commitPrepared(log, state, resumed);
 
   expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
-    new NodeAttemptResumed({ nodeId: START_ID, interrupted: 1 }),
+    new NodeAttemptResumed({ nodeId: START_ID, crashed: 1 }),
   ]);
 });
 
-test("resumedAttemptEvents counts no interrupted attempt after a RunStopped", () => {
+test("resumedAttemptEvents counts no crashed attempt after a RunStopped", () => {
   const { state, log } = resumable();
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitPrepared(log, state, prepareRunStopped(state, "signal", "stop now"));
@@ -479,11 +479,11 @@ test("resumedAttemptEvents counts no interrupted attempt after a RunStopped", ()
   commitPrepared(log, state, resumed);
 
   expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
-    new NodeAttemptResumed({ nodeId: START_ID, interrupted: 0 }),
+    new NodeAttemptResumed({ nodeId: START_ID, crashed: 0 }),
   ]);
 });
 
-test("resumedAttemptEvents counts two crashes as two interrupted attempts", () => {
+test("resumedAttemptEvents counts two crashes as two crashed attempts", () => {
   const { state, log } = resumable();
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
@@ -492,7 +492,7 @@ test("resumedAttemptEvents counts two crashes as two interrupted attempts", () =
   commitPrepared(log, state, resumed);
 
   expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
-    new NodeAttemptResumed({ nodeId: START_ID, interrupted: 2 }),
+    new NodeAttemptResumed({ nodeId: START_ID, crashed: 2 }),
   ]);
 });
 
@@ -509,8 +509,8 @@ test("resumedAttemptEvents follows the record's retryNodeIds", () => {
 
   expect((resumed.record as RunResumedRecord).retryNodeIds).toEqual(["b", "a"]);
   expect(resumedAttemptEvents(state, resumed.record as RunResumedRecord)).toEqual([
-    new NodeAttemptResumed({ nodeId: "b", interrupted: 2 }),
-    new NodeAttemptResumed({ nodeId: "a", interrupted: 1 }),
+    new NodeAttemptResumed({ nodeId: "b", crashed: 2 }),
+    new NodeAttemptResumed({ nodeId: "a", crashed: 1 }),
   ]);
 });
 

@@ -437,7 +437,7 @@ the stop (the host's `signal.reason`, the callback's error), never a sibling's, 
 failure stays the run's `RunFailed`. A host stop and a host callback that throws or rejects
 (`onEvent`, `onStream`, steering) append one `RunStoppedRecord` (`signal` or `callback`) when
 the stop is requested, listing the nodes in flight, before anything winds down; other host
-faults append none, so their attempts count as interrupted on resume, and nothing is appended
+faults append none, so their attempts count as crashed on resume, and nothing is appended
 after a terminal result or a second time in one segment. Inside an AGENT turn a tool call that
 had already settled when the stop arrived still records its step (`record(step, { settled: true
 })`) and publishes its `ToolCallFinished`, as long as the run has no terminal result; other

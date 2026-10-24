@@ -1,0 +1,44 @@
+# TS-only: an AGENT whose output is Optional(str) is a text producer. After a tool turn its final
+# reply is the output, with no structured call: the models list has two entries, and a third
+# request would fail the case. Neither request asks for a schema.
+kind: run
+rules: [run-log]
+python_skip: "TS-only (yian #1025): Optional(str) output cases follow the inbox model"
+flow: |
+  id: optional-text
+  name: optional_text
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: Optional(str)
+  output: ${chat.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties: {topic: {type: string}}
+        required: [topic]
+      results:
+      - return: found a
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: call-1, name: lookup, arguments: {topic: a}}]
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: text, text: done}]
+expect:
+  output: {status: succeeded, output: done}
+  events: [[RunStarted], [NodeStarted, {node_id: __start__}], [NodeSucceeded, {node_id: __start__, output: {}}], [NodeStarted, {node_id: chat}], [ModelCallStarted, {exchange_id: <id:1>, model: gpt-5.5, node_id: chat, provider: openai, purpose: chat}], [ModelCallFinished, {exchange_id: <id:1>, model: gpt-5.5, node_id: chat, provider: openai, purpose: chat}], [ToolCallStarted, {arguments: {topic: a}, call_index: 0.0, exchange_id: <id:1>, name: lookup, node_id: chat, tool_call_id: call-1}], [ToolCallFinished, {call_index: 0.0, exchange_id: <id:1>, name: lookup, node_id: chat, result: found a, tool_call_id: call-1}], [ModelCallStarted, {exchange_id: <id:2>, model: gpt-5.5, node_id: chat, provider: openai, purpose: chat}], [ModelCallFinished, {exchange_id: <id:2>, model: gpt-5.5, node_id: chat, provider: openai, purpose: chat}], [NodeSucceeded, {node_id: chat, output: done}], [NodeStarted, {node_id: __end__}], [NodeSucceeded, {node_id: __end__, output: done}], [RunSucceeded, {output: done}]]
+  tool_calls: {lookup: [{args: {topic: a}, attempt: 1, call_id: r1/chat/1/0, node: chat}]}

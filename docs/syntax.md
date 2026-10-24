@@ -1699,18 +1699,20 @@ says to delete the line; with `mode: plain` and `tools:`, those tools now run.
 
 An AGENT node's `output:` may be any declared shape a model can generate, which
 excludes `file` and `None` anywhere in the type (a flow that declares one fails at
-load; produce such a value in a CODE node). Only a bare `str`
-keeps the node a **text producer**. A `Literal(...)` enum, record, union, non-string
-scalar, or list switches the node to **structured generation**: the engine derives a
-schema from the declared `output:` and asks the model to emit a conforming value
-(via the provider's native structured output, or a JSON prompt-injection fallback
-for providers that lack it). A root `Literal(...)` is constrained internally as a
-single `value` field and returned to the flow as the bare tag. `Optional(X)` allows
-null in the schema wherever it appears: at the root, as a list element, or as a
-record field. A root `Optional(str)` stays a text producer, so it never returns
-null. An `object` or `Any` output asks for an open mapping or any JSON value. Where a
-provider's structured output is strict, yian asks for such a schema without strict
-constraints, so the provider doesn't constrain the open part:
+load; produce such a value in a CODE node). Only an untagged `str` or
+`Optional(str)` keeps the node a **text producer**. A `Literal(...)` enum, record,
+union, non-string scalar, or list switches the node to **structured generation**:
+the engine derives a schema from the declared `output:` and asks the model to emit
+a conforming value (via the provider's native structured output, or a JSON
+prompt-injection fallback for providers that lack it). A root `Literal(...)` is
+constrained internally as a single `value` field and returned to the flow as the
+bare tag. `Optional(X)` allows null in the schema wherever it appears: at the root,
+as a list element, or as a record field. A root `Optional(str)` is a text producer
+like `str`: its value is the reply's text (`""` for an empty reply), never null from
+the model. Other `Optional(...)` outputs stay structured, and there the model may
+answer null. An `object` or `Any` output asks for an open mapping or any JSON
+value. Where a provider's structured output is strict, yian asks for such a schema
+without strict constraints, so the provider doesn't constrain the open part:
 
 - `azure` gets a forced function tool that isn't strict, instead of its strict
   JSON-schema mode.
@@ -2504,7 +2506,7 @@ worker:
   steerable: true               # default false
   tools: [search]
   prompt: Research the question and answer it.
-  output: str                   # required: `str` or no `output:`
+  output: str                   # required: `str`, `Optional(str)`, or no `output:`
 ```
 
 - **Steer.** At the top of each loop iteration the node reads the messages the
@@ -2536,10 +2538,10 @@ worker:
   before it go with that request, and an interrupt cuts its streaming text reply
   at the last chunk shown.
 
-`steerable: true` is a load error on an AGENT with a non-`str` output, because a
-structured value cannot be partial. A model question from
-`ask_user` is still answered through `ask_user`, not by a steer. Python hosts pass
-the inbox as `run_flow(..., steering=inbox)` (see [API](api.md#steering)); a
+`steerable: true` is a load error on an AGENT whose output is anything but `str` or
+`Optional(str)`, because a structured value cannot be partial. A model question
+from `ask_user` is still answered through `ask_user`, not by a steer. Python hosts
+pass the inbox as `run_flow(..., steering=inbox)` (see [API](api.md#steering)); a
 node without `steerable: true` never reads it.
 
 ### `code` / `tool` — the other leaves

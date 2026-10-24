@@ -1427,8 +1427,8 @@ describe("status", () => {
   }
 
   /** The finished log cut after the `echo` node's start: a run whose process ended mid-run. */
-  async function interruptedLog(): Promise<string> {
-    const log = await finishedLog("interrupted.jsonl");
+  async function crashedLog(): Promise<string> {
+    const log = await finishedLog("crashed.jsonl");
     const lines = readFileSync(log, "utf8").split("\n");
     const started = lines.findIndex(
       (line) => line.includes('"kind":"node_started"') && line.includes('"node_id":"echo"'),
@@ -1443,32 +1443,32 @@ describe("status", () => {
     const { io, stdout, stderr } = testIo();
     expect(await main(["status", log, "--json"], io)).toBe(0);
     expect(stdout()).toBe(
-      '{"format":"yian.cli.v1","in_flight":[],"interrupted_attempts":{},"status":"succeeded"}\n',
+      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"status":"succeeded"}\n',
     );
     expect(stderr()).toBe("");
   });
 
-  test("--json: an interrupted run's nodes in flight and interrupted attempts", async () => {
-    const log = await interruptedLog();
+  test("--json: a crashed run's nodes in flight and crashed attempts", async () => {
+    const log = await crashedLog();
     const before = readFileSync(log, "utf8");
     const { io, stdout } = testIo();
     expect(await main(["status", log, "--json"], io)).toBe(0);
     expect(stdout()).toBe(
-      '{"format":"yian.cli.v1","in_flight":["echo"],"interrupted_attempts":{"echo":1},"status":"interrupted"}\n',
+      '{"format":"yian.cli.v1","crashed_attempts":{"echo":1},"in_flight":["echo"],"status":"crashed"}\n',
     );
     // It never appends.
     expect(readFileSync(log, "utf8")).toBe(before);
   });
 
-  test("text: the status, then the nodes in flight and interrupted attempts when any", async () => {
+  test("text: the status, then the nodes in flight and crashed attempts when any", async () => {
     const finished = testIo();
     expect(await main(["status", await finishedLog()], finished.io)).toBe(0);
     expect(finished.stdout()).toBe("status: succeeded\n");
     expect(finished.stderr()).toBe("");
-    const interrupted = testIo();
-    expect(await main(["status", await interruptedLog()], interrupted.io)).toBe(0);
-    expect(interrupted.stdout()).toBe(
-      "status: interrupted\nin flight: echo\ninterrupted attempts: echo=1\n",
+    const crashed = testIo();
+    expect(await main(["status", await crashedLog()], crashed.io)).toBe(0);
+    expect(crashed.stdout()).toBe(
+      "status: crashed\nin flight: echo\ncrashed attempts: echo=1\n",
     );
   });
 
@@ -1482,7 +1482,7 @@ describe("status", () => {
         format: "yian.cli.v1",
         status: "running",
         in_flight: [],
-        interrupted_attempts: {},
+        crashed_attempts: {},
       });
     } finally {
       log.close();

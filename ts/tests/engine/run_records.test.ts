@@ -34,8 +34,8 @@
  * `test_record_wire_examples_cover_the_closed_record_inventory` (against `RUN_RECORD_TYPES`).
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
- * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 15 are
- * unsupported, 10-13 are retired, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
+ * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 16 are
+ * unsupported, 10-14 are retired, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
  * its run-id rows (empty, a lone surrogate) and its unsupported-record row; the `RunStopped`
  * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
  * valid); a failure without a node id, an evidence or capture of another class, a bad worker

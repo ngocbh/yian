@@ -1,0 +1,15 @@
+# TS-only: an Optional(str) output is text, so a steerable agent may declare it (yian #1025).
+kind: load
+python_skip: "TS-only (yian #1025): steerable is replaced by steer_inbox in TS"
+flow: |
+  id: steer
+  name: steer
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steerable: true
+      output: Optional(str)
+  output: ${chat.output}
+expect:
+  load: ok

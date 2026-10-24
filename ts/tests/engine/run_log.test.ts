@@ -76,8 +76,8 @@
  *   names Python yian; TS's own schemas 10 and 11 are retired as Python names its retired
  *   schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
  * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 13 and the float
- *   token `14.0` (the current schema written as a float); the float row is wire-only, since a JS
- *   `14.0` is the number 14.
+ *   token `15.0` (the current schema written as a float); the float row is wire-only, since a JS
+ *   `15.0` is the number 15.
  * - The writer's lock is a SQLite lock on the sibling `<log>.lock`, not a `flock` on the log:
  *   `test_jsonl_resume_locks_before_its_first_read` checks the lock is held when the log is read;
  *   `test_jsonl_lock_contention_names_the_log_and_the_likely_cause` pins a busy `FileLockError` as
@@ -273,7 +273,7 @@ test("a schema 9 record names Python yian", () => {
   expectError(() => new RecordEnvelope(9, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, PYTHON_SCHEMA);
 });
 
-test("a schema 14 record, from before derived commits held from pointers, is retired", () => {
+test("a schema 14 record, from before an unfinished backward attempt was backward.unfinished, is retired", () => {
   const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":14,"seq":0}`;
   const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
   expect(error.schema).toBe(14);

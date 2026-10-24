@@ -7,7 +7,7 @@
  * `test_observers_share_the_same_failure_authority`.
  *
  * Changed: the carriers' own keys stand in for dataclass fields. The observers also hold their
- * `type` tag; a `RunResult` also holds `interruptedAttempts`, reads `learning` and
+ * `type` tag; a `RunResult` also holds `crashedAttempts`, reads `learning` and
  * `backwardOutcome` through getters, and keeps its backward handle outside the instance.
  *
  * Not ported: the `inspect.signature` half of
@@ -46,7 +46,7 @@ test("failure carriers have no parallel location fields", () => {
     "output",
     "failure",
     "events",
-    "interruptedAttempts",
+    "crashedAttempts",
   ]);
   expect([result.learning, result.backwardOutcome]).toEqual([null, null]);
 });

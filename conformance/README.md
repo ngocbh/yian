@@ -699,7 +699,7 @@ A case's group is its directory under `cases/`.
 | `run-leaves` | run | TOOL (retries, call ids), CODE, HUMAN_INPUT, WAIT |
 | `run-agent` | run | AGENT with scripted models: plain, structured, tool loop, steering, interrupts, retries |
 | `run-memory` | run | episodic, reflective and profile memories |
-| `resume` | resume | recovery, TOOL attempts across a resume, interrupted-attempt counts, re-supplied keys |
+| `resume` | resume | recovery, TOOL attempts across a resume, crashed-attempt counts, re-supplied keys |
 | `backward` | backward | explicit backward feedback and learning |
 | `cli` | cli | non-interactive `yian run`, the `--json` commands, `yian status --json` |
 

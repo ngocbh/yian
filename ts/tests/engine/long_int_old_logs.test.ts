@@ -8,7 +8,7 @@
  * and `test_route_value_json_with_a_long_int_is_rejected`.
  *
  * Changed: ints are `bigint`s with no digit limit (decisions 4a, 23), so each log reads whole
- * where Python refuses it with its old-log message. `resumeFlow` returns the finished run's
+ * where Python refuses it with its old-log message. `advance` returns the finished run's
  * recorded result and leaves the log unchanged; `JsonlRunLog.resume`, the reader replay and the
  * CLI use, and `decodeRecord` read the edited record with the whole int (the route keeps it as
  * its `value_json` text); `yian run --resume` exits 0, prints the recorded output and leaves the
@@ -31,7 +31,7 @@ import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { validateRoute } from "../../src/runtime/contracts.ts";
 import {
   decodeRecord,
@@ -165,7 +165,7 @@ test.each(OLD_LOGS)("resume fails clearly and leaves the log (%s)", async (_id, 
   const { flow, path, output } = await makeLog();
   const before = readFileSync(path);
 
-  const result = await resumeFlow({ log: path, env });
+  const result = await advance({ log: path, env });
 
   expect(result.failure).toBeNull();
   expect(result.status).toBe("succeeded");

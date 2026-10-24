@@ -45,7 +45,7 @@ export const TOOL_REGISTRY = new Map<string, FunctionTool>();
 
 // Names a group tool may not take: the run's ask_user handler and the skills tool.
 const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([ASK_USER, LOAD_SKILL]);
-const ASK_USER_HINT = "pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow";
+const ASK_USER_HINT = "pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance";
 
 const ASK_USER_DESCRIPTION =
   "Ask the user one short question and wait for the answer. Use only when you need a decision " +
@@ -337,7 +337,7 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
   if (!server.isOpen) {
     throw new TypeError(
       `tools[${JSON.stringify(key)}] is an MCP server that isn't open; open it with "await server.open()" ` +
-        "or pass it to runFlow/resumeFlow, which open it",
+        "or pass it to runFlow/advance, which open it",
     );
   }
   if (server.isClosed) throw new RangeError(`tools[${JSON.stringify(key)}]: MCP server '${server.label}' is closed`);

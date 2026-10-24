@@ -54,7 +54,7 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { LearnContext, MemoryMutation, MemoryOperationError } from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { type ResumeFlowOptions, resumeFlow, type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
+import { type AdvanceOptions, advance, type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -112,8 +112,8 @@ const load = (text: string) => loadFlow(text, { env });
 const run = (flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, options: RunFlowOptions = {}) =>
   runFlow(flow, inputs, { env, ...options });
 
-/** `resumeFlow` in the file's env. */
-const resume = (flow: ComposedFlow, options: ResumeFlowOptions) => resumeFlow({ env, ...options });
+/** `advance` in the file's env. */
+const resume = (flow: ComposedFlow, options: AdvanceOptions) => advance({ env, ...options });
 
 /** A `Map` serving the memory key `test` with `backend`. */
 const testMemory = (backend: unknown) => new Map([["test", backend as FakeMemory]]);

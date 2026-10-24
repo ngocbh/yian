@@ -18,7 +18,7 @@
  * - ints are `bigint`s (the child's value is `80n`), and the budget is `BUILTIN.maxTotalNodes`
  *   (Python's `Defaults()`).
  *
- * Ported, through `runFlow` and `resumeFlow` in an environment holding only a credential store
+ * Ported, through `runFlow` and `advance` in an environment holding only a credential store
  * path in a fresh directory: `test_deep_static_call_map_chain_resumes_after_its_last_expansion`.
  */
 
@@ -37,7 +37,7 @@ import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { childFlow, engine, intParameter, parentWithSpawner } from "./run_state_fixtures.ts";
@@ -214,7 +214,7 @@ test("deep static CALL/MAP chain resumes after its last expansion", async () => 
     expect(expanded).toHaveLength(DEEP_LEVELS);
     writeFileSync(path, `${lines.slice(0, expanded.at(-1)! + 1).join("\n")}\n`);
 
-    const resumed = await resumeFlow({ log: path, env });
+    const resumed = await advance({ log: path, env });
 
     expect(resumed.failure).toBeNull();
     expect(resumed.output).toEqual(DEEP_OUTPUT);

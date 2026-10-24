@@ -89,7 +89,7 @@ const NAMES: Record<string, string[]> = {
   ".": [
     "loadFlow",
     "runFlow",
-    "resumeFlow",
+    "advance",
     "buildMemories",
     "MemoryRegistry",
     "Failure",
@@ -125,7 +125,7 @@ const NAMES: Record<string, string[]> = {
     "BackwardOutcome",
     "inspectRun",
     "runFlow",
-    "resumeFlow",
+    "advance",
     "loadRecordedFlow",
     "runLogPath",
     "updateRunIndex",

@@ -2,7 +2,7 @@
  * Silent replay of a historical log prefix through the live reducer: a port of
  * `tests/engine/test_run_recovery_prefixes.py`. Python's `ValueError` is a `RangeError` here.
  *
- * Ported, through `run.ts`'s `replayRunLog` (exported `@internal`) and `resumeFlow`, with flows
+ * Ported, through `run.ts`'s `replayRunLog` (exported `@internal`) and `advance`, with flows
  * loaded from YAML whose CODE references resolve from the conformance fixtures, each pinning its
  * one class and full message: `test_replay_preserves_ordered_unfinished_starts_for_later_resume`,
  * `test_replay_rejects_invalid_prefix_roots` (3 rows),
@@ -41,7 +41,7 @@
  * route to a handle that matches no edge throws the `RangeError` itself, not the live
  * `NodeDataError`.
  *
- * TS-only, through `runFlow`, `inspectRun` and `resumeFlow`: a two-worker run whose log refuses
+ * TS-only, through `runFlow`, `inspectRun` and `advance`: a two-worker run whose log refuses
  * appends after both `NodeStarted` records counts each node once, and its resume publishes a
  * `NodeAttemptResumed` for each, in start order.
  *
@@ -69,7 +69,7 @@ import { legacyConnectionConfig } from "../../src/llm_clients/connection.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Grow } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { inspectRun, replayRunLog, type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { inspectRun, replayRunLog, type RunResult, advance, runFlow } from "../../src/run.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -285,7 +285,7 @@ test("a replayed route to a handle that matches no edge throws the RangeError it
   );
 });
 
-// ---- Through run.ts's log replay and resumeFlow ----
+// ---- Through run.ts's log replay and advance ----
 
 const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
 const RECOVERY_RUN_ID = "recovery-run";
@@ -528,7 +528,7 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
     });
     let result: RunResult;
     try {
-      result = await resumeFlow({ log: path, env });
+      result = await advance({ log: path, env });
     } finally {
       forward.mockRestore();
     }
@@ -558,7 +558,7 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
     expect(replayed.learnable).toBe(false);
     expect(replayed.trace).toBeNull();
     const complete = readFileSync(path, "utf8");
-    const inspected = await resumeFlow({ log: path, env });
+    const inspected = await advance({ log: path, env });
     expect(inspected.output).toBe(result.output);
     expect(inspected.events).toEqual([]);
     expect(readFileSync(path, "utf8")).toBe(complete);
@@ -677,7 +677,7 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
     expect(progressOf(inspectRun(path, { flow, env }))).toEqual(expected);
 
     const seen: RunEvent[] = [];
-    const result = await resumeFlow({ log: path, env, onEvent: (event) => seen.push(event) });
+    const result = await advance({ log: path, env, onEvent: (event) => seen.push(event) });
     expect(result.status).toBe("succeeded");
     expect(seen.slice(0, 3)).toEqual([
       new RunResumed(),

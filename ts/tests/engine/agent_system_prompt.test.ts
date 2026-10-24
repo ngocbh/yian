@@ -15,7 +15,7 @@
  * grant a real `noop` tool in the run's `ToolSet`, where Python patches `ToolSet.resolve`; the
  * model answers without calling it, then (structured) gives the value in a second request.
  *
- * Ported through `loadFlow`, `runFlow` and `resumeFlow`, in `hostEnv`, a `ScriptedModel` given as
+ * Ported through `loadFlow`, `runFlow` and `advance`, in `hostEnv`, a `ScriptedModel` given as
  * `models`: `test_run_flow_sends_the_rendered_persona`,
  * `test_resume_replays_a_finished_node_with_its_recorded_system_prompt` (its backward through
  * `RunResult.backward`, the resumed model serving the backward replies too),
@@ -42,7 +42,7 @@ import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode, type EvalNodeOptions } from "../../src/runtime/eval_node.ts";
 import { NodeSucceededRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
@@ -272,7 +272,7 @@ test("resume replays a finished node with its recorded system prompt", async () 
     JSON.stringify({ input_feedback: { draft: ["Too stiff."] }, self_feedback: [], variable_feedback: {} }),
     JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} }),
   );
-  const resumed = await resumeFlow({ log: path, ...served(model) });
+  const resumed = await advance({ log: path, ...served(model) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
@@ -294,7 +294,7 @@ test("retry after a mid node crash renders the same system prompt", async () => 
   expect(systems(first)[0]).toBe(RENDERED);
 
   const retry = scripted("draft", "final");
-  const resumed = await resumeFlow({ log: path, ...served(retry) });
+  const resumed = await advance({ log: path, ...served(retry) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
@@ -310,7 +310,7 @@ test("resume refuses a flow whose system prompt changed", async () => {
 
   // Resume compiles the recorded flow, so the change is to the recorded text.
   editRecordedFlow(path, (text) => text.replace(JSON.stringify(TEMPLATE), JSON.stringify("You are ${name}.")));
-  const error = await rejected(resumeFlow({ log: path, ...served(scripted()) }));
+  const error = await rejected(advance({ log: path, ...served(scripted()) }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("flow fingerprint mismatch");
 });

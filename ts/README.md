@@ -97,14 +97,14 @@ are internal: they serve the CLI and yian's own code, and may change without not
 
 | Import | Names |
 |---|---|
-| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `resumeFlow`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `resumeFlow`, `ResumeFlowOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
+| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `advance`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
 | `@ngocbh/yian/llm_clients` | for hosts that set up providers: `LLMConfig`, `LLM_CONFIG_KEYS`, `SUPPORTED_LLM_PROVIDERS`, `LLMProvider`, `ValidationError`, `Issue`, `azureResourceEndpoint`; `listModels`, `ListModelsOptions`, `ModelListError`; `AuthStore`, `AuthStoreOptions`, `AuthState`, `ProviderSelection`, `Credentials`, `ApiKeyCredentials`, `OAuthCredentials`; `OpenAIAuth`, `AuthRequest`, `AuthRequestOptions`, `HttpResponse`, `AuthError` |
 
-`Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `ResumeFlowOptions`, `RunInspection`,
+`Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `AdvanceOptions`, `RunInspection`,
 `RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `StorageKind`, `Value`, `ValueRecord`,
 `JsonValue`, `JsonObject`, `JsonMode`, `ToolEntry`, `AskUserHandler`, `AskUserRequest`,
 `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`, `StandardIssue`,
@@ -121,7 +121,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `runId`, `backward_outcome` is `backwardOutcome`), and keyword arguments become one options
   object. The JSON forms stay snake_case: an event's `toJSON()`, run logs, CLI documents. Flow
   values keep their own keys.
-- **Promises.** `loadFlow`, `runFlow`, `resumeFlow`, `result.backward`, `buildMemories`,
+- **Promises.** `loadFlow`, `runFlow`, `advance`, `result.backward`, `buildMemories`,
   `invokeTool` and `McpServer`'s `open` and `close` return Promises; their errors are rejections.
   `inspectRun`, `iterRunRecords`, `runRecordOffsets`, `updateRunIndex`, `readRunIndex`, `loadSkills`
   and `loadSkillDir` are synchronous.
@@ -132,7 +132,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `Date`, a `Map`, an accessor or a Proxy is refused with `TypeCheckError` (see [Types → host
   intake][docs/typing.md#two-constructors-infer-vs-check]). Tool arguments and CODE inputs arrive
   the other way: an int within ±(2^53−1) as a `number`, a larger one as a `bigint`.
-- **`signal`.** `runFlow` and `resumeFlow` take an `AbortSignal`; aborting it stops the run, which
+- **`signal`.** `runFlow` and `advance` take an `AbortSignal`; aborting it stops the run, which
   rejects with the signal's reason. A tool's `ctx.signal` aborts when its call must end early.
 - **Tools.** Every tool is a `FunctionTool`, often built with `tool()` from a raw JSON Schema or a
   Standard Schema v1 validator (zod 4, ArkType; valibot through `toStandardJsonSchema`). A plain
@@ -270,7 +270,7 @@ await runFlow(flow, inputs, { log, live });
 
 A `LiveChannel` (exported by `@ngocbh/yian/run`, with `LiveChannelOptions`, `LiveFrame`,
 `LiveFollowFrame`, `LiveSnapshot` and `LiveCall`)
-is a run's live channel, passed as `runFlow`'s or `resumeFlow`'s `live`. Its frames are plain JSON
+is a run's live channel, passed as `runFlow`'s or `advance`'s `live`. Its frames are plain JSON
 with the log's snake_case keys, so a host can send them anywhere with `logJson`:
 
 - `{type: "record", seq, line}`: a line exactly as the log appended it, sent once the append
@@ -328,7 +328,7 @@ snapshot lists every call in flight.
 ## Recovering and inspecting runs
 
 ```ts
-resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
+advance(options: AdvanceOptions): Promise<RunResult>
 loadRecordedFlow(log: string, options?: { env?: (name: string) => string | undefined; codeRoot?: string | null }): Promise<ComposedFlow | null>
 foldRunLog(log: string, options?: { env?: (name: string) => string | undefined; flow?: ComposedFlow | null; codeRoot?: string | null }): Promise<FoldedRun>
 inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: string) => string | undefined }): RunInspection
@@ -336,7 +336,7 @@ updateRunIndex(runsDir: string, options?: { timeoutMs?: number }): void
 readRunIndex(runsDir: string, options?: { timeoutMs?: number }): RunIndexRow[]
 ```
 
-`resumeFlow` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
+`advance` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
 `onEvent`, `onStream`, `live`, `memory`, `tools`, `skills`, `steering`, `context`, `signal`, `env`,
 `scheduler`, `random` and `models`, plus `loadFlow`'s `codeRoot`, and `apiKey` and `headers` for
 a run started with `llmConfig.api_key`. It runs the flow `RunStarted` recorded, compiled from the
@@ -345,7 +345,7 @@ recorded flow files; `flow` is only for a run whose flow was built in code (`Run
 `loadRecordedFlow` compiles a log's recorded flow the same way, for a host that needs it first;
 both follow each recorded file's `refs` to the files it uses, never the disk.
 With `codeRoot`, both refuse a recorded CODE reference whose file's real path is now outside
-it, as `loadFlow` does, with `LoadError`; `resumeFlow` refuses before it appends anything.
+it, as `loadFlow` does, with `LoadError`; `advance` refuses before it appends anything.
 `foldRunLog` takes `codeRoot` too and refuses the same way before its replay.
 The specs of the tools and skills the AGENTs grant are recorded, and an unfinished run's must
 match the ones passed; tool implementations, memory and context aren't recorded: pass the ones
@@ -518,7 +518,7 @@ throws `SkillError`. See [Skills][docs/api.md#skills].
 
 `steering` is an object with `interruptSignal(nodeId)`, returning an `AbortSignal` the host aborts
 to interrupt that AGENT node, and `drain(nodeId)`, returning the queued steer messages (or a promise
-of them). It reaches AGENT nodes authored `steerable: true`; pass the same inbox to `resumeFlow`.
+of them). It reaches AGENT nodes authored `steerable: true`; pass the same inbox to `advance`.
 See [Steering][docs/api.md#steering].
 
 ## Provider setup
@@ -600,15 +600,15 @@ function `${...}` expressions can call; each `default` goes through host intake.
 
 ## `env`, `signal` and `scheduler`
 
-- `env` is a function `(name: string) => string | undefined`. `loadFlow`, `runFlow`, `resumeFlow`,
+- `env` is a function `(name: string) => string | undefined`. `loadFlow`, `runFlow`, `advance`,
   `inspectRun`, `buildMemories` and `defaultSkillRoots` read the environment through it instead of
   `process.env`: connections, credentials, `HOME`, and every `YIAN_*` default and limit. Concurrent
   calls with different `env`s each keep their own values. A bad `YIAN_*` value rejects with
   `DefaultsError`; a resume whose recorded values differ, with `DefaultsMismatchError`. See
   [Defaults and limits][docs/api.md#defaults-and-limits] and [`docs/defaults.md`][docs/defaults.md].
-- `signal` is the host's stop for `runFlow`, `resumeFlow` and `McpServer.open`. An aborted run
+- `signal` is the host's stop for `runFlow`, `advance` and `McpServer.open`. An aborted run
   appends a stop record, lets the nodes in flight wind down and rejects with the signal's reason;
-  `resumeFlow` retries the stopped nodes. An already-aborted signal rejects before anything is
+  `advance` retries the stopped nodes. An already-aborted signal rejects before anything is
   created.
 - `scheduler` (`{ now(), sleep(ms, signal) }`), `random` (a draw in [0, 1) for backoff jitter) and
   `models` (the model builder AGENT nodes use) are for tests and conformance: virtual time, fixed
@@ -977,7 +977,7 @@ Node 22, and so does every unit test; a change keeps both green.
   own. `scheduler` (the clock and cancellable sleep a node's waits run on; `realScheduler` when
   absent), `random` (a draw in [0, 1) for backoff jitter; `Math.random` when absent) and `runDir`
   (the run's folder, where its files go) go to every node when `evalNode` or `FlowEngine` is given
-  them; `runFlow` and `resumeFlow` give `runDir` the log's folder, and none without a log.
+  them; `runFlow` and `advance` give `runDir` the log's folder, and none without a log.
 - `BackwardContext` and `BackwardResult` deep-copy and deep-freeze their values once, in the
   constructor: read them, and copy before you change one (unlike `BindingCapture.boundInputs`,
   which gives a fresh copy per read).
@@ -1202,7 +1202,7 @@ Node 22, and so does every unit test; a change keeps both green.
   it truncates an incomplete tail. Both logs keep the canonical round trip of every record, and
   `close()` refuses later appends but keeps the records readable.
 - Each append stamps the envelope's `at` (UTC, milliseconds, `toISOString` form) from the log's
-  `clock` option (epoch ms, default `Date.now`); `runFlow`, `resumeFlow` and a result's
+  `clock` option (epoch ms, default `Date.now`); `runFlow`, `advance` and a result's
   `backward` pass their `scheduler`'s clock, so tests and conformance get virtual times. An
   envelope the engine prepares has `at: null` and encodes without it; the engine's prepare,
   append and replay checks compare records without `at`, and every log reader refuses a line
@@ -1378,11 +1378,11 @@ START is ready after the START inputs' commit; a success walks its
   overtaken by another while it awaits (its opener, a handler, a learner or a commit) is refused
   after that await and appends nothing further (Python re-reads the current attempt, which is the
   same while synchronous).
-- `src/run.ts` (`yian/run`) holds `runFlow`, `resumeFlow`, `loadRecordedFlow`, `inspectRun` and
+- `src/run.ts` (`yian/run`) holds `runFlow`, `advance`, `loadRecordedFlow`, `inspectRun` and
   `RunResult`. `runFlow` takes the inputs and `llmConfig` through host intake, checks the run's
   tools, skills and model configs, opens its memory sessions and MCP servers, creates the log,
   recording the flow files, granted tool specs and skills, and drives a `FlowEngine` to a result,
-  then closes what it opened. `resumeFlow` locks an existing log, compiles the flow it recorded,
+  then closes what it opened. `advance` locks an existing log, compiles the flow it recorded,
   replays it on a private copy and drives the rest (a finished log returns its result and appends
   nothing; an unfinished one first checks the granted tool specs and skills). `inspectRun` reads a log's status, in-flight nodes, crashed counts,
   run id, schema, flow fingerprint, learnable flag, last seq, start time (`startedAt`), a finished
@@ -1471,7 +1471,7 @@ START is ready after the START inputs' commit; a success walks its
   (one `yian.cli.v1` document; ints must be `bigint`, a `number` is written as a float), and the
   key prompts `ensureEnvKey`, `ensureApiKey`, `confirmOllamaEndpoint`.
 - `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, wired to
-  `loadFlow`, `runFlow` (fresh), `loadRecordedFlow` and `resumeFlow` (`--resume`, which takes no
+  `loadFlow`, `runFlow` (fresh), `loadRecordedFlow` and `advance` (`--resume`, which takes no
   flow file and runs the recorded flow, with the recorded-key checks),
   `loadSkillDir`, `inspectRun`, and `updateRunIndex` and `readRunIndex` (`yian status` with no
   log; `yian run` updates the index of `~/.yian/runs` when a run there ends); the diagnostic boxes, the banner, progress on stderr and

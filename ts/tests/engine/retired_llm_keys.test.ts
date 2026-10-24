@@ -5,7 +5,7 @@
  * harvested case `engine_retired_llm_keys__temperature_on_a_node` (assembled likewise); the flow
  * and def sites of the load-error test through `loadFlow`.
  *
- * Ported through `runFlow` and `resumeFlow`, in `hostEnv` (with `VLLM_API_KEY` where Python sets
+ * Ported through `runFlow` and `advance`, in `hostEnv` (with `VLLM_API_KEY` where Python sets
  * it), an AGENT's model a `ScriptedModel` given as `models`: `test_a_retired_key_in_the_run_layer_fails_before_the_log`,
  * `test_resuming_a_record_with_a_set_retired_key_fails_before_appending` and
  * `test_a_finished_record_with_a_set_retired_key_still_replays` (Python serves its reply through
@@ -25,7 +25,7 @@ import { LLMConfig, retiredKeyError } from "../../src/llm_clients/config.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { decodeRecord, encodeRecord } from "../../src/runtime/log.ts";
 import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -201,7 +201,7 @@ test("resuming a record with a set retired key fails before appending", async ()
   recordTemperature(log);
   const before = readFileSync(log);
 
-  const error = await rejected(resumeFlow({ log, env }));
+  const error = await rejected(advance({ log, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   const message = (error as RangeError).message;
@@ -225,7 +225,7 @@ test("a finished record with a set retired key still replays", async () => {
   recordTemperature(log);
   const before = readFileSync(log);
 
-  const replayed = await resumeFlow({ log, env });
+  const replayed = await advance({ log, env });
 
   expect(replayed.status).toBe("succeeded");
   expect(readFileSync(log).equals(before)).toBe(true);

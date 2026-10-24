@@ -98,7 +98,7 @@ describe("an MCP server in a ToolSet", () => {
   test("test_an_unopened_server_is_rejected", () => {
     const unopened = mcpServer({ command: "fake" });
     expect(thrown(() => new ToolSet({ fake: unopened }), TypeError)).toBe(
-      `tools["fake"] is an MCP server that isn't open; open it with "await server.open()" or pass it to runFlow/resumeFlow, which open it`,
+      `tools["fake"] is an MCP server that isn't open; open it with "await server.open()" or pass it to runFlow/advance, which open it`,
     );
   });
 

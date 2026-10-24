@@ -41,7 +41,7 @@ import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/memory.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
@@ -304,7 +304,7 @@ test("a resumed AGENT's tool call gets an idempotency key no earlier start used"
   // Cut at the second model_call: the first start wrote its reply (n 1) and the tool's result (n 2).
   const cut = seqOf(uncut.log, "tool_result") + 1;
   await crashAfter(cut, () => run(new ScriptedModel(replies(), CONFIG), { log, tools: { save }, flow, runId: "r" }));
-  const resumed = await resumeFlow({
+  const resumed = await advance({
     log,
     tools: { save },
     env: retriesEnv(0),

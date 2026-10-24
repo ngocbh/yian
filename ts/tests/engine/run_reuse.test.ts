@@ -26,7 +26,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 
 import { hostEnv } from "./mcp_helpers.ts";
 import { rejected, textReply } from "./run_state_fixtures.ts";
@@ -238,7 +238,7 @@ test("test_log_resume_restores_into_a_private_graph", async () => {
 
   const fresh = await loadFlow(BLOCKING_CALL);
   const original = graphSnapshot(fresh.compiled);
-  const resumed = await resumeFlow({ log: path, env: hostEnv(dir), tools: { ask_user: () => "yes" } });
+  const resumed = await advance({ log: path, env: hostEnv(dir), tools: { ask_user: () => "yes" } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");

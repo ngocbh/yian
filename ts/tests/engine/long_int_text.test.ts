@@ -33,7 +33,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import type { AskUserRequest, ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { serving, textReply } from "./run_state_fixtures.ts";
@@ -55,7 +55,7 @@ async function run(
   const flow = await loadFlow(text, { env });
   const log = join(dir, `run-${runs++}.jsonl`);
   const result = await runFlow(flow, { n: 4999n }, { env, log, ...options });
-  const resumed = await resumeFlow({ log, env, tools: options.tools ?? null });
+  const resumed = await advance({ log, env, tools: options.tools ?? null });
   expect(resumed.status).toBe(result.status);
   if (result.failure !== null) expect(resumed.failure!.message).toBe(result.failure.message);
   else expect(resumed.output).toEqual(result.output);

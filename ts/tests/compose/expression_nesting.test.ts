@@ -30,7 +30,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
 import { FakeMemory } from "../engine/memory_fakes.ts";
 import { caseText, loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
@@ -229,7 +229,7 @@ test(
     );
     expect(result.status).toBe("succeeded");
     expect(result.output).toEqual(Array(LEARNABLE_CHAIN).fill("v"));
-    const replayed = await resumeFlow({ env, log: path, memory: new Map([["test", backend]]) });
+    const replayed = await advance({ env, log: path, memory: new Map([["test", backend]]) });
     expect(replayed.status).toBe("succeeded");
     expect(replayed.output).toEqual(result.output);
   },

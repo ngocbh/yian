@@ -38,7 +38,7 @@
  * `test_imports_and_a_calling_defs_chain_count_apart`,
  * `test_imports_at_the_limit_over_defs_at_the_limit_load`,
  * `test_chain_at_the_limit_loads_runs_and_resumes` (run with `runFlow`, resumed with
- * `resumeFlow`), and `test_call_directive_counts` and `test_map_and_loop_bodies_count` (the chains
+ * `advance`), and `test_call_directive_counts` and `test_map_and_loop_bodies_count` (the chains
  * at the limit run with `runFlow`).
  *
  * Ported through `assembleText`: the load half of `test_inline_bodies_count`, pinning the whole
@@ -68,7 +68,7 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget, reload } from "../../src/defaults.ts";
 import { NodeStarted } from "../../src/events.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import {
   assembled,
   assembleText,
@@ -837,7 +837,7 @@ describe("chains of defs: entries", () => {
     expect(expanded).toHaveLength(50);
     writeFileSync(path, `${lines.slice(0, expanded.at(-1)! + 1).join("\n")}\n`);
 
-    const resumed = await resumeFlow({ log: path, env });
+    const resumed = await advance({ log: path, env });
 
     expect(resumed.status).toBe("succeeded");
     expect(resumed.output).toBe("hi");

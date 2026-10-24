@@ -90,8 +90,8 @@ import { virtualScheduler } from "../src/platform.ts";
 import {
   inspectRun,
   replayRunLog,
-  type ResumeFlowOptions,
-  resumeFlow,
+  type AdvanceOptions,
+  advance,
   type RunInspection,
   type RunFlowOptions,
   type RunResult,
@@ -1436,8 +1436,8 @@ const RUN_OPTIONS: Readonly<Record<string, keyof RunFlowOptions>> = {
   context: "context",
 };
 
-/** The `resumeFlow` option each `resume` key sets. */
-const RESUME_OPTIONS: Readonly<Record<string, keyof ResumeFlowOptions>> = {
+/** The `advance` option each `resume` key sets. */
+const RESUME_OPTIONS: Readonly<Record<string, keyof AdvanceOptions>> = {
   num_workers: "numWorkers",
   api_key: "apiKey",
   headers: "headers",
@@ -2516,8 +2516,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       }
       events.length = 0;
       chunks.length = 0;
-      const resumeArguments = runOptions<ResumeFlowOptions>(resume, RESUME_OPTIONS);
-      start = (memory) => resumeFlow({ ...resumeArguments, ...hooks, memory });
+      const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
+      start = (memory) => advance({ ...resumeArguments, ...hooks, memory });
     }
   }
   let outcomes: Value[] = [];
@@ -2798,7 +2798,7 @@ async function checkInvariants(
     compare(`crashed counts${at}`, counted, expected.crashedAttempts);
   }
   const before = readFileSync(log);
-  const reopened = await resumeFlow({ log, ...options });
+  const reopened = await advance({ log, ...options });
   if (!readFileSync(log).equals(before)) fail("resuming the finished log changed it");
   if (reopened.status !== finished) {
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
@@ -2933,7 +2933,7 @@ export async function crashSweep(
     if (k < inputsCommit) {
       // A log cut inside its run start doesn't hold the run's inputs yet, so it can't be resumed.
       const before = readFileSync(log);
-      const refused = await settle(() => resumeFlow(hooks));
+      const refused = await settle(() => advance(hooks));
       const message = `run log ${log} ends inside its run start; start the run again`;
       if (!(refused instanceof RangeError) || refused.message !== message) {
         throw new CaseFailure(`the resume didn't refuse the incomplete run start${at}\n${failureText(refused)}`);
@@ -2949,10 +2949,10 @@ export async function crashSweep(
       // The cut run's `context`, host key and header values, which the log doesn't hold, as a
       // `resume` case passes them again.
       const context = args.context === undefined ? {} : { context: args.context };
-      const { api_key: apiKey, headers } = (args.llmConfig ?? {}) as Pick<ResumeFlowOptions, "headers"> & {
+      const { api_key: apiKey, headers } = (args.llmConfig ?? {}) as Pick<AdvanceOptions, "headers"> & {
         api_key?: string;
       };
-      resumed = await resumeFlow({ ...hooks, ...context, apiKey, headers });
+      resumed = await advance({ ...hooks, ...context, apiKey, headers });
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }

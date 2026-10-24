@@ -236,7 +236,7 @@ crash between the two leaves an orphan commit: the resume retries the node, whic
 writes a new commit; the orphan stays in the log, unread. The run's inputs and system values are
 `pool_commit`s right after `run_started`, applied at once; START is ready only after the START
 inputs' commit, so a log that ends before it holds no inputs yet and isn't resumable
-(`resumeFlow` refuses it and leaves it as it is). The reducer keeps a producer index: each pool
+(`advance` refuses it and leaves it as it is). The reducer keeps a producer index: each pool
 name maps to the seq of the accepted `pool_commit` that last wrote it, pruned with the pool and
 rebuilt by replay. A derived node (START, END, LOOP, CALL, MAP, whose value only reads earlier
 values through its binding) gets an input route in every run; in a non-learnable run its sources
@@ -289,7 +289,7 @@ Changed (TS yian): the reducer counts, per node, the attempts a resume retried t
 covered; a stop covers every attempt started before it. The counts are history: they stay after
 the node's outcome and after a prune. `resumedAttemptEvents` in `ts/src/runtime/engine.ts` builds
 the `NodeAttemptResumed` event per retried node that a resume will publish, and `inspectRun` will
-report the counts, once `resumeFlow` and `inspectRun` are ported.
+report the counts, once `advance` and `inspectRun` are ported.
 
 Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation

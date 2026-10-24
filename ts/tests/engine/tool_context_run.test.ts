@@ -1,5 +1,5 @@
 /**
- * `runFlow`/`resumeFlow` pass the host `context` and per-call ids to tools in a run: a port of
+ * `runFlow`/`advance` pass the host `context` and per-call ids to tools in a run: a port of
  * `tests/engine/test_tool_context_run.py`.
  *
  * An AGENT's model is a `ScriptedModel` given as `models`, where Python patches
@@ -36,7 +36,7 @@ import type { Response } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskUserRequest, registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
@@ -172,7 +172,7 @@ test("a resumed tool node sees the same call id and the new context", async () =
   await crashAfter(9, () =>
     runFlow(flow, {}, { log: path, tools: { place: recorder(seen) }, context: db, runId: "run-7f3a", env: hostEnv(dir) }),
   );
-  const resumed = await resumeFlow({ log: path, tools: { place: recorder(seen) }, context: db2, env: hostEnv(dir) });
+  const resumed = await advance({ log: path, tools: { place: recorder(seen) }, context: db2, env: hostEnv(dir) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   const [first, second] = seen;
@@ -191,7 +191,7 @@ test("resume without context gives undefined", async () => {
   await crashAfter(9, () =>
     runFlow(flow, {}, { log: path, tools: { place: recorder(seen) }, context: new Db(), env: hostEnv(dir) }),
   );
-  const resumed = await resumeFlow({ log: path, tools: { place: recorder(seen) }, env: hostEnv(dir) });
+  const resumed = await advance({ log: path, tools: { place: recorder(seen) }, env: hostEnv(dir) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(seen[1]!.context).toBeUndefined();

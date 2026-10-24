@@ -32,7 +32,7 @@
  * learnable and body output `test_a_partial_loop_compares_an_omitted_file_with_a_returned_one` (4)
  * and `test_a_partial_loop_compares_a_carried_file_the_body_does_not_take` (4).
  *
- * Ported through `runFlow` (and `resumeFlow`), each run in `hostEnv`: the flow runs
+ * Ported through `runFlow` (and `advance`), each run in `hostEnv`: the flow runs
  * `test_a_tagged_union_of_a_file_and_an_object_member_loads`,
  * `test_an_object_binding_delivers_a_nested_file_as_its_mapping`,
  * `test_an_object_output_binding_over_a_record_with_a_file_succeeds`,
@@ -88,7 +88,7 @@ import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import { bindParams } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
-import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { SourceEntry, sameSourceEntry } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
@@ -1476,8 +1476,8 @@ async function runLogged(name: string, text: string, options: RunFlowOptions = {
 }
 
 /** Resume the log at `path` over `text` in `hostEnv`. */
-async function resumeText(text: string, path: string, options: Omit<Parameters<typeof resumeFlow>[0], "log"> = {}) {
-  return resumeFlow({ log: path, env: hostEnv(dir), ...options });
+async function resumeText(text: string, path: string, options: Omit<Parameters<typeof advance>[0], "log"> = {}) {
+  return advance({ log: path, env: hostEnv(dir), ...options });
 }
 
 test("resuming a run with a typed list of files succeeds", async () => {

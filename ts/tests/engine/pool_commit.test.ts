@@ -29,7 +29,7 @@ import {
   logJson,
   parseJson,
   replayRunLog,
-  resumeFlow,
+  advance,
   runFlow,
   runRecordOffsets,
   TypedValue,
@@ -240,7 +240,7 @@ test("a cut between a node's commit and its success reruns the node, leaving the
     );
 
     const orphan = lines(log)[k];
-    const resumed = await resumeFlow({ log, env: NO_ENV });
+    const resumed = await advance({ log, env: NO_ENV });
     expect(resumed.status).toBe("succeeded");
     expect(resumed.output).toEqual(uncut.output);
     expect(lines(log)[k]).toBe(orphan);
@@ -303,7 +303,7 @@ test("parallel nodes whose commits interleave: only the node without its success
     ["node_succeeded", finished],
   ]);
 
-  const resumed = await resumeFlow({ log, env: NO_ENV });
+  const resumed = await advance({ log, env: NO_ENV });
   expect(resumed.output).toEqual([2n, 4n, 6n]);
   const after = readRunLog(log);
   const startsOf = (node: string) => after.filter(({ kind, payload }) => kind === "node_started" && payload["node_id"] === node);
@@ -363,7 +363,7 @@ test("a log cut inside its run start can't be resumed, and stays as it is", asyn
     const log = freshLog();
     await crashAfter(k, () => run(flow, log));
     const before = readFileSync(log);
-    const error = await rejected(resumeFlow({ log, env: NO_ENV }));
+    const error = await rejected(advance({ log, env: NO_ENV }));
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toBe(`run log ${log} ends inside its run start; start the run again`);
     expect(readFileSync(log).equals(before)).toBe(true);

@@ -15,7 +15,7 @@
  * re-checks the handle there; Python's rewrite assigns the origin in place and checks the handle
  * only in `validate_execution_setup`. No path reaches a rewrite with such a `Case`.
  *
- * Ported, through `runFlow` and `resumeFlow` in an environment holding only the test's credential
+ * Ported, through `runFlow` and `advance` in an environment holding only the test's credential
  * store: `test_a_log_routed_to_the_old_default_handle_does_not_resume`. Changed: replay throws the
  * reducer's `RangeError` itself (never the live `NodeDataError`), with its full message.
  *
@@ -35,7 +35,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted } from "../../src/events.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
-import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
+import { advance, type RunResult, runFlow } from "../../src/run.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { commitPrepared, NodeDataError, prepareNodeRouted } from "../../src/runtime/state.ts";
 import { loadErrorAsync } from "../compose/declarations.ts";
@@ -223,7 +223,7 @@ test("a log routed to the old default handle does not resume", async () => {
     lines[routed] = JSON.stringify(records[routed]);
     writeFileSync(path, `${lines.join("\n")}\n`);
 
-    const caught = await rejected(resumeFlow({ log: path, env }));
+    const caught = await rejected(advance({ log: path, env }));
     expect((caught as Error).constructor).toBe(RangeError);
     expect((caught as Error).message).toBe("NodeRouted handle 'default' matches no outgoing edge of 'gate'");
   } finally {

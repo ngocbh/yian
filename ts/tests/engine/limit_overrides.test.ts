@@ -42,7 +42,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
 import { buildMemories } from "../../src/memory_host.ts";
 import type { Send } from "../../src/platform.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/index.ts";
 import { parseType } from "../../src/typesys/types.ts";
 import { linkConformanceFixtures, loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
@@ -329,7 +329,7 @@ test("learnable run at the expression maximum logs and resumes", async () => {
   const result = await runFlow(flow, { s: "a" }, { env, log: path, learnable: true, memory: new Map([["test", backend]]) });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("A");
-  const replayed = await resumeFlow({ env, log: path, memory: new Map([["test", backend]]) });
+  const replayed = await advance({ env, log: path, memory: new Map([["test", backend]]) });
 
   expect(replayed.status, replayed.failure?.message).toBe("succeeded");
   expect(replayed.output).toBe("A");

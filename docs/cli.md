@@ -210,7 +210,7 @@ crash recorded its config, and its key is checked like the others; one that had 
 started is checked when it resolves. A saved login's connection settings need nothing: they are pinned
 with the login.
 
-Changed (TS yian): a TS host resumes such a run with `resumeFlow({ log, apiKey, headers })`;
+Changed (TS yian): a TS host resumes such a run with `advance({ log, apiKey, headers })`;
 the CLI's message keeps Python's names.
 
 Changed (TS yian): `yian run --resume PATH` takes no flow file. It runs the flow the log
@@ -221,7 +221,7 @@ reads are the ones that recorded flow grants, and before an unfinished log appen
 the description and parameters of each granted tool and the text of each granted skill must
 be the recorded ones (`resume failed: resume refused: tools.lookup description differs from
 the recorded one`). A log whose flow a host built in code can't be resumed by the CLI:
-`resume failed: this run's flow was built in code; resume it with resumeFlow({log, flow})`.
+`resume failed: this run's flow was built in code; resume it with advance({log, flow})`.
 
 `--resume` also needs the `YIAN_<NAME>` defaults and limits the run started with. A
 run records the ones that differ from the built-in values, and a log that started

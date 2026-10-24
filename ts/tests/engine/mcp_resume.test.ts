@@ -1,5 +1,5 @@
 /**
- * `resumeFlow` opens the MCP servers passed to it unopened only for an unfinished run: a port of
+ * `advance` opens the MCP servers passed to it unopened only for an unfinished run: a port of
  * `tests/engine/test_mcp_resume.py`, over the fake server in `tests/fixtures/mcp/`.
  *
  * Ported: `test_a_resumed_tool_node_calls_an_unopened_server_which_the_resume_closes`,
@@ -32,7 +32,7 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { RunStarted } from "../../src/events.ts";
 import { MemorySetupError } from "../../src/memory/contracts.ts";
-import { type ResumeFlowOptions, type RunFlowOptions, resumeFlow, runFlow } from "../../src/run.ts";
+import { type AdvanceOptions, type RunFlowOptions, advance, runFlow } from "../../src/run.ts";
 import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
@@ -85,9 +85,9 @@ function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
   return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
 }
 
-/** `resumeFlow` in `hostEnv(dir)`. */
-function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow({ env: hostEnv(dir), ...options });
+/** `advance` in `hostEnv(dir)`. */
+function resume(flow: ComposedFlow, options: AdvanceOptions) {
+  return advance({ env: hostEnv(dir), ...options });
 }
 
 /** An unopened fake server over stdio, its pid appended to a fresh marker file. */

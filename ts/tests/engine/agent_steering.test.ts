@@ -43,7 +43,7 @@
  * the model and its provider passed in (`models`, `llmConfig`) where Python patches
  * `model_from_config`; the fold is inline code, as the fixtures have no `reply_fold`.
  *
- * Ported through `loadFlow`, `runFlow` and `resumeFlow` (`runWith`, `resumeWith`), Python's
+ * Ported through `loadFlow`, `runFlow` and `advance` (`runWith`, `resumeWith`), Python's
  * `_flow` loaded (`steerFlow`): `test_run_boundary_rejects_an_object_without_the_inbox_methods`,
  * `test_resume_reuses_a_finished_steered_node_without_calling_the_inbox`. Changed: TS steering is push-based
  * (design 6.8: `Steering` in `src/nodes/base.ts`, checked by `requireSteering` in

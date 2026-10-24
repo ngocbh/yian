@@ -72,7 +72,7 @@ import { Binding } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { Scheduler } from "../../src/platform.ts";
-import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
+import { replayRunLog, advance, runFlow } from "../../src/run.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
@@ -756,7 +756,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       return original.call(this, inputs);
     });
     try {
-      const result = await resumeFlow({ log: path, memory: backends, env });
+      const result = await advance({ log: path, memory: backends, env });
       expect(result.status).toBe("succeeded");
       expect(result.output).toEqual({ mapped: [1n, 2n], repeated: { n: 2n, exited: false } });
       expect(calls).toEqual(["outer/repeated#1/bump"]);
@@ -781,7 +781,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       for (const occurrence of historical) expect(occurrence.recordJson).toBe(untimed(lines[occurrence.outcomeSeq]!));
 
       const complete = readFileSync(path, "utf8");
-      const inspected = await resumeFlow({
+      const inspected = await advance({
         log: path,
         memory: new Map([["episodic", {}], ["reflective", {}]]) as never,
         env,

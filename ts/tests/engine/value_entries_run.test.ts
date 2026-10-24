@@ -45,7 +45,7 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeSkipped, NodeStarted } from "../../src/events.ts";
-import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { rejected } from "./run_state_fixtures.ts";
 
@@ -446,7 +446,7 @@ test("a resumed run routes to a value entry and replays it", async () => {
   expect(caught).toBe(interruption);
   expect("exit_result" in succeededValues(path)).toBe(false);
 
-  const answered = await resumeFlow({ log: path, env, tools: { ask_user: () => "exit" } });
+  const answered = await advance({ log: path, env, tools: { ask_user: () => "exit" } });
 
   expect(answered.failure).toBeNull();
   expect(answered.status).toBe("succeeded");
@@ -456,7 +456,7 @@ test("a resumed run routes to a value entry and replays it", async () => {
   expect(succeededValues(path)["exit_result"]!.value).toEqual(answered.output);
   const before = readFileSync(path);
 
-  const replayed = await resumeFlow({ log: path, env });
+  const replayed = await advance({ log: path, env });
 
   expect(replayed.failure).toBeNull();
   expect(replayed.status).toBe("succeeded");

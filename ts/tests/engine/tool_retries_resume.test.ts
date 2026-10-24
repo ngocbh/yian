@@ -9,7 +9,7 @@
  * `started` step after the wait. JS has no `TimeoutError`, so the rows throw their own. Every run
  * sees only the test's credential store in its environment.
  *
- * Ported through `runFlow` and `resumeFlow`:
+ * Ported through `runFlow` and `advance`:
  * `test_a_crash_inside_attempt_two_resumes_at_attempt_three_with_one_retry_used`,
  * `test_a_crash_inside_attempt_two_with_no_retry_left_fails_on_resume`,
  * `test_a_retries_zero_crash_resumes_at_attempt_two_without_steps`,
@@ -62,7 +62,7 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
-import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
+import { replayRunLog, advance, runFlow } from "../../src/run.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import {
   BackwardFinishedRecord,
@@ -213,7 +213,7 @@ test("a crash inside attempt two resumes at attempt three with one retry used", 
 
   // Failures used = 1, so two retries remain: attempts 3 and 4 fail, attempt 5 succeeds.
   script.outcomes = [new TimeoutError("c"), new TimeoutError("d")];
-  const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const result = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(script.attempts()).toEqual([1, 2, 3, 4, 5]);
@@ -240,7 +240,7 @@ test("a crash inside attempt two with no retry left fails on resume", async () =
   );
 
   script.outcomes = [new TimeoutError("c")];
-  const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const result = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("node.execute");
@@ -259,7 +259,7 @@ test("a retries zero crash resumes at attempt two without steps", async () => {
   await crashAfter(9, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
-  const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const result = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(script.attempts()).toEqual([1, 2]);
@@ -281,7 +281,7 @@ test("a crash during the backoff wait rewaits and resumes at attempt two", async
   );
   expect(steps(path)).toEqual([failed(1, "a", 7, "TransientToolError")]);
 
-  const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const result = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(script.attempts()).toEqual([1, 2]);
@@ -305,7 +305,7 @@ test("a crash during the second backoff rewaits the last recorded delay", async 
   await crashAfter(12, () =>
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
-  const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const result = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(script.attempts()).toEqual([1, 2, 3]);
@@ -329,12 +329,12 @@ test("two crashes rewait the recorded delay each resume", async () => {
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
   // Records 10 and 11 are `RunResumed` and the resumed start; record 12 is attempt 2's outcome.
-  await crashAfter(12, () => resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) }));
+  await crashAfter(12, () => advance({ log: path, tools: script.tools(), ...host(scheduler) }));
 
   expect(script.attempts()).toEqual([1, 2]);
   expect(waited).toEqual([7000, 7000]);
 
-  const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const result = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(script.attempts()).toEqual([1, 2, 3]);
@@ -358,7 +358,7 @@ for (const [name, first, then] of [
       runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: first, ...host(scheduler) }),
     );
     script.outcomes = [new TimeoutError("c")];
-    const result = await resumeFlow({ log: path, tools: script.tools(), numWorkers: then, ...host(scheduler) });
+    const result = await advance({ log: path, tools: script.tools(), numWorkers: then, ...host(scheduler) });
 
     expect(result.status, result.failure?.message).toBe("succeeded");
     expect(script.attempts()).toEqual([1, 2, 3, 4]);
@@ -378,7 +378,7 @@ test("an unfinished first attempt shows in the final message", async () => {
     runFlow(flow, {}, { log: path, runId: "r1", tools: script.tools(), numWorkers: 0, ...host(scheduler) }),
   );
   script.outcomes = [new TimeoutError("b"), new TimeoutError("c")];
-  const result = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const result = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("node.execute");
@@ -407,7 +407,7 @@ test("a learnable run with a retried tool replays and runs backward", async () =
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(steps(path)).toEqual([failed(1, "a", 1), started(2)]);
 
-  const resumed = await resumeFlow({ log: path, tools: script.tools(), ...host(scheduler) });
+  const resumed = await advance({ log: path, tools: script.tools(), ...host(scheduler) });
 
   expect(resumed.status).toBe("succeeded");
   expect(resumed.output).toBe("ok");
@@ -490,7 +490,7 @@ test("two tools retrying at once in a pooled map resume with their own steps", a
   for (const [n, nodeId] of ids) expect(byNode.get(nodeId)).toEqual([failed(1, `a${n}`, 1), started(2)]);
 
   seen.length = 0;
-  const result = await resumeFlow({ log: path, tools: { x }, numWorkers: 4, ...host(scheduler) });
+  const result = await advance({ log: path, tools: { x }, numWorkers: 4, ...host(scheduler) });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toEqual(["ok0", "ok1"]);
@@ -711,7 +711,7 @@ for (const [name, fixture, source] of [
     });
     const { scheduler } = clock();
 
-    const error = await rejected(resumeFlow({ log: path, tools: { place }, ...host(scheduler) }));
+    const error = await rejected(advance({ log: path, tools: { place }, ...host(scheduler) }));
 
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toBe(

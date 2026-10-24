@@ -16,11 +16,11 @@
  * (`buildGrow` refuses an AGENT), pinning the whole message where Python matches a fragment.
  * Ported (adapted): `test_final_log_only_runtime_and_public_surface`: the retired events, `Pause`,
  * engine methods and `resumeCommand` are absent; `FlowEngine` isn't on the package root; the
- * `run_flow` and `resume_flow` parameter rows check `RunFlowOptions`'s and `ResumeFlowOptions`'s
+ * `run_flow` and `resume_flow` parameter rows check `RunFlowOptions`'s and `AdvanceOptions`'s
  * keys (TS-only: `signal`, `env`, `scheduler`, `random`, `models`, and the `@internal`
  * `checkLlmConfigs` of Python's `_resume_flow_controlled`) and the `RunResult` row its own fields
  * and getters (TS-only: `crashedAttempts`; `_backward_handle` is a private field). The
- * `ResumeFlowOptions` keys also stand for `test_run_lifecycle.py`'s
+ * `AdvanceOptions` keys also stand for `test_run_lifecycle.py`'s
  * `test_final_run_boundary_signatures_and_result_fields_are_exact`.
  *
  * TS-only: the package root (`index.ts`) exports exactly its documented root list plus the memory
@@ -116,6 +116,8 @@ test("only the final log-only runtime and run API remain", () => {
   expect("FlowEngine" in yian).toBe(false);
 
   expect("resumeCommand" in run).toBe(false);
+  expect("resumeFlow" in run).toBe(false);
+  expect("resumeFlow" in yian).toBe(false);
   // The options' keys, exactly: a missing or extra key fails `tsc`.
   const options: Record<keyof run.RunFlowOptions, true> = {
     log: true,
@@ -140,7 +142,7 @@ test("only the final log-only runtime and run API remain", () => {
   };
   expect(Object.keys(options)).toHaveLength(19);
   expect(run.runFlow.length).toBe(2);
-  const resumeOptions: Record<keyof run.ResumeFlowOptions, true> = {
+  const advanceOptions: Record<keyof run.AdvanceOptions, true> = {
     log: true,
     flow: true,
     codeRoot: true,
@@ -162,8 +164,8 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(resumeOptions)).toHaveLength(20);
-  expect(run.resumeFlow.length).toBe(1);
+  expect(Object.keys(advanceOptions)).toHaveLength(20);
+  expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
   expect(Object.keys(result)).toEqual([
@@ -186,7 +188,7 @@ test("the package root exports exactly its documented root list plus the memory 
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
-    resumeFlow: run.resumeFlow,
+    advance: run.advance,
     buildMemories,
     MemoryRegistry,
     SQLiteStorage,

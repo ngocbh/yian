@@ -4,7 +4,7 @@
  * compiles the recorded flow, never the files on disk.
  *
  * TS-only too: `loadFlowSource` with `codeRoot` checks every recorded file's CODE references, a
- * host child's included, against it, and so do `resumeFlow`, `loadRecordedFlow` and `foldRunLog`
+ * host child's included, against it, and so do `advance`, `loadRecordedFlow` and `foldRunLog`
  * with `codeRoot`.
  */
 
@@ -32,7 +32,7 @@ import {
   type FoldedRun,
   foldRunLog,
   loadRecordedFlow,
-  resumeFlow,
+  advance,
   type RunFlowOptions,
   runFlow,
 } from "../../src/run.ts";
@@ -561,7 +561,7 @@ for (const [name, load] of Object.entries(LOAD_SHAPES)) {
     const log = await cutRun(flow, 9);
     rmSync(dir, { recursive: true });
 
-    const resumed = await resumeFlow({ log, env: hostEnv(logs), tools: { lookup: lookup() } });
+    const resumed = await advance({ log, env: hostEnv(logs), tools: { lookup: lookup() } });
 
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toBe("lookup:x");
@@ -576,7 +576,7 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
   symlinkSync(join(dir, "store", "c.yaml"), join(dir, "lib", "child.yaml"));
   const log = await cutRun(await loadRoot(dir), 9);
 
-  const resumed = await resumeFlow({ log, env: hostEnv(logs) });
+  const resumed = await advance({ log, env: hostEnv(logs) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("up:x");
@@ -602,7 +602,7 @@ test("resume with codeRoot runs a recorded flow whose CODE files stay inside it"
   const log = await cutRun(flow, 9);
 
   expect((await loadRecordedFlow(log, { env: hostEnv(logs), codeRoot: root }))!.compiled.flowId).toBe("root");
-  const resumed = await resumeFlow({ log, env: hostEnv(logs), codeRoot: root });
+  const resumed = await advance({ log, env: hostEnv(logs), codeRoot: root });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("up:x");
@@ -630,14 +630,14 @@ test.each(MOVED_OUT)(
     change(flows, out);
     const before = readFileSync(log);
 
-    const error = await loadErrorAsync(resumeFlow({ log, env: hostEnv(logs), codeRoot: root }));
+    const error = await loadErrorAsync(advance({ log, env: hostEnv(logs), codeRoot: root }));
     expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
     expect(readFileSync(log).equals(before)).toBe(true);
     const loadError = await loadErrorAsync(loadRecordedFlow(log, { env: hostEnv(logs), codeRoot: root }));
     expect(loadError.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
 
     // Unconfined, the same log resumes: the moved file still exports `up`.
-    const resumed = await resumeFlow({ log, env: hostEnv(logs) });
+    const resumed = await advance({ log, env: hostEnv(logs) });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toBe("up:x");
   },
@@ -651,7 +651,7 @@ test("a finished log is refused with codeRoot too when its CODE file resolves ou
   linkCodeFileOut(flows, out);
   const before = readFileSync(log);
 
-  const error = await loadErrorAsync(resumeFlow({ log, env: hostEnv(logs), codeRoot: root }));
+  const error = await loadErrorAsync(advance({ log, env: hostEnv(logs), codeRoot: root }));
 
   expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
   expect(readFileSync(log).equals(before)).toBe(true);
@@ -724,7 +724,7 @@ test.each<[string, Partial<{ t: FunctionTool; skills: Map<string, Skill> }>, str
   const t = change.t ?? lookup("t", "Look it up.");
 
   const error = await rejected(
-    resumeFlow({ log, env: hostEnv(logs), tools: { t }, skills: change.skills ?? skill(), models }),
+    advance({ log, env: hostEnv(logs), tools: { t }, skills: change.skills ?? skill(), models }),
   );
 
   expect(error).toBeInstanceOf(RangeError);
@@ -748,7 +748,7 @@ test(
     markers.push(marker);
     const server = mcpServer(stdioOptions("--marker", marker));
 
-    const error = await rejected(resumeFlow({ log, env: hostEnv(logs), tools: { fake: server }, models }));
+    const error = await rejected(advance({ log, env: hostEnv(logs), tools: { fake: server }, models }));
 
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toStartWith("resume refused: tools.echo description");
@@ -763,7 +763,7 @@ test(
 test("a finished log resumes without its tools or skills", async () => {
   const log = await runInto(await loadFlow(AGENT_FLOW), { tools: { t: lookup("t") }, skills: skill(), models }, {});
 
-  const resumed = await resumeFlow({ log, env: hostEnv(logs) });
+  const resumed = await advance({ log, env: hostEnv(logs) });
 
   expect(resumed.status).toBe("succeeded");
   expect(resumed.output).toBe("done");
@@ -779,7 +779,7 @@ test("a log of another yian version resumes with a warning naming both versions"
 
   const resumed = await withWarnings(
     (message) => warnings.push(message),
-    () => resumeFlow({ log, env: hostEnv(logs), tools: { lookup: lookup() } }),
+    () => advance({ log, env: hostEnv(logs), tools: { lookup: lookup() } }),
   );
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
@@ -790,7 +790,7 @@ test("a log of another yian version resumes with a warning naming both versions"
   // Reading the finished log back resumes nothing, so it warns of nothing.
   await withWarnings(
     (message) => warnings.push(message),
-    () => resumeFlow({ log, env: hostEnv(logs) }),
+    () => advance({ log, env: hostEnv(logs) }),
   );
   expect(warnings).toHaveLength(1);
 });
@@ -800,12 +800,12 @@ test("a run of a flow built in code resumes only with that flow passed in", asyn
   const log = await cutRun(flow, 8);
   const before = readFileSync(log);
 
-  const missing = await rejected(resumeFlow({ log, env: hostEnv(logs), tools: { lookup: lookup() } }));
+  const missing = await rejected(advance({ log, env: hostEnv(logs), tools: { lookup: lookup() } }));
   expect(missing).toBeInstanceOf(RangeError);
   expect((missing as Error).message).toContain("built in code");
   expect(readFileSync(log).equals(before)).toBe(true);
 
-  const resumed = await resumeFlow({ log, flow, env: hostEnv(logs), tools: { lookup: lookup() } });
+  const resumed = await advance({ log, flow, env: hostEnv(logs), tools: { lookup: lookup() } });
   expect(resumed.output).toBe("lookup:x");
 });
 
@@ -816,7 +816,7 @@ test("a run with recorded flow files refuses a flow passed in", async () => {
   const log = await cutRun(flow, 9);
   const before = readFileSync(log);
 
-  const error = await rejected(resumeFlow({ log, flow, env: hostEnv(logs), tools: { lookup: lookup() } }));
+  const error = await rejected(advance({ log, flow, env: hostEnv(logs), tools: { lookup: lookup() } }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("leave out flow");

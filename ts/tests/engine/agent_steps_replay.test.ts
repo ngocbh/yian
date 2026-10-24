@@ -8,7 +8,7 @@
  * delay and continue the attempt count. Steers aren't read until the first live call.
  *
  * Most rows run a YAML flow through `runFlow` with a JSONL log, cut it with `crashAfter`, and
- * resume it with `resumeFlow`; the replay cursor is also tested alone over a fake `NodeSteps`.
+ * resume it with `advance`; the replay cursor is also tested alone over a fake `NodeSteps`.
  */
 
 import { createHash } from "node:crypto";
@@ -40,7 +40,7 @@ import { CapabilityFault, type Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { inspectRun, resumeFlow, runFlow } from "../../src/run.ts";
+import { inspectRun, advance, runFlow } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
@@ -189,7 +189,7 @@ function resume(
   options: { tools?: Tools; modelRetries?: number; steering?: Steering; at?: number; events?: RunEvent[] } = {},
 ) {
   const { tools = {}, modelRetries = 0, steering, at = START + 60_000, events } = options;
-  return resumeFlow({
+  return advance({
     log,
     tools,
     steering,

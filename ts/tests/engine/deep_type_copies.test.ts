@@ -30,7 +30,7 @@ import { join } from "node:path";
 
 import { copyGraph } from "../../src/compile/model.ts";
 import { outputContractType } from "../../src/nodes/contracts.ts";
-import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 
@@ -145,7 +145,7 @@ test(
     expect(expanded).toHaveLength(10);
     writeFileSync(path, lines.slice(0, expanded.at(-1)! + 1).join(""));
 
-    const resumed = await resumeFlow({ log: path, env });
+    const resumed = await advance({ log: path, env });
 
     expectSucceeded(resumed, treeValue(100));
   },

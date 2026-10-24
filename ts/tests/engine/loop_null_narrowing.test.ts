@@ -67,7 +67,7 @@
  * by `run-loop/engine_loop_null_narrowing__an_absent_checked_field_reads_as_null` (its events pin
  * that the body never starts).
  *
- * Ported through `runFlow` and `resumeFlow`, in `hostEnv`:
+ * Ported through `runFlow` and `advance`, in `hostEnv`:
  * `test_optional_seed_pagination_resumes_after_its_first_expansion`.
  */
 
@@ -84,7 +84,7 @@ import { forget } from "../../src/defaults.ts";
 import { NodeStarted } from "../../src/events.ts";
 import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
-import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
+import { advance, type RunResult, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -296,7 +296,7 @@ test("optional seed pagination resumes after its first expansion", async () => {
   expect(expanded).toBeGreaterThanOrEqual(0);
   writeFileSync(path, lines.slice(0, expanded + 1).join(""));
 
-  const resumed = await resumeFlow({ log: path, env: hostEnv(dir) });
+  const resumed = await advance({ log: path, env: hostEnv(dir) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toEqual({ cursor: null });

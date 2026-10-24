@@ -5,7 +5,7 @@
  * Ported: the episodic and reflective rows of `test_process_local_backends_never_open_sqlite`,
  * `test_snapshot_identity_survives_a_real_process_restart` and
  * `test_idle_run_does_not_keep_storage_owned_after_backend_close`; through `runFlow`,
- * `RunResult.backward` and `resumeFlow`: `test_explicit_learning_remains_saved_after_reopen`
+ * `RunResult.backward` and `advance`: `test_explicit_learning_remains_saved_after_reopen`
  * (2 rows).
  *
  * Not ported: the session rows, `test_api_session_history_is_used_after_reopening_storage`,
@@ -38,7 +38,7 @@ import { type JsonObject, MemoryOperationError } from "../../src/memory/contract
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
 import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { memorySnapshot, NO_ENV, reply } from "./run_state_fixtures.ts";
 
@@ -159,7 +159,7 @@ for (const policy of POLICIES) {
     const prefix = fs.readFileSync(log);
     await withBackend(backend(policy, file, reflector), async (reopened) => {
       expect(memorySnapshot(reopened)).toEqual(recorded);
-      const inspected = await resumeFlow({ log, memory: new Map([[policy, reopened]]), env: NO_ENV });
+      const inspected = await advance({ log, memory: new Map([[policy, reopened]]), env: NO_ENV });
       expect(inspected.output).toBe(7n);
       expect(memorySnapshot(reopened)).toEqual(recorded);
     });

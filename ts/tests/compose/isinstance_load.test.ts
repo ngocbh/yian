@@ -17,7 +17,7 @@
  * `test_isinstance_in_flow_asserts_fills_start_and_end`, followed by
  * `test_a_failing_flow_input_assert_fails_at_start`, `test_isinstance_in_a_flow_output`,
  * `test_isinstance_in_a_loop_while_runs_several_iterations`, followed by
- * `test_a_run_that_used_isinstance_replays` (`resumeFlow` over the finished log, then over the log
+ * `test_a_run_that_used_isinstance_replays` (`advance` over the finished log, then over the log
  * cut after the second iteration),
  * `test_isinstance_in_defs_and_nested_inline_children`,
  * `test_isinstance_in_a_map_per_item_input`, `test_isinstance_in_a_call_directive_argument`,
@@ -61,7 +61,7 @@ import { ExpressionError } from "../../src/expr/index.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
@@ -583,7 +583,7 @@ describe("type tables and runs", () => {
     const log = join(dir, "replay.jsonl");
     const first = await runFlow(await loadConformanceFlow(LOOP_FLOW), {}, { env, log });
     expect(first.status, first.failure?.message).toBe("succeeded");
-    const replayed = await resumeFlow({ env, log });
+    const replayed = await advance({ env, log });
     expect(replayed.status, replayed.failure?.message).toBe("succeeded");
     expect(replayed.output).toStrictEqual(first.output);
 
@@ -591,7 +591,7 @@ describe("type tables and runs", () => {
     const kept = cutLogAfter(log, "loop#1/__end__");
     expect(kept).toContain("loop~1");
     expect(kept.some((nodeId) => nodeId?.startsWith("loop~2") || nodeId?.startsWith("loop#2/"))).toBe(false);
-    const resumed = await resumeFlow({ env, log });
+    const resumed = await advance({ env, log });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toStrictEqual(first.output);
   });

@@ -67,11 +67,11 @@
  *
  * Ported: `test_package_exports_the_host_builder`, on `index.ts`.
  *
- * Ported, through `runFlow` and `resumeFlow` in that environment, the first run stopped by a
+ * Ported, through `runFlow` and `advance` in that environment, the first run stopped by a
  * throwing `onEvent` at `RunStarted`: `test_resume_checks_registry_types_too` and
  * `test_resume_accepts_one_callee_called_from_two_nodes` (every case).
  *
- * Ported, through `runFlow`, `resumeFlow` and `RunResult.backward` in that environment:
+ * Ported, through `runFlow`, `advance` and `RunResult.backward` in that environment:
  * `test_backward_checks_registry_types_too`.
  */
 
@@ -114,7 +114,7 @@ import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { RunStarted } from "../../src/events.ts";
-import { resumeFlow, runFlow, type RunFlowOptions } from "../../src/run.ts";
+import { advance, runFlow, type RunFlowOptions } from "../../src/run.ts";
 
 import { FakeMemory, type FakeSession } from "./memory_fakes.ts";
 import { NO_ENV } from "./run_state_fixtures.ts";
@@ -1076,10 +1076,10 @@ function stopAfterStart(event: unknown): void {
   if (event instanceof RunStarted) throw new Error("host stop");
 }
 
-/** `resumeFlow` in an environment holding only the test's credential store. */
+/** `advance` in an environment holding only the test's credential store. */
 function resume(flow: ComposedFlow, log: string, memory: unknown) {
   const env = new Map([["YIAN_AUTH_FILE", path.join(tmp, "auth.json")]]);
-  return resumeFlow({ log, memory: memory as Map<string, Memory>, env: (name) => env.get(name) });
+  return advance({ log, memory: memory as Map<string, Memory>, env: (name) => env.get(name) });
 }
 
 test("resume checks registry types too", async () => {

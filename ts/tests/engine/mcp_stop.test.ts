@@ -27,7 +27,7 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { type RunFlowOptions, type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { type RunFlowOptions, type RunResult, advance, runFlow } from "../../src/run.ts";
 import { readRunLog } from "../../src/runtime/log.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { type McpServer, mcpServer } from "../../src/tools/mcp.ts";
@@ -152,7 +152,7 @@ for (const numWorkers of [0, 8]) {
         parameters: { type: "object", properties: { seconds: { type: "number" } }, required: ["seconds"] },
         execute: () => "done",
       });
-      const resumed = await resumeFlow({ log, env: hostEnv(dir), tools: { fake: [slow] } });
+      const resumed = await advance({ log, env: hostEnv(dir), tools: { fake: [slow] } });
       expect(resumed.failure).toBeNull();
       expect(resumed.status).toBe("succeeded");
     },

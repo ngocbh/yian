@@ -12,7 +12,7 @@
  *
  * Ported: `test_a_node_starts_with_an_empty_type_table` (the loaded flow through `assembleText`)
  * and `test_case_forward_routes_with_its_type_table`. Ported through `loadFlow` and `runFlow` (and
- * `resumeFlow`), a loaded node's type table set by hand as Python sets it:
+ * `advance`), a loaded node's type table set by hand as Python sets it:
  * `test_bindings_and_case_conditions_use_the_node_type_table`,
  * `test_a_node_without_the_type_name_fails_naming_it` (failing `binding.evaluate`),
  * `test_node_asserts_use_the_node_type_table`, `test_loop_respawn_copies_the_type_table`,
@@ -63,7 +63,7 @@ import {
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 import { assembleText } from "../compose/declarations.ts";
@@ -548,7 +548,7 @@ test("a loop with a type table resumes mid-loop", async () => {
     const kept = cutLogAfter(log, "loop#1/__end__");
     expect(kept).toContain("loop~1");
     expect(kept.some((nodeId) => nodeId?.startsWith("loop~2") || nodeId?.startsWith("loop#2/"))).toBe(false);
-    const resumed = await resumeFlow({ log });
+    const resumed = await advance({ log });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toEqual(first.output);
   } finally {

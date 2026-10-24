@@ -72,7 +72,7 @@ export interface LiveChannelOptions {
  * Forwards a run's records and model call frames to subscribers, and keeps the calls in flight for
  * `snapshot()`.
  *
- * A host creates one, subscribes, and passes it as `runFlow`'s or `resumeFlow`'s `live`; the
+ * A host creates one, subscribes, and passes it as `runFlow`'s or `advance`'s `live`; the
  * producer methods (`wrap`, `start`, `chunk`, `end`, `settle`) are for the engine and the run
  * boundary. Each updates the calls, then calls each subscriber synchronously, in subscription order.
  * A subscriber that throws is dropped and reported through `onSubscriberError`; the frame still

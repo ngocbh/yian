@@ -966,6 +966,14 @@ export function builtinType(name: string): Type | null {
   return typ;
 }
 
+let messagesType: Type | undefined;
+
+/** Return the type of an AGENT's new messages, `list(Message)`. */
+export function newMessagesType(): Type {
+  messagesType ??= typeFor("list(Message)", new Map());
+  return messagesType;
+}
+
 /**
  * Resolve a `TypeExpr` against the registry into a runtime `Type`.
  *

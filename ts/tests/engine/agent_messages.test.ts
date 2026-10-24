@@ -14,7 +14,8 @@ import {
   checkConversation, checkMessage, checkModelConversation, ConversationError, fromModelMessage, type Message, toModelMessage,
 } from "../../src/nodes/agent/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { typeFor } from "../../src/typesys/types.ts";
+import { messagesKey, NEW_MESSAGES, VariablePool } from "../../src/typesys/pool.ts";
+import { newMessagesType, typeFor } from "../../src/typesys/types.ts";
 import { FileRef, TypeCheckError, TypedValue, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import { loadSchema } from "../schema.ts";
 
@@ -248,4 +249,22 @@ describe("checkConversation over public Message values", () => {
     const check = () => checkConversation(models);
     expect(typeof check).toBe("function");
   });
+});
+
+test("an AGENT's new messages live under <id>.new_messages, typed list(Message)", () => {
+  expect(NEW_MESSAGES).toBe("new_messages");
+  expect(messagesKey("turn#3/reply")).toBe("turn#3/reply.new_messages");
+  expect(newMessagesType()).toEqual(typeFor("list(Message)", new Map()));
+  expect(newMessagesType()).toBe(newMessagesType());
+});
+
+test("${x.new_messages[.path]} reads the pool name x.new_messages", () => {
+  const pool = new VariablePool();
+  const said = [{ role: "assistant", parts: [{ type: "text", text: "hi" }] }];
+  pool.set("x", "answer");
+  pool.set(messagesKey("x"), said, newMessagesType());
+  expect(pool.resolve("x", ["output"])).toBe("answer");
+  expect(pool.resolve("x", ["new_messages"])).toEqual(said);
+  expect(pool.resolve("y", ["new_messages"])).toBeNull();
+  expect(pool.resolve("x", ["new_messages", "role"])).toBeNull();
 });

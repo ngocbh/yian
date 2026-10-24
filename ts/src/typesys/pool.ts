@@ -7,7 +7,8 @@
  * bound-input record is the flow's run-arguments object (the standalone `inputs` namespace is
  * retired). The one side namespace is `system` (host-injected ambient: run id / clock / tenant;
  * reserved, run-global). There is no engine-private key-addressed namespace; live
- * AGENT and TOOL effects all return the leaf's ordinary Output.
+ * AGENT and TOOL effects all return the leaf's ordinary Output. An AGENT's success also stores
+ * its new messages under their own pool name, `<id>.new_messages` (`messagesKey`).
  *
  * Two responsibilities:
  * - `resolve(head, rest)` backs the `${...}` expression evaluator. Because values are typed
@@ -33,6 +34,14 @@ import {
 } from "./values.ts";
 
 type TypedWire = ReturnType<TypedValue["toWire"]>;
+
+/** The field an AGENT's new messages are read under: `${<id>.new_messages}`. */
+export const NEW_MESSAGES = "new_messages";
+
+/** The pool name of node `nodeId`'s new messages. A node id holds no `.`, so it never names a node. */
+export function messagesKey(nodeId: string): string {
+  return `${nodeId}.${NEW_MESSAGES}`;
+}
 
 /** A variable pool's wire object: each namespace's values as `{kind, value}`, and the START id. */
 export interface PoolWire {
@@ -110,7 +119,8 @@ export class VariablePool {
    *
    * Recognizes three namespaces: `input.<key>[.<path>]` reads the START record,
    * `<node>.output[.<path>]` reads a node's value (`.output` is a syntactic discriminator the
-   * resolver skips), and `system.<key>` reads a host ambient. An unrecognized head resolves to
+   * resolver skips), and `system.<key>` reads a host ambient. `<node>.new_messages[.<path>]`
+   * reads the node's new messages, stored under `messagesKey(<node>)`. An unrecognized head resolves to
    * `null` (the missing-ref-is-falsy contract); legacy plural surfaces
    * (`${outputs.X}`/`${inputs.X}`) are rejected at load time, so the load-time guard, not this
    * method, is the authoritative defense.
@@ -124,6 +134,10 @@ export class VariablePool {
     // `output` token is a syntactic discriminator and is skipped.
     if (this.store.has(head) && rest[0] === "output") {
       return traverse(this.store.get(head), rest.slice(1));
+    }
+    // `${<node>.new_messages[.path]}` reads the node's messages under their own pool name.
+    if (rest[0] === NEW_MESSAGES && this.store.has(messagesKey(head))) {
+      return traverse(this.store.get(messagesKey(head)), rest.slice(1));
     }
     // Singular input head: `${input.k}` ≡ `store[startId].k`.
     if (head === "input") {

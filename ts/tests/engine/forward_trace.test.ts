@@ -400,6 +400,7 @@ import {
   textReply,
   traceSnapshot,
   prepareGrowth,
+  fixedRebinder,
   serving,
 } from "./run_state_fixtures.ts";
 import { replayRunLog, runFlow } from "../../src/run.ts";
@@ -1142,6 +1143,7 @@ function learnableRun(): RecordEnvelope[] {
 /** Install `entry` as an accepted source and as `target`'s current writer. */
 function install(trace: RetainedTrace, target: string, entry: SourceEntry): void {
   trace._sources.set(sourceKey(entry.source!), entry);
+  trace._sourceNames.set(sourceKey(entry.source!), target);
   trace._currentWriters.set(target, entry);
 }
 
@@ -1601,6 +1603,31 @@ function runNode(
 ): RetainedTrace {
   return step(step(trace, at(seq, new NodeStartedRecord(node.id)))!, at(seq + 1, record), node, options)!;
 }
+
+test("a binding that finished must rebind; only a binding failure rebuilds to null (TS-only)", () => {
+  const unfinished = fixedRebinder(null);
+  // A success's binding finished, so a rebind that fails is a fault, not missing inputs.
+  const succeeded = drivenTrace(new TraceNode("a"), { rebinder: unfinished });
+  expectError(
+    () => succeeded.occurrences[0]!.boundInputs,
+    RangeError,
+    "the bound inputs of 'a' don't rebuild: the binding didn't finish",
+  );
+  // A failure at a binding stage recorded none, and nothing is rebound.
+  let rebinds = 0;
+  const counted: Rebinder = (sources, resolve, route) => {
+    rebinds += 1;
+    return unfinished(sources, resolve, route);
+  };
+  const failure = new Failure({ code: "binding.evaluate", message: "Missing.", nodeId: "a" });
+  const failed = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: captureV() }), {
+    rebinder: counted,
+    terminalSucceeded: false,
+    terminalFailure: failure,
+  });
+  expect(failed.occurrences[0]!.boundInputs).toBeNull();
+  expect(rebinds).toBe(0);
+});
 
 test("prepareTrace and apply build the trace record by record", () => {
   const [run, , learned] = learnableRun();

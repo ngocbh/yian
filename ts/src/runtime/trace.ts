@@ -42,7 +42,7 @@ import {
   retainFailure,
   validateDeclaredNames,
 } from "../nodes/base.ts";
-import { BindingCapture, BindingError } from "../nodes/binding.ts";
+import { BINDING_FAILURE_CODES, BindingCapture, BindingError } from "../nodes/binding.ts";
 import {
   type ChildFlowBoundary,
   isExactly,
@@ -107,11 +107,14 @@ export interface ReboundSource {
 
 /**
  * Bind an occurrence's node again from the values `resolve` gives for its sources (`rebind`, over
- * the node and wiring it ran with), returning the bound inputs and capture.
+ * the node and wiring it ran with), returning the bound inputs and capture. `route` is the
+ * occurrence's capture route, which holds whole any reserved value its hook resolved without the
+ * binder.
  */
 export type Rebinder = (
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
+  route: ValueRoute,
 ) => { inputs: Record<string, unknown>; capture: BindingCapture };
 
 /** @internal Decode a typed value from its canonical log text, a fresh copy. */
@@ -335,7 +338,8 @@ export class TraceOccurrence {
 
   /**
    * The bound inputs, canonical JSON rebuilt by binding the node again from the values its route
-   * read (`reboundInputs`), or `null` when its binding didn't finish. Built on the first read.
+   * read (`reboundInputs`), or `null` for a failure at a binding stage, whose binding didn't
+   * finish. Built on the first read.
    *
    * @throws RangeError when the occurrence was made without a rebinder, or as `reboundInputs`.
    */
@@ -354,10 +358,19 @@ export class TraceOccurrence {
  * (`traceResolver`), so it works after the pool has moved on. The run's system values are added
  * whole, since the route names no producer for them.
  *
- * @returns The canonical bound inputs, or `null` when the binding doesn't finish, as when it ran.
- * @throws RangeError when a route source has no accepted producer.
+ * Only an occurrence whose binding finished is rebound: a failure at a binding stage has no
+ * bound inputs.
+ *
+ * @returns The canonical bound inputs.
+ * @throws RangeError when a route source has no accepted producer, or the binding no longer
+ *   finishes (the `BindingError` as `cause`): the log and the flow disagree.
  */
-export function reboundInputs(trace: RetainedTrace, route: ValueRoute, rebind: Rebinder): JsonObject | null {
+export function reboundInputs(
+  trace: RetainedTrace,
+  nodeId: string,
+  route: ValueRoute,
+  rebind: Rebinder,
+): JsonObject {
   const sources = new Map<string, number>();
   // System values never change within a run, so their seq isn't checked (`traceResolver`).
   for (const key of trace.system.keys()) sources.set(`${SYSTEM_PREFIX}${key}`, 0);
@@ -374,12 +387,12 @@ export function reboundInputs(trace: RetainedTrace, route: ValueRoute, rebind: R
   }
   let capture: BindingCapture;
   try {
-    capture = rebind(sources, traceResolver(trace)).capture;
+    capture = rebind(sources, traceResolver(trace), route).capture;
   } catch (error) {
-    if (error instanceof BindingError) return null;
-    throw error;
+    if (!(error instanceof BindingError)) throw error;
+    throw new RangeError(`the bound inputs of ${reprText(nodeId)} don't rebuild: ${error.message}`, { cause: error });
   }
-  return canonicalSeed(capture.boundInputs)[1] as JsonObject | null;
+  return canonicalSeed(capture.boundInputs)[1] as JsonObject;
 }
 
 /**
@@ -1179,7 +1192,7 @@ export function prepareTrace(
     seed,
     steps,
     capture,
-    rebinder === null ? null : () => reboundInputs(trace, capture.route, rebinder),
+    unbound(record) ? () => null : rebinder === null ? null : () => reboundInputs(trace, node.id, capture.route, rebinder),
   );
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);
@@ -1273,6 +1286,11 @@ export function prepareTrace(
     causalRouteSource,
     terminal,
   });
+}
+
+/** Whether `record` is a failure at a binding stage, which bound no inputs. */
+function unbound(record: RecordEnvelope["record"]): boolean {
+  return isExactly(record, NodeFailedRecord) && (BINDING_FAILURE_CODES as readonly string[]).includes(record.failure.code);
 }
 
 /** Canonical log text of the JSON `text`. */

@@ -72,7 +72,8 @@ import {
   validateOptionalOrigin,
 } from "./contracts.ts";
 
-const BINDING_FAILURE_CODES = ["binding.evaluate", "binding.type", "contract.input"] as const;
+/** The failure codes of a binding stage, the ones an evaluation fails with before its inputs are bound. */
+export const BINDING_FAILURE_CODES = ["binding.evaluate", "binding.type", "contract.input"] as const;
 
 /** The semantic stage a `BindingError` failed at. */
 export type BindingFailureCode = (typeof BINDING_FAILURE_CODES)[number];

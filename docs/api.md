@@ -2456,13 +2456,17 @@ records `forward_capture: null`. What it held is rebuilt, never stored twice. Th
 learning reads (`BackwardContext.inputs`, the episodes' inputs, AGENT backward's evaluation
 evidence) are rebuilt by binding the node again with the wiring it ran with, from the values its
 capture route read, each looked up in the retained trace's history by the producer the route
-names (`TraceOccurrence.boundInputs`); a binding that didn't finish rebuilds to `null`, as it
-was. A derived record's whole capture is rebuilt when the record is accepted, live and on
+names (`TraceOccurrence.boundInputs`). A derived record's whole capture is rebuilt when the record is accepted, live and on
 replay, from its commit's `from` (for an expansion, its commits' `from`; for a child START, its
 constant wiring), with its value. A template function in a binding therefore runs again when
 learning first reads an occurrence's inputs, and when a replay checks recorded backward results.
 `run_started` also records `tool_groups`, so learning expands a grant naming a tool group the
-same way after the run is reopened without its tools.
+same way after the run is reopened without its tools; resuming with groups that hold other
+tools, or the same tools in another order, is refused ("resume refused: tool_groups.<group>
+differs from the recorded one"), as changed tool specs are. A rebuild runs only for an occurrence
+whose binding finished (every outcome but a failure at a binding stage, whose inputs are
+`null`); if it no longer finishes, the log and the flow disagree, and reading the inputs throws a
+`RangeError`.
 
 Changed (TS yian, schema 18): the inbox and wait records. Six record kinds, each with every
 field always present: `node_waiting {node_id, call_ids, waits, steer_inbox}` moves an in-flight

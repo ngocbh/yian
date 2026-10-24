@@ -1023,7 +1023,8 @@ interface Rebound {
 
 /**
  * Bind `node` from `sources` as the evaluator does, with defaults filled; with `capture`, collect
- * the route and bound inputs too.
+ * the route and bound inputs too. `reserved`, when given, are the node's reserved values, used in
+ * place of its `bindReserved`.
  */
 function bindFrom(
   node: Node,
@@ -1032,6 +1033,7 @@ function bindFrom(
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
   capture: boolean,
+  reserved: Readonly<Record<string, unknown>> | null = null,
 ): Rebound {
   const pool = new VariablePool(flow.startId);
   const entries = new Map<string, ReboundSource>();
@@ -1051,17 +1053,19 @@ function bindFrom(
     ? {}
     : bindParams(params, nodeWiring, pool, { ...bindOptions, collector, finishCapture: false });
   const reservedSources = new Set<string>();
-  const reserved = node.bindReserved(nodeWiring, pool, {
-    bind:
-      collector === null
-        ? null
-        : (name, source, normalize) => {
-            reservedSources.add(name);
-            return normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
-          },
-  });
-  for (const name of Object.keys(reserved)) {
-    const value = reserved[name] as Value;
+  const bound =
+    reserved ??
+    node.bindReserved(nodeWiring, pool, {
+      bind:
+        collector === null
+          ? null
+          : (name, source, normalize) => {
+              reservedSources.add(name);
+              return normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
+            },
+    });
+  for (const name of Object.keys(bound)) {
+    const value = bound[name] as Value;
     setField(record as ValueRecord, name, value);
     if (collector !== null && !reservedSources.has(name)) collector.recordSource(name, ValueRoute.literal(value), false);
   }
@@ -1088,6 +1092,10 @@ function bindFrom(
  * the producer index, which is sound because records apply in log order: the pool when a derived
  * commit is accepted holds exactly what its binding read.
  *
+ * `options.reserved` gives the node's reserved values instead of its `bindReserved`: a hook that
+ * resolves its value without the binder records it whole, as a literal route, and reads names
+ * the route doesn't name.
+ *
  * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
  */
 export function rebind(
@@ -1096,8 +1104,9 @@ export function rebind(
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
+  options: { reserved?: Readonly<Record<string, unknown>> | null } = {},
 ): { inputs: Record<string, unknown>; capture: BindingCapture } {
-  const { inputs, collector } = bindFrom(node, flow, sources, resolve, wiringOverride, true);
+  const { inputs, collector } = bindFrom(node, flow, sources, resolve, wiringOverride, true, options.reserved ?? null);
   return { inputs, capture: collector!.freeze() };
 }
 

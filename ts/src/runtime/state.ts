@@ -34,7 +34,7 @@ import {
   RunSucceeded,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { ResolvedValue, SourceRef, sameSource } from "../expr/lineage.ts";
+import { ResolvedValue, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import {
   MemoryScope,
@@ -62,7 +62,7 @@ import {
   sameOptional,
   validateOutputContract,
 } from "../nodes/contracts.ts";
-import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
+import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
   isRecord,
@@ -2164,7 +2164,21 @@ function nodeRebinder(state: RunState, node: Node): Rebinder {
   // Copied now: the flow drops a pruned node's wiring.
   const wiring = (state.wiringOverrides.get(node.id) ??
     Object.fromEntries(flow.wiring.get(node.id) ?? new Map())) as JsonObject;
-  return (sources, resolve) => rebind(node, flow, sources, resolve, wiring);
+  return (sources, resolve, route) =>
+    rebind(node, flow, sources, resolve, wiring, { reserved: recordedReserved(node, route) });
+}
+
+/**
+ * The reserved values a capture route holds whole: each route field that isn't one of `node`'s
+ * params, when every such field is a literal with its value (a hook that resolved it without the
+ * binder, such as a call-time AGENT's `__llm_config`, which reads names the route doesn't name);
+ * `null` when there are none or one was bound through the binder, so `rebind` binds them again.
+ */
+function recordedReserved(node: Node, route: ValueRoute): Record<string, unknown> | null {
+  const params = new Set((node.params ?? []).map((parameter) => parameter.name));
+  const fields = route.names.map((name, index) => [name, route.children[index]!] as const).filter(([name]) => !params.has(name));
+  if (fields.length === 0 || fields.some(([, child]) => child.kind !== "literal" || child.valueJson === null)) return null;
+  return Object.fromEntries(fields.map(([name, child]) => [name, parseJson(child.valueJson!, "codec")]));
 }
 
 /** The physical executing node of a canonical outcome record, or `null` for another record. */

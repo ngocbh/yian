@@ -103,11 +103,12 @@ class RecordedCallError extends Error {
 
 /**
  * Return the error a failed `model_call` step recorded as `{kind, message}`: a `ProviderError` of
- * that kind (not retryable), an `AuthError`, or an error of that name, each with the message.
+ * that kind (not retryable, from `provider`), an `AuthError`, or an error of that name, each with
+ * the message.
  */
-function recordedFailure({ kind, message }: { kind: string; message: string }): Error {
+function recordedFailure({ kind, message }: { kind: string; message: string }, provider: string): Error {
   if ((ERROR_KINDS as readonly string[]).includes(kind)) {
-    return new ProviderError(kind as ErrorKind, message, { retryable: false });
+    return new ProviderError(kind as ErrorKind, message, { retryable: false, provider });
   }
   return kind === "AuthError" ? new AuthError(message) : new RecordedCallError(kind, message);
 }
@@ -167,9 +168,9 @@ export function errorName(error: unknown): string {
  * With `record`, a reply an earlier start recorded for this call is returned first, as recorded,
  * with nothing emitted or written (`AgentSteps.takeRecorded`); a recorded reply a host interrupt
  * cut throws `ReplyInterrupted` with its text, and a recorded call that failed throws its error
- * again (rebuilt from its kind and message, marked). The first live call after the replay continues the
- * failed attempts recorded after the last reply: it waits the last one's `retry_in` and numbers
- * its attempts after them (`AgentSteps.priorAttempts`).
+ * again (rebuilt from its kind and message, marked). The first live call after the replay
+ * continues the failed attempts recorded after the last reply: it waits the last one's
+ * `retry_in` and numbers its attempts after them (`AgentSteps.priorAttempts`).
  *
  * With `record`, the request goes to the model with its file media inlined (`fileToInline`), and
  * the call is written before anything acts on it: each failed attempt, before its
@@ -214,7 +215,7 @@ export async function callModel(
   if (record !== undefined) {
     const recorded = record.steps.takeRecorded(purpose, record.digest);
     if (recorded !== null && "failure" in recorded) {
-      const error = recordedFailure(recorded.failure);
+      const error = recordedFailure(recorded.failure, model.provider);
       markModelFailure(error);
       throw error;
     }

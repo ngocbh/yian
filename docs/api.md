@@ -2740,8 +2740,8 @@ recorded call that failed for good fails the node again with its recorded error.
 after the last recorded call belong to the first live call: it waits the last one's `retry_in`
 again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. The AGENT reads its
 host inbox (steers and the interrupt) only once the replay ends. New steps are numbered after
-the recorded ones, so a call made again after a crash cut its `model_call` gets the same `n`, and
-its tool calls the idempotency keys they would have had.
+the recorded ones; a call a crash cut before its `model_call` was written ran no tool, so no
+idempotency key names two calls that ran.
 
 A recorded call whose `purpose` or `request_sha256` differs from the rebuilt request (another
 host, tool set or yian version builds a different request) is a host fault: the resume rejects

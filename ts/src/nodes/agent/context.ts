@@ -197,7 +197,8 @@ export interface PriorAttempts {
  * It also replays what earlier starts recorded (`NodeSteps.prior`), in order: each successful
  * `model_call`, and each failed one that wasn't to be retried, ends one logical call to take back
  * (`takeRecorded`) in place of calling the model; the failed attempts before it belong to it, and
- * failed attempts after the last one are the next live call's (`priorAttempts`). Each `tool_result` is found by its call id (`recordedResult`).
+ * failed attempts after the last one are the next live call's (`priorAttempts`). Each
+ * `tool_result` is found by its reply and its call id (`recordedResult`).
  * Steps of any other kind (`llm_config`, or a kind this version doesn't know) are not the loop's
  * and are skipped.
  */
@@ -215,7 +216,8 @@ export class AgentSteps {
   #taken = 0;
   /** The retried failed attempts recorded after the last logical call. */
   #trailing: readonly NumberedStep[];
-  readonly #results = new Map<string, ValueRecord>();
+  /** The recorded tool results, by the `n` of the reply they answer, then by call id. */
+  readonly #results = new Map<number, Map<string, ValueRecord>>();
 
   /**
    * @param steps This start's engine steps, or `undefined` to record nothing.
@@ -247,7 +249,12 @@ export class AgentSteps {
           attempts = [];
         }
       } else if (step["kind"] === "tool_result") {
-        this.#results.set(step["call_id"] as string, step);
+        // Call ids repeat across replies (an adapter may number each reply's calls from 0), so a
+        // result is filed under the reply before it; a later start's closer still follows it.
+        const reply = this.#calls.at(-1)?.at(-1)?.n ?? 0;
+        let results = this.#results.get(reply);
+        if (results === undefined) this.#results.set(reply, (results = new Map()));
+        results.set(step["call_id"] as string, step);
       }
     }
     this.#trailing = attempts;
@@ -296,9 +303,12 @@ export class AgentSteps {
     return { attempts: trailing.length, retryIn: Number(trailing.at(-1)!.step["retry_in"]) };
   }
 
-  /** Return the result an earlier start recorded for tool call `callId`, or `null`. */
-  recordedResult(callId: string): RecordedResult | null {
-    const step = this.#results.get(callId);
+  /**
+   * Return the result an earlier start recorded for tool call `callId` of the reply whose
+   * `model_call` step is `n`, or `null`.
+   */
+  recordedResult(n: number, callId: string): RecordedResult | null {
+    const step = this.#results.get(n)?.get(callId);
     if (step === undefined) return null;
     const closed = step["closed"];
     return {

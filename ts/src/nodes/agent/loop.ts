@@ -361,9 +361,12 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   };
   for (const [index, call] of turn.calls.entries()) {
     checkNodeStopped(turn);
-    let result = steps.recordedResult(call.id);
-    // Live, the interrupt skipped this call's group and every later call, so none of them committed.
-    if (result?.closed === "skipped") return true;
+    let result = steps.recordedResult(turn.n, call.id);
+    // Live, the interrupt skipped from this call's group on; the groups before it committed.
+    if (result?.closed === "skipped") {
+      commit();
+      return true;
+    }
     const check = await checkCall(turn, call, index);
     if (result === null) {
       if ("error" in check) {
@@ -439,11 +442,10 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     }
     return { error, granted: true };
   }
-  // The key names the reply's `model_call` step and the call's place in it. Steps outlive a start,
-  // and a resumed start replays the recorded ones, so a reply made again after a crash cut its
-  // `model_call` gets that step's number, and its calls the keys they would have had; no call ran
-  // under them, since tools run only once their reply is written. Outside a run (no run id) the
-  // tool set gives each call a fresh id.
+  // The key names the reply's `model_call` step and the call's place in it. Steps outlive a start
+  // and a resumed start numbers its steps after the recorded ones, so a key never names two
+  // calls that ran: a reply a crash cut before its `model_call` was written ran no tool. Outside a
+  // run (no run id) the tool set gives each call a fresh id.
   const runId = toolset.runId;
   const callId = runId ? `${runId}/${ctx.nodeId}/${turn.n}/${index}` : undefined;
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });

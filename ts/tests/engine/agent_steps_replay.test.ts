@@ -146,9 +146,16 @@ type Tools = Record<string, FunctionTool>;
 /** Run `flow` over `model` with a log, run id `r`, a virtual clock at `START` and `modelRetries`. */
 async function run(
   model: ChatModel,
-  options: { log?: string; flow?: string; tools?: Tools; modelRetries?: number; steering?: Steering } = {},
+  options: {
+    log?: string;
+    flow?: string;
+    tools?: Tools;
+    modelRetries?: number;
+    steering?: Steering;
+    learnable?: boolean;
+  } = {},
 ): Promise<{ log: string; result: Awaited<ReturnType<typeof runFlow>> }> {
-  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, steering } = options;
+  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, steering, learnable = false } = options;
   const result = await runFlow(await loadFlow(flow), {}, {
     llmConfig: CONFIG,
     env: retriesEnv(modelRetries),
@@ -158,6 +165,7 @@ async function run(
     runId: RUN_ID,
     tools,
     steering,
+    learnable,
     log,
   });
   return { log, result };
@@ -167,7 +175,7 @@ async function run(
 async function cutRun(
   k: number,
   model: ChatModel,
-  options: { flow?: string; tools?: Tools; modelRetries?: number; steering?: Steering } = {},
+  options: { flow?: string; tools?: Tools; modelRetries?: number; steering?: Steering; learnable?: boolean } = {},
 ): Promise<string> {
   const log = runLog();
   await crashAfter(k, () => run(model, { ...options, log }));
@@ -202,7 +210,8 @@ function sentResults(model: ScriptedModel, index: number): ToolResultPart[] {
 
 /**
  * The log at `path` as comparable entries: run_resumed records and the later starts of `writer`
- * left out, record and step times masked, and a success's commit given as its commit's entry.
+ * left out, record and step times masked, a success's commit given as its commit's entry, and a
+ * capture source's `execution_seq` as the kind and node of the record it names.
  */
 function comparable(path: string): unknown[] {
   let started = false;
@@ -222,6 +231,18 @@ function comparable(path: string): unknown[] {
       delete step["first_token_at"];
     }
     if (kind === "node_succeeded") copy["commit"] = logJson(entry(bySeq.get(copy["commit"] as bigint)!) as JsonObject);
+    const named = (value: unknown): void => {
+      if (typeof value !== "object" || value === null) return;
+      const record = value as Record<string, unknown>;
+      for (const [key, item] of Object.entries(record)) {
+        if (key !== "execution_seq") named(item);
+        else {
+          const source = bySeq.get(item as bigint)!;
+          record[key] = `${source.kind} ${String((source.record as { nodeId?: string }).nodeId)}`;
+        }
+      }
+    };
+    named(copy);
     return { kind, ...copy };
   };
   return kept.map(entry);
@@ -302,9 +323,11 @@ test("the replay cursor takes the recorded replies in order and finds each resul
   expect(steps.replaying()).toBe(false);
   expect(steps.takeRecorded("chat", D1)).toBeNull();
   expect(steps.priorAttempts("chat", D1)).toBeNull();
-  expect(steps.recordedResult("c1")).toEqual({ output: "one", isError: false, closed: null });
-  expect(steps.recordedResult("c2")).toEqual({ output: "two", isError: false, closed: null });
-  expect(steps.recordedResult("c3")).toBeNull();
+  expect(steps.recordedResult(2, "c1")).toEqual({ output: "one", isError: false, closed: null });
+  expect(steps.recordedResult(6, "c2")).toEqual({ output: "two", isError: false, closed: null });
+  // A result belongs to the reply before it.
+  expect(steps.recordedResult(6, "c1")).toBeNull();
+  expect(steps.recordedResult(2, "c3")).toBeNull();
 });
 
 test("failed attempts after the last reply are the next call's prior attempts, taken once", () => {
@@ -404,6 +427,22 @@ test("a replayed reply whose arguments hold ints and floats matches its digest",
   const resumed = await resume(log, model, { tools: { save: save() } });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(steps(log)[2]!["request_sha256"]).toBe(steps(uncut.log)[2]!["request_sha256"]!);
+});
+
+test("a call id two replies share finds each reply's own result", async () => {
+  // Gemini makes up `yian_call_<i>` per reply, so a later reply's first call has the first's id.
+  const replies = () => [calls(["c1", "save", "a"]), calls(["c1", "save", "b"]), textReply("done")];
+  const tools = { save: topicTool("save") };
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { tools });
+  // Cut before the second reply's result: its call must be closed, not given the first's result.
+  const log = await cutRun(seqOf(uncut.log, "tool_result", 1), new ScriptedModel(replies(), CONFIG), { tools });
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const resumed = await resume(log, model, { tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(sentResults(model, 0).map((part) => [part.callId, part.content])).toEqual([
+    ["c1", "save:a"],
+    ["c1", TOOL_OUTCOME_UNKNOWN],
+  ]);
 });
 
 test("a crash mid-call makes the call again under the same n", async () => {
@@ -731,6 +770,26 @@ test("recorded skipped results replay the host interrupt that skipped them", asy
   expect(model.requests.length).toBe(0);
   expect(ran).toEqual([]);
   expect(steps(log).map((step) => step["output"])).toContain(SKIPPED_TOOL_RESULT);
+});
+
+test("calls a group committed before a host interrupt skipped the rest keep their evidence on replay", async () => {
+  const flow = flowText(["lookup", "save"], { steerable: true });
+  const replies = () => [calls(["call-x", "lookup", "x"], ["call-y", "lookup", "y"], ["call-z", "save", "z"])];
+  const options = () => {
+    const host = interruptible();
+    // The interrupt lands while the safe group runs, so only `save z` is skipped.
+    const lookup = topicTool("lookup", { safe: true, run: (topic) => (host.interrupt(), `lookup:${topic}`) });
+    return { flow, tools: { lookup, save: topicTool("save") }, steering: host.steering, learnable: true };
+  };
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), options());
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  expect(steps(uncut.log).map((step) => step["closed"] ?? null)).toEqual([null, null, null, "skipped"]);
+  // Cut after the skipped result, before the node's commit.
+  const log = await cutRun(seqOf(uncut.log, "tool_result", 2) + 1, new ScriptedModel(replies(), CONFIG), options());
+  const resumed = await resume(log, new ScriptedModel([], CONFIG), { tools: options().tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  // The node's success, its evidence included, is the uncut run's.
+  expect(comparable(log)).toEqual(comparable(uncut.log));
 });
 
 test("a reply whose arguments nest too deep fails the resumed node again after its step", async () => {

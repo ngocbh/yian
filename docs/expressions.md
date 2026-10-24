@@ -57,7 +57,7 @@ at a 1-based line and a UTF-16 column: `unexpected ')' at line 1, column 2`.
 Changed (TS yian): **list slices.** A postfix subscript `x[lower:upper]` follows any operand: a
 reference, a call result, parentheses, a list literal or another subscript (`xs[1:][:2]`).
 Either bound may be omitted (`xs[1:]`, `xs[:-1]`, `xs[:]`). Postfix binds tightest, as Python's
-primary does: `-xs[1:]` is `-(xs[1:])` and `xs[1:] ** 2` squares the slice. The tree is
+primary does: `-xs[1:]` parses as `-(xs[1:])` and `xs[1:] ** 2` as `(xs[1:]) ** 2`. The tree is
 `subscript[base, slice[lower, upper]]`, with an omitted bound as `omitted[]`.
 
 The colon rule: a `:` directly inside a subscript's brackets ends a bound, and the lexer tries it

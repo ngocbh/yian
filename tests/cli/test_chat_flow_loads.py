@@ -11,8 +11,7 @@ from yian.compose.loader import load_flow
     "path",
     [
         "src/yian/cli/chat/chat.yaml",
-        "examples/chat.yaml",
-        ".claude/skills/composing-agents/templates/chat.yaml",
+        "tests/cli/chat_example.yaml",
     ],
 )
 def test_chat_flow_loads(path):

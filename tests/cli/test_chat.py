@@ -29,10 +29,11 @@ from yian.nodes.base import _HostStop
 
 runner = CliRunner()
 
-# The bundled example chat flow, resolved from THIS file's location — not cwd. The `chat`
-# command's `flow` arg is `exists=True`, so a cwd-relative path only works when pytest runs
-# from the repo root; anchoring to `__file__` keeps these tests cwd-independent.
-EXAMPLE_CHAT = Path(__file__).resolve().parents[2] / "examples" / "chat.yaml"
+# Python yian's copy of the example chat flow (examples/chat.yaml is TS yian's), resolved from
+# THIS file's location — not cwd. The `chat` command's `flow` arg is `exists=True`, so a
+# cwd-relative path only works when pytest runs from the repo root; anchoring to `__file__`
+# keeps these tests cwd-independent.
+EXAMPLE_CHAT = Path(__file__).resolve().parent / "chat_example.yaml"
 
 # Matches an ANSI SGR (color/style) escape sequence, e.g. "\x1b[1;36m".
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")

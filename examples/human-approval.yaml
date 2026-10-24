@@ -1,16 +1,16 @@
-# human-approval — a deterministic human gate with the HUMAN_INPUT node.
+# human-approval — a deterministic human gate with the `ask` built-in.
 #
-# A HUMAN_INPUT node ALWAYS blocks at a fixed point in the graph and waits for a typed
-# answer from the human; the answer is validated against the node's declared
-# `output:` type before the flow continues. (Contrast with the `ask_user` tool —
-# see ask-user.yaml — which is model-CHOSEN, not guaranteed.)
+# An `ask` TOOL node ALWAYS asks at a fixed point in the graph: the host answers at once, or
+# returns `pending()` and answers later with `complete()`. The answer is validated against
+# the node's declared `output:` type before the flow continues. (Contrast with the
+# `ask_user` tool — see ask-user.yaml — which is model-CHOSEN, not guaranteed.)
 #
-# The flow: an agent drafts a short plan, a HUMAN_INPUT node asks the human to approve
-# or revise it, `case ... on` routes on the typed answer, and whichever branch ran is
-# combined by an n-ary `|` coalesce into the flow output.
+# The flow: an agent drafts a short plan, an `ask` node asks the human to approve or revise
+# it, `case ... on` routes on the typed answer, and whichever branch ran is combined by an
+# n-ary `|` coalesce into the flow output.
 #
-# Exercises: a Literal typedef as the human answer, the blocking HUMAN_INPUT node,
-# `case ... on` with `else`, and a coalesce join.
+# Exercises: a Literal typedef as the human answer, a TOOL node calling `ask`, `case ... on`
+# with `else`, and a coalesce join.
 #
 # Run it with (the CLI will prompt you for the approval):
 #   yian run examples/human-approval.yaml --input task="Plan a team offsite"
@@ -34,15 +34,15 @@ nodes:
     prompt: "Draft a short, concrete plan (exactly 3 numbered steps) for: ${task}"
 
   approve:
-    kind: human_input
+    kind: tool
+    tool_id: ask                         # always asks; the host answers
     input:
-      plan: ${draft.output}              # context the prompt may reference (bare ${plan})
-    prompt: |-
-      Here is the proposed plan:
+      prompt: |-
+        Here is the proposed plan:
 
-      ${plan}
+        ${draft.output}
 
-      Approve it as-is, or send it back to be revised? (approve / revise)
+        Approve it as-is, or send it back to be revised? (approve / revise)
     output: Approval                     # the human's answer, validated against Approval's tags
 
   gate:

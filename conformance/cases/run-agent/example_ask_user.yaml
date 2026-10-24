@@ -6,19 +6,20 @@ rules: [run-log]
 flow: |
   # ask-user — a model-chosen clarifying question via the blocking ask_user tool.
   #
-  # `ask_user` is an ordinary tool granted to an agent. Granting it only
-  # ENABLES the capability: the live agent loop blocks to ask the human ONLY when the model
-  # decides it needs a fact it can't supply itself, then receives the answer as the tool
-  # result. (Contrast with the HUMAN_INPUT node — see human-approval.yaml —
-  # which ALWAYS blocks at a fixed point. For a guaranteed gate, use HUMAN_INPUT; for an
-  # agent that asks "only if needed", use this.)
+  # `ask_user` is an ordinary tool granted to an agent, served by the run's ask handler.
+  # Granting it only ENABLES the capability: the live agent loop blocks to ask the human ONLY
+  # when the model decides it needs a fact it can't supply itself, then receives the answer as
+  # the tool result. (Contrast with an `ask` TOOL node — see human-approval.yaml — which
+  # ALWAYS asks at a fixed point. For a guaranteed gate, use an `ask` node; for an agent that
+  # asks "only if needed", use this.)
   #
   # Because it is model-chosen, whether the call happens depends on the prompt AND the
   # model: a tool-capable model that judges the request ambiguous will call ask_user; a
   # request that is already clear (or a weak model) may just answer outright.
   #
   # Exercises: an AGENT with an authored `tools:` grant, which runs the tool loop — the
-  # loop binds ask_user and blocks on the call until the answer arrives.
+  # loop binds ask_user to the run's ask handler and blocks on the call until the answer
+  # arrives.
   #
   # Run it with a deliberately ambiguous request (the CLI will prompt if the agent asks):
   #   yian run examples/ask-user.yaml --input request="Book me a table for dinner"

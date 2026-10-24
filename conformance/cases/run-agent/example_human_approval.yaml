@@ -1,10 +1,83 @@
 # From examples/human-approval.yaml.
 # The human approves the drafted plan, the `case ... on` the answer takes `kickoff`, and the `|`
 # join returns its text; `revise_plan` is skipped and gets no model call.
-# No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
+# `tool_calls` pins the `ask` call: its prompt is a wiring template over `draft`'s output.
 kind: run
 rules: [run-log]
 flow: |
+  # human-approval — a deterministic human gate with the `ask` built-in.
+  #
+  # An `ask` TOOL node ALWAYS asks at a fixed point in the graph: the host answers at once, or
+  # returns `pending()` and answers later with `complete()`. The answer is validated against
+  # the node's declared `output:` type before the flow continues. (Contrast with the
+  # `ask_user` tool — see ask-user.yaml — which is model-CHOSEN, not guaranteed.)
+  #
+  # The flow: an agent drafts a short plan, an `ask` node asks the human to approve or revise
+  # it, `case ... on` routes on the typed answer, and whichever branch ran is combined by an
+  # n-ary `|` coalesce into the flow output.
+  #
+  # Exercises: a Literal typedef as the human answer, a TOOL node calling `ask`, `case ... on`
+  # with `else`, and a coalesce join.
+  #
+  # Run it with (the CLI will prompt you for the approval):
+  #   yian run examples/human-approval.yaml --input task="Plan a team offsite"
+
+  id: human-approval
+  name: human_approval
+  description: Draft a plan, ask a human to approve or revise it, then finalize accordingly.
+
+  typedefs:
+    Approval: Literal(approve, revise)    # the typed human answer (a tag-only enum)
+
+  input:
+    task: !str
+
+  nodes:
+    draft:
+      kind: agent
+      input:
+        task: ${input.task}
+      output: str
+      prompt: "Draft a short, concrete plan (exactly 3 numbered steps) for: ${task}"
+
+    approve:
+      kind: tool
+      tool_id: ask                         # always asks; the host answers
+      input:
+        prompt: |-
+          Here is the proposed plan:
+
+          ${draft.output}
+
+          Approve it as-is, or send it back to be revised? (approve / revise)
+      output: Approval                     # the human's answer, validated against Approval's tags
+
+    gate:
+      kind: case                           # route on the human's answer (simple form)
+      on: ${approve.output}
+      cases:
+        - when: approve
+          then: kickoff
+      else: revise_plan
+
+    kickoff:
+      kind: agent
+      input:
+        plan: ${draft.output}
+      output: str
+      prompt: "The plan was approved. Write a short, upbeat kickoff message for it:\n\n${plan}"
+
+    revise_plan:
+      kind: agent
+      input:
+        plan: ${draft.output}
+      output: str
+      prompt: "The plan needs work. Rewrite it tighter and clearer, keeping 3 steps:\n\n${plan}"
+
+  # kickoff runs on approve; revise_plan runs otherwise. Coalesce picks whichever ran.
+  output: ${kickoff.output | revise_plan.output}
+# Python yian has no `ask` built-in: it runs the old HUMAN_INPUT example.
+python_flow: |
   # human-approval — a deterministic human gate with the HUMAN_INPUT node.
   #
   # A HUMAN_INPUT node ALWAYS blocks at a fixed point in the graph and waits for a typed
@@ -99,6 +172,24 @@ host:
             parts: [{type: text, text: "The offsite plan is approved: let's pick a date!"}]
 expect:
   output: {status: succeeded, output: "The offsite plan is approved: let's pick a date!"}
+  tool_calls:
+    ask:
+    - args:
+        answer_schema:
+        - enum: [approve, revise]
+          name: answer
+          required: true
+          type: str
+        node_id: approve
+        question: |-
+          Here is the proposed plan:
+
+          1. Pick a date. 2. Book a venue. 3. Send invites.
+
+          Approve it as-is, or send it back to be revised? (approve / revise)
+      attempt: 1
+      call_id: r1/approve
+      node: approve
   # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started

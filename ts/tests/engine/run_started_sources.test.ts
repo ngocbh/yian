@@ -4,7 +4,8 @@
  * compiles the recorded flow, never the files on disk.
  *
  * TS-only too: `loadFlowSource` with `codeRoot` checks every recorded file's CODE references, a
- * host child's included, against it, and so do `resumeFlow` and `loadRecordedFlow` with `codeRoot`.
+ * host child's included, against it, and so do `resumeFlow`, `loadRecordedFlow` and `foldRunLog`
+ * with `codeRoot`.
  */
 
 import {
@@ -27,8 +28,15 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { VERSION, withWarnings } from "../../src/platform.ts";
-import { loadRecordedFlow, resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
-import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import {
+  type FoldedRun,
+  foldRunLog,
+  loadRecordedFlow,
+  resumeFlow,
+  type RunFlowOptions,
+  runFlow,
+} from "../../src/run.ts";
+import { PoolCommitRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { mcpServer } from "../../src/tools/mcp.ts";
@@ -600,7 +608,8 @@ test("resume with codeRoot runs a recorded flow whose CODE files stay inside it"
   expect(resumed.output).toBe("up:x");
 });
 
-test.each<[string, (flows: string, out: string) => void]>([
+/** The two ways a recorded CODE file comes to resolve outside the root, each run on `flows` with `out`. */
+const MOVED_OUT: [string, (flows: string, out: string) => void][] = [
   ["the file replaced by a symlink pointing out", linkCodeFileOut],
   [
     "its folder moved out and linked back",
@@ -609,7 +618,9 @@ test.each<[string, (flows: string, out: string) => void]>([
       symlinkSync(join(out, "lib"), join(flows, "lib"));
     },
   ],
-])(
+];
+
+test.each(MOVED_OUT)(
   "resume with codeRoot refuses a recorded CODE file that now resolves outside it, before appending anything: %s",
   async (_name, change) => {
     const root = freshDir("code-root");
@@ -644,6 +655,59 @@ test("a finished log is refused with codeRoot too when its CODE file resolves ou
 
   expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
   expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+/** The value the folded run's top `__end__` commit writes: the run's output. */
+function foldedOutput(folded: FoldedRun): unknown {
+  const end = folded.records.find(
+    ({ entry }) => entry.envelope.record instanceof PoolCommitRecord && entry.envelope.record.key === "__end__",
+  );
+  return end?.value?.toObject();
+}
+
+test("foldRunLog with codeRoot folds a recorded flow whose CODE files stay inside it", async () => {
+  const root = freshDir("code-root");
+  const { flow } = await writeCodeFlow(root);
+  const log = await runInto(flow);
+
+  const folded = await foldRunLog(log, { env: hostEnv(logs), codeRoot: root });
+
+  expect(folded.flow.compiled.flowId).toBe("root");
+  expect(folded.records).toHaveLength(readRunLog(log).length);
+  expect(foldedOutput(folded)).toBe("up:x");
+});
+
+test.each(MOVED_OUT)(
+  "foldRunLog with codeRoot refuses a recorded CODE file that now resolves outside it: %s",
+  async (_name, change) => {
+    const root = freshDir("code-root");
+    const out = freshDir("code-out");
+    const { flows, flow } = await writeCodeFlow(root);
+    const log = await runInto(flow);
+    change(flows, out);
+    const before = readFileSync(log);
+
+    const error = await loadErrorAsync(foldRunLog(log, { env: hostEnv(logs), codeRoot: root }));
+    expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+    expect(readFileSync(log).equals(before)).toBe(true);
+
+    // Unconfined, the same log folds: the moved file still exports `up`.
+    expect(foldedOutput(await foldRunLog(log, { env: hostEnv(logs) }))).toBe("up:x");
+  },
+);
+
+test("foldRunLog ignores codeRoot for a flow built in code", async () => {
+  const root = freshDir("code-root");
+  const out = freshDir("code-out");
+  const { flows, flow } = await writeCodeFlow(root);
+  const built = new ComposedFlow(flow.compiled);
+  const log = await runInto(built);
+  expect(started(log).flow).toBeNull();
+  linkCodeFileOut(flows, out);
+
+  const folded = await foldRunLog(log, { env: hostEnv(logs), flow: built, codeRoot: root });
+
+  expect(foldedOutput(folded)).toBe("up:x");
 });
 
 /** Cut a run of `AGENT_FLOW` after its AGENT ran, with the tool `t`; return the log. */

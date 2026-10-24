@@ -1123,8 +1123,8 @@ field's contract (`compose/validate/typed_bindings.py`, `local_input_contracts`,
 `local_field_error` in `compose/helpers/output_contracts.py`); a read is an error only
 when every alternative rejects it. MAP inputs and reserved wiring keys are skipped. Flow
 asserts check `${input.X...}` the same way. A field read on a builtin's result walks the
-type `expr.builtins.builtin_result_type` gives (`str` for every shipped builtin, unknown
-for a host-registered one), via `compose/validate/constructors.py`'s
+type `expr.builtins.builtin_result_type` gives (`str` for every shipped builtin (TS yian's
+`len` gives `int`), unknown for a host-registered one), via `compose/validate/constructors.py`'s
 `builtin_field_errors`.
 
 Compose's narrowing pass (`compose/validate/narrowing.py`) runs after the CASE desugar and

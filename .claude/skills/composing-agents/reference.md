@@ -48,6 +48,8 @@ One expression grammar, everywhere `${...}` appears:
 | `${a + b}`, `${a * b + 1}` | arithmetic — `+ - * / % **`, unary minus |
 | `${a == b}`, `${x in [1, 2]}` | comparisons / membership / `and`/`or`/`not` |
 | `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call (null or wrong-typed args fail: `${upper(x :- "")}`) |
+| `${len(x)}` | TS yian: length of a list (items) or text (code points), an `int`; bindings and conditions only, not prompts |
+| `${xs[1:]}`, `${xs[:-n]}` | TS yian: a Python list slice (negative counts from the end, bounds clamp, no step or index); inside the brackets `:` ends a bound, so a default needs parentheses: `${xs[(n :- 0):]}` |
 | `${Buy(action="buy", qty=n)}`, `${Buy(x)}` | constructor: build a typedef record from exactly these fields, or check and narrow `x` (like `!Buy ${x}`) |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
@@ -99,7 +101,7 @@ One `${...}` grammar; the context decides what happens to the result:
 |---------|-------|--------------|
 | **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. A tag (`name: !T value`) declares the type; nested `${...}` in mappings and lists is evaluated. A builtin called with arguments it doesn't take is a load error. |
 | **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${...}` loads and evaluates identically; a `${...}` inside the expression is a load error, as is a call to a function other than a builtin, `isinstance`, or a `typedefs:` constructor `T(...)`, or to a builtin with arguments it doesn't take. |
-| **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified); a builtin called with arguments it doesn't take is a load error |
+| **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified); only formatting builtins (`render_as_json`, `join`, `upper`, `lower`; not `len`); a builtin called with arguments it doesn't take is a load error |
 
 > Bindings wire, conditions test, nodes compute. A heavy transform still belongs
 > in a `code` node — but simple arithmetic/coalesce in a binding is fine.

@@ -54,6 +54,25 @@ from Python's only on rare control and format characters. A parse error still st
 `could not parse expression '<text>': `, but the rest is TS's own text naming what it found,
 at a 1-based line and a UTF-16 column: `unexpected ')' at line 1, column 2`.
 
+Changed (TS yian): **list slices.** A postfix subscript `x[lower:upper]` follows any operand: a
+reference, a call result, parentheses, a list literal or another subscript (`xs[1:][:2]`).
+Either bound may be omitted (`xs[1:]`, `xs[:-1]`, `xs[:]`). Postfix binds tightest, as Python's
+primary does: `-xs[1:]` is `-(xs[1:])` and `xs[1:] ** 2` squares the slice. The tree is
+`subscript[base, slice[lower, upper]]`, with an omitted bound as `omitted[]`.
+
+The colon rule: a `:` directly inside a subscript's brackets ends a bound, and the lexer tries it
+before `:-` and `:?`. Pending operators don't hide the brackets, so `xs[:-1]`, `xs[a:-b]`,
+`xs[a :- b]` and `xs[n - 1:-1]` are all Python slices. Inside parentheses, a call or a list
+within a bound, the escapes work as before, so a default in a bound needs parentheses:
+`xs[(n :- 0):]`. These are parse errors, each naming the fix:
+
+| Text | Message |
+|---|---|
+| `xs[a:?b]` | ``inside a slice, `:` ends a bound; write `(a :? b)` for a required value`` |
+| `xs[::2]`, `xs[1:2:1]`, `xs[n :- 0:]` | ``slices take no step; for a default in a bound, use parentheses: `xs[(n :- 0):]` `` |
+| `xs[0]` | ``indexing `xs[i]` is not supported; `xs[i:i + 1]` gives a one-item list`` |
+| `xs[1:].a` | `unexpected '.'`: a list has no fields |
+
 `and`, `or`, `not`, and `in` are reserved operators and cannot be the exact root
 name of a reference. They remain legal as dotted field names, such as
 `record.output.in`.
@@ -74,7 +93,8 @@ An expression nests at most 100 levels, the same bound as a
 [value](typing.md#nesting-limit), so `YIAN_MAX_VALUE_NESTING` sets both (see
 [Defaults and limits](defaults.md)). Each call, list literal, unary operator
 (`-`, `not`), comparison, escape (`|`, `:-`, `:?`), `and`/`or` chain, and operator chain is
-one level; a plain reference adds none, and parentheses add none of their own. Mixing
+one level (in TS yian, so is a subscript, like a call); a plain reference adds none, and
+parentheses add none of their own. Mixing
 precedence nests: `a * b + c` is a `product` inside a `sum`, two levels, and
 `((a + b) + c) + d` is three chains, three levels. `-1` is one level. `parse_expr` checks
 the depth first, without recursion, so no later walk meets a tree deep enough to
@@ -107,6 +127,24 @@ left side with text on the right, is an error.
 
 When the `None` would come from a node a `case` may skip, Compose rejects the arithmetic at
 load and asks for a `:-` default (see `syntax.md`, "Skipped branches and flow outputs").
+In TS yian this looks through a slice: `${maybe.output[1:] + xs}` is refused like
+`${maybe.output + xs}`.
+
+Changed (TS yian): **slice semantics.** `xs[a:b]` on a list of length n follows Python's
+`slice.indices` with step 1: an omitted `a` is 0 and an omitted `b` is n, a negative bound adds
+n, both bounds clamp to `[0, n]`, and `a >= b` gives `[]`. Bounds are ints of any size, and a
+bool counts as 0 or 1, as in arithmetic.
+
+| Case | Binding / condition | Strict (prompt) |
+|---|---|---|
+| the base is `null` or misses | a miss, as `.field` on null is, so `${xs[1:] :- []}` falls back | raises `unresolved reference ${xs}` |
+| the base is text, a record or a number | raises `slicing takes a list, got str` | same |
+| a bound is `null` or misses | raises `slice bound is null; omit it to mean the end` | same |
+| a bound is a float or text | raises `slice bounds take int, got float` | same |
+
+Quote a YAML value that holds a slice: in a plain scalar `xs[a: b]` (a space after the colon)
+breaks the scalar, and in an unquoted flow mapping the `[` and `]` break it. Write
+`q: "${xs[a: b]}"`.
 
 In bindings, CASE conditions, LOOP predicates, flow outputs, prompts, and asserts the
 loader rejects field reads a known type can't have, including a field only some members of
@@ -299,26 +337,37 @@ in an `object` slot a nested file becomes its mapping. Numbers are delivered as 
 
 A **prompt** is the strict context: it reads local inputs as bare `${name}`;
 AGENT prompts also read their own declared variables. It renders in
-`STRICT_RAISE` mode and may call a builtin.
+`STRICT_RAISE` mode and may call a formatting builtin (`render_as_json`, `join`, `upper`,
+`lower`). In TS yian, `len` isn't one: compute a length in an input binding. A host that
+registers its own function named `len` replaces the shipped one, and a prompt may call it.
 
 ## builtins — pure expression functions
 
 A template span may be a plain reference or a call to a pure builtin. Prompts use
 local values; bindings and conditions use their existing resolver. The same
-closed registry serves these contexts. Builtins are read-only formatting and
-create no graph node.
+closed registry serves these contexts. Builtins are pure and read-only (formatting; TS yian's
+`len` measures) and create no graph node.
 
 | Builtin | Does |
 |---------|------|
 | `render_as_json(value, indent=2)` | pretty-print a value as JSON |
 | `join(value, sep="\n")` | join a list's elements, each stringified |
 | `upper(s)` / `lower(s)` | case-fold text |
+| `len(obj)` | TS yian: the length of text in code points or of a list in items, an `int`; bindings and conditions only |
 
 Changed (TS yian): `join` writes each element in the text form, and `sep` must be text.
 `render_as_json` uses yian's own writer with Python's layout and floats in the text form (`1.0`
 renders as `1`, infinity as bare `Infinity`, so the text is not strict JSON), and takes only an
 int indent of 0 or more. `upper`/`lower` use JavaScript's non-locale case mapping, which differs
 from Python's only where the engines' Unicode versions differ.
+
+Changed (TS yian): `len` measures rather than formats, and gives an `int`: `len("é😀")` is 2, as
+Python's `len` counts code points. Anything but text or a list fails:
+`len() takes str or list, got record`. A prompt can't call it.
+
+Typedef names are PascalCase and every shipped builtin is lowercase, so the loader refuses a
+typedef named like one (`typedef name 'len' must be PascalCase (an uppercase identifier)`). A
+host-registered function isn't checked; a builtin wins over a typedef of the same name in a call.
 
 A builtin never turns null into text. A null argument, a null `join` element, a
 non-text `upper`/`lower` argument, or a non-list `join` argument fails the
@@ -352,9 +401,10 @@ prompt that calls a builtin with arguments it doesn't take, makes `run_flow` rai
 `ExpressionError` before the run. A `typedefs:` constructor `T(...)` is not an unknown
 function; set in Python, its name must be in the node's type table.
 
-Each shipped builtin returns text, so a field read on its result (`${upper(x).f}`) is a
-load error wherever it is written: `reference ${upper(...).f} reads field 'f' on type
-str, which has no fields`. A host-registered builtin's result, even one registered
+Each shipped builtin returns text, except `len`, which returns `int`, so a field read on its
+result (`${upper(x).f}`) is a load error wherever it is written: `reference ${upper(...).f}
+reads field 'f' on type str, which has no fields`, or `reference ${len(...).f} reads field 'f'
+on type int, which has no fields`. A host-registered builtin's result, even one registered
 under a shipped name, isn't checked. A value bound from a builtin call (`v: ${upper(x)}`)
 is not typed at load, so a later `${v.f}` is not checked.
 
@@ -461,6 +511,16 @@ preserve their structural routes. Equal values never establish source identity.
 An explicit backward call uses those routes without evaluating the expression or
 calling a registered function again. Opaque operations stop mechanical transfer
 and retain local context; literal/default inputs have no invented upstream source.
+
+In TS yian, a list slice keeps a `list` route of its base's route projected to each kept
+index, so feedback on a slice item reaches that item of the base. `len`, like every builtin
+call, is an `opaque` route.
+
+Changed (TS yian): where `len()` and list slicing differ from Python. Yian refuses slicing text,
+`len` of a record, a `null` slice bound, a step and an index, where Python gives a value; each
+message names the fix. A slice of `null` or a miss is a miss (`:-` catches it), where Python
+raises. `len(obj=x)` works, since a builtin has no positional-only parameters. A prompt can't
+call `len` (`unknown prompt function 'len'; prompts call only formatting builtins ...`).
 
 Feedback is ordinary text, a partial record, an exact-length positional list, or
 `None`. Whole-value text stays unchanged; interpretation context accompanies it

@@ -351,7 +351,7 @@ this model whenever you design anything:
   fragment. The walk also checks prompt and node-assert local names, each typed by its
   binding's contract under the node's narrowing view (`local_input_contracts`), a flow
   assert's `${input.X...}`, and a builtin's result (`builtin_result_type`, `str` for each
-  shipped builtin; `builtin_field_errors`). Compose's narrowing pass
+  shipped builtin, `int` for TS yian's `len`; `builtin_field_errors`). Compose's narrowing pass
   (`compose/validate/narrowing.py`) gives each node a view of the producer/flow-input
   contracts under the CASE branches that route it (an `on:` tag branch, or what a
   searched `when:` proves true; a true `isinstance` keeps the base members `T` shares if

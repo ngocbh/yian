@@ -387,11 +387,12 @@ binding's type: a field only the child's declared input has is a load error, sin
 value can't hold it. A LOOP's carried name may read a field the seed's type or the
 body's returned type has.
 
-Each shipped builtin returns text, so a field read on its result is a load error
-wherever it is written:
+Each shipped builtin returns text, except `len`, which returns `int`, so a field read on
+its result is a load error wherever it is written:
 
 ```
 reference ${upper(...).f} reads field 'f' on type str, which has no fields
+reference ${len(...).f} reads field 'f' on type int, which has no fields
 ```
 
 Changed: a field read a local name's type can't have, in a prompt, question text, or
@@ -613,6 +614,8 @@ appears — bindings, conditions, prompts. Inside it you may write:
 | `${a and b}`, `${not a}` | boolean — `and` / `or` / `not` |
 | `${[a, b, c]}` | a list literal (elements are themselves expressions) |
 | `${upper(name)}`, `${join(items, ", ")}` | a pure builtin call (with dotted access on the result: `${fn(x).field}`); a null or wrong-typed argument fails, so default it: `${upper(name :- "")}` |
+| `${len(xs)}` | TS yian: the length of a list (items) or text (code points), an `int`, in bindings and conditions; a prompt can't call it |
+| `${xs[1:]}`, `${xs[:-n]}`, `${xs[a:b]}` | TS yian: a list slice as in Python. A negative bound counts from the end, and bounds clamp. Inside the brackets `:` ends a bound, so a default needs parentheses: `${xs[(n :- 0):]}`. There is no step and no index. Quote the YAML value |
 | `${Buy(action="buy", qty=n)}`, `${Buy(x)}` | a [constructor](expressions.md#constructors-t): a typedef name builds a record from exactly the given fields and checks it, or checks and narrows `x` like `!Buy ${x}` |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
@@ -1295,6 +1298,11 @@ There are no YAML tags inside `${...}`, so a typedef name works as a constructor
 fields and checks it. `${Buy(x)}` checks and narrows `x`, exactly like `!Buy ${x}`. See
 [Constructors](expressions.md#constructors-t).
 
+In TS yian an expression can also measure and slice a list: `${len(input.history)}` and
+`${input.history[len(input.history) - 4:]}` (see
+[Operators inside `${...}`](#operators-inside) and
+[Expressions → list slices](expressions.md#layer-1--grammar-parse-only)).
+
 ### Load check
 
 The loader compares the tag's type with the type it infers for the value:
@@ -1314,7 +1322,7 @@ The loader compares the tag's type with the type it infers for the value:
   branch fails at load.
 - A MAP's lone `${item}` or `${item.field}` is inferred from the element type of
   `over:`, so `t: !str ${item}` over a `list(int)` fails at load.
-- A value whose type can't be inferred (arithmetic, a builtin call, an untyped
+- A value whose type can't be inferred (arithmetic, a builtin call, a slice, an untyped
   producer) is checked at runtime only.
 
 Literals are checked against the type at load:

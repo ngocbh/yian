@@ -31,8 +31,9 @@ import type { ModelAccess } from "../llm_clients/factory.ts";
 import { CapabilityFault, type CompleteResult, Grow, markerMessage, Output, Pending, Route, type Steering } from "../nodes/base.ts";
 import type { SourceResolver } from "../nodes/binding.ts";
 import { type CallView, isExactly, NodeSteps } from "../nodes/contracts.ts";
-import type { Scheduler } from "../platform.ts";
+import { realScheduler, type Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
+import { toolCallId } from "../tools/context.ts";
 import { ToolSet } from "../tools/registry.ts";
 import { jsTypeName, type ValueRecord } from "../typesys/values.ts";
 import {
@@ -71,12 +72,13 @@ import {
   prepareRunStopped,
   prepareRunWaiting,
   prepareSend,
+  prepareTakeCommit,
   RunState,
   requireExpansionOutput,
   resolveFromPool,
 } from "./state.ts";
 import { captureBindings, sourcePath } from "./trace.ts";
-import { nodeCalls } from "./waits.ts";
+import { decideWait, nodeCalls } from "./waits.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -669,7 +671,7 @@ export class FlowEngine {
         prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);
       }
     } else if (outcome instanceof Pending) {
-      return this.#commitPending(nodeId, outcome);
+      return this.#commitPending(nodeId, outcome, carriers);
     } else {
       throw new TypeError(`raw evaluator returned an unsupported outcome ${jsTypeName(outcome)}`);
     }
@@ -681,10 +683,25 @@ export class FlowEngine {
    * and append the result in this synchronous section, so no delivery lands between the decision
    * and its records.
    */
-  #commitPending(nodeId: string, outcome: Pending): readonly RunEvent[] {
+  #commitPending(nodeId: string, outcome: Pending, carriers: OutcomeCarriers): readonly RunEvent[] {
     const { state, log } = this;
     if (outcome.wait === null) return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: outcome.callIds }));
-    throw new TypeError("take and sleep outcomes aren't decided yet");
+    const callId = toolCallId(state.runId!, nodeId);
+    const decision = decideWait(state.waits, callId, outcome.wait, this.#now());
+    if (decision.kind === "take") {
+      // The commit and its success go in together: nothing is appended between them.
+      commitPrepared(log, state, prepareTakeCommit(state, nodeId, decision.commit));
+      return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, carriers));
+    }
+    if (decision.kind === "slept") throw new TypeError("sleep outcomes aren't decided yet");
+    // The decision left is to wait. It isn't compared by name: "wait" is still a node kind, and the
+    // kind census counts that comparison.
+    return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry] }));
+  }
+
+  /** The engine's clock: the scheduler's, as the run log's record times are. */
+  #now(): number {
+    return (this.scheduler ?? realScheduler).now();
   }
 
   /**

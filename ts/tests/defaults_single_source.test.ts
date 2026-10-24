@@ -61,6 +61,7 @@ const ALLOWED: Record<string, string> = {
   "llm/framing.ts: ASCII_SPACE": "the ASCII whitespace bytes",
   "llm/testing.ts: NULL_BODY_STATUSES": "HTTP statuses whose response has no body",
   // Display and message formatting.
+  "cli/chat.ts: SECOND_PRESS_MS": "how soon a second Ctrl-C cancels the chat's run",
   "cli/run.ts: ERR_CONTEXT": "lines of YAML shown around an error",
   "cli/run.ts: flowBanner.||": "terminal width when the output reports none",
   "cli/run.ts: SGR": "terminal color and style codes",

@@ -22,7 +22,17 @@ import { AuthError } from "../llm_clients/auth/index.ts";
 import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { realScheduler, type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
-import { advance, cancel, close, DeliveryRefused, RunBusyError, type RunResult, runFlow, send } from "../run.ts";
+import {
+  advance,
+  cancel,
+  close,
+  DeliveryRefused,
+  interrupt as interruptReply,
+  RunBusyError,
+  type RunResult,
+  runFlow,
+  send,
+} from "../run.ts";
 import { recordTimeMs } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
@@ -72,7 +82,9 @@ export interface ChatDeps {
   tools?: Readonly<Record<string, ToolEntry>>;
 }
 
-const HINT = "(Ctrl-C again to cancel the run; /exit to finish it)";
+const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
+// A second Ctrl-C this soon after the one that interrupted a turn cancels the run.
+const SECOND_PRESS_MS = 2_000;
 const EXIT_LINES = new Set(["/exit", "/quit"]);
 
 /** The inbox lines go to: its name, and whether it takes messages (`Inbox(Message)`) or text. */
@@ -138,8 +150,10 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * output of each node named `reply` on stdout as it finishes; returns the exit code.
  *
  * `/exit`, `/quit` or the end of input closes the inbox; the run finishes, `session ended` goes to
- * stderr and the chat exits 0. Ctrl-C (at the prompt, or SIGINT while the run moves) prints a
- * hint; a second one in a row cancels the run (`chat cancelled`, exit 130). SIGTERM, SIGHUP or
+ * stderr and the chat exits 0. Ctrl-C (SIGINT) while a turn runs interrupts the agents reading the
+ * inbox as their steer inbox (`interrupt`): the reply is cut, `(interrupted)` goes to stderr and
+ * the chat waits for the next line. A second Ctrl-C within 2 s, or one at the prompt, cancels the
+ * run (`chat cancelled`, exit 130). SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>`, exit 130), as
  * does Ctrl-C at an `ask` prompt. While the prompt is up, the run is advanced at its `wakeAt`;
  * what was typed so far comes back at the next prompt. Off a terminal (stdin or stderr isn't a
@@ -195,7 +209,10 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
   // The line prompt (or, once the inbox is closed, the wait for a deadline) that a deadline, a
   // stop or a cancel takes down.
   let line: AbortController | null = null;
-  let interrupts = 0;
+  // Whether a turn runs (the run is being started or advanced), and the scheduler time of the
+  // Ctrl-C that last interrupted one.
+  let turning = false;
+  let pressedAt: number | null = null;
   // Settles true once the run is cancelled, false when it had already ended.
   let cancelling: Promise<boolean> | null = null;
   const cancelRun = async (path: string): Promise<boolean> => {
@@ -212,9 +229,16 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       stop.abort(new HostStop("SIGINT"));
       return;
     }
-    interrupts += 1;
-    if (interrupts === 1) {
-      void io.stderr.write(`${HINT}\n`).catch(() => {});
+    const now = scheduler.now();
+    // A press while a turn runs interrupts its reply; a second within 2 s, or one at the prompt,
+    // cancels.
+    if (turning && (pressedAt === null || now - pressedAt > SECOND_PRESS_MS)) {
+      pressedAt = now;
+      void io.stderr.write(`${INTERRUPTING}\n`).catch(() => {});
+      // The live engine takes it at once; with no reply running it names nobody and appends nothing.
+      interruptReply(log, inbox.name, { env: env.read }).catch((error: unknown) => {
+        if (!(error instanceof DeliveryRefused)) stop.abort(error);
+      });
       return;
     }
     // A live engine takes the cancel, and its `advance` resolves `cancelled`.
@@ -282,8 +306,11 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     log = path;
     // Python's rule: a node named `reply`, at any depth, is what the chat says.
     const onEvent = (event: RunEvent) => {
-      if (!(event instanceof NodeSucceeded) || event.output === null) return;
+      if (!(event instanceof NodeSucceeded)) return;
       if (event.nodeId.slice(event.nodeId.lastIndexOf("/") + 1) !== "reply") return;
+      // An interrupted reply succeeds with null when its output is `Optional(...)`.
+      if (event.interrupted) return io.stderr.write("(interrupted)\n");
+      if (event.output === null) return;
       return io.stdout.write(`${writeAsText(event.output as Value)}\n`);
     };
     const shared = {
@@ -293,14 +320,25 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       signal: stop.signal,
       scheduler,
     };
-    const moveOn = () => advance({ log: path, ...shared });
-    let result: RunResult = await runFlow(flow, supplied, {
-      log: path,
-      runId,
-      llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
-      numWorkers: options.numWorkers,
-      ...shared,
-    });
+    /** Run `move` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling. */
+    const turn = async (move: () => Promise<RunResult>): Promise<RunResult> => {
+      turning = true;
+      try {
+        return await move();
+      } finally {
+        turning = false;
+      }
+    };
+    const moveOn = () => turn(() => advance({ log: path, ...shared }));
+    let result: RunResult = await turn(() =>
+      runFlow(flow, supplied, {
+        log: path,
+        runId,
+        llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
+        numWorkers: options.numWorkers,
+        ...shared,
+      }),
+    );
     let closed = false;
     let cancelled = false;
     // The deadline the run was last moved at. A node is due once any of its calls passes its
@@ -368,7 +406,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         await close(path, inbox.name, { env: env.read });
         closed = true;
       } else {
-        interrupts = 0;
+        pressedAt = null;
         try {
           await send(path, inbox.name, lineEvent(read.value, inbox.message), { env: env.read });
         } catch (error) {

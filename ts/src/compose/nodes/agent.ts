@@ -23,7 +23,7 @@ import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import { isValue, LLM_CONFIG_KEY, valueLeaves } from "../../nodes/agent/llm_values.ts";
-import { AgentNode, isMaxToolIterations, isTextOutput, type PromptItem } from "../../nodes/agent/node.ts";
+import { AgentNode, isMaxToolIterations, isTextOutput, type PromptItem, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
   Binding,
@@ -508,7 +508,7 @@ export interface AgentDescriptorFields extends NodeDescriptorFields {
   llmConfig?: unknown;
   retries?: number;
   asserts?: readonly string[] | null;
-  steerable?: boolean;
+  steerInbox?: string | null;
   memories?: readonly MemoryDecl[];
   outputContractOverride?: ValueContract | null;
 }
@@ -536,7 +536,7 @@ export class AgentDescriptor extends NodeDescriptor {
     "long_term_memory",
     "retries",
     "asserts",
-    "steerable",
+    "steer_inbox",
   );
   static override readonly required = this.require();
   static override readonly bindingFields: readonly string[] = ["inputs"];
@@ -558,8 +558,8 @@ export class AgentDescriptor extends NodeDescriptor {
   readonly retries: number;
   /** The node asserts. */
   readonly asserts: readonly string[];
-  /** Whether the node takes steering messages while it runs. */
-  readonly steerable: boolean;
+  /** The authored `steer_inbox:` source (`${input.<name>}`); `null` when absent. */
+  readonly steerInbox: string | null;
   /** The authored `long_term_memory:` declarations. */
   readonly memories: readonly MemoryDecl[];
   /**
@@ -591,7 +591,7 @@ export class AgentDescriptor extends NodeDescriptor {
     this.llmConfig = fields.llmConfig === undefined ? {} : fields.llmConfig;
     this.retries = fields.retries ?? current().agentRetries;
     this.asserts = fields.asserts ?? [];
-    this.steerable = fields.steerable ?? false;
+    this.steerInbox = fields.steerInbox ?? null;
     this.memories = memories;
     this.outputContractOverride = fields.outputContractOverride ?? null;
   }
@@ -632,7 +632,10 @@ export class AgentDescriptor extends NodeDescriptor {
     return desc.replace({ prompt: readPromptList(nodeId, desc, cursor, diagnostics) }) as InstanceType<T>;
   }
 
-  /** Reject the retired `memory_policy:` key, at its key, before the generic key check. */
+  /**
+   * Reject the retired `memory_policy:` and `steerable:` keys, at their key, before the generic
+   * key check.
+   */
   static override _normalizeCursor(cursor: SourceCursor): SourceCursor {
     if (cursor.has("memory_policy")) {
       throw LoadDiagnostics.fromCursor(cursor).error(
@@ -640,11 +643,18 @@ export class AgentDescriptor extends NodeDescriptor {
         { range: cursor.keyRangeOf("memory_policy") },
       );
     }
+    if (cursor.has("steerable")) {
+      throw LoadDiagnostics.fromCursor(cursor).error(
+        "node field `steerable:` was replaced by `steer_inbox:`: declare an `Inbox(...)` input and write " +
+          "`steer_inbox: ${input.<name>}`; the host sends steers with `send`",
+        { range: cursor.keyRangeOf("steerable") },
+      );
+    }
     return cursor;
   }
 
   /**
-   * Check the `prompt:`, `system_prompt:`, `tools:`, `retries:`, `skills:` and `steerable:`
+   * Check the `prompt:`, `system_prompt:`, `tools:`, `retries:`, `skills:` and `steer_inbox:`
    * shapes, store `retries` as a `number`, and parse a present `long_term_memory:` into
    * `memories` (`null` is none).
    *
@@ -705,12 +715,13 @@ export class AgentDescriptor extends NodeDescriptor {
         { range: rangeOf("skills") },
       );
     }
-    const steerable = Object.hasOwn(fields, "steerable") ? fields["steerable"] : false;
-    if (typeof steerable !== "boolean") {
-      throw diagnostics.error(
-        `node ${id} (kind=${this.kind}): \`steerable:\` must be true or false${formerBooleanHint(steerable)}`,
-        { range: rangeOf("steerable") },
-      );
+    if (Object.hasOwn(fields, "steerInbox")) {
+      const steerInbox = fields["steerInbox"];
+      if (typeof steerInbox !== "string" || steerInbox === "") {
+        throw diagnostics.error("`steer_inbox:` must be `${input.<name>}` naming an Inbox input", {
+          range: rangeOf("steer_inbox"),
+        });
+      }
     }
     if (Object.hasOwn(fields, "memories")) {
       const value = fields["memories"] as Value;
@@ -736,8 +747,9 @@ export class AgentDescriptor extends NodeDescriptor {
    *
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
-   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, `steerable` with
-   *   non-text output, a variable named like an input, or an input named `__llm_config`.
+   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a steer inbox with
+   *   non-text output, a variable named like an input, or an input named `__llm_config` or
+   *   `__steer_inbox`.
    * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
    *   `Parameter`s or `null`.
    */
@@ -756,7 +768,7 @@ export class AgentDescriptor extends NodeDescriptor {
       ctx.diagnostics,
       llmFieldRanges,
     );
-    const steerableRange = this.fieldRanges.get(siteKey("field", "steerable")) ?? this.range;
+    const steerInboxRange = this.fieldRanges.get(siteKey("field", "steer_inbox")) ?? this.range;
     if (Object.hasOwn(this.env, "max_tool_iterations") && !isMaxToolIterations(this.env["max_tool_iterations"])) {
       throw ctx.diagnostics.error(
         `node ${id}: \`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
@@ -781,7 +793,7 @@ export class AgentDescriptor extends NodeDescriptor {
         memories,
         variables,
         skills: this.skills,
-        steerable: this.steerable,
+        steerInbox: this.steerInbox !== null,
       });
     } catch (error) {
       // AgentNode checks skill grants and tool names; a refusal is the loader's one error type.
@@ -823,9 +835,9 @@ export class AgentDescriptor extends NodeDescriptor {
         );
       }
     }
-    if (this.steerable && !isTextOutput(node.outputContract)) {
-      // Checked here too so the error points at the `steerable:` line.
-      throw ctx.diagnostics.error(`node ${id}: steerable needs \`str\` output`, { range: steerableRange });
+    if (this.steerInbox !== null && !isTextOutput(node.outputContract)) {
+      // Checked here too so the error points at the `steer_inbox:` line.
+      throw ctx.diagnostics.error(`node ${id}: a steer inbox needs \`str\` output`, { range: steerInboxRange });
     }
     node.params = this.sinkParams();
     const inputNames = new Set(node.params.map((parameter) => parameter.name));
@@ -846,10 +858,22 @@ export class AgentDescriptor extends NodeDescriptor {
         { range: this.fieldRanges.get(siteKey("input", LLM_CONFIG_KEY)) ?? this.range },
       );
     }
-    const result = this._finish(node, this.sinkWiring());
-    // Errors about `llm_config` values point at the authored `llm_config:`.
+    if (inputNames.has(STEER_INBOX_KEY)) {
+      throw ctx.diagnostics.error(
+        `input ${reprText(STEER_INBOX_KEY)} is reserved for \`steer_inbox:\`; rename the input`,
+        { range: this.fieldRanges.get(siteKey("input", STEER_INBOX_KEY)) ?? this.range },
+      );
+    }
+    const wiring = this.sinkWiring();
+    if (this.steerInbox !== null) wiring.set(STEER_INBOX_KEY, this.steerInbox);
+    const result = this._finish(node, wiring);
+    // Errors about `llm_config` values point at the authored `llm_config:`, and errors about the
+    // steer inbox at `steer_inbox:`.
     const fieldRanges = new Map(result.fieldRanges);
     if (llmConfigRange !== null) fieldRanges.set(siteKey("field", LLM_CONFIG_KEY), llmConfigRange);
+    if (this.steerInbox !== null && steerInboxRange !== null) {
+      fieldRanges.set(siteKey("field", STEER_INBOX_KEY), steerInboxRange);
+    }
     return new BuildResult({ ...result, fieldRanges });
   }
 

@@ -1,0 +1,25 @@
+# TS-only: `steer_inbox:` names an Inbox input (yian #1025).
+kind: load
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+flow: |
+  id: steer
+  name: steer
+  input:
+    text: !str
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steer_inbox: ${input.text}
+      output: str
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'chat' steer_inbox: `${input.text}` isn't an inbox; `steer_inbox:` names an Inbox input
+      frames:
+      - label: flow.yaml
+        range: [9, 18, 9, 31]

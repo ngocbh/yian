@@ -2,7 +2,7 @@
  * An AGENT without tools or skills makes a single model call; one with tools runs the loop:
  * mirrors `tests/engine/test_agent_without_tools.py`.
  *
- * Ported: `test_skills_and_steerable_need_no_mode`.
+ * Ported: `test_skills_and_steerable_need_no_mode` (`steerable` is `steerInbox` here).
  *
  * Changed: `test_text_agent_without_tools_makes_one_unbound_call`,
  * `test_structured_agent_without_tools_makes_one_structured_call`,
@@ -76,9 +76,9 @@ test("structured agent without tools makes one structured call", async () => {
   expect(model.requests[0]!.tools).toEqual([]);
 });
 
-test("skills and steerable need no mode", () => {
+test("skills and a steer inbox need no mode", () => {
   expect(new AgentNode("n", { prompt: "p", skills: ["review"] }).skills).toEqual(["review"]);
-  expect(new AgentNode("n", { prompt: "p", steerable: true }).steerable).toBe(true);
+  expect(new AgentNode("n", { prompt: "p", steerInbox: true }).steerInbox).toBe(true);
 });
 
 test("a Python-built agent with tools runs the tool loop", async () => {

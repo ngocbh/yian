@@ -666,7 +666,7 @@ Schema `conformance/schema/cli.schema.json` in the repository.
 | `yian auth --remove --auth-file F --json` | `{"format", "ok"}` | the removal failed |
 | `yian auth openai --method subscription --login device --json` | JSON lines: `{"format", "event", ...}` | sign-in failed |
 | `yian run FLOW ... --json` (fresh or `--resume`) | `{"format", "status", ...}` | the run failed |
-| `yian status LOG --json` (TS yian only) | `{"format", "status", "in_flight", "crashed_attempts"}` | the log can't be read |
+| `yian status LOG --json` (TS yian only) | `{"format", "status", "in_flight", "crashed_attempts", "ready", "wake_at"}` | the log can't be read |
 | `yian status --json` (TS yian only) | `{"format", "runs"}` | the run index can't be updated |
 
 Every document follows these rules:
@@ -968,7 +968,7 @@ second stop still kills the child.
 lock, so it works while the run is going.
 
 ```json
-{"format": "yian.cli.v1", "status": "crashed", "in_flight": ["draft"], "crashed_attempts": {"draft": 1}}
+{"format": "yian.cli.v1", "status": "crashed", "in_flight": ["draft"], "crashed_attempts": {"draft": 1}, "ready": false, "wake_at": null}
 ```
 
 - `status` is `running` while a writer holds the log's lock; `succeeded`, `failed` or `cancelled`
@@ -980,6 +980,12 @@ lock, so it works while the run is going.
   it is empty for an ended run.
 - `crashed_attempts` maps a node id to the attempts a resume retried, or would retry, after a
   crash.
+- `ready` is `true` when a `waiting` run has a waiting node that can be woken now: every call it
+  waits on is answered, timed out or closed. `wake_at` is the earliest deadline of an open call of
+  a waiting node (a UTC time such as `2026-10-20T14:02:11.123Z`), or `null` when none has one. A
+  host resumes a waiting run when it is `ready`, and also once `wake_at` is due, when the resume
+  times that call out though `ready` is still `false`. Both are `false` and `null` for any other
+  status.
 
 It reads the records alone, not the flow, so a run whose process ended after its END succeeded,
 but before a node that was already ready started, reads as finished, though `--resume` would still
@@ -1002,9 +1008,7 @@ status LOG` reads it. With `--json`:
 {"format": "yian.cli.v1", "runs": [{"run_id": "4f1c...", "flow": "/home/ada/flows/climate.yaml", "status": "succeeded", "started_at": "2026-10-23T14:02:11.123Z", "ended_at": "2026-10-23T14:02:15.456Z", "parent_run_id": null, "last_seq": 12, "result": {"summary": "..."}, "input_tokens": 1200, "output_tokens": 300, "cache_read_tokens": 0, "reasoning_tokens": 0, "ready": false, "wake_at": null}]}
 ```
 
-For a `waiting` run, `ready` says whether `--resume` would make progress now (a waiting node has
-every call it waits on settled) and `wake_at` is when a deadline comes due; they are `false` and
-`null` for any other status.
+For a `waiting` run, `ready` and `wake_at` are as `yian status LOG` reports them (see above).
 
 `result` is the run's output once it succeeded, else `null`, and the token counts sum every model
 call, failed attempts included. A log it can't read is a `warning:` line on stderr and keeps its

@@ -2956,10 +2956,11 @@ Read from the records, a run ends `cancelled` on a cancel and `failed` on a node
 `RunFailedRecord`, whatever else is pending; END's success, then a route that proved END
 unreachable, end it only with nothing in flight and nothing waiting. For a `waiting` run, `waits`
 lists each waiting node's calls (`{ node, callId, tool, inbox, deadline, settled }`, oldest wait
-first), `ready` says whether some waiting node has every call it waits on settled, so `advance`
-makes progress now, and `wakeAt` is the earliest deadline of an open call of a waiting node, when
-`advance` times it out (`null` when none has one); for any other status they are `[]`, `false` and
-`null`.
+first), `ready` says whether some waiting node can be woken now (every call it waits on is
+settled), and `wakeAt` is the earliest deadline of an open call of a waiting node (`null` when none
+has one): a host advances a waiting run when it is `ready`, and also once `wakeAt` is due, when
+`advance` times that call out though `ready` is still `false`. For any other status they are `[]`,
+`false` and `null`.
 The result also holds `runId`, `schema`, `flowFingerprint` and `learnable` from the log's
 `RunStarted`, `lastSeq`, the seq of its last complete record, and `failure`, the `Failure` that
 ended a `failed` run (a node's failure, or the `graph.terminal_unreachable` failure of a route that
@@ -3049,7 +3050,7 @@ index or the log.
 | `lastSeq`, `offset` | the seq of the last record read, and the byte offset just past it |
 | `result` | the value of the top-level END's `pool_commit` as `logJson` text, `null` until the END succeeded |
 | `inputTokens`, `outputTokens`, `cacheReadTokens`, `reasoningTokens` | sums over every `model_call` step's `usage`, failed attempts included |
-| `waits`, `ready`, `wakeAt` | for a `waiting` run, as `inspectRun` reads them: each waiting node's calls, whether a waiting node can be woken now, and the earliest deadline of an open call of a waiting node; `[]`, `false` and `null` for any other status (`running` included) |
+| `waits`, `ready`, `wakeAt` | for a `waiting` run, as `inspectRun` reads them: each waiting node's calls, whether some waiting node can be woken now (every call it waits on settled), and the earliest deadline of an open call of a waiting node, at which a host also advances the run; `[]`, `false` and `null` for any other status (`running` included) |
 
 - An update reads each `<runsDir>/<run_id>/log.jsonl` on from its row's `offset` with
   `iterRunRecords` (`afterOffset`, `runId`, `afterSeq`), and doesn't open a log that hasn't grown.

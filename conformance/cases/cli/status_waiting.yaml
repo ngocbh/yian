@@ -22,3 +22,5 @@ expect:
     status: waiting
     in_flight: []
     crashed_attempts: {}
+    ready: false
+    wake_at: null

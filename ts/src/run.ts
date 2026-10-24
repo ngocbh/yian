@@ -1603,7 +1603,8 @@ export interface RunInspection {
   readonly waits: readonly WaitInfo[];
   /**
    * Whether a `waiting` run has a waiting node it can wake now (every call it waits on is
-   * settled), so `advance` makes progress; `false` for any other status.
+   * settled); `false` for any other status. A host also advances a waiting run once `wakeAt` is
+   * due, though `ready` is still `false`.
    */
   readonly ready: boolean;
   /**

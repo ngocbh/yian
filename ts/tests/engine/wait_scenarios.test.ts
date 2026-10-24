@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { foldRunLog, inspectRun, type RunInspection } from "../../src/run.ts";
 import { START_ID } from "../../src/compile/model.ts";
-import { PoolCommitRecord, readRunLog, recordTimeMs } from "../../src/runtime/log.ts";
+import { iterRunRecords, type NodeStepRecord, PoolCommitRecord, readRunLog, recordTimeMs } from "../../src/runtime/log.ts";
 import {
   DeliveryRefused,
   prepareInboxClosed,
@@ -164,6 +164,24 @@ describe("the scenarios' own rules", () => {
     expect(prepareInboxClosed(state, "msgs")).toBeNull();
     expect(e.state.pool.store.get("heard")!.toObject()).toEqual({ events: [], closed: true });
   });
+});
+
+test("f: a steer step consumes what it read; a send after it stays unread through a crash", () => {
+  const f = plain("f");
+  expect(unreadEvents(f.state.waits)).toEqual(new Map([["msgs", [f.marks.sc!]]]));
+  expect(unreadEvents(stateAt(f, "steer").waits)).toEqual(new Map());
+  expect(f.state.inboxEvents.has(f.marks.sa!)).toBe(false);
+});
+
+test("foldRunLog yields the steer step with inbox and from; each from seq's record is the send with its value", async () => {
+  const f = plain("f");
+  const { records } = await foldRunLog(f.path, { flow: f.composed, env: NO_ENV });
+  const step = records[f.marks.steer!]!.entry.envelope.record as NodeStepRecord;
+  expect(step.step).toEqual({ kind: "steer", inbox: "msgs", from: [f.marks.sa!, f.marks.sb!] });
+  expect(records[f.marks.sa!]!.value!.toObject()).toBe("a");
+  expect(records[f.marks.sb!]!.value!.toObject()).toBe("b");
+  // A reader that skips step kinds it doesn't know still decodes every record.
+  expect([...iterRunRecords(f.path)]).toHaveLength(readRunLog(f.path).length);
 });
 
 test("foldRunLog yields a send's value at its commit, and a take's at its commit once its success rebuilds it", async () => {

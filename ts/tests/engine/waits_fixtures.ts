@@ -12,9 +12,10 @@ import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import type { Node } from "../../src/nodes/base.ts";
+import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
+import { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
@@ -28,6 +29,7 @@ import {
   prepareNodeSucceeded,
   prepareNodeWaiting,
   prepareNodeWoken,
+  prepareMessagesCommit,
   preparePoolCommit,
   type PreparedTransition,
   replayRecords,
@@ -40,6 +42,7 @@ import {
 } from "../../src/runtime/state.ts";
 import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import { toolCallId } from "../../src/tools/context.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { InboxRef, inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
@@ -76,8 +79,20 @@ export function waitFlow(...nodes: Node[]): CompiledFlow {
   return paramFlow([MSGS], ...nodes);
 }
 
-/** START(...params) -> each node -> END (END joins them all). */
-export function paramFlow(params: readonly Parameter[], ...nodes: Node[]): CompiledFlow {
+/** START(msgs: Inbox(str)) -> an AGENT `chat` reading steer inbox `msgs` -> END. */
+export function steerFlow(): CompiledFlow {
+  const chat = new AgentNode("chat", { prompt: "hi", steerInbox: true });
+  const wiring = new Map([["chat", new Map([[STEER_INBOX_KEY, new Binding("${input.msgs}")]])]]);
+  return paramFlow([MSGS], { wiring }, chat);
+}
+
+/** START(...params) -> each node -> END (END joins them all), with `options.wiring` when given first. */
+export function paramFlow(
+  params: readonly Parameter[],
+  ...rest: [{ wiring: ReadonlyMap<string, ReadonlyMap<string, unknown>> }, ...Node[]] | Node[]
+): CompiledFlow {
+  const options = rest[0] instanceof Node || rest.length === 0 ? {} : (rest.shift() as { wiring: ReadonlyMap<string, ReadonlyMap<string, unknown>> });
+  const nodes = rest as Node[];
   return CompiledFlow.fromParts(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params })],
@@ -88,13 +103,18 @@ export function paramFlow(params: readonly Parameter[], ...nodes: Node[]): Compi
       ...nodes.map((node) => new Edge(`start-${node.id}`, START_ID, node.id)),
       ...nodes.map((node) => new Edge(`${node.id}-end`, node.id, END_ID)),
     ],
+    options,
   );
 }
 
-/** Commit `nodeId`'s output and success; a learnable state records a literal capture. */
+/**
+ * Commit `nodeId`'s output, its messages when it produces them (an AGENT), and its success; a
+ * learnable state records a literal capture.
+ */
 export function succeed(log: RunLog, state: RunState, nodeId: string, output: unknown): void {
   const node = state.flow.nodes.get(nodeId)!;
   commitPrepared(log, state, preparePoolCommit(state, nodeId, output));
+  if (node.producesMessages) commitPrepared(log, state, prepareMessagesCommit(state, nodeId));
   commitPrepared(
     log,
     state,
@@ -106,11 +126,18 @@ export function succeed(log: RunLog, state: RunState, nodeId: string, output: un
  * A JSONL log and state of `flow` after run start and START's success (holding each inbox's
  * handle). `fingerprint` defaults to `flowFingerprint(flow)`; a flow holding a test double passes
  * `FINGERPRINT` and is never replayed through `replayRunLog`. A learnable run gets the execution
- * layout after fingerprinting, as `learnableStarted` does. `numWorkers` defaults to 0.
+ * layout after fingerprinting, as `learnableStarted` does. `numWorkers` defaults to 0; an AGENT's
+ * model config comes from `effectiveLlmByStaticPath` (none by default).
  */
 export function started(
   flow: CompiledFlow,
-  options: { learnable?: boolean; defaults?: Record<string, bigint>; fingerprint?: string; numWorkers?: number } = {},
+  options: {
+    learnable?: boolean;
+    defaults?: Record<string, bigint>;
+    fingerprint?: string;
+    numWorkers?: number;
+    effectiveLlmByStaticPath?: Record<string, JsonObject>;
+  } = {},
 ) {
   const fingerprint = options.fingerprint ?? flowFingerprint(flow);
   if (options.learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
@@ -124,7 +151,7 @@ export function started(
       runId: RUN_ID,
       flowFingerprint: fingerprint,
       startWiringOverride: {},
-      effectiveLlmByStaticPath: {},
+      effectiveLlmByStaticPath: options.effectiveLlmByStaticPath ?? {},
       numWorkers: options.numWorkers ?? 0,
       learnable: options.learnable ?? false,
       defaults: options.defaults ?? {},
@@ -191,11 +218,17 @@ class Scenario {
   log: RunLog;
   state: RunState;
 
-  constructor(name: string, flow: CompiledFlow, learnable: boolean, numWorkers = 0) {
+  constructor(
+    name: string,
+    flow: CompiledFlow,
+    learnable: boolean,
+    numWorkers = 0,
+    effectiveLlmByStaticPath: Record<string, JsonObject> = {},
+  ) {
     this.name = name;
     this.flow = flow;
     this.learnable = learnable;
-    const run = started(flow, { learnable, numWorkers });
+    const run = started(flow, { learnable, numWorkers, effectiveLlmByStaticPath });
     this.path = run.path;
     this.composed = run.composed;
     this.log = run.log;
@@ -242,6 +275,7 @@ class Scenario {
   }
   succeed(node: string, output: unknown, mark?: string): this {
     this.commit(preparePoolCommit(this.state, node, output), mark);
+    if (this.state.flow.nodes.get(node)!.producesMessages) this.commit(prepareMessagesCommit(this.state, node));
     return this.commit(prepareNodeSucceeded(this.state, node, { forwardCapture: this.capture(node) }));
   }
   resume(mark?: string): this {
@@ -294,6 +328,8 @@ export const askAnswer = (node: string, answer: string) => ({
  *   pending step, and the restart waits on the same call.
  * - `d`: a sleep waits while another branch runs, then times out.
  * - `e`: the inbox closes while a take waits with the host down; the take commits closed.
+ * - `f`: an AGENT reads two sends as one steer step, a third send arrives, then a crash; the
+ *   restarted agent succeeds and the third send stays unread.
  */
 export function scenarioLogs(): ScenarioLog[] {
   return [false, true].flatMap((learnable) => [
@@ -306,6 +342,7 @@ export function scenarioLogs(): ScenarioLog[] {
     scenarioCCrash(learnable),
     scenarioD(learnable),
     scenarioE(learnable),
+    scenarioF(learnable),
   ]);
 }
 
@@ -381,5 +418,13 @@ function scenarioE(learnable: boolean): ScenarioLog {
   run.start("heard").wait("heard", takeEntry("heard")).runWaiting();
   run.reopen().close("closed");
   run.reopen().woken("heard").take("heard", { inbox: "msgs", events: [], closed: true }, "take");
+  return run.end().done();
+}
+
+function scenarioF(learnable: boolean): ScenarioLog {
+  const run = new Scenario("f", steerFlow(), learnable, 0, { chat: { provider: "openai", model: "gpt-5.5" } });
+  run.send("a", "sa").send("b", "sb").start("chat");
+  run.step("chat", { kind: "steer", inbox: "msgs", from: [seqOf(run, "sa"), seqOf(run, "sb")] }, "steer").send("c", "sc");
+  run.reopen().resume("resumed").start("chat", "restarted").succeed("chat", "ok");
   return run.end().done();
 }

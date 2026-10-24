@@ -2797,6 +2797,33 @@ object; the log does not hold it (see [Tool context](#tool-context)).
 Changed (TS yian): `resume_flow` is `advance` (options `AdvanceOptions`); the CLI's `--resume`
 calls it.
 
+Changed (TS yian): a run can end waiting. When nodes wait on calls (a host tool's `pending()`, an
+`ask`, a `take` or a `sleep`) and nothing else can run, `runFlow` and `advance` record `run_waiting`,
+release the log's lock and resolve with `status: "waiting"`; `waits` lists each waiting node's
+calls. `advance` (and the CLI's `--resume`) moves a waiting run on. It appends `RunResumedRecord`
+only when the last segment crashed or stopped (work in flight, a recorded stop, or no
+`run_waiting` as its last frontier record) or `numWorkers` changes. A waiting node whose calls are
+settled, or past their deadline by the `scheduler`'s clock, is woken (`node_woken`, naming the calls
+it times out) with no `RunResumedRecord`. A waiting run with neither appends nothing and returns
+`waiting` with no events. A process-local run (`log: null`) can end waiting too, but can't be
+advanced.
+
+While a run waits, the process that left it keeps its `RunState` in an in-process registry keyed
+by the log's real path. A later `advance` in that process reuses it, skipping the replay and the
+recompile, while the log still ends at the record it left, has the same size, device and inode,
+and the call passes the same `codeRoot`, code-built `flow`, `apiKey` and `headers`; anything else
+rebuilds from the log. The entry is kept until the run moves on, so a host holding many waiting
+runs pays for each one's state. `advance` of a run this process is moving rejects with the lock's
+busy message (`run log PATH is locked by another writer (is the run still active?)`); one started
+while another call in this process is setting the run up waits for that call to finish, then
+reads the log again. A missing log rejects with code `ENOENT`, from resolving its real path.
+
+`RunResult.status` is `"succeeded"`, `"failed"`, `"cancelled"` (a host's cancel ended the run) or
+`"waiting"`. `waits` holds a waiting run's calls (`node`, `callId`, `tool`, `inbox`, `deadline`,
+`settled`), `[]` otherwise; `unread` holds, at a terminal status, the send seqs no take read, by
+inbox, and is empty while the run waits. `result.backward` needs a run that succeeded or failed;
+on a waiting or cancelled one it raises `RangeError`.
+
 Changed (TS yian): `advance({ log, numWorkers, onEvent, onStream, memory, tools, skills,
 steering, apiKey, headers, context, signal, env, codeRoot })` returns a Promise of the
 `RunResult`, and the

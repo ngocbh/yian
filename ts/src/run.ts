@@ -18,7 +18,10 @@
  * the host's runs folder and names its log there. For hosts that read run-log values it re-exports
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
  * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
- * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with.
+ * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
+ * the built-in message value (`Message`, `MessagePart`, `checkMessage`, which reads a decoded
+ * `Message` back with its files, `checkConversation` and `ConversationError`, from
+ * `nodes/agent/messages.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -161,6 +164,13 @@ import {
   writeAsText,
 } from "./typesys/values.ts";
 
+export {
+  checkConversation,
+  checkMessage,
+  ConversationError,
+  type Message,
+  type MessagePart,
+} from "./nodes/agent/messages.ts";
 export type { Steering } from "./nodes/base.ts";
 export { staticPathOf } from "./nodes/ids.ts";
 export {

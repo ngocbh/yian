@@ -56,10 +56,13 @@ import type {
   SqliteStatement,
   SqliteValue,
 } from "../src/platform.ts";
+import type { Message as RootMessage } from "../src/index.ts";
 import type {
   JsonMode,
   JsonObject,
   JsonValue,
+  Message,
+  MessagePart,
   Steering,
   StorageKind,
   Value,
@@ -113,6 +116,9 @@ const NAMES: Record<string, string[]> = {
     "MarkdownVersionMismatch",
     "markdownVersion",
     "ProfileMemory",
+    "checkMessage",
+    "checkConversation",
+    "ConversationError",
   ],
   "./run": [
     "RunResult",
@@ -127,6 +133,9 @@ const NAMES: Record<string, string[]> = {
     "logJson",
     "parseJson",
     "JSONDecodeError",
+    "checkMessage",
+    "checkConversation",
+    "ConversationError",
   ],
   "./tools": [
     "registerTool",
@@ -261,6 +270,9 @@ describe("entry points", () => {
       Credentials?,
       AuthState?,
       Issue?,
+      Message?,
+      MessagePart?,
+      RootMessage?,
     ];
     expect(names).toEqual([]);
   });

@@ -51,6 +51,7 @@ import {
 } from "../../src/memory/storage/markdown.ts";
 import { checkStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { buildMemories, MemoryRegistry } from "../../src/memory_host.ts";
+import { checkConversation, checkMessage, ConversationError } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import * as base from "../../src/nodes/base.ts";
 import { ToolAttemptsFailed } from "../../src/nodes/tool/node.ts";
@@ -179,7 +180,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(getters).toEqual(["learning", "backwardOutcome"]);
 });
 
-test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory and ToolAttemptsFailed", () => {
+test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed and the message names", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -210,6 +211,9 @@ test("the package root exports exactly its documented root list plus the memory 
     ReportedToolError,
     registerTemplateFn,
     ToolAttemptsFailed,
+    checkMessage,
+    checkConversation,
+    ConversationError,
   };
   expect(Object.keys(yian).sort()).toEqual(Object.keys(expected).sort());
   const exported = yian as Record<string, unknown>;
@@ -217,6 +221,8 @@ test("the package root exports exactly its documented root list plus the memory 
   // The type export, checked by `tsc`.
   const store: yian.MarkdownStore = new InMemoryMarkdownStore() satisfies MarkdownStore;
   expect(store).toBeInstanceOf(InMemoryMarkdownStore);
+  const m: yian.Message = { role: "user", parts: [] };
+  expect(m.parts).toEqual([]);
 });
 
 test("yian/run re-exports BackwardOutcome and Steering", () => {

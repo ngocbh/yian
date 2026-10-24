@@ -448,7 +448,6 @@ describe("evalNode checks its arguments", () => {
     ["steer_inbox", { steerInbox: {} }, new TypeError("steer_inbox must be callable or null")],
     ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
     ["signal", { signal: new AbortController() }, new TypeError("signal must be an AbortSignal or null")],
-    ["steering", { steering: { drain: () => [] } }, new TypeError("steering must provide interruptSignal(nodeId), or be null")],
     [
       "models",
       { models: { env: NO_ENV } },

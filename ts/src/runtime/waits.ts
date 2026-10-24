@@ -475,9 +475,9 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
     // call of the node's latest reply takes it, as the reducer checks: provider ids repeat across
     // replies. Any other closer, or an agent result no pending step registered, answers nothing.
     if (typeof closed === "string") {
-      const reply = w._replies.get(record.nodeId) ?? -1;
+      const reply = w._replies.get(record.nodeId);
       for (const call of w.calls.values()) {
-        const latest = call.pendingSeq !== null && call.pendingSeq > reply;
+        const latest = call.pendingSeq !== null && (reply === undefined || call.pendingSeq > reply);
         const closes = call.state === "closed" && call.closedReason === closed && call.resultSeq === null;
         if (call.nodeId === record.nodeId && call.resultKey === key && latest && closes) {
           call.resultSeq = seq;

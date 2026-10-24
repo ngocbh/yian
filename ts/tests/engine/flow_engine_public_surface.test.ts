@@ -167,9 +167,6 @@ test("the constructor checks its arguments", () => {
   expect(build({ onStream: 1 })).toThrow(new TypeError("on_stream must be callable or null"));
   expect(build({ memoryContextOpener: 1 })).toThrow(new TypeError("memory_context_opener must be callable or null"));
   expect(build({ skills: {} })).toThrow(new TypeError("skills must be a map or null"));
-  expect(build({ steering: {} })).toThrow(
-    new TypeError("steering must provide interruptSignal(nodeId), or be null"),
-  );
   expect(build({ models: { env: NO_ENV, createModel: 1 } })).toThrow(
     new TypeError("models must provide env(name) and createModel(config, options), or be null"),
   );

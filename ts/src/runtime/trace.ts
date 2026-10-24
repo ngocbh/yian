@@ -106,16 +106,16 @@ export interface ReboundSource {
 }
 
 /**
- * Bind an occurrence's node again from the values `resolve` gives for its sources (`rebind`, over
- * the node and wiring it ran with), returning the bound inputs and capture. `route` is the
- * occurrence's capture route, which holds whole any reserved value its hook resolved without the
- * binder.
+ * Bind an occurrence's node again from the values `resolve` gives for its sources
+ * (`rebindInputs`, over the node and wiring it ran with), returning the bound inputs. `route` is
+ * the occurrence's capture route, which holds whole any reserved value its hook resolved without
+ * the binder.
  */
 export type Rebinder = (
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   route: ValueRoute,
-) => { inputs: Record<string, unknown>; capture: BindingCapture };
+) => Record<string, unknown>;
 
 /** @internal Decode a typed value from its canonical log text, a fresh copy. */
 export function decodeTyped(text: string): TypedValue {
@@ -288,15 +288,19 @@ export class TraceOccurrence {
   readonly capture: ForwardCapture;
   /** Rebuilds the bound inputs, or `null` when none was given. */
   readonly #rebind: (() => JsonObject | null) | null;
-  /** The rebuilt bound inputs, once read. */
-  #bound: { readonly inputs: JsonObject | null } | null = null;
+  /** The rebuilt bound inputs, `undefined` until first read. */
+  #bound: JsonObject | null | undefined = undefined;
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
    *
-   * @param capture The occurrence's forward capture; defaults to the record's.
-   * @param rebind Rebuilds the bound inputs (`reboundInputs`); `null` leaves `boundInputs`
-   *   unreadable.
+   * @param options.memoryScope The receiver's memory scope; defaults to `null`.
+   * @param options.hiddenInputs The bound inputs its node keeps from models; defaults to none.
+   * @param options.seed An expansion's canonical seed; defaults to `null`.
+   * @param options.steps The node's recorded steps; defaults to none.
+   * @param options.capture The occurrence's forward capture; defaults to the record's.
+   * @param options.rebind Rebuilds the bound inputs (`reboundInputs`); `null` (the default)
+   *   leaves `boundInputs` unreadable.
    * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
    *   `null` or exactly a `MemoryScope`, or there is no capture.
    */
@@ -306,13 +310,23 @@ export class TraceOccurrence {
     outcomeSeq: number,
     envelope: RecordEnvelope,
     inputRoute: ValueRoute,
-    memoryScope: MemoryScope | null = null,
-    hiddenInputs: ReadonlySet<string> = new Set(),
-    seed: JsonValue | null = null,
-    steps: readonly ValueRecord[] = [],
-    capture: ForwardCapture | null = null,
-    rebind: (() => JsonObject | null) | null = null,
+    options: {
+      memoryScope?: MemoryScope | null;
+      hiddenInputs?: ReadonlySet<string>;
+      seed?: JsonValue | null;
+      steps?: readonly ValueRecord[];
+      capture?: ForwardCapture | null;
+      rebind?: (() => JsonObject | null) | null;
+    } = {},
   ) {
+    const {
+      memoryScope = null,
+      hiddenInputs = new Set<string>(),
+      seed = null,
+      steps = [],
+      capture = null,
+      rebind = null,
+    } = options;
     this.source = source;
     this.nodeId = nodeId;
     this.outcomeSeq = outcomeSeq;
@@ -344,16 +358,16 @@ export class TraceOccurrence {
    * @throws RangeError when the occurrence was made without a rebinder, or as `reboundInputs`.
    */
   get boundInputs(): JsonObject | null {
-    if (this.#bound === null) {
+    if (this.#bound === undefined) {
       if (this.#rebind === null) throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its bound inputs`);
-      this.#bound = { inputs: this.#rebind() };
+      this.#bound = this.#rebind();
     }
-    return this.#bound.inputs;
+    return this.#bound;
   }
 }
 
 /**
- * Rebuild an occurrence's bound inputs: bind its node again (`rebind`) from the values its capture
+ * Rebuild an occurrence's bound inputs: bind its node again (`rebindInputs`) from the values its capture
  * route read, each looked up in the trace's history by the producer the route names
  * (`traceResolver`), so it works after the pool has moved on. The run's system values are added
  * whole, since the route names no producer for them.
@@ -380,19 +394,20 @@ export function reboundInputs(
     pending.push(...node.children);
     if (node.source === null) continue;
     const seq = node.source.executionSeq;
+    // A route source names its producer's start, not the pool name the binding read.
     const name = trace._sourceNames.get(sourceKey(new SourceRef(node.source.runId, seq)));
     if (name === undefined) throw new RangeError(`route source ${seq} names no accepted producer`);
     // One binding reads each pool name from its one current producer.
     sources.set(name, seq);
   }
-  let capture: BindingCapture;
+  let inputs: Record<string, unknown>;
   try {
-    capture = rebind(sources, traceResolver(trace), route).capture;
+    inputs = rebind(sources, traceResolver(trace), route);
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
     throw new RangeError(`the bound inputs of ${reprText(nodeId)} don't rebuild: ${error.message}`, { cause: error });
   }
-  return canonicalSeed(capture.boundInputs)[1] as JsonObject;
+  return canonicalSeed(inputs)[1] as JsonObject;
 }
 
 /**
@@ -1181,19 +1196,14 @@ export function prepareTrace(
     );
   }
   validateSources(trace, inputRoute, envelope.seq);
-  const occurrence = new TraceOccurrence(
-    source,
-    node.id,
-    envelope.seq,
-    envelope,
-    inputRoute,
-    node.memoryScope,
-    node.modelHiddenInputs(),
+  const occurrence = new TraceOccurrence(source, node.id, envelope.seq, envelope, inputRoute, {
+    memoryScope: node.memoryScope,
+    hiddenInputs: node.modelHiddenInputs(),
     seed,
     steps,
     capture,
-    unbound(record) ? () => null : rebinder === null ? null : () => reboundInputs(trace, node.id, capture.route, rebinder),
-  );
+    rebind: unbound(record) ? () => null : rebinder === null ? null : () => reboundInputs(trace, node.id, capture.route, rebinder),
+  });
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);
   if (boundaryTarget !== undefined) {

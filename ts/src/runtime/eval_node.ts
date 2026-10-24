@@ -614,13 +614,7 @@ export async function evalNode(
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const collector = captureBindings ? new BindingCollector() : null;
-  let backwardCapture = captureBindings
-    ? new BackwardCapture({
-        inputNames: node.backwardInputNames(),
-        variableNames: node.declaredVariables().map((parameter) => parameter.name),
-        scope: node.executionScope,
-      })
-    : null;
+  let backwardCapture = captureBindings ? nodeBackwardCapture(node) : null;
   let capturesClosed = false;
   let renderRecorded = false;
   let boundConfig: JsonValue | null = null;
@@ -1014,6 +1008,19 @@ function stageFailure(node: Node, error: unknown, usesBaseTemplate: boolean): Ev
   return evaluationFailure(node, node.exceptionCode(error), error, node.exceptionOrigin(error));
 }
 
+/**
+ * The backward material `node` gives an evaluation: its backward input names, its variable names
+ * and its execution scope, with `nodeData` (none by default).
+ */
+export function nodeBackwardCapture(node: Node, nodeData: Readonly<Record<string, unknown>> | null = null): BackwardCapture {
+  return new BackwardCapture({
+    inputNames: node.backwardInputNames(),
+    variableNames: node.declaredVariables().map((parameter) => parameter.name),
+    scope: node.executionScope,
+    nodeData,
+  });
+}
+
 /** The bound inputs, binder state and capabilities `rebind` and `rebuildDerived` share. */
 interface Rebound {
   inputs: Record<string, unknown>;
@@ -1092,10 +1099,6 @@ function bindFrom(
  * the producer index, which is sound because records apply in log order: the pool when a derived
  * commit is accepted holds exactly what its binding read.
  *
- * `options.reserved` gives the node's reserved values instead of its `bindReserved`: a hook that
- * resolves its value without the binder records it whole, as a literal route, and reads names
- * the route doesn't name.
- *
  * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
  */
 export function rebind(
@@ -1104,10 +1107,29 @@ export function rebind(
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
-  options: { reserved?: Readonly<Record<string, unknown>> | null } = {},
 ): { inputs: Record<string, unknown>; capture: BindingCapture } {
-  const { inputs, collector } = bindFrom(node, flow, sources, resolve, wiringOverride, true, options.reserved ?? null);
+  const { inputs, collector } = bindFrom(node, flow, sources, resolve, wiringOverride, true);
   return { inputs, capture: collector!.freeze() };
+}
+
+/**
+ * `rebind` without collecting a route: the bound inputs only, with defaults filled.
+ *
+ * `options.reserved` gives the node's reserved values instead of its `bindReserved`: a hook that
+ * resolves its value without the binder records it whole, as a literal route, and reads names
+ * the route doesn't name.
+ *
+ * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
+ */
+export function rebindInputs(
+  node: Node,
+  flow: Flow,
+  sources: ReadonlyMap<string, number>,
+  resolve: (name: string, seq: number) => ReboundSource,
+  wiringOverride: JsonObject | null,
+  options: { reserved?: Readonly<Record<string, unknown>> | null } = {},
+): Record<string, unknown> {
+  return bindFrom(node, flow, sources, resolve, wiringOverride, false, options.reserved ?? null).inputs;
 }
 
 /**

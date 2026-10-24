@@ -1154,7 +1154,9 @@ function install(trace: RetainedTrace, target: string, entry: SourceEntry): void
 function installOccurrence(trace: RetainedTrace, record: OutcomeRecord): TraceOccurrence {
   const capture = record.forwardCapture!;
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
-  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, null, new Set(), null, [], null, () => ({ v: 1n }));
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
+    rebind: () => ({ v: 1n }),
+  });
   trace._occurrences.push(occurrence);
   trace.occurrenceBySource.set(sourceKey(occurrence.source), occurrence);
   return occurrence;
@@ -1356,7 +1358,10 @@ test("a trace occurrence keeps a decoded copy of its envelope", () => {
   const hidden = new Set(["v"]);
   const scope = new MemoryScope(["a"], { memories: ["notes"] });
 
-  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, scope, hidden);
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
+    memoryScope: scope,
+    hiddenInputs: hidden,
+  });
   const recordJson = encodeRecord(envelope);
   (capture.evaluatedKeys as Set<string>).add("v");
   hidden.add("w");
@@ -1369,7 +1374,7 @@ test("a trace occurrence keeps a decoded copy of its envelope", () => {
   expect([...occurrence.hiddenInputs]).toEqual(["v"]);
   expect(Object.isFrozen(occurrence)).toBe(true);
   expectError(
-    () => new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {} as MemoryScope),
+    () => new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, { memoryScope: {} as MemoryScope }),
     TypeError,
     "historical memory scope must be a MemoryScope or null",
   );
@@ -1668,7 +1673,7 @@ test("prepareTrace and apply build the trace record by record", () => {
   let given: [ReadonlyMap<string, number>, ReboundSource] | null = null;
   const rebinder: Rebinder = (sources, resolve) => {
     given = [new Map(sources), resolve("__start__", 0)];
-    return { inputs: { v: 1n }, capture: new BindingCapture({ v: 1n }, ValueRoute.record([]), new Set()) };
+    return { v: 1n };
   };
   expect(step(trace, succeeded, node, { writerFiles: files, rebinder })).toBe(trace);
   const source = new SourceRef(RUN, 2);
@@ -2327,11 +2332,13 @@ function changedOccurrence(
     changes.outcomeSeq ?? occurrence.outcomeSeq,
     changes.envelope ?? occurrence.envelope,
     occurrence.inputRoute,
-    changes.memoryScope === undefined ? occurrence.memoryScope : changes.memoryScope,
-    occurrence.hiddenInputs,
-    occurrence.seed,
-    occurrence.steps,
-    occurrence.capture,
+    {
+      memoryScope: changes.memoryScope === undefined ? occurrence.memoryScope : changes.memoryScope,
+      hiddenInputs: occurrence.hiddenInputs,
+      seed: occurrence.seed,
+      steps: occurrence.steps,
+      capture: occurrence.capture,
+    },
   );
 }
 

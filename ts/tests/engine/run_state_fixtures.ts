@@ -73,7 +73,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import type { Rebinder } from "../../src/runtime/trace.ts";
-import { BindingCapture, BindingError } from "../../src/nodes/binding.ts";
+import { BindingError } from "../../src/nodes/binding.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { NodeStarted, type RunEvent, type RunFailed, type RunSucceeded, StreamChunk } from "../../src/events.ts";
@@ -117,7 +117,7 @@ import {
   prepareRecord,
   type PreparedTransition,
   prepareRunStarted,
-  rebuildCommitValue,
+  rebuildCommit,
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -1146,7 +1146,7 @@ export function prepareOutput(
   const pending = state.pendingCommits.get(nodeId)!;
   if (pending.valueJson === null) {
     // The success checks a derived value against the one evaluated: here, its own rebuild.
-    const rebuilt = decodeTyped(rebuildCommitValue(state, nodeId, pending.key, pending.from!));
+    const rebuilt = decodeTyped(rebuildCommit(state, nodeId, pending.key, pending.from!).valueJson);
     return prepareNodeSucceeded(state, nodeId, { ...carriers, output: rebuilt });
   }
   return prepareNodeSucceeded(state, nodeId, carriers);
@@ -1238,7 +1238,7 @@ export function forwardCapture(node: Node, inputs: Readonly<Record<string, unkno
 export function fixedRebinder(inputs: ValueRecord | null): Rebinder {
   return () => {
     if (inputs === null) throw new BindingError("the binding didn't finish", { failureCode: "binding.evaluate" });
-    return { inputs, capture: new BindingCapture(inputs, ValueRoute.record([]), new Set()) };
+    return inputs;
   };
 }
 

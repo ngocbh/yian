@@ -1202,7 +1202,7 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     "a tool group that isn't a list of names",
     (payload) => (payload["tool_groups"] = { g: "t" }),
     TypeError,
-    "run_started payload tool_groups['g'] must be an array of strings",
+    "RunStarted tool_groups['g'] must be an array of tool names",
   ],
   [
     "an empty tool name in a group",

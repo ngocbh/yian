@@ -38,7 +38,7 @@ import {
   type RecordEnvelope,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { rebuildCommitValue, rebuildGrowth } from "../../src/runtime/state.ts";
+import { rebuildCommit, rebuildGrowth } from "../../src/runtime/state.ts";
 import { decodeTyped } from "../../src/runtime/trace.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
@@ -355,7 +355,7 @@ function rebuildAll(
           expect([record.nodeId, decodeTyped(valueJson).toObject()]).toEqual([record.nodeId, outputs.get(record.nodeId) as never]);
           return;
         }
-        const valueJson = rebuildCommitValue(state, record.nodeId, commit.key, commit.from);
+        const valueJson = rebuildCommit(state, record.nodeId, commit.key, commit.from).valueJson;
         expect([record.nodeId, decodeTyped(valueJson).toObject()]).toEqual([record.nodeId, outputs.get(record.nodeId) as never]);
         rebuilt += 1;
       } else if (record instanceof NodeExpandedRecord) {
@@ -405,7 +405,7 @@ test("a tampered from seq makes the pool resolver refuse the rebuild", async () 
       const commit = envelopes[record.commit]!.record as PoolCommitRecord;
       const [name, seq] = [...commit.from!][0]!;
       try {
-        rebuildCommitValue(state, record.nodeId, commit.key, new Map([[name, seq + 1]]));
+        rebuildCommit(state, record.nodeId, commit.key, new Map([[name, seq + 1]]));
       } catch (error) {
         refused = error;
       }

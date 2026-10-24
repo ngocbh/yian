@@ -3222,12 +3222,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
         skills: wireEntries(payload["skills"], `${label} skills`, ["description", "instructions"]) as never,
         tools: wireEntries(payload["tools"], `${label} tools`, ["description", "parameters"]) as never,
-        toolGroups: Object.fromEntries(
-          Object.entries(wireObject(payload["tool_groups"], `${label} tool_groups`)).map(([name, members]) => [
-            name,
-            wireTextArray(members, `${label} tool_groups[${reprText(name)}]`),
-          ]),
-        ),
+        toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as never,
         yianVersion: wireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });

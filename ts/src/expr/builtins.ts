@@ -45,7 +45,8 @@ export const TEMPLATE_FNS = new Map<string, TemplateFn>();
  * Register `fn` as the builtin `name`, replacing any builtin of that name (last writer wins).
  *
  * Each param's `default` is read as a host value, so `{name: "indent", default: 2}` gives the int
- * `2n`.
+ * `2n`. `fn` must be pure and deterministic: replay and learning bind a node again from the run
+ * log, calling it again with the same arguments.
  *
  * @throws {TypeCheckError} If a default is no yian value (`fromHost`'s message).
  */

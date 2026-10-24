@@ -606,7 +606,8 @@ yian](#differences-from-python-yian). Each function's TSDoc lists what it throws
 `VariablePool`][docs/typing.md#variablepool--the-runs-typed-value-store]), and throws
 `ExpressionError` for a bad expression.
 `registerTemplateFn(name, { params: [{ name, default? }], call(...args) })` adds or replaces a
-function `${...}` expressions can call; each `default` goes through host intake.
+function `${...}` expressions can call; each `default` goes through host intake. It must be pure
+and deterministic, since replay and learning call it again when they bind a node from the log.
 
 ## `env`, `signal` and `scheduler`
 
@@ -1296,7 +1297,7 @@ Node 22, and so does every unit test; a change keeps both green.
 key order, then the START inputs) after `RunStarted`; a node's `pool_commit` waits in
 `pendingCommits` until its `node_succeeded` names it, and a resume drops it. A derived commit
 (`isDerivedCommit`: a `derived` node other than the top-level START and END) holds `from` and no
-value; its success rebuilds the value (`rebuildCommitValue`: `rebind` and the node's pure
+value; its success rebuilds the value (`rebuildCommit`: `rebind` and the node's pure
 `forward`, from `runtime/eval_node.ts`'s `rebuildDerived`), reading each named value from the pool
 through `poolResolver`, which refuses a seq that isn't its name's producer. A spawner's expansion
 first writes one commit per START of its fragment (`expansionCommits`, `prepareExpansionCommit`),

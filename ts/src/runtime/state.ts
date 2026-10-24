@@ -75,8 +75,8 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
-import { BackwardCapture, ForwardCapture, validateSource } from "./contracts.ts";
-import { rebind, rebuildDerived } from "./eval_node.ts";
+import { ForwardCapture, validateSource } from "./contracts.ts";
+import { nodeBackwardCapture, rebindInputs, rebuildDerived } from "./eval_node.ts";
 import {
   type BackwardRecord,
   reduceBackwardRecord,
@@ -526,37 +526,20 @@ function rebuildDerivedRecord(
     capture: learnable,
   });
   if (!learnable) return { outcome, capture: null };
-  const backward = new BackwardCapture({
-    inputNames: node.backwardInputNames(),
-    variableNames: node.declaredVariables().map((parameter) => parameter.name),
-    scope: node.executionScope,
-    nodeData: node.captureBackwardContext(),
-  });
-  return { outcome, capture: captureBindings(capture!, backward) };
+  return { outcome, capture: captureBindings(capture!, nodeBackwardCapture(node, node.captureBackwardContext())) };
 }
 
 /**
  * Rebuild the value of `nodeId`'s derived commit under `key` from its `from`, reading the pool
- * through the producer index (`poolResolver`), as its binding read it when the commit was accepted.
+ * through the producer index (`poolResolver`), as its binding read it when the commit was accepted,
+ * with the forward capture of the success that accepts the commit (`rebuildDerivedRecord`).
  *
- * @returns The canonical typed wire text of the value.
+ * @returns The canonical typed wire text of the value, and the capture (`null` in a run that
+ *   doesn't learn).
  * @throws RangeError when a `from` seq isn't its name's producer, or the node rebuilds to a growth
  *   or under another key; a `BindingError` when its binding no longer evaluates.
  */
-export function rebuildCommitValue(
-  state: RunState,
-  nodeId: string,
-  key: string,
-  from: ReadonlyMap<string, number>,
-): string {
-  return rebuildCommit(state, nodeId, key, from).valueJson;
-}
-
-/**
- * `rebuildCommitValue`, with the forward capture of the success that accepts the commit
- * (`rebuildDerivedRecord`).
- */
-function rebuildCommit(
+export function rebuildCommit(
   state: RunState,
   nodeId: string,
   key: string,
@@ -587,7 +570,7 @@ function committedText(state: RunState, key: string, value: unknown): string {
 
 /**
  * Rebuild spawner `spawnerId`'s growth from its expansion commits' `from` (see
- * `rebuildCommitValue`): its canonical seed and sorted prune ids, and in a learnable run the
+ * `rebuildCommit`): its canonical seed and sorted prune ids, and in a learnable run the
  * expansion's forward capture (`rebuildDerivedRecord`).
  *
  * With `from` `null` (every child START of the expansion fails to bind, so it wrote no commit),
@@ -2158,7 +2141,7 @@ function prepareRecordTrace(
 }
 
 /**
- * Return what binds `node` again with the wiring it runs with now (`rebind`), kept for learning,
+ * Return what binds `node` again with the wiring it runs with now (`rebindInputs`), kept for learning,
  * which runs after an expansion may have pruned the node from the flow.
  */
 function nodeRebinder(state: RunState, node: Node): Rebinder {
@@ -2167,11 +2150,12 @@ function nodeRebinder(state: RunState, node: Node): Rebinder {
   const wiring = (state.wiringOverrides.get(node.id) ??
     Object.fromEntries(flow.wiring.get(node.id) ?? new Map())) as JsonObject;
   return (sources, resolve, route) =>
-    rebind(node, flow, sources, resolve, wiring, { reserved: recordedReserved(node, route) });
+    rebindInputs(node, flow, sources, resolve, wiring, { reserved: recordedReserved(node, route) });
 }
 
 /**
- * The reserved values a capture route holds whole: each route field that isn't one of `node`'s
+ * The reserved values a capture route holds whole (a node kind has at most one reserved field,
+ * such as AGENT's `__llm_config` or MAP's `over`): each route field that isn't one of `node`'s
  * params, when every such field is a literal with its value (a hook that resolved it without the
  * binder, such as a call-time AGENT's `__llm_config`, which reads names the route doesn't name);
  * `null` when there are none or one was bound through the binder, so `rebind` binds them again.

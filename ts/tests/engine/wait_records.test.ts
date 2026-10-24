@@ -2,8 +2,8 @@
  * The inbox and wait record kinds (`node_waiting`, `node_woken`, `run_waiting`, `inbox_closed`,
  * `run_cancelled`, `run_failed`), the take form of `pool_commit`, and the record-time exports:
  * their constructors' checks and their canonical wire; the waits fold's empty state on a fresh
- * `RunState`, and the reducer refusing the new kinds until it applies them. TS-only: Python yian
- * has no inbox or suspension records.
+ * `RunState`, the reducer refusing the new kinds until it applies them, and `eventBytes`, an
+ * event's size. TS-only: Python yian has no inbox or suspension records.
  */
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -31,7 +31,7 @@ import {
 } from "../../src/runtime/log.ts";
 import { prepareRecord, RunState } from "../../src/runtime/state.ts";
 import { WaitsState } from "../../src/runtime/waits.ts";
-import { logJson } from "../../src/typesys/json.ts";
+import { eventBytes, logJson } from "../../src/typesys/json.ts";
 import { commitStartSuccess, flow, initializedAndStarted } from "./run_state_fixtures.ts";
 
 const DEADLINE = "2026-10-24T09:00:00.000Z";
@@ -365,4 +365,18 @@ test("a state whose waits fold was replaced is refused", () => {
     RangeError,
     "transition requires initialized reducer containers",
   );
+});
+
+test.each<[string, unknown, number]>([
+  ["text", "hello", 7],
+  ["a record, keys sorted", { b: 1n, a: "é" }, 16],
+  ["a float", 1.5, 3],
+  ["a whole float", { x: 2.0 }, 9],
+  ["an int past 2^53", 2n ** 60n, 19],
+])("eventBytes measures %s as UTF-8 bytes of its run-log JSON", (_name, value, size) => {
+  expect(eventBytes(value)).toBe(size);
+});
+
+test("eventBytes is the same whatever the key order", () => {
+  expect(eventBytes({ a: "é", b: 1n })).toBe(eventBytes({ b: 1n, a: "é" }));
 });

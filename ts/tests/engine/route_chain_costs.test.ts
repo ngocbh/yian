@@ -329,7 +329,7 @@ test.each([
     "a non-string interpolation result",
     new ValueRoute("interpolation", { children: [SOURCE], valueJson: "1", spans: [[0, 1]] }),
     RangeError,
-    "interpolation requires a string result and one span per child",
+    "interpolation requires a string result or none, and one span per child",
   ],
   [
     "a span item that isn't an integer",

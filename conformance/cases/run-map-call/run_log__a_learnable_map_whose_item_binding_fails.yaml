@@ -1,0 +1,150 @@
+# TS-only (run-log). Pins: a learnable MAP whose second item's binding fails records each item's
+# capture: the interpolation route of `line` in both, without its text, which learning rebuilds
+# by binding the MAP and its items again up to the same failure.
+kind: run
+rules: [run-log]
+flow: |
+  id: labels
+  name: labels
+  input: {xs: !list(Optional(str))}
+  defs:
+    label:
+      input: {line: !str, x: !str}
+      nodes:
+        echo: {kind: code, input: {line: "${input.line}"}, output: str, code: "return inputs['line']"}
+      output: ${echo.output}
+  nodes:
+    each: {kind: map, over: "${input.xs}", call: label, input: {line: "Item ${item}.", x: '${item :? "no item"}'}}
+  output: ${each.output}
+inputs: {xs: [a, null]}
+run: {run_id: r1, num_workers: 0, learnable: true}
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [11, 89, 11, 111]
+      message: no item
+      node: each
+  trace:
+  - - run_started
+    - null
+    - {learnable: true, num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        xs: [a, null]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        xs: [a, null]
+  - - node_succeeded
+    - __start__
+    - commit: 6
+      forward_capture:
+        evaluated_keys: [xs]
+        input_names: [xs]
+        node_data:
+          input_output_paths:
+            xs: [xs]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [xs]
+              run_id: r1
+          kind: record
+          names: [xs]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+  - [node_started, each]
+  - - node_failed
+    - each
+    - failure:
+        code: binding.evaluate
+        message: no item
+        frames:
+        - label: flow.yaml
+          range: [11, 89, 11, 111]
+        node: each
+      forward_capture:
+        evaluated_keys: [over]
+        input_names: [line, x]
+        items:
+        - capture:
+            evaluated_keys: [line, x]
+            route:
+              children:
+              - children:
+                - children:
+                  - kind: source
+                    source:
+                      execution_seq: 5
+                      path: [xs, 0]
+                      run_id: r1
+                  kind: selected
+                kind: interpolation
+                spans:
+                - [5, 6]
+              - children:
+                - children:
+                  - kind: source
+                    source:
+                      execution_seq: 5
+                      path: [xs, 0]
+                      run_id: r1
+                  kind: selected
+                kind: selected
+              kind: record
+              names: [line, x]
+            scope: null
+          index: 0
+        - capture:
+            evaluated_keys: [line]
+            route:
+              children:
+              - children:
+                - children:
+                  - kind: source
+                    source:
+                      execution_seq: 5
+                      path: [xs, 1]
+                      run_id: r1
+                  kind: selected
+                kind: interpolation
+                spans:
+                - [5, 5]
+              kind: record
+              names: [line]
+            scope: null
+          index: 1
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 5
+              path: [xs]
+              run_id: r1
+          kind: record
+          names: [over]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [each]

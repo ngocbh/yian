@@ -1021,16 +1021,15 @@ export function nodeBackwardCapture(node: Node, nodeData: Readonly<Record<string
   });
 }
 
-/** The bound inputs, binder state and capabilities `rebind` and `rebuildDerived` share. */
+/** The bound inputs and capabilities `rebind` and `rebuildDerived` share. */
 interface Rebound {
   inputs: Record<string, unknown>;
-  collector: BindingCollector | null;
   caps: NodeCaps;
 }
 
 /**
- * Bind `node` from `sources` as the evaluator does, with defaults filled; with `capture`, collect
- * the route and bound inputs too. `reserved`, when given, are the node's reserved values, used in
+ * Bind `node` from `sources` as the evaluator does, with defaults filled; with a `collector`,
+ * collect the route and bound inputs into it too. `reserved`, when given, are the node's reserved values, used in
  * place of its `bindReserved`.
  */
 function bindFrom(
@@ -1039,7 +1038,7 @@ function bindFrom(
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
-  capture: boolean,
+  collector: BindingCollector | null,
   reserved: Readonly<Record<string, unknown>> | null = null,
 ): Rebound {
   const pool = new VariablePool(flow.startId);
@@ -1051,7 +1050,6 @@ function bindFrom(
     else pool.store.set(name, entry.value);
   }
   const sourceResolver: SourceResolver = (path) => resolvePoolPath(path, pool, (name) => entries.get(name)!.source);
-  const collector = capture ? new BindingCollector() : null;
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow.wiring.get(node.id) ?? new Map());
   const params = node.params ?? [];
@@ -1087,7 +1085,7 @@ function bindFrom(
       return bindParams(params, nodeWiring, pool, { ...bindOptions, item, collector: collector.forItem(index) });
     };
   }
-  return { inputs, collector, caps };
+  return { inputs, caps };
 }
 
 /**
@@ -1099,7 +1097,16 @@ function bindFrom(
  * the producer index, which is sound because records apply in log order: the pool when a derived
  * commit is accepted holds exactly what its binding read.
  *
- * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
+ * `options.reserved` gives the node's reserved values instead of its `bindReserved`: a hook that
+ * resolves its value without the binder records it whole, as a literal route, and reads names
+ * the route doesn't name.
+ *
+ * A node that binds per item (MAP) binds its items in its pure `forward`, as the evaluator ran it,
+ * so the capture holds them. A binding that doesn't finish, its items' included, gives the
+ * `BindingError` as `failure` and, as the evaluator keeps it, the capture of the routes collected
+ * before it failed, with no bound inputs.
+ *
+ * @throws whatever `resolve` or a per-item node's `forward` throws besides a `BindingError`.
  */
 export function rebind(
   node: Node,
@@ -1107,29 +1114,18 @@ export function rebind(
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
-): { inputs: Record<string, unknown>; capture: BindingCapture } {
-  const { inputs, collector } = bindFrom(node, flow, sources, resolve, wiringOverride, true);
-  return { inputs, capture: collector!.freeze() };
-}
-
-/**
- * `rebind` without collecting a route: the bound inputs only, with defaults filled.
- *
- * `options.reserved` gives the node's reserved values instead of its `bindReserved`: a hook that
- * resolves its value without the binder records it whole, as a literal route, and reads names
- * the route doesn't name.
- *
- * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
- */
-export function rebindInputs(
-  node: Node,
-  flow: Flow,
-  sources: ReadonlyMap<string, number>,
-  resolve: (name: string, seq: number) => ReboundSource,
-  wiringOverride: JsonObject | null,
   options: { reserved?: Readonly<Record<string, unknown>> | null } = {},
-): Record<string, unknown> {
-  return bindFrom(node, flow, sources, resolve, wiringOverride, false, options.reserved ?? null).inputs;
+): { capture: BindingCapture; failure: BindingError | null } {
+  const collector = new BindingCollector();
+  try {
+    const { inputs, caps } = bindFrom(node, flow, sources, resolve, wiringOverride, collector, options.reserved ?? null);
+    if (node.bindsPerItem) node.forward(inputs, caps);
+    return { capture: collector.freeze(), failure: null };
+  } catch (error) {
+    if (!(error instanceof BindingError)) throw error;
+    collector.invalidate();
+    return { capture: collector.freeze(), failure: error };
+  }
 }
 
 /**
@@ -1151,7 +1147,8 @@ export function rebuildDerived(
   options: { capture?: boolean } = {},
 ): { outcome: Output | Grow; capture: BindingCapture | null } {
   if (node.derived !== true) throw new TypeError(`node ${reprText(node.id)} is not derived`);
-  const { inputs, collector, caps } = bindFrom(node, flow, from, resolve, wiringOverride, options.capture === true);
+  const collector = options.capture === true ? new BindingCollector() : null;
+  const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride, collector);
   const outcome: unknown = node.forward(inputs, caps);
   if (!(outcome instanceof Output || outcome instanceof Grow)) {
     throw new TypeError(`derived node ${reprText(node.id)} forward returned ${jsTypeName(outcome)}, not an Output or Grow`);

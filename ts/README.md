@@ -150,7 +150,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 19) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 20) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -1337,7 +1337,9 @@ Node 22, and so does every unit test; a change keeps both green.
   or for a derived record, which holds none, the one the reducer rebuilt from its sources).
   `boundInputs` rebuilds its bound inputs on first read by binding the node again (`rebind`, over
   the node and wiring it ran with) from the values its capture route read, looked up in the
-  trace's history by the producer each route source names (`traceResolver`); records hold none. `occurrenceMaterial(trace, source, caps)`
+  trace's history by the producer each route source names (`traceResolver`); records hold none.
+  The same binding gives each interpolation route its rendered text in `capture` and `inputRoute`,
+  which records leave out (`value_json: null`). `occurrenceMaterial(trace, source, caps)`
   rebuilds what learning reads of an occurrence through its node's `learningMaterial` (an AGENT's
   render, recall and interactions, each recorded request checked against its digest), and
   `evaluationEvidence` shapes it as AGENT backward's `_evaluation_evidence`; `backwardContext`

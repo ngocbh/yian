@@ -1,0 +1,113 @@
+# TS-only (run-log). Pins: a learnable node whose binding fails after a template with literal text
+# records the partial capture: the interpolation route of `line`, without its text, which
+# learning rebuilds by binding the node again up to the same failure.
+kind: run
+rules: [run-log]
+flow: |
+  id: greet
+  name: greet
+  input:
+    name: !str
+    nick: !Optional(str) null
+  nodes:
+    shout:
+      kind: code
+      input:
+        line: 'Hello, ${input.name}!'
+        nick: '${input.nick :? "no nick"}'
+      code: |
+        return inputs["line"]
+      output: str
+  output: ${shout.output}
+inputs:
+  name: Ann
+run:
+  run_id: r1
+  num_workers: 0
+  learnable: true
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 41]
+      message: no nick
+      node: shout
+  trace:
+  - - run_started
+    - null
+    - {learnable: true, num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {name: Ann}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {name: Ann, nick: null}
+  - - node_succeeded
+    - __start__
+    - commit: 6
+      forward_capture:
+        evaluated_keys: [name]
+        input_names: [name, nick]
+        node_data:
+          input_output_paths:
+            name: [name]
+            nick: [nick]
+        route:
+          children:
+          - kind: source
+            source:
+              execution_seq: 0
+              path: [name]
+              run_id: r1
+          - {kind: literal, value_json: null}
+          kind: record
+          names: [name, nick]
+        scope:
+          boundary: start
+          flow_path: []
+          occurrence_path: []
+          static_path: [__start__]
+  - [node_started, shout]
+  - - node_failed
+    - shout
+    - failure:
+        code: binding.evaluate
+        message: no nick
+        frames:
+        - label: flow.yaml
+          range: [11, 13, 11, 41]
+        node: shout
+      forward_capture:
+        evaluated_keys: [line]
+        input_names: [line, nick]
+        route:
+          children:
+          - children:
+            - kind: source
+              source:
+                execution_seq: 5
+                path: [name]
+                run_id: r1
+            kind: interpolation
+            spans:
+            - [7, 10]
+          kind: record
+          names: [line]
+        scope:
+          boundary: null
+          flow_path: []
+          occurrence_path: []
+          static_path: [shout]

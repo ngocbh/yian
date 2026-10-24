@@ -73,7 +73,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import type { Rebinder } from "../../src/runtime/trace.ts";
-import { BindingError } from "../../src/nodes/binding.ts";
+import { BindingCapture, BindingError } from "../../src/nodes/binding.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { NodeStarted, type RunEvent, type RunFailed, type RunSucceeded, StreamChunk } from "../../src/events.ts";
@@ -1238,10 +1238,10 @@ export function forwardCapture(node: Node, inputs: Readonly<Record<string, unkno
  * a binding that didn't finish.
  */
 export function fixedRebinder(inputs: ValueRecord | null): Rebinder {
-  return () => {
-    if (inputs === null) throw new BindingError("the binding didn't finish", { failureCode: "binding.evaluate" });
-    return inputs;
-  };
+  return () => ({
+    capture: new BindingCapture(inputs, ValueRoute.record([]), new Set()),
+    failure: inputs === null ? new BindingError("the binding didn't finish", { failureCode: "binding.evaluate" }) : null,
+  });
 }
 
 /** The root flow's declaration site. */

@@ -17,6 +17,9 @@
     {"properties": {"name": {"const": "NodeFailed"}, "data": {"$ref": "#/$defs/NodeFailed"}}},
     {"properties": {"name": {"const": "NodeExpanded"}, "data": {"$ref": "#/$defs/NodeExpanded"}}},
     {"properties": {"name": {"const": "NodeAttemptResumed"}, "data": {"$ref": "#/$defs/NodeAttemptResumed"}}},
+    {"properties": {"name": {"const": "NodeWaiting"}, "data": {"$ref": "#/$defs/NodeWaiting"}}},
+    {"properties": {"name": {"const": "NodeWoken"}, "data": {"$ref": "#/$defs/NodeWoken"}}},
+    {"properties": {"name": {"const": "CallClosed"}, "data": {"$ref": "#/$defs/CallClosed"}}},
     {"properties": {"name": {"const": "ModelCallStarted"}, "data": {"$ref": "#/$defs/ModelCallStarted"}}},
     {"properties": {"name": {"const": "ModelCallFinished"}, "data": {"$ref": "#/$defs/ModelCallFinished"}}},
     {"properties": {"name": {"const": "ToolCallStarted"}, "data": {"$ref": "#/$defs/ToolCallStarted"}}},
@@ -26,7 +29,9 @@
     {"properties": {"name": {"const": "RunStarted"}, "data": {"$ref": "#/$defs/RunStarted"}}},
     {"properties": {"name": {"const": "RunResumed"}, "data": {"$ref": "#/$defs/RunResumed"}}},
     {"properties": {"name": {"const": "RunSucceeded"}, "data": {"$ref": "#/$defs/RunSucceeded"}}},
-    {"properties": {"name": {"const": "RunFailed"}, "data": {"$ref": "#/$defs/RunFailed"}}}
+    {"properties": {"name": {"const": "RunFailed"}, "data": {"$ref": "#/$defs/RunFailed"}}},
+    {"properties": {"name": {"const": "RunWaiting"}, "data": {"$ref": "#/$defs/RunWaiting"}}},
+    {"properties": {"name": {"const": "RunCancelled"}, "data": {"$ref": "#/$defs/RunCancelled"}}}
   ],
   "$defs": {
     "value": {
@@ -180,6 +185,33 @@
         "crashed": {"type": "integer", "minimum": 0, "description": "How many of the node's attempts crashed (started, with no outcome and no stop covering them), derived from the log; a deliberate stop doesn't count, so a node restarted only after stops has 0."}
       }
     },
+    "NodeWaiting": {
+      "description": "A node stopped running to wait on calls; it holds no worker.",
+      "type": "object",
+      "required": ["node_id", "call_ids"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "call_ids": {"type": "array", "items": {"type": "string"}, "description": "The calls the node waits on."}
+      }
+    },
+    "NodeWoken": {
+      "description": "A waiting node went back in flight to run again.",
+      "type": "object",
+      "required": ["node_id", "timed_out"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "timed_out": {"type": "array", "items": {"type": "string"}, "description": "The node's calls that timed out, possibly none."}
+      }
+    },
+    "CallClosed": {
+      "description": "A host call was closed without an answer; a later answer to it is refused.",
+      "type": "object",
+      "required": ["call_id", "reason"],
+      "properties": {
+        "call_id": {"type": "string"},
+        "reason": {"type": "string", "enum": ["crashed", "interrupted", "timed_out", "cancelled", "failed"], "description": "Why the call was closed."}
+      }
+    },
     "ModelCallStarted": {
       "description": "An AGENT node is about to call its model (in-loop, transient).",
       "type": "object",
@@ -309,6 +341,20 @@
       "properties": {
         "failure": {"$ref": "#/$defs/failure"}
       }
+    },
+    "RunWaiting": {
+      "description": "The run holds no worker: every unsettled node waits for a delivery or a deadline. Not a terminal.",
+      "type": "object",
+      "required": ["node_ids"],
+      "properties": {
+        "node_ids": {"type": "array", "items": {"type": "string"}, "description": "The waiting node ids, in the order they began waiting."}
+      }
+    },
+    "RunCancelled": {
+      "description": "The run ended because its host cancelled it.",
+      "type": "object",
+      "required": [],
+      "properties": {}
     }
   }
 }

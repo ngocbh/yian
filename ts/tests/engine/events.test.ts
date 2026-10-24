@@ -3,7 +3,8 @@
  * `tests/engine/test_in_loop_event_types.py` and `tests/engine/test_run_resumed_event.py`,
  * plus each event's `type` discriminant, its snake_case JSON data form, and
  * `conformance/schema/events.schema.json`, which describes that form. TS-only: `ReplayDegraded`,
- * an in-loop observer, and `ModelCallRetried`, a retry outside a forward node.
+ * an in-loop observer, `ModelCallRetried`, a retry outside a forward node, and the wait observers
+ * `NodeWaiting`, `NodeWoken`, `RunWaiting`, `RunCancelled` and `CallClosed`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -14,6 +15,8 @@ import { FAILURE_CODES, Failure, OriginRef } from "../../src/diagnostics.ts";
 import { ERROR_KINDS } from "../../src/llm/errors.ts";
 import * as events from "../../src/events.ts";
 import {
+  CallClosed,
+  CLOSE_REASONS,
   IN_LOOP_EVENTS,
   ModelCallFinished,
   type ModelCallPurpose,
@@ -26,12 +29,16 @@ import {
   NodeSkipped,
   NodeStarted,
   NodeSucceeded,
+  NodeWaiting,
+  NodeWoken,
   ReplayDegraded,
+  RunCancelled,
   RunFailed,
   type RunEvent,
   RunResumed,
   RunStarted,
   RunSucceeded,
+  RunWaiting,
   StreamChunk,
   TokenUsage,
   ToolCallFinished,
@@ -308,6 +315,12 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
       retry_in: 0,
     },
   },
+  { event: new NodeWaiting({ nodeId: "heard", callIds: ["r/heard/1", "r/heard/2"] }), data: { node_id: "heard", call_ids: ["r/heard/1", "r/heard/2"] } },
+  { event: new NodeWoken({ nodeId: "nap", timedOut: ["r/nap/1"] }), data: { node_id: "nap", timed_out: ["r/nap/1"] } },
+  { event: new NodeWoken({ nodeId: "heard", timedOut: [] }), data: { node_id: "heard", timed_out: [] } },
+  { event: new RunWaiting({ nodeIds: ["heard", "nap"] }), data: { node_ids: ["heard", "nap"] } },
+  { event: new RunCancelled(), data: {} },
+  { event: new CallClosed({ callId: "r/ask/1", reason: "cancelled" }), data: { call_id: "r/ask/1", reason: "cancelled" } },
   { event: new RunStarted(), data: {} },
   { event: new RunResumed(), data: {} },
   { event: new RunSucceeded({ output: { greeting: "hi" } }), data: { output: { greeting: "hi" } } },
@@ -411,6 +424,30 @@ describe("in-loop observers", () => {
   });
 });
 
+describe("wait events", () => {
+  test("the events copy and freeze their id lists", () => {
+    const ids = ["r/heard/1"];
+    const waiting = new NodeWaiting({ nodeId: "heard", callIds: ids });
+    const woken = new NodeWoken({ nodeId: "heard", timedOut: ids });
+    const run = new RunWaiting({ nodeIds: ids });
+    ids.push("r/heard/2");
+    for (const list of [waiting.callIds, woken.timedOut, run.nodeIds]) {
+      expect(list).toEqual(["r/heard/1"]);
+      expect(Object.isFrozen(list)).toBe(true);
+    }
+  });
+
+  test("CLOSE_REASONS lists why a host call closes", () => {
+    expect(CLOSE_REASONS).toEqual(["crashed", "interrupted", "timed_out", "cancelled", "failed"]);
+    expect(Object.isFrozen(CLOSE_REASONS)).toBe(true);
+  });
+
+  test("RunCancelled is a terminal of its own, not RunFailed", () => {
+    expect(new RunCancelled() instanceof RunFailed).toBe(false);
+    expect(new RunCancelled().type).toBe("RunCancelled");
+  });
+});
+
 describe("run events", () => {
   test("RunResumed needs no fields and is not RunStarted", () => {
     const resumed = new RunResumed();
@@ -436,7 +473,7 @@ describe("type discriminant", () => {
   test("the samples cover every event class", () => {
     const sampled: string[] = [...new Set(SAMPLES.map(({ event }) => event.type))].sort();
     expect(sampled).toEqual(EVENT_CLASS_NAMES);
-    expect(EVENT_CLASS_NAMES).toHaveLength(18);
+    expect(EVENT_CLASS_NAMES).toHaveLength(23);
   });
 
   test("TokenUsage is not an event and has no type", () => {
@@ -681,6 +718,7 @@ describe("events schema", () => {
       const properties = def(name).properties as Record<string, Schema>;
       expect(properties.purpose!.enum).toEqual(Object.keys(PURPOSES));
     }
+    expect((def("CallClosed").properties as Record<string, Schema>).reason!.enum).toEqual([...CLOSE_REASONS]);
   });
 });
 

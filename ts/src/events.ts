@@ -14,7 +14,9 @@
  * Run observers bracket a fresh or recovered execution segment with `RunStarted`
  * or `RunResumed`. `RunSucceeded` is derived at successful quiescence;
  * `RunFailed` is derived from a durable node failure or from a reduced transition
- * that makes the terminal output unreachable. Plain classes keep this low-level
+ * that makes the terminal output unreachable. `NodeWaiting` and `NodeWoken` follow a
+ * node's move out of and back into flight, `RunWaiting` a quiescence with nodes waiting,
+ * `RunCancelled` a cancel, and `CallClosed` a host call closed without an answer. Plain classes keep this low-level
  * observer module separate from the serialized record vocabulary in `runtime/log`;
  * canonical semantic failures come from `diagnostics`.
  *
@@ -216,6 +218,65 @@ export class NodeAttemptResumed {
   /** Return the data form. */
   toJSON() {
     return { node_id: this.nodeId, crashed: this.crashed };
+  }
+}
+
+/** A node stopped running to wait on calls; it holds no worker. */
+export class NodeWaiting {
+  readonly type = "NodeWaiting" as const;
+  readonly nodeId: string;
+  /** The calls the node waits on. */
+  readonly callIds: readonly string[];
+
+  constructor(options: { nodeId: string; callIds: readonly string[] }) {
+    this.nodeId = options.nodeId;
+    this.callIds = Object.freeze([...options.callIds]);
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { node_id: this.nodeId, call_ids: [...this.callIds] };
+  }
+}
+
+/** A waiting node went back in flight to run again. */
+export class NodeWoken {
+  readonly type = "NodeWoken" as const;
+  readonly nodeId: string;
+  /** The node's calls that timed out, possibly none. */
+  readonly timedOut: readonly string[];
+
+  constructor(options: { nodeId: string; timedOut: readonly string[] }) {
+    this.nodeId = options.nodeId;
+    this.timedOut = Object.freeze([...options.timedOut]);
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { node_id: this.nodeId, timed_out: [...this.timedOut] };
+  }
+}
+
+/** Why a host call was closed by record. */
+export const CLOSE_REASONS = Object.freeze(["crashed", "interrupted", "timed_out", "cancelled", "failed"] as const);
+
+/** One of `CLOSE_REASONS`. */
+export type CloseReason = (typeof CLOSE_REASONS)[number];
+
+/** A host call was closed without an answer; a later answer to it is refused. */
+export class CallClosed {
+  readonly type = "CallClosed" as const;
+  readonly callId: string;
+  readonly reason: CloseReason;
+
+  constructor(options: { callId: string; reason: CloseReason }) {
+    this.callId = options.callId;
+    this.reason = options.reason;
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { call_id: this.callId, reason: this.reason };
   }
 }
 
@@ -593,6 +654,32 @@ export class RunFailed {
   }
 }
 
+/** The run holds no worker: every unsettled node waits for a delivery or a deadline. Not a terminal. */
+export class RunWaiting {
+  readonly type = "RunWaiting" as const;
+  /** The waiting node ids, in the order they began waiting. */
+  readonly nodeIds: readonly string[];
+
+  constructor(options: { nodeIds: readonly string[] }) {
+    this.nodeIds = Object.freeze([...options.nodeIds]);
+  }
+
+  /** Return the data form. */
+  toJSON() {
+    return { node_ids: [...this.nodeIds] };
+  }
+}
+
+/** The run ended because its host cancelled it. */
+export class RunCancelled {
+  readonly type = "RunCancelled" as const;
+
+  /** Return the data form, which is empty. */
+  toJSON() {
+    return {};
+  }
+}
+
 /** Every event `onEvent` and `onStream` receive (`onStream` receives only `StreamChunk`). */
 export type RunEvent =
   | NodeStarted
@@ -603,6 +690,9 @@ export type RunEvent =
   | NodeFailed
   | NodeExpanded
   | NodeAttemptResumed
+  | NodeWaiting
+  | NodeWoken
+  | CallClosed
   | ModelCallStarted
   | ModelCallFinished
   | ToolCallStarted
@@ -612,4 +702,6 @@ export type RunEvent =
   | RunStarted
   | RunResumed
   | RunSucceeded
-  | RunFailed;
+  | RunFailed
+  | RunWaiting
+  | RunCancelled;

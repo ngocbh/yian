@@ -1111,13 +1111,19 @@ export function preparePoolCommit(
  * @param nodeId The exact id of the executing node.
  * @param options.evidence Frozen visible evidence captured during this exact evaluation.
  * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @param options.output The value the node evaluated to, live; a derived commit's value rebuilt
+ *   from its `from` must equal it.
  * @returns The canonical `NodeSucceededRecord`, naming the commit's seq, and a detached
  *   append-before-apply plan.
  * @throws TypeError when a carrier has the wrong type.
- * @throws RangeError when the state or the executing node is invalid, or the node has no pending
- *   commit.
+ * @throws RangeError when the state or the executing node is invalid, the node has no pending
+ *   commit, or its derived value doesn't rebuild to `options.output`.
  */
-export function prepareNodeSucceeded(state: RunState, nodeId: string, options: OutcomeCarriers = {}): PreparedTransition {
+export function prepareNodeSucceeded(
+  state: RunState,
+  nodeId: string,
+  options: OutcomeCarriers & { output?: unknown } = {},
+): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeSucceeded expects a RunState");
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
   requireInitializedNonterminal(state);
@@ -1130,6 +1136,7 @@ export function prepareNodeSucceeded(state: RunState, nodeId: string, options: O
       evidence: options.evidence ?? null,
       forwardCapture: options.forwardCapture ?? null,
     }),
+    Object.hasOwn(options, "output") ? { output: options.output } : null,
   );
 }
 
@@ -1403,13 +1410,28 @@ function prepareCommitTransition(
 }
 
 /** Freeze one fully validated success delta and its canonical public record. */
-function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord): PreparedTransition {
+function prepareSuccessTransition(
+  state: RunState,
+  record: NodeSucceededRecord,
+  live: { readonly output: unknown } | null = null,
+): PreparedTransition {
   validateNodeEvidence(state, record.nodeId, record.evidence);
   // The caller checked that the record names the node's pending commit.
   let pending = state.pendingCommits.get(record.nodeId)!;
   if (pending.valueJson === null) {
     // A derived commit: the pool now holds what its binding read.
     const { valueJson } = rebuildCommitValue(state, record.nodeId, pending.key, pending.from!);
+    // Live, a binding that read a name its `from` missed rebuilds to another value.
+    if (live !== null) {
+      const target = state.flow.nodes.get(pending.key)!;
+      const [wire] = canonicalOutputValue(live.output, target.outputContract, nodeOutputType(target));
+      if (logJson(wire) !== valueJson) {
+        throw new RangeError(
+          `derived node ${reprText(record.nodeId)} evaluated to another value than its commit at seq ${pending.seq} ` +
+            "rebuilds from its from",
+        );
+      }
+    }
     pending = { ...pending, valueJson };
   }
   const delta = prepareSuccessDelta(state, record, pending);

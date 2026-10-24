@@ -2400,7 +2400,8 @@ Derived commits are a `derived` node's (START, END, LOOP, CALL, MAP), except the
 and END's, which keep their values: a non-top `__end__`'s and the stopping LOOP driver's. A
 derived node's binding reads only earlier values, so a replay rebuilds its value from the pool when
 its success accepts the commit, and refuses (`RangeError`) a `from` seq that isn't the seq of the
-commit that last wrote that name. The names come from the binding's lookups in both learnable and
+commit that last wrote that name. A live run rebuilds it too, and a value that differs from the one
+the node evaluated to is a `RangeError` naming the node and the commit's seq. The names come from the binding's lookups in both learnable and
 non-learnable runs, so both write the same `from`.
 
 - A spawner's expansion writes its child STARTs' commits: before `node_expanded`, one derived

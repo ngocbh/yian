@@ -19,6 +19,7 @@ import { buildGrow } from "../../src/compile/expand.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { Node, Output } from "../../src/nodes/base.ts";
 import { NodeExpanded, NodeSucceeded, type RunEvent } from "../../src/events.ts";
@@ -562,4 +563,34 @@ test("foldRunLog yields null for an orphan commit", async () => {
   const orphan = folded.records[at]!;
   expect(orphan.entry.envelope.record).toBeInstanceOf(PoolCommitRecord);
   expect(orphan.value).toBeNull();
+});
+
+test("a derived node whose value doesn't rebuild from its from fails the run at its success", async () => {
+  // The double changes only the evaluation (the evaluator's template run), as a binding that read
+  // a name its `from` missed would; the success rebuilds the value from `from` with `forward`.
+  const original = Node.prototype.runForEvaluator;
+  const spy = spyOn(EndNode.prototype, "runForEvaluator").mockImplementation(async function (
+    this: EndNode,
+    inputs,
+    caps,
+    capture,
+  ) {
+    const result = await original.call(this, inputs, caps, capture);
+    return this.id === "chat#0/__end__" ? new Output({ ...((result as Output).value as object), log: "changed" }) : result;
+  });
+  try {
+    const log = freshLog();
+    const error = await runFlow(await load(CHAT), {}, chatOptions(log)).then(
+      () => null,
+      (rejection: unknown) => rejection,
+    );
+    expect(error).toBeInstanceOf(RangeError);
+    const envelopes = readRunLog(log);
+    const seq = envelopes.findIndex(({ record }) => record instanceof PoolCommitRecord && record.nodeId === "chat#0/__end__");
+    expect((error as Error).message).toContain("chat#0/__end__");
+    expect((error as Error).message).toContain(`seq ${seq}`);
+    expect(envelopes.some(({ record }) => record instanceof NodeSucceededRecord && record.nodeId === "chat#0/__end__")).toBe(false);
+  } finally {
+    spy.mockRestore();
+  }
 });

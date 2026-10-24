@@ -473,7 +473,7 @@ export class FlowEngine {
       // The output is written before the success that accepts it: a crash between the two leaves
       // an orphan commit, and the node reruns.
       commitPrepared(this.log, state, commit);
-      prepared = prepareNodeSucceeded(state, nodeId, carriers);
+      prepared = prepareNodeSucceeded(state, nodeId, { ...carriers, output: outcome.value });
     } else if (outcome instanceof Route) {
       try {
         prepared = prepareNodeRouted(state, nodeId, outcome.handle, carriers);

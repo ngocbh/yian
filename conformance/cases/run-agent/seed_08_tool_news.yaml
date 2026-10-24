@@ -121,10 +121,11 @@ expect:
           }
       ]
     - [pool_commit, summarize, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
-    - [node_succeeded, summarize, {commit: 13}]
+    - [pool_commit, summarize, {key: summarize.new_messages, steps: [12]}]
+    - [node_succeeded, summarize, {commit: 13, messages: 14}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: "- Growth [0]\n- Earnings [1]\n- Outlook [0][1]"}]
-    - [node_succeeded, __end__, {commit: 16}]
+    - [node_succeeded, __end__, {commit: 17}]
   # A TOOL node's call id is <run>/<node>.
   tool_calls:
     get_facts:

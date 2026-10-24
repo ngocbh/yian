@@ -95,10 +95,11 @@ expect:
     - [node_step, assistant, {n: 2, step: {call_id: c1, is_error: false, kind: tool_result, output: 2 people at 7 pm}}]
     - [node_step, assistant, {n: 3, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Book a table for 2 at 7 pm through the restaurant's site., type: text}], role: assistant}, purpose: chat, request_sha256: c2413beeb77d6cbaa180167212a7c7170c2d925b58fe6e429f7fdde1af01d013, response_id: null, usage: null}}]
     - [pool_commit, assistant, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
-    - [node_succeeded, assistant, {commit: 12}]
+    - [pool_commit, assistant, {key: assistant.new_messages, steps: [9, 10, 11]}]
+    - [node_succeeded, assistant, {commit: 12, messages: 13}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
-    - [node_succeeded, __end__, {commit: 15}]
+    - [node_succeeded, __end__, {commit: 16}]
   # A model-requested call sets only `question` and `options` (docs/api.md, Blocking human
   # interaction); the other request fields are null and left out.
   tool_calls:

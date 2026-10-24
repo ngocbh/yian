@@ -102,16 +102,19 @@ expect:
   - - pool_commit
     - agent
     - value: ok
+  - - pool_commit
+    - agent
+    - {key: agent.new_messages, steps: [11]}
   - - node_succeeded
     - agent
-    - {commit: 12}
+    - {commit: 12, messages: 13}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: ok
   - - node_succeeded
     - __end__
-    - {commit: 15}
+    - {commit: 16}
   stream:
   - chunk: ok
     final: false

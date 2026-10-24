@@ -148,6 +148,10 @@ expect:
   - - pool_commit
     - first
     - value: draft
+  - - pool_commit
+    - first
+    - key: first.new_messages
+      steps: [9]
   - - node_succeeded
     - first
     - commit: 10
@@ -168,6 +172,7 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [first]
+      messages: 11
   - [node_started, second]
   - - node_step
     - second
@@ -188,9 +193,13 @@ expect:
   - - pool_commit
     - second
     - value: answer
+  - - pool_commit
+    - second
+    - key: second.new_messages
+      steps: [14]
   - - node_succeeded
     - second
-    - commit: 14
+    - commit: 15
       forward_capture:
         evaluated_keys: [draft]
         input_names: [draft]
@@ -208,13 +217,14 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [second]
+      messages: 16
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: answer
   - - node_succeeded
     - __end__
-    - commit: 17
+    - commit: 19
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
@@ -222,7 +232,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 12
+              execution_seq: 13
               path: []
               run_id: r1
           kind: record
@@ -293,7 +303,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 12
+            execution_seq: 13
             path: []
             run_id: r1
         feedback: [fresh draft]
@@ -313,7 +323,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 16
+            execution_seq: 18
             path: []
             run_id: r1
         feedback: [Second review.]
@@ -324,7 +334,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 12
+          execution_seq: 13
           path: []
           run_id: r1
       - attribution:
@@ -341,7 +351,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 16
+          execution_seq: 18
           path: []
           run_id: r1
       proposals: []

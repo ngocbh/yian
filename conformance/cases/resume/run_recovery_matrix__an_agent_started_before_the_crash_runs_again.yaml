@@ -97,16 +97,19 @@ expect:
   - - pool_commit
     - effect
     - value: again
+  - - pool_commit
+    - effect
+    - {key: effect.new_messages, steps: [11]}
   - - node_succeeded
     - effect
-    - {commit: 12}
+    - {commit: 12, messages: 13}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: again
   - - node_succeeded
     - __end__
-    - {commit: 15}
+    - {commit: 16}
   stream:
   - chunk: again
     final: false

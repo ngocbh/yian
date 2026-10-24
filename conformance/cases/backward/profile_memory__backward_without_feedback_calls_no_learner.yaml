@@ -119,6 +119,10 @@ expect:
   - - pool_commit
     - reply
     - value: Hello.
+  - - pool_commit
+    - reply
+    - key: reply.new_messages
+      steps: [9]
   - - node_succeeded
     - reply
     - commit: 10
@@ -139,13 +143,14 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [reply]
+      messages: 11
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: Hello.
   - - node_succeeded
     - __end__
-    - commit: 13
+    - commit: 14
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
@@ -200,7 +205,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 12
+          execution_seq: 13
           path: []
           run_id: r1
       proposals:

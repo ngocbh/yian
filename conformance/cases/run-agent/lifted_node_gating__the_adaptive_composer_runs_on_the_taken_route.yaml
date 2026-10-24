@@ -146,9 +146,12 @@ expect:
         - description: Relational.
           label: Postgres
         question: Which database?
+  - - pool_commit
+    - ask__compose
+    - {key: ask__compose.new_messages, steps: [11]}
   - - node_succeeded
     - ask__compose
-    - {commit: 12}
+    - {commit: 12, messages: 13}
   - [node_started, ask]
   - - pool_commit
     - ask
@@ -156,7 +159,7 @@ expect:
         DB: Postgres
   - - node_succeeded
     - ask
-    - {commit: 15}
+    - {commit: 16}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -165,7 +168,7 @@ expect:
           DB: Postgres
   - - node_succeeded
     - __end__
-    - {commit: 18}
+    - {commit: 19}
   events:
   - [RunStarted]
   - - NodeStarted

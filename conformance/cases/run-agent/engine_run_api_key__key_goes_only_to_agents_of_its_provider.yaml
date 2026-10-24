@@ -178,9 +178,12 @@ expect:
   - - pool_commit
     - inherits
     - value: ok
+  - - pool_commit
+    - inherits
+    - {key: inherits.new_messages, steps: [9]}
   - - node_succeeded
     - inherits
-    - {commit: 10}
+    - {commit: 10, messages: 11}
   - [node_started, child]
   - - pool_commit
     - child
@@ -209,13 +212,16 @@ expect:
   - - pool_commit
     - other
     - value: ok
+  - - pool_commit
+    - other
+    - {key: other.new_messages, steps: [17]}
   - - node_succeeded
     - other
-    - {commit: 17}
+    - {commit: 18, messages: 19}
   - [node_started, child/__start__]
   - - node_succeeded
     - child/__start__
-    - commit: 13
+    - commit: 14
   - [node_started, optout]
   - - node_step
     - optout
@@ -236,9 +242,12 @@ expect:
   - - pool_commit
     - optout
     - value: ok
+  - - pool_commit
+    - optout
+    - {key: optout.new_messages, steps: [24]}
   - - node_succeeded
     - optout
-    - {commit: 23}
+    - {commit: 25, messages: 26}
   - [node_started, child/nested]
   - - node_step
     - child/nested
@@ -259,24 +268,27 @@ expect:
   - - pool_commit
     - child/nested
     - value: ok
+  - - pool_commit
+    - child/nested
+    - {key: child/nested.new_messages, steps: [29]}
   - - node_succeeded
     - child/nested
-    - {commit: 27}
+    - {commit: 30, messages: 31}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: ok
   - - node_succeeded
     - __end__
-    - {commit: 30}
+    - {commit: 34}
   - [node_started, child/__end__]
   - - pool_commit
     - child/__end__
     - key: child
-      from: {child/nested: 27}
+      from: {child/nested: 30}
   - - node_succeeded
     - child/__end__
-    - {commit: 33}
+    - {commit: 37}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -91,10 +91,11 @@ expect:
           response_id: null
           usage: null
     - [pool_commit, write, {value: A line.}]
-    - [node_succeeded, write, {commit: 13}]
+    - [pool_commit, write, {key: write.new_messages, steps: [12]}]
+    - [node_succeeded, write, {commit: 13, messages: 14}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: A line.}]
-    - [node_succeeded, __end__, {commit: 16}]
+    - [node_succeeded, __end__, {commit: 17}]
   events:
     - [RunResumed]
     - [NodeAttemptResumed, {crashed: 1, node_id: write}]

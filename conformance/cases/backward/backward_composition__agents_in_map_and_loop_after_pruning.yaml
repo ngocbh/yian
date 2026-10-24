@@ -274,6 +274,10 @@ expect:
   - - pool_commit
     - many#0/loop#0/invoke/author
     - value: one
+  - - pool_commit
+    - many#0/loop#0/invoke/author
+    - key: many#0/loop#0/invoke/author.new_messages
+      steps: [40]
   - - node_succeeded
     - many#0/loop#0/invoke/author
     - commit: 41
@@ -303,6 +307,7 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
+      messages: 42
   - [node_started, many#1/loop#0/invoke/author]
   - - node_step
     - many#1/loop#0/invoke/author
@@ -323,9 +328,13 @@ expect:
   - - pool_commit
     - many#1/loop#0/invoke/author
     - value: one
+  - - pool_commit
+    - many#1/loop#0/invoke/author
+    - key: many#1/loop#0/invoke/author.new_messages
+      steps: [45]
   - - node_succeeded
     - many#1/loop#0/invoke/author
-    - commit: 45
+    - commit: 46
       forward_capture:
         evaluated_keys: [n]
         input_names: [n]
@@ -352,6 +361,7 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
+      messages: 47
   - [node_started, many#0/loop#0/invoke/__end__]
   - - pool_commit
     - many#0/loop#0/invoke/__end__
@@ -359,33 +369,33 @@ expect:
       from: {many#0/loop#0/invoke/author: 41}
   - - node_succeeded
     - many#0/loop#0/invoke/__end__
-    - commit: 48
+    - commit: 50
   - [node_started, many#1/loop#0/invoke/__end__]
   - - pool_commit
     - many#1/loop#0/invoke/__end__
     - key: many#1/loop#0/invoke
-      from: {many#1/loop#0/invoke/author: 45}
+      from: {many#1/loop#0/invoke/author: 46}
   - - node_succeeded
     - many#1/loop#0/invoke/__end__
-    - commit: 51
+    - commit: 53
   - [node_started, many#0/loop#0/__end__]
   - - pool_commit
     - many#0/loop#0/__end__
-    - from: {many#0/loop#0/invoke: 48}
+    - from: {many#0/loop#0/invoke: 50}
   - - node_succeeded
     - many#0/loop#0/__end__
-    - commit: 54
+    - commit: 56
   - [node_started, many#1/loop#0/__end__]
   - - pool_commit
     - many#1/loop#0/__end__
-    - from: {many#1/loop#0/invoke: 51}
+    - from: {many#1/loop#0/invoke: 53}
   - - node_succeeded
     - many#1/loop#0/__end__
-    - commit: 57
+    - commit: 59
   - [node_started, many#0/loop~1]
   - - pool_commit
     - many#0/loop~1
-    - from: {many#0/loop#0/__end__: 54}
+    - from: {many#0/loop#0/__end__: 56}
       key: many#0/loop#1/__start__
   - - node_expanded
     - many#0/loop~1
@@ -397,7 +407,7 @@ expect:
   - [node_started, many#1/loop~1]
   - - pool_commit
     - many#1/loop~1
-    - from: {many#1/loop#0/__end__: 57}
+    - from: {many#1/loop#0/__end__: 59}
       key: many#1/loop#1/__start__
   - - node_expanded
     - many#1/loop~1
@@ -409,15 +419,15 @@ expect:
   - [node_started, many#0/loop#1/__start__]
   - - node_succeeded
     - many#0/loop#1/__start__
-    - commit: 60
+    - commit: 62
   - [node_started, many#1/loop#1/__start__]
   - - node_succeeded
     - many#1/loop#1/__start__
-    - commit: 63
+    - commit: 65
   - [node_started, many#0/loop#1/invoke]
   - - pool_commit
     - many#0/loop#1/invoke
-    - from: {many#0/loop#1/__start__: 60}
+    - from: {many#0/loop#1/__start__: 62}
       key: many#0/loop#1/invoke/__start__
   - - node_expanded
     - many#0/loop#1/invoke
@@ -425,7 +435,7 @@ expect:
   - [node_started, many#1/loop#1/invoke]
   - - pool_commit
     - many#1/loop#1/invoke
-    - from: {many#1/loop#1/__start__: 63}
+    - from: {many#1/loop#1/__start__: 65}
       key: many#1/loop#1/invoke/__start__
   - - node_expanded
     - many#1/loop#1/invoke
@@ -433,11 +443,11 @@ expect:
   - [node_started, many#0/loop#1/invoke/__start__]
   - - node_succeeded
     - many#0/loop#1/invoke/__start__
-    - commit: 70
+    - commit: 72
   - [node_started, many#1/loop#1/invoke/__start__]
   - - node_succeeded
     - many#1/loop#1/invoke/__start__
-    - commit: 73
+    - commit: 75
   - [node_started, many#0/loop#1/invoke/author]
   - - node_step
     - many#0/loop#1/invoke/author
@@ -458,9 +468,13 @@ expect:
   - - pool_commit
     - many#0/loop#1/invoke/author
     - value: one
+  - - pool_commit
+    - many#0/loop#1/invoke/author
+    - key: many#0/loop#1/invoke/author.new_messages
+      steps: [82]
   - - node_succeeded
     - many#0/loop#1/invoke/author
-    - commit: 81
+    - commit: 83
       forward_capture:
         evaluated_keys: [n]
         input_names: [n]
@@ -468,7 +482,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 75
+              execution_seq: 77
               path: [n]
               run_id: r1
           kind: record
@@ -487,6 +501,7 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
+      messages: 84
   - [node_started, many#1/loop#1/invoke/author]
   - - node_step
     - many#1/loop#1/invoke/author
@@ -507,9 +522,13 @@ expect:
   - - pool_commit
     - many#1/loop#1/invoke/author
     - value: one
+  - - pool_commit
+    - many#1/loop#1/invoke/author
+    - key: many#1/loop#1/invoke/author.new_messages
+      steps: [87]
   - - node_succeeded
     - many#1/loop#1/invoke/author
-    - commit: 85
+    - commit: 88
       forward_capture:
         evaluated_keys: [n]
         input_names: [n]
@@ -517,7 +536,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 77
+              execution_seq: 79
               path: [n]
               run_id: r1
           kind: record
@@ -536,81 +555,82 @@ expect:
             kind: call
             static_path: [many, loop, invoke]
           static_path: [many, loop, invoke, author]
+      messages: 89
   - [node_started, many#0/loop#1/invoke/__end__]
   - - pool_commit
     - many#0/loop#1/invoke/__end__
     - key: many#0/loop#1/invoke
-      from: {many#0/loop#1/invoke/author: 81}
+      from: {many#0/loop#1/invoke/author: 83}
   - - node_succeeded
     - many#0/loop#1/invoke/__end__
-    - commit: 88
+    - commit: 92
   - [node_started, many#1/loop#1/invoke/__end__]
   - - pool_commit
     - many#1/loop#1/invoke/__end__
     - key: many#1/loop#1/invoke
-      from: {many#1/loop#1/invoke/author: 85}
+      from: {many#1/loop#1/invoke/author: 88}
   - - node_succeeded
     - many#1/loop#1/invoke/__end__
-    - commit: 91
+    - commit: 95
   - [node_started, many#0/loop#1/__end__]
   - - pool_commit
     - many#0/loop#1/__end__
-    - from: {many#0/loop#1/invoke: 88}
+    - from: {many#0/loop#1/invoke: 92}
   - - node_succeeded
     - many#0/loop#1/__end__
-    - commit: 94
+    - commit: 98
   - [node_started, many#1/loop#1/__end__]
   - - pool_commit
     - many#1/loop#1/__end__
-    - from: {many#1/loop#1/invoke: 91}
+    - from: {many#1/loop#1/invoke: 95}
   - - node_succeeded
     - many#1/loop#1/__end__
-    - commit: 97
+    - commit: 101
   - [node_started, many#0/loop~2]
   - - pool_commit
     - many#0/loop~2
     - key: many#0/loop
-      from: {many#0/loop#1/__end__: 94}
+      from: {many#0/loop#1/__end__: 98}
   - - node_succeeded
     - many#0/loop~2
-    - commit: 100
+    - commit: 104
   - [node_started, many#1/loop~2]
   - - pool_commit
     - many#1/loop~2
     - key: many#1/loop
-      from: {many#1/loop#1/__end__: 97}
+      from: {many#1/loop#1/__end__: 101}
   - - node_succeeded
     - many#1/loop~2
-    - commit: 103
+    - commit: 107
   - [node_started, many#0/__end__]
   - - pool_commit
     - many#0/__end__
-    - from: {many#0/loop: 100}
+    - from: {many#0/loop: 104}
   - - node_succeeded
     - many#0/__end__
-    - commit: 106
+    - commit: 110
   - [node_started, many#1/__end__]
   - - pool_commit
     - many#1/__end__
-    - from: {many#1/loop: 103}
+    - from: {many#1/loop: 107}
   - - node_succeeded
     - many#1/__end__
-    - commit: 109
+    - commit: 113
   - [node_started, many/__end__]
   - - pool_commit
     - many/__end__
     - key: many
-      from: {many#0/__end__: 106, many#1/__end__: 109}
+      from: {many#0/__end__: 110, many#1/__end__: 113}
   - - node_succeeded
     - many/__end__
-    - commit: 112
+    - commit: 116
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: [one, one]
   - - node_succeeded
     - __end__
-    - commit: 115
+    - commit: 119
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
@@ -618,7 +638,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 111
+              execution_seq: 115
               path: []
               run_id: r1
           kind: record
@@ -844,7 +864,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 43
+            execution_seq: 44
             path: []
             run_id: r1
         feedback: [{n: Refine n.}]
@@ -864,7 +884,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 47
+            execution_seq: 49
             path: []
             run_id: r1
         feedback:
@@ -885,7 +905,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 50
+            execution_seq: 52
             path: []
             run_id: r1
         feedback:
@@ -897,10 +917,10 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 43
+          execution_seq: 44
           path: []
           run_id: r1
-      - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 53, path: [], run_id: r1}}]
+      - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 55, path: [], run_id: r1}}]
         feedback: [Refine n.]
         invoked: true
         result:
@@ -908,10 +928,10 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 47
+          execution_seq: 49
           path: []
           run_id: r1
-      - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 56, path: [], run_id: r1}}]
+      - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 58, path: [], run_id: r1}}]
         feedback: [Refine n.]
         invoked: true
         result:
@@ -919,28 +939,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 50
-          path: []
-          run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 65
-            path: []
-            run_id: r1
-        feedback:
-        - n: Refine n.
-        invoked: true
-        result:
-          input_feedback:
-            n: [Refine n.]
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 53
+          execution_seq: 52
           path: []
           run_id: r1
       - attribution:
@@ -961,29 +960,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 56
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 59
-          path: []
-          run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
-        result:
-          input_feedback: {}
-          self_feedback: []
-          variable_feedback: {}
-        source:
-          execution_seq: 62
+          execution_seq: 55
           path: []
           run_id: r1
       - attribution:
@@ -992,7 +969,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 75
+            execution_seq: 69
             path: []
             run_id: r1
         feedback:
@@ -1004,7 +981,29 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 65
+          execution_seq: 58
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 61
+          path: []
+          run_id: r1
+      - attribution: []
+        feedback: []
+        invoked: false
+        result:
+          input_feedback: {}
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 64
           path: []
           run_id: r1
       - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 77, path: [], run_id: r1}}]
@@ -1018,11 +1017,11 @@ expect:
           execution_seq: 67
           path: []
           run_id: r1
-      - attribution: []
-        feedback: []
-        invoked: false
+      - attribution: [{contribution_index: 0, input_name: n, message_index: 0, parents: [0], sender: {execution_seq: 79, path: [], run_id: r1}}]
+        feedback: [{n: Refine n.}]
+        invoked: true
         result:
-          input_feedback: {}
+          input_feedback: {n: [Refine n.]}
           self_feedback: []
           variable_feedback: {}
         source:
@@ -1037,27 +1036,18 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 72
+          execution_seq: 71
           path: []
           run_id: r1
-      - attribution:
-        - contribution_index: 0
-          input_name: n
-          message_index: 0
-          parents: [0]
-          sender:
-            execution_seq: 79
-            path: []
-            run_id: r1
-        feedback: [{n: Refine n.}]
-        invoked: true
+      - attribution: []
+        feedback: []
+        invoked: false
         result:
-          input_feedback:
-            n: [Refine n.]
+          input_feedback: {}
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 75
+          execution_seq: 74
           path: []
           run_id: r1
       - attribution:
@@ -1066,7 +1056,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 83
+            execution_seq: 81
             path: []
             run_id: r1
         feedback:
@@ -1083,15 +1073,15 @@ expect:
           run_id: r1
       - attribution:
         - contribution_index: 0
-          input_name: result
+          input_name: n
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 87
+            execution_seq: 86
             path: []
             run_id: r1
         feedback:
-        - Review every iteration.
+        - {n: Refine n.}
         invoked: true
         result:
           input_feedback:
@@ -1108,7 +1098,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 90
+            execution_seq: 91
             path: []
             run_id: r1
         feedback:
@@ -1120,16 +1110,16 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 83
+          execution_seq: 81
           path: []
           run_id: r1
       - attribution:
         - contribution_index: 0
-          input_name: n
+          input_name: result
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 93
+            execution_seq: 94
             path: []
             run_id: r1
         feedback:
@@ -1137,11 +1127,11 @@ expect:
         invoked: true
         result:
           input_feedback:
-            result: [Review every iteration.]
+            n: [Refine n.]
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 87
+          execution_seq: 86
           path: []
           run_id: r1
       - attribution:
@@ -1150,7 +1140,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 96
+            execution_seq: 97
             path: []
             run_id: r1
         feedback: [Review every iteration.]
@@ -1161,7 +1151,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 90
+          execution_seq: 91
           path: []
           run_id: r1
       - attribution:
@@ -1170,18 +1160,18 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 99
+            execution_seq: 100
             path: []
             run_id: r1
-        feedback: [{n: Review every iteration.}]
+        feedback: [Review every iteration.]
         invoked: true
         result:
           input_feedback:
-            n: [Review every iteration.]
+            result: [Review every iteration.]
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 93
+          execution_seq: 94
           path: []
           run_id: r1
       - attribution:
@@ -1190,7 +1180,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 102
+            execution_seq: 103
             path: []
             run_id: r1
         feedback: [{n: Review every iteration.}]
@@ -1201,7 +1191,27 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 96
+          execution_seq: 97
+          path: []
+          run_id: r1
+      - attribution:
+        - contribution_index: 0
+          input_name: n
+          message_index: 0
+          parents: [0]
+          sender:
+            execution_seq: 106
+            path: []
+            run_id: r1
+        feedback: [{n: Review every iteration.}]
+        invoked: true
+        result:
+          input_feedback:
+            n: [Review every iteration.]
+          self_feedback: []
+          variable_feedback: {}
+        source:
+          execution_seq: 100
           path: []
           run_id: r1
       - attribution:
@@ -1210,7 +1220,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 105
+            execution_seq: 109
             path: []
             run_id: r1
         feedback: [{n: Review every iteration.}]
@@ -1221,7 +1231,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 99
+          execution_seq: 103
           path: []
           run_id: r1
       - attribution:
@@ -1230,7 +1240,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 108
+            execution_seq: 112
             path: []
             run_id: r1
         feedback: [{n: Review every iteration.}]
@@ -1241,7 +1251,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 102
+          execution_seq: 106
           path: []
           run_id: r1
       - attribution:
@@ -1250,7 +1260,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 111
+            execution_seq: 115
             path: []
             run_id: r1
         feedback: [Review every iteration.]
@@ -1261,7 +1271,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 105
+          execution_seq: 109
           path: []
           run_id: r1
       - attribution:
@@ -1270,7 +1280,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 111
+            execution_seq: 115
             path: []
             run_id: r1
         feedback: [Review every iteration.]
@@ -1281,7 +1291,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 108
+          execution_seq: 112
           path: []
           run_id: r1
       - attribution:
@@ -1290,7 +1300,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 114
+            execution_seq: 118
             path: []
             run_id: r1
         feedback: [Review every iteration.]
@@ -1302,7 +1312,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 111
+          execution_seq: 115
           path: []
           run_id: r1
       - attribution:
@@ -1319,7 +1329,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 114
+          execution_seq: 118
           path: []
           run_id: r1
       proposals: []

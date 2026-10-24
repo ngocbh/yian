@@ -231,9 +231,12 @@ expect:
     - value:
         action: buy
         qty: 3
+  - - pool_commit
+    - a
+    - {key: a.new_messages, steps: [9]}
   - - node_succeeded
     - a
-    - {commit: 10}
+    - {commit: 10, messages: 11}
   - [node_started, route]
   - - node_routed
     - route
@@ -244,7 +247,7 @@ expect:
     - value: buy 3
   - - node_succeeded
     - place_buy
-    - {commit: 15}
+    - {commit: 16}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -255,7 +258,7 @@ expect:
         trade: buy 3
   - - node_succeeded
     - __end__
-    - {commit: 18}
+    - {commit: 19}
   events:
   - [RunStarted]
   - - NodeStarted

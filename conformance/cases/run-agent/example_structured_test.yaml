@@ -135,19 +135,23 @@ expect:
     - [node_started, person]
     - [node_step, person, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: '{"name": "Ada Lovelace", "age": 36}', type: text}], role: assistant}, purpose: structured_native, request_sha256: 5bf5a015db2a2ea4840a7074f89496e0d9fa88fec79f12206db7525ffcf6c168, response_id: null, usage: null}}]
     - [pool_commit, person, {value: {name: Ada Lovelace, age: 36}}]
-    - [node_succeeded, person, {commit: 10}]
+    - [pool_commit, person, {key: person.new_messages, steps: [9]}]
+    - [node_succeeded, person, {commit: 10, messages: 11}]
     - [node_started, wordcount]
     - [node_step, wordcount, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: '{"value": 6}', type: text}], role: assistant}, purpose: structured_native, request_sha256: 40a6c87bfb3e92e482d66c4a19bca83793c7fcbb557ff650afc8692a9d300f55, response_id: null, usage: null}}]
     - [pool_commit, wordcount, {value: 6}]
-    - [node_succeeded, wordcount, {commit: 14}]
+    - [pool_commit, wordcount, {key: wordcount.new_messages, steps: [14]}]
+    - [node_succeeded, wordcount, {commit: 15, messages: 16}]
     - [node_started, sentiment]
     - [node_step, sentiment, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: '{"value": "positive"}', type: text}], role: assistant}, purpose: structured_native, request_sha256: 8f3265e2ef919386ac350256607d20edfee667a7db71c2275e6fbc8bea5507e3, response_id: null, usage: null}}]
     - [pool_commit, sentiment, {value: positive}]
-    - [node_succeeded, sentiment, {commit: 18}]
+    - [pool_commit, sentiment, {key: sentiment.new_messages, steps: [19]}]
+    - [node_succeeded, sentiment, {commit: 20, messages: 21}]
     - [node_started, keywords]
     - [node_step, keywords, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: '{"items": ["Ada Lovelace", "mathematics"]}', type: text}], role: assistant}, purpose: structured_native, request_sha256: 5a5980627667ef53e8d6d2b924cb564a652304a0da6307186439f049823275c4, response_id: null, usage: null}}]
     - [pool_commit, keywords, {value: [Ada Lovelace, mathematics]}]
-    - [node_succeeded, keywords, {commit: 22}]
+    - [pool_commit, keywords, {key: keywords.new_messages, steps: [24]}]
+    - [node_succeeded, keywords, {commit: 25, messages: 26}]
     - [node_started, __end__]
     - - pool_commit
       - __end__
@@ -156,4 +160,4 @@ expect:
           wordcount: 6
           sentiment: positive
           keywords: [Ada Lovelace, mathematics]
-    - [node_succeeded, __end__, {commit: 25}]
+    - [node_succeeded, __end__, {commit: 29}]

@@ -168,9 +168,12 @@ expect:
   - - pool_commit
     - agent
     - value: ok
+  - - pool_commit
+    - agent
+    - {key: agent.new_messages, steps: [9]}
   - - node_succeeded
     - agent
-    - {commit: 10}
+    - {commit: 10, messages: 11}
   - [node_started, child]
   - - pool_commit
     - child
@@ -199,20 +202,23 @@ expect:
   - - pool_commit
     - other
     - value: ok
+  - - pool_commit
+    - other
+    - {key: other.new_messages, steps: [17]}
   - - node_succeeded
     - other
-    - {commit: 17}
+    - {commit: 18, messages: 19}
   - [node_started, child/__start__]
   - - node_succeeded
     - child/__start__
-    - commit: 13
+    - commit: 14
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: ok
   - - node_succeeded
     - __end__
-    - {commit: 22}
+    - {commit: 24}
   - [node_started, child/nested]
   - - node_step
     - child/nested
@@ -233,17 +239,20 @@ expect:
   - - pool_commit
     - child/nested
     - value: ok
+  - - pool_commit
+    - child/nested
+    - {key: child/nested.new_messages, steps: [27]}
   - - node_succeeded
     - child/nested
-    - {commit: 26}
+    - {commit: 28, messages: 29}
   - [node_started, child/__end__]
   - - pool_commit
     - child/__end__
     - key: child
-      from: {child/nested: 26}
+      from: {child/nested: 28}
   - - node_succeeded
     - child/__end__
-    - {commit: 29}
+    - {commit: 32}
   events:
   - [RunStarted]
   - - NodeStarted

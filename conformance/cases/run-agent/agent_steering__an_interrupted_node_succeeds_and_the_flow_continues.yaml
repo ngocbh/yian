@@ -97,9 +97,12 @@ expect:
   - - pool_commit
     - chat
     - value: ''
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages, steps: []}
   - - node_succeeded
     - chat
-    - {commit: 9}
+    - {commit: 9, messages: 10}
   - [node_started, after]
   - - node_step
     - after
@@ -120,16 +123,19 @@ expect:
   - - pool_commit
     - after
     - value: summary
+  - - pool_commit
+    - after
+    - {key: after.new_messages, steps: [13]}
   - - node_succeeded
     - after
-    - {commit: 13}
+    - {commit: 14, messages: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: summary
   - - node_succeeded
     - __end__
-    - {commit: 16}
+    - {commit: 18}
   events:
   - [RunStarted]
   - - NodeStarted

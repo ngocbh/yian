@@ -192,16 +192,19 @@ expect:
   - - pool_commit
     - writer
     - value: both found
+  - - pool_commit
+    - writer
+    - {key: writer.new_messages, steps: [9, 10, 11, 12]}
   - - node_succeeded
     - writer
-    - {commit: 13}
+    - {commit: 13, messages: 14}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: both found
   - - node_succeeded
     - __end__
-    - {commit: 16}
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted

@@ -73,7 +73,7 @@ host:
             role: user
             parts:
             - type: text
-              text: '{"forward":{"run_id":"r1","node_id":"writer","node_started_seq":11,"inputs":{"topic":"reefs"},"input_names":["topic"],"output":"Reefs glow.","failure":null,"variable_names":["tone","count"],"prompt_template":"[{\"user\":\"${topic}, ${count} lines\"},{\"assistant\":\"Which tone?\"},{\"user\":\"${tone}\"}]","rendered_prompt":"[{\"role\":\"user\",\"text\":\"reefs, 3 lines\"},{\"role\":\"assistant\",\"text\":\"Which tone?\"},{\"role\":\"user\",\"text\":\"concise\"}]","variables":{"count":3,"tone":"concise"},"variable_domains":{"count":"int","tone":"Literal(concise, detailed)"},"evaluation_evidence":{"scope":null,"bound_inputs":{"topic":"reefs"},"base_system_prompt":"Be concise.","prompt":"concise","memory_sections":[],"interactions":[{"kind":"model_text","text":"Reefs glow."}]}},"feedback":["Too long."],"downstream_context":[{"message_index":0,"sender":{"run_id":"r1","execution_seq":16,"path":[]},"input_name":"result","sender_message_index":0,"contribution_index":0,"parents":[0],"contexts":[{"expression":"","result":"Reefs glow.","sources":[{"source":{"run_id":"r1","execution_seq":16,"path":[]},"value":"Reefs glow."}],"role":"output","operand":[],"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"writer.output","result":"Reefs glow.","sources":[{"source":{"run_id":"r1","execution_seq":11,"path":[]},"value":"Reefs glow."}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null}]}]}'
+              text: '{"forward":{"run_id":"r1","node_id":"writer","node_started_seq":11,"inputs":{"topic":"reefs"},"input_names":["topic"],"output":"Reefs glow.","failure":null,"variable_names":["tone","count"],"prompt_template":"[{\"user\":\"${topic}, ${count} lines\"},{\"assistant\":\"Which tone?\"},{\"user\":\"${tone}\"}]","rendered_prompt":"[{\"role\":\"user\",\"text\":\"reefs, 3 lines\"},{\"role\":\"assistant\",\"text\":\"Which tone?\"},{\"role\":\"user\",\"text\":\"concise\"}]","variables":{"count":3,"tone":"concise"},"variable_domains":{"count":"int","tone":"Literal(concise, detailed)"},"evaluation_evidence":{"scope":null,"bound_inputs":{"topic":"reefs"},"base_system_prompt":"Be concise.","prompt":"concise","memory_sections":[],"interactions":[{"kind":"model_text","text":"Reefs glow."}]}},"feedback":["Too long."],"downstream_context":[{"message_index":0,"sender":{"run_id":"r1","execution_seq":17,"path":[]},"input_name":"result","sender_message_index":0,"contribution_index":0,"parents":[0],"contexts":[{"expression":"","result":"Reefs glow.","sources":[{"source":{"run_id":"r1","execution_seq":17,"path":[]},"value":"Reefs glow."}],"role":"output","operand":[],"positions":[],"span":null,"result_type":null,"snapshot":null},{"expression":"writer.output","result":"Reefs glow.","sources":[{"source":{"run_id":"r1","execution_seq":11,"path":[]},"value":"Reefs glow."}],"role":"source","operand":null,"positions":[],"span":null,"result_type":null,"snapshot":null}]}]}'
 backward:
 - feedback: Too long.
 expect:
@@ -167,6 +167,10 @@ expect:
   - - pool_commit
     - writer
     - {value: Reefs glow.}
+  - - pool_commit
+    - writer
+    - key: writer.new_messages
+      steps: [13]
   - - node_succeeded
     - writer
     - commit: 14
@@ -193,13 +197,14 @@ expect:
           occurrence_path: []
           static_path: [writer]
         variable_names: [tone, count]
+      messages: 15
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - {value: Reefs glow.}
   - - node_succeeded
     - __end__
-    - commit: 17
+    - commit: 18
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
@@ -262,7 +267,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 16
+            execution_seq: 17
             path: []
             run_id: r1
         feedback: [Too long.]
@@ -291,7 +296,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 16
+          execution_seq: 17
           path: []
           run_id: r1
       proposals: []

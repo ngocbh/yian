@@ -10,9 +10,12 @@ flow: |
         console.log("ready");
         return "x";
     settle:
-      kind: wait
-      until: "2999-01-01"
+      kind: code
       depends_on: [first]
+      # Keeps the run busy until the SIGINT; bounded so the CODE worker ends if none comes.
+      code: |
+        await new Promise((resolve) => setTimeout(resolve, 30_000));
+        return null;
   output: ${first.output}
 python_flow: |
   id: pause

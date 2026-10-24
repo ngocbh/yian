@@ -97,6 +97,7 @@ import {
   canonicalTyped,
   decodeRecord,
   encodeRecord,
+  InboxClosedRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
@@ -813,6 +814,12 @@ interface RunWaitingDelta {
   readonly nodeIds: readonly string[];
 }
 
+/** Closing an inbox; the waits fold applies it. */
+interface InboxClosedDelta {
+  readonly kind: "inboxClosed";
+  readonly inbox: string;
+}
+
 /**
  * One pool commit. A run-start commit (`initial`) applies at once; a node's waits for its success.
  * `valueJson` is the value's canonical typed wire text.
@@ -832,7 +839,7 @@ interface CommitPlan extends PlanAnchors {
   readonly send: boolean;
 }
 
-/** One dispatch, resume, step, stop, wait, wake or run wait. */
+/** One dispatch, resume, step, stop, wait, wake, run wait or inbox close. */
 interface FrontierPlan extends PlanAnchors {
   readonly kind: "frontier";
   readonly delta:
@@ -842,7 +849,8 @@ interface FrontierPlan extends PlanAnchors {
     | RunStoppedDelta
     | NodeWaitingDelta
     | NodeWokenDelta
-    | RunWaitingDelta;
+    | RunWaitingDelta
+    | InboxClosedDelta;
 }
 
 /** The touched coordinates of one successful output commit. */
@@ -1232,6 +1240,28 @@ function inboxElementType(state: RunState, name: string): Type | null {
   const start = state.flow.nodes.get(state.flow.startId);
   const type = (start?.params ?? []).find((param) => param.name === name)?.contract?.type;
   return type !== undefined && isInboxType(type) ? type.element! : null;
+}
+
+/**
+ * Prepare a host's close of the top-level inbox `inbox`: later sends are refused, takes still read
+ * what is queued, and a take already waiting on it with nothing assigned is answered.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @returns The canonical `InboxClosedRecord` and its plan, with no observers; `null` when the
+ *   inbox is already closed.
+ * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
+ *   such inbox.
+ */
+export function prepareInboxClosed(state: RunState, inbox: string): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareInboxClosed expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  requireDeliverable(state);
+  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  if (state.waits.inboxes.get(inbox)?.closed === true) return null;
+  return prepareRecord(state, new InboxClosedRecord(inbox));
 }
 
 /**
@@ -1725,6 +1755,8 @@ export function prepareRecord(
     validateNodeWoken(state, record);
   } else if (isExactly(record, RunWaitingRecord)) {
     validateRunWaiting(state, record);
+  } else if (isExactly(record, InboxClosedRecord)) {
+    validateInboxClosed(state, record);
   } else {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
@@ -1777,6 +1809,10 @@ export function prepareRecord(
     validateRunWaiting(state, canonical);
     delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
     observers = [new RunWaiting({ nodeIds: canonical.nodeIds })];
+  } else if (isExactly(canonical, InboxClosedRecord)) {
+    validateInboxClosed(state, canonical);
+    delta = { kind: "inboxClosed", inbox: canonical.inbox };
+    observers = [];
   } else {
     // An exhaustive codec invariant.
     throw new TypeError("frontier envelope decoded to a different record kind");
@@ -2856,7 +2892,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   return [];
 }
 
-/** Validate, append and apply one sparse dispatch, recovery, step, stop, wait, wake or run-wait delta. */
+/** Validate, append and apply one sparse dispatch, recovery, step, stop, wait, wake, run-wait or close delta. */
 function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
   if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
@@ -2869,10 +2905,11 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       isExactly(record, RunStoppedRecord) ||
       isExactly(record, NodeWaitingRecord) ||
       isExactly(record, NodeWokenRecord) ||
-      isExactly(record, RunWaitingRecord)
+      isExactly(record, RunWaitingRecord) ||
+      isExactly(record, InboxClosedRecord)
     )
   ) {
-    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake or run-wait record");
+    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake, run-wait or close record");
   }
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
@@ -2914,6 +2951,9 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   } else if (isExactly(record, RunWaitingRecord) && delta.kind === "runWaiting") {
     if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
     observers = [new RunWaiting({ nodeIds: record.nodeIds })];
+  } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
+    if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
+    observers = [];
   } else {
     throw new TypeError("frontier record and prevalidated delta disagree");
   }
@@ -2965,6 +3005,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
       break;
     case "runWaiting":
+    case "inboxClosed":
       break;
   }
   state.nextSequence = prepared.expectedSequence + 1;
@@ -3146,7 +3187,7 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
   }
 }
 
-/** Permit only the canonical dispatch, resume, step, stop, wait, wake or run-wait trace change before append. */
+/** Permit only the canonical dispatch, resume, step, stop, wait, wake, run-wait or close trace change before append. */
 function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition): void {
   const delta = prepared._plan.traceDelta;
   const record = prepared.record;
@@ -3181,7 +3222,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace step must only advance the accepted sequence");
     }
-  } else if (isExactly(record, RunStoppedRecord) || isExactly(record, RunWaitingRecord)) {
+  } else if (isExactly(record, RunStoppedRecord) || isExactly(record, RunWaitingRecord) || isExactly(record, InboxClosedRecord)) {
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace stop must only advance the accepted sequence");
     }
@@ -3194,7 +3235,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
       throw new RangeError("frontier trace wake must bring back its node's parked start");
     }
   } else {
-    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake or run-wait record");
+    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait or close record");
   }
   if (!isExactly(record, NodeWaitingRecord) && delta.parked !== null) {
     throw new RangeError("only a wait can park a start");
@@ -3667,6 +3708,16 @@ function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
   const open = waiting.callIds.find((callId) => !timedOut.has(callId) && w.calls.get(callId)?.state === "open");
   if (open !== undefined && !w.interrupts.has(nodeId)) {
     throw new RangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
+  }
+}
+
+/** Require a close record to name an open inbox the START declares. */
+function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
+  if (inboxElementType(state, record.inbox) === null) {
+    throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is no inbox the START declares`);
+  }
+  if (state.waits.inboxes.get(record.inbox)?.closed === true) {
+    throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is already closed`);
   }
 }
 

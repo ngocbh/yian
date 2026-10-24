@@ -341,7 +341,6 @@ test("a fresh RunState holds an empty waits fold and no inbox events", () => {
 });
 
 test.each<[string, () => RunRecord]>([
-  ["InboxClosedRecord", () => new InboxClosedRecord("msgs")],
   ["RunCancelledRecord", () => new RunCancelledRecord()],
   ["RunFailedRecord", () => new RunFailedRecord(FAILURE)],
 ])("the reducer doesn't prepare a %s yet", (name, build) => {

@@ -2291,7 +2291,7 @@ test("a learnable frontier plan holding an outcome record is refused", () => {
   expectError(
     () => commitPrepared(log, state, forged),
     RangeError,
-    "frontier trace requires a dispatch, resume, step, stop, wait, wake or run-wait record",
+    "frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait or close record",
   );
 
   expect(log.nextSequence).toBe(4);

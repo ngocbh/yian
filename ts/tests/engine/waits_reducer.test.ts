@@ -15,6 +15,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import {
   canonicalTyped,
+  InboxClosedRecord,
   MemoryRunLog,
   NodeStepRecord,
   NodeWaitingRecord,
@@ -31,6 +32,7 @@ import {
   commitPrepared,
   DeliveryRefused,
   prepareComplete,
+  prepareInboxClosed,
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeSucceeded,
@@ -747,4 +749,62 @@ test("a resume's freed events go to a take that waited meanwhile, which then com
   expect(state.pool.store.get("b")!.toObject()).toEqual({ events: ["hi"], closed: false });
   start(log, state, "a");
   wait(log, state, "a", takeEntry("a"));
+});
+
+/** Commit a close of `inbox` (default `msgs`) and return its seq. */
+function close(log: RunLog, state: RunState, inbox = "msgs"): number {
+  return commit(log, state, prepareInboxClosed(state, inbox)!);
+}
+
+describe("inbox_closed", () => {
+  test("refusals come in order; a second close is a no-op", () => {
+    const ended = started(waitFlow(tool("ask", "ask")));
+    finish(ended.log, ended.state, "ask", "done");
+    expect(refused(ended.state, ended.log, () => prepareInboxClosed(ended.state, "other")).reason).toBe("ended");
+    const fresh = new RunState(waitFlow(tool("heard", "take")));
+    const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
+    commitPrepared(log, fresh, prepareRunStarted(fresh, startData()));
+    expect(refused(fresh, log, () => prepareInboxClosed(fresh, "msgs")).reason).toBe("not_started");
+    const run = started(paramFlow([MSGS, NAME], tool("heard", "take")));
+    expect(refused(run.state, run.log, () => prepareInboxClosed(run.state, "name")).reason).toBe("unknown_inbox");
+    const prepared = prepareInboxClosed(run.state, "msgs")!;
+    expect(prepared.observers).toEqual([]);
+    commitPrepared(run.log, run.state, prepared);
+    expect(prepareInboxClosed(run.state, "msgs")).toBeNull();
+    expect(() => prepareRecord(run.state, new InboxClosedRecord("msgs"))).toThrow(/already closed/);
+    expect(refused(run.state, run.log, () => prepareSend(run.state, "msgs", "late")).reason).toBe("inbox_closed");
+    expect(() => prepareRecord(run.state, new PoolCommitRecord(START_ID, `${START_ID}.msgs`, { kind: "str", value: "late" }))).toThrow(
+      /closed/,
+    );
+  });
+
+  test("a close answers a waiting take with nothing assigned; it commits closed with no events", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take")));
+    start(log, state, "heard");
+    wait(log, state, "heard", takeEntry("heard"));
+    close(log, state);
+    expect(state.waits.calls.get(call("heard"))!.closedInbox).toBe(true);
+    expect(wakeableNodes(state.waits)).toEqual(["heard"]);
+    commitPrepared(log, state, prepareNodeWoken(state, "heard"));
+    expect(() => prepareTakeCommit(state, "heard", takeOf([], false))).toThrow(/closed true/);
+    takeAndSucceed(log, state, "heard", takeOf([], true));
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: [], closed: true });
+  });
+
+  test("a take can't wait on a closed inbox; it commits what is queued, closed only when it takes the last", () => {
+    const { log, state } = started(waitFlow(tool("a", "take"), tool("b", "take")));
+    const seqs = [send(log, state, "x"), send(log, state, "y")];
+    close(log, state);
+    start(log, state, "a");
+    start(log, state, "b");
+    expect(() => prepareTakeCommit(state, "a", takeOf([seqs[0]!], true))).toThrow(/closed false/);
+    takeAndSucceed(log, state, "a", takeOf([seqs[0]!], false));
+    takeAndSucceed(log, state, "b", takeOf([seqs[1]!], true));
+    const { log: log2, state: state2 } = started(waitFlow(tool("heard", "take")));
+    close(log2, state2);
+    start(log2, state2, "heard");
+    expect(() => prepareNodeWaiting(state2, "heard", { callIds: [call("heard")], waits: [takeEntry("heard")] })).toThrow(
+      /closed inbox/,
+    );
+  });
 });

@@ -131,12 +131,12 @@ export class OllamaChat implements NdjsonProtocol {
    * `{role, content, thinking, tool_calls}`: its text parts joined with `"\n"`, its reasoning
    * texts joined with `""`, and each call in part order as `{id, function: {name, arguments}}`,
    * the arguments copied (`{}` for an invalid call); refusal parts are not sent. Reasoning goes
-   * back only when every reasoning record on the message reads back for this protocol, provider, model and
-   * account; otherwise none of it is sent and `onReplayDegraded` is called once for the message
-   * with the first reason in part order. A reasoning part without a payload is never sent and
-   * signals nothing. A tool message is one `{role: "tool", content, tool_name, tool_call_id}` per
-   * result; `isError` is not sent. An empty `content`, `thinking` and call list are left out, so an
-   * empty assistant message is `{role: "assistant"}`.
+   * back only when every reasoning record on the message reads back for this protocol, provider,
+   * model and account; otherwise none of it is sent and `onReplayDegraded` is called once for the
+   * message with the first reason in part order. A reasoning part without a payload is never sent
+   * and signals nothing. A tool message is one `{role: "tool", content, tool_name, tool_call_id}`
+   * per result; `isError` is not sent. An empty `content`, `thinking` and call list are left out,
+   * so an empty assistant message is `{role: "assistant"}`.
    *
    * Each tool is `{type: "function", function: {name, description, parameters}}`, the parameters
    * copied as written; `strict`, the tool choice and `parallelToolCalls` are not sent. The block

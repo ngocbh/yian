@@ -724,8 +724,8 @@ export class Message {
 
   /**
    * Return the message as `yian.message.v1` JSON: `format`, `role`, `parts`, then `author`,
-   * `protocol` and `provider_payload` unless `null`. Payloads are copies, so changing the result leaves the
-   * message unchanged.
+   * `protocol` and `provider_payload` unless `null`. Payloads are copies, so changing the result
+   * leaves the message unchanged.
    */
   toJSON(): JsonObject {
     const data: JsonObject = {

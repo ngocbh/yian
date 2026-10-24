@@ -152,6 +152,8 @@ function intervalWithin(source: Type, sink: Type): boolean {
  * never fits a union.
  * Every non-null type without a `file` in it fits `Any`; `Any` fits only `Any` (and
  * `Optional(Any)`), since load can't tell which JSON value it holds.
+ * `Inbox(T)` relates to `Inbox(U)` as `T` to `U`, and to nothing else, `Any` and `object`
+ * included.
  *
  * @param source - Type guaranteed by the producer.
  * @param sink - Type required by the consumer slot.
@@ -160,6 +162,9 @@ function intervalWithin(source: Type, sink: Type): boolean {
 export function typesCompatible(source: Type, sink: Type): boolean {
   if (source.kind === ValueKind.NONE) return sink.kind === ValueKind.NONE || sink.nullable;
   if (source.nullable && !sink.nullable) return false;
+  if (source.kind === ValueKind.INBOX || sink.kind === ValueKind.INBOX) {
+    return source.kind === sink.kind && typesCompatible(source.element!, sink.element!);
+  }
   if (sink.kind === ValueKind.ANY) return !hasFile(source);
   if (source.kind === ValueKind.ANY) return false;
   const sourceIsList = isListKind(source.kind);
@@ -241,7 +246,8 @@ const STRING_STORED: ReadonlySet<ValueKind> = new Set([ValueKind.DATE, ValueKind
  * every non-null value holds a `file`, which are disjoint from it. Load treats `file` as
  * disjoint from `Any`, `object`, and a record shaped like a file's JSON form, so a typed `file`
  * slot needs a `file`-typed source; the JSON form is accepted at runtime where load can't tell
- * (an untyped producer, a value decoded from a run record).
+ * (an untyped producer, a value decoded from a run record). `Inbox(T)` relates to `Inbox(U)` as
+ * `T` to `U`, and to nothing else, `Any` and `object` included.
  *
  * @param inferred - Type the producing expression is inferred to have.
  * @param declared - Type the binding declares.
@@ -291,6 +297,10 @@ function listElement(typ: Type): Type {
 
 /** Classify the non-null values of `inferred` against `declared`. */
 function relateNonNull(inferred: Type, declared: Type): TypeRelation {
+  if (inferred.kind === ValueKind.INBOX || declared.kind === ValueKind.INBOX) {
+    if (inferred.kind !== declared.kind) return "disjoint";
+    return typeRelation(inferred.element!, declared.element!);
+  }
   if (declared.kind === ValueKind.ANY) {
     if (!hasFile(inferred)) return "fits";
     return requiresFile(inferred) ? "disjoint" : "narrower";

@@ -10,8 +10,13 @@
  * not started yet, a failed check after a committed group included, with interrupted brackets,
  * while a run stop still wins.
  *
+ * What learning reads of each path comes from the steps it recorded (`stepsMaterial`): a reply's
+ * runnable calls, then the results recorded for them in call order. So a failing group shows the
+ * results its calls recorded, a failed check shows the call it refused with no result, and calls an
+ * interrupt skipped show with no result.
+ *
  * The tools here block on a gate the test settles, and log when they start and end; most rows run
- * `runAgent` directly with a sink for events, and the host-callback and run-stop rows
+ * `runAgent` directly with sinks for events and steps, and the host-callback and run-stop rows
  * run the node through `FlowEngine`.
  */
 
@@ -20,21 +25,34 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
-import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
+import { Message, Response, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
-import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
-import { runAgent } from "../../src/nodes/agent/loop.ts";
+import {
+  MemoryContext,
+  ModelTextInteraction,
+  ToolCallInteraction,
+  ToolResultInteraction,
+} from "../../src/memory/contracts.ts";
+import {
+  AgentLoopError,
+  type AgentRunContext,
+  DEFAULT_SYSTEM,
+  ToolIterationLimitError,
+} from "../../src/nodes/agent/context.ts";
+import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
+import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Steering } from "../../src/nodes/base.ts";
+import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { Skill } from "../../src/skills/catalog.ts";
-import { LOAD_SKILL } from "../../src/skills/tool.ts";
+import { LOAD_SKILL, loadSkillTool } from "../../src/skills/tool.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { ReportedToolError, ToolCheckError } from "../../src/tools/errors.ts";
 import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
 import { aborted, engine, graph, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -140,7 +158,11 @@ function refusing(name: string, log: string[]): StandardSchemaV1 {
   };
 }
 
-/** One `runAgent` over `model` with recording sinks; `onEvent` also sees each event. */
+/**
+ * One `runAgent` over `model` with recording sinks; `onEvent` also sees each event. `material()`
+ * rebuilds what learning reads from the recorded steps, with the messages and tool specs the run
+ * sent.
+ */
 function agent(
   model: ScriptedModel,
   toolset: ToolSet,
@@ -151,9 +173,11 @@ function agent(
     nodeId?: string;
     onEvent?: (event: unknown) => void;
     steering?: Steering;
+    maxToolIterations?: number;
   } = {},
 ) {
   const events: unknown[] = [];
+  const steps: ValueRecord[] = [];
   const ctx: AgentRunContext = {
     nodeId: options.nodeId ?? "n",
     messages: [userMessage("go")],
@@ -162,8 +186,9 @@ function agent(
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
-    maxToolIterations: -1,
+    maxToolIterations: options.maxToolIterations ?? -1,
     signal: options.signal,
+    steps: new NodeSteps(1, [], (step) => steps.push(step)),
     memoryContext: new MemoryContext(),
     toolset,
     emitEvent: (event) => {
@@ -182,8 +207,29 @@ function agent(
     () => (settled = true),
     () => (settled = true),
   );
-  return { running, events, isSettled: () => settled };
+  const material = () => {
+    const system = new Message({ role: "system", parts: [new TextPart(systemPromptWithMemory(DEFAULT_SYSTEM, []))] });
+    const specs = toolset
+      .resolve(toolset.expand(tools))
+      .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
+    if (ctx.skills.length > 0) specs.push(loadSkillTool());
+    return stepsMaterial(steps, { messages: [system, ...ctx.messages], tools: specs, structured: async () => null });
+  };
+  return { running, events, material, isSettled: () => settled };
 }
+
+/** What learning reads of `run`, checking that every recorded request matched its rebuild. */
+async function learned(run: { material: ReturnType<typeof agent>["material"] }) {
+  const { interactions, digestOk } = await run.material();
+  expect(digestOk).toBe(true);
+  return interactions;
+}
+
+/** A learner's view of a call to `name` with `args`. */
+const called = (name: string, args: JsonObject = {}) => new ToolCallInteraction(name, args);
+
+/** A learner's view of a result `text` from `name`. */
+const returned = (name: string, text: string) => new ToolResultInteraction(name, text);
 
 /** The tool events among `events`, as `started <name>` and `finished <name> <result or error>`. */
 function toolEvents(events: readonly unknown[]): string[] {
@@ -232,6 +278,13 @@ test("two safe calls run together and commit in call order", async () => {
   expect((await run.running).value).toBe("done");
   expect(log).toEqual(["a start", "b start", "b end", "a end"]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", "a result"), result(1, "b", "b result")]);
+  expect(await learned(run)).toEqual([
+    called("a", { n: 1 }),
+    called("b", { n: 2 }),
+    returned("a", "a result"),
+    returned("b", "b result"),
+    new ModelTextInteraction("done"),
+  ]);
   // Started in call order, finished in finish order.
   expect(toolEvents(run.events)).toEqual(["started a", "started b", "finished b b result", "finished a a result"]);
 });
@@ -296,6 +349,7 @@ test("an event sink failing a group's second start starts no later call of the g
   expect(await rejected(run.running)).toBe(fault);
   expect(a.ctx!.signal.reason).toBe(fault);
   expect(log).toEqual(["a start", "a end"]);
+  expect(await learned(run)).toEqual([called("a"), called("b"), called("c")]);
 });
 
 test("a reported error in a group doesn't abort its sibling; both commit in call order", async () => {
@@ -400,6 +454,8 @@ test("an ungranted call fails the node after the group before it ran and committ
   expect((error as Error).message).toContain("requested tool 'x', but it is not granted");
   expect(log).toEqual(["a start", "a end"]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result"]);
+  // The reply's calls, then the result the group before the refused call recorded.
+  expect(await learned(run)).toEqual([called("a"), called("x"), returned("a", "a result")]);
 });
 
 test("invalid arguments fail the node after the group before them ran and committed", async () => {
@@ -416,6 +472,7 @@ test("invalid arguments fail the node after the group before them ran and commit
   expect(error).toBeInstanceOf(RangeError);
   expect(log).toEqual(["a start", "a end"]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b RangeError"]);
+  expect(await learned(run)).toEqual([called("a"), called("b", { bogus: 1 }), returned("a", "a result")]);
 });
 
 test("a call after an unsafe one is validated only once the unsafe call ran", async () => {
@@ -454,6 +511,7 @@ test("a reported error from the argument check is the call's error result, and t
   expect(log).toEqual([]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", "no such file", true)]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a ReportedToolError"]);
+  expect(await learned(run)).toEqual([called("a"), returned("a", "no such file"), new ModelTextInteraction("done")]);
 });
 
 test("nothing in a group starts until the group is formed", async () => {
@@ -514,6 +572,26 @@ test("a failing call aborts its siblings, and the node rejects with it once all 
     "finished a TypeError",
   ]);
   expect(model.requests).toHaveLength(1);
+  expect(await learned(run)).toEqual([called("a"), called("b"), called("c"), called("d")]);
+});
+
+test("a failing group shows learning the results its calls recorded before the failure", async () => {
+  const log: string[] = [];
+  const failure = new Error("b boom");
+  const a = gated("a", log);
+  const b = gated("b", log);
+  const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: a.tool, b: b.tool }), ["a", "b"]);
+
+  await a.entered;
+  await b.entered;
+  a.resolve("a result");
+  await flush();
+  b.reject(failure);
+
+  expect(await rejected(run.running)).toBe(failure);
+  expect(log).toEqual(["a start", "b start", "a end", "b end"]);
+  expect(await learned(run)).toEqual([called("a"), called("b"), returned("a", "a result")]);
 });
 
 test.each([
@@ -553,6 +631,7 @@ test.each([
 
   expect(await rejected(run.running)).toBe(reason);
   expect(model.requests).toHaveLength(1);
+  expect(await learned(run)).toEqual([called("a"), called("b")]);
 });
 
 test("a settled group's signal no longer follows the node's signal", async () => {
@@ -677,6 +756,14 @@ test("an interrupt while a safe group runs lets every call of it finish and skip
     "started c",
     "finished c interrupted",
   ]);
+  // The skipped call shows with no result.
+  expect(await learned(run)).toEqual([
+    called("a"),
+    called("b"),
+    called("c"),
+    returned("a", "a result"),
+    returned("b", "b result"),
+  ]);
 });
 
 test("an interrupt seen at a later call's check skips it and the rest", async () => {
@@ -702,6 +789,7 @@ test("an interrupt seen at a later call's check skips it and the rest", async ()
     "started c",
     "finished c interrupted",
   ]);
+  expect(await learned(run)).toEqual([called("a"), called("b"), called("c"), returned("a", "a result")]);
 });
 
 test("an interrupt inside a group before a failed check commits the group and skips the failed call", async () => {
@@ -719,6 +807,7 @@ test("an interrupt inside a group before a failed check commits the group and sk
   expect((await run.running).value).toBe("");
   expect(log).toEqual(["b validate", "a start", "a end"]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b interrupted"]);
+  expect(await learned(run)).toEqual([called("a"), called("b"), returned("a", "a result")]);
 });
 
 test("a run stop inside a group before a failed check rejects with the stop, and the failed call gets no brackets", async () => {
@@ -739,4 +828,17 @@ test("a run stop inside a group before a failed check rejects with the stop, and
   expect(await rejected(run.running)).toBe(reason);
   expect(log).toEqual(["b validate", "a start", "a end"]);
   expect(toolEvents(run.events)).toEqual(["started a"]);
+  expect(await learned(run)).toEqual([called("a"), called("b")]);
+});
+
+test("a reply at the tool-iteration cap fails the node, running none of its calls, and learning reads its calls", async () => {
+  const log: string[] = [];
+  const model = new ScriptedModel([callsReply(["a", { n: 1 }], ["b"]), textReply("done")], CONFIG);
+  const run = agent(model, new ToolSet({ a: instant("a", log), b: instant("b", log) }), ["a", "b"], {
+    maxToolIterations: 1,
+  });
+
+  expect(await rejected(run.running)).toBeInstanceOf(ToolIterationLimitError);
+  expect(log).toEqual([]);
+  expect(await learned(run)).toEqual([called("a", { n: 1 }), called("b")]);
 });

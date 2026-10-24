@@ -3600,7 +3600,7 @@ answer completed as an error fails the node and is never retried. A `timeout` (a
 `AskRequest.deadline` before the handler runs. When the deadline passes with no answer the output
 is null: a declared `output: Optional(T)` succeeds with null, so a `case` can route on it (the
 host's answer schema is `T`, so null always means nobody answered), and any other declared output
-fails the node with failure code `tool.timeout`; an `ask` with no `output:` returns null. Since
+fails the node with failure code `tool.timeout`, as does an `ask` with no `output:` (which reads as `str`). Since
 null means nobody answered, `complete` refuses a null answer for an `ask`.
 
 Changed (TS yian): an AGENT's tool call may wait too. When a tool it calls (its `ask_user`

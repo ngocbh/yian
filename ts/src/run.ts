@@ -92,6 +92,7 @@ import {
 } from "./llm_clients/connection.ts";
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
+import { Message, ToolCallPart } from "./llm/messages.ts";
 import {
   type LearningResult,
   type Memory,
@@ -2138,7 +2139,10 @@ export interface PendingCall {
   readonly node: string;
   /** The tool's id (`"ask"`, or a host tool's). */
   readonly tool: string;
-  /** The arguments its `pending` step recorded, or `null` when it recorded none. */
+  /**
+   * The arguments its `pending` step recorded, or for an agent's call those of the reply's tool
+   * call; `null` when none.
+   */
   readonly arguments: JsonObject | null;
   /** The seq of its `pending` step. */
   readonly pendingSeq: number;
@@ -2159,7 +2163,9 @@ export interface PendingCall {
 export function pendingCalls(log: string): readonly PendingCall[] {
   const waits = new WaitsState();
   // Each unsettled call's recorded arguments; a settled node's calls leave the fold, so theirs go.
-  const args = new Map<string, JsonObject>();
+  const args = new Map<string, JsonObject | null>();
+  // Each running node's latest `model_call` step, which holds its agent calls' arguments.
+  const replies = new Map<string, Readonly<JsonObject>>();
   let first = true;
   for (const { envelope } of iterRunRecords(log)) {
     if (first && !(envelope.record instanceof RunStartedRecord)) {
@@ -2168,9 +2174,16 @@ export function pendingCalls(log: string): readonly PendingCall[] {
     first = false;
     applyWaitsRecord(waits, envelope);
     const record = envelope.record;
-    if (record instanceof NodeStepRecord && record.step["kind"] === "pending") {
-      args.set(String(record.step["call_id"]), record.step["arguments"] as JsonObject);
+    if (record instanceof NodeStepRecord && record.step["kind"] === "model_call") {
+      replies.set(record.nodeId, record.step);
+    } else if (record instanceof NodeStepRecord && record.step["kind"] === "pending") {
+      const step = record.step;
+      const value = Object.hasOwn(step, "reply")
+        ? agentCallArguments(replies.get(record.nodeId), Number(step["index"]))
+        : (step["arguments"] as JsonObject);
+      args.set(String(step["call_id"]), value);
     } else if (isOutcomeRecord(record)) {
+      replies.delete((record as { nodeId: string }).nodeId);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
     }
   }
@@ -2202,11 +2215,26 @@ function openHostCalls(waits: WaitsState, argumentsOf: (call: Call) => JsonObjec
     }));
 }
 
-/** The arguments of `call`'s `pending` step among its node's steps in `state`, or `null`. */
+/**
+ * The arguments of `call`'s `pending` step among its node's steps in `state` (for an agent's call,
+ * those of its reply's tool call), or `null`.
+ */
 function stateArguments(state: RunState, call: Call): JsonObject | null {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
   const step = steps.find((entry) => entry["kind"] === "pending" && entry["call_id"] === call.callId);
-  return step === undefined ? null : ((step["arguments"] as JsonObject | undefined) ?? null);
+  if (step === undefined) return null;
+  if (Object.hasOwn(step, "reply")) return agentCallArguments(steps[Number(step["reply"]) - 1], Number(step["index"]));
+  return (step["arguments"] as JsonObject | undefined) ?? null;
+}
+
+/** The arguments of runnable tool call `index` of the reply a `model_call` step recorded, or `null`. */
+function agentCallArguments(reply: Readonly<JsonObject> | undefined, index: number): JsonObject | null {
+  if (reply === undefined || reply["kind"] !== "model_call") return null;
+  // A call whose arguments didn't parse never ran, so it has no index.
+  const calls = Message.fromJSON(reply["output"]).parts.filter(
+    (part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null,
+  );
+  return (calls[index]?.arguments as JsonObject | undefined) ?? null;
 }
 
 /**

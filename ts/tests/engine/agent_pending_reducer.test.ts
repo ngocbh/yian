@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { pendingCalls } from "../../src/run.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import { NodeStepRecord, RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
@@ -219,4 +220,15 @@ describe("complete on an agent's call", () => {
     expect(prepareComplete(state, id, { output: "yes" })).toBeNull();
     expect(() => prepareComplete(state, id, { output: "no" })).toThrow(/already answered/);
   });
+});
+
+test("pendingCalls reads an agent call's arguments from its reply", () => {
+  const { log, state, path } = started(paramFlow([], agent("a")));
+  start(log, state, "a");
+  step(log, state, "a", reply(["c1", "ask_user", { question: "Ship?" }], ["c2", "lookup", { x: 1n }]));
+  const seq = step(log, state, "a", pendingOf("a", 1, 1, "c2", "lookup"));
+  log.close();
+  expect(pendingCalls(path)).toEqual([
+    { callId: agentCall("a", 1, 1), node: "a", tool: "lookup", arguments: { x: 1n }, pendingSeq: seq, deadline: null },
+  ]);
 });

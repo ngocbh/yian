@@ -308,9 +308,12 @@ A case can't hold code, so its host is declared under `host`.
   `ConnectionError`; any other name raises a plain error with that class name.
   A call after the last entry fails the case before any result is compared, since it is the
   case's own error; an entry left unused fails it after the comparisons.
-- **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's `ask_user` tool gives to the
-  calling node, in order; the same rules when they run out or are left over. A case with `human`
-  doesn't declare a tool named `ask_user`.
+- **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's ask handler gives to the
+  calling node, in order; the same rules when they run out or are left over. The one handler
+  answers a TOOL `ask` (TS) and an agent's `ask_user` tool. In TS it declares, as extra inputs,
+  every input the flow's TOOL `ask` nodes pass beyond `prompt`, `questions` and `timeout` (such
+  as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
+  `ask` or `ask_user`.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
   and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules
@@ -439,8 +442,10 @@ A case can't hold code, so its host is declared under `host`.
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
 attempt, node}`.
-`ask_user` calls from `human` are listed too; their `args` are the request in data form
-(`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`; nulls left out).
+Calls answered from `human` are listed too, under the name they were made by (`ask` for a
+TOOL `ask`, `ask_user` for an agent's or a HUMAN_INPUT's call); their `args` are the request in
+data form (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`, `deadline`
+and the host's extras; nulls left out).
 HUMAN_INPUT never sends `options`; a model's `ask_user` call can.
 
 `expect.memory` (it needs `host.memory`) is `{<key>: <text>}`: after the main run and its

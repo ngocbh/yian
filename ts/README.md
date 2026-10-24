@@ -1264,8 +1264,12 @@ Node 22, and so does every unit test; a change keeps both green.
   unchanged. Sources are keyed by `sourceKey`. Typed values (`SourceEntry.valueJson`,
   `TraceTerminal.outputJson`, the system values) are held as canonical log text (`logJson` of the
   typed wire) and decoded on each read, so every read gets a fresh value and equality is text
-  equality. An occurrence holds its envelope's round trip `decodeRecord(encodeRecord(envelope))`
-  and the steps its node recorded across its starts. `occurrenceMaterial(trace, source, caps)`
+  equality. An occurrence holds its envelope's round trip `decodeRecord(encodeRecord(envelope))`,
+  the steps its node recorded across its starts, and its forward capture (`capture`: the record's,
+  or for a derived record, which holds none, the one the reducer rebuilt from its sources).
+  `boundInputs` rebuilds its bound inputs on first read by binding the node again (`rebind`, over
+  the node and wiring it ran with) from the values its capture route read, looked up in the
+  trace's history by the producer each route source names (`traceResolver`); records hold none. `occurrenceMaterial(trace, source, caps)`
   rebuilds what learning reads of an occurrence through its node's `learningMaterial` (an AGENT's
   render, recall and interactions, each recorded request checked against its digest), and
   `evaluationEvidence` shapes it as AGENT backward's `_evaluation_evidence`; `backwardContext`
@@ -1381,10 +1385,11 @@ START is ready after the START inputs' commit; a success walks its
 - Changed: a session's `commit` may resolve to `undefined` or `null`.
 - Changed: a restored snapshot must equal the recorded one by value and type (`1` and `1.0` differ,
   where Python's `==` treats them equal).
-- `src/runtime/backward.ts` holds `learningMaterials(state, { memory, models, expandTools,
-  onEvent })`, which rebuilds every occurrence's learning material once per attempt (one whose
-  rebuilt request misses its digest, or whose render, recall, structured model or tool groups
-  can't be rebuilt, has no material: learning reads no prompt, sections or interactions of it,
+- `src/runtime/backward.ts` holds `learningMaterials(state, { memory, models, onEvent })`, which
+  rebuilds every occurrence's learning material once per attempt, expanding tool groups with the
+  ones `run_started` recorded (one whose rebuilt request misses its digest, or whose render,
+  recall or structured model can't be rebuilt, or that grants a tool the recorded specs lack, has
+  no material: learning reads no prompt, sections or interactions of it,
   and it is reported as `ReplayDegraded` `rebuilt_request_differs`), and
   `computeBackward(trace, rootFeedback, { cache, materials, models, onEvent })`: one reverse walk over the
   accepted occurrences that gathers each occurrence's messages, calls its retained backward handler

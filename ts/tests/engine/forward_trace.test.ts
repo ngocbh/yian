@@ -72,7 +72,8 @@
  *
  * TS-only (bound inputs from the route): a learnable chat's replayed trace rebuilds each
  * occurrence's bound inputs by rebinding its node from the values its route read, a template
- * binding (`reply`) and a `+` binding (`__end__`) after the loop pruned their nodes.
+ * binding (`reply`) and a `+` binding (`__end__`) after the loop pruned their nodes; a replayed
+ * derived record (an inner `__end__`) that holds a forward capture is refused.
  *
  * TS-only (frontier trace), on `learnableStarted` with START's `NodeStarted` committed: a learnable
  * `RunStopped` carries a sequence-only trace delta and commits; a forged stop plan whose trace
@@ -250,7 +251,7 @@
  */
 
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -4567,4 +4568,37 @@ test("an occurrence's bound inputs are rebuilt from its route: a template and a 
     log: "\nUser: a\nAssistant: A\nUser: b\nAssistant: B",
   });
   expect(of("chat#0/ask").boundInputs).toEqual({});
+});
+
+/** A run-log line as plain JSON. */
+type Wire = Record<string, unknown>;
+
+test("a replayed derived record holding a forward capture is refused (TS-only)", async () => {
+  const log = join(boundDir, "derived-capture.jsonl");
+  const config = { provider: "anthropic", model: "claude-test" };
+  const answers = ["a", "b", "c"];
+  const chat = await loadFlow(BOUND_CHAT, { sourceLabel: "flow.yaml" });
+  const result = await runFlow(chat, {}, {
+    env: NO_ENV,
+    log,
+    numWorkers: 0,
+    learnable: true,
+    models: serving(new ScriptedModel([textReply("A"), textReply("B"), textReply("C")], config)),
+    tools: { ask_user: () => answers.shift()! },
+  });
+  expect(result.status).toBe("succeeded");
+  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);
+  const succeeded = (nodeId: string) =>
+    lines.find((line) => line["kind"] === "node_succeeded" && (line["payload"] as Wire)["node_id"] === nodeId)!;
+  const end = succeeded("chat#0/__end__")["payload"] as Wire;
+  // A derived record holds none: it is rebuilt from the record's sources.
+  expect(end["forward_capture"]).toBeNull();
+  end["forward_capture"] = (succeeded("chat#0/ask")["payload"] as Wire)["forward_capture"];
+  writeFileSync(log, `${lines.map((line) => logJson(line)).join("\n")}\n`);
+  const reopened = JsonlRunLog.resume(log);
+  try {
+    expectError(() => replayRunLog(chat, reopened), RangeError, "a derived record holds no forward capture");
+  } finally {
+    reopened[Symbol.dispose]();
+  }
 });

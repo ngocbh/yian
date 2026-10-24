@@ -39,7 +39,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext, MemoryScope, MemorySection, type RecallContext } from "../../src/memory/contracts.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
-import { AgentNode, renderAgentPrompt } from "../../src/nodes/agent/node.ts";
+import { type AgentPrompt, AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { advance, runFlow } from "../../src/run.ts";
@@ -53,6 +53,17 @@ import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { crashAfter, editRecordedFlow, nodeFlow, rejected, serving, textReply } from "./run_state_fixtures.ts";
+
+/** The node's private render, which `forward` and `learningMaterial` share. */
+function renderPrompt(
+  node: AgentNode,
+  inputs: Readonly<Record<string, unknown>>,
+  skills: ReadonlyMap<string, Skill> | null,
+): AgentPrompt {
+  type Inputs = Readonly<Record<string, unknown>>;
+  type Render = { renderPrompt(inputs: Inputs, skills: ReadonlyMap<string, Skill> | null): AgentPrompt };
+  return (node as unknown as Render).renderPrompt(inputs, skills);
+}
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-system-prompt-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -120,7 +131,7 @@ test.each([
   expect(model.requests).toHaveLength(tools && structured ? 2 : 1);
   const user = model.requests[0]!.messages[1]!;
   expect([user.role, user.text()]).toEqual(["user", "Hello from Ada"]);
-  expect(renderAgentPrompt(node, { name: "Ada", title: "CTO" }, null).baseSystemPrompt).toBe(RENDERED);
+  expect(renderPrompt(node, { name: "Ada", title: "CTO" }, null).baseSystemPrompt).toBe(RENDERED);
 });
 
 test("the system prompt reads the node variables", async () => {
@@ -172,7 +183,7 @@ test("skills append after the authored prompt and recall skips them", async () =
 test.each([
   ["a text prompt", "Hi ${name}" as const],
   ["a list prompt", [{ splice: "history" }, { role: "user", text: "Now: ${name}" }] as const],
-])("renderAgentPrompt returns what forward sends (%s)", async (_label, prompt) => {
+])("the render returns what forward sends (%s)", async (_label, prompt) => {
   const model = scripted("done");
   const skill = new Skill({ name: "review", description: "Review code changes.", instructions: "Read the diff." });
   const skills = new Map([["review", skill]]);
@@ -181,13 +192,13 @@ test.each([
   const inputs = { name: "Ada", history: [{ role: "user", text: "earlier" }, { role: "assistant", text: "noted" }] };
 
   expect(await node.forward(inputs, { skills, models: serving(model) })).toEqual(new Output("done"));
-  const rendered = renderAgentPrompt(node, inputs, skills);
+  const rendered = renderPrompt(node, inputs, skills);
 
   const [system, ...sent] = model.requests[0]!.messages;
   expect(rendered.baseSystemPrompt).toBe(system!.text());
   expect(rendered.baseSystemPrompt).toBe(systemPromptWithSkills("You are Ada.", [skill]));
   expect(rendered.systemPrompt).toBe("You are Ada.");
-  expect(rendered.messages.map((message) => message.toJSON())).toEqual(sent.map((message) => message.toJSON()));
+  expect(rendered.modelMessages().map((message) => message.toJSON())).toEqual(sent.map((message) => message.toJSON()));
   expect(rendered.promptText).toBe(sent.at(-1)!.text());
   expect(rendered.skills).toEqual([skill]);
 });

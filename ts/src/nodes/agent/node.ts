@@ -287,8 +287,8 @@ function renderPromptList(nodeId: string, items: readonly PromptItem[], record: 
 
 /** The prompt one AGENT invocation sends, rendered from its inputs, variables and granted skills. */
 export interface AgentPrompt {
-  /** The prompt's model messages, after the system message, built when read; the last is the user's. */
-  readonly messages: readonly ModelMessage[];
+  /** Build the prompt's model messages, after the system message; the last is the user's. */
+  modelMessages(): readonly ModelMessage[];
   /** The last message's text, which recall and learning read as the prompt. */
   readonly promptText: string;
   /** The authored system prompt rendered, or `DEFAULT_SYSTEM`; recall reads it. */
@@ -297,87 +297,6 @@ export interface AgentPrompt {
   readonly baseSystemPrompt: string;
   /** The granted skills, sorted by name. */
   readonly skills: readonly Skill[];
-}
-
-/**
- * Render what one invocation of `node` sends: the pure half of `AgentNode.forward`, which learning
- * also calls with the recorded skills.
- *
- * The authored `systemPrompt` renders against the same inputs and variables as `prompt`; without
- * one it is `DEFAULT_SYSTEM`. A text prompt renders into one user message, a list prompt into its
- * messages (`renderPromptList`). `options.capture` receives the actual template, the resolved
- * variable values and domains, and the rendered prompt once, with the parts established so far
- * when rendering fails; unknown variables or an unfinished prompt stay `null`, and capture faults
- * propagate. A list prompt's template and rendered prompt are `logJson` text: the authored items,
- * and the `{role, text}` messages and each spliced `Message` as its JSON without `protocol` or
- * `provider_payload`.
- *
- * @param inputs Delivered inputs, kept separate from local variables.
- * @param skills The run's skills by name, or `null` when the host supplied none.
- * @param options `capture` is the render capture; `signal` is checked after rendering, before the
- *   skill grants are read.
- * @throws RangeError when a variable collides with a declared or delivered input.
- * @throws ExpressionError as `forward` documents for a prompt that can't render.
- * @throws SkillError when the node grants skills `skills` doesn't hold.
- * @throws CapabilityFault when the capture fails; the signal's reason once it aborted.
- */
-export function renderAgentPrompt(
-  node: AgentNode,
-  inputs: Readonly<Record<string, unknown>>,
-  skills: ReadonlyMap<string, Skill> | null,
-  options: { capture?: NodeCaps["captureRender"]; signal?: AbortSignal } = {},
-): AgentPrompt {
-  const { capture, signal } = options;
-  const template = typeof node.prompt === "string" ? node.prompt : logJson(authoredPrompt(node.prompt));
-  const captured: Record<string, unknown> | null =
-    capture === undefined
-      ? null
-      : { prompt_template: template, variables: null, variable_domains: null, rendered_prompt: null };
-  let messages: PromptMessage[];
-  let systemPrompt: string;
-  try {
-    const colliding = collidingVariable(node, inputs);
-    if (colliding !== null) throw new RangeError(`variable ${reprText(colliding)} collides with an input name`);
-    if (captured !== null) {
-      captured["variable_domains"] = captureValue(() =>
-        Object.fromEntries(
-          node.variables.map((variable) => {
-            const contract = variable.contract as ValueContract;
-            return [variable.name, canonicalTypeLabel(contract.type)];
-          }),
-        ),
-      );
-    }
-    const variables = node.resolveVariables();
-    if (captured !== null) {
-      captured["variables"] = captureValue(() => copyValue(variables));
-    }
-    const record = { ...inputs, ...variables } as ValueRecord;
-    if (typeof node.prompt === "string") {
-      messages = [textMessage("user", renderTemplateRecord(node.prompt, record), 0)];
-      if (captured !== null) captured["rendered_prompt"] = messages[0]!.text;
-    } else {
-      messages = renderPromptList(node.id, node.prompt, record);
-      if (captured !== null) captured["rendered_prompt"] = logJson(messages.map((message) => message.captured));
-    }
-    systemPrompt = node.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(node.systemPrompt, record);
-  } finally {
-    if (captured !== null) capture?.(captured);
-  }
-  signal?.throwIfAborted();
-  const granted = node.grantedSkills(skills);
-  return {
-    // Built when read: forward reads them after recall, so a text a model message refuses fails
-    // the node after recall has refused it, as before.
-    get messages() {
-      return messages.map(modelMessage);
-    },
-    // The last message is always the user's.
-    promptText: messages.at(-1)!.text,
-    systemPrompt,
-    baseSystemPrompt: systemPromptWithSkills(systemPrompt, granted),
-    skills: granted,
-  };
 }
 
 /** Return the first local variable of `node` named like a declared or delivered input, or `null`. */
@@ -909,7 +828,7 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Render the prompt once (`renderAgentPrompt`, which publishes the render capture), recall with
+   * Render the prompt once (`renderPrompt`, which publishes the render capture), recall with
    * it, and run the loop. Recall and learning read the last message's text. No invocation state
    * is stored on the node.
    *
@@ -944,7 +863,7 @@ export class AgentNode extends Node {
     if (caps.steps !== undefined && this.callTime !== null) {
       this.recordConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, caps.steps);
     }
-    const rendered = renderAgentPrompt(this, inputs, caps.skills ?? null, {
+    const rendered = this.renderPrompt(inputs, caps.skills ?? null, {
       capture: caps.captureRender,
       signal: caps.signal,
     });
@@ -958,7 +877,7 @@ export class AgentNode extends Node {
         ? new MemoryContext()
         : await caps.openMemoryContext(systemPrompt, promptText);
     checkStopped(caps);
-    const ctx = this.runContext(rendered.messages, promptText, config, caps, {
+    const ctx = this.runContext(rendered.modelMessages(), promptText, config, caps, {
       memoryContext,
       baseSystemPrompt,
       skills: rendered.skills,
@@ -1007,8 +926,86 @@ export class AgentNode extends Node {
     return invocationConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, this.hostCredentials);
   }
 
-  /** @internal Resolve the validated literal defaults into one detached invocation record. */
-  resolveVariables(): ValueRecord {
+  /**
+   * Render what one invocation sends: the pure half of `forward`, which `learningMaterial` also
+   * calls with the recorded skills.
+   *
+   * The authored `systemPrompt` renders against the same inputs and variables as `prompt`; without
+   * one it is `DEFAULT_SYSTEM`. A text prompt renders into one user message, a list prompt into its
+   * messages (`renderPromptList`). `options.capture` receives the actual template, the resolved
+   * variable values and domains, and the rendered prompt once, with the parts established so far
+   * when rendering fails; unknown variables or an unfinished prompt stay `null`, and capture faults
+   * propagate. A list prompt's template and rendered prompt are `logJson` text: the authored items,
+   * and the `{role, text}` messages and each spliced `Message` as its JSON without `protocol` or
+   * `provider_payload`.
+   *
+   * @param inputs Delivered inputs, kept separate from local variables.
+   * @param skills The run's skills by name, or `null` when the host supplied none.
+   * @param options `capture` is the render capture; `signal` is checked after rendering, before the
+   *   skill grants are read.
+   * @throws RangeError when a variable collides with a declared or delivered input.
+   * @throws ExpressionError as `forward` documents for a prompt that can't render.
+   * @throws SkillError when the node grants skills `skills` doesn't hold.
+   * @throws CapabilityFault when the capture fails; the signal's reason once it aborted.
+   */
+  private renderPrompt(
+    inputs: Readonly<Record<string, unknown>>,
+    skills: ReadonlyMap<string, Skill> | null,
+    options: { capture?: NodeCaps["captureRender"]; signal?: AbortSignal } = {},
+  ): AgentPrompt {
+    const { capture, signal } = options;
+    const template = typeof this.prompt === "string" ? this.prompt : logJson(authoredPrompt(this.prompt));
+    const captured: Record<string, unknown> | null =
+      capture === undefined
+        ? null
+        : { prompt_template: template, variables: null, variable_domains: null, rendered_prompt: null };
+    let messages: PromptMessage[];
+    let systemPrompt: string;
+    try {
+      const colliding = collidingVariable(this, inputs);
+      if (colliding !== null) throw new RangeError(`variable ${reprText(colliding)} collides with an input name`);
+      if (captured !== null) {
+        captured["variable_domains"] = captureValue(() =>
+          Object.fromEntries(
+            this.variables.map((variable) => {
+              const contract = variable.contract as ValueContract;
+              return [variable.name, canonicalTypeLabel(contract.type)];
+            }),
+          ),
+        );
+      }
+      const variables = this.resolveVariables();
+      if (captured !== null) {
+        captured["variables"] = captureValue(() => copyValue(variables));
+      }
+      const record = { ...inputs, ...variables } as ValueRecord;
+      if (typeof this.prompt === "string") {
+        messages = [textMessage("user", renderTemplateRecord(this.prompt, record), 0)];
+        if (captured !== null) captured["rendered_prompt"] = messages[0]!.text;
+      } else {
+        messages = renderPromptList(this.id, this.prompt, record);
+        if (captured !== null) captured["rendered_prompt"] = logJson(messages.map((message) => message.captured));
+      }
+      systemPrompt = this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record);
+    } finally {
+      if (captured !== null) capture?.(captured);
+    }
+    signal?.throwIfAborted();
+    const granted = this.grantedSkills(skills);
+    return {
+      // Built when called: forward builds them after recall, so a text a model message refuses
+      // fails the node after recall has refused it, as before.
+      modelMessages: () => messages.map(modelMessage),
+      // The last message is always the user's.
+      promptText: messages.at(-1)!.text,
+      systemPrompt,
+      baseSystemPrompt: systemPromptWithSkills(systemPrompt, granted),
+      skills: granted,
+    };
+  }
+
+  /** Resolve the validated literal defaults into one detached invocation record. */
+  private resolveVariables(): ValueRecord {
     return copyValue(applyDefaults(this.variables, {}) as ValueRecord) as ValueRecord;
   }
 
@@ -1061,7 +1058,7 @@ export class AgentNode extends Node {
 
   /**
    * Rebuild what learning reads about one accepted invocation: its prompt rendered with the
-   * recorded skills (`renderAgentPrompt`), its memory sections recalled against the recorded
+   * recorded skills (`renderPrompt`), its memory sections recalled against the recorded
    * snapshots, and its interactions read from its steps (`stepsMaterial`), each recorded request
    * checked against the one rebuilt from them.
    *
@@ -1081,7 +1078,7 @@ export class AgentNode extends Node {
     let rendered: AgentPrompt;
     let memoryContext: MemoryContext;
     try {
-      rendered = renderAgentPrompt(this, inputs, caps.skills);
+      rendered = this.renderPrompt(inputs, caps.skills);
       memoryContext = await caps.openMemoryContext(rendered.systemPrompt, rendered.promptText);
     } catch (error) {
       if (!isRebuildRefusal(error)) throw error;
@@ -1110,7 +1107,7 @@ export class AgentNode extends Node {
       }
     };
     const { interactions, digestOk } = await stepsMaterial(steps, {
-      messages: [system, ...rendered.messages],
+      messages: [system, ...rendered.modelMessages()],
       tools,
       structured,
     });

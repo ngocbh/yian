@@ -417,3 +417,16 @@ test("advance with codeRoot refuses a CODE file outside it; runFlow's entry has 
   writeFileSync(join(dir, "fn.ts"), code);
   expect((await advance({ log, tools, env: NO_ENV, codeRoot: root })).status).toBe("waiting");
 });
+
+test("an advance passing an API key the flow doesn't use still hits the registry with that key", async () => {
+  const root = mkdtempSync(join(ROOT, "key-"));
+  const { dir, flow } = await codeHostFlow(root);
+  const log = freshLog();
+  const tools = { lookup: lookupQ() };
+  expect((await runFlow(flow, {}, { log, env: NO_ENV, tools })).status).toBe("waiting");
+  // runFlow's entry holds no key, so this one recompiles and leaves an entry holding the key.
+  expect((await advance({ log, tools, env: NO_ENV, apiKey: "sk-test" })).status).toBe("waiting");
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, tools, env: NO_ENV, apiKey: "sk-test" })).status).toBe("waiting");
+});

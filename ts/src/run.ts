@@ -1674,7 +1674,9 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const kept = reusable(runHold.idle, authority, key, { codeRoot: root, hostFlow, credentials });
       const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, codeRoot));
       const state = kept?.state ?? replayRunLog(flow, authority, credentials);
-      keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: root, apiKey, headers });
+      // The caller's credentials, which the replay used, before a flow that sends no host key
+      // drops them below: a later call passing the same ones then reuses the entry.
+      keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: root, ...credentials });
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
         apiKey = null;

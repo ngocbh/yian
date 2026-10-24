@@ -793,7 +793,9 @@ export class NodeStepRecord {
  * derived commit (one a derived node writes, or an expansion writes for a child START) holds no
  * value but `from`: the seq of the `pool_commit` that wrote each pool name its binding read, from
  * which a replay rebuilds the value. A take commit holds neither but `take`: the inbox, the seqs
- * of the send commits it consumed, and whether it saw the inbox closed.
+ * of the send commits it consumed, and whether it saw the inbox closed. A messages commit (an
+ * AGENT's) holds only `steps`: the seqs of the node steps its success rebuilds `<node>.new_messages`
+ * from.
  */
 export class PoolCommitRecord {
   /** The writing node's non-empty id: the node whose output this is, or the START for the run start. */
@@ -809,24 +811,32 @@ export class PoolCommitRecord {
   readonly from: ReadonlyMap<string, number> | null;
   /** A take commit's inbox, consumed send seqs and close flag; `null` for any other commit. Frozen. */
   readonly take: TakeCommit | null;
+  /** A messages commit's step seqs, ascending; `null` for any other commit. Frozen. */
+  readonly steps: readonly number[] | null;
 
   /**
-   * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from` or
-   *   `take`.
+   * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from`,
+   *   `take` or `steps`.
    * @param options.from A derived commit's sources; copied in name order.
    * @param options.take A take commit's pointer form.
+   * @param options.steps A messages commit's step seqs.
    * @throws TypeError when an id isn't a string, `from` isn't a `Map` or `null`, or `take` isn't
    *   an object or has a field of the wrong type.
    * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, a `from` name is
-   *   empty or its seq isn't a positive safe integer, `take` breaks the take commit rules, or the
-   *   commit doesn't hold exactly one of `value`, `from` and `take`.
+   *   empty or its seq isn't a positive safe integer, `take` breaks the take commit rules, `steps`
+   *   aren't strictly increasing positive safe integers, or the commit doesn't hold exactly one of
+   *   `value`, `from`, `take` and `steps`.
    * @throws TypeCheckError when the value holds NaN or another non-JSON value.
    */
   constructor(
     nodeId: string,
     key: string,
     value: TypedWire | null,
-    options: { from?: ReadonlyMap<string, number> | null; take?: TakeCommit | null } = {},
+    options: {
+      from?: ReadonlyMap<string, number> | null;
+      take?: TakeCommit | null;
+      steps?: readonly number[] | null;
+    } = {},
   ) {
     this.nodeId = requireNonemptyString(nodeId, "node_id");
     this.key = requireNonemptyString(key, "key");
@@ -834,8 +844,9 @@ export class PoolCommitRecord {
       value === null ? null : (freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire);
     this.from = validatedFrom(options.from ?? null);
     this.take = options.take == null ? null : validatedTake(options.take);
-    if ([this.value, this.from, this.take].filter((form) => form !== null).length !== 1) {
-      throw new RangeError("a pool_commit holds exactly one of value, from and take");
+    this.steps = options.steps == null ? null : validatedSteps(options.steps);
+    if ([this.value, this.from, this.take, this.steps].filter((form) => form !== null).length !== 1) {
+      throw new RangeError("a pool_commit holds exactly one of value, from, take and steps");
     }
     Object.freeze(this);
   }
@@ -875,6 +886,22 @@ function validatedTake(take: unknown): TakeCommit {
 }
 
 /**
+ * Return a frozen copy of a messages commit's step seqs.
+ *
+ * @throws RangeError when `steps` isn't a list of strictly increasing positive safe integers.
+ */
+function validatedSteps(steps: unknown): readonly number[] {
+  const ok =
+    isList(steps) &&
+    [...steps].every(
+      (seq, index, all) =>
+        typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1 && (index === 0 || (all[index - 1] as number) < seq),
+    );
+  if (!ok) throw new RangeError("steps must be strictly increasing positive integers");
+  return Object.freeze([...(steps as readonly number[])]);
+}
+
+/**
  * Return a frozen copy of a derived commit's `from` in name order, or `null`.
  *
  * @throws TypeError when `from` isn't a `Map` or `null`.
@@ -896,24 +923,35 @@ function validatedFrom(from: unknown): ReadonlyMap<string, number> | null {
   return Object.freeze(new Map(entries));
 }
 
-/** Accept a node's success: its pending `PoolCommitRecord`, named by seq. Frozen. */
+/**
+ * Accept a node's success: its pending `PoolCommitRecord`, named by seq, and its pending messages
+ * commit, if any. Frozen.
+ */
 export class NodeSucceededRecord {
   /** The succeeded node's non-empty id. */
   readonly nodeId: string;
   /** The seq of the node's `PoolCommitRecord` this success accepts. */
   readonly commit: number;
+  /** The seq of the node's messages commit this success also accepts, or `null`. */
+  readonly messages: number | null;
   /** The binding capture accepted with the outcome, if any. */
   readonly forwardCapture: ForwardCapture | null;
 
   /**
+   * @param options.messages The seq of the node's messages commit; defaults to `null`.
    * @throws TypeError when the id isn't a string, or the capture is of another class.
-   * @throws RangeError when the id is empty or `commit` isn't a positive safe integer.
+   * @throws RangeError when the id is empty, or `commit` or `messages` isn't a positive safe
+   *   integer.
    */
-  constructor(nodeId: string, commit: number, options: OutcomeCarriers = {}) {
-    const { forwardCapture = null } = options;
+  constructor(nodeId: string, commit: number, options: OutcomeCarriers & { messages?: number | null } = {}) {
+    const { forwardCapture = null, messages = null } = options;
     this.nodeId = requireNonemptyString(nodeId, "node_id");
     if (!Number.isSafeInteger(commit) || commit < 1) throw new RangeError("commit must be a positive integer");
     this.commit = commit;
+    if (messages !== null && (!Number.isSafeInteger(messages) || messages < 1)) {
+      throw new RangeError("messages must be a positive integer");
+    }
+    this.messages = messages;
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
@@ -3135,11 +3173,17 @@ function payloadForRecord(record: RunRecord): JsonObject {
       const { inbox, events, closed } = record.take;
       return { node_id: record.nodeId, key: record.key, inbox, events: events.map(BigInt), closed };
     }
+    if (record.steps !== null) return { node_id: record.nodeId, key: record.key, steps: record.steps.map(BigInt) };
     const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
     return { node_id: record.nodeId, key: record.key, from };
   }
   if (record instanceof NodeSucceededRecord) {
-    return { node_id: record.nodeId, commit: BigInt(record.commit), ...outcomePayload(record) };
+    return {
+      node_id: record.nodeId,
+      commit: BigInt(record.commit),
+      messages: record.messages === null ? null : BigInt(record.messages),
+      ...outcomePayload(record),
+    };
   }
   if (record instanceof NodeRoutedRecord) {
     return {
@@ -3290,7 +3334,13 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       );
     case "pool_commit": {
       // The form is chosen by its marker key, so a payload mixing forms is refused as extra fields.
-      const form = Object.hasOwn(payload, "from") ? "from" : Object.hasOwn(payload, "inbox") ? "take" : "value";
+      const form = Object.hasOwn(payload, "steps")
+        ? "steps"
+        : Object.hasOwn(payload, "from")
+          ? "from"
+          : Object.hasOwn(payload, "inbox")
+            ? "take"
+            : "value";
       requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form]], label);
       return new PoolCommitRecord(
         wireName(payload["node_id"], `${label} node_id`),
@@ -3299,15 +3349,16 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         {
           from: form === "from" ? fromFromPayload(payload["from"], `${label} from`) : null,
           take: form === "take" ? takeFromPayload(payload, label) : null,
+          steps: form === "steps" ? wireItems(payload["steps"], `${label} steps`, wireInt) : null,
         },
       );
     }
     case "node_succeeded":
-      requireFields(payload, ["node_id", "commit", "forward_capture"], label);
+      requireFields(payload, ["node_id", "commit", "messages", "forward_capture"], label);
       return new NodeSucceededRecord(
         wireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["commit"], `${label} commit`),
-        outcomeFromPayload(payload, label),
+        { ...outcomeFromPayload(payload, label), messages: wireNullableInt(payload["messages"], `${label} messages`) },
       );
     case "node_routed": {
       requireFields(payload, ["node_id", "handle", "terminal_failure", "forward_capture"], label);
@@ -3480,6 +3531,15 @@ function wireNullableText(value: unknown, label: string): string | null {
 }
 
 /**
+ * Return `null` for `null`, else an int token (a `bigint`) as a `number`.
+ *
+ * @throws TypeError or RangeError as `wireInt`.
+ */
+function wireNullableInt(value: unknown, label: string): number | null {
+  return value === null ? null : wireInt(value, label);
+}
+
+/**
  * Return `value` when it is a non-empty string.
  *
  * @throws TypeError when it isn't a string.
@@ -3520,6 +3580,7 @@ const POOL_COMMIT_FORM_FIELDS = {
   value: ["kind", "value"],
   from: ["from"],
   take: ["inbox", "events", "closed"],
+  steps: ["steps"],
 } as const;
 
 /**

@@ -34,7 +34,17 @@ import {
   runRecordOffsets,
   TypedValue,
 } from "../../src/run.ts";
-import { JsonlRunLog, MemoryRunLog, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
+import {
+  decodeRecord,
+  encodeRecord,
+  JsonlRunLog,
+  MemoryRunLog,
+  NodeSucceededRecord,
+  PoolCommitRecord,
+  readRunLog,
+  RecordEnvelope,
+  SCHEMA_VERSION,
+} from "../../src/runtime/log.ts";
 import { TypedValue as RuntimeTypedValue } from "../../src/typesys/values.ts";
 import { crashAfter, NO_ENV, rejected } from "./run_state_fixtures.ts";
 
@@ -530,3 +540,41 @@ console.log(JSON.stringify({
     decodeError: true,
   });
 }, 70_000);
+
+test("a messages commit holds steps and nothing else", () => {
+  const record = new PoolCommitRecord("reply", "reply.new_messages", null, { steps: [5, 6, 9] });
+  expect(record.steps).toEqual([5, 6, 9]);
+  expect(Object.isFrozen(record.steps)).toBe(true);
+  expect([record.value, record.from, record.take]).toEqual([null, null, null]);
+  const text = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 10, record, "2026-10-24T00:00:00.000Z"));
+  expect(text).toContain('"payload":{"key":"reply.new_messages","node_id":"reply","steps":[5,6,9]}');
+  expect((decodeRecord(text).record as PoolCommitRecord).steps).toEqual([5, 6, 9]);
+});
+
+test("a messages commit may name no steps; other commits have steps null", () => {
+  expect(new PoolCommitRecord("reply", "reply.new_messages", null, { steps: [] }).steps).toEqual([]);
+  expect(new PoolCommitRecord("x", "x", { kind: "str", value: "v" }).steps).toBeNull();
+});
+
+test.each([[[3, 3]], [[4, 2]], [[0]], [[1.5]], [["1"]]])("steps %j is refused", (steps) => {
+  expect(() => new PoolCommitRecord("reply", "reply.new_messages", null, { steps: steps as number[] })).toThrow(
+    "steps must be strictly increasing positive integers",
+  );
+});
+
+test("a pool_commit with steps and another form is refused", () => {
+  expect(() => new PoolCommitRecord("reply", "reply", { kind: "str", value: "x" }, { steps: [1] })).toThrow(
+    "a pool_commit holds exactly one of value, from, take and steps",
+  );
+});
+
+test("node_succeeded names its messages commit, or null", () => {
+  const withMessages = new NodeSucceededRecord("reply", 9, { messages: 10 });
+  const text = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 11, withMessages, "2026-10-24T00:00:00.000Z"));
+  expect(text).toContain('"payload":{"commit":9,"forward_capture":null,"messages":10,"node_id":"reply"}');
+  expect((decodeRecord(text).record as NodeSucceededRecord).messages).toBe(10);
+  const without = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 4, new NodeSucceededRecord("x", 3), null));
+  expect(without).toContain('"payload":{"commit":3,"forward_capture":null,"messages":null,"node_id":"x"}');
+  expect((decodeRecord(without).record as NodeSucceededRecord).messages).toBeNull();
+  expect(() => new NodeSucceededRecord("x", 3, { messages: 0 })).toThrow("messages must be a positive integer");
+});

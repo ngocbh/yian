@@ -1,0 +1,10 @@
+# TS-only: an Inbox(T) slot takes only a handle or its mapping, not the inbox's name as text.
+kind: value
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+type: Inbox(str)
+value: owner_messages
+expect:
+  raises:
+    class: TypeCheckError
+    message: '"owner_messages" does not match declared type Inbox(str)'
+    path: []

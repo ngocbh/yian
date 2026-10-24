@@ -776,6 +776,14 @@ Load still asks for a `file`-typed source where a typed `file` slot reads a valu
 `object` or `Any` value into `!file` doesn't load. The JSON form is accepted where load
 can't tell: an untyped producer, a seed, or a value read back from the run log.
 
+Changed (TS yian): `Inbox(X)` is the type of a handle on a top-level inbox whose events are
+`X`s. Its value is an `InboxRef`, whose JSON form is the mapping `{inbox: <name>}`. An inbox
+is a whole input: it is never `Optional(...)`, never inside `list(...)`, a record or a
+`Union(...)`, never holds another inbox, and is never an output (`Optional(Inbox(str))`
+fails with ``an inbox is never optional in 'Optional(Inbox(str))'; write Inbox(...)``).
+`Inbox(X)` relates only to another inbox, by its event type, so `Any` and `object` neither
+fill nor take one. `Inbox` is a reserved name: no typedef may take it.
+
 When the loader can't type a list's items (a tool's untyped array, a mixed or empty
 literal list), the list is a `list(Optional(Any))`, and its items are checked at
 runtime when passed on, such as a MAP's `${item}`.

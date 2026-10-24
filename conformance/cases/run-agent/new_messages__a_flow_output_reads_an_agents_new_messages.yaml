@@ -1,5 +1,7 @@
-# TS-only: a flow output reads an AGENT's new messages, `list(Message)`: the reply calling
-# `lookup`, its tool result, and the final reply. The top END reads the messages commit.
+# TS-only: a flow output reads an AGENT's new messages, `list(Message)`, here its one reply,
+# rebuilt from its messages commit. Tool-less: a crash between a tool call and its result
+# resumes with an unknown-outcome result, so a crash sweep can't expect one history; the tool
+# turn is covered in ts/tests/engine/agent_new_messages.test.ts.
 kind: run
 rules: [run-log]
 python_skip: "new_messages is TS-only (#1081)"
@@ -10,7 +12,6 @@ flow: |
   nodes:
     writer:
       kind: agent
-      tools: [lookup]
       system_prompt: Help.
       prompt: hi
       output: str
@@ -19,25 +20,9 @@ flow: |
     history: ${writer.new_messages}
 run: {run_id: r1, num_workers: 0}
 host:
-  tools:
-    lookup:
-      description: Look up a topic.
-      parameters:
-        type: object
-        properties:
-          topic:
-            type: string
-        required: [topic]
-      results:
-      - return: found:x
   models:
     writer:
       agent:
-      - reply:
-          format: yian.message.v1
-          role: assistant
-          parts:
-          - {type: tool_call, id: call-x, name: lookup, arguments: {topic: x}}
       - reply:
           format: yian.message.v1
           role: assistant
@@ -50,10 +35,6 @@ expect:
       answer: done
       history:
       - role: assistant
-        parts: [{type: tool_call, id: call-x, name: lookup, arguments: {topic: x}}]
-      - role: tool
-        parts: [{type: tool_result, call_id: call-x, name: lookup, content: found:x}]
-      - role: assistant
         parts: [{type: text, text: done}]
   trace:
     - [run_started, null, {effective_llm_by_static_path: {writer: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, learnable: false, num_workers: 0}]
@@ -65,12 +46,10 @@ expect:
     - [pool_commit, __start__, {value: {}}]
     - [node_succeeded, __start__, {commit: 6}]
     - [node_started, writer]
-    - [node_step, writer, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {topic: x}, id: call-x, name: lookup, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 987d1b022a6cc1e1143ec13d000eb0a9b95aa885fbf1ac0ede3384aa68a12422, response_id: null, usage: null}}]
-    - [node_step, writer, {n: 2, step: {call_id: call-x, is_error: false, kind: tool_result, output: found:x}}]
-    - [node_step, writer, {n: 3, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: e635a991e460e1b691ff75235384cc6f48a372e7cac95d1d5fe9750a0dc7b096, response_id: null, usage: null}}]
+    - [node_step, writer, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 0c2d612474786e4d309464090eba530c35a97e3b3432cf6da0b668dd13355633, response_id: null, usage: null}}]
     - [pool_commit, writer, {value: done}]
-    - [pool_commit, writer, {key: writer.new_messages, steps: [9, 10, 11]}]
-    - [node_succeeded, writer, {commit: 12, messages: 13}]
+    - [pool_commit, writer, {key: writer.new_messages, steps: [9]}]
+    - [node_succeeded, writer, {commit: 10, messages: 11}]
     - [node_started, __end__]
-    - [pool_commit, __end__, {value: {answer: done, history: [{parts: [{arguments: {topic: x}, id: call-x, name: lookup, type: tool_call}], role: assistant}, {parts: [{call_id: call-x, content: found:x, name: lookup, type: tool_result}], role: tool}, {parts: [{text: done, type: text}], role: assistant}]}}]
-    - [node_succeeded, __end__, {commit: 16}]
+    - [pool_commit, __end__, {value: {answer: done, history: [{parts: [{text: done, type: text}], role: assistant}]}}]
+    - [node_succeeded, __end__, {commit: 14}]

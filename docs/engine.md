@@ -271,6 +271,16 @@ terminal result as an in-flight one does; when END is unreachable while nodes wa
 with `run_failed` at quiescence, and a host's cancel ends it with `run_cancelled`. See
 [Authoritative run logs](api.md#authoritative-run-logs).
 
+Changed (TS yian): the engine decides a take or sleep when it commits the node's outcome, with no
+await between the decision and its records, so a take with unread events commits them inline and
+an over sleep commits `null`; otherwise the node waits. Before it starts a ready node, the
+dispatcher wakes the oldest waiting node whose calls are settled or past their deadline (a woken
+node takes no worker slot, since only TOOL nodes wait). Pooled mode keeps one scheduler timer for
+the earliest open deadline; serial mode notices a due deadline when the running node settles. At
+quiescence with nodes waiting, `run()` records `run_waiting` and resolves instead of failing. A
+host's send, complete, inbox close or cancel reaches a running engine synchronously between two
+awaits (`FlowEngine.deliver`); a cancel aborts the running nodes and `run()` resolves cancelled.
+
 `RunStartedRecord` holds the complete effective model map of the agents resolved at
 run start. An agent whose `llm_config` reads a value known only when it runs (see
 [Values in `llm_config`](syntax.md#values-in-llm_config)) is in the optional

@@ -8,8 +8,16 @@
  * follows its record's append and reducer application. Stream chunks are transient callback-only
  * messages and never enter the log.
  *
- * Knows about:   compile/model, diagnostics, events, llm_clients (types), nodes, runtime
- *                eval_node, live, log, state and trace, skills, tools, typesys.
+ * A node can end its evaluation waiting (`Pending`): on host calls, or on a take or sleep the
+ * engine decides when it commits the outcome. The dispatcher wakes a waiting node whose calls are
+ * settled or due, oldest first, before it starts a ready one; pooled mode keeps one scheduler
+ * timer for the earliest deadline. At quiescence with nodes waiting it records `run_waiting` (or
+ * `run_failed` once END can't be reached) and `run()` resolves. A host's send, complete, close or
+ * cancel lands synchronously between two awaits through `deliver`.
+ *
+ * Knows about:   compile/model, diagnostics, events, llm_clients (types), nodes, platform (the
+ *                scheduler), runtime eval_node, live, log, state, trace and waits, skills, tools,
+ *                typesys.
  * Never imports: the run boundary, compose, or the CLI.
  */
 
@@ -437,15 +445,19 @@ export class FlowEngine {
   }
 
   /**
-   * Drive newly ready work to a terminal result.
+   * Drive newly ready and wakeable work to a terminal result, or to quiescence with nodes waiting.
    *
    * A node failure is a result: `run()` resolves with its `RunFailed`, whatever stops arrive while
-   * it drains. A stop or any other error aborts the run signal, waits for every running node, and
-   * rejects `run()` with the error that initiated it, never a sibling's derived abort.
+   * it drains. A host cancel (`deliver`) is one too: `run()` resolves once running nodes have
+   * drained. At quiescence with waiting nodes it records `run_waiting` (unless that is already the
+   * last frontier record) or, when END can't be reached, `run_failed`, and resolves. A stop or any
+   * other error aborts the run signal, waits for every running node, and rejects `run()` with the
+   * error that initiated it, never a sibling's derived abort.
    *
-   * @returns The new post-durable observers, in order; none when the state is already terminal.
-   * @throws Error (as a rejection) on a second call, or when nothing is ready and nothing is in
-   *   flight before a terminal result.
+   * @returns A copy of the run's post-durable observers, in order, including those of deliveries
+   *   made while it ran; none when the state is already terminal.
+   * @throws Error (as a rejection) on a second call, or when nothing is ready, in flight or
+   *   waiting before a terminal result.
    * @throws RangeError when the state is uninitialized, its run id, sequence or worker count
    *   differs from the log's or the engine's, or it has unfinished starts.
    * @throws The host signal's reason when it aborts (before any start when it is already aborted).

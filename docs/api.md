@@ -786,6 +786,8 @@ tool 'place_order' failed after 3 attempts: attempt 1: TimeoutError: read timed 
 Every attempt is listed, and an attempt with no recorded outcome shows as
 `interrupted`. `failure.code` stays `node.execute`.
 
+Changed (TS yian): an attempt with no recorded outcome shows as `unfinished` (`attempt 2: unfinished`).
+
 An AGENT's `retries:` means something else: it bounds how often the model may
 correct a structured reply that doesn't fit `output:` (see
 [structured generation](syntax.md#agent-the-llm-backed-agent-node)). Tool calls
@@ -1981,6 +1983,9 @@ epoch restores successfully. Its later `learn` fails with
 `episodic.stale_generation` or `reflective.stale_generation` without rebasing;
 the backward outcome retains the completed feedback.
 
+Changed (TS yian): that record is a failed `BackwardFinished` with failure code
+`backward.unfinished` ("backward attempt did not finish"); Python yian records `backward.interrupted`.
+
 Changed (TS yian): the commit-ID digest input is yian's run-log canonical JSON
 (`logJson`: keys in UTF-16 code-unit order, ints of any size, integral floats
 written with `.0`) of `[run_id, attempt_id, memory, [[mutation_id, payload], ...]]`, not
@@ -2306,13 +2311,14 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 14, and readers accept only schema 14. The schema
+Changed (TS yian): records use schema 15, and readers accept only schema 15. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 13 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 14 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
-writes were `pool_commit` records, or before node steps were numbered) with "run log schema N
-predates schema 14 and is not supported", and any other schema with "unsupported run-record
-schema: N" (a float token shows as `14.0`); the "predates" message for schemas 7
+writes were `pool_commit` records, before node steps were numbered, or before an unfinished
+backward attempt was `backward.unfinished`) with "run log schema N predates schema 15 and is
+not supported", and any other schema with "unsupported run-record schema: N" (a float token
+shows as `15.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2381,7 +2387,7 @@ at once, and START is ready only after the last.
 - A log that ends inside its run start (before the START inputs' commit) can't be resumed, since
   it doesn't hold the run's inputs yet: `resumeFlow` refuses it with "run log PATH ends inside its
   run start; start the run again" and leaves it as it is (`replayRunLog` too; `inspectRun`
-  without the flow reads it as `interrupted` with nothing in flight).
+  without the flow reads it as `crashed` with nothing in flight).
 - `runRecordOffsets(path)` (from `yian/run`) returns the byte offset where each record's line
   starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
   Read the record at seq `k`, such as the commit a success names, with
@@ -2774,15 +2780,15 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
     external effect exactly-once.
 
 Changed (TS yian): right after `RunResumed`, a resume publishes one `NodeAttemptResumed(node_id,
-interrupted)` event per node it runs again, in retry order. `interrupted` counts that node's
-interrupted attempts, including the one this resume retries: starts with no outcome before a
+crashed)` event per node it runs again, in retry order. `crashed` counts that node's
+crashed attempts, including the one this resume retries: starts with no outcome before a
 resume, unless a `RunStoppedRecord` covered them. A host stop or a failing host callback records
 that stop before the run winds down, so only a crash (or a host fault that isn't a callback)
 counts. Nodes running beside a crashing node are counted too: the crash interrupts every start in
 flight, not only the one that was running when the process died. A stop adds nothing to the
-count of the nodes it covered (a node never interrupted resumes with `interrupted` 0). yian sets no limit; a host that resumes on its own
-decides how many interruptions to tolerate. `RunResult.interruptedAttempts` and `inspectRun` hold
-the same counts.
+count of the nodes it covered (a node that never crashed resumes with `crashed` 0). yian sets no
+limit; a host that resumes on its own decides how many crashes to tolerate.
+`RunResult.crashedAttempts` and `inspectRun` hold the same counts.
 
 Changed (TS yian): a resume keeps the recorded times and stamps its own records, from its
 `RunResumed` on, from its `scheduler`'s clock; replay ignores `at`, so a log replays the same
@@ -2792,18 +2798,18 @@ Changed (TS yian): the log also holds `RunStoppedRecord` (see [Authoritative run
 logs](#authoritative-run-logs)): when the host's signal aborts a run or a resume, or a host
 callback throws or rejects, the engine lets the nodes in flight wind down and appends one record
 naming them, with `reason` `signal` or `callback`. It isn't terminal: the stopped nodes are still
-in flight, a resume retries them after its `RunResumed`, and they aren't counted as interrupted.
+in flight, a resume retries them after its `RunResumed`, and they aren't counted as crashed.
 Between the stop and that resume only those nodes' steps are appended.
 
 ### Reading a run log with `inspectRun`
 
 Changed (TS yian): `inspectRun(log, { flow, env })` reads where the run in a log stands without
-changing the file or taking its lock, and returns `{ status, inFlight, interruptedAttempts }`.
+changing the file or taking its lock, and returns `{ status, inFlight, crashedAttempts }`.
 `status` is `running` while a writer holds the log's lock, `succeeded` or `failed` once the run
 finished, `stopped` when the host stopped its last segment (a `RunStoppedRecord`), and otherwise
-`interrupted`, the process having ended without a stop; a run that is neither running nor finished
+`crashed`, the process having ended without a stop; a run that is neither running nor finished
 can be resumed. `inFlight` lists the nodes started and not settled, in start order (`[]` for a
-finished run), and `interruptedAttempts` the attempts a resume counted as interrupted, plus, for a
+finished run), and `crashedAttempts` the attempts a resume counted after a crash, plus, for a
 run that is neither running nor finished, one for each node in flight that no stop covers: what
 `resumeFlow` would count. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
 is exact, and `env`'s `YIAN_*` values must match the recorded ones. Without it, the status is read
@@ -2875,7 +2881,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 14); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 15); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 
@@ -3134,7 +3140,7 @@ The terminal outcome of a fresh or recovered run exposes these public fields:
 | `backward_outcome` | last observed accepted `BackwardOutcome`, or `None` before an attempt is observed |
 
 Changed (TS yian): the fields are camelCase (`runId`, `backwardOutcome`), and `log` is the path
-as given to `runFlow`, a string, not resolved. `interruptedAttempts` maps each node id to the
+as given to `runFlow`, a string, not resolved. `crashedAttempts` maps each node id to the
 number of its attempts a resume retried with no recorded stop (as `NodeAttemptResumed` counts
 them); it is empty for a run never resumed.
 

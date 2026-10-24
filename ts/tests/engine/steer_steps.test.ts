@@ -16,8 +16,10 @@ import {
   prepareNodeFailed,
   prepareNodeStarted,
   prepareNodeStep,
+  prepareNodeSucceeded,
   prepareNodeWaiting,
   prepareSend,
+  prepareTakeCommit,
   type PreparedTransition,
   type RunState,
   stepsWithSteerValues,
@@ -26,7 +28,7 @@ import { availableUnread } from "../../src/runtime/waits.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
 import { expectUnchanged, FINGERPRINT, FuncNode, nodeFailure, snapshot } from "./run_state_fixtures.ts";
-import { FakeHost, inboxEngine, inboxFlow } from "./inbox_fixtures.ts";
+import { FakeHost, FakeTake, inboxEngine, inboxFlow } from "./inbox_fixtures.ts";
 import { call, MSGS, paramFlow, replayed, started, succeed } from "./waits_fixtures.ts";
 
 /** A second inbox param, `other: Inbox(str)`. */
@@ -117,6 +119,43 @@ test("a node reads one steer inbox", () => {
   expect(refusal(state, () => prepareNodeStep(state, "chat", steer([s3], "other")))).toBe(
     "node 'chat' reads steer inbox 'msgs', not 'other'",
   );
+});
+
+/** A run with `chat` (a steer reader on `msgs`) and `take` (a take on `msgs`) started, and "a", "b" sent. */
+function competing() {
+  const flow = paramFlow([MSGS], new SteerNode("chat", () => "ok"), new FakeTake("take", "msgs"));
+  const run = started(flow, { fingerprint: FINGERPRINT });
+  const { log, state } = run;
+  commitPrepared(log, state, prepareNodeStarted(state, "chat"));
+  commitPrepared(log, state, prepareNodeStarted(state, "take"));
+  const s1 = commit(log, state, prepareSend(state, "msgs", "a"));
+  const s2 = commit(log, state, prepareSend(state, "msgs", "b"));
+  return { ...run, s1, s2 };
+}
+
+test("a take that commits first consumes its event; the steer read then gets only the rest", () => {
+  const { log, state, s1, s2 } = competing();
+  commit(log, state, prepareTakeCommit(state, "take", { inbox: "msgs", events: [s1], closed: false }));
+  expect(refusal(state, () => prepareNodeStep(state, "chat", steer([s1, s2])))).toBe(
+    `a steer step must consume the whole unread queue [${s2}], found [${s1}, ${s2}]`,
+  );
+  commit(log, state, prepareNodeStep(state, "chat", steer([s2])));
+  expect(stepsWithSteerValues(state, "chat").map((step) => step["values"])).toEqual([["b"]]);
+  commitPrepared(log, state, prepareNodeSucceeded(state, "take"));
+  expect(state.pool.get("take")).toEqual({ events: ["a"], closed: false });
+  expect(availableUnread(state.waits, "msgs")).toEqual([]);
+});
+
+test("a steer read that lands first consumes every event; a take can't commit one of them", () => {
+  const { log, state, s1, s2 } = competing();
+  commit(log, state, prepareNodeStep(state, "chat", steer([s1, s2])));
+  refusal(state, () => prepareTakeCommit(state, "take", { inbox: "msgs", events: [s1], closed: false }));
+  expect(availableUnread(state.waits, "msgs")).toEqual([]);
+  const s3 = commit(log, state, prepareSend(state, "msgs", "c"));
+  commit(log, state, prepareTakeCommit(state, "take", { inbox: "msgs", events: [s3], closed: false }));
+  commitPrepared(log, state, prepareNodeSucceeded(state, "take"));
+  expect(state.pool.get("take")).toEqual({ events: ["c"], closed: false });
+  expect(stepsWithSteerValues(state, "chat").map((step) => step["values"])).toEqual([["a", "b"]]);
 });
 
 test("a steer read's values stay until its node succeeds, then go", () => {

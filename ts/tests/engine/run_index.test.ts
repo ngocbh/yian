@@ -8,7 +8,17 @@
  */
 
 import { spawn } from "node:child_process";
-import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import fs, {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -356,14 +366,23 @@ describe("updateRunIndex and readRunIndex", () => {
     writeRun(runs, "gone", failedRun);
     mkdirSync(join(runs, "damaged"));
     writeFileSync(join(runs, "damaged", "log.jsonl"), "not a run log\n");
+    // A file error is skipped the same way.
+    mkdirSync(join(runs, "folder-log", "log.jsonl"), { recursive: true });
+    // A run folder reached through a symlink is a run folder.
+    const elsewhere = freshRuns();
+    writeRun(elsewhere, "linked", failedRun);
+    symlinkSync(join(elsewhere, "linked"), join(runs, "linked"));
     const warnings: string[] = [];
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
-    expect(Object.keys(byId(readRunIndex(runs))).sort()).toEqual(["gone", "good"]);
-    expect(warnings).toHaveLength(1);
+    expect(Object.keys(byId(readRunIndex(runs))).sort()).toEqual(["gone", "good", "linked"]);
+    expect(warnings).toHaveLength(2);
     expect(warnings[0]).toStartWith(`run index skipped ${join(runs, "damaged", "log.jsonl")}: run log `);
+    expect(warnings[1]).toStartWith(`run index skipped ${join(runs, "folder-log", "log.jsonl")}: `);
+    // The index holds every run's result, so it is as private as the run folders.
+    expect(statSync(join(runs, "index.sqlite")).mode & 0o777).toBe(0o600);
     rmSync(join(runs, "gone"), { recursive: true });
     withWarnings(() => {}, () => updateRunIndex(runs));
-    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["good"]);
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["good", "linked"]);
   });
 
   test("an index of another version is rebuilt", () => {

@@ -26,7 +26,7 @@
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { knownCallTimeBaseUrls, knownCallTimeProviders } from "../compile/llm_cascade.ts";
@@ -63,7 +63,7 @@ import { MemoryOperationError } from "../memory/contracts.ts";
 import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
 import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError, withWarnings } from "../platform.ts";
+import { FileLockError, sqliteErrorCode, withWarnings } from "../platform.ts";
 import {
   hostInputs,
   inspectRun,
@@ -717,15 +717,24 @@ export function defaultRunsDir(env: Env): string {
 }
 
 /**
- * Update the run index of `~/.yian/runs` (`updateRunIndex`) after the run in `log` ended, when
- * `log` is a run folder's log there; a failed update is a `warning:` line on stderr, and the logs
- * it skips aren't reported (`yian status` reports them).
+ * Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for another
+ * update) after the run in `log` ended, when `log` is a run folder's log there; a failed update is
+ * a `warning:` line on stderr, and the logs it skips aren't reported (`yian status` reports them).
  */
 async function indexRun(log: string, io: CliIo): Promise<void> {
   const runsDir = defaultRunsDir(io.env);
-  if (resolve(dirname(dirname(log))) !== resolve(runsDir)) return;
+  // Real paths, so a log reached through a symlinked HOME still counts; a missing folder can't.
+  const real = (path: string) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return null;
+    }
+  };
+  const folder = real(dirname(dirname(log)));
+  if (folder === null || folder !== real(runsDir)) return;
   try {
-    withWarnings(() => {}, () => updateRunIndex(runsDir));
+    withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000 }));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     await io.stderr.write(`${paint(`warning: run index not updated: ${error.message}`, "yellow", io.stderr, io.env)}\n`);
@@ -1805,7 +1814,9 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
     }
   } catch (error) {
     if (!(error instanceof Error) || error instanceof TypeError) throw error;
-    const message = isSystemError(error) ? `can't read ${runsDir}: ${osReason(error)}` : error.message;
+    let message = error.message;
+    if (sqliteErrorCode(error) !== undefined) message = `can't use ${join(runsDir, "index.sqlite")}: ${error.message}`;
+    else if (isSystemError(error)) message = `can't read ${runsDir}: ${osReason(error)}`;
     await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
     if (json) await printJson({ error: diagnosticJson(new Diagnostic({ code: "run.setup", message })) }, io.stdout);
     return 1;

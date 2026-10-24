@@ -167,14 +167,15 @@ function checkedTimeout(timeoutMs: unknown): number {
 
 /**
  * Bring `<runsDir>/index.sqlite` up to date with every run log `<runsDir>/<run_id>/log.jsonl`,
- * creating the index when it is missing.
+ * creating the index (mode 0600) when it is missing.
  *
  * Each log is read on from the byte offset its row reached (`iterRunRecords` with `afterOffset`,
  * `runId` and `afterSeq`); a log that hasn't grown isn't opened. A log that was truncated or
  * replaced (`RunLogChangedError`) is read again from the start. A run folder with no log, or a log
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
- * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run)
- * raises a warning through `warn` and keeps its row as it was. An index of another layout version
+ * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
+ * or a file error such as no permission) raises a warning through `warn` and keeps its row as it
+ * was. An index of another layout version
  * is dropped and built again.
  *
  * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
@@ -191,7 +192,7 @@ function checkedTimeout(timeoutMs: unknown): number {
 export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } = {}): void {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const path = join(runsDir, INDEX_FILE);
-  const runIds = runFolders(runsDir);
+  createPrivate(path);
   const db = openSqlite(path);
   try {
     db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
@@ -202,21 +203,23 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
     }
     try {
       prepareSchema(db);
-      const select = db.prepare(`SELECT * FROM runs WHERE run_id = ?`);
+      const select = db.prepare("SELECT * FROM runs WHERE run_id = ?");
       const upsert = db.prepare(
         `INSERT OR REPLACE INTO runs (${COLUMNS.join(", ")}) VALUES (${COLUMNS.map(() => "?").join(", ")})`,
       );
       const kept = new Set<string>();
-      for (const runId of runIds) {
+      // Listed under the lock, so a run another builder indexed since is never dropped as gone.
+      for (const runId of fs.readdirSync(runsDir).sort(compareCodeUnits)) {
         const log = join(runsDir, runId, "log.jsonl");
-        const size = fs.statSync(log, { throwIfNoEntry: false })?.size;
-        if (size === undefined) continue;
         const stored = select.get(runId);
-        if (stored !== undefined) kept.add(runId);
         const saved = stored === undefined ? null : fromColumns(stored);
-        if (saved !== null && saved.offset === size) continue;
         let built: Building | null;
         try {
+          const size = fs.statSync(log).size;
+          if (saved !== null && saved.offset === size) {
+            kept.add(runId);
+            continue;
+          }
           try {
             built = readRun(log, runId, saved);
           } catch (error) {
@@ -224,20 +227,17 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
             built = readRun(log, runId, null);
           }
         } catch (error) {
-          // Removed since it was listed: the run is gone.
-          if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
-            kept.delete(runId);
-            continue;
-          }
-          if (!(error instanceof RangeError)) throw error;
-          warn(`run index skipped ${log}: ${error.message}`);
+          const code = (error as NodeJS.ErrnoException | null)?.code;
+          // No log: a file such as the index, a folder whose run hasn't started, or a run removed since.
+          if (code === "ENOENT" || code === "ENOTDIR") continue;
+          if (!(error instanceof RangeError || typeof code === "string")) throw error;
+          // One log yian can't read must not stop the others; its row stays as it was.
+          warn(`run index skipped ${log}: ${(error as Error).message}`);
+          if (saved !== null) kept.add(runId);
           continue;
         }
-        // A log emptied since its last update has no row.
-        if (built === null) {
-          kept.delete(runId);
-          continue;
-        }
+        // A log with no complete record (one emptied since its last update included) has no row.
+        if (built === null) continue;
         kept.add(runId);
         upsert.run(...toColumns(built));
       }
@@ -262,9 +262,9 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
 /**
  * Return the rows of `<runsDir>/index.sqlite`, by start time then run id, as the last update left
  * them, with `running` put on top of a `stopped` or `crashed` run whose log a writer holds now
- * (`isRunLogLocked`, probed on every read). A missing index, or one of another layout version, has
- * no rows. Reading doesn't update the index; it reads while a builder works, and waits only while
- * one commits.
+ * (`isRunLogLocked`, probed on every read; a lock that can't be probed counts as free). A missing
+ * index, or one of another layout version, has no rows. Reading doesn't update the index; it reads
+ * while a builder works, and waits only while one commits.
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait while a builder commits, in milliseconds; 5000 by default.
@@ -287,20 +287,33 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
   return rows.map((columns) => {
     const { scan, ...row } = fromColumns(columns);
     let status = statusOf(scan);
-    if ((status === "stopped" || status === "crashed") && isRunLogLocked(join(runsDir, row.runId, "log.jsonl"))) {
+    if ((status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
       status = "running";
     }
     return { ...row, status };
   });
 }
 
-/** Return the names of the folders in `runsDir`, sorted. */
-function runFolders(runsDir: string): string[] {
-  return fs
-    .readdirSync(runsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort(compareCodeUnits);
+/** Return whether a writer holds the lock of `log`; a lock that can't be probed counts as free. */
+function locked(log: string): boolean {
+  try {
+    return isRunLogLocked(log);
+  } catch {
+    // The stored status is what the records show; a lock that can't be read adds nothing to it.
+    return false;
+  }
+}
+
+/**
+ * Create the empty file `path` with mode 0600 when it is missing, so the index, which holds every
+ * run's result, is as private as the run folders; SQLite gives its journal the same mode.
+ */
+function createPrivate(path: string): void {
+  try {
+    fs.closeSync(fs.openSync(path, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== "EEXIST") throw error;
+  }
 }
 
 /** Create the `runs` table, dropping one of another layout version first. */

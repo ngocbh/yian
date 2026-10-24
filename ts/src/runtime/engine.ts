@@ -421,8 +421,8 @@ export class FlowEngine {
    * @throws DeliveryRefused when the run refuses it; nothing is appended.
    * @throws Error before `run()` was called.
    * @throws The error of an `onEvent` that throws on these observers. The record is durable by
-   *   then. While the loop runs, the throw stops the run; after the loop has ended, it is only
-   *   rethrown.
+   *   then. While the loop runs, the throw (or a rejection of the promise it returned) stops the
+   *   run; after the loop has ended, a throw is only rethrown and a rejection is ignored.
    */
   deliver(op: DeliveryOp): { readonly seq: number | null; readonly events: readonly RunEvent[] } {
     if (!this.#ran) throw new Error("FlowEngine.deliver needs run() first");
@@ -438,7 +438,9 @@ export class FlowEngine {
     } else {
       for (const observer of observers) {
         this.#events.push(observer);
-        this.onEvent?.(observer);
+        const returned = this.onEvent?.(observer);
+        // The loop has ended, so a rejection has no run to stop.
+        if (returned instanceof Promise) returned.then(undefined, () => {});
       }
     }
     return { seq, events: observers };

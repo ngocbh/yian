@@ -107,3 +107,22 @@ test("after the loop has ended, a throwing onEvent rethrows, the record stays, a
   expect(run.log.nextSequence).toBe(before + 1);
   expect(recordNames(run.log).at(-1)).toBe("RunCancelledRecord");
 });
+
+test("after the loop has ended, a rejection from onEvent's promise is ignored", async () => {
+  let armed = false;
+  const run = inboxEngine(inboxFlow(["m"], [new FakeHost("ask")], [[START_ID, "ask"], ["ask", END_ID]]), {
+    onEvent: () => (armed ? Promise.reject(new Error("late observer failed")) : undefined),
+  });
+  await run.run();
+  armed = true;
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => void unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    expect(run.deliver({ kind: "cancel" }).events[0]).toBeInstanceOf(RunCancelled);
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  expect(unhandled).toEqual([]);
+});

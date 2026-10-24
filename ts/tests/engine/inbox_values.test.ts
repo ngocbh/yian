@@ -1,9 +1,11 @@
 /** The inbox handle, its type and its codec. */
 import { describe, expect, test } from "bun:test";
 
+import { kindName } from "../../src/expr/builtins.ts";
 import { canonicalSeed, canonicalTyped } from "../../src/runtime/log.ts";
 import {
   buildValue,
+  FileRef,
   buildValueAs,
   fromHost,
   hasFile,
@@ -144,4 +146,10 @@ describe("inbox reading type", () => {
     expect(hasFile(inboxType(STR))).toBe(true);
     expect(requiresFile(inboxType(STR))).toBe(true);
   });
+});
+
+test("an expression error names a handle's kind as inbox", () => {
+  expect(kindName(new InboxRef("m"))).toBe("inbox");
+  expect(kindName(new FileRef({ uri: "s3://b/k" }))).toBe("file");
+  expect(kindName({ inbox: "m" })).toBe("record");
 });

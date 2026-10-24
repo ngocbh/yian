@@ -40,7 +40,7 @@ import { CapabilityFault, type Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { inspectRun, advance, runFlow } from "../../src/run.ts";
+import { advance, inspectRun, runFlow, send } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
@@ -57,18 +57,17 @@ const CONFIG = { provider: "anthropic", model: "claude-test" };
 const START = Date.UTC(2026, 9, 22, 10, 0, 0, 0);
 const RUN_ID = "r";
 
-/** A flow whose agent `writer` may call `tools`; `steerable` gives it a host inbox; `output` its type. */
-function flowText(tools: readonly string[] = ["save"], options: { steerable?: boolean; output?: string } = {}): string {
-  const { steerable = false, output = "str" } = options;
+/** A flow whose agent `writer` may call `tools`; `steerInbox` gives it a steer inbox `notes`; `output` its type. */
+function flowText(tools: readonly string[] = ["save"], options: { steerInbox?: boolean; output?: string } = {}): string {
+  const { steerInbox = false, output = "str" } = options;
   return `
 id: replay
 name: replay
-nodes:
+${steerInbox ? "input:\n  notes: !Inbox(str)\n" : ""}nodes:
   writer:
     kind: agent
     tools: [${tools.join(", ")}]
-    steerable: ${steerable}
-    prompt: hi
+${steerInbox ? "    steer_inbox: ${input.notes}\n" : ""}    prompt: hi
     output: ${output}
 output: \${writer.output}
 `;
@@ -610,53 +609,41 @@ test("a request that doesn't match the recorded digest is a host fault; the run 
   expect(resumed.output).toBe("done");
 });
 
-/** A host inbox whose drains return `batches` in turn (then none), logging each drain. */
-function inbox(batches: string[][], drains: number[] = []): Steering {
-  return {
-    interruptSignal: () => new AbortController().signal,
-    drain: () => {
-      drains.push(drains.length + 1);
-      return batches.shift() ?? [];
-    },
-  };
-}
-
-/** The text of every user message in `request`. */
+/** The text parts of every user message in `request`, a message's parts joined by `|`. */
 function userTexts(request: Request): string[] {
-  return request.messages.filter((message) => message.role === "user").map((message) => message.text());
+  return request.messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.parts.map((part) => (part as TextPart).text).join("|"));
 }
 
-test("a steer queued while the run is down joins the first live call; a replayed steered call matches", async () => {
+test("a send made while the run is down joins the first live call with the one read before the crash", async () => {
   const replies = () => [calls(["call-a", "save", "a"]), calls(["call-b", "save", "b"]), textReply("done")];
-  const flow = flowText(["save"], { steerable: true });
-  const tools = { save: topicTool("save") };
-  // The second call is steered: its request holds the steer, which its digest leaves out.
-  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools, steering: inbox([[], ["first"]]) });
-  // Cut after the second call's tool result, before the third call.
-  const log = await cutRun(seqOf(uncut.log, "tool_result", 1) + 1, new ScriptedModel(replies(), CONFIG), {
-    flow,
-    tools,
-    steering: inbox([[], ["first"]]),
+  const flow = flowText(["save"], { steerInbox: true });
+  // The second call's tool sends a steer to the run, which the third call reads.
+  const sending = (log: string) => ({
+    save: topicTool("save", {
+      run: async (topic) => {
+        if (topic === "b") await send(log, "notes", "first");
+        return `save:${topic}`;
+      },
+    }),
   });
-  const drains: number[] = [];
-  let drainedBeforeLive = -1;
+  const first = runLog();
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { log: first, flow, tools: sending(first) });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  // Cut after the second call's tool result, before the steer read and the third call.
+  const log = runLog();
+  await crashAfter(seqOf(uncut.log, "tool_result", 1) + 1, () =>
+    run(new ScriptedModel(replies(), CONFIG), { log, flow, tools: sending(log) }),
+  );
+  await send(log, "notes", "while down", { env: retriesEnv(0) });
   const model = new ScriptedModel([textReply("done")], CONFIG);
-  const watched: ChatModel = {
-    provider: model.provider,
-    model: model.model,
-    stream: (request, options) => {
-      drainedBeforeLive = drains.length;
-      return model.stream(request, options);
-    },
-  };
-  const resumed = await resume(log, watched, { tools, steering: inbox([["while down"]], drains) });
+  const resumed = await resume(log, model, { tools: sending(log) });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  // Neither replayed call drained the inbox; the live call drained it once, first.
-  expect(drainedBeforeLive).toBe(1);
-  expect(drains).toEqual([1]);
-  // The steer read before the crash is lost; the one queued while down joins the live call.
-  expect(userTexts(model.requests[0]!)).toEqual(["hi", "while down"]);
+  // Both unread sends join the live call as one read.
+  expect(userTexts(model.requests[0]!)).toEqual(["hi", "first|while down"]);
   expect(sentResults(model, 0).map((part) => part.callId)).toEqual(["call-a", "call-b"]);
+  expect(resumed.unread).toEqual(new Map());
 });
 
 test("replay uses the recorded tool call ids, and a re-run call's idempotency key is the original's", async () => {
@@ -684,7 +671,7 @@ test("replay uses the recorded tool call ids, and a re-run call's idempotency ke
 function interruptible(): { steering: Steering; interrupt: () => void } {
   const controller = new AbortController();
   return {
-    steering: { interruptSignal: () => controller.signal, drain: () => [] },
+    steering: { interruptSignal: () => controller.signal },
     interrupt: () => controller.abort(new Error("interrupted")),
   };
 }
@@ -710,7 +697,7 @@ function hooked(model: ChatModel, hook: (k: number) => void): ChatModel {
 }
 
 test("a recorded interrupted reply replays as the interrupt: its text is the output, no model is called", async () => {
-  const flow = flowText([], { steerable: true });
+  const flow = flowText([], { steerInbox: true });
   const cutReply = () => [new TextDelta(0, "hel"), new TextDelta(0, "lo"), new Finish({ reason: "stop" })];
   const first = interruptible();
   const uncut = await run(
@@ -732,7 +719,7 @@ test("a recorded interrupted reply replays as the interrupt: its text is the out
 });
 
 test("an interrupt set before the resume lets the replay finish, then returns the latest reply", async () => {
-  const flow = flowText(["save"], { steerable: true });
+  const flow = flowText(["save"], { steerInbox: true });
   const checking = new Response({
     message: new Message({
       role: "assistant",
@@ -754,7 +741,7 @@ test("an interrupt set before the resume lets the replay finish, then returns th
 });
 
 test("recorded skipped results replay the host interrupt that skipped them", async () => {
-  const flow = flowText(["save"], { steerable: true });
+  const flow = flowText(["save"], { steerInbox: true });
   const reply = () => [calls(["call-a", "save", "a"], ["call-b", "save", "b"])];
   const ran: string[] = [];
   const tools = { save: topicTool("save", { log: ran }) };
@@ -782,7 +769,7 @@ test("recorded skipped results replay the host interrupt that skipped them", asy
 });
 
 test("calls a group committed before a host interrupt skipped the rest keep their evidence on replay", async () => {
-  const flow = flowText(["lookup", "save"], { steerable: true });
+  const flow = flowText(["lookup", "save"], { steerInbox: true });
   const replies = () => [calls(["call-x", "lookup", "x"], ["call-y", "lookup", "y"], ["call-z", "save", "z"])];
   const options = () => {
     const host = interruptible();

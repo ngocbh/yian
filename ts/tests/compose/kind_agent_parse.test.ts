@@ -390,7 +390,7 @@ test.each<CaseRow>([
   { id: "load-agent/compose_agent_load_checks__agent_union_output_loads", call: assembled },
   { id: "load-agent/compose_agent_load_checks__max_tool_iterations_minus_one_loads", call: assembled },
   // tests/compose/test_agent_mode_removed.py
-  { id: "load-agent/compose_agent_mode_removed__steerable_agent_without_tools_loads", call: assembled },
+  { id: "load-agent/compose_agent_mode_removed__an_agent_with_a_steer_inbox_and_no_tools_loads", call: assembled },
   // tests/compose/test_agent_output_nesting.py
   { id: "load-agent/compose_agent_output_nesting__a_written_out_record_at_the_limit_loads", call: assembled },
   // tests/compose/test_llm_config_values_types.py

@@ -48,7 +48,7 @@ import {
 } from "../memory/index.ts";
 import { sameMemoryScope } from "../memory/contracts.ts";
 import { type CompleteResult, ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
-import { BindingError } from "../nodes/binding.ts";
+import { BindingError, copyValue } from "../nodes/binding.ts";
 import {
   type Binding,
   type CallView,
@@ -79,6 +79,7 @@ import {
   type Type,
   TypeCheckError,
   TypedValue,
+  type ValueRecord,
   writeAsText,
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
@@ -157,6 +158,7 @@ import {
   type Call,
   type CallStateKind,
   nodeCalls,
+  seqList,
   WaitsState,
   wakeableNodes,
 } from "./waits.ts";
@@ -1289,7 +1291,7 @@ function sendKey(state: RunState, inbox: string): string {
 }
 
 /** The element type `T` of the START's top-level `Inbox(T)` param `name`, or `null` when it declares none. */
-function inboxElementType(state: RunState, name: string): Type | null {
+export function inboxElementType(state: RunState, name: string): Type | null {
   const start = state.flow.nodes.get(state.flow.startId);
   const type = (start?.params ?? []).find((param) => param.name === name)?.contract?.type;
   return type !== undefined && isInboxType(type) ? type.element! : null;
@@ -1735,6 +1737,8 @@ export function prepareRunStopped(state: RunState, reason: RunStopReason, messag
  * @param options.callIds Every call the node waits on: each open call it registered since its
  *   last wake, and the call `waits` registers.
  * @param options.waits The take or sleep call this record registers, at most one; none by default.
+ * @param options.steerInbox The steer inbox the node opened, which an interrupt of that inbox
+ *   reaches while it waits; none by default.
  * @returns The canonical `NodeWaitingRecord`, its plan and its `NodeWaiting` observer.
  * @throws TypeError when an argument has the wrong type.
  * @throws RangeError when the record breaks a wait rule (see `validateNodeWaiting`).
@@ -1742,11 +1746,15 @@ export function prepareRunStopped(state: RunState, reason: RunStopReason, messag
 export function prepareNodeWaiting(
   state: RunState,
   nodeId: string,
-  options: { callIds: readonly string[]; waits?: readonly WaitEntry[] },
+  options: { callIds: readonly string[]; waits?: readonly WaitEntry[]; steerInbox?: string | null },
 ): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWaiting expects a RunState");
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
-  return prepareRecord(state, new NodeWaitingRecord(nodeId, options.callIds, { waits: options.waits ?? [] }));
+  const record = new NodeWaitingRecord(nodeId, options.callIds, {
+    waits: options.waits ?? [],
+    steerInbox: options.steerInbox ?? null,
+  });
+  return prepareRecord(state, record);
 }
 
 /**
@@ -2725,7 +2733,7 @@ function prepareRecordTrace(
     ...options,
     rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
     nodeDataRebuilder: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
-    steps: nodeId === null ? [] : (state.nodeSteps.get(nodeId) ?? []),
+    steps: nodeId === null ? [] : stepsWithSteerValues(state, nodeId),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
     rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
@@ -3949,7 +3957,8 @@ function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
  * Require a wait record to move an in-flight node with no pending commit to the waiting set: its
  * `waits` entry (a take or sleep TOOL node's own call, not yet registered; a take's inbox declared,
  * open and with nothing unread a take may read), and `call_ids` naming exactly calls of the node
- * registered since its last wake, not closed, including every open one.
+ * registered since its last wake, not closed, including every open one. A `steer_inbox` names a
+ * declared top-level inbox, on a node that reads a steer inbox.
  */
 function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
   const { nodeId } = record;
@@ -3960,7 +3969,14 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} is not in-flight`);
   requireNoPendingCommit(state, nodeId, "NodeWaiting");
-  if (record.steerInbox !== null) throw new RangeError("NodeWaiting steer_inbox is only for agents, which don't wait yet");
+  if (record.steerInbox !== null) {
+    if (!node.readsSteerInbox) {
+      throw new RangeError(`NodeWaiting steer_inbox on node ${reprText(nodeId)}, which reads no steer inbox`);
+    }
+    if (inboxElementType(state, record.steerInbox) === null) {
+      throw new RangeError(`NodeWaiting steer_inbox ${reprText(record.steerInbox)} is no inbox the START declares`);
+    }
+  }
   const w = state.waits;
   const toolId = node.hostToolCall()?.toolId ?? null;
   for (const entry of record.waits) {
@@ -4107,6 +4123,48 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
     throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
   } else if (step["kind"] === "pending") {
     validatePendingStep(state, nodeId, step);
+  } else if (step["kind"] === "steer") {
+    validateSteerStep(state, nodeId, step);
+  }
+}
+
+/** The keys a `steer` step holds. */
+const STEER_STEP_KEYS = ["kind", "inbox", "from"] as const;
+
+/**
+ * Require a running node's `steer` step to consume the whole unread queue of its one steer inbox:
+ * the node reads a steer inbox (`readsSteerInbox`); exactly `kind`, `inbox` and `from`; `inbox` a
+ * declared top-level inbox, the one any earlier steer step of the node named; `from` the inbox's
+ * unread events a read may take (`availableUnread`), in order, at least one.
+ */
+function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  if (!state.flow.nodes.get(nodeId)!.readsSteerInbox) {
+    throw new RangeError(`a steer step on node ${reprText(nodeId)}, which reads no steer inbox`);
+  }
+  const keys = Object.keys(step);
+  if (keys.length !== STEER_STEP_KEYS.length || !STEER_STEP_KEYS.every((key) => Object.hasOwn(step, key))) {
+    throw new RangeError("a steer step holds only kind, inbox and from");
+  }
+  const inbox = step["inbox"];
+  if (typeof inbox !== "string" || inboxElementType(state, inbox) === null) {
+    throw new RangeError(`steer inbox ${typeof inbox === "string" ? reprText(inbox) : writeAsText(inbox ?? null)} is no inbox the START declares`);
+  }
+  const earlier = (state.nodeSteps.get(nodeId) ?? []).find((prior) => prior["kind"] === "steer");
+  if (earlier !== undefined && earlier["inbox"] !== inbox) {
+    throw new RangeError(
+      `node ${reprText(nodeId)} reads steer inbox ${reprText(String(earlier["inbox"]))}, not ${reprText(inbox)}`,
+    );
+  }
+  // Ints, so the log writes them as ints.
+  const raw = step["from"];
+  const from = Array.isArray(raw) && raw.every((seq) => typeof seq === "bigint") ? seqList(raw) : null;
+  if (from === null) throw new RangeError("a steer step's from must be a list of send seqs (ints)");
+  if (from.length === 0) throw new RangeError("a steer step consumes at least one event");
+  const queue = availableUnread(state.waits, inbox);
+  if (from.length !== queue.length || from.some((seq, index) => seq !== queue[index])) {
+    throw new RangeError(
+      `a steer step must consume the whole unread queue [${queue.join(", ")}], found [${from.join(", ")}]`,
+    );
   }
 }
 
@@ -4278,14 +4336,39 @@ function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | unde
 }
 
 /**
- * Drop a settled node's start count and recorded steps.
+ * Drop a settled node's start count and recorded steps, and the values its steer reads consumed.
  *
  * @throws RangeError when the node has no start count, as Python's `del` raises `KeyError`.
  */
 function forgetNodeSteps(state: RunState, nodeId: string): void {
   if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
+  for (const step of state.nodeSteps.get(nodeId) ?? []) {
+    if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) state.inboxEvents.delete(seq);
+  }
   state.nodeSteps.delete(nodeId);
   state.nodeStepSeqs.delete(nodeId);
+}
+
+/**
+ * Return copies of `nodeId`'s recorded steps, each `steer` step's copy given `values`: the
+ * consumed sends' values (copies, `copyValue`), in `from` order. The steps the state holds don't
+ * change.
+ *
+ * @throws RangeError when a consumed send's value is gone (the log and the state disagree).
+ */
+export function stepsWithSteerValues(state: RunState, nodeId: string): ValueRecord[] {
+  return (state.nodeSteps.get(nodeId) ?? []).map((step) => {
+    const copy = structuredClone(step) as ValueRecord;
+    if (step["kind"] !== "steer") return copy;
+    copy["values"] = (seqList(step["from"]) ?? []).map((seq) => {
+      const value = state.inboxEvents.get(seq);
+      if (value === undefined) {
+        throw new RangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
+      }
+      return copyValue(value.toObject());
+    });
+    return copy;
+  });
 }
 
 /** Require an existing unknown node in the in-flight frontier, with no pending commit. */
@@ -5388,7 +5471,8 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
     );
   }
   const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
-  const bodies = state.nodeSteps.get(nodeId) ?? [];
+  // A steer step's events are rebuilt into messages, so it needs its values.
+  const bodies = stepsWithSteerValues(state, nodeId) as unknown as readonly Readonly<JsonObject>[];
   const picked = record.steps!.map((seq) => bodies[seqs.indexOf(seq)]!);
   try {
     const [wire] = canonicalTyped(node.rebuildMessages(picked, decodeTyped(output.valueJson)), newMessagesType());

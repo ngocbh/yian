@@ -1575,8 +1575,7 @@ result stays in the loop's message history, the evidence, and any logs.
 
 ## Steering
 
-An AGENT authored `steerable: true` (see
-[Steering a running agent](syntax.md#steering-a-running-agent-steerable)) reads a
+An AGENT authored `steerable: true` (Python yian; TS yian reads a `steer_inbox:`, below) reads a
 host inbox while its tool loop runs. The inbox is any object with two methods:
 
 ```python
@@ -1640,23 +1639,37 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   nodes replay without reading it.
 - `yian.run.Steering` is the matching `typing.Protocol`.
 
-Changed (TS yian): the inbox is push-based. In place of `interrupted(node_id)`,
-`interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that
-node. `drain(nodeId)` returns the queued messages or a promise of them, and the node
-awaits it between its effects. Only the main thread reads the inbox (CODE bodies run on
-worker threads but never see it), so it needs no lock. The `Steering` interface lives in
-`nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
+Changed (TS yian): an AGENT reads steers from a declared inbox, `steer_inbox: ${input.<name>}`
+(see [Steering a running agent](syntax.md#steering-a-running-agent-steer_inbox)), and the
+host sends them like any event: `send(log, "<name>", event)`, through the live engine while the
+run moves, or under the log's lock while it is down. `steering` holds only the interrupt:
+`interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that node (an
+object without it is a `TypeError` before any record is written). Only the main thread reads
+it (CODE bodies run on worker threads but never see it), so it needs no lock. The `Steering`
+interface lives in `nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
 
-Also changed (TS yian): every model call streams, so the interrupt is read before each later
-text chunk of every chat call, and a host without `onStream` can cut a reply too; a reply
-whose text had all arrived is kept whole. So an interrupt during a reply's reasoning or
-tool-call stream takes effect at its next text chunk, or once the reply is complete. An interrupt during the wait before retrying a failed model
-call ends the wait at once, and the node succeeds with no new text (`""`, the cut call's
-empty reply). Steers are awaited at the top of each iteration only, and an interrupt that lands while
-an async `drain` settles stops the node before the next model call. A reply's tool calls
-are checked for an interrupt before each call's check, before each group, and before the
-node fails at a call whose check failed (see
-[Tool context](#tool-context)), and a group that is running finishes.
+- **Steers.** Before each model call, after the previous reply's tool results, the agent reads
+  everything queued in its inbox in one zero-wait read, through the engine. The read appends a
+  `steer {inbox, from: [<send seq>, ...]}` node step (exactly these keys) and its events join
+  the request: one user message per read, a text part per event, and a `Message` event as its
+  own user message keeping its `author`. Nothing queued: no step. `from` is the whole unread
+  queue; the run reducer refuses any other. The consumed events leave the inbox's unread
+  queue at the step, and their values stay in the run state until the agent settles.
+- **Replay.** A resumed agent gets each recorded steer back with its values, from the run state,
+  before the call it preceded, so the request is rebuilt as sent. `request_sha256` hashes every
+  message, steers included. A send made while the run was down is read by the first live call.
+- **Run log.** A reader sees the `steer` step like any node step; `foldRunLog` gives each send
+  in `from` as the `pool_commit` holding its value. Readers skip step kinds they don't know.
+- **Interrupts.** An interrupt is read at the top of each iteration, before the steer read, so
+  an honored interrupt leaves queued steers unread in the inbox. Every model call streams, so
+  the interrupt is read before each later text chunk of every chat call, and a host without
+  `onStream` can cut a reply too; a reply whose text had all arrived is kept whole. So an
+  interrupt during a reply's reasoning or tool-call stream takes effect at its next text
+  chunk, or once the reply is complete. An interrupt during the wait before retrying a failed
+  model call ends the wait at once, and the node succeeds with no new text (`""`, the cut
+  call's empty reply). A reply's tool calls are checked for an interrupt before each call's
+  check, before each group, and before the node fails at a call whose check failed (see
+  [Tool context](#tool-context)), and a group that is running finishes.
 
 ## Injecting agent memory
 
@@ -2465,8 +2478,8 @@ Changed (TS yian, schema 22): an AGENT's success writes three records with nothi
 its output `pool_commit`, then a messages commit, then `node_succeeded`, which names both. The
 messages commit, `pool_commit {node_id, key: "<node>.new_messages", steps: [seq, ...]}`, holds no
 value but `steps`: the seqs of the agent's own steps its new messages are made of, ascending:
-each chat `model_call` whose reply arrived, every `tool_result`, and for a structured agent its
-accepted structured call (the node's last `model_call`, when it is structured, has no `error` and
+each chat `model_call` whose reply arrived, every `tool_result`, every `steer` read, and for a
+structured agent its accepted structured call (the node's last `model_call`, when it is structured, has no `error` and
 wasn't cut). Failed attempts, `llm_config` steps and earlier structured attempts are left out.
 `node_succeeded` gains `messages`, the messages commit's seq (`null` for every other node; always
 on the wire). The reducer derives `steps` itself (`Node.messageSteps`, which picks step `n`s that
@@ -2476,7 +2489,10 @@ that names none. It rebuilds the value, a `list(Message)` (`Node.rebuildMessages
 commit is prepared, so a value that doesn't rebuild appends nothing: each reply as recorded, then
 one `tool` message per call it answered, in the reply's call order (results are recorded in
 finish order). A tool call with no result (its arguments didn't parse, or a host interrupt cut its
-reply) is left out, so every tool call in the value has a result; so is media that isn't a
+reply) is left out, so every tool call in the value has a result. Each `steer` read joins where
+it was read, after the previous reply's results, as the user messages the request held: one per
+`Message` event, keeping its author, and one for each run of other events, a text part per event
+(the reducer reads the events from the run's sends). Left out too is media that isn't a
 run-folder file (a run without a log keeps a reply's media inline; the agent warns when it records
 such a reply), and a message left with no parts. A structured agent's value ends with one
 assistant message holding its final value as JSON text; the recorded structured reply (an
@@ -2533,7 +2549,8 @@ whose binding finished (every outcome but a failure at a binding stage, whose in
 Changed (TS yian, schema 18): the inbox and wait records. Six record kinds, each with every
 field always present: `node_waiting {node_id, call_ids, waits, steer_inbox}` moves an in-flight
 node to the waiting set (`waits` holds at most one take or sleep call, `{call_id, tool, inbox,
-mode, deadline}`, with nulls where unused; `steer_inbox` is always null for now), `node_woken
+mode, deadline}`, with nulls where unused; `steer_inbox` names the steer inbox of an AGENT that
+waits with one open, else null), `node_woken
 {node_id, timed_out}` moves it back in flight, `run_waiting {node_ids}` marks a quiescence with
 nodes waiting, `inbox_closed {inbox}`, and the terminal `run_cancelled {}` and `run_failed
 {failure}`. `run_resumed` gains `closed_calls`, the open calls of the retried nodes it closes
@@ -2742,8 +2759,8 @@ on replay. Each `step` is a JSON object with a string `kind`:
   may have sent) and `retry_in` (the wait in seconds before the retry, `null` when it isn't
   retried) in place of `response_id` and `finish`. A call a stop or abort cut writes nothing.
   `request_sha256` is the SHA-256 of the request's messages (each message's `author` included),
-  tools, tool choice, parallel tool calls and output format, as `logJson` text, with the steers
-  the AGENT read left out. Media
+  tools, tool choice, parallel tool calls and output format, as `logJson` text; the steers the
+  AGENT read are messages like any other, so the digest covers them. Media
   in a reply is never inline: its bytes are stored as `media/<sha256>.<ext>` beside the run's
   log, `output` holds the file reference, and the request (and its digest) holds that form;
   only the request sent to the provider has the bytes inline.
@@ -3120,10 +3137,9 @@ the run log is not a durable replacement for that memory backend.
 Changed (TS yian): there is no session memory, so nothing keeps a conversation beside the
 run log; a chat's history is the value a LOOP carries, rebuilt on replay from the node outputs
 that made it (the turns' derived commits hold `from` pointers; see [Authoritative run
-logs](#authoritative-run-logs)). Steers aren't
-recorded: a steer an AGENT read before a crash is lost (the replayed requests don't hold it, and
-`request_sha256` leaves steers out so they still match), and one queued while the run was down
-joins the first live model call.
+logs](#authoritative-run-logs)). Each steer read is recorded as a `steer` step, so a steer an
+AGENT read before a crash joins the replayed requests where it joined the live ones, and one
+queued while the run was down joins the first live model call.
 
 Changed (TS yian): an AGENT records each model call and each tool result as a node step (see
 [Authoritative run logs](#authoritative-run-logs)), and a resumed AGENT replays them instead of
@@ -3136,8 +3152,9 @@ checked as live and, when its check passes, closed with a `tool_result` written 
 reply a host interrupt cut, or recorded `skipped` results, end the AGENT as the interrupt did; a
 recorded call that failed for good fails the node again with its recorded error. Failed attempts
 after the last recorded call belong to the first live call: it waits the last one's `retry_in`
-again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. The AGENT reads its
-host inbox (steers and the interrupt) only once the replay ends. New steps are numbered after
+again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. A recorded `steer`
+step gives its events back in place; the AGENT reads its steer inbox live, and the host's
+interrupt, only once the replay ends. New steps are numbered after
 the recorded ones; a call a crash cut before its `model_call` was written ran no tool, so no
 idempotency key names two calls that ran.
 
@@ -3592,7 +3609,7 @@ included) returns `pending()`, the agent records a `pending` step for the call (
 runs the reply's other calls, and waits on every call of the reply that pended. The host answers
 each with `complete`; once all are answered the agent wakes, replays its recorded steps (no
 handler is called again) and calls its model with every result, in call order. An agent given the
-host's interrupt signal (a steerable agent) can't wait yet: its tool returning `pending()` fails
+host's interrupt signal (an agent with a `steer_inbox:` run with host steering) can't wait yet: its tool returning `pending()` fails
 it, so answer inline. A process lost after the `pending` step but before the agent waits closes
 the call as `crashed` on resume, and the model reads that the call's outcome is unknown. With
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as

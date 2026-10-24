@@ -4,15 +4,18 @@
 # commit. The resumed agent replays the reply and the skipped results, and ends as the interrupt
 # did, with the reply's text, calling neither the model nor the tool.
 kind: resume
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 rules: [run-log]
 flow: |
   id: replay-interrupt
   name: replay_interrupt
   llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
   nodes:
     chat:
       kind: agent
-      steerable: true
+      steer_inbox: ${input.notes}
       tools: [lookup]
       prompt: Help the user.
       output: str
@@ -63,7 +66,7 @@ expect:
     - [pool_commit, __start__, {key: system.today}]
     - [pool_commit, __start__, {value: {}}]
     - [node_started, __start__]
-    - [pool_commit, __start__, {value: {}}]
+    - [pool_commit, __start__, {value: {notes: {inbox: notes}}}]
     - [node_succeeded, __start__, {commit: 6}]
     - [node_started, chat]
     - - node_step

@@ -85,6 +85,7 @@ import { defaultModelAccess, type ModelAccess } from "../../src/llm_clients/fact
 import {
   AssertionStageError,
   BindingStageError,
+  CapabilityFault,
   Grow,
   Node,
   NodeAssertFailed,
@@ -93,6 +94,8 @@ import {
   type NodeResult,
   Output,
   Route,
+  type SteerInbox,
+  type SteerRead,
 } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -112,7 +115,7 @@ import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/run
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
-import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected } from "./run_state_fixtures.ts";
+import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "./run_state_fixtures.ts";
 
 /** Return the failure `drive` resolves to, or fail when it resolves to anything else. */
 async function driveFailure(
@@ -442,13 +445,10 @@ describe("evalNode checks its arguments", () => {
     ["tools", { tools: new Map() }, new TypeError("tools must be a ToolSet or null")],
     ["skills", { skills: { s: {} } }, new TypeError("skills must be a map or null")],
     ["steps", { steps: { starts: 1, prior: [], record() {} } }, new TypeError("steps must be a NodeSteps or null")],
+    ["steer_inbox", { steerInbox: {} }, new TypeError("steer_inbox must be callable or null")],
     ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
     ["signal", { signal: new AbortController() }, new TypeError("signal must be an AbortSignal or null")],
-    [
-      "steering",
-      { steering: { drain: () => [] } },
-      new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null"),
-    ],
+    ["steering", { steering: { drain: () => [] } }, new TypeError("steering must provide interruptSignal(nodeId), or be null")],
     [
       "models",
       { models: { env: NO_ENV } },
@@ -469,7 +469,7 @@ describe("evalNode checks its arguments", () => {
       tools: new ToolSet(),
       steps: new NodeSteps(1, [], () => 1),
       signal: new AbortController().signal,
-      steering: { interruptSignal: () => new AbortController().signal, drain: () => [] },
+      steering: { interruptSignal: () => new AbortController().signal },
       models: MODELS,
       onFault: () => {},
     };
@@ -499,7 +499,7 @@ class TraitCapsNode extends CapsNode {
   override readonly kind = NodeKind.AGENT;
   override readonly needsTools = true;
   override readonly needsSteps = true;
-  override readonly needsSteering = true;
+  override readonly readsSteerInbox = true;
 }
 
 /** The scheduler, random-draw and run-folder options, malformed, with the error each rejects with. */
@@ -609,6 +609,79 @@ class CapsProbe extends Node {
 class ModelsProbe extends CapsProbe {
   override readonly needsModels = true;
 }
+
+/** A probe that declares it reads a steer inbox. */
+class SteerReaderProbe extends CapsProbe {
+  override readsSteerInbox = true;
+}
+
+describe("the steer inbox capability", () => {
+  /** An opener whose inbox `m` reads `read()`'s answer, counting reads. */
+  function opener(read: () => SteerRead | null = () => null) {
+    const calls: string[] = [];
+    const open = (inbox: string): SteerInbox => {
+      calls.push(`open ${inbox}`);
+      return { inbox, queued: () => (calls.push("queued"), false), read: () => (calls.push("read"), read()) };
+    };
+    return { open, calls };
+  }
+
+  test("openSteerInbox reaches only a node declaring readsSteerInbox", async () => {
+    const seen = new Map<string, NodeCaps>();
+    const { open } = opener();
+    await drive(new CapsProbe("plain", seen), { steerInbox: open });
+    await drive(new SteerReaderProbe("chat", seen), { steerInbox: open });
+    expect("openSteerInbox" in seen.get("plain")!).toBe(false);
+    expect(typeof seen.get("chat")!.openSteerInbox).toBe("function");
+  });
+
+  test("a steer read after the evaluation settled is refused", async () => {
+    const seen = new Map<string, NodeCaps>();
+    const { open, calls } = opener();
+    await drive(new SteerReaderProbe("chat", seen), { steerInbox: open });
+    const kept = seen.get("chat")!.openSteerInbox!;
+    const error = thrown(() => kept("m"));
+    expect(error).toBeInstanceOf(CapabilityFault);
+    expect((error as CapabilityFault).original).toEqual(new Error("steer inbox capability is closed"));
+    expect(calls).toEqual([]);
+  });
+
+  test("a read opened while running is refused once the evaluation settled", async () => {
+    let inbox: SteerInbox | null = null;
+    const { open, calls } = opener();
+    class Keeper extends SteerReaderProbe {
+      override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+        inbox = caps.openSteerInbox!("m");
+        return super.forward(inputs, caps);
+      }
+    }
+    await drive(new Keeper("chat", new Map()), { steerInbox: open });
+    expect(thrown(() => inbox!.read())).toBeInstanceOf(CapabilityFault);
+    expect(thrown(() => inbox!.queued())).toBeInstanceOf(CapabilityFault);
+    expect(calls).toEqual(["open m"]);
+  });
+
+  test("a refused read's fault reaches onFault and rejects the evaluation, even when the node catches it", async () => {
+    const original = new RangeError("refused");
+    const { open } = opener(() => {
+      throw new CapabilityFault(original);
+    });
+    const faults: unknown[] = [];
+    class Catcher extends SteerReaderProbe {
+      override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+        try {
+          caps.openSteerInbox!("m").read();
+        } catch {
+          // The node hides the fault; the evaluator still sees it.
+        }
+        return super.forward(inputs, caps);
+      }
+    }
+    const error = await rejected(drive(new Catcher("chat", new Map()), { steerInbox: open, onFault: (e) => faults.push(e) }));
+    expect(error).toBe(original);
+    expect(faults).toEqual([original]);
+  });
+});
 
 describe("the models capability", () => {
   test("reaches a node declaring needsModels through evalNode, and not a node without it", async () => {

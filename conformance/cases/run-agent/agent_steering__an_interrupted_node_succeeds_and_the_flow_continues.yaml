@@ -3,15 +3,18 @@
 # (non-steerable) AGENT renders that empty draft into its prompt ("summarize: ") and its reply
 # is the run's output.
 kind: run
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 rules: [run-log]
 flow: |
   id: steer
   name: steer
   llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
   nodes:
     chat:
       kind: agent
-      steerable: true
+      steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
       output: str
@@ -89,7 +92,7 @@ expect:
   - [node_started, __start__]
   - - pool_commit
     - __start__
-    - value: {}
+    - value: {notes: {inbox: notes}}
   - - node_succeeded
     - __start__
     - {commit: 6}
@@ -142,7 +145,7 @@ expect:
     - node_id: __start__
   - - NodeSucceeded
     - node_id: __start__
-      output: {}
+      output: {notes: {inbox: notes}}
   - - NodeStarted
     - node_id: chat
   - - NodeSucceeded

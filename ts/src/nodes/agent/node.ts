@@ -40,6 +40,7 @@ import {
   buildValueAs,
   canonicalTypeLabel,
   isList,
+  inboxName,
   isRecord,
   type Type,
   TypeCheckError,
@@ -64,8 +65,9 @@ import {
   NodeKind,
   type Output,
   type Pending,
+  type SteerInbox,
 } from "../base.ts";
-import { applyDefaults, BindingError, copyValue, type ReservedBinder } from "../binding.ts";
+import { applyDefaults, BindingError, copyValue, type ReservedBinder, resolveSource, sourceOrigin } from "../binding.ts";
 import {
   Binding,
   type CallView,
@@ -105,10 +107,23 @@ import {
 } from "./messages.ts";
 import { OutputInvalidError } from "./structured.ts";
 
+/** The reserved wiring key an agent's `steer_inbox:` rides; it binds to the inbox's name. */
+export const STEER_INBOX_KEY = "__steer_inbox";
+
 /** The step key under which a call-time agent records the config it resolved. */
 const CONFIG_STEP = "effective_llm_config";
 /** The `kind` of the step a call-time agent records its config in. */
 const CONFIG_STEP_KIND = "llm_config";
+
+/**
+ * Open the steer inbox named `inbox` through `caps.openSteerInbox`.
+ *
+ * @throws CapabilityFault carrying a TypeError when the evaluator gave no steer inbox.
+ */
+function openSteerInbox(caps: NodeCaps, inbox: string): SteerInbox {
+  if (caps.openSteerInbox === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no steer inbox"));
+  return caps.openSteerInbox(inbox);
+}
 
 /** Whether an AGENT output contract is plain text: none, or an untagged `str`, nullable or not (`Optional(str)`). */
 export function isTextOutput(contract: OutputContract | null): boolean {
@@ -375,8 +390,8 @@ export class AgentNode extends Node {
   variables: readonly Parameter[];
   /** The granted skill names, or `"all"` for every skill the host supplies. */
   skills: readonly string[] | "all";
-  /** Whether the host may steer or interrupt this agent while it runs. */
-  readonly steerable: boolean;
+  /** Whether this agent reads a steer inbox (`steer_inbox:`, the reserved `__steer_inbox` wiring). */
+  readonly steerInbox: boolean;
   /**
    * The author-facing phrase naming this agent's `llm_config` when a desugar synthesized the
    * agent from another node's text (e.g. `node 'ask' adaptive_questions.llm_config`).
@@ -420,9 +435,9 @@ export class AgentNode extends Node {
    * @param options.memories Exact `MemoryDecl`s with AGENT `DeclSite`s; defaults to `[]`.
    * @param options.variables Exact `Parameter`s with literal defaults; defaults to `[]`.
    * @param options.skills Skill names, or `"all"`; defaults to `[]`.
-   * @param options.steerable Whether the host may steer this agent; defaults to `false`.
+   * @param options.steerInbox Whether this agent reads a steer inbox; defaults to `false`.
    * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `memories`, `variables`
-   *   or `steerable`.
+   *   or `steerInbox`.
    * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
    *   `builtin_tools` grant, a memory without an AGENT
    *   `DeclSite`, or a variable whose name repeats or whose default is missing or invalid.
@@ -441,7 +456,7 @@ export class AgentNode extends Node {
       memories?: readonly MemoryDecl[];
       variables?: readonly Parameter[] | null;
       skills?: readonly string[] | "all" | null;
-      steerable?: boolean;
+      steerInbox?: boolean;
     } = {},
   ) {
     const {
@@ -455,7 +470,7 @@ export class AgentNode extends Node {
       memories = [],
       variables = null,
       skills = null,
-      steerable = false,
+      steerInbox = false,
     } = options;
     super(nodeId, { title });
     if (isList(prompt)) checkPromptItems(nodeId, prompt);
@@ -498,11 +513,11 @@ export class AgentNode extends Node {
     this.skills = skills ?? [];
     this.validateSkills();
     this.validateVariables();
-    if (typeof steerable !== "boolean") {
-      throw new TypeError(`AGENT node ${reprText(nodeId)}: steerable must be a bool`);
+    if (typeof steerInbox !== "boolean") {
+      throw new TypeError(`AGENT node ${reprText(nodeId)}: steerInbox must be a bool`);
     }
-    this.steerable = steerable;
-    this.needsSteering = steerable;
+    this.steerInbox = steerInbox;
+    this.readsSteerInbox = steerInbox;
     this.llmConfigLabel = null;
     this.wiresLlmConfig = false;
     this.llmValueTypes = [];
@@ -510,29 +525,45 @@ export class AgentNode extends Node {
     this.hostCredentials = null;
   }
 
-  /** Declare `__llm_config` when values in the layers can reach this agent's config. */
+  /**
+   * Declare `__llm_config` when values in the layers can reach this agent's config, and
+   * `__steer_inbox` when it reads a steer inbox.
+   */
   override reservedWiringKeys(): ReadonlySet<string> {
-    return new Set(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []);
-  }
-
-  /** Hide `__llm_config` from recall and learning, when this agent has it: it configures the call. */
-  override modelHiddenInputs(): ReadonlySet<string> {
-    return new Set(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []);
+    return new Set(this.reservedKeys());
   }
 
   /**
-   * Resolve and check a call-time agent's `llm_config` before its model call.
+   * Hide `__llm_config` and `__steer_inbox` from recall and learning, when this agent has them:
+   * they configure the call.
+   */
+  override modelHiddenInputs(): ReadonlySet<string> {
+    return new Set(this.reservedKeys());
+  }
+
+  /** The reserved wiring keys this agent has. */
+  private reservedKeys(): string[] {
+    return [...(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []), ...(this.steerInbox ? [STEER_INBOX_KEY] : [])];
+  }
+
+  /**
+   * Resolve the steer inbox's name, and check a call-time agent's `llm_config`, before its model
+   * call.
    *
-   * The node and own-flow layers resolve against `pool`, merge over the base run start recorded,
-   * and are checked as run start checks a static agent's config (`callTimeConfig`). Nothing is
-   * rendered, recalled or sent to a model first. `options.bind` is unused: the bound value is the
-   * resolved config, not the values it was read from.
+   * The steer inbox binding (`__steer_inbox`) resolves through `options.bind` (else against
+   * `pool`) to the inbox's name. The node and own-flow `llm_config` layers resolve against `pool`,
+   * merge over the base run start recorded, and are checked as run start checks a static agent's
+   * config (`callTimeConfig`). Nothing is rendered, recalled or sent to a model first.
+   * `options.bind` is unused for the config: the bound value is the resolved config, not the values
+   * it was read from.
    *
-   * @returns `{__llm_config: <config>}`, the resolved config with no key or header value, the
-   *   shape of a `RunStarted` map entry; `{}` for an agent run start resolved.
-   * @throws Error when a call-time agent's wiring has no `__llm_config` binding.
-   * @throws BindingError when a value breaks its tag (`binding.type`) or fails to resolve, or the
-   *   resolved config is refused (`contract.input`); the message names the field.
+   * @returns `{__steer_inbox: <name>}` for an agent with a steer inbox, and `{__llm_config:
+   *   <config>}`, the resolved config with no key or header value, the shape of a `RunStarted` map
+   *   entry, for a call-time agent; `{}` for neither.
+   * @throws Error when the wiring lacks a reserved binding the agent has.
+   * @throws BindingError when the steer inbox binding isn't an inbox, a value breaks its tag
+   *   (`binding.type`) or fails to resolve, or the resolved config is refused (`contract.input`);
+   *   the message names the field.
    * @throws AuthError when the config is marked for the host key the run does not hold; the
    *   host's to fix, not a failure of this node.
    */
@@ -541,22 +572,43 @@ export class AgentNode extends Node {
     pool: VariablePool,
     options: { bind?: ReservedBinder | null } = {},
   ): Record<string, unknown> {
-    if (this.callTime === null) return {};
+    const reserved: Record<string, unknown> = {};
+    if (this.steerInbox) {
+      if (!nodeWiring.has(STEER_INBOX_KEY)) {
+        throw new Error(`AGENT node ${reprText(this.id)} has no \`${STEER_INBOX_KEY}\` wiring`);
+      }
+      const source = nodeWiring.get(STEER_INBOX_KEY);
+      const normalize = (value: unknown): string => {
+        const name = inboxName(value);
+        if (name === null) {
+          throw new BindingError(`AGENT node ${reprText(this.id)}: steer_inbox must be an inbox`, {
+            failureCode: "contract.input",
+            origin: sourceOrigin(source),
+          });
+        }
+        return name;
+      };
+      const { bind = null } = options;
+      reserved[STEER_INBOX_KEY] =
+        bind === null ? normalize(resolveSource(source, pool)) : bind(STEER_INBOX_KEY, source, normalize);
+    }
+    if (this.callTime === null) return reserved;
     const template = nodeWiring.get(LLM_CONFIG_KEY);
     if (!(template instanceof Binding)) {
       throw new Error(`AGENT node ${reprText(this.id)} has no \`${LLM_CONFIG_KEY}\` wiring`);
     }
-    return {
-      [LLM_CONFIG_KEY]: callTimeConfig(template, pool, this.callTime, {
-        label: this.llmConfigLabel,
-        credentials: this.hostCredentials,
-      }),
-    };
+    reserved[LLM_CONFIG_KEY] = callTimeConfig(template, pool, this.callTime, {
+      label: this.llmConfigLabel,
+      credentials: this.hostCredentials,
+    });
+    return reserved;
   }
 
-  /** Name the reserved `__llm_config` key as the authored `llm_config` field. */
+  /** Name the reserved `__llm_config` and `__steer_inbox` keys as the authored fields. */
   override reservedKeyLabel(key: string): string {
-    return key === LLM_CONFIG_KEY ? "llm_config" : super.reservedKeyLabel(key);
+    if (key === LLM_CONFIG_KEY) return "llm_config";
+    if (key === STEER_INBOX_KEY) return "steer_inbox";
+    return super.reservedKeyLabel(key);
   }
 
   /**
@@ -585,12 +637,12 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Return the declared inputs eligible for feedback, never `__llm_config`. The model config is
-   * not material the model reasons about, so the node that produced a value in it never receives
-   * this agent's input feedback.
+   * Return the declared inputs eligible for feedback, never `__llm_config` or `__steer_inbox`.
+   * Neither is material the model reasons about, so the node that produced a value in one never
+   * receives this agent's input feedback.
    */
   override backwardInputNames(): readonly string[] {
-    return super.backwardInputNames().filter((name) => name !== LLM_CONFIG_KEY);
+    return super.backwardInputNames().filter((name) => name !== LLM_CONFIG_KEY && name !== STEER_INBOX_KEY);
   }
 
   /**
@@ -616,18 +668,18 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Reject a steerable agent whose output contract is not plain text (none, `str`, or
+   * Reject an agent with a steer inbox whose output contract is not plain text (none, `str`, or
    * `Optional(str)`). The contract is assigned after construction, so this is checked here as well
    * as at YAML load.
    *
-   * @throws RangeError when the agent is steerable and its output isn't an untagged `str` or
-   *   `Optional(str)`.
+   * @throws RangeError when the agent reads a steer inbox and its output isn't an untagged `str`
+   *   or `Optional(str)`.
    */
   override validateExecutionSetup(): void {
     super.validateExecutionSetup();
-    if (this.steerable && !isTextOutput(this.outputContract)) {
+    if (this.steerInbox && !isTextOutput(this.outputContract)) {
       // An interrupted node returns its text so far; a structured value can't be partial.
-      throw new RangeError(`AGENT node ${reprText(this.id)}: steerable needs \`str\` output`);
+      throw new RangeError(`AGENT node ${reprText(this.id)}: a steer inbox needs \`str\` output`);
     }
   }
 
@@ -799,6 +851,7 @@ export class AgentNode extends Node {
       baseSystemPrompt: string;
       skills: readonly Skill[];
       models: ModelAccess;
+      steerInbox: SteerInbox | undefined;
     },
   ): AgentRunContext {
     return {
@@ -818,6 +871,7 @@ export class AgentNode extends Node {
       baseSystemPrompt: options.baseSystemPrompt,
       skills: options.skills,
       steering: caps.steering,
+      steerInbox: options.steerInbox,
       models: options.models,
       sent: () => [],
       steps: caps.steps,
@@ -879,7 +933,8 @@ export class AgentNode extends Node {
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param caps The node's signal, checked before recall and the model call, its scheduler and
    *   random draw for model-retry waits, and the capabilities its traits ask for: memory context,
-   *   tools, live sinks, skills, steering, model access and steps.
+   *   tools, live sinks, skills, the steer inbox and the host's interrupt signal, model access and
+   *   steps.
    * @returns The model's answer, or Pending when a tool call waits for a later answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
@@ -896,6 +951,8 @@ export class AgentNode extends Node {
     if (caps.steps !== undefined && this.callTime !== null) {
       this.recordConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, caps.steps);
     }
+    // Opened before anything renders, so a replaying agent already reads its inbox.
+    const steerInbox = this.steerInbox ? openSteerInbox(caps, inputs[STEER_INBOX_KEY] as string) : undefined;
     const rendered = this.renderPrompt(inputs, caps.skills ?? null, { signal: caps.signal });
     const { systemPrompt, promptText, baseSystemPrompt } = rendered;
     const config = this.callConfig(inputs);
@@ -912,6 +969,7 @@ export class AgentNode extends Node {
       baseSystemPrompt,
       skills: rendered.skills,
       models,
+      steerInbox,
     });
     try {
       return await runAgent(ctx);

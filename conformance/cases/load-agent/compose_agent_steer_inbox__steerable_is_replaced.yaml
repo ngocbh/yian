@@ -1,0 +1,21 @@
+# TS-only: `steerable:` was replaced by `steer_inbox:` (yian #1025); the error says how to move.
+kind: load
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+flow: |
+  id: steer
+  name: steer
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steerable: true
+      output: str
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node field `steerable:` was replaced by `steer_inbox:`: declare an `Inbox(...)` input and write `steer_inbox: ${input.<name>}`; the host sends steers with `send`'
+      frames:
+      - label: flow.yaml
+        range: [7, 5, 7, 14]

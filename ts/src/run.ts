@@ -896,7 +896,7 @@ export interface RunFlowOptions {
   tools?: Readonly<Record<string, ToolEntry>> | null;
   /** The skills this run can grant, keyed by `Skill.name`. */
   skills?: ReadonlyMap<string, Skill> | null;
-  /** The host inbox for AGENT nodes authored `steerable: true`. */
+  /** The host's interrupt signal for AGENT nodes with a `steer_inbox`. */
   steering?: Steering | null;
   /** The host's app object a tool receives as `ctx.context`; never recorded. */
   context?: unknown;
@@ -1541,7 +1541,7 @@ export interface AdvanceOptions {
    * granted one with its recorded description and instructions.
    */
   skills?: ReadonlyMap<string, Skill> | null;
-  /** The host inbox for AGENT nodes authored `steerable: true`. */
+  /** The host's interrupt signal for AGENT nodes with a `steer_inbox`. */
   steering?: Steering | null;
   /**
    * The provider key of a run started with `llmConfig.api_key`, for the agents the log marks for it

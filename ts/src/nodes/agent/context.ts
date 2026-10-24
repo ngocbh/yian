@@ -24,7 +24,7 @@ import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
-import { CapabilityFault, type NodeCaps, type Steering } from "../base.ts";
+import { CapabilityFault, type NodeCaps, type SteerInbox, type Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 
 /** The system prompt of an AGENT that authors none. */
@@ -73,8 +73,10 @@ export interface AgentRunContext {
   readonly baseSystemPrompt: string;
   /** The granted skills served by `load_skill`, sorted by name. */
   readonly skills: readonly Skill[];
-  /** The host inbox; present only for a steerable node. */
+  /** The host's interrupt signal; present only for a node with a steer inbox. */
   readonly steering?: Steering;
+  /** The steer inbox this invocation reads; absent without `steer_inbox`. */
+  readonly steerInbox?: SteerInbox;
   /** The run's environment and model builder. */
   readonly models: ModelAccess;
   /** The credentials the built model's route sends, for scrubbing; `() => []` until it is built. */
@@ -179,6 +181,12 @@ export type RecordedCall =
   | { readonly n: number; readonly response: Response }
   | { readonly n: number; readonly failure: { readonly kind: string; readonly message: string } };
 
+/** A steer read an earlier start recorded, as `takeRecordedSteer` gives it back: its step's `n` and the values it read. */
+export interface RecordedSteer {
+  readonly n: number;
+  readonly values: readonly unknown[];
+}
+
 /** Attempts of a model call that an earlier start made and lost: their count, and the last one's wait. */
 export interface PriorAttempts {
   readonly attempts: number;
@@ -196,7 +204,9 @@ export interface PriorAttempts {
  * `model_call`, and each failed one that wasn't to be retried, ends one logical call to take back
  * (`takeRecorded`) in place of calling the model; the failed attempts before it belong to it, and
  * failed attempts after the last one are the next live call's (`priorAttempts`). Each
- * `tool_result` is found by its reply and its call id (`recordedResult`).
+ * `tool_result` is found by its reply and its call id (`recordedResult`). Each `steer` step is
+ * handed back (`takeRecordedSteer`) before the logical call it preceded, with the values the
+ * engine attached to its copy; one after the last call is handed back after it.
  * Steps of any other kind (`llm_config`, or a kind this version doesn't know) are not the loop's
  * and are skipped.
  */
@@ -216,6 +226,8 @@ export class AgentSteps {
   #trailing: readonly NumberedStep[];
   /** The recorded tool results, by the `n` of the reply they answer, then by call id. */
   readonly #results = new Map<number, Map<string, ValueRecord>>();
+  /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
+  readonly #steers = new Map<number, NumberedStep>();
 
   /**
    * @param steps This start's engine steps, or `undefined` to record nothing.
@@ -253,9 +265,44 @@ export class AgentSteps {
         let results = this.#results.get(reply);
         if (results === undefined) this.#results.set(reply, (results = new Map()));
         results.set(step["call_id"] as string, step);
+      } else if (step["kind"] === "steer") {
+        // A steer is read only before a logical call, never between its attempts, so it belongs
+        // to the next call.
+        this.#steers.set(this.#calls.length, { n: index + 1, step });
       }
     }
     this.#trailing = attempts;
+  }
+
+  /**
+   * Take the steer read recorded before the next logical call, once.
+   *
+   * @returns Its step's `n` and the values the engine attached to the step's copy; `null` when
+   *   none was recorded there, or it was taken.
+   * @throws CapabilityFault carrying a RangeError when the step's copy has no values: the steps
+   *   came from somewhere other than the engine.
+   */
+  takeRecordedSteer(): RecordedSteer | null {
+    const recorded = this.#steers.get(this.#taken);
+    if (recorded === undefined) return null;
+    this.#steers.delete(this.#taken);
+    const values = recorded.step["values"];
+    if (!Array.isArray(values)) {
+      throw new CapabilityFault(
+        new RangeError(
+          `node ${reprText(this.#nodeId)} step ${recorded.n}: a steer step without its values; resume through the engine`,
+        ),
+      );
+    }
+    return { n: recorded.n, values };
+  }
+
+  /**
+   * Whether replay is over and recorded failed attempts continue the next call, so it retries a
+   * recorded request and no steer joins it.
+   */
+  continuesCall(): boolean {
+    return !this.replaying() && this.#trailing.length > 0;
   }
 
   /** Whether a recorded call is still to be taken, so the loop is replaying. */
@@ -521,11 +568,8 @@ export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering"
 }
 
 // --------------------------------------------------------------------------------------- //
-// The host inbox on replay. Steers aren't recorded yet, so these rules keep a resumed AGENT's
-// replay matching its log: a replaying loop reads neither steers nor the interrupt (they reach
-// the first live call), and a request's digest leaves the steer messages out (a steer read before
-// a crash is lost, and the replayed request lacks it). A recorded steer step, which replay feeds
-// back and the digest includes, replaces the steer rules; keep them here, together.
+// The host interrupt on replay. A replaying loop doesn't read the host's interrupt: the recorded
+// calls already happened. Recorded steers replay as steps (`takeRecordedSteer`).
 // --------------------------------------------------------------------------------------- //
 
 /**
@@ -534,18 +578,6 @@ export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering"
  */
 export function interruptRequested(interrupt: AbortSignal | undefined, steps: AgentSteps): boolean {
   return interrupt?.aborted === true && !steps.replaying();
-}
-
-/**
- * Take the host's queued steer messages for this node, awaiting a promised answer; none without
- * an inbox, and none while `steps` is replaying, so they stay queued for the first live call.
- */
-export async function drainSteers(
-  ctx: Pick<AgentRunContext, "nodeId" | "steering">,
-  steps: AgentSteps,
-): Promise<string[]> {
-  if (ctx.steering === undefined || steps.replaying()) return [];
-  return [...(await ctx.steering.drain(ctx.nodeId))];
 }
 
 /**
@@ -568,15 +600,15 @@ export function digestRequest(request: Request, baseSystemPrompt: string | null)
 
 /**
  * Return the digest a `model_call` step records for `request`: the SHA-256 of the `logJson` text
- * (canonical layout; ints of any size, so a long int argument hashes) of its messages (`steers`
- * left out, by identity), tools, tool choice, parallel tool calls and output format. Media is
- * hashed in the form the request holds it, the file form for a reply.
+ * (canonical layout; ints of any size, so a long int argument hashes) of its messages, tools,
+ * tool choice, parallel tool calls and output format. Media is hashed in the form the request
+ * holds it, the file form for a reply.
  */
-export function requestSha256(request: Request, steers: ReadonlySet<Message>): string {
+export function requestSha256(request: Request): string {
   const choice = request.toolChoice;
   const format = request.outputFormat;
   const json = {
-    messages: request.messages.filter((message) => !steers.has(message)).map((message) => message.toJSON()),
+    messages: request.messages.map((message) => message.toJSON()),
     tools: request.tools.map((tool) => ({
       name: tool.name,
       description: tool.description,

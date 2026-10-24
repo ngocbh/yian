@@ -30,15 +30,18 @@ import {
   ValueKind,
   valueRepr,
 } from "../../typesys/values.ts";
-import type { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics } from "../helpers/errors.ts";
 import { literalValue, NOT_LITERAL } from "../helpers/output_contracts.ts";
+import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
-import { retriesError } from "./agent.ts";
+import { MODE_REMOVED_FIX, retriesError } from "./agent.ts";
 import {
   type BuildContext,
   type BuildResult,
   NodeDescriptor,
   type NodeDescriptorFields,
+  notTextError,
+  rangeAt,
   rejectNonText,
   siteKey,
 } from "./base.ts";
@@ -48,6 +51,7 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
   toolId: string;
   retries?: number;
   asserts?: readonly string[] | null;
+  adaptiveQuestions?: unknown;
 }
 
 /**
@@ -60,7 +64,14 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
  */
 export class ToolDescriptor extends NodeDescriptor {
   static override readonly kind = "tool";
-  static override readonly allowed = this.allow("tool_id", "inputs", "outputs", "retries", "asserts");
+  static override readonly allowed = this.allow(
+    "tool_id",
+    "inputs",
+    "outputs",
+    "retries",
+    "asserts",
+    "adaptive_questions",
+  );
   static override readonly required = this.require("tool_id");
   static override readonly bindingFields: readonly string[] = ["inputs"];
 
@@ -70,6 +81,8 @@ export class ToolDescriptor extends NodeDescriptor {
   readonly retries: number;
   /** The node asserts. */
   readonly asserts: readonly string[];
+  /** `ask`: the authored `adaptive_questions:` block as YAML read it, or `null`. */
+  readonly adaptiveQuestions: unknown;
 
   /**
    * Create a descriptor from `fields`. `retries` defaults to `current().toolRetries`; `asserts`
@@ -82,6 +95,42 @@ export class ToolDescriptor extends NodeDescriptor {
     this.toolId = fields.toolId;
     this.retries = fields.retries ?? current().toolRetries;
     this.asserts = fields.asserts ?? [];
+    this.adaptiveQuestions = fields.adaptiveQuestions ?? null;
+  }
+
+  /**
+   * Check an `adaptive_questions:` block and an `ask`'s reserved input around the template
+   * `parse`, and range the block's brief and `llm_config:`.
+   *
+   * @throws LoadError when `adaptive_questions:` is on a tool id other than `ask` (at the block),
+   *   authors a key other than `prompt`/`llm_config`/`retries` or a non-text brief, an `ask`
+   *   authors input `__questions`, or the template `parse` rejects the node.
+   */
+  static override parse<T extends typeof NodeDescriptor>(
+    this: T,
+    nodeId: string,
+    cursor: SourceCursor,
+  ): InstanceType<T> {
+    const diagnostics = LoadDiagnostics.fromCursor(cursor);
+    const toolId = cursor.get("tool_id");
+    if (typeof toolId === "string" && cursor.has("adaptive_questions")) {
+      if (toolId !== ASK) {
+        throw diagnostics.error(
+          `node ${reprText(nodeId)} (tool_id: ${toolId}): \`adaptive_questions:\` applies only to tool_id: ask`,
+          { range: cursor.keyRangeOf("adaptive_questions") },
+        );
+      }
+      checkAdaptiveBlock(nodeId, `tool_id: ${ASK}`, cursor, diagnostics);
+    }
+    const desc = super.parse(nodeId, cursor) as ToolDescriptor;
+    if (desc.toolId === ASK && Object.hasOwn(desc.inputs, QUESTIONS_INPUT)) {
+      throw diagnostics.error(
+        `node ${reprText(nodeId)} (tool_id: ask): input '${QUESTIONS_INPUT}' is reserved for adaptive_questions`,
+        { range: rangeAt(cursor, ["inputs", QUESTIONS_INPUT]) ?? desc.range },
+      );
+    }
+    recordAdaptiveRanges(desc, cursor);
+    return desc as InstanceType<T>;
   }
 
   /**
@@ -124,6 +173,7 @@ export class ToolDescriptor extends NodeDescriptor {
         refuse("outputs", `${toolId}'s output is ${output}; remove \`output:\``);
       }
     }
+    if (toolId === ASK) ToolDescriptor.checkAskSurface(nodeId, fields, ranges, ownRange, diagnostics);
     if (Object.hasOwn(fields, "retries")) {
       const problem = retriesError(fields["retries"]);
       if (problem !== null) {
@@ -134,6 +184,40 @@ export class ToolDescriptor extends NodeDescriptor {
       fields["retries"] = Number(fields["retries"]);
     }
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+  }
+
+  /**
+   * Check an `ask`'s question surface: one of input `prompt`, input `questions` or
+   * `adaptive_questions:` (an error at the node), `questions` and `adaptive_questions:` not both,
+   * and an adaptive block with a brief and a valid `retries:` (errors at the block).
+   *
+   * @throws LoadError for the first rule broken.
+   */
+  private static checkAskSurface(
+    nodeId: string,
+    fields: Record<string, unknown>,
+    ranges: Map<string, SourceRange>,
+    ownRange: SourceRange | null,
+    diagnostics: LoadDiagnostics,
+  ): void {
+    const id = reprText(nodeId);
+    const inputs = isRecord(fields["inputs"]) ? fields["inputs"] : {};
+    const hasQuestions = (inputs["questions"] ?? null) !== null;
+    const auto = fields["adaptiveQuestions"] ?? null;
+    const autoRange = ranges.get(siteKey("field", "adaptive_questions")) ?? ownRange;
+    if ((inputs["prompt"] ?? null) === null && !hasQuestions && auto === null) {
+      throw diagnostics.error(
+        `node ${id} (tool_id: ask): ask needs input prompt:, input questions:, or adaptive_questions:`,
+        { range: ownRange },
+      );
+    }
+    if (hasQuestions && auto !== null) {
+      throw diagnostics.error(
+        `node ${id} (tool_id: ask): input questions: and adaptive_questions: are mutually exclusive`,
+        { range: autoRange },
+      );
+    }
+    if (auto !== null) checkAdaptiveFields(nodeId, `tool_id: ${ASK}`, auto, autoRange, diagnostics);
   }
 
   /**
@@ -329,6 +413,8 @@ export class ToolDescriptor extends NodeDescriptor {
   }
 }
 
+/** The `ask` input `adaptive_questions:` writes its questions to; no author writes it. */
+export const QUESTIONS_INPUT = "__questions";
 /** The inputs a `take` reads. */
 const TAKE_INPUTS: ReadonlySet<string> = new Set(["from", "take", "timeout"]);
 const DATE = Type.scalar(ValueKind.DATE);
@@ -339,6 +425,86 @@ const TAKE_MODE = new Type({ kind: ValueKind.STRING, tags: new Set(["one", "all"
 
 /** The keys the adaptive desugar reads from an `adaptive_questions:` block. */
 export const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config", "retries"]);
+
+/**
+ * Check an authored `adaptive_questions:` block's keys and brief, before the template parse.
+ *
+ * @param label The node's kind or tool id as messages name it, such as `kind=human_input`.
+ * @throws LoadError when the block authors `mode:` or a key other than `prompt`/`llm_config`/
+ *   `retries` (at the key), or its brief is not text or holds a lone surrogate (at the brief).
+ */
+export function checkAdaptiveBlock(
+  nodeId: string,
+  label: string,
+  cursor: SourceCursor,
+  diagnostics: LoadDiagnostics,
+): void {
+  const subject = `node ${reprText(nodeId)} (${label})`;
+  const adaptive = cursor.get("adaptive_questions");
+  if (!isRecord(adaptive)) return;
+  if (Object.hasOwn(adaptive, "mode")) {
+    throw diagnostics.error(`${subject}: \`adaptive_questions.mode:\` was removed: ${MODE_REMOVED_FIX}`, {
+      range: keyRange(cursor.child("adaptive_questions"), "mode") ?? cursor.keyRangeOf("adaptive_questions"),
+    });
+  }
+  for (const key of Object.keys(adaptive)) {
+    if (ADAPTIVE_KEYS.has(key)) continue;
+    throw diagnostics.error(
+      `${subject}: \`adaptive_questions:\` field ${reprText(key)} is not allowed ` +
+        `(allowed: ${[...ADAPTIVE_KEYS].sort(compareCodeUnits).join(", ")})`,
+      { range: keyRange(cursor.child("adaptive_questions"), key) ?? cursor.keyRangeOf("adaptive_questions") },
+    );
+  }
+  const brief = adaptive["prompt"] ?? null;
+  if (brief === null) return;
+  const briefRange = rangeAt(cursor, ["adaptive_questions", "prompt"]) ?? cursor.keyRangeOf("adaptive_questions");
+  if (typeof brief !== "string") {
+    throw diagnostics.error(`${subject}: ` + notTextError("adaptive_questions.prompt", brief), { range: briefRange });
+  }
+  checkWrittenValue(brief, `node ${reprText(nodeId)} field 'adaptive_questions.prompt'`, briefRange, diagnostics);
+}
+
+/**
+ * Record the ranges of an `adaptive_questions:` block's brief, as `siteKey("text",
+ * "adaptive_questions.prompt")`, and `llm_config:` value, as `siteKey("field",
+ * "adaptive_questions.llm_config")`, so an error points at them rather than the whole block.
+ */
+export function recordAdaptiveRanges(desc: NodeDescriptor, cursor: SourceCursor): void {
+  const adaptive = cursor.get("adaptive_questions");
+  if (!isRecord(adaptive)) return;
+  for (const [key, site] of [
+    ["prompt", siteKey("text", "adaptive_questions.prompt")],
+    ["llm_config", siteKey("field", "adaptive_questions.llm_config")],
+  ] as const) {
+    if (!Object.hasOwn(adaptive, key)) continue;
+    const range = rangeAt(cursor, ["adaptive_questions", key]);
+    if (range !== null) desc.fieldRanges.set(site, range);
+  }
+}
+
+/**
+ * Check a parsed `adaptive_questions:` block: a mapping with its own `prompt:` (the LLM brief)
+ * and a valid `retries:`.
+ *
+ * @param label The node's kind or tool id as messages name it, such as `kind=human_input`.
+ * @throws LoadError at `range` for the first rule broken.
+ */
+export function checkAdaptiveFields(
+  nodeId: string,
+  label: string,
+  adaptive: unknown,
+  range: SourceRange | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  const subject = `node ${reprText(nodeId)} (${label})`;
+  if (!isRecord(adaptive) || !adaptive["prompt"]) {
+    throw diagnostics.error(`${subject}: \`adaptive_questions:\` requires a \`prompt:\` (the LLM brief)`, { range });
+  }
+  const problem = Object.hasOwn(adaptive, "retries") ? retriesError(adaptive["retries"]) : null;
+  if (problem !== null) {
+    throw diagnostics.error(`${subject}: \`adaptive_questions.retries:\` ${problem}`, { range });
+  }
+}
 
 /**
  * Return the first question text field that is present and not text, as `[path, value]`.

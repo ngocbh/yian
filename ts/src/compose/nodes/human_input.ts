@@ -38,7 +38,6 @@ import {
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import type { SourceCursor } from "../source/index.ts";
-import { MODE_REMOVED_FIX, retriesError } from "./agent.ts";
 import {
   type BuildContext,
   type BuildResult,
@@ -50,7 +49,13 @@ import {
   siteKey,
   wholeRefName,
 } from "./base.ts";
-import { ADAPTIVE_KEYS, answerSchema, keyRange, nonTextQuestionField } from "./tool.ts";
+import {
+  answerSchema,
+  checkAdaptiveBlock,
+  checkAdaptiveFields,
+  nonTextQuestionField,
+  recordAdaptiveRanges,
+} from "./tool.ts";
 
 export { answerSchema };
 
@@ -136,45 +141,9 @@ export class HumanInputDescriptor extends NodeDescriptor {
   ): InstanceType<T> {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
     const id = reprText(nodeId);
-    const adaptive = cursor.get("adaptive_questions");
-    if (isRecord(adaptive)) {
-      if (Object.hasOwn(adaptive, "mode")) {
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`adaptive_questions.mode:\` was removed: ${MODE_REMOVED_FIX}`,
-          { range: keyRange(cursor.child("adaptive_questions"), "mode") ?? cursor.keyRangeOf("adaptive_questions") },
-        );
-      }
-      for (const key of Object.keys(adaptive)) {
-        if (ADAPTIVE_KEYS.has(key)) continue;
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`adaptive_questions:\` field ${reprText(key)} is not allowed ` +
-            `(allowed: ${[...ADAPTIVE_KEYS].sort(compareCodeUnits).join(", ")})`,
-          { range: keyRange(cursor.child("adaptive_questions"), key) ?? cursor.keyRangeOf("adaptive_questions") },
-        );
-      }
-    }
-    const brief = isRecord(adaptive) ? (adaptive["prompt"] ?? null) : null;
-    if (brief !== null) {
-      const briefRange = rangeAt(cursor, ["adaptive_questions", "prompt"]) ?? cursor.keyRangeOf("adaptive_questions");
-      if (typeof brief !== "string") {
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): ` + notTextError("adaptive_questions.prompt", brief),
-          { range: briefRange },
-        );
-      }
-      checkWrittenValue(brief, `node ${id} field 'adaptive_questions.prompt'`, briefRange, diagnostics);
-    }
+    checkAdaptiveBlock(nodeId, `kind=${this.kind}`, cursor, diagnostics);
     const desc = super.parse(nodeId, cursor) as HumanInputDescriptor;
-    if (isRecord(adaptive)) {
-      for (const [key, site] of [
-        ["prompt", siteKey("text", "adaptive_questions.prompt")],
-        ["llm_config", siteKey("field", "adaptive_questions.llm_config")],
-      ] as const) {
-        if (!Object.hasOwn(adaptive, key)) continue;
-        const range = rangeAt(cursor, ["adaptive_questions", key]);
-        if (range !== null) desc.fieldRanges.set(site, range);
-      }
-    }
+    recordAdaptiveRanges(desc, cursor);
     if (!isList(desc.questions)) return desc as InstanceType<T>;
     const questionsRange = desc.fieldRanges.get(siteKey("field", "questions")) ?? desc.range;
     const found = nonTextQuestionField(desc.questions);
@@ -236,20 +205,7 @@ export class HumanInputDescriptor extends NodeDescriptor {
         { range: autoRange },
       );
     }
-    if (auto !== null) {
-      if (!isRecord(auto) || !auto["prompt"]) {
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`adaptive_questions:\` requires a \`prompt:\` (the LLM brief)`,
-          { range: autoRange },
-        );
-      }
-      const problem = Object.hasOwn(auto, "retries") ? retriesError(auto["retries"]) : null;
-      if (problem !== null) {
-        throw diagnostics.error(`node ${id} (kind=${this.kind}): \`adaptive_questions.retries:\` ${problem}`, {
-          range: autoRange,
-        });
-      }
-    }
+    if (auto !== null) checkAdaptiveFields(nodeId, `kind=${this.kind}`, auto, autoRange, diagnostics);
     const promptRange = ranges.get(siteKey("field", "prompt")) ?? ownRange;
     rejectNonText(this.kind, nodeId, "prompt", prompt, promptRange, diagnostics);
     if (prompt !== null) checkWrittenValue(prompt, `node ${id} field 'prompt'`, promptRange, diagnostics);

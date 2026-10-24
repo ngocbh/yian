@@ -4,7 +4,11 @@
  * and the frames into each call's text. A two-process test shows they compose over a byte pipe.
  */
 
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import { expect, test } from "bun:test";
 
@@ -334,3 +338,96 @@ test("a dropped chunk makes the view report a gap", async () => {
   });
   expect(result.gapAt).toMatchObject({ type: "chunk", index: 2, text: "o" });
 });
+
+// ---------- two processes ----------
+
+/** The child script: a host that runs a flow and writes its `follow` frames on stdout. */
+const CHILD = fileURLToPath(new URL("../fixtures/live/follow_child.ts", import.meta.url));
+
+/** The JSON lines a child writes on stdout, taken one at a time; each wait is bounded. */
+function jsonLines(child: { stdout: Readable }) {
+  const queued: unknown[] = [];
+  const waiting: ((line: unknown) => void)[] = [];
+  createInterface({ input: child.stdout }).on("line", (line) => {
+    const parsed: unknown = JSON.parse(line);
+    const waiter = waiting.shift();
+    if (waiter !== undefined) waiter(parsed);
+    else queued.push(parsed);
+  });
+  return (): Promise<unknown> => {
+    if (queued.length > 0) return Promise.resolve(queued.shift());
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timed out waiting for the child")), 10_000);
+      waiting.push((line) => {
+        clearTimeout(timer);
+        resolve(line);
+      });
+    });
+  };
+}
+
+test("a view in another process follows two parallel calls through a pipe", async () => {
+  const log = runLog();
+  // Without `--no-install`, Bun may try to install the script's imports from the network.
+  const flags = process.versions.bun === undefined ? [] : ["--no-install"];
+  const child = spawn(process.execPath, [...flags, CHILD, log], { stdio: ["pipe", "pipe", "inherit"] });
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  try {
+    const next = jsonLines(child);
+    let done: unknown = null;
+    /** Read lines until one of type `until`; return the frames among them, keeping `done` aside. */
+    const read = async (until: string): Promise<LiveFollowFrame[]> => {
+      const frames: LiveFollowFrame[] = [];
+      for (let line = await next(); ; line = await next()) {
+        const { type } = line as { type: string };
+        if (type === "done") done = line;
+        else if (type !== "ack") frames.push(line as LiveFollowFrame);
+        if (type === until) return frames;
+      }
+    };
+    /** Send `command`; return the frames the child sent before its ack. */
+    const send = (command: string): Promise<LiveFollowFrame[]> => {
+      child.stdin.write(`${command}\n`);
+      return read("ack");
+    };
+    expect(await next()).toEqual({ type: "ready" });
+    // The first chunk of each call exists before the viewer follows.
+    expect(await send("release a")).toEqual([]);
+    expect(await send("release b")).toEqual([]);
+    const [first, ...rest] = await send("follow");
+    expect(rest).toEqual([]);
+    expect(first!.type).toBe("snapshot");
+    const snapshot = (first as { snapshot: LiveSnapshot }).snapshot;
+    expect(snapshot.calls.map((call) => call.chunks.join("")).sort()).toEqual(["a0", "b0"]);
+    // The run moves on before the viewer reads the log.
+    const buffered = await send("release a");
+    const view = LiveView.from(iterRunRecords(log), snapshot);
+    const settled = new Map<string, string>();
+    const apply = (frame: LiveFrame) => {
+      if (frame.type === "record") {
+        const { record } = decodeRecord(frame.line);
+        if (record instanceof NodeStepRecord) {
+          const call = view.calls().find((c) => c.node === record.nodeId && c.n === record.n);
+          if (call !== undefined) settled.set(key(call.node, call.n), call.text);
+        }
+      }
+      expect(view.apply(frame)).toBe(true);
+    };
+    for (const frame of buffered) apply(frame as LiveFrame);
+    for (const topic of ["b", "b", "a", "a"]) for (const frame of await send(`release ${topic}`)) apply(frame as LiveFrame);
+    // The run ends after the last record, maybe before the last ack.
+    if (done === null) for (const frame of await read("done")) apply(frame as LiveFrame);
+    expect(done).toEqual({ type: "done", status: "succeeded" });
+    child.stdin.end();
+    expect(await exited).toBe(0);
+    const texts = callTexts(log);
+    expect([...texts.values()].sort()).toEqual(["a0a1a2", "b0b1"]);
+    expect(Object.fromEntries(settled)).toEqual(Object.fromEntries(texts));
+    const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
+    expect(view.lastSeq).toBe(lines.length - 1);
+    expect(view.calls()).toEqual([]);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+  }
+}, 30_000);

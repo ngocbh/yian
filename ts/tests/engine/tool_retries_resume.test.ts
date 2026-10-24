@@ -46,6 +46,9 @@
  *
  * Changed (vocabulary): a TS resume also publishes `NodeAttemptResumed` for each retried node; no
  * row here reads the events.
+ *
+ * Changed: an attempt with no recorded outcome shows as `unfinished`, where Python says
+ * `interrupted`.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -242,7 +245,7 @@ test("a crash inside attempt two with no retry left fails on resume", async () =
   expect(result.status).toBe("failed");
   expect(result.failure!.code).toBe("node.execute");
   expect(result.failure!.message).toBe(
-    "tool 'x' failed after 3 attempts: attempt 1: TimeoutError: a; attempt 2: interrupted; attempt 3: TimeoutError: c",
+    "tool 'x' failed after 3 attempts: attempt 1: TimeoutError: a; attempt 2: unfinished; attempt 3: TimeoutError: c",
   );
 });
 
@@ -365,7 +368,7 @@ for (const [name, first, then] of [
   });
 }
 
-test("an interrupted first attempt shows in the final message", async () => {
+test("an unfinished first attempt shows in the final message", async () => {
   const path = freshLog();
   const flow = await flowOf(1);
   const script = new Script();
@@ -381,7 +384,7 @@ test("an interrupted first attempt shows in the final message", async () => {
   expect(result.failure!.code).toBe("node.execute");
   expect(result.failure!.causeType).toBe("ToolAttemptsFailed");
   expect(result.failure!.message).toBe(
-    "tool 'x' failed after 3 attempts: attempt 1: interrupted; attempt 2: TimeoutError: b; attempt 3: TimeoutError: c",
+    "tool 'x' failed after 3 attempts: attempt 1: unfinished; attempt 2: TimeoutError: b; attempt 3: TimeoutError: c",
   );
   expect(script.attempts()).toEqual([1, 2, 3]);
   expect(waited).toEqual([1000]);

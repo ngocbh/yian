@@ -105,15 +105,15 @@ const RULES: Rule[] = [
     },
   },
   {
-    name: "nodes/contracts.ts imports only diagnostics, typesys and defaults",
+    name: "nodes/contracts.ts imports only diagnostics and typesys",
     files: only("nodes/contracts.ts"),
-    allow: ["diagnostics", "typesys", "defaults"],
+    allow: ["diagnostics", "typesys"],
     builtins: false,
-    why: "nodes/contracts.ts may import only diagnostics, typesys and defaults (a NodeSteps built outside a run reads the event cap)",
+    why: "nodes/contracts.ts may import only diagnostics and typesys",
     samples: {
       file: "nodes/contracts.ts",
-      bad: ["nodes/call/node", "nodes/index", "index", "compile", "runtime", "skills"],
-      good: ["diagnostics", "typesys", "typesys/json", "defaults"],
+      bad: ["nodes/call/node", "nodes/index", "index", "compile", "runtime", "skills", "defaults"],
+      good: ["diagnostics", "typesys", "typesys/json"],
     },
   },
   {
@@ -197,14 +197,14 @@ const RULES: Rule[] = [
     },
   },
   {
-    name: "defaults.ts imports only node builtins",
+    name: "defaults.ts imports only node builtins and the event cap's value",
     files: only("defaults.ts"),
-    allow: [],
-    why: "defaults must stay a node: builtin leaf",
+    allow: ["typesys/event_limit"],
+    why: "defaults must stay a leaf: node: builtins, and typesys/event_limit, which imports nothing",
     samples: {
       file: "defaults.ts",
-      bad: ["diagnostics", "typesys", "index"],
-      good: [],
+      bad: ["diagnostics", "typesys", "typesys/json", "index"],
+      good: ["typesys/event_limit"],
     },
   },
   {
@@ -591,7 +591,7 @@ describe("layer rule snippets", () => {
   });
 
   test("nodes/contracts.ts imports no node: builtin", () => {
-    const rule = RULES.find((r) => r.name === "nodes/contracts.ts imports only diagnostics, typesys and defaults")!;
+    const rule = RULES.find((r) => r.name === "nodes/contracts.ts imports only diagnostics and typesys")!;
     const text = 'import { readFileSync } from "node:fs";';
     expect(ruleViolations(rule, [{ path: "nodes/contracts.ts", text }])).toEqual([
       'nodes/contracts.ts:1: import { readFileSync } from "node:fs"; -> node:fs',

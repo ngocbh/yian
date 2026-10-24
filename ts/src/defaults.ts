@@ -16,11 +16,14 @@
  * records the values that differ from the built-in ones, and resuming it with different
  * values is refused. `docs/defaults.md` lists every entry.
  *
- * This module imports only `node:` builtins, so any layer may import it.
+ * This module imports only `node:` builtins and the event cap's built-in value
+ * (`typesys/event_limit.ts`, which imports nothing), so any layer may import it.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import process from "node:process";
+
+import { MAX_EVENT_BYTES } from "./typesys/event_limit.ts";
 
 /** The kind of an entry: a language safety limit, a setting's default, or an input cap. */
 export type Group = "limit" | "setting" | "input cap";
@@ -314,7 +317,7 @@ export const ENTRIES = Object.freeze([
   }),
   // Media travel as run-folder file refs, so the cap is on text and structure.
   entry("MAX_EVENT_BYTES", {
-    default: 1024 * 1024,
+    default: MAX_EVENT_BYTES,
     description: "Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes",
     group: "input cap",
     minimum: 1,

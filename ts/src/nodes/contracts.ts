@@ -10,7 +10,6 @@
  * algorithms.
  */
 
-import { current } from "../defaults.ts";
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 import {
   buildValueAs,
@@ -25,6 +24,7 @@ import {
   unionField,
   unionTagFields,
 } from "../typesys/index.ts";
+import { MAX_EVENT_BYTES } from "../typesys/event_limit.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import {
   fileFieldType,
@@ -1188,7 +1188,11 @@ export class NodeSteps {
    * holds a call reuses it.
    */
   readonly calls: readonly CallView[];
-  /** The run's recorded cap on one event's canonical JSON; a node's `pending` arguments must fit it. */
+  /**
+   * The run's recorded `YIAN_MAX_EVENT_BYTES`, the cap on an event's run-log JSON, which a node's
+   * `pending` step must fit; the engine passes it, and a `NodeSteps` built outside a run gets the
+   * built-in value.
+   */
   readonly maxEventBytes: number;
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
@@ -1207,7 +1211,7 @@ export class NodeSteps {
     prior: readonly ValueRecord[],
     record: (step: ValueRecord, options?: { settled?: boolean }) => number,
     calls: readonly CallView[] = [],
-    maxEventBytes: number = current().maxEventBytes,
+    maxEventBytes: number = MAX_EVENT_BYTES,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");

@@ -224,7 +224,7 @@ test("a cut between a node's commit and its success reruns the node, leaving the
 
     // The orphan is ignored on replay: the pool holds what it held before the commit.
     const inspection = inspectRun(log, { flow, env: NO_ENV });
-    expect(inspection.status).toBe("interrupted");
+    expect(inspection.status).toBe("crashed");
     expect([...inspection.inFlight]).toContain(node);
     const replayed = (count: number) => replayRunLog(flow, MemoryRunLog.fromRecords(cutEnvelopes.slice(0, count)));
     const before = replayed(k).pool.store.get(key);
@@ -464,7 +464,7 @@ test.if(process.versions.bun !== undefined)("on Bun the run entry is the source 
 const WRITTEN_LINE =
   '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
   '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
-  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":14,"seq":9}';
+  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":15,"seq":9}';
 
 test("a fixed pool_commit line with a big int, infinities and an escaped record round-trips through the public JSON form", () => {
   expect(roundTrip(WRITTEN_LINE)).toBe(WRITTEN_LINE);

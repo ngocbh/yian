@@ -47,6 +47,9 @@
  * `RangeError` where Python raises `ValueError`. `test_an_awaitable_from_a_function_tool_is_not_retried`
  * is "an execute returning a rejected promise is retried like any error": TS awaits every result.
  *
+ * Changed: an attempt with no recorded outcome shows as `unfinished`, where Python says
+ * `interrupted`.
+ *
  * TS-only: `hostToolCall()` names the tool, the inputs, their proven types and the output type;
  * the node's kind, title and traits read on an instance (`needsTools`, `needsSteps`). `backoff`
  * directly: the doubling and the jitter's upper half, the cap, `retryAfter` taking no draw, and a
@@ -380,7 +383,7 @@ test("a resumed start continues the numbering and re-waits", async () => {
   expect(error).toBeInstanceOf(ToolAttemptsFailed);
   expect((error as Error).message).toBe(
     "tool 'flaky' failed after 4 attempts: attempt 1: TimeoutError: a; " +
-      "attempt 2: TimeoutError: b; attempt 3: interrupted; attempt 4: TimeoutError: d",
+      "attempt 2: TimeoutError: b; attempt 3: unfinished; attempt 4: TimeoutError: d",
   );
   expect((error as Error).cause).toBe(timeout);
 });

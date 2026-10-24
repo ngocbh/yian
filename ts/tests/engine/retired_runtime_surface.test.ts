@@ -19,7 +19,7 @@
  * `run_flow` and `resume_flow` parameter rows check `RunFlowOptions`'s and `ResumeFlowOptions`'s
  * keys (TS-only: `signal`, `env`, `scheduler`, `random`, `models`, and the `@internal`
  * `checkLlmConfigs` of Python's `_resume_flow_controlled`) and the `RunResult` row its own fields
- * and getters (TS-only: `interruptedAttempts`; `_backward_handle` is a private field). The
+ * and getters (TS-only: `crashedAttempts`; `_backward_handle` is a private field). The
  * `ResumeFlowOptions` keys also stand for `test_run_lifecycle.py`'s
  * `test_final_run_boundary_signatures_and_result_fields_are_exact`.
  *
@@ -171,7 +171,7 @@ test("only the final log-only runtime and run API remain", () => {
     "output",
     "failure",
     "events",
-    "interruptedAttempts",
+    "crashedAttempts",
   ]);
   const getters = Object.entries(Object.getOwnPropertyDescriptors(run.RunResult.prototype))
     .filter(([, descriptor]) => descriptor.get !== undefined)

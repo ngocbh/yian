@@ -222,7 +222,7 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
-Changed (TS yian): records use schema 14, with a `RunStoppedRecord`, every payload field
+Changed (TS yian): records use schema 15, with a `RunStoppedRecord`, every payload field
 required, the time each record was appended (`at`), a `RunStartedRecord` that holds the
 flow files, the skills and tool specs the AGENTs grant, the yian version and the parent run,
 a `PoolCommitRecord` for every write to the variable pool, and node steps numbered within their
@@ -426,7 +426,7 @@ the stop (the host's `signal.reason`, the callback's error), never a sibling's, 
 failure stays the run's `RunFailed`. A host stop and a host callback that throws or rejects
 (`onEvent`, `onStream`, steering) append one `RunStoppedRecord` (`signal` or `callback`) when
 the stop is requested, listing the nodes in flight, before anything winds down; other host
-faults append none, so their attempts count as interrupted on resume, and nothing is appended
+faults append none, so their attempts count as crashed on resume, and nothing is appended
 after a terminal result or a second time in one segment. Inside an AGENT turn a tool call that
 had already settled when the stop arrived still records its step (`record(step, { settled: true
 })`) and publishes its `ToolCallFinished`, as long as the run has no terminal result; other

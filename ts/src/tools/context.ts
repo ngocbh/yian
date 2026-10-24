@@ -20,7 +20,7 @@ export class ToolContext<T = unknown> {
   readonly callId: string;
   /**
    * The attempt number, starting at 1. For a TOOL node it counts the attempts at the same call: 2
-   * on its first retry, and the next number when a resumed run re-runs an interrupted attempt.
+   * on its first retry, and the next number when a resumed run re-runs an unfinished attempt.
    * Every other call, including one from an AGENT's tool loop, sees 1.
    */
   readonly attempt: number;

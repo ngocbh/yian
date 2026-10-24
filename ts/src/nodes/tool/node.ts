@@ -29,7 +29,7 @@ import { HostToolCall, outputContractType } from "../contracts.ts";
  * A TOOL call failed after at least one retry; the message lists every attempt.
  *
  * Its `cause` is the last attempt's error. An attempt that started but has no recorded failure
- * (the run stopped or crashed inside it) shows as `interrupted`.
+ * (the run stopped or crashed inside it) shows as `unfinished`.
  */
 export class ToolAttemptsFailed extends Error {
   override name = "ToolAttemptsFailed";
@@ -95,7 +95,7 @@ function attemptsMessage(toolId: string, history: readonly ValueRecord[], attemp
   const parts: string[] = [];
   for (let number = 1; number < attempt; number++) {
     const recorded = failed.get(number) as ValueRecord | null | undefined;
-    const shown = recorded == null ? "interrupted" : `${recorded.type}: ${recorded.message}`;
+    const shown = recorded == null ? "unfinished" : `${recorded.type}: ${recorded.message}`;
     parts.push(`attempt ${number}: ${shown}`);
   }
   const last = errorStep(error);
@@ -121,10 +121,9 @@ function attemptsMessage(toolId: string, history: readonly ValueRecord[], attemp
  *
  * Through the engine's node steps the node records `{kind: "tool_attempt", event: "failed", ...}`
  * after each failure it will retry and `{kind: "tool_attempt", event: "started", ...}` before the
- * retry, so a resumed run continues the attempt
- * count; an attempt interrupted by a crash uses up no retry. A failure without a retry propagates
- * unchanged; after a retry the node rejects with `ToolAttemptsFailed`, whose message lists every
- * attempt's error.
+ * retry, so a resumed run continues the attempt count; an unfinished attempt (a crash or stop
+ * inside it) uses up no retry. A failure without a retry propagates unchanged; after a retry the
+ * node rejects with `ToolAttemptsFailed`, whose message lists every attempt's error.
  *
  * `inputTypes` maps each input name to the type the loader proved its binding has (a literal's
  * exact type, a typed binding's declared type, or a reference's inferred type); an input whose

@@ -131,7 +131,7 @@ import {
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import {
-  addInterruptedAttempts,
+  addCrashedAttempts,
   commitInitialPool,
   commitPrepared,
   prepareRunResumed,
@@ -208,10 +208,10 @@ export class RunResult {
   /** The post-durable observers of this call only. */
   readonly events: readonly RunEvent[];
   /**
-   * The number of accepted starts of each node that a resume retried with no recorded stop, by
-   * node id; empty for a run never resumed.
+   * The number of accepted starts of each node that a resume retried with no recorded stop
+   * (crashed attempts), by node id; empty for a run never resumed.
    */
-  readonly interruptedAttempts: ReadonlyMap<string, number>;
+  readonly crashedAttempts: ReadonlyMap<string, number>;
   #backwardOutcome: BackwardOutcome | null;
 
   /** Hold the given fields; `output`, `failure` and `backwardOutcome` default to `null`. */
@@ -223,7 +223,7 @@ export class RunResult {
     output?: unknown;
     failure?: Failure | null;
     events?: readonly RunEvent[];
-    interruptedAttempts?: ReadonlyMap<string, number>;
+    crashedAttempts?: ReadonlyMap<string, number>;
     backwardOutcome?: BackwardOutcome | null;
   }) {
     this.input = fields.input;
@@ -233,7 +233,7 @@ export class RunResult {
     this.output = fields.output ?? null;
     this.failure = fields.failure ?? null;
     this.events = fields.events ?? [];
-    this.interruptedAttempts = fields.interruptedAttempts ?? new Map();
+    this.crashedAttempts = fields.crashedAttempts ?? new Map();
     this.#backwardOutcome = fields.backwardOutcome ?? null;
   }
 
@@ -254,7 +254,7 @@ export class RunResult {
    * Run one new explicit backward attempt over the retained accepted execution.
    *
    * Each call appends a new attempt, whatever earlier attempts did; an unfinished earlier attempt
-   * (from a killed process, say) is first recorded as interrupted. The forward fields never change.
+   * (from a killed process, say) is first recorded as unfinished. The forward fields never change.
    *
    * @param feedback Ordinary text or structured feedback on the flow's output, taken through host
    *   intake (`{n: 3}` holds the int `3n`).
@@ -1440,13 +1440,13 @@ export function runLogPath(runsDir: string, runId: string): string {
 }
 
 /** Where a run log stands, as `inspectRun` reads it. */
-export type RunStatus = "running" | "succeeded" | "failed" | "stopped" | "interrupted";
+export type RunStatus = "running" | "succeeded" | "failed" | "stopped" | "crashed";
 
 /** What `inspectRun` reads from one run log. */
 export interface RunInspection {
   /**
    * `running` while a writer holds the log's lock; `succeeded` or `failed` once the run finished;
-   * `stopped` when the host stopped the last segment; otherwise `interrupted` (the process ended
+   * `stopped` when the host stopped the last segment; otherwise `crashed` (the process ended
    * without a stop). A run that isn't running or finished can be resumed.
    */
   readonly status: RunStatus;
@@ -1455,9 +1455,9 @@ export interface RunInspection {
   /**
    * By node id, the starts a resume retried with no stop covering them, plus, for a run that is
    * neither running nor finished, one for each node in flight that no stop covers: the attempts a
-   * resume would retry as interrupted.
+   * resume would retry after a crash.
    */
-  readonly interruptedAttempts: ReadonlyMap<string, number>;
+  readonly crashedAttempts: ReadonlyMap<string, number>;
   /** The run's id; `null` only for a running log with no record yet, as are the next five. */
   readonly runId: string | null;
   /** The run-record schema the log is written in, `SCHEMA_VERSION`. */
@@ -1489,7 +1489,7 @@ export interface RunInspection {
 /**
  * Read where the run in `log` stands without changing the file or taking its lock.
  *
- * In-flight nodes and interrupted counts come from the records. Without `flow`, the status is
+ * In-flight nodes and crashed counts come from the records. Without `flow`, the status is
  * read from the records too: `failed` after a node failure; `succeeded` after the top-level END
  * succeeded, and `failed` after a route proved END unreachable, each with nothing in flight. The
  * records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
@@ -1505,7 +1505,7 @@ export interface RunInspection {
  * @param options.env The environment whose `YIAN_*` values the replay with `flow` checks the
  *   recorded ones against, as `resumeFlow`'s `env`; without one, the values already in effect.
  *   Reading without `flow` doesn't use it.
- * @returns The status, the nodes in flight, the interrupted counts, the run's id, schema, flow
+ * @returns The status, the nodes in flight, the crashed counts, the run's id, schema, flow
  *   fingerprint, learnable flag, last seq, start time and (once finished) end time, and a failed
  *   run's failure.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
@@ -1547,19 +1547,19 @@ export function inspectRun(
     running || envelopes === null
       ? scan
       : withEnv(options.env ?? processEnv, () => replayedScan(flow!, envelopes));
-  const { starts, interrupted, lastStop, finished } = source;
+  const { starts, crashed, lastStop, finished } = source;
   let status: RunStatus;
   if (running) status = "running";
   else if (finished !== null) status = finished;
-  else status = lastStop === null ? "interrupted" : "stopped";
+  else status = lastStop === null ? "crashed" : "stopped";
   // A running run's attempts are still running, and a finished run's are abandoned.
-  if (status === "interrupted" || status === "stopped") addInterruptedAttempts(interrupted, starts, lastStop);
+  if (status === "crashed" || status === "stopped") addCrashedAttempts(crashed, starts, lastStop);
   const inFlight = status === "succeeded" || status === "failed" ? [] : [...starts.keys()];
   const { started } = scan;
   return {
     status,
     inFlight,
-    interruptedAttempts: interrupted,
+    crashedAttempts: crashed,
     runId: started?.runId ?? null,
     schema: started?.schema ?? null,
     flowFingerprint: started === null ? null : (started.record as RunStartedRecord).flowFingerprint,
@@ -2054,8 +2054,8 @@ export function replayCompiledRunLog(
 type RecordScan = {
   /** The start sequence of each node in flight, in start order. */
   starts: Map<string, number>;
-  /** The interrupted counts the run's resumes recorded, as `RunState.interruptedAttempts`. */
-  interrupted: Map<string, number>;
+  /** The crashed counts the run's resumes recorded, as `RunState.crashedAttempts`. */
+  crashed: Map<string, number>;
   /** The sequence of the last `RunStopped` since the last `RunResumed`, or `null`. */
   lastStop: number | null;
   /** How the records show the run finished, or `null` when they don't. */
@@ -2071,7 +2071,7 @@ type RecordScan = {
 };
 
 /**
- * Read the in-flight nodes, interrupted counts and terminal status from a log's records, as the
+ * Read the in-flight nodes, crashed counts and terminal status from a log's records, as the
  * reducer derives them from starts, outcomes, stops and resumes.
  *
  * Finished means a node failed, or, with nothing in flight, the top-level END succeeded or a route
@@ -2079,7 +2079,7 @@ type RecordScan = {
  */
 function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   const starts = new Map<string, number>();
-  const interrupted = new Map<string, number>();
+  const crashed = new Map<string, number>();
   let lastStop: number | null = null;
   let nodeFailure: Failure | null = null;
   let endSucceeded = false;
@@ -2112,7 +2112,7 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
       lastStop = seq;
     } else if (record instanceof RunResumedRecord) {
       // The resume retries exactly the nodes in flight.
-      addInterruptedAttempts(interrupted, starts, lastStop);
+      addCrashedAttempts(crashed, starts, lastStop);
       starts.clear();
       lastStop = null;
     }
@@ -2122,7 +2122,7 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   const failure = nodeFailure ?? (starts.size === 0 ? unreachable : null);
   if (failure !== null) finished = "failed";
   else if (starts.size === 0 && endSucceeded) finished = "succeeded";
-  return { starts, interrupted, lastStop, finished, failure, started, lastSeq, lastAt };
+  return { starts, crashed, lastStop, finished, failure, started, lastSeq, lastAt };
 }
 
 /**
@@ -2137,7 +2137,7 @@ function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]):
   if (state.result !== null) finished = state.result instanceof RunSucceeded ? "succeeded" : "failed";
   return {
     starts: new Map(state.acceptedStarts),
-    interrupted: new Map(state.interruptedAttempts),
+    crashed: new Map(state.crashedAttempts),
     lastStop: state.lastStopSequence,
     finished,
     failure: state.result instanceof RunFailed ? state.result.failure : null,
@@ -2264,7 +2264,7 @@ function resultFromState(
     runId: requiredStateRunId(state),
     log: path,
     events,
-    interruptedAttempts: new Map(state.interruptedAttempts),
+    crashedAttempts: new Map(state.crashedAttempts),
     backwardOutcome: handle === null ? state.backwardState.outcome : handle.outcome,
   };
   let result: RunResult;

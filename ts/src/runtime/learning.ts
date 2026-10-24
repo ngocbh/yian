@@ -657,8 +657,8 @@ export class BackwardAttempt {
 }
 
 /** The failure of an attempt that stopped before it finished. */
-function interruptedFailure(): BackwardFailure {
-  return new BackwardFailure("backward", "backward.interrupted", "backward attempt interrupted before completion");
+function unfinishedFailure(): BackwardFailure {
+  return new BackwardFailure("backward", "backward.unfinished", "backward attempt did not finish");
 }
 
 /** Project each memory in `memoryOrder` from the attempt's accepted requests and observations. */
@@ -812,14 +812,14 @@ export class RuntimeBackwardState {
     return this.current === null || this.finished !== null;
   }
 
-  /** The accepted Finished outcome, or the interruption derived without appending anything. */
+  /** The accepted Finished outcome, or the unfinished outcome derived without appending anything. */
   get outcome(): BackwardOutcome | null {
     const current = this.current;
     if (current === null) return null;
     if (current.finished !== null) return current.finished.outcome;
     return new BackwardOutcome("failed", {
       feedback: current.ready?.rootResult ?? null,
-      failure: interruptedFailure(),
+      failure: unfinishedFailure(),
       learning: prefixLearning(this),
     });
   }
@@ -918,9 +918,9 @@ function validateBackwardFinished(
   }
   // A failed outcome always carries a failure.
   const failure = outcome.failure!;
-  if (sameBackwardFailure(failure, interruptedFailure())) {
+  if (sameBackwardFailure(failure, unfinishedFailure())) {
     if (!sameBackwardOutcome(outcome, backward.outcome!) || (ready === null && record.attributedResults.length > 0)) {
-      throw new RangeError("interrupted Finished must exactly project the accepted prefix");
+      throw new RangeError("the Finished of an unfinished attempt must exactly project the accepted prefix");
     }
     return;
   }

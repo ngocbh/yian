@@ -113,8 +113,8 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     data: { node_id: "loop", grow: { seed: [{ n: 0 }, 0], prune: ["B", "a", "b"] } },
   },
   {
-    event: new NodeAttemptResumed({ nodeId: "n", interrupted: 2 }),
-    data: { node_id: "n", interrupted: 2 },
+    event: new NodeAttemptResumed({ nodeId: "n", crashed: 2 }),
+    data: { node_id: "n", crashed: 2 },
   },
   {
     event: new ModelCallStarted({ nodeId: "n", exchangeId: "x", purpose: "chat", attempt: 1 }),

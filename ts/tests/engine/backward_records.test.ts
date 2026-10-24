@@ -159,6 +159,9 @@
  * `RunResult.backward` write the lines (the failed rows' commit throws a `MemoryOperationError`);
  * each prefix replays through `replayRunLog` from a `MemoryRunLog`, and the next line is prepared
  * and committed through the internal `HistoricalLogCursor`.
+ *
+ * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
+ * `backward.interrupted`.
  */
 
 import { expect, test } from "bun:test";
@@ -1280,7 +1283,7 @@ test("a backward start's append failure installs no attempt", () => {
   expect(log.nextSequence).toBe(sequence);
 });
 
-test("an interrupted attempt before Ready requires an explicit finish before a fresh start", () => {
+test("an unfinished attempt before Ready requires an explicit finish before a fresh start", () => {
   const { state, log } = retainedTerminal();
   acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
   const prior = state.backwardState;
@@ -1504,10 +1507,10 @@ test("backward policy batches and unfinished prefixes follow the accepted layout
     expect(state.backwardState.canStart).toBe(false);
     acceptBackward(state, log, new MemoryCommitSucceededRecord(memory, commitId, 1));
   }
-  const interrupted = state.backwardState.outcome!;
-  expect(interrupted.status).toBe("failed");
-  expect(interrupted.failure!.code).toBe("backward.interrupted");
-  expect(interrupted.learning!.status).toBe("incomplete");
+  const unfinished = state.backwardState.outcome!;
+  expect(unfinished.status).toBe("failed");
+  expect(unfinished.failure!.code).toBe("backward.unfinished");
+  expect(unfinished.learning!.status).toBe("incomplete");
   const policies = state.backwardState.policyOutcomes;
   expect(policies.map((policy) => policy.status)).toEqual(["succeeded", "succeeded"]);
   const learning = new LearningResult("succeeded", { policies });
@@ -1518,7 +1521,7 @@ test("backward policy batches and unfinished prefixes follow the accepted layout
   expect(state.backwardState.current!.requests[1]!.mutations).toEqual([]);
 });
 
-test("an interrupted attempt after Ready requires an explicit finish before a fresh start", async () => {
+test("an unfinished attempt after Ready requires an explicit finish before a fresh start", async () => {
   const { state, log, root, attributed } = await retainedBackward();
   acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
   acceptBackward(state, log, new BackwardReadyRecord(1, root, attributed, []));
@@ -1638,7 +1641,7 @@ test("mutation ids may repeat across different recorded memories", async () => {
 const retryableRows = (codes: readonly string[]): [boolean, string][] =>
   codes.flatMap((code) => [false, true].map((retryable): [boolean, string] => [retryable, code]));
 
-test.each(retryableRows(["learn.failed", "backward.interrupted"]))(
+test.each(retryableRows(["learn.failed", "backward.unfinished"]))(
   "a learner-failed Finished keeps completed feedback and all unrequested policies: retryable %p, %s",
   async (retryable, code) => {
     const [keys] = proposalTable();
@@ -1663,7 +1666,7 @@ test.each(retryableRows(["learn.failed", "backward.interrupted"]))(
   },
 );
 
-test.each(retryableRows(["commit.failed", "backward.interrupted"]))(
+test.each(retryableRows(["commit.failed", "backward.unfinished"]))(
   "a known commit failure stops later requests and admits a later attempt: retryable %p, %s",
   async (retryable, code) => {
     const [keys, proposals] = proposalTable();
@@ -1727,7 +1730,7 @@ test.each(["succeeded", "commit_failed", "interrupted_after_request"] as const)(
       outcome = new BackwardOutcome("failed", { feedback: root, failure, learning });
     } else {
       outcome = state.backwardState.outcome!;
-      expect(outcome.failure!.code).toBe("backward.interrupted");
+      expect(outcome.failure!.code).toBe("backward.unfinished");
     }
     expect(state.backwardState.canStart).toBe(false);
     expectError(
@@ -2001,10 +2004,10 @@ test.each([
   // A changed message is no longer the interruption, so the commit-failure rule refuses it.
   ["message", "failed Finished after Ready requires a recorded commit failure"],
   ["feedback", FINISHED_FEEDBACK],
-  ["learning", "interrupted Finished must exactly project the accepted prefix"],
+  ["learning", "the Finished of an unfinished attempt must exactly project the accepted prefix"],
   ["attribution", FINISHED_ATTRIBUTION],
 ] as const)(
-  "an interrupted Finished must exactly project the prefix: %s",
+  "an unfinished attempt's Finished must exactly project the prefix: %s",
   async (change, message) => {
     const [keys, proposals] = proposalTable();
     const { state, log, root, attributed } = await retainedBackward({ keys });

@@ -21,7 +21,7 @@
  *
  * TS-only: an already-aborted signal rejects with its reason before the log exists, as does a bad
  * `scheduler`, `random` or `models`; an existing log path is refused (`EEXIST`) and left
- * unchanged; `result.log` is the path as given (`null` without one); `interruptedAttempts` is an empty map; host intake of inputs (`{n: 3}` for an
+ * unchanged; `result.log` is the path as given (`null` without one); `crashedAttempts` is an empty map; host intake of inputs (`{n: 3}` for an
  * `int` is `3n`, NaN refused where it sits, an accessor or a Proxy inputs record refused,
  * `Infinity` kept for a `float`, a too-deep value refused); the run's `env` scopes the `YIAN_*`
  * values it reads and records, and a bad one rejects before the log exists.
@@ -55,7 +55,7 @@
  * appends past a record); a `RunStopped` covers its in-flight nodes; resumed then crashed again
  * counts 2, and the count stays after the node finishes; a locked log (a `JsonlRunLog` held open)
  * is `running` with the recorded counts only; END succeeded with another node ready but unstarted
- * reads `succeeded` without the flow and `interrupted` with it; a finished pooled failure has
+ * reads `succeeded` without the flow and `crashed` with it; a finished pooled failure has
  * nothing in flight and adds nothing; a missing log throws `ENOENT`, and an empty log no writer
  * holds is refused; a route that proved END unreachable reads `failed`; the replay with the flow
  * checks the recorded `YIAN_*` values against the given `env` (the records alone don't); the run
@@ -522,10 +522,10 @@ test("result.log is the path as given", async () => {
   expect((await run(flow, { topic: "ACME" })).log).toBeNull();
 });
 
-test("interruptedAttempts is an empty map for a fresh run", async () => {
+test("crashedAttempts is an empty map for a fresh run", async () => {
   const result = await run(await load(PLAN_FLOW), { topic: "ACME" });
-  expect(result.interruptedAttempts).toBeInstanceOf(Map);
-  expect(result.interruptedAttempts.size).toBe(0);
+  expect(result.crashedAttempts).toBeInstanceOf(Map);
+  expect(result.crashedAttempts.size).toBe(0);
   expect(result.learning).toBeNull();
   expect(result.backwardOutcome).toBeNull();
 });
@@ -1128,7 +1128,7 @@ test("inspectRun reads a succeeded and a failed run, with and without the flow",
   const succeeded = join(dir, "succeeded.jsonl");
   const plan = await load(PLAN_FLOW);
   await run(plan, { topic: "ACME" }, { log: succeeded });
-  expect(inspectBoth(succeeded, plan)).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
+  expect(inspectBoth(succeeded, plan)).toEqual({ status: "succeeded", inFlight: [], crashedAttempts: new Map() });
 
   const failed = join(dir, "failed.jsonl");
   const boom = await load(
@@ -1136,7 +1136,7 @@ test("inspectRun reads a succeeded and a failed run, with and without the flow",
       "output: ${fail.output}\n",
   );
   await run(boom, {}, { log: failed });
-  expect(inspectBoth(failed, boom)).toEqual({ status: "failed", inFlight: [], interruptedAttempts: new Map() });
+  expect(inspectBoth(failed, boom)).toEqual({ status: "failed", inFlight: [], crashedAttempts: new Map() });
 });
 
 test("inspectRun counts the node in flight at a crash once", async () => {
@@ -1145,9 +1145,9 @@ test("inspectRun counts the node in flight at a crash once", async () => {
   const before = readFileSync(path);
 
   expect(inspectBoth(path, flow)).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: ["work"],
-    interruptedAttempts: new Map([["work", 1]]),
+    crashedAttempts: new Map([["work", 1]]),
   });
   expect(readFileSync(path)).toEqual(before);
 });
@@ -1171,10 +1171,10 @@ test("inspectRun: a RunStopped covers its in-flight nodes", async () => {
   });
   expect(await rejected(run(flow, {}, { log: path, numWorkers: 0, signal: host.signal, tools: { work } }))).toBe(stop);
 
-  expect(inspectBoth(path, flow)).toEqual({ status: "stopped", inFlight: ["work"], interruptedAttempts: new Map() });
+  expect(inspectBoth(path, flow)).toEqual({ status: "stopped", inFlight: ["work"], crashedAttempts: new Map() });
   const resumed = await resume(flow, { log: path, tools: { work } });
   expect(resumed.status).toBe("succeeded");
-  expect(inspectBoth(path, flow)).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
+  expect(inspectBoth(path, flow)).toEqual({ status: "succeeded", inFlight: [], crashedAttempts: new Map() });
 });
 
 test("inspectRun: resumed then crashed again counts 2, and the count stays after the node finishes", async () => {
@@ -1184,16 +1184,16 @@ test("inspectRun: resumed then crashed again counts 2, and the count stays after
   await crashAfter(11, () => resume(flow, { log: path }));
 
   expect(inspectBoth(path, flow)).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: ["work"],
-    interruptedAttempts: new Map([["work", 2]]),
+    crashedAttempts: new Map([["work", 2]]),
   });
   const resumed = await resume(flow, { log: path });
-  expect(resumed.interruptedAttempts).toEqual(new Map([["work", 2]]));
+  expect(resumed.crashedAttempts).toEqual(new Map([["work", 2]]));
   expect(inspectBoth(path, flow)).toEqual({
     status: "succeeded",
     inFlight: [],
-    interruptedAttempts: new Map([["work", 2]]),
+    crashedAttempts: new Map([["work", 2]]),
   });
 });
 
@@ -1202,11 +1202,11 @@ test("inspectRun: a locked log is running, with the recorded counts only", async
   const flow = await crashedWork(path);
   const held = JsonlRunLog.resume(path);
   try {
-    expect(inspectBoth(path, flow)).toEqual({ status: "running", inFlight: ["work"], interruptedAttempts: new Map() });
+    expect(inspectBoth(path, flow)).toEqual({ status: "running", inFlight: ["work"], crashedAttempts: new Map() });
   } finally {
     held.close();
   }
-  expect(inspectRun(path).status).toBe("interrupted");
+  expect(inspectRun(path).status).toBe("crashed");
 });
 
 test("inspectRun: END succeeded with another node ready but unstarted is succeeded without the flow only", async () => {
@@ -1225,11 +1225,11 @@ test("inspectRun: END succeeded with another node ready but unstarted is succeed
     log.close();
   }
 
-  expect(progressOf(inspectRun(path))).toEqual({ status: "succeeded", inFlight: [], interruptedAttempts: new Map() });
+  expect(progressOf(inspectRun(path))).toEqual({ status: "succeeded", inFlight: [], crashedAttempts: new Map() });
   expect(progressOf(inspectRun(path, { flow, env: hostEnv(dir) }))).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: [],
-    interruptedAttempts: new Map(),
+    crashedAttempts: new Map(),
   });
   const resumed = await resume(flow, { log: path });
   expect(resumed.output).toBe("Ada");
@@ -1245,7 +1245,7 @@ test("inspectRun: a finished pooled failure has nothing in flight and adds nothi
   expect(readRunLog(path).some((envelope) => envelope.payload["node_id"] === "waiter")).toBe(true);
   expect(readRunLog(path).at(-1)!.kind).toBe("node_failed");
 
-  expect(inspectBoth(path, flow)).toEqual({ status: "failed", inFlight: [], interruptedAttempts: new Map() });
+  expect(inspectBoth(path, flow)).toEqual({ status: "failed", inFlight: [], crashedAttempts: new Map() });
 });
 
 test("inspectRun refuses a missing log and an empty log no writer holds", async () => {
@@ -1284,7 +1284,7 @@ test("inspectRun reads a route that proved END unreachable as failed, with and w
   expect(last.kind).toBe("node_routed");
   expect(last.payload["terminal_failure"]).not.toBeNull();
 
-  expect(inspectBoth(path, flow)).toEqual({ status: "failed", inFlight: [], interruptedAttempts: new Map() });
+  expect(inspectBoth(path, flow)).toEqual({ status: "failed", inFlight: [], crashedAttempts: new Map() });
 });
 
 test("inspectRun replays with the run's env", async () => {
@@ -1294,13 +1294,13 @@ test("inspectRun replays with the run's env", async () => {
   await crashAfter(9, () => run(flow, {}, { log: path, numWorkers: 0, env }));
 
   expect(progressOf(inspectRun(path, { flow, env }))).toEqual({
-    status: "interrupted",
+    status: "crashed",
     inFlight: ["work"],
-    interruptedAttempts: new Map([["work", 1]]),
+    crashedAttempts: new Map([["work", 1]]),
   });
   expect(thrownBy(() => inspectRun(path, { flow, env: hostEnv(dir) }))).toBeInstanceOf(DefaultsMismatchError);
   // Reading without the flow doesn't check the recorded values.
-  expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("interrupted");
+  expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("crashed");
 });
 
 test("inspectRun reads the run id, schema, fingerprint, learnable flag and last seq, with and without the flow", async () => {
@@ -1311,7 +1311,7 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
   expect(inspectWithAndWithout(path, plan)).toEqual({
     status: "succeeded",
     inFlight: [],
-    interruptedAttempts: new Map(),
+    crashedAttempts: new Map(),
     runId: result.runId,
     schema: SCHEMA_VERSION,
     flowFingerprint: flowFingerprint(plan.compiled),
@@ -1354,7 +1354,7 @@ test("inspectRun reads a running log with no record yet as running with nothing 
     expect(inspectRun(path)).toEqual({
       status: "running",
       inFlight: [],
-      interruptedAttempts: new Map(),
+      crashedAttempts: new Map(),
       runId: null,
       schema: null,
       flowFingerprint: null,
@@ -1419,7 +1419,7 @@ test("a resume keeps the recorded times and stamps its own records from its cloc
   const flow = await load(WORK_FLOW);
   await crashAfter(9, () => run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) }));
   const crashed = inspectRun(path);
-  expect([crashed.status, crashed.startedAt, crashed.endedAt]).toEqual(["interrupted", "2026-10-20T14:00:00.000Z", null]);
+  expect([crashed.status, crashed.startedAt, crashed.endedAt]).toEqual(["crashed", "2026-10-20T14:00:00.000Z", null]);
   const before = readRunLog(path);
 
   const result = await resume(flow, { log: path, scheduler: virtualScheduler(octoberTwentieth(16, 30)) });
@@ -1580,7 +1580,7 @@ test("inspectRun reads a locked log as running when a writer's rollback shrinks 
   try {
     const inspection = inspectRun(path);
     expect(cut).toBe(true);
-    expect(progressOf(inspection)).toEqual({ status: "running", inFlight: ["work"], interruptedAttempts: new Map() });
+    expect(progressOf(inspection)).toEqual({ status: "running", inFlight: ["work"], crashedAttempts: new Map() });
     expect(inspection.lastSeq).toBe(8);
   } finally {
     readSpy.mockRestore();

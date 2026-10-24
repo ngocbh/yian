@@ -78,7 +78,7 @@
  * TS only: driving with an inexact `RunState` or a non-log refuses before opening; feedback that
  * passes the feedback check but can't be prepared (a lone surrogate) is refused before the opener
  * runs; an async opener resolves before the first record; a drive overtaken by another drive while
- * it awaits its opener (fresh and interrupted prior attempt) or its handler (the handler then
+ * it awaits its opener (fresh and unfinished prior attempt) or its handler (the handler then
  * throws, or its learner fails) is refused by the reducer, appends nothing and closes its runtime,
  * and one overtaken while its commit is pending is refused the same way and appends nothing
  * further; a drive whose handler throws or whose learner fails while a newer drive is mid-attempt
@@ -105,6 +105,9 @@
  *   `test_cleanup_unwraps_host_failure_after_closing_all_sessions`: TS has no such classes.
  * - The `inner_payload` cells of `test_commit_batch_is_detached_from_every_accepted_authority`: TS
  *   has no private payload tree.
+ *
+ * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
+ * `backward.interrupted`.
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -356,7 +359,7 @@ test("a late proposal failure discards all staged mutations", async () => {
     const prior = new MemoryMutation("same", { lesson: "first" });
     const fail = () => {
       if (failureKind === "backend") {
-        throw new MemoryOperationError("provider", "backward.interrupted", "Backend declined.", true);
+        throw new MemoryOperationError("provider", "backward.unfinished", "Backend declined.", true);
       }
       if (failureKind === "duplicate") return [new MemoryMutation("same", {}), new MemoryMutation("same", {})];
       if (failureKind === "tuple") return new Set();
@@ -372,7 +375,7 @@ test("a late proposal failure discards all staged mutations", async () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.failure!.stage).toBe("learn");
     expect(outcome.failure!.memory).toBe("B");
-    expect(outcome.failure!.code).toBe(failureKind === "backend" ? "backward.interrupted" : "memory.invalid_result");
+    expect(outcome.failure!.code).toBe(failureKind === "backend" ? "backward.unfinished" : "memory.invalid_result");
     expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["review"] });
     expect(outcome.learning!.status).toBe("failed");
     expect(outcome.learning!.policies.map((policy) => policy.status)).toEqual(Array(3).fill("unrequested"));
@@ -396,7 +399,7 @@ test("a policy failure preserves prior success and stops later policies", async 
     const { engine: built, node } = await terminal(["A", "B", "C"]);
     const failed = invalidResult
       ? {}
-      : new MemoryOperationError("storage", "backward.interrupted", "Store refused.", true);
+      : new MemoryOperationError("storage", "backward.unfinished", "Store refused.", true);
     const memory = new Map([
       ["A", new FakeMemory()],
       ["B", new FakeMemory({ commitOutcomes: [failed] })],
@@ -406,7 +409,7 @@ test("a policy failure preserves prior success and stops later policies", async 
     expect(outcome.status).toBe("failed");
     expect(outcome.failure!.stage).toBe("commit");
     expect(outcome.failure!.memory).toBe("B");
-    expect(outcome.failure!.code).toBe(invalidResult ? "memory.invalid_result" : "backward.interrupted");
+    expect(outcome.failure!.code).toBe(invalidResult ? "memory.invalid_result" : "backward.unfinished");
     expect(outcome.learning!.status).toBe("failed");
     expect(outcome.learning!.policies.map((policy) => policy.status)).toEqual(["succeeded", "failed", "unrequested"]);
     expect(["A", "B", "C"].map((name) => memory.get(name)!.commitCalls.length)).toEqual([1, 1, 0]);
@@ -711,7 +714,7 @@ test("an append fault preserves the exact prefix and closes resources", async ()
       expect(memory.get("A")!.commitCalls).toHaveLength(1);
       expect(memory.get("B")!.commitCalls).toEqual([]);
     } else {
-      expect(current.outcome!.failure!.code).toBe("backward.interrupted");
+      expect(current.outcome!.failure!.code).toBe("backward.unfinished");
       expect(current.policyOutcomes[0]!.status).toBe(knownFailure === "commit" ? "failed" : "succeeded");
     }
   }
@@ -761,7 +764,7 @@ test("a manual precommit retry reopens snapshots and recomputes every memory", a
     expect(memory.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["2"]);
     expect(built.state.backwardState.attempts).toHaveLength(2);
     const first = built.state.backwardState.attempts[0]!.finished!.outcome;
-    expect(first.failure!.code).toBe("backward.interrupted");
+    expect(first.failure!.code).toBe("backward.unfinished");
     expect(first.feedback).toEqual(old.ready !== null ? old.ready.rootResult : null);
     expect(classes(records(built).slice(before, before + 2))).toEqual([BackwardFinishedRecord, BackwardStartedRecord]);
     expect(built.state.backwardState.started!.attemptId).toBe(2);
@@ -793,7 +796,7 @@ test("a known precommit failure allows a fresh complete pass without prior propo
   expect(memory.get("B")!.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["new-second"]);
 });
 
-test("a failed resource setup does not close an interrupted attempt", async () => {
+test("a failed resource setup does not close an unfinished attempt", async () => {
   const mismatch = "opened memory runtime does not match the recorded memory table and snapshots";
   const rows: [string, new (...args: never[]) => Error, string][] = [
     ["table", RangeError, mismatch],
@@ -856,7 +859,7 @@ test("a backend host or unexpected error escapes with the exact prefix", async (
           (record) => record.constructor === BackwardFinishedRecord,
         ) as BackwardFinishedRecord[];
         expect(finished.map((record) => record.attemptId)).toEqual([1, 2]);
-        expect(finished[0]!.outcome.failure!.code).toBe("backward.interrupted");
+        expect(finished[0]!.outcome.failure!.code).toBe("backward.unfinished");
         expect(finished[0]!.outcome.learning!.policies.map((policy) => policy.status)).toEqual([
           "unknown",
           "unrequested",
@@ -928,7 +931,7 @@ test("a later attempt follows or closes any prior attempt and recomputes everyth
     const finished = all.filter((record) => record.constructor === BackwardFinishedRecord) as BackwardFinishedRecord[];
     expect(finished.map((record) => record.attemptId)).toEqual([1, 2]);
     if (prior === "requested_unfinished") {
-      expect(finished[0]!.outcome.failure!.code).toBe("backward.interrupted");
+      expect(finished[0]!.outcome.failure!.code).toBe("backward.unfinished");
       expect(finished[0]!.outcome.learning!.policies.map((policy) => policy.status)).toEqual(["unknown"]);
     }
     expect(node.calls).toHaveLength(calls + 1);
@@ -1350,7 +1353,7 @@ test("a drive overtaken during its handler is refused by the reducer", async () 
     });
     const pending = drive(built, new Map([["A", stale]]), "stale");
     await entered.promise;
-    // The other drive closes the stale attempt as interrupted and completes its own.
+    // The other drive closes the stale attempt as unfinished and completes its own.
     expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
     const after = records(built);
     const finished = built.state.backwardState.finished!;
@@ -1388,7 +1391,7 @@ test("a drive overtaken while its commit is pending appends nothing further", as
     const pending = drive(built, new Map([["A", stale]]), "stale");
     await entered.promise;
     expect(records(built).at(-1)!.constructor).toBe(MemoryCommitRequestedRecord);
-    // The other drive closes the stale attempt as interrupted and completes its own.
+    // The other drive closes the stale attempt as unfinished and completes its own.
     expect((await drive(built, new Map([["A", new FakeMemory()]]))).status).toBe("succeeded");
     const after = records(built);
     gate.resolve();
@@ -1421,7 +1424,7 @@ test("a stale drive can't finish a newer drive's attempt", async () => {
     });
     const pending = drive(built, new Map([["A", stale]]), "stale");
     await entered[0]!.promise;
-    // The newer drive closes attempt 1 as interrupted, starts attempt 2 and waits in its handler.
+    // The newer drive closes attempt 1 as unfinished, starts attempt 2 and waits in its handler.
     const newer = drive(built, new Map([["A", new FakeMemory()]]));
     await entered[1]!.promise;
     const after = records(built);

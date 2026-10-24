@@ -647,7 +647,9 @@ yian chat examples/chat.yaml
   A line is sent to the inbox and the run is advanced; lines typed while the run moves wait for
   the next prompt. The output of every node named `reply`, at any depth, prints on stdout as it
   finishes; the flow's final output isn't printed. A line the inbox refuses (too large for
-  `YIAN_MAX_EVENT_BYTES`, say) prints `not sent: <reason>` and the chat goes on.
+  `YIAN_MAX_EVENT_BYTES`, say) prints `not sent: <reason>` and the chat goes on. Off a terminal
+  (stdin or stderr isn't a TTY), each prompt is written once, with no escape codes, and the input
+  stays in cooked mode.
 - **Ending.** `/exit`, `/quit` or the end of input (Ctrl-D) closes the inbox: takes still get what
   was queued, the flow finishes normally, `session ended` goes to stderr and the chat exits `0`.
   If the run still waits after that with no deadline to wake it (a take on another inbox), the
@@ -655,11 +657,16 @@ yian chat examples/chat.yaml
 - **Ctrl-C.** The first Ctrl-C (at the prompt, or SIGINT while the run moves) prints
   `(Ctrl-C again to cancel the run; /exit to finish it)`. A second one in a row cancels the run
   (`run_cancelled`: no output, no learning), prints `chat cancelled` and exits `130`; a line sent
-  in between resets the count. SIGTERM or SIGHUP stops the run instead, leaving its log
-  resumable: `chat stopped; the run is in LOG`, exit `130`. Ctrl-C at an `ask` prompt stops the
-  run the same way.
+  in between resets the count. SIGTERM or SIGHUP stops the run instead (`run_stopped`): `chat
+  stopped; the run is in LOG`, exit `130`. Ctrl-C at an `ask` prompt stops the run the same way.
+- **After a stop.** The log stays, and `yian status LOG` shows where the run stands. `yian chat`
+  can't pick up an existing run yet. A host continues it through the API: `advance` retries the
+  nodes the stop interrupted (an `ask` asks again), and then `send` and `advance` go on as above.
+  `yian run --resume LOG` also retries them, but it sends no lines, so it stops at the next take
+  with `run waiting: ...`.
 - **Timers.** While the prompt is up, the chat advances the run when its earliest deadline
-  (`wakeAt`) passes, so a `sleep` or a `take` timeout fires on time without a new line.
+  (`wakeAt`) passes, so a `sleep` or a `take` timeout fires on time without a new line. The
+  prompt goes away while the run moves and comes back with what you had typed.
 - **Asks.** An `ask` node prompts at the terminal while the run moves, with the handler `yian
   run` uses, so it never pends.
 - **Failures.** A failed run prints its diagnostic on stderr and exits `1`; the chat doesn't

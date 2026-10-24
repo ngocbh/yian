@@ -1597,8 +1597,9 @@ START is ready after the START inputs' commit; a success walks its
   run's ask handler), `askText`, `askChoice`, `readLine` (the chat's line prompt), `promptInputs`
   (the missing flow inputs) and `close`. Prompts take turns in one FIFO and draw on stderr;
   `onStop` hears Ctrl-C or the end of input, which close the terminal (`readLine` returns them
-  instead, and Ctrl-C there leaves it open), and `onActive` hears a turn take and give back the
-  terminal.
+  instead, and Ctrl-C there leaves it open; an aborted `readLine` returns its draft), and
+  `onActive` hears a turn take and give back the terminal. A `plain` terminal (off a TTY) writes
+  each prompt once with no escape codes and leaves the input in cooked mode.
   A call the closed terminal ends throws `TerminalStopped`, or the signal's reason once it
   aborted (`askUser`), or returns null.
 - It reads keys with raw-mode `node:readline` and has no dependency: it imports only `node:`

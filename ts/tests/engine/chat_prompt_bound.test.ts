@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Request } from "../../src/llm/messages.ts";
 import { advance, close, runFlow, send } from "../../src/run.ts";
-import { NO_ENV, PromptModel, serving, SUMMARIZER_FIRST_LINE, systemText } from "./run_state_fixtures.ts";
+import { NO_ENV, PromptModel, serving, SUMMARIZER_FIRST_LINE, systemText, userText } from "./run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-chat-prompt-bound-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -48,11 +48,11 @@ async function chat(learnable: boolean) {
   let result = await runFlow(flow, {}, { env: NO_ENV, log, numWorkers: 0, learnable, llmConfig: CONFIG, models });
   for (let turn = 1; turn <= TURNS; turn += 1) {
     expect(result.status).toBe("waiting");
-    await send(log, "messages", `${turn}:`.padEnd(MESSAGE, "m"), { env: NO_ENV });
+    await send(log, "owner_messages", userText(`${turn}:`.padEnd(MESSAGE, "m")), { env: NO_ENV });
     result = await advance({ log, env: NO_ENV, numWorkers: 0, models });
     if (turn === 20 || turn === 40 || turn === 80) bytesAt.set(turn, statSync(log).size);
   }
-  await close(log, "messages", { env: NO_ENV });
+  await close(log, "owner_messages", { env: NO_ENV });
   result = await advance({ log, env: NO_ENV, numWorkers: 0, models });
   expect(result.status).toBe("succeeded");
   return { model, bytesAt, output: result.output };

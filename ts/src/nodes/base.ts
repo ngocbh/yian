@@ -194,11 +194,14 @@ export class Pending {
   /**
    * Describe one wait; `callIds` and `wait` are copied.
    *
-   * @throws TypeError when a call id isn't a string or `wait` names another tool.
+   * @throws TypeError when `callIds` is a single string, a call id isn't a string, or `wait`
+   *   names another tool.
    * @throws RangeError when an id is empty or repeated, both or neither of `callIds` and `wait`
    *   are given, or `wait`'s fields break their rules.
    */
   constructor(callIds: Iterable<string>, options: { wait?: WaitRequest | null } = {}) {
+    // A string is an Iterable<string>, so it would typecheck and wait on its characters.
+    if (typeof callIds === "string") throw new TypeError("pending call ids must be a collection of ids, not one string");
     const ids = [...callIds];
     for (const id of ids) {
       if (typeof id !== "string") throw new TypeError(`pending call ids must be strings, got ${jsTypeName(id)}`);

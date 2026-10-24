@@ -30,6 +30,7 @@ test.each<[string, () => unknown, ErrorConstructor]>([
   ["a repeated id", () => new Pending(["a", "a"]), RangeError],
   ["an empty id", () => new Pending([""]), RangeError],
   ["a non-string id", () => new Pending([1 as unknown as string]), TypeError],
+  ["a plain string of ids", () => new Pending("r/ask"), TypeError],
   ["sleep with both", () => new Pending([], { wait: { tool: "sleep", until: "2026-10-23T00:00:00.000Z", forSeconds: 1 } }), RangeError],
   ["sleep with neither", () => new Pending([], { wait: { tool: "sleep", until: null, forSeconds: null } }), RangeError],
   ["take mode", () => new Pending([], { wait: { tool: "take", inbox: "m", mode: "many" as "one", timeoutSeconds: null } }), RangeError],

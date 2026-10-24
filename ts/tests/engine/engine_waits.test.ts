@@ -24,7 +24,7 @@ test.each([0, 2])("with nothing waiting, nonterminal quiescence still throws (%p
 });
 
 import { NodeStarted, NodeSucceeded, type RunEvent } from "../../src/events.ts";
-import { NodeSucceededRecord, NodeWaitingRecord, PoolCommitRecord } from "../../src/runtime/log.ts";
+import { NodeStartedRecord, NodeSucceededRecord, NodeWaitingRecord, PoolCommitRecord } from "../../src/runtime/log.ts";
 import { FakeTake } from "./inbox_fixtures.ts";
 
 /** A take `heard` on inbox `m` between START and END. */
@@ -83,7 +83,7 @@ import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { formatRecordTime } from "../../src/runtime/log.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { FakeSleep, handClock } from "./inbox_fixtures.ts";
+import { FakeSleep, type HandClock, handClock } from "./inbox_fixtures.ts";
 
 const T0 = Date.UTC(2026, 9, 23, 12, 0, 0);
 
@@ -216,4 +216,83 @@ test("a send made from onEvent(RunWaiting) still wakes the take in the same run(
   ]);
   expect(run.state.pool.get("heard")).toEqual({ events: ["hi"], closed: false });
   expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+import { NodeWaiting } from "../../src/events.ts";
+import { FuncNode } from "./run_state_fixtures.ts";
+
+const startedOf = (nodeId: string) => (record: unknown) =>
+  record instanceof NodeStartedRecord && record.nodeId === nodeId;
+
+test("a timer wakes a sleep while another branch still runs", async () => {
+  const clock: HandClock = handClock(T0, (deadline) => {
+    // The engine's timer fires as soon as it is armed.
+    if (deadline === T0 + 5000) clock.set(deadline);
+  });
+  const a = new GateNode("a");
+  const b = new FakeSleep("b", 5);
+  const c = new FuncNode("c", () => "after");
+  const flow = inboxFlow([], [a, b, c], [[START_ID, "a"], [START_ID, "b"], ["b", "c"], ["a", END_ID], ["c", END_ID]]);
+  const run = inboxEngine(flow, {
+    numWorkers: 2,
+    scheduler: clock,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeSucceeded && event.nodeId === "c") a.release();
+    },
+  });
+  const events = await run.run();
+  const aDone = indexOf(run, succeededOf("a"));
+  expect(indexOf(run, wokenOf("b")) < aDone && indexOf(run, succeededOf("c")) < aDone).toBe(true);
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+test("a send after node_waiting wakes the take while a sibling still runs", async () => {
+  const gate = new GateNode("gate");
+  let sent: number | null = null;
+  const run: ReturnType<typeof inboxEngine> = inboxEngine(pairFlow(new FakeTake("heard", "m"), gate, ["m"]), {
+    numWorkers: 2,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeWaiting && event.nodeId === "heard") sent = run.deliver({ kind: "send", inbox: "m", event: "hi" }).seq;
+      if (event instanceof NodeSucceeded && event.nodeId === "heard") gate.release();
+    },
+  });
+  const events = await run.run();
+  expect(indexOf(run, succeededOf("heard")) < indexOf(run, succeededOf("gate"))).toBe(true);
+  expect(takeCommit(run)!.take).toEqual({ inbox: "m", events: [sent!], closed: false });
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+test("a woken node takes no worker slot", async () => {
+  const gate = new GateNode("gate");
+  const run: ReturnType<typeof inboxEngine> = inboxEngine(pairFlow(new FakeTake("heard", "m"), gate, ["m"]), {
+    numWorkers: 1,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeWaiting && event.nodeId === "heard") run.deliver({ kind: "send", inbox: "m", event: "hi" });
+      if (event instanceof NodeSucceeded && event.nodeId === "heard") gate.release();
+    },
+  });
+  const events = await run.run();
+  // The gate holds the one worker while the woken take runs beside it.
+  expect(indexOf(run, startedOf("gate")) < indexOf(run, succeededOf("heard"))).toBe(true);
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+test("the engine's timer is armed while work runs, and gone at the end", async () => {
+  const clock = handClock(T0);
+  const gate = new GateNode("gate");
+  const waited = Promise.withResolvers<void>();
+  const run = inboxEngine(pairFlow(new FakeSleep("nap", 60), gate), {
+    numWorkers: 2,
+    scheduler: clock,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeWaiting && event.nodeId === "nap") waited.resolve();
+    },
+  });
+  const running = run.run();
+  await Promise.all([waited.promise, gate.started]);
+  expect(clock.pending()).toBe(1);
+  gate.release();
+  const events = await running;
+  expect(events.at(-1)).toBeInstanceOf(RunWaiting);
+  expect(clock.pending()).toBe(0);
 });

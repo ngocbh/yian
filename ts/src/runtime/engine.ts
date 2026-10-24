@@ -47,7 +47,7 @@ import {
   requireSteering,
 } from "./eval_node.ts";
 import { LiveChannel } from "./live.ts";
-import type { NodeStepRecord, OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
+import { type NodeStepRecord, type OutcomeCarriers, recordTimeMs, type RunLog, type RunResumedRecord, type RunStopReason } from "./log.ts";
 import {
   callResultStep,
   commitPrepared,
@@ -79,7 +79,7 @@ import {
   resolveFromPool,
 } from "./state.ts";
 import { captureBindings, sourcePath } from "./trace.ts";
-import { decideWait, dueTimeouts, isWakeable, nodeCalls } from "./waits.ts";
+import { decideWait, dueTimeouts, isWakeable, nodeCalls, wakeAt } from "./waits.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -331,6 +331,8 @@ export class FlowEngine {
   #queue: CompletionQueue | null = null;
   /** The run signal's reason once a host cancels the run. */
   readonly #cancelled = new Error("run cancelled");
+  /** The pooled dispatcher's one scheduler sleep, until the earliest open deadline. */
+  #timer: { readonly at: string; readonly controller: AbortController } | null = null;
 
   /**
    * Borrow a prepared state and log and configure one drive.
@@ -529,11 +531,29 @@ export class FlowEngine {
     const events = this.#events;
     const completions = new CompletionQueue();
     const active = new Map<string, Promise<void>>();
+    // The woken nodes among the active ones.
+    const wakes = new Set<string>();
     this.#queue = completions;
+    const startWorker = (nodeId: string): void => {
+      const worker = this.#startEvaluation(nodeId).then(
+        (outcome) => completions.push({ nodeId, outcome }),
+        (error: unknown) => completions.push({ nodeId, error }),
+      );
+      active.set(nodeId, worker);
+    };
     try {
       while (state.result === null) {
         signal.throwIfAborted();
-        while (state.ready.length > 0 && active.size < this.numWorkers) {
+        for (let woken = this.#nextWake(); woken !== null; woken = this.#nextWake()) {
+          const { nodeId } = woken;
+          this.#publish(commitPrepared(log, state, prepareNodeWoken(state, nodeId, woken.timedOut)), events);
+          signal.throwIfAborted();
+          // Only TOOL nodes wait, and a woken one returns from its settled call without calling
+          // anything, so it takes no worker slot.
+          startWorker(nodeId);
+          wakes.add(nodeId);
+        }
+        while (state.ready.length > 0 && active.size - wakes.size < this.numWorkers) {
           // A callback failing during the previous node's synchronous start stops the run.
           signal.throwIfAborted();
           const nodeId = state.ready[0]!;
@@ -541,19 +561,19 @@ export class FlowEngine {
           // The start is durable and published before its worker starts.
           this.#publish(started, events);
           signal.throwIfAborted();
-          const worker = this.#startEvaluation(nodeId).then(
-            (outcome) => completions.push({ nodeId, outcome }),
-            (error: unknown) => completions.push({ nodeId, error }),
-          );
-          active.set(nodeId, worker);
+          startWorker(nodeId);
         }
         if (active.size === 0) {
           this.#quiesce(events);
-          break;
+          // A delivery made from the run_waiting observer can leave work; then go on.
+          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) break;
+          continue;
         }
+        this.#armTimer();
         const completion = await completions.take();
         if ("nudge" in completion) continue;
         active.delete(completion.nodeId);
+        wakes.delete(completion.nodeId);
         // An entry taken after the abort is discarded; the abort's error is the run's.
         signal.throwIfAborted();
         if ("error" in completion) throw completion.error;
@@ -577,6 +597,7 @@ export class FlowEngine {
       throw initiating;
     } finally {
       this.#queue = null;
+      this.#disarmTimer();
     }
     // A cancel taken through a nudge ends the loop with workers still running; they drain here.
     await Promise.all(active.values());
@@ -715,6 +736,39 @@ export class FlowEngine {
     // The decision left is to wait. It isn't compared by name: "wait" is still a node kind, and the
     // kind census counts that comparison.
     return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry] }));
+  }
+
+  /** Keep one scheduler sleep for the earliest open deadline of a waiting node; it nudges the dispatcher. */
+  #armTimer(): void {
+    const at = wakeAt(this.state.waits);
+    if (at === (this.#timer?.at ?? null)) return;
+    this.#disarmTimer();
+    if (at === null) return;
+    const scheduler = this.scheduler ?? realScheduler;
+    const now = scheduler.now();
+    const ms = recordTimeMs(at, "deadline") - now;
+    if (ms <= 0) {
+      // The deadline passed since the dispatcher last looked: wake it now. A past deadline that
+      // isn't due waits on its node's other calls, and a timer for it would only spin.
+      if (dueTimeouts(this.state.waits, now).size > 0) this.#queue?.nudge();
+      return;
+    }
+    const timer = { at, controller: new AbortController() };
+    this.#timer = timer;
+    scheduler.sleep(ms, timer.controller.signal).then(
+      () => {
+        if (this.#timer === timer) this.#timer = null;
+        this.#queue?.nudge();
+      },
+      // Disarmed.
+      () => {},
+    );
+  }
+
+  /** Drop the dispatcher's scheduler sleep, if any. */
+  #disarmTimer(): void {
+    this.#timer?.controller.abort();
+    this.#timer = null;
   }
 
   /** The oldest waiting node that is wakeable or has a due call, with its due calls; else null. */

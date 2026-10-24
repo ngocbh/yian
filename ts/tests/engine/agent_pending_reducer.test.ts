@@ -6,8 +6,17 @@
 import { describe, expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import type { RunLog } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareNodeStarted, prepareNodeStep, prepareNodeWaiting, type RunState } from "../../src/runtime/state.ts";
+import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
+import {
+  callResultStep,
+  commitPrepared,
+  prepareNodeStarted,
+  prepareNodeStep,
+  prepareNodeWaiting,
+  prepareRunResumed,
+  type RunState,
+} from "../../src/runtime/state.ts";
 import { RUN_ID } from "./run_state_fixtures.ts";
 import { paramFlow, started } from "./waits_fixtures.ts";
 
@@ -107,5 +116,51 @@ describe("an agent's pending step", () => {
     step(log, state, "a", result("c1"));
     step(log, state, "a", reply(["c9", "lookup", {}]));
     refuse("a", pendingOf("a", 1, 0, "c1")); // an earlier reply
+  });
+});
+
+describe("an agent's tool_result", () => {
+  test("answers its node's call of the latest reply; repeated provider ids don't collide", () => {
+    const { log, state } = started(paramFlow([], agent("a"), agent("b")));
+    start(log, state, "a");
+    start(log, state, "b");
+    step(log, state, "a", reply(["c0", "ask_user", { question: "q" }]));
+    step(log, state, "a", pendingOf("a", 1, 0, "c0"));
+    // Another agent's provider numbered its call c0 too: its own result, no collision.
+    step(log, state, "b", reply(["c0", "lookup", {}]));
+    step(log, state, "b", result("c0", "b's"));
+    expect(state.waits.calls.get(agentCall("a", 1, 0))!.state).toBe("open");
+    step(log, state, "a", result("c0"));
+    expect(state.waits.calls.get(agentCall("a", 1, 0))!.state).toBe("answered");
+    // The next reply reuses c0 for an inline call: the node's own detail, not a second answer.
+    step(log, state, "a", reply(["c0", "lookup", {}]));
+    step(log, state, "a", result("c0", "inline"));
+    expect(callResultStep(state, agentCall("a", 1, 0))!["output"]).toBe("yes");
+  });
+
+  test("after a resume closes an agent's call, the agent writes its one closer", () => {
+    const { log, state } = started(paramFlow([], agent("a")));
+    start(log, state, "a");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q" }]));
+    step(log, state, "a", pendingOf("a", 1, 0, "c1"));
+    const resumed = prepareRunResumed(state, { numWorkers: 0 });
+    expect(resumed.record).toEqual(new RunResumedRecord(["a"], 0, [agentCall("a", 1, 0)]));
+    commitPrepared(log, state, resumed);
+    start(log, state, "a");
+    const closer = result("c1", TOOL_OUTCOME_UNKNOWN, { is_error: true, closed: "crashed" });
+    expect(() => prepareNodeStep(state, "a", { ...closer, closed: "timed_out" })).toThrow(/closed \(crashed\)/);
+    expect(() => prepareNodeStep(state, "a", result("c1"))).toThrow(/closed \(crashed\)/);
+    const seq = step(log, state, "a", closer);
+    expect(state.waits.calls.get(agentCall("a", 1, 0))!.resultSeq).toBe(seq);
+    expect(state.waits.calls.get(agentCall("a", 1, 0))!.state).toBe("closed");
+    expect(() => prepareNodeStep(state, "a", closer)).toThrow(/closer/);
+  });
+
+  test("a closed result for an open call is refused", () => {
+    const { log, state } = started(paramFlow([], agent("a")));
+    start(log, state, "a");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q" }]));
+    step(log, state, "a", pendingOf("a", 1, 0, "c1"));
+    expect(() => prepareNodeStep(state, "a", result("c1", "x", { closed: "crashed" }))).toThrow(/open/);
   });
 });

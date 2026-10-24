@@ -1409,9 +1409,12 @@ export function callResultStep(state: RunState, callId: string): Readonly<JsonOb
   const call = state.waits.calls.get(callId);
   if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
-  return (
-    steps.findLast((step) => step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey) ?? null
+  // An agent's provider id may name a later reply's call too; its answer is the first after its registration.
+  const from = steps.findIndex((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
+  const at = steps.findIndex(
+    (step, index) => index > from && step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey,
   );
+  return at < 0 ? null : steps[at]!;
 }
 
 /**
@@ -4092,12 +4095,17 @@ function latestReply(state: RunState, nodeId: string): number | null {
 /**
  * Require a `tool_result` step for a registered call (its `tool_call_id ?? call_id` is the call's
  * result key) to answer an open host call of this node (never a take or sleep, which the run
- * settles itself), within the run's `MAX_EVENT_BYTES`. A result no
- * call registered (an agent's) is the node's own detail, refused only on a waiting node.
+ * settles itself), within the run's `MAX_EVENT_BYTES`. A result no call registered (an agent's
+ * inline call) is the node's own detail, refused only on a waiting node.
+ *
+ * An AGENT's result refers to a registered call only when that call is its own node's and of its
+ * latest reply (`resultCall`), since provider ids repeat across replies and nodes. A call closed
+ * by record takes one more result on a running AGENT, its closer: `closed` equal to the call's
+ * reason, once. No other result carries `closed` for a registered call.
  */
 function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
   const key = typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"];
-  const call = [...state.waits.calls.values()].find((each) => each.resultKey === key);
+  const call = resultCall(state, nodeId, key);
   if (call === undefined) {
     if (waiting) {
       throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
@@ -4110,12 +4118,47 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   if (call.tool === TAKE || call.tool === SLEEP) {
     throw new RangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
   }
-  if (call.state !== "open") {
+  const agent = state.flow.nodes.get(nodeId)!.hostToolCall() === null;
+  const closed = step["closed"];
+  if (closed !== undefined && call.state === "open") {
+    throw new RangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; only a record closes a call`);
+  }
+  if (agent && !waiting && call.state === "closed" && closed === call.closedReason) {
+    if (call.resultSeq !== null) throw new RangeError(`call ${reprText(call.callId)} already has its closer`);
+  } else if (call.state !== "open") {
     const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
     throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${why}`);
   }
   const size = eventBytes(step);
   if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
+}
+
+/**
+ * The registered call a `tool_result` step on `nodeId` with result key `key` refers to, or
+ * `undefined`. A TOOL node's key is a call id, unique in the run, so any node's call may match (and
+ * the caller refuses another node's). An AGENT's key is a provider id, which repeats across
+ * replies and nodes, so only its own calls of its latest reply match.
+ *
+ * @throws RangeError when two calls of the latest reply share the key.
+ */
+function resultCall(state: RunState, nodeId: string, key: unknown): Call | undefined {
+  if (state.flow.nodes.get(nodeId)!.hostToolCall() !== null) {
+    return [...state.waits.calls.values()].find((each) => each.resultKey === key);
+  }
+  const latest = latestReply(state, nodeId);
+  const calls = nodeCalls(state.waits, nodeId).filter(
+    (each) => each.resultKey === key && stepInt(pendingStepOf(state, each)?.["reply"]) === latest,
+  );
+  if (calls.length > 1) {
+    const ids = writeAsText(calls.map((each) => each.callId));
+    throw new RangeError(`calls ${ids} of one reply share the tool call id ${reprText(String(key))}`);
+  }
+  return calls[0];
+}
+
+/** The `pending` step that registered `call` on its node, or `undefined` (a take or sleep). */
+function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | undefined {
+  return (state.nodeSteps.get(call.nodeId) ?? []).find((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
 }
 
 /**

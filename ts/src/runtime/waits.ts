@@ -324,7 +324,7 @@ const FRONTIER_KINDS: ReadonlyMap<Function, string> = new Map<Function, string>(
 /**
  * Fold one accepted record into `w`, in log order. Records only: the reducer validates each record
  * before it is folded, so the fold trusts what it reads and changes nothing for a record it has no
- * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id` and `deadline`.
+ * rule for. Of a step it reads only `kind`, `call_id`, `tool`, `tool_call_id`, `deadline` and `closed`.
  *
  * @param envelope The record and its seq; a `RecordEnvelope` fits.
  * @throws RangeError when a `pending` step's `deadline` is set but isn't a record time.
@@ -446,7 +446,19 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
     });
   } else if (step["kind"] === "tool_result") {
     const key = typeof toolCallId === "string" ? toolCallId : callId;
-    // A closer's result, or an agent result no pending step registered, answers nothing.
+    const closed = step["closed"];
+    // An agent's closer for a call a record closed is its result; the call stays closed. Any
+    // other closer, or an agent result no pending step registered, answers nothing.
+    if (typeof closed === "string") {
+      for (const call of w.calls.values()) {
+        const closes = call.state === "closed" && call.closedReason === closed && call.resultSeq === null;
+        if (call.nodeId === record.nodeId && call.resultKey === key && closes) {
+          call.resultSeq = seq;
+          return;
+        }
+      }
+      return;
+    }
     for (const call of w.calls.values()) {
       if (call.nodeId === record.nodeId && call.resultKey === key && call.state === "open") {
         call.state = "answered";

@@ -659,14 +659,16 @@ export function rebuildGrowth(
 }
 
 /**
- * The value a prepared record accepts into the pool, for a reader folding a log (`foldRunLog`):
- * a run-start commit's own value, or for a success, its commit's value (rebuilt for a derived
- * commit), with the commit's seq; `null` for any other record.
+ * The value a prepared record accepts, for a reader folding a log (`foldRunLog`): a run-start
+ * commit's or a send's own value, or for a success, its commit's value (rebuilt for a derived or
+ * take commit), with the commit's seq; `null` for any other record.
  */
 export function acceptedCommit(prepared: PreparedTransition): { seq: number; value: TypedValue } | null {
   const plan = prepared._plan;
-  // A run-start commit always holds its value.
-  if (plan.kind === "commit" && plan.initial) return { seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) };
+  // A run-start commit and a send always hold their values, and apply at once.
+  if (plan.kind === "commit" && (plan.initial || plan.send)) {
+    return { seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) };
+  }
   if (plan.kind !== "success") return null;
   const seq = (prepared.record as NodeSucceededRecord).commit;
   return { seq, value: normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson)) };

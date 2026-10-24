@@ -23,7 +23,7 @@
  * (`typesys/values.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
  * `foldRunLog`, which replays a log and gives each accepted `pool_commit`'s value, a derived one
- * rebuilt from its `from` pointers, with `PoolCommitRecord` (`runtime/log.ts`) to read the records
+ * rebuilt from its `from` pointers and a take's from the sends it consumed, with `PoolCommitRecord` (`runtime/log.ts`) to read the records
  * it returns, and the built-in message value (`Message`, `MessagePart`, `checkMessage`, which reads
  * a decoded `Message` back with its files, `checkConversation` and `ConversationError`, from
  * `nodes/agent/messages.ts`).
@@ -1745,8 +1745,9 @@ export interface FoldedRecord {
   /** The record as `iterRunRecords` reads it. */
   readonly entry: RunLogEntry;
   /**
-   * For a `pool_commit` the run accepted, the value it writes: the one it holds, or for a derived
-   * commit the one rebuilt from its `from`. `null` for an orphan commit and any other record.
+   * For a `pool_commit` the run accepted, the value it writes: the one it holds (a send's too), for
+   * a derived commit the one rebuilt from its `from`, or for a take commit `{events, closed}` built
+   * from the sends it consumed. `null` for an orphan commit and any other record.
    */
   readonly value: TypedValue | null;
 }
@@ -1754,7 +1755,8 @@ export interface FoldedRecord {
 /**
  * Replay the run log at `log` through the run reducer, as resume does, and return each record with
  * the value of each accepted `pool_commit`: hosts read derived values this way, such as a LOOP
- * iteration's `<loop>#k/__end__`, which the log records only as `from` pointers. The recorded flow
+ * iteration's `<loop>#k/__end__`, which the log records only as `from` pointers, and a take's
+ * events, which its commit records as the seqs of the sends it consumed. The recorded flow
  * is compiled first, under `env`'s `YIAN_*` values, which must be the run's. No seq-to-value map
  * is kept beside the reducer: a derived value is rebuilt from the pool when its commit is accepted.
  *

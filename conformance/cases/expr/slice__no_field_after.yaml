@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: "xs[1:].a"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression 'xs[1:].a': unexpected '.' at line 1, column 7"

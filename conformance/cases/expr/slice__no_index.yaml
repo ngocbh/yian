@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: "xs[0]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression 'xs[0]': indexing `xs[i]` is not supported; `xs[i:i + 1]` gives a one-item list at line 1, column 3"

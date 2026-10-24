@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: "xs[a:?b]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression 'xs[a:?b]': inside a slice, `:` ends a bound; write `(a :? b)` for a required value at line 1, column 6"

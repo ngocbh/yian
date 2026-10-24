@@ -19,6 +19,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { ReplayDegraded } from "../../src/events.ts";
 import { sourceKey } from "../../src/expr/lineage.ts";
 import type { Response } from "../../src/llm/messages.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import {
   MemorySection,
@@ -93,12 +94,15 @@ async function rebuilt(
   return await materialsOf(flow, path, registry, model);
 }
 
-/** Replay the log at `path` and rebuild its occurrences' material, with the reports it makes. */
+/**
+ * Replay the log at `path` and rebuild its occurrences' material, with the reports it makes;
+ * `model` is served, or a `ModelAccess` stands in for it.
+ */
 async function materialsOf(
   flow: ComposedFlow,
   path: string,
   registry: Map<string, FakeMemory> | null,
-  model: ScriptedModel,
+  model: ScriptedModel | ModelAccess,
 ) {
   const log = JsonlRunLog.resume(path);
   let state;
@@ -121,7 +125,7 @@ async function materialsOf(
   try {
     const materials = await learningMaterials(state, {
       memory,
-      models: serving(model),
+      models: model instanceof ScriptedModel ? serving(model) : model,
       expandTools: null,
       onEvent: (event) => events.push(event),
     });
@@ -219,6 +223,41 @@ output: \${count.output}
       ? [new ModelTextInteraction('{"value": "seven"}'), new ModelTextInteraction('{"value": 7}')]
       : [new ModelValueInteraction(7n)],
   );
+});
+
+test.each([
+  ["a refused build leaves it out and is reported", new RangeError("no credentials")],
+  ["a TypeError is a fault, which rejects", new TypeError("broken builder")],
+])("a structured agent whose model can't be built now: %s", async (_label, error) => {
+  const text = `\
+id: counted
+name: counted
+llm_config: {provider: openai, model: gpt-5.5}
+nodes:
+  count:
+    kind: agent
+    prompt: count
+    output: int
+output: \${count.output}
+`;
+  const path = join(dir, `unbuilt-${++count}.jsonl`);
+  const flow = await loadFlow(text);
+  const model = new ScriptedModel([textReply('{"value": 7}')], { provider: "openai", model: "gpt-5.5" });
+  const result = await runFlow(flow, {}, { log: path, learnable: true, models: serving(model), env: hostEnv(dir) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const refusing: ModelAccess = {
+    env: hostEnv(dir),
+    createModel: () => {
+      throw error;
+    },
+  };
+  if (error instanceof TypeError) {
+    await expect(materialsOf(flow, path, null, refusing)).rejects.toBe(error);
+    return;
+  }
+  const rebuiltMaterial = await materialsOf(flow, path, null, refusing);
+  expect(rebuiltMaterial.agent("count").material).toBeNull();
+  expect(rebuiltMaterial.events).toEqual([new ReplayDegraded({ nodeId: "count", reason: "rebuilt_request_differs" })]);
 });
 
 test("a skill grant: the render lists the recorded skills and every request carries load_skill", async () => {

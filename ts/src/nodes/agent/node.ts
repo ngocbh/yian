@@ -1104,9 +1104,10 @@ export class AgentNode extends Node {
         const model = await caps.models.createModel(config, { nodeId: this.id, signal: new AbortController().signal });
         return { model, typ: contract.type };
       } catch (error) {
-        if (!(error instanceof Error)) throw error;
+        // A TypeError is a fault in the builder, not a refused build.
+        if (!(error instanceof Error) || error instanceof TypeError) throw error;
         // A model that can't be built now can't give the plan, so its structured requests can't
-        // be checked: `null` fails the digest, and the occurrence is left out and reported.
+        // be checked: `null` fails the digest, and the occurrence's material is left out and reported.
         return null;
       }
     };

@@ -509,6 +509,7 @@ export interface AgentDescriptorFields extends NodeDescriptorFields {
   retries?: number;
   asserts?: readonly string[] | null;
   steerInbox?: string | null;
+  steerRender?: string | null;
   memories?: readonly MemoryDecl[];
   outputContractOverride?: ValueContract | null;
 }
@@ -558,8 +559,10 @@ export class AgentDescriptor extends NodeDescriptor {
   readonly retries: number;
   /** The node asserts. */
   readonly asserts: readonly string[];
-  /** The authored `steer_inbox:` source (`${input.<name>}`); `null` when absent. */
+  /** The authored `steer_inbox:` source (`${input.<name>}`, or the mapping's `from:`); `null` when absent. */
   readonly steerInbox: string | null;
+  /** The `steer_inbox:` mapping's `render:` template over `${event}`; `null` when absent. */
+  readonly steerRender: string | null;
   /** The authored `long_term_memory:` declarations. */
   readonly memories: readonly MemoryDecl[];
   /**
@@ -592,6 +595,7 @@ export class AgentDescriptor extends NodeDescriptor {
     this.retries = fields.retries ?? current().agentRetries;
     this.asserts = fields.asserts ?? [];
     this.steerInbox = fields.steerInbox ?? null;
+    this.steerRender = fields.steerRender ?? null;
     this.memories = memories;
     this.outputContractOverride = fields.outputContractOverride ?? null;
   }
@@ -618,6 +622,16 @@ export class AgentDescriptor extends NodeDescriptor {
       throw diagnostics.error(message, { range: cursor.keyRangeOf("mode") });
     }
     const desc = super.parse(nodeId, cursor) as AgentDescriptor;
+    // A `steer_inbox:` mapping's errors and reads point at its `from:` and `render:` values.
+    if (isRecord(cursor.get("steer_inbox"))) {
+      for (const [key, site] of [
+        ["from", siteKey("field", "steer_inbox")],
+        ["render", siteKey("field", "steer_inbox.render")],
+      ] as const) {
+        const range = rangeAt(cursor, ["steer_inbox", key]);
+        if (range !== null) desc.fieldRanges.set(site, range);
+      }
+    }
     if (isRecord(desc.variables)) {
       for (const name of Object.keys(desc.variables)) {
         rejectInfinityName(
@@ -633,8 +647,9 @@ export class AgentDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject the retired `memory_policy:` and `steerable:` keys, at their key, before the generic
-   * key check.
+   * Reject the retired `memory_policy:` and `steerable:` keys, at their key, and a `steer_inbox:`
+   * mapping with a key other than `from:` and `render:`, no `from:`, or a `render:` that isn't
+   * non-empty text, before the generic key check.
    */
   static override _normalizeCursor(cursor: SourceCursor): SourceCursor {
     if (cursor.has("memory_policy")) {
@@ -642,6 +657,27 @@ export class AgentDescriptor extends NodeDescriptor {
         "node field `memory_policy:` was renamed to `long_term_memory:`",
         { range: cursor.keyRangeOf("memory_policy") },
       );
+    }
+    const steerInbox = cursor.has("steer_inbox") ? cursor.get("steer_inbox") : null;
+    if (isRecord(steerInbox)) {
+      const diagnostics = LoadDiagnostics.fromCursor(cursor);
+      const unknown = Object.keys(steerInbox).find((key) => key !== "from" && key !== "render");
+      if (unknown !== undefined) {
+        throw diagnostics.error("`steer_inbox:` takes only `from:` and `render:`", {
+          range: rangeAt(cursor, ["steer_inbox", unknown]) ?? cursor.keyRangeOf("steer_inbox"),
+        });
+      }
+      if (!Object.hasOwn(steerInbox, "from")) {
+        throw diagnostics.error("`steer_inbox:` needs `from:` naming an Inbox input", {
+          range: cursor.keyRangeOf("steer_inbox"),
+        });
+      }
+      const render = Object.hasOwn(steerInbox, "render") ? steerInbox["render"] : null;
+      if (render !== null && (typeof render !== "string" || render === "")) {
+        throw diagnostics.error("`steer_inbox.render:` must be non-empty text", {
+          range: rangeAt(cursor, ["steer_inbox", "render"]) ?? cursor.keyRangeOf("steer_inbox"),
+        });
+      }
     }
     if (cursor.has("steerable")) {
       throw LoadDiagnostics.fromCursor(cursor).error(
@@ -655,8 +691,8 @@ export class AgentDescriptor extends NodeDescriptor {
 
   /**
    * Check the `prompt:`, `system_prompt:`, `tools:`, `retries:`, `skills:` and `steer_inbox:`
-   * shapes, store `retries` as a `number`, and parse a present `long_term_memory:` into
-   * `memories` (`null` is none).
+   * shapes, store `retries` as a `number`, split a `steer_inbox:` mapping into its source and
+   * `steerRender`, and parse a present `long_term_memory:` into `memories` (`null` is none).
    *
    * @throws LoadError at the field for a bad shape, a lone surrogate in a prompt, or a bad
    *   memory declaration.
@@ -714,6 +750,12 @@ export class AgentDescriptor extends NodeDescriptor {
         `node ${id} (kind=${this.kind}): \`skills:\` must be a list of skill names or \`all\``,
         { range: rangeOf("skills") },
       );
+    }
+    if (isRecord(fields["steerInbox"])) {
+      // `_normalizeCursor` checked the mapping's keys; it splits into the source and the render.
+      const { from, render = null } = fields["steerInbox"];
+      fields["steerInbox"] = from;
+      fields["steerRender"] = render;
     }
     if (Object.hasOwn(fields, "steerInbox")) {
       const steerInbox = fields["steerInbox"];
@@ -794,6 +836,7 @@ export class AgentDescriptor extends NodeDescriptor {
         variables,
         skills: this.skills,
         steerInbox: this.steerInbox !== null,
+        steerRender: this.steerRender,
       });
     } catch (error) {
       // AgentNode checks skill grants and tool names; a refusal is the loader's one error type.

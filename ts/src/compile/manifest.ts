@@ -159,7 +159,8 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // only labels a failing body's stack frames.
   [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeOrigin", "codeLineOrigins"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
-  [NodeKind.TOOL]: ["inputTypes"],
+  // `answerSchema` is not part of a TOOL's identity yet: no loaded flow sets it.
+  [NodeKind.TOOL]: ["inputTypes", "answerSchema"],
   [NodeKind.CASE]: [],
   [NodeKind.HUMAN_INPUT]: [],
   [NodeKind.WAIT]: [],

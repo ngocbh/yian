@@ -279,3 +279,67 @@ test("a spliced media part fails the node before any model call", async () => {
   expect(error).toEqual(new ExpressionError("node 'reply' prompt[0]: ${history} holds a media part; no model route sends media yet"));
   expect(models.built).toBe(0);
 });
+
+test.each([
+  ["a history ending on a tool call", CHAT, TOOL_HISTORY.slice(0, 2),
+    "node 'reply' prompt[0]: rendered message 1: tool call 'c1' (read_file) has no result before the next user message"],
+  ["a tool result with no call", CHAT, [TOOL_HISTORY[0], TOOL_HISTORY[2]],
+    "node 'reply' prompt[0]: rendered message 1: tool result 'c1' answers no open tool call"],
+  ["a tool call in a user message", CHAT,
+    [{ role: "user", parts: [{ type: "tool_call", id: "c", name: "t", arguments: {} }] }],
+    "node 'reply' prompt[0]: rendered message 0: user messages can't hold a tool_call part"],
+  ["text in a tool message", CHAT,
+    [TOOL_HISTORY[0], TOOL_HISTORY[1], { role: "tool", parts: [{ type: "text", text: "x" }] }],
+    "node 'reply' prompt[0]: rendered message 2: tool messages can't hold a text part"],
+  ["an empty Message", CHAT, [{ role: "assistant", parts: [] }],
+    "node 'reply' prompt[0]: rendered message 0: the message has no parts"],
+])("%s fails the node before any model call", async (_, prompt, history, text) => {
+  const node = agent(prompt);
+  const models = serving(new ScriptedModel([textReply("done")], CONFIG));
+  const error = await rejected(node.forward({ history, message: "again" }, { models }));
+  expect(error).toEqual(new ExpressionError(text));
+  expect(models.built).toBe(0);
+});
+
+/** An AGENT `reply` like `agent`, reading the inputs `names`. */
+function agentWith(prompt: readonly PromptItem[], names: readonly string[]): AgentNode {
+  const node = new AgentNode("reply", { prompt, systemPrompt: "Be kind.", llmConfig: CONFIG });
+  node.params = names.map((name) => new Parameter(name, { required: true }));
+  return node;
+}
+
+const SPLIT: readonly PromptItem[] = [{ splice: "calls" }, { splice: "results" }, { role: "user", text: "Go" }];
+
+test("a call and its result from two splice items pass", async () => {
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  await agentWith(SPLIT, ["calls", "results"]).forward(
+    { calls: TOOL_HISTORY.slice(0, 2), results: [TOOL_HISTORY[2]] },
+    { models: serving(model) },
+  );
+  expect(model.requests[0]!.messages.map((message) => message.role)).toEqual(["system", "user", "assistant", "tool", "user"]);
+});
+
+test("a literal user message between a call and its result fails, naming the call's item", async () => {
+  const prompt: PromptItem[] = [{ splice: "calls" }, { role: "user", text: "wait" }, { splice: "results" }, { role: "user", text: "Go" }];
+  const models = serving(new ScriptedModel([textReply("done")], CONFIG));
+  const error = await rejected(
+    agentWith(prompt, ["calls", "results"]).forward({ calls: TOOL_HISTORY.slice(0, 2), results: [TOOL_HISTORY[2]] }, { models }),
+  );
+  expect(error).toEqual(new ExpressionError(
+    "node 'reply' prompt[0]: rendered message 1: tool call 'c1' (read_file) has no result before the next user message",
+  ));
+  expect(models.built).toBe(0);
+});
+
+test("a spliced Gemini-style history repeating yian_call_0 across turns passes", async () => {
+  const call = (id: string) => ({ type: "tool_call", id, name: "read_file", arguments: {} });
+  const answer = (id: string) => ({ role: "tool", parts: [{ type: "tool_result", call_id: id, name: "read_file", content: "ok" }] });
+  const history = [
+    { role: "user", parts: [{ type: "text", text: "Read two files" }] },
+    { role: "assistant", parts: [call("yian_call_0")] }, answer("yian_call_0"),
+    { role: "assistant", parts: [call("yian_call_0"), call("yian_call_1")] }, answer("yian_call_1"), answer("yian_call_0"),
+    { role: "assistant", parts: [{ type: "text", text: "Both read." }] },
+  ];
+  const { model } = await run(agent(CHAT), history);
+  expect(model.requests[0]!.messages).toHaveLength(9);
+});

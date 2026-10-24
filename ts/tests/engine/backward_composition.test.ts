@@ -20,6 +20,8 @@
  *   given as `ReflectiveMemory`'s `createModel`; Python's one `with_structured_output` binding is
  *   the one request asking for structured output.
  * - Python's `ValueError` is a `RangeError`; CODE bodies are JavaScript (decision 11).
+ *
+ * TS-only: slice and `len` routes cross a public CALL the same way (Python has no slices).
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -642,6 +644,84 @@ output: \${outer.output}
     // The replay rebuilds the seed, and checks the recorded backward results against the rebuilt
     // bound inputs, which rebinds the CALL once more.
     expect(calls).toEqual([["same"], ["same"], ["same"], ["same"], ["same"], ["same"]]);
+  } finally {
+    if (saved === undefined) TEMPLATE_FNS.delete("composition_opaque");
+    else TEMPLATE_FNS.set("composition_opaque", saved);
+  }
+});
+
+test("slice and len routes cross public call without reevaluation", async () => {
+  const calls: unknown[] = [];
+  const saved = TEMPLATE_FNS.get("composition_opaque");
+  registerTemplateFn("composition_opaque", {
+    params: [{ name: "value" }],
+    call: (value) => {
+      calls.push(structuredClone(value));
+      return value;
+    },
+  });
+  try {
+    const flow = await load(`id: sliced-expressions
+name: sliced_expressions
+long_term_memory: test
+input:
+  values: !list(str)
+defs:
+  identity:
+    input:
+      values: !list(str)
+    nodes: {}
+    output: \${input.values}
+  combine:
+    input:
+      values: !list(str)
+    nodes:
+      invoke:
+        kind: call
+        call: identity
+        input:
+          values: \${input.values[1:] + composition_opaque(input.values[:len(input.values) - 1])}
+    output: \${invoke.output}
+nodes:
+  outer:
+    kind: call
+    call: combine
+    input:
+      values: \${input.values}
+output: \${outer.output}
+`);
+    const backend = new FakeMemory();
+    const memory = new Map([["test", backend]]);
+    const path = fresh("sliced.jsonl");
+    const result = await run(flow, { values: ["a", "b", "c"] }, { log: path, learnable: true, memory });
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toEqual(["b", "c", "a", "b"]);
+    // Once live and once in the CALL expansion's check against its rebuild from `from`.
+    expect(calls).toEqual([
+      ["a", "b"],
+      ["a", "b"],
+    ]);
+    const outcome = await result.backward(["first", "second", "opaque 1", "opaque 2"]);
+    expect(outcome.status).toBe("succeeded");
+    // Each slice item's feedback reaches its own index of the input, one contribution each.
+    expect(outcome.feedback).toEqual(
+      new BackwardResult({
+        inputFeedback: {
+          values: [
+            [null, "first", null],
+            [null, null, "second"],
+          ],
+        },
+      }),
+    );
+    // Learning rebinds the CALL, and the rebuilt capture equals the recorded one (a mismatch
+    // throws).
+    expect(calls).toEqual([
+      ["a", "b"],
+      ["a", "b"],
+      ["a", "b"],
+      ["a", "b"],
+    ]);
   } finally {
     if (saved === undefined) TEMPLATE_FNS.delete("composition_opaque");
     else TEMPLATE_FNS.set("composition_opaque", saved);

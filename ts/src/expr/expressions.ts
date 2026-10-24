@@ -992,7 +992,8 @@ class EvalExpr {
   /**
    * `base[lower:upper]` on a list, as Python's `slice.indices` with step 1: an omitted lower is 0
    * and an omitted upper the length, a negative bound counts from the end, and both clamp to
-   * `[0, n]`. A null or missing base is a miss, as a `.field` on null is.
+   * `[0, n]`. A null or missing base is a miss, as a `.field` on null is. When tracing, the
+   * route is a `list` of the base route projected to each kept index.
    *
    * @throws {ExpressionError} If a bound is null or not an int (a bool counts as 0 or 1), or the
    *   base is not a list.
@@ -1000,6 +1001,7 @@ class EvalExpr {
   subscript(node: Tree): Walked {
     const [baseNode, slice] = node.children as [ExprNode, Tree];
     const base = this.walk(baseNode);
+    const baseRoute = this.#trace ? this.#lastRoute! : null;
     // A bound may miss and fall back (`(n :- 0)`); a strict miss still names the base.
     const missPath = this.#missPath;
     const lower = this.sliceBound(slice.children[0]!);
@@ -1017,6 +1019,14 @@ class EvalExpr {
     };
     const start = clamp(lower, 0n);
     const stop = Math.max(start, clamp(upper, n));
+    if (baseRoute !== null) {
+      // Each kept item is its base item, so feedback on it reaches that item.
+      const children = Array.from({ length: stop - start }, (_, k) => baseRoute.project([start + k]));
+      this.#frames.at(-1)!.route = new ValueRoute("list", {
+        children,
+        expression: "[" + children.map((child) => child.expression).join(", ") + "]",
+      });
+    }
     return base.slice(start, stop);
   }
 

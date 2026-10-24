@@ -97,7 +97,7 @@ expect:
     - [node_succeeded, __end__, {commit: 16}]
   events:
     - [RunResumed]
-    - [NodeAttemptResumed, {interrupted: 1, node_id: write}]
+    - [NodeAttemptResumed, {crashed: 1, node_id: write}]
     - [NodeStarted, {node_id: write}]
     - [ModelCallStarted, {attempt: 2, exchange_id: <id:1>, model: gpt-5.5, node_id: write, provider: openai, purpose: chat}]
     - [ModelCallFinished, {attempt: 2, exchange_id: <id:1>, model: gpt-5.5, node_id: write, provider: openai, purpose: chat}]

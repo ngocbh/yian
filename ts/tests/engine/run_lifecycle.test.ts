@@ -976,7 +976,7 @@ test("a resume after a crash publishes RunResumed and NodeAttemptResumed with th
   // RunResumed and work's second NodeStarted are kept; its outcome is refused again.
   const first: RunEvent[] = [];
   await crashAfter(11, () => resume(flow, { log: path, onEvent: (event) => first.push(event) }));
-  expect(first.slice(0, 2)).toEqual([new RunResumed(), new NodeAttemptResumed({ nodeId: "work", interrupted: 1 })]);
+  expect(first.slice(0, 2)).toEqual([new RunResumed(), new NodeAttemptResumed({ nodeId: "work", crashed: 1 })]);
 
   const seen: RunEvent[] = [];
   const result = await resume(flow, { log: path, onEvent: (event) => seen.push(event) });
@@ -986,7 +986,7 @@ test("a resume after a crash publishes RunResumed and NodeAttemptResumed with th
   expect(result.events).toEqual(seen);
   expect(seen.slice(0, 3)).toEqual([
     new RunResumed(),
-    new NodeAttemptResumed({ nodeId: "work", interrupted: 2 }),
+    new NodeAttemptResumed({ nodeId: "work", crashed: 2 }),
     new NodeStarted({ nodeId: "work" }),
   ]);
   expect(result.interruptedAttempts).toEqual(new Map([["work", 2]]));

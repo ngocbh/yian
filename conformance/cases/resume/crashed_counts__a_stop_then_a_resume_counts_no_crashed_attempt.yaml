@@ -1,5 +1,5 @@
 # TS-only (decision 20): a host stop after fetch's first tool call records run_stopped with fetch in
-# flight; the resume retries fetch, and its NodeAttemptResumed counts no interrupted attempt, since the stop covers
+# flight; the resume retries fetch, and its NodeAttemptResumed counts no crashed attempt, since the stop covers
 # that start.
 kind: resume
 rules: [run-log]
@@ -44,7 +44,7 @@ expect:
   - [node_succeeded, __end__, {commit: 15}]
   events:
   - [RunResumed]
-  - [NodeAttemptResumed, {node_id: fetch, interrupted: 0}]
+  - [NodeAttemptResumed, {node_id: fetch, crashed: 0}]
   - [NodeStarted, {node_id: fetch}]
   - [NodeSucceeded, {node_id: fetch, output: F1}]
   - [NodeStarted, {node_id: __end__}]

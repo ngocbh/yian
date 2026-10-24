@@ -681,8 +681,8 @@ test("a pooled run frozen after both starts counts each, and its resume publishe
     expect(result.status).toBe("succeeded");
     expect(seen.slice(0, 3)).toEqual([
       new RunResumed(),
-      new NodeAttemptResumed({ nodeId: "first", interrupted: 1 }),
-      new NodeAttemptResumed({ nodeId: "second", interrupted: 1 }),
+      new NodeAttemptResumed({ nodeId: "first", crashed: 1 }),
+      new NodeAttemptResumed({ nodeId: "second", crashed: 1 }),
     ]);
     expect(result.interruptedAttempts).toEqual(counts);
   } finally {

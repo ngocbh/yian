@@ -1,7 +1,48 @@
-/** The per-call context yian passes to a host tool, and the reserved `ask_user` handler id. */
+/** The per-call context yian passes to a host tool, the reserved handler ids and the pending marker. */
 
 /** The reserved id of a run's `ask_user` handler. */
 export const ASK_USER = "ask_user";
+
+/** The built-in `take` tool: read an inbox. */
+export const TAKE = "take";
+/** The built-in `sleep` tool: wait until a time. */
+export const SLEEP = "sleep";
+/** The host-implemented `ask` tool: ask a person. */
+export const ASK = "ask";
+/** A built-in tool id. */
+export type BuiltinToolId = typeof TAKE | typeof SLEEP | typeof ASK;
+/** The built-in tool ids, which a TOOL node reaches with `tool_id:`. */
+export const BUILTIN_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set<BuiltinToolId>([TAKE, SLEEP, ASK]);
+
+/** A TOOL node's call id: the same on every attempt and start of the node. */
+export function toolCallId(runId: string, nodeId: string): string {
+  return `${runId}/${nodeId}`;
+}
+
+/** The brand `pending()` carries; a registry symbol, so a marker from another yian copy counts. */
+export const PENDING_BRAND: unique symbol = Symbol.for("yian.pending") as never;
+
+/** What a host handler returns to say "the answer comes later, through complete()". */
+export interface PendingMarker {
+  readonly [PENDING_BRAND]: true;
+}
+
+const PENDING: PendingMarker = Object.freeze({ [PENDING_BRAND]: true as const });
+
+/** Return the pending marker. A handler returns it; yian records the call and the node waits. */
+export function pending(): PendingMarker {
+  return PENDING;
+}
+
+/** Whether `value` is a pending marker; never throws. */
+export function isPending(value: unknown): value is PendingMarker {
+  try {
+    return typeof value === "object" && value !== null && (value as Record<symbol, unknown>)[PENDING_BRAND] === true;
+  } catch {
+    // A Proxy whose get trap throws isn't a marker.
+    return false;
+  }
+}
 
 /**
  * Who is calling a tool, the host's app object, and the call's abort signal.
@@ -12,8 +53,9 @@ export const ASK_USER = "ask_user";
  */
 export class ToolContext<T = unknown> {
   /**
-   * An opaque id for this call. For a TOOL node it is the run id plus the expanded node path, for
-   * example `run-7f3a/loop#3/place`, and stays the same when a resumed run re-runs the same call.
+   * An opaque id for this call. For a TOOL node it is `toolCallId(runId, node)`, the run id plus the
+   * expanded node path, for example `run-7f3a/loop#3/place`, and stays the same on every attempt
+   * and when a resumed run re-runs the same call.
    * For a call from an AGENT's tool loop it is unique per call but not stable across resume until
    * AGENT steps are recorded. Outside a run (an unbound tool set) each call gets a fresh id.
    */

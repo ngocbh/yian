@@ -42,7 +42,7 @@ import {
   RunStoppedRecord,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
-import { applyWaitsRecord, type WaitsJson, WaitsState } from "./waits.ts";
+import { applyWaitsRecord, type WaitInfo, type WaitsJson, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
@@ -129,6 +129,12 @@ export interface RunIndexRow {
   readonly reasoningTokens: number;
   /** The byte offset the row was built up to: the end of the record at `lastSeq`. */
   readonly offset: number;
+  /** For a `waiting` run, the calls of each waiting node, oldest wait first; `[]` otherwise. */
+  readonly waits: readonly WaitInfo[];
+  /** Whether a `waiting` run has a waiting node it can wake now; `false` otherwise. */
+  readonly ready: boolean;
+  /** For a `waiting` run, the earliest deadline of an open call of a waiting node; `null` otherwise. */
+  readonly wakeAt: string | null;
 }
 
 /**
@@ -184,10 +190,48 @@ export function emptyRunScan(): RunScan {
   };
 }
 
-/** Return the scan `JSON.stringify(scan)` wrote as `text`. */
+/**
+ * Return the scan `JSON.stringify(scan)` wrote as `text`.
+ *
+ * @throws RangeError when `text` isn't such a scan.
+ */
 export function runScanFromJson(text: string): RunScan {
-  const scan = JSON.parse(text) as Omit<RunScan, "waits"> & { waits: WaitsJson };
-  return { ...scan, waits: WaitsState.fromJSON(scan.waits) };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new RangeError(`run scan isn't JSON: ${(error as Error).message}`, { cause: error });
+  }
+  const bad = (field: string, what: string) => new RangeError(`run scan ${field} must be ${what}`);
+  if (!isRecord(raw)) throw new RangeError("run scan must be an object");
+  const seqOrNull = (field: string): number | null => {
+    const value = raw[field];
+    if (value !== null && !Number.isSafeInteger(value)) throw bad(field, "an integer or null");
+    return value as number | null;
+  };
+  const pairs = (field: string): [string, number][] => {
+    const value = raw[field];
+    const ok =
+      Array.isArray(value) &&
+      value.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && Number.isSafeInteger(pair[1]));
+    if (!ok) throw bad(field, "an array of [node id, integer] pairs");
+    return (value as [string, number][]).map(([node, n]) => [node, n]);
+  };
+  const flag = (field: string): boolean => {
+    if (typeof raw[field] !== "boolean") throw bad(field, "a boolean");
+    return raw[field] as boolean;
+  };
+  return {
+    inFlight: pairs("inFlight"),
+    lastStop: seqOrNull("lastStop"),
+    endSucceeded: flag("endSucceeded"),
+    crashed: pairs("crashed"),
+    nodeFailureSeq: seqOrNull("nodeFailureSeq"),
+    unreachableSeq: seqOrNull("unreachableSeq"),
+    runFailureSeq: seqOrNull("runFailureSeq"),
+    cancelled: flag("cancelled"),
+    waits: WaitsState.fromJSON(raw["waits"] as unknown as WaitsJson),
+  };
 }
 
 /**
@@ -300,7 +344,8 @@ function checkedTimeout(timeoutMs: unknown): number {
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
  * or a file error such as no permission) raises a warning through `warn` and keeps its row as it
- * was. An index of another layout version is dropped and built again.
+ * was. A row whose stored scan can't be read is built again from the start of its log. An index
+ * of another layout version is dropped and built again.
  *
  * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
  * It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it blocks its
@@ -336,7 +381,13 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
       for (const runId of fs.readdirSync(runsDir).sort(compareCodeUnits)) {
         const log = join(runsDir, runId, "log.jsonl");
         const stored = select.get(runId);
-        const saved = stored === undefined ? null : fromColumns(stored);
+        let saved: StoredRow | null = null;
+        try {
+          saved = stored === undefined ? null : fromColumns(stored);
+        } catch (error) {
+          // A row this version can't read is built again from the log.
+          if (!(error instanceof RangeError)) throw error;
+        }
         let built: StoredRow | null;
         try {
           const size = fs.statSync(log).size;
@@ -387,8 +438,11 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
  * Return the rows of `<runsDir>/index.sqlite`, by start time then run id, as the last update left
  * them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
  * (`isRunLogLocked`, probed on every read; a lock that can't be probed counts as free). A missing
- * index, or one of another layout version, has no rows. Reading doesn't update the index; it reads
- * while a builder works, and waits only while one commits.
+ * index, or one of another layout version, has no rows. A row whose stored scan can't be read is
+ * left out with a warning through `warn`; the next update builds it again. A `waiting` row's
+ * `waits`, `ready` and `wakeAt` are read from its scan's waits fold, as `inspectRun` reads them.
+ * Reading doesn't update the index; it reads while a builder works, and waits only while one
+ * commits.
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait while a builder commits, in milliseconds; 5000 by default.
@@ -408,13 +462,31 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
   } finally {
     db.close();
   }
-  return rows.map((columns) => {
-    const { scan, ...row } = fromColumns(columns);
+  return rows.flatMap((columns) => {
+    let stored: StoredRow;
+    try {
+      stored = fromColumns(columns);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      // The next update builds the row again; until then it isn't listed.
+      warn(`run index skipped ${columns["run_id"] as string}: ${error.message}`);
+      return [];
+    }
+    const { scan, ...row } = stored;
     let status: RunIndexStatus = scanStatus(scan);
     if ((status === "waiting" || status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
       status = "running";
     }
-    return { ...row, status };
+    const waiting = status === "waiting";
+    return [
+      {
+        ...row,
+        status,
+        waits: waiting ? waitInfos(scan.waits) : [],
+        ready: waiting && wakeableNodes(scan.waits).length > 0,
+        wakeAt: waiting ? wakeAt(scan.waits) : null,
+      },
+    ];
   });
 }
 

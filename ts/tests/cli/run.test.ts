@@ -1469,6 +1469,8 @@ describe("status", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         reasoning_tokens: 0,
+        ready: false,
+        wake_at: null,
       });
       expect(document.runs[2]).toMatchObject({ run_id: "held", flow: null, status: "running", result: null });
     } finally {

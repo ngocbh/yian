@@ -658,7 +658,7 @@ export class BackwardAttempt {
 
 /** The failure of an attempt that stopped before it finished. */
 function unfinishedFailure(): BackwardFailure {
-  return new BackwardFailure("backward", "backward.interrupted", "backward attempt interrupted before completion");
+  return new BackwardFailure("backward", "backward.unfinished", "backward attempt did not finish");
 }
 
 /** Project each memory in `memoryOrder` from the attempt's accepted requests and observations. */
@@ -920,7 +920,7 @@ function validateBackwardFinished(
   const failure = outcome.failure!;
   if (sameBackwardFailure(failure, unfinishedFailure())) {
     if (!sameBackwardOutcome(outcome, backward.outcome!) || (ready === null && record.attributedResults.length > 0)) {
-      throw new RangeError("interrupted Finished must exactly project the accepted prefix");
+      throw new RangeError("the Finished of an unfinished attempt must exactly project the accepted prefix");
     }
     return;
   }

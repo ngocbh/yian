@@ -913,8 +913,8 @@ function failed(memory: string, id = 1): MemoryCommitFailedRecord {
 /** The failure of an interrupted attempt. */
 const UNFINISHED = new BackwardFailure(
   "backward",
-  "backward.interrupted",
-  "backward attempt interrupted before completion",
+  "backward.unfinished",
+  "backward attempt did not finish",
 );
 
 /** A Finished of attempt `id` that interrupted before Ready. */
@@ -1177,7 +1177,7 @@ test("an interrupted attempt before Ready has no feedback", () => {
   const state = new RuntimeBackwardState(["a"], [new BackwardAttempt(started())]);
   const outcome = state.outcome!;
   expect(outcome.feedback).toBeNull();
-  expect(outcome.failure!.code).toBe("backward.interrupted");
+  expect(outcome.failure!.code).toBe("backward.unfinished");
   const policies = [new PolicyCommitOutcome("a", "unrequested")];
   expect(outcome.learning).toEqual(new LearningResult("incomplete", { policies }));
 });
@@ -1591,13 +1591,13 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
     "an interrupted Finished with other learning",
     (trace) => reduced([started(), failedFinish(UNFINISHED)], trace),
     RangeError,
-    "interrupted Finished must exactly project the accepted prefix",
+    "the Finished of an unfinished attempt must exactly project the accepted prefix",
   ],
   [
     "an interrupted Finished before Ready with results",
     (trace) => reduced([started(), failedFinish(UNFINISHED, { learning: INCOMPLETE }, chainResults())], trace),
     RangeError,
-    "interrupted Finished must exactly project the accepted prefix",
+    "the Finished of an unfinished attempt must exactly project the accepted prefix",
   ],
   [
     "a failed Finished after Ready without a commit failure",

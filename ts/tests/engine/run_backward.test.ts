@@ -499,7 +499,7 @@ for (const durable of [false, true]) {
         expect(result.backwardOutcome!.status).toBe("succeeded");
         expect(result.learning!.status).toBe("succeeded");
       } else {
-        expect(result.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+        expect(result.backwardOutcome!.failure!.code).toBe("backward.unfinished");
         expect(result.learning!.status).toBe("incomplete");
         expect(result.learning!.policies[0]!.status).toBe(disposition);
       }
@@ -714,7 +714,7 @@ test("test_cancelled_backward_retains_started_and_releases_resources", async () 
 
   expect(await rejected(result.backward("Interrupted review."))).toBe(failure);
 
-  expect(result.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+  expect(result.backwardOutcome!.failure!.code).toBe("backward.unfinished");
   expect(result.backwardOutcome!.feedback).toBeNull();
   expect(backend.sessions.every((session) => session.closed)).toBe(true);
   expect(backend.commitCalls).toEqual([]);
@@ -760,7 +760,7 @@ test("test_stale_handle_publishes_its_new_accepted_prefix_on_host_failure", asyn
 
   expect(await rejected(first.backward("New review."))).toBe(failure);
 
-  expect(first.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+  expect(first.backwardOutcome!.failure!.code).toBe("backward.unfinished");
   expect(first.learning!.status).toBe("incomplete");
   const last = records(path).at(-1);
   expect(last).toBeInstanceOf(BackwardStartedRecord);
@@ -781,7 +781,7 @@ for (const otherFinishes of [false, true]) {
     expect(await rejected(original.backward("First review."))).toBe(interrupted);
     const resumed = await resume(flow, { log: path, memory });
     const [previous, previousLearning] = [resumed.backwardOutcome, resumed.learning];
-    expect(previous!.failure!.code).toBe("backward.interrupted");
+    expect(previous!.failure!.code).toBe("backward.unfinished");
     expect(previousLearning!.status).toBe("incomplete");
     if (otherFinishes) {
       const other = await resume(flow, { log: path, memory });
@@ -866,7 +866,7 @@ for (const prefix of ["started", "ready", "requested", "confirmed"]) {
     const inspected = await resume(flow, { log: path });
 
     expect(inspected.backwardOutcome).toEqual(expected as never);
-    expect(inspected.backwardOutcome!.failure!.code).toBe("backward.interrupted");
+    expect(inspected.backwardOutcome!.failure!.code).toBe("backward.unfinished");
     expect(inspected.learning!.status).toBe("incomplete");
     expect(inspected.learning!.policies[0]!.status).toBe(
       ({ started: "unrequested", ready: "unrequested", requested: "unknown", confirmed: "succeeded" } as const)[
@@ -934,7 +934,7 @@ await resumed.backward("Second review.");
       const resumed = await resume(flow, { log: path, memory: testMemory(third) });
       const projected = resumed.backwardOutcome!;
       expect(projected.status).toBe("failed");
-      expect(projected.failure!.code).toBe("backward.interrupted");
+      expect(projected.failure!.code).toBe("backward.unfinished");
       const outcome = await resumed.backward("Third review.");
       expect(outcome.status).toBe("succeeded");
       expect(resumed.backwardOutcome).toBe(outcome);

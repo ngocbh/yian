@@ -356,7 +356,7 @@ test("a late proposal failure discards all staged mutations", async () => {
     const prior = new MemoryMutation("same", { lesson: "first" });
     const fail = () => {
       if (failureKind === "backend") {
-        throw new MemoryOperationError("provider", "backward.interrupted", "Backend declined.", true);
+        throw new MemoryOperationError("provider", "backward.unfinished", "Backend declined.", true);
       }
       if (failureKind === "duplicate") return [new MemoryMutation("same", {}), new MemoryMutation("same", {})];
       if (failureKind === "tuple") return new Set();
@@ -372,7 +372,7 @@ test("a late proposal failure discards all staged mutations", async () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.failure!.stage).toBe("learn");
     expect(outcome.failure!.memory).toBe("B");
-    expect(outcome.failure!.code).toBe(failureKind === "backend" ? "backward.interrupted" : "memory.invalid_result");
+    expect(outcome.failure!.code).toBe(failureKind === "backend" ? "backward.unfinished" : "memory.invalid_result");
     expect(outcome.feedback!.inputFeedback).toEqual({ topic: ["review"] });
     expect(outcome.learning!.status).toBe("failed");
     expect(outcome.learning!.policies.map((policy) => policy.status)).toEqual(Array(3).fill("unrequested"));
@@ -396,7 +396,7 @@ test("a policy failure preserves prior success and stops later policies", async 
     const { engine: built, node } = await terminal(["A", "B", "C"]);
     const failed = invalidResult
       ? {}
-      : new MemoryOperationError("storage", "backward.interrupted", "Store refused.", true);
+      : new MemoryOperationError("storage", "backward.unfinished", "Store refused.", true);
     const memory = new Map([
       ["A", new FakeMemory()],
       ["B", new FakeMemory({ commitOutcomes: [failed] })],
@@ -406,7 +406,7 @@ test("a policy failure preserves prior success and stops later policies", async 
     expect(outcome.status).toBe("failed");
     expect(outcome.failure!.stage).toBe("commit");
     expect(outcome.failure!.memory).toBe("B");
-    expect(outcome.failure!.code).toBe(invalidResult ? "memory.invalid_result" : "backward.interrupted");
+    expect(outcome.failure!.code).toBe(invalidResult ? "memory.invalid_result" : "backward.unfinished");
     expect(outcome.learning!.status).toBe("failed");
     expect(outcome.learning!.policies.map((policy) => policy.status)).toEqual(["succeeded", "failed", "unrequested"]);
     expect(["A", "B", "C"].map((name) => memory.get(name)!.commitCalls.length)).toEqual([1, 1, 0]);
@@ -711,7 +711,7 @@ test("an append fault preserves the exact prefix and closes resources", async ()
       expect(memory.get("A")!.commitCalls).toHaveLength(1);
       expect(memory.get("B")!.commitCalls).toEqual([]);
     } else {
-      expect(current.outcome!.failure!.code).toBe("backward.interrupted");
+      expect(current.outcome!.failure!.code).toBe("backward.unfinished");
       expect(current.policyOutcomes[0]!.status).toBe(knownFailure === "commit" ? "failed" : "succeeded");
     }
   }
@@ -761,7 +761,7 @@ test("a manual precommit retry reopens snapshots and recomputes every memory", a
     expect(memory.commitCalls[0]![1].map((mutation) => mutation.mutationId)).toEqual(["2"]);
     expect(built.state.backwardState.attempts).toHaveLength(2);
     const first = built.state.backwardState.attempts[0]!.finished!.outcome;
-    expect(first.failure!.code).toBe("backward.interrupted");
+    expect(first.failure!.code).toBe("backward.unfinished");
     expect(first.feedback).toEqual(old.ready !== null ? old.ready.rootResult : null);
     expect(classes(records(built).slice(before, before + 2))).toEqual([BackwardFinishedRecord, BackwardStartedRecord]);
     expect(built.state.backwardState.started!.attemptId).toBe(2);
@@ -856,7 +856,7 @@ test("a backend host or unexpected error escapes with the exact prefix", async (
           (record) => record.constructor === BackwardFinishedRecord,
         ) as BackwardFinishedRecord[];
         expect(finished.map((record) => record.attemptId)).toEqual([1, 2]);
-        expect(finished[0]!.outcome.failure!.code).toBe("backward.interrupted");
+        expect(finished[0]!.outcome.failure!.code).toBe("backward.unfinished");
         expect(finished[0]!.outcome.learning!.policies.map((policy) => policy.status)).toEqual([
           "unknown",
           "unrequested",
@@ -928,7 +928,7 @@ test("a later attempt follows or closes any prior attempt and recomputes everyth
     const finished = all.filter((record) => record.constructor === BackwardFinishedRecord) as BackwardFinishedRecord[];
     expect(finished.map((record) => record.attemptId)).toEqual([1, 2]);
     if (prior === "requested_unfinished") {
-      expect(finished[0]!.outcome.failure!.code).toBe("backward.interrupted");
+      expect(finished[0]!.outcome.failure!.code).toBe("backward.unfinished");
       expect(finished[0]!.outcome.learning!.policies.map((policy) => policy.status)).toEqual(["unknown"]);
     }
     expect(node.calls).toHaveLength(calls + 1);

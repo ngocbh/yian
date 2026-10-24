@@ -557,7 +557,7 @@ describe("terminal resume inspects actual public attempt prefixes without reopen
 
       const outcome = inspected.backwardOutcome!;
       expect(outcome.status).toBe("failed");
-      expect(outcome.failure!.code).toBe("backward.interrupted");
+      expect(outcome.failure!.code).toBe("backward.unfinished");
       expect(outcome.feedback).toEqual(completed.feedback);
       expect(outcome.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["topic review"] } }));
       expect(outcome.learning!.status).toBe("incomplete");
@@ -762,7 +762,7 @@ test("reverse cancellation retains started only and resume recomputes the entire
   expect(records(path).slice(count).map((record) => record.constructor)).toEqual([BackwardStartedRecord]);
   expect(readFileSync(path, "utf8").startsWith(before)).toBe(true);
   const outcome = result.backwardOutcome!;
-  expect(outcome.failure!.code).toBe("backward.interrupted");
+  expect(outcome.failure!.code).toBe("backward.unfinished");
   expect(outcome.feedback).toBeNull();
   expect(outcome.learning!.status).toBe("incomplete");
   expect(outcome.learning!.policies[0]!.status).toBe("unrequested");
@@ -914,7 +914,7 @@ describe("public append rejection keeps exact authority and retries after every 
         expect(outcome).toBeNull();
         expect(result.learning).toBeNull();
       } else {
-        expect(outcome!.failure!.code).toBe("backward.interrupted");
+        expect(outcome!.failure!.code).toBe("backward.unfinished");
         if (phase === "ready") expect(outcome!.feedback).toBeNull();
         else expect(outcome!.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["old topic"] } }));
         expect(outcome!.learning!.status).toBe(phase === "failed_finished" ? "failed" : "incomplete");
@@ -971,7 +971,7 @@ describe("public append rejection keeps exact authority and retries after every 
       if (phase !== "started") {
         const prior = all.filter((record) => record instanceof BackwardFinishedRecord && record.attemptId === 1);
         expect(prior).toHaveLength(1);
-        expect((prior[0] as BackwardFinishedRecord).outcome.failure!.code).toBe("backward.interrupted");
+        expect((prior[0] as BackwardFinishedRecord).outcome.failure!.code).toBe("backward.unfinished");
         expect((prior[0] as BackwardFinishedRecord).outcome.feedback).toEqual(outcome!.feedback);
       }
       expect(backend.openSnapshots).toEqual([null, { namespace: "test" }, { namespace: "test" }]);
@@ -988,7 +988,7 @@ test("three memory failure preserves ordered dispositions and admits a public re
   source = source.replace("  first:\n    kind: agent", "  first:\n    kind: agent\n    long_term_memory: B");
   const flow = await load(source.replace("    long_term_memory: test", "    long_term_memory: C"));
   const backends = new Map(["A", "B", "C"].map((name) => [name, new FakeMemory()]));
-  backends.get("B")!.commitOutcomes.push(new MemoryOperationError("store", "backward.interrupted", "Store declined.", true));
+  backends.get("B")!.commitOutcomes.push(new MemoryOperationError("store", "backward.unfinished", "Store declined.", true));
   const forwardChat = new ScriptedModel([textReply("draft"), textReply("answer")]);
   const access = models(() => forwardChat);
   const path = fresh("policies.jsonl");
@@ -1016,7 +1016,7 @@ test("three memory failure preserves ordered dispositions and admits a public re
   expect(learned).toEqual(["A", "B", "C"]);
   expect(outcome.status).toBe("failed");
   expect(outcome.failure!.stage).toBe("commit");
-  expect(outcome.failure!.code).toBe("backward.interrupted");
+  expect(outcome.failure!.code).toBe("backward.unfinished");
   expect(outcome.failure!.memory).toBe("B");
   expect(outcome.feedback).toEqual(new BackwardResult({ inputFeedback: { topic: ["topic review"] } }));
   expect(outcome.learning!.status).toBe("failed");

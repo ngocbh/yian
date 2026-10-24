@@ -1506,7 +1506,7 @@ test("backward policy batches and unfinished prefixes follow the accepted layout
   }
   const interrupted = state.backwardState.outcome!;
   expect(interrupted.status).toBe("failed");
-  expect(interrupted.failure!.code).toBe("backward.interrupted");
+  expect(interrupted.failure!.code).toBe("backward.unfinished");
   expect(interrupted.learning!.status).toBe("incomplete");
   const policies = state.backwardState.policyOutcomes;
   expect(policies.map((policy) => policy.status)).toEqual(["succeeded", "succeeded"]);
@@ -1638,7 +1638,7 @@ test("mutation ids may repeat across different recorded memories", async () => {
 const retryableRows = (codes: readonly string[]): [boolean, string][] =>
   codes.flatMap((code) => [false, true].map((retryable): [boolean, string] => [retryable, code]));
 
-test.each(retryableRows(["learn.failed", "backward.interrupted"]))(
+test.each(retryableRows(["learn.failed", "backward.unfinished"]))(
   "a learner-failed Finished keeps completed feedback and all unrequested policies: retryable %p, %s",
   async (retryable, code) => {
     const [keys] = proposalTable();
@@ -1663,7 +1663,7 @@ test.each(retryableRows(["learn.failed", "backward.interrupted"]))(
   },
 );
 
-test.each(retryableRows(["commit.failed", "backward.interrupted"]))(
+test.each(retryableRows(["commit.failed", "backward.unfinished"]))(
   "a known commit failure stops later requests and admits a later attempt: retryable %p, %s",
   async (retryable, code) => {
     const [keys, proposals] = proposalTable();
@@ -1727,7 +1727,7 @@ test.each(["succeeded", "commit_failed", "interrupted_after_request"] as const)(
       outcome = new BackwardOutcome("failed", { feedback: root, failure, learning });
     } else {
       outcome = state.backwardState.outcome!;
-      expect(outcome.failure!.code).toBe("backward.interrupted");
+      expect(outcome.failure!.code).toBe("backward.unfinished");
     }
     expect(state.backwardState.canStart).toBe(false);
     expectError(
@@ -2001,7 +2001,7 @@ test.each([
   // A changed message is no longer the interruption, so the commit-failure rule refuses it.
   ["message", "failed Finished after Ready requires a recorded commit failure"],
   ["feedback", FINISHED_FEEDBACK],
-  ["learning", "interrupted Finished must exactly project the accepted prefix"],
+  ["learning", "the Finished of an unfinished attempt must exactly project the accepted prefix"],
   ["attribution", FINISHED_ATTRIBUTION],
 ] as const)(
   "an interrupted Finished must exactly project the prefix: %s",

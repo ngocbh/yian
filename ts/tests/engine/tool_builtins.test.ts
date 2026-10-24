@@ -376,7 +376,7 @@ describe("ask", () => {
     expect(recorded).toEqual([]);
   });
 
-  test("an ask closed timed_out returns null for Optional(T) and fails tool.timeout otherwise", async () => {
+  test("an ask closed timed_out returns null for Optional(T) and fails tool.timeout otherwise, no output: included", async () => {
     const held = heldCall({
       callId: "r1/lead",
       tool: "ask",
@@ -398,8 +398,9 @@ describe("ask", () => {
     );
     expect(strict.exceptionCode(error)).toBe("tool.timeout");
 
+    // No `output:` reads as `str`, which a timeout can't give.
     const free = new ToolNode("lead", { toolId: "ask" });
-    expect(await free.forward({ prompt: "?" }, capsWith([held], tools).caps)).toEqual(new Output(null));
+    expect(await rejection(free.forward({ prompt: "?" }, capsWith([held], tools).caps))).toBeInstanceOf(ToolTimeoutError);
   });
 
   test("ask's waitResultStep checks the answer type without null", () => {

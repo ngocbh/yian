@@ -380,7 +380,7 @@ export class ToolNode extends Node {
   /**
    * Record the `pending` step of a call whose handler returned `pending()`, and wait on it.
    *
-   * @throws Error outside a durable run (no steps or no run id).
+   * @throws Error outside a durable run (no steps, no run id, or no log).
    * @throws ToolCheckError when the arguments are over the run's event size limit; nothing is
    *   recorded.
    */
@@ -392,7 +392,7 @@ export class ToolNode extends Node {
     deadline: string | null,
   ): Pending {
     const steps = caps.steps;
-    if (steps === undefined || callId === null) {
+    if (steps === undefined || callId === null || !steps.durable) {
       throw new Error(`tool ${reprText(tool)} returned pending() outside a durable run; give the run a log`);
     }
     const args = jsonPart(fromHost(inputs, `tool ${reprText(tool)} arguments`), [], "mapping") as ValueRecord;

@@ -273,3 +273,11 @@ test("an ask with no output: that nobody answers by its deadline fails tool.time
     "TOOL node 'gate' (ask): nobody answered by 2026-10-23T01:00:00.000Z; declare output: Optional(...) to route on a timeout",
   );
 });
+
+test("a run with no log refuses an ask's pending(): nothing could answer it", async () => {
+  const result = await run(gateFlow("ask", '      prompt: "Ship?"'), { log: null, tools: { ask: () => pending() } });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure?.nodeId).toBe("gate");
+  expect(result.failure?.message).toContain("returned pending() outside a durable run; give the run a log");
+});

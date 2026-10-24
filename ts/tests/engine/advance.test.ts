@@ -270,9 +270,10 @@ test("an advance from onEvent(RunStarted) waits for runFlow, not on the lock", a
   expect([advanced.status, advanced.events]).toEqual(["waiting", []]);
 });
 
-test("a process-local run ends waiting and resolves", async () => {
+test("a process-local run refuses a host call's pending(): nothing could answer it", async () => {
   const result = await runFlow(hostFlow(), {}, { log: null, env: NO_ENV, tools: { lookup: pendingTool() } });
-  expect([result.status, result.log]).toEqual(["waiting", null]);
+  expect([result.status, result.log]).toEqual(["failed", null]);
+  expect(result.failure?.message).toContain("returned pending() outside a durable run; give the run a log");
 });
 
 test("a bad option holds nothing", async () => {

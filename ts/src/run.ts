@@ -1410,6 +1410,8 @@ async function startRun(
       scheduler,
       random,
       runDir: locator === null ? null : dirname(locator),
+      // Nothing could answer a pending call in a run with no log.
+      durable: locator !== null,
     });
     const events: RunEvent[] = [];
     publishBoundaryObservers(observers, events, onEvent, (error) => engine.stopForCallback(error));

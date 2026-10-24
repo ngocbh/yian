@@ -684,7 +684,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
               "the host's interrupt signal can't wait for a later answer yet; answer it inline",
           );
         }
-        if (callId === undefined || turn.ctx.steps === undefined) {
+        if (callId === undefined || turn.ctx.steps === undefined || !turn.ctx.steps.durable) {
           throw new AgentLoopError(
             `agent node ${reprText(turn.ctx.nodeId)}: tool ${reprText(call.name)} returned pending() outside a durable run; ` +
               "give the run a log",

@@ -417,6 +417,7 @@ nodes:
     input:
       prompt: "Ship?"
       timeout: "1m"
+    output: Optional(str)
   slow:
     kind: tool
     tool_id: gate
@@ -445,3 +446,19 @@ output: \${agent.output}
   expect(indexOf(records, "node_succeeded", "slow")).toBeLessThan(indexOf(records, "node_woken", "agent"));
   expect(indexOf(records, "node_woken", "lead")).toBeGreaterThan(indexOf(records, "node_woken", "agent"));
 }, 5000);
+
+test("a run with no log refuses an agent's pending(): nothing could answer it", async () => {
+  const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"])], CONFIG);
+  const result = await runFlow(await loadFlow(agentFlow("ask_user")), {}, {
+    env: hostEnv(dir),
+    log: null,
+    tools: { ask_user: () => pending() },
+    models: serving(model),
+  });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure?.nodeId).toBe("agent");
+  expect(result.failure?.message).toBe(
+    "agent node 'agent': tool 'ask_user' returned pending() outside a durable run; give the run a log",
+  );
+});

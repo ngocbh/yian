@@ -11,6 +11,23 @@ flow: |
   name: typed_gate_replay
   nodes:
     ask:
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "How many?"
+    use:
+      kind: code
+      input:
+        n: !int ${ask.output}
+      code: |
+        return inputs["n"]
+  output: ${use.output}
+# Python yian has no ask built-in: it runs the human_input gate.
+python_flow: |
+  id: typed-gate-replay
+  name: typed_gate_replay
+  nodes:
+    ask:
       kind: human_input
       prompt: "How many?"
     use:
@@ -35,7 +52,7 @@ expect:
       message: 'binding ''n'': "three" does not match declared type int'
       frames:
       - label: flow.yaml
-        range: [10, 10, 10, 28]
+        range: [12, 10, 12, 28]
       node: use
   trace:
   - - run_started
@@ -81,21 +98,17 @@ expect:
         message: 'binding ''n'': "three" does not match declared type int'
         frames:
         - label: flow.yaml
-          range: [10, 10, 10, 28]
+          range: [12, 10, 12, 28]
         node: use
   tool_calls:
-    ask_user:
-    - args:
-        question: How many?
-        node_id: ask
+    ask:
+    - args: {question: "How many?", node_id: ask}
       call_id: r1/ask
       attempt: 1
       node: ask
-    - args:
-        question: How many?
-        node_id: ask
+    - args: {question: "How many?", node_id: ask}
       call_id: r1/ask
-      attempt: 1
+      attempt: 2
       node: ask
 python_expect:
   output:

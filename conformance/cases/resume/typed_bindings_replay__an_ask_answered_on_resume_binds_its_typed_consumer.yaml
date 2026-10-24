@@ -1,6 +1,6 @@
 # From tests/engine/test_typed_bindings_replay.py::test_typed_consumer_after_resume_accepts_a_matching_answer.
 # Also tests/engine/test_run_recovery_matrix.py::test_effect_start_prefix_replays_without_running_effect_work[human_input].
-# A HUMAN_INPUT that started before the crash is retried and asked again; the consumer binds the answer given
+# An ask that started before the crash is retried and asked again; the consumer binds the answer given
 # on resume against its declared type. `use` returns its input (the test doubles it).
 # Record 8 is ask's node_started: the first answer is given, its result is refused.
 # hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
@@ -12,8 +12,10 @@ flow: |
   name: typed_gate_replay
   nodes:
     ask:
-      kind: human_input
-      prompt: "How many?"
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "How many?"
     use:
       kind: code
       input:
@@ -83,17 +85,13 @@ expect:
     - __end__
     - {commit: 17}
   tool_calls:
-    ask_user:
-    - args:
-        question: How many?
-        node_id: ask
+    ask:
+    - args: {question: "How many?", node_id: ask}
       call_id: r1/ask
       attempt: 1
       node: ask
-    - args:
-        question: How many?
-        node_id: ask
+    - args: {question: "How many?", node_id: ask}
       call_id: r1/ask
-      attempt: 1
+      attempt: 2
       node: ask
 resume: {}

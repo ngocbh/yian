@@ -1,5 +1,5 @@
 # From tests/engine/test_run_recovery_matrix.py::test_namespaced_human_input_start_replays_without_host_interaction[map].
-# A HUMAN_INPUT inside a grown MAP item is retried under its namespaced id.
+# An ask inside a grown MAP item is retried under its namespaced id.
 # Record 19 is invoke#0/ask's node_started: the first answer is given, its result is refused.
 # hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
@@ -14,8 +14,10 @@ flow: |
         token: !str
       nodes:
         ask:
-          kind: human_input
-          prompt: nested map input
+          kind: tool
+          tool_id: ask
+          input:
+            prompt: nested map input
           output: str
       output: ${ask.output}
   nodes:
@@ -139,13 +141,11 @@ expect:
     - __end__
     - {commit: 37}
   tool_calls:
-    ask_user:
+    ask:
     - args:
         question: nested map input
         answer_schema:
-        - name: answer
-          type: str
-          required: true
+        - {name: answer, type: str, required: true}
         node_id: invoke#0/ask
       call_id: r1/invoke#0/ask
       attempt: 1
@@ -153,19 +153,15 @@ expect:
     - args:
         question: nested map input
         answer_schema:
-        - name: answer
-          type: str
-          required: true
+        - {name: answer, type: str, required: true}
         node_id: invoke#0/ask
       call_id: r1/invoke#0/ask
-      attempt: 1
+      attempt: 2
       node: invoke#0/ask
     - args:
         question: nested map input
         answer_schema:
-        - name: answer
-          type: str
-          required: true
+        - {name: answer, type: str, required: true}
         node_id: invoke#1/ask
       call_id: r1/invoke#1/ask
       attempt: 1

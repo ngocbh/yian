@@ -59,10 +59,14 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
 /**
  * kind=tool: a direct, deterministic call to one tool in the run's `ToolSet`.
  *
- * `allowed` adds `tool_id`, `inputs`/`outputs`, `retries` and `asserts` to the commons; `tool_id`
- * is required. A tool's authored `input:` is its sink-binding surface, so `inputs` is its one
- * binding field. `output:` is optional; when present it is the node's output contract, which the
- * engine checks the tool's return value against on every call.
+ * `allowed` adds `tool_id`, `inputs`/`outputs`, `retries`, `asserts` and `adaptive_questions` to
+ * the commons; `tool_id` is required. A tool's authored `input:` is its sink-binding surface, so
+ * `inputs` is its one binding field. `output:` is optional; when present it is the node's output
+ * contract, which the engine checks the tool's return value against on every call.
+ *
+ * `tool_id: take | sleep | ask` names a yian built-in, whose inputs are checked at load and whose
+ * output is inferred (`take`, `sleep`) or is the answer type (`ask`, which alone takes
+ * `adaptive_questions:`).
  */
 export class ToolDescriptor extends NodeDescriptor {
   static override readonly kind = "tool";

@@ -384,13 +384,16 @@ export function renderAgentPrompt(
   };
 }
 
-/** Whether `error` is a render's or recall's refusal, which leaves an invocation's prompt unrebuilt. */
+/**
+ * Whether `error` is a render's or recall's refusal (a template error, a missing skill, a variable
+ * colliding with an input, a refused recall), which leaves an invocation's prompt unrebuilt; any
+ * other error is a fault and escapes.
+ */
 function isRebuildRefusal(error: unknown): boolean {
   return (
     error instanceof ExpressionError ||
     error instanceof SkillError ||
     error instanceof MemoryRecallError ||
-    error instanceof TypeError ||
     error instanceof RangeError
   );
 }

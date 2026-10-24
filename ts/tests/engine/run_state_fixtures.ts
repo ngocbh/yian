@@ -43,6 +43,7 @@ import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import {
   type BackwardContext,
   type BackwardResult,
+  type Grow,
   Node,
   type NodeCaps,
   NodeKind,
@@ -102,9 +103,12 @@ import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitInitialPool,
   commitPrepared,
+  expansionCommits,
   type GrowBuilder,
   type GrowthIndex,
   growthIndex,
+  prepareExpanded,
+  prepareExpansionCommit,
   prepareNodeStarted,
   prepareNodeSucceeded,
   preparePoolCommit,
@@ -1127,8 +1131,42 @@ export function prepareOutput(
   options: { commitAs?: string | null } & OutcomeCarriers = {},
 ): PreparedTransition {
   const { commitAs = null, ...carriers } = options;
-  commitPrepared(log, state, preparePoolCommit(state, nodeId, output, { commitAs }));
+  // A child START's expansion committed its value already; its success only names it.
+  if (!state.pendingCommits.has(nodeId)) {
+    commitPrepared(log, state, preparePoolCommit(state, nodeId, output, { commitAs }));
+  }
   return prepareNodeSucceeded(state, nodeId, carriers);
+}
+
+/**
+ * Commit in-flight spawner `nodeId`'s expansion commits for `grow`, as the engine does before its
+ * `NodeExpanded`, each with `from` (empty by default); return how many it committed.
+ */
+export function commitExpansion(
+  log: RunLog,
+  state: RunState,
+  nodeId: string,
+  grow: Grow,
+  growBuilder: GrowBuilder,
+  from: ReadonlyMap<string, number> = new Map(),
+): number {
+  const commits = expansionCommits(state, nodeId, grow, growBuilder);
+  for (const [key, value] of commits) commitPrepared(log, state, prepareExpansionCommit(state, nodeId, key, value, from));
+  return commits.length;
+}
+
+/** `commitExpansion`, then prepare the expansion with the carriers in `options`. */
+export function prepareGrowth(
+  log: RunLog,
+  state: RunState,
+  nodeId: string,
+  grow: Grow,
+  growBuilder: GrowBuilder,
+  options: OutcomeCarriers & { from?: ReadonlyMap<string, number> } = {},
+): PreparedTransition {
+  const { from, ...carriers } = options;
+  commitExpansion(log, state, nodeId, grow, growBuilder, from);
+  return prepareExpanded(state, nodeId, grow, growBuilder, carriers);
 }
 
 /**

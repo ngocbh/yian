@@ -96,6 +96,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, call_it]
+  - - pool_commit
+    - call_it
+    - from: {__start__: 6}
+      key: call_it/__start__
+      value: {n: -1}
   - - node_expanded
     - call_it
     - prune_ids: []

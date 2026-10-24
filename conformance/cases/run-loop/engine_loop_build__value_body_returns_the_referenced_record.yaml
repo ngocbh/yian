@@ -87,6 +87,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat_loop]
+  - - pool_commit
+    - chat_loop
+    - from: {}
+      key: chat_loop#0/__start__
+      value: {n: 0}
   - - node_expanded
     - chat_loop
     - prune_ids: []
@@ -95,13 +100,9 @@ expect:
         result: start
       - 0
   - [node_started, chat_loop#0/__start__]
-  - - pool_commit
-    - chat_loop#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - chat_loop#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, chat_loop#0/step]
   - - pool_commit
     - chat_loop#0/step
@@ -115,10 +116,16 @@ expect:
     - chat_loop#0/__end__
     - value:
         n: 1
+      from: {chat_loop#0/step: 14}
   - - node_succeeded
     - chat_loop#0/__end__
     - {commit: 17}
   - [node_started, chat_loop~1]
+  - - pool_commit
+    - chat_loop~1
+    - from: {chat_loop#0/__end__: 17}
+      key: chat_loop#1/__start__
+      value: {n: 1}
   - - node_expanded
     - chat_loop~1
     - prune_ids:
@@ -131,13 +138,9 @@ expect:
         result: start
       - 1
   - [node_started, chat_loop#1/__start__]
-  - - pool_commit
-    - chat_loop#1/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - chat_loop#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, chat_loop#1/step]
   - - pool_commit
     - chat_loop#1/step
@@ -151,6 +154,7 @@ expect:
     - chat_loop#1/__end__
     - value:
         n: 2
+      from: {chat_loop#1/step: 25}
   - - node_succeeded
     - chat_loop#1/__end__
     - {commit: 28}
@@ -161,6 +165,7 @@ expect:
         n: 2
         result: start
       key: chat_loop
+      from: {chat_loop#1/__end__: 28}
   - - node_succeeded
     - chat_loop~2
     - {commit: 31}

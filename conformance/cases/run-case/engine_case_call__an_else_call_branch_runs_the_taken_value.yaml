@@ -94,19 +94,20 @@ expect:
     - gate
     - handle: '#else'
   - [node_started, __call_1]
+  - - pool_commit
+    - __call_1
+    - from: {}
+      key: __call_1/__start__
+      value: {stance: con}
   - - node_expanded
     - __call_1
     - prune_ids: []
       seed:
         stance: con
   - [node_started, __call_1/__start__]
-  - - pool_commit
-    - __call_1/__start__
-    - value:
-        stance: con
   - - node_succeeded
     - __call_1/__start__
-    - {commit: 13}
+    - commit: 11
   - [node_started, __call_1/x]
   - - pool_commit
     - __call_1/x
@@ -119,6 +120,7 @@ expect:
     - __call_1/__end__
     - value: took:con
       key: __call_1
+      from: {__call_1/x: 16}
   - - node_succeeded
     - __call_1/__end__
     - {commit: 19}

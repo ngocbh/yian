@@ -93,6 +93,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, loop]
+  - - pool_commit
+    - loop
+    - from: {}
+      key: loop#0/__start__
+      value: {exited: false, n: 0}
   - - node_expanded
     - loop
     - prune_ids: []
@@ -101,14 +106,9 @@ expect:
         n: 0
       - 0
   - [node_started, loop#0/__start__]
-  - - pool_commit
-    - loop#0/__start__
-    - value:
-        exited: false
-        n: 0
   - - node_succeeded
     - loop#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, loop#0/step]
   - - pool_commit
     - loop#0/step
@@ -124,10 +124,16 @@ expect:
     - value:
         exited: false
         n: 1
+      from: {loop#0/step: 14}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 17}
   - [node_started, loop~1]
+  - - pool_commit
+    - loop~1
+    - from: {loop#0/__end__: 17}
+      key: loop#1/__start__
+      value: {exited: false, n: 1}
   - - node_expanded
     - loop~1
     - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
@@ -136,14 +142,9 @@ expect:
         n: 1
       - 1
   - [node_started, loop#1/__start__]
-  - - pool_commit
-    - loop#1/__start__
-    - value:
-        exited: false
-        n: 1
   - - node_succeeded
     - loop#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, loop#1/step]
   - - pool_commit
     - loop#1/step
@@ -159,10 +160,16 @@ expect:
     - value:
         exited: false
         n: 2
+      from: {loop#1/step: 25}
   - - node_succeeded
     - loop#1/__end__
     - {commit: 28}
   - [node_started, loop~2]
+  - - pool_commit
+    - loop~2
+    - from: {loop#1/__end__: 28}
+      key: loop#2/__start__
+      value: {exited: false, n: 2}
   - - node_expanded
     - loop~2
     - prune_ids: [loop#1/__end__, loop#1/__start__, loop#1/step, loop~2]
@@ -171,14 +178,9 @@ expect:
         n: 2
       - 2
   - [node_started, loop#2/__start__]
-  - - pool_commit
-    - loop#2/__start__
-    - value:
-        exited: false
-        n: 2
   - - node_succeeded
     - loop#2/__start__
-    - {commit: 33}
+    - commit: 31
   - [node_started, loop#2/step]
   - - pool_commit
     - loop#2/step
@@ -194,6 +196,7 @@ expect:
     - value:
         exited: true
         n: 3
+      from: {loop#2/step: 36}
   - - node_succeeded
     - loop#2/__end__
     - {commit: 39}
@@ -204,6 +207,7 @@ expect:
         exited: true
         n: 3
       key: loop
+      from: {loop#2/__end__: 39}
   - - node_succeeded
     - loop~3
     - {commit: 42}

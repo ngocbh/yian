@@ -91,6 +91,13 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, ask]
+  - - pool_commit
+    - ask
+    - from: {}
+      key: ask#0/__start__
+      value:
+        n: 0
+        r: {hint: start, kind: more}
   - - node_expanded
     - ask
     - prune_ids: []
@@ -101,16 +108,9 @@ expect:
           kind: more
       - 0
   - [node_started, ask#0/__start__]
-  - - pool_commit
-    - ask#0/__start__
-    - value:
-        n: 0
-        r:
-          hint: start
-          kind: more
   - - node_succeeded
     - ask#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, ask#0/step]
   - - pool_commit
     - ask#0/step
@@ -130,10 +130,18 @@ expect:
         r:
           hint: again
           kind: more
+      from: {ask#0/step: 14}
   - - node_succeeded
     - ask#0/__end__
     - {commit: 17}
   - [node_started, ask~1]
+  - - pool_commit
+    - ask~1
+    - from: {ask#0/__end__: 17}
+      key: ask#1/__start__
+      value:
+        n: 1
+        r: {hint: again, kind: more}
   - - node_expanded
     - ask~1
     - prune_ids: [ask#0/__end__, ask#0/__start__, ask#0/step, ask~1]
@@ -144,16 +152,9 @@ expect:
           kind: more
       - 1
   - [node_started, ask#1/__start__]
-  - - pool_commit
-    - ask#1/__start__
-    - value:
-        n: 1
-        r:
-          hint: again
-          kind: more
   - - node_succeeded
     - ask#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, ask#1/step]
   - - pool_commit
     - ask#1/step
@@ -173,10 +174,18 @@ expect:
         r:
           hint: again
           kind: more
+      from: {ask#1/step: 25}
   - - node_succeeded
     - ask#1/__end__
     - {commit: 28}
   - [node_started, ask~2]
+  - - pool_commit
+    - ask~2
+    - from: {ask#1/__end__: 28}
+      key: ask#2/__start__
+      value:
+        n: 2
+        r: {hint: again, kind: more}
   - - node_expanded
     - ask~2
     - prune_ids: [ask#1/__end__, ask#1/__start__, ask#1/step, ask~2]
@@ -187,16 +196,9 @@ expect:
           kind: more
       - 2
   - [node_started, ask#2/__start__]
-  - - pool_commit
-    - ask#2/__start__
-    - value:
-        n: 2
-        r:
-          hint: again
-          kind: more
   - - node_succeeded
     - ask#2/__start__
-    - {commit: 33}
+    - commit: 31
   - [node_started, ask#2/step]
   - - pool_commit
     - ask#2/step
@@ -216,6 +218,7 @@ expect:
         r:
           answer: ok
           kind: done
+      from: {ask#2/step: 36}
   - - node_succeeded
     - ask#2/__end__
     - {commit: 39}
@@ -228,6 +231,7 @@ expect:
           answer: ok
           kind: done
       key: ask
+      from: {ask#2/__end__: 39}
   - - node_succeeded
     - ask~3
     - {commit: 42}

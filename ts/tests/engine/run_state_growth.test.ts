@@ -158,9 +158,11 @@ import {
   FailingLog,
   fragment,
   fragmentBuilder,
+  commitExpansion,
   fragmentIds,
   initializedSpawner,
   parentFlow,
+  prepareGrowth,
   prepareOutput,
   reducerSnapshot,
   RUN_ID,
@@ -274,6 +276,7 @@ test("growth canonicalizes the seed and isolates the builder, record and observe
     (seed as { nested: { values: number[] } }).nested.values.push(99);
     return fragment(spawner.id);
   };
+  commitExpansion(log, state, "spawn", new Grow(originalSeed), fragmentBuilder);
   const before = snapshot(state);
   const beforeTopology = topologySnapshot(state);
 
@@ -311,7 +314,8 @@ test("growth canonicalizes the seed and isolates the builder, record and observe
   expect(state.inFlight.has("spawn")).toBe(false);
   expect(state.ready).toEqual(["spawn/child/start"]);
   expect(state.depth.get("spawn/child/end")).toBe(1);
-  expect(state.nextSequence).toBe(8);
+  // The child START's expansion commit, then the expansion.
+  expect(state.nextSequence).toBe(9);
 });
 
 test("growth rejects a cyclic seed before the builder", () => {
@@ -357,7 +361,8 @@ test("growth rejects an excessively nested seed before the builder", () => {
     return fragment("spawn");
   };
 
-  prepareExpanded(initializedSpawner().state, "spawn", new Grow(nested(limit + 2)), builder);
+  const spawned = initializedSpawner();
+  prepareGrowth(spawned.log, spawned.state, "spawn", new Grow(nested(limit + 2)), builder);
   expect(builderCalled).toBe(true);
 
   builderCalled = false;
@@ -480,12 +485,16 @@ test("growth accepts a disconnected inert redirect placeholder", () => {
     return built;
   };
 
+  commitExpansion(log, state, "spawn", new Grow({}), inertTargetBuilder);
+  const committed = snapshot(state);
   const prepared = prepareExpanded(state, "spawn", new Grow({}), inertTargetBuilder);
 
   expect(prepared.record).toBeInstanceOf(NodeExpandedRecord);
-  expectUnchanged(state, before);
+  expectUnchanged(state, committed);
+  expect(snapshot(state)).not.toEqual(before);
   expect(topologySnapshot(state)).toEqual(beforeTopology);
-  expect(log.nextSequence).toBe(7);
+  // The expansion commit for the child START is the only record written.
+  expect(log.nextSequence).toBe(8);
 });
 
 const END_EDGE = "'spawn/child/start->spawn/child/end'";
@@ -525,6 +534,7 @@ test.each([
 
 test("a growth append failure leaves the topology and every state coordinate unchanged", () => {
   const { state, log: prior } = initializedSpawner();
+  commitExpansion(prior, state, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
   const log = new FailingLog(RUN_ID, prior.records());
   const prepared = prepareExpanded(state, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
 
@@ -533,9 +543,10 @@ test("a growth append failure leaves the topology and every state coordinate unc
 });
 
 test("growth replay rejects a changed but valid builder digest", () => {
-  const { state: live } = initializedSpawner();
-  const prepared = prepareExpanded(live, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
+  const { state: live, log: liveLog } = initializedSpawner();
+  const prepared = prepareGrowth(liveLog, live, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
   const { state: replay, log: replayLog } = initializedSpawner();
+  commitExpansion(replayLog, replay, "spawn", new Grow({ value: "stable" }), fragmentBuilder);
   const recorded = (prepared.record as NodeExpandedRecord).topologyDigest;
   const rebuilt = expansionDigest(fragment("spawn", "changed"));
 
@@ -550,9 +561,10 @@ test("growth replay rejects a changed but valid builder digest", () => {
 });
 
 test("growth replay unwraps a fragment rejection to its original", () => {
-  const { state: live } = initializedSpawner();
-  const prepared = prepareExpanded(live, "spawn", new Grow({}), fragmentBuilder);
+  const { state: live, log: liveLog } = initializedSpawner();
+  const prepared = prepareGrowth(liveLog, live, "spawn", new Grow({}), fragmentBuilder);
   const { state: replay, log } = initializedSpawner();
+  commitExpansion(log, replay, "spawn", new Grow({}), fragmentBuilder);
   const cyclicBuilder: GrowBuilder = (spawner) => {
     const built = fragment(spawner.id);
     built.edges.push(new Edge("cycle-back", built.endId, built.startId, { ordering: true }));
@@ -575,8 +587,11 @@ test("live growth and its record replay produce equal state", () => {
   const { state: live, log: liveLog } = initializedSpawner();
   const { state: replay, log: replayLog } = initializedSpawner();
 
-  const livePrepared = prepareExpanded(live, "spawn", new Grow({ labels: ["a", "b"] }), fragmentBuilder);
+  const livePrepared = prepareGrowth(liveLog, live, "spawn", new Grow({ labels: ["a", "b"] }), fragmentBuilder);
   const liveObservers = commitPrepared(liveLog, live, livePrepared);
+  for (const record of liveLog.records().slice(replayLog.nextSequence, -1)) {
+    commitPrepared(replayLog, replay, prepareRecord(replay, record.record));
+  }
   const replayPrepared = prepareRecord(replay, livePrepared.record, { growBuilder: fragmentBuilder });
   const replayObservers = commitPrepared(replayLog, replay, replayPrepared);
 
@@ -624,7 +639,7 @@ test.each(["call", "map", "loop"])("actual buildGrow splices %s with FIFO order 
   state.depth.set("spawn", 2);
   const priorPool = state.pool.toWire();
 
-  const prepared = prepareExpanded(state, "spawn", grow, buildGrow);
+  const prepared = prepareGrowth(log, state, "spawn", grow, buildGrow);
   const observers = commitPrepared(log, state, prepared);
 
   const record = prepared.record as NodeExpandedRecord;
@@ -646,7 +661,7 @@ test("actual CALL growth allows an omitted optional defaulted child input", () =
   spawner.params = [];
   const { state, log } = initializedSpawner(parentFlow({ spawner }));
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), buildGrow));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}), buildGrow));
 
   const clonedStart = state.flow.nodes.get("spawn/__start__")!;
   expect(clonedStart.params!.map((param) => param.name)).toEqual(["optional"]);
@@ -666,7 +681,7 @@ test("a zero-field LOOP growth schedules its next driver after the body", () => 
   loop.params = [];
   const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
 
-  const expansion = prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow);
+  const expansion = prepareGrowth(log, state, "spawn", new Grow([{}, 0n]), buildGrow);
   commitPrepared(log, state, expansion);
   const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = fragmentIds(expansion);
 
@@ -679,7 +694,7 @@ test("a zero-field LOOP growth schedules its next driver after the body", () => 
 });
 
 test.each(["today", "now", "run_id"])("growth accepts the closed system ambient %s", (ambient) => {
-  const { state } = initializedSpawner();
+  const { state, log } = initializedSpawner();
   const systemReferenceBuilder: GrowBuilder = (spawner) => {
     const built = fragment(spawner.id);
     const end = EndNode.value(built.endId, { outputName: "value" });
@@ -689,7 +704,7 @@ test.each(["today", "now", "run_id"])("growth accepts the closed system ambient 
     return built;
   };
 
-  expect(prepareExpanded(state, "spawn", new Grow({}), systemReferenceBuilder).record).toBeInstanceOf(
+  expect(prepareGrowth(log, state, "spawn", new Grow({}), systemReferenceBuilder).record).toBeInstanceOf(
     NodeExpandedRecord,
   );
 });
@@ -1022,12 +1037,12 @@ test("a growth builder's non-Flow return is a raw host fault", () => {
 
 test("growth reference validation reads a Binding source", () => {
   // A valid wrapped reference reaches the same closed-reference scanner as raw text.
-  const { state } = initializedSpawner();
+  const { state, log } = initializedSpawner();
   const built = unknownReferenceFragment("spawn");
   const origin = new OriginRef("growth-reference");
   wiringOf(built, built.endId).set("value", new Binding(`\${${built.startId}.output}`, { origin }));
 
-  const prepared = prepareExpanded(state, "spawn", new Grow({}), () => built);
+  const prepared = prepareGrowth(log, state, "spawn", new Grow({}), () => built);
 
   const delta = (prepared._plan as { delta: { newNodeIds: readonly string[]; newEdgeIds: readonly string[] } }).delta;
   expect(delta.newNodeIds).toEqual([built.startId, built.endId]);
@@ -1143,7 +1158,7 @@ test("growth accepts a peak node count equal to the budget", () => {
   const newCount = fragment("spawn").nodes.size;
   state.runDefaults = { ...state.runDefaults, maxTotalNodes: state.flow.nodes.size + newCount };
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}, oldIds), fragmentBuilder));
 
   expect(oldIds.filter((nodeId) => state.flow.nodes.has(nodeId))).toEqual([]);
   expect(state.flow.nodes.has("spawn/child/start")).toBe(true);
@@ -1182,7 +1197,7 @@ test("growth stamps a positive reference depth on the boundary", () => {
   const { state, log } = initializedSpawner();
   state.depth.set("spawn", 7);
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}), fragmentBuilder));
 
   expect(state.depth.get("spawn/child/end")).toBe(8);
 });
@@ -1196,7 +1211,7 @@ test("growth prunes only the named settled dynamic overlay coordinates", () => {
   );
   const residueId = "old/child/residue";
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}, oldIds), fragmentBuilder));
 
   for (const nodeId of oldIds) {
     expect(state.flow.nodes.has(nodeId)).toBe(false);
@@ -1223,7 +1238,7 @@ test("growth preserves unrelated in-flight siblings and FIFO order", () => {
   commitPrepared(log, state, prepareNodeStarted(state, "side"));
   const sideStart = state.acceptedStarts.get("side");
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}), fragmentBuilder));
 
   expect([...state.inFlight]).toEqual(["side"]);
   expect(state.acceptedStarts).toEqual(new Map([["side", sideStart!]]));
@@ -1398,7 +1413,7 @@ test("an unsettled reader keeps a settled prune id it reads only through a templ
   };
   const { state, log, oldId, readerId } = setup();
 
-  const prepared = prepareExpanded(state, "spawn", new Grow({}, [oldId, readerId]), fragmentBuilder);
+  const prepared = prepareGrowth(log, state, "spawn", new Grow({}, [oldId, readerId]), fragmentBuilder);
   const observers = commitPrepared(log, state, prepared);
 
   expect(state.flow.nodes.has(oldId)).toBe(true);
@@ -1442,13 +1457,15 @@ test("a LOOP clone record uses the actual id, self-prunes and inherits depth zer
   const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
   state.depth.set("spawn", 2);
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow([{}, 0n]), buildGrow));
   const firstDynamic = [...state.flow.nodes.keys()].filter((nodeId) => !state.initialStaticIds.has(nodeId));
   expect(firstDynamic).toContain("spawn~1");
   expect(state.depth.get("spawn~1")).toBe(2);
   for (const nodeId of firstDynamic) {
     state.nodeState.set(nodeId, nodeId === "spawn~1" ? NodeState.UNKNOWN : NodeState.TAKEN);
   }
+  // The body settled by fiat, so its START's expansion commit is no longer waiting.
+  state.pendingCommits.clear();
   for (const edgeId of state.edgeState.keys()) {
     if (edgeId !== "start-spawn" && edgeId !== "spawn-end") state.edgeState.set(edgeId, NodeState.TAKEN);
   }
@@ -1459,7 +1476,7 @@ test("a LOOP clone record uses the actual id, self-prunes and inherits depth zer
   const clone = state.flow.nodes.get("spawn~1")!;
   const grow = await clone.run({});
   expect(grow.constructor).toBe(Grow);
-  const prepared = prepareExpanded(state, "spawn~1", grow as Grow, buildGrow);
+  const prepared = prepareGrowth(log, state, "spawn~1", grow as Grow, buildGrow);
 
   const record = prepared.record as NodeExpandedRecord;
   expect(record.spawnerId).toBe("spawn~1");
@@ -1478,6 +1495,7 @@ test("a LOOP clone record uses the actual id, self-prunes and inherits depth zer
 
 test("a growth commit does no builder or graph work after append", () => {
   const { state, log: prior } = initializedSpawner();
+  commitExpansion(prior, state, "spawn", new Grow({ nested: { items: ["stable"] } }), fragmentBuilder);
   const built = fragment("spawn");
   const builderSeeds: unknown[] = [];
   let builderCalls = 0;
@@ -1535,7 +1553,7 @@ test("growth records the spawner as the owner of its fragment", () => {
   const { state, log } = initializedSpawner();
   const staticIds = new Set(state.flow.nodes.keys());
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}), fragmentBuilder));
 
   const newIds = [...state.flow.nodes.keys()].filter((nodeId) => !staticIds.has(nodeId));
   expect(newIds.length).toBeGreaterThan(0);
@@ -1563,8 +1581,8 @@ function grownUnderRequested(sideState: NodeState): {
 }
 
 /** Prepare the growth of `spawn` that requests pruning `x/child/start`. */
-function pruneRequested(state: RunState): PreparedTransition {
-  return prepareExpanded(state, "spawn", new Grow({}, ["x/child/start"]), fragmentBuilder);
+function pruneRequested(state: RunState, log: MemoryRunLog): PreparedTransition {
+  return prepareGrowth(log, state, "spawn", new Grow({}, ["x/child/start"]), fragmentBuilder);
 }
 
 /**
@@ -1578,6 +1596,8 @@ function assertReplaysEqual(
   setup: () => { state: RunState; log: MemoryRunLog },
 ): void {
   const { state: replay, log: replayLog } = setup();
+  const record = prepared.record as NodeExpandedRecord;
+  commitExpansion(replayLog, replay, record.spawnerId, new Grow(record.seed, record.pruneIds), fragmentBuilder);
   const replayObservers = commitPrepared(
     replayLog,
     replay,
@@ -1609,7 +1629,7 @@ function assertRetired(state: RunState, ids: readonly string[]): void {
 test("pruning keeps a grown subtree with unsettled work", () => {
   const { state, log, grown, side } = grownUnderRequested(NodeState.UNKNOWN);
 
-  const prepared = pruneRequested(state);
+  const prepared = pruneRequested(state, log);
   const observers = commitPrepared(log, state, prepared);
 
   expect([...state.deferredPrune]).toEqual(["x/child/start"]);
@@ -1625,7 +1645,7 @@ test("pruning keeps a grown subtree with unsettled work", () => {
 test("pruning retires a grown subtree once settled", () => {
   const { state, log, grown, side } = grownUnderRequested(NodeState.TAKEN);
 
-  const prepared = pruneRequested(state);
+  const prepared = pruneRequested(state, log);
   const observers = commitPrepared(log, state, prepared);
 
   expect((prepared.record as NodeExpandedRecord).pruneIds).toEqual(["x/child/start"]);
@@ -1658,7 +1678,7 @@ test.each(["waiting", "ready", "in-flight"] as const)(
     };
     const { state, log, oldId } = setup();
 
-    const prepared = prepareExpanded(state, "spawn", new Grow({}, [oldId]), fragmentBuilder);
+    const prepared = prepareGrowth(log, state, "spawn", new Grow({}, [oldId]), fragmentBuilder);
     const observers = commitPrepared(log, state, prepared);
 
     expect((prepared.record as NodeExpandedRecord).pruneIds).toEqual([oldId]);
@@ -1691,8 +1711,8 @@ function sideChain(state: RunState): [string, string] {
 }
 
 /** Prepare the growth of `spawn` that requests pruning `a` and `b`. */
-function pruneSideChain(state: RunState): PreparedTransition {
-  return prepareExpanded(state, "spawn", new Grow({}, ["a", "b"]), fragmentBuilder);
+function pruneSideChain(state: RunState, log: MemoryRunLog): PreparedTransition {
+  return prepareGrowth(log, state, "spawn", new Grow({}, ["a", "b"]), fragmentBuilder);
 }
 
 test("growth keeps a settled prune id that kept work reads", () => {
@@ -1704,7 +1724,7 @@ test("growth keeps a settled prune id that kept work reads", () => {
   };
   const { state, log } = setup();
 
-  const prepared = pruneSideChain(state);
+  const prepared = pruneSideChain(state, log);
   const observers = commitPrepared(log, state, prepared);
 
   expect(["a", "b"].filter((nodeId) => !state.flow.nodes.has(nodeId))).toEqual([]);
@@ -1723,7 +1743,7 @@ test("growth retires a settled prune id the kept work doesn't read", () => {
   };
   const { state, log } = setup();
 
-  const prepared = pruneSideChain(state);
+  const prepared = pruneSideChain(state, log);
   const observers = commitPrepared(log, state, prepared);
 
   assertRetired(state, ["b"]);
@@ -1741,7 +1761,7 @@ test("a growth that retires a counted node keeps its interrupted-attempt count",
   };
   const { state, log, oldIds } = setup();
 
-  const prepared = prepareExpanded(state, "spawn", new Grow({}, oldIds), fragmentBuilder);
+  const prepared = prepareGrowth(log, state, "spawn", new Grow({}, oldIds), fragmentBuilder);
   const observers = commitPrepared(log, state, prepared);
 
   assertRetired(state, oldIds);

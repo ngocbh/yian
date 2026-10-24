@@ -87,26 +87,29 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, invoke]
+  - - pool_commit
+    - invoke
+    - from: {}
+      key: invoke/__start__
+      value: {}
+  - - pool_commit
+    - invoke
+    - from: {}
+      key: invoke#0/__start__
+      value: {maybe: null}
   - - node_expanded
     - invoke
     - prune_ids: []
       seed:
       - maybe: null
   - [node_started, invoke/__start__]
-  - - pool_commit
-    - invoke/__start__
-    - value: {}
   - - node_succeeded
     - invoke/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, invoke#0/__start__]
-  - - pool_commit
-    - invoke#0/__start__
-    - value:
-        maybe: null
   - - node_succeeded
     - invoke#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, invoke#0/leaf]
   - - node_failed
     - invoke#0/leaf

@@ -114,19 +114,20 @@ expect:
     - pick
     - handle: '#else'
   - [node_started, __call_0]
+  - - pool_commit
+    - __call_0
+    - from: {}
+      key: __call_0/__start__
+      value: {tag: draft}
   - - node_expanded
     - __call_0
     - prune_ids: []
       seed:
         tag: draft
   - [node_started, __call_0/__start__]
-  - - pool_commit
-    - __call_0/__start__
-    - value:
-        tag: draft
   - - node_succeeded
     - __call_0/__start__
-    - {commit: 13}
+    - commit: 11
   - [node_started, __call_0/fx]
   - - pool_commit
     - __call_0/fx
@@ -139,6 +140,7 @@ expect:
     - __call_0/__end__
     - value: draft
       key: __call_0
+      from: {__call_0/fx: 16}
   - - node_succeeded
     - __call_0/__end__
     - {commit: 19}

@@ -2130,10 +2130,10 @@ test.each(["success", "failure", "growth"])("historical outcomes keep the schema
     const result = await runFlow(loaded, {}, { log: path, learnable: true, numWorkers: 0, memory, env });
     expect(result.status).toBe(kind === "failure" ? "failed" : "succeeded");
     const lines = readFileSync(path, "utf8").split("\n").slice(0, -1);
-    // success: through work's NodeSucceeded; growth: through outer's NodeExpanded; failure: the
-    // whole log, ending with work's NodeFailed. The run start is RunStarted and four commits, and
-    // START's success its start, commit and success.
-    const wires = kind === "failure" ? lines : lines.slice(0, kind === "growth" ? 10 : 11);
+    // success: through work's NodeSucceeded; growth: through outer's NodeExpanded, after its child
+    // START's expansion commit; failure: the whole log, ending with work's NodeFailed. The run
+    // start is RunStarted and four commits, and START's success its start, commit and success.
+    const wires = kind === "failure" ? lines : lines.slice(0, 11);
     const last = wires.at(-1)!;
     expect(decodeRecord(last).kind).toBe({ success: "node_succeeded", failure: "node_failed", growth: "node_expanded" }[kind]);
 

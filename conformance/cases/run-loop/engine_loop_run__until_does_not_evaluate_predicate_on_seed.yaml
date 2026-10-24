@@ -93,6 +93,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, repeat]
+  - - pool_commit
+    - repeat
+    - from: {}
+      key: repeat#0/__start__
+      value: {n: 0, seen: null}
   - - node_expanded
     - repeat
     - prune_ids: []
@@ -101,14 +106,9 @@ expect:
         seen: null
       - 0
   - [node_started, repeat#0/__start__]
-  - - pool_commit
-    - repeat#0/__start__
-    - value:
-        n: 0
-        seen: null
   - - node_succeeded
     - repeat#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, repeat#0/bump]
   - - pool_commit
     - repeat#0/bump
@@ -124,10 +124,18 @@ expect:
     - value:
         n: 1
         seen: [a]
+      from: {repeat#0/bump: 14}
   - - node_succeeded
     - repeat#0/__end__
     - {commit: 17}
   - [node_started, repeat~1]
+  - - pool_commit
+    - repeat~1
+    - from: {repeat#0/__end__: 17}
+      key: repeat#1/__start__
+      value:
+        n: 1
+        seen: [a]
   - - node_expanded
     - repeat~1
     - prune_ids: [repeat#0/__end__, repeat#0/__start__, repeat#0/bump, repeat~1]
@@ -136,14 +144,9 @@ expect:
         seen: [a]
       - 1
   - [node_started, repeat#1/__start__]
-  - - pool_commit
-    - repeat#1/__start__
-    - value:
-        n: 1
-        seen: [a]
   - - node_succeeded
     - repeat#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, repeat#1/bump]
   - - pool_commit
     - repeat#1/bump
@@ -159,6 +162,7 @@ expect:
     - value:
         n: 2
         seen: [a, b]
+      from: {repeat#1/bump: 25}
   - - node_succeeded
     - repeat#1/__end__
     - {commit: 28}
@@ -169,6 +173,7 @@ expect:
         n: 2
         seen: [a, b]
       key: repeat
+      from: {repeat#1/__end__: 28}
   - - node_succeeded
     - repeat~2
     - {commit: 31}

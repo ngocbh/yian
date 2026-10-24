@@ -109,33 +109,35 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, outer]
+  - - pool_commit
+    - outer
+    - from: {}
+      key: outer/__start__
+      value: {v: 60}
   - - node_expanded
     - outer
     - prune_ids: []
       seed:
         v: 60
   - [node_started, outer/__start__]
-  - - pool_commit
-    - outer/__start__
-    - value:
-        v: 60
   - - node_succeeded
     - outer/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, outer/via]
+  - - pool_commit
+    - outer/via
+    - from: {outer/__start__: 9}
+      key: outer/via/__start__
+      value: {v: 60}
   - - node_expanded
     - outer/via
     - prune_ids: []
       seed:
         v: 60
   - [node_started, outer/via/__start__]
-  - - pool_commit
-    - outer/via/__start__
-    - value:
-        v: 60
   - - node_succeeded
     - outer/via/__start__
-    - {commit: 16}
+    - commit: 14
   - [node_started, outer/via/x]
   - - pool_commit
     - outer/via/x

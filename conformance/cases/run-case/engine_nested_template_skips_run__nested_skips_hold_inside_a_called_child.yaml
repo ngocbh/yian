@@ -80,19 +80,20 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, k]
+  - - pool_commit
+    - k
+    - from: {__start__: 6}
+      key: k/__start__
+      value: {approve: false}
   - - node_expanded
     - k
     - prune_ids: []
       seed:
         approve: false
   - [node_started, k/__start__]
-  - - pool_commit
-    - k/__start__
-    - value:
-        approve: false
   - - node_succeeded
     - k/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, k/gate]
   - - node_routed
     - k/gate
@@ -105,6 +106,7 @@ expect:
         r:
           b: null
       key: k
+      from: {}
   - - node_succeeded
     - k/__end__
     - {commit: 16}

@@ -74,19 +74,20 @@ expect:
     - probe
     - {commit: 12}
   - [node_started, echo]
+  - - pool_commit
+    - echo
+    - from: {mk: 9}
+      key: echo/__start__
+      value: {text: 'echo ${probe.output}'}
   - - node_expanded
     - echo
     - prune_ids: []
       seed:
         text: echo ${probe.output}
   - [node_started, echo/__start__]
-  - - pool_commit
-    - echo/__start__
-    - value:
-        text: echo ${probe.output}
   - - node_succeeded
     - echo/__start__
-    - {commit: 17}
+    - commit: 15
   - [node_started, echo/inner]
   - - pool_commit
     - echo/inner
@@ -99,6 +100,7 @@ expect:
     - echo/__end__
     - value: echo ${probe.output}
       key: echo
+      from: {echo/inner: 20}
   - - node_succeeded
     - echo/__end__
     - {commit: 23}

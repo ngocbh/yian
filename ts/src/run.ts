@@ -134,6 +134,7 @@ import {
   addInterruptedAttempts,
   commitInitialPool,
   commitPrepared,
+  type PreparedTransition,
   prepareRunResumed,
   prepareRunStarted,
   RunState,
@@ -1944,7 +1945,11 @@ function collectStaticNodes(graph: Flow, path: readonly string[], found: [string
 export function replayRunLog(
   flow: ComposedFlow,
   log: RunLog,
-  options: { apiKey?: string | null; headers?: Readonly<Record<string, string>> | null } = {},
+  options: {
+    apiKey?: string | null;
+    headers?: Readonly<Record<string, string>> | null;
+    onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
+  } = {},
 ): RunState {
   if (!(flow instanceof ComposedFlow)) throw new TypeError("replayRunLog expects a ComposedFlow");
   return replayCompiledRunLog(flow.compiled, log, { ...options, resultContract: childSignature(flow).output });
@@ -1972,9 +1977,10 @@ export function replayCompiledRunLog(
     apiKey?: string | null;
     headers?: Readonly<Record<string, string>> | null;
     resultContract?: OutputContract | null;
+    onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
   } = {},
 ): RunState {
-  const { apiKey = null, headers = null, resultContract = null } = options;
+  const { apiKey = null, headers = null, resultContract = null, onPrepared = null } = options;
   const sourceRunId = log.runId;
   const sourceSequence = log.nextSequence;
   if (typeof sourceRunId !== "string" || sourceRunId === "") {
@@ -2039,7 +2045,10 @@ export function replayCompiledRunLog(
     const replayed = resolveRuntimeMemoryLayout(privateFlow);
     checkRecordedMemoryTable(first.memories, first.memoryStacks, replayed.memories, replayed.stacks, "supplied flow");
   }
-  const state = replayRecords(new RunState(privateFlow, { resultContract }), canonical, { growBuilder: buildGrow });
+  const state = replayRecords(new RunState(privateFlow, { resultContract }), canonical, {
+    growBuilder: buildGrow,
+    onPrepared,
+  });
   if (log.runId !== sourceRunId || log.nextSequence !== sourceSequence) {
     throw new RangeError("run log changed while its historical prefix was replayed");
   }

@@ -39,10 +39,13 @@ import {
 import type { NodeStepRecord, OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
 import {
   commitPrepared,
+  expansionCommits,
   type GrowBuilder,
+  isDerivedCommit,
   NodeDataError,
   type PreparedTransition,
   prepareExpanded,
+  prepareExpansionCommit,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -51,9 +54,10 @@ import {
   preparePoolCommit,
   prepareRunStopped,
   RunState,
+  requireExpansionOutput,
   resolveFromPool,
 } from "./state.ts";
-import { captureBindings } from "./trace.ts";
+import { captureBindings, sourcePath } from "./trace.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -220,6 +224,11 @@ export class FlowEngine {
   readonly #steering: Steering | null;
   /** The error that ended the run, once one did; the first wins. */
   #failure: { readonly error: unknown } | null = null;
+  /**
+   * The pool names each derived node in flight read, to the seq of the `pool_commit` that wrote
+   * each: its commit's `from`. Taken when the node's outcome is committed.
+   */
+  readonly #reads = new Map<string, Map<string, number>>();
   #ran = false;
 
   /**
@@ -437,6 +446,8 @@ export class FlowEngine {
     if (!isExactly(evaluated, EvaluatedOutcome)) throw new TypeError("FlowEngine outcome must be an EvaluatedOutcome");
     const { state } = this;
     const { outcome } = evaluated;
+    const reads = this.#reads.get(nodeId) ?? new Map<string, number>();
+    this.#reads.delete(nodeId);
     const carriers: OutcomeCarriers = {
       evidence: evaluated.evidence,
       // A learnable state evaluated with binding capture on, so both captures are present.
@@ -445,10 +456,15 @@ export class FlowEngine {
     let prepared: PreparedTransition;
     if (outcome instanceof EvaluationFailure) {
       prepared = this.#prepareFailure(nodeId, outcome.failure, carriers);
+    } else if (outcome instanceof Output && state.pendingCommits.has(nodeId)) {
+      // A child START: its expansion committed its value, which its success names.
+      requireExpansionOutput(state, nodeId, outcome.value);
+      prepared = prepareNodeSucceeded(state, nodeId, carriers);
     } else if (outcome instanceof Output) {
       let commit: PreparedTransition;
       try {
-        commit = preparePoolCommit(state, nodeId, outcome.value, { commitAs: outcome.commitAs });
+        const from = isDerivedCommit(state, nodeId) ? reads : null;
+        commit = preparePoolCommit(state, nodeId, outcome.value, { commitAs: outcome.commitAs, from });
       } catch (error) {
         if (!(error instanceof NodeDataError)) throw error;
         const failure = this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers);
@@ -467,6 +483,11 @@ export class FlowEngine {
       }
     } else if (outcome instanceof Grow) {
       try {
+        // The child STARTs' values are written before the expansion that admits them: a crash
+        // between them leaves orphan commits, and the spawner reruns.
+        for (const [key, value] of expansionCommits(state, nodeId, outcome, this.growBuilder, carriers)) {
+          commitPrepared(this.log, state, prepareExpansionCommit(state, nodeId, key, value, reads));
+        }
         prepared = prepareExpanded(state, nodeId, outcome, this.growBuilder, carriers);
       } catch (error) {
         if (!(error instanceof GrowthRejected)) throw error;
@@ -524,12 +545,24 @@ export class FlowEngine {
     // else from the pool and the producer index (sources are pool_commit seqs), kept in memory with
     // the outcome and dropped after the commit.
     const derived = node.derived;
-    const sourceResolver: SourceResolver | null =
+    const resolver: SourceResolver | null =
       trace !== null
         ? (path) => trace.resolve(path)
         : derived
           ? (path) => resolveFromPool(path, state.pool, state.producers, state.runId!)
           : null;
+    // A derived node's commit names each pool name its binding read, in both modes alike.
+    let sourceResolver = resolver;
+    if (derived) {
+      const reads = new Map<string, number>();
+      this.#reads.set(nodeId, reads);
+      sourceResolver = (path) => {
+        const read = sourcePath(path, state.flow.startId, (name) => state.producers.has(name));
+        const seq = read === null ? undefined : state.producers.get(read.name);
+        if (seq !== undefined) reads.set(read!.name, seq);
+        return resolver!(path);
+      };
+    }
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its
     // signal die with the node instead of piling up on the long-lived run signal.
     const runSignal = this.#controller.signal;

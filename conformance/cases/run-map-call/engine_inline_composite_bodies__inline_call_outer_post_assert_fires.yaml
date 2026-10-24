@@ -55,17 +55,19 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, composite]
+  - - pool_commit
+    - composite
+    - from: {}
+      key: composite/__start__
+      value: {}
   - - node_expanded
     - composite
     - prune_ids: []
       seed: {}
   - [node_started, composite/__start__]
-  - - pool_commit
-    - composite/__start__
-    - value: {}
   - - node_succeeded
     - composite/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, composite/inner]
   - - pool_commit
     - composite/inner

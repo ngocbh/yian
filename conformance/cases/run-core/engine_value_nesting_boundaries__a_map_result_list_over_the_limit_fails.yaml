@@ -81,6 +81,21 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, m]
+  - - pool_commit
+    - m
+    - from: {}
+      key: m/__start__
+      value: {}
+  - - pool_commit
+    - m
+    - from: {}
+      key: m#0/__start__
+      value: {y: 1}
+  - - pool_commit
+    - m
+    - from: {}
+      key: m#1/__start__
+      value: {y: 2}
   - - node_expanded
     - m
     - prune_ids: []
@@ -88,28 +103,17 @@ expect:
       - y: 1
       - y: 2
   - [node_started, m/__start__]
-  - - pool_commit
-    - m/__start__
-    - value: {}
   - - node_succeeded
     - m/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, m#0/__start__]
-  - - pool_commit
-    - m#0/__start__
-    - value:
-        y: 1
   - - node_succeeded
     - m#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, m#1/__start__]
-  - - pool_commit
-    - m#1/__start__
-    - value:
-        y: 2
   - - node_succeeded
     - m#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, m#0/work]
   - - pool_commit
     - m#0/work
@@ -131,6 +135,7 @@ expect:
     - m#0/__end__
     - value:
       - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [1]
+      from: {m#0/work: 20}
   - - node_succeeded
     - m#0/__end__
     - {commit: 26}
@@ -139,6 +144,7 @@ expect:
     - m#1/__end__
     - value:
       - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [2]
+      from: {m#1/work: 23}
   - - node_succeeded
     - m#1/__end__
     - {commit: 29}

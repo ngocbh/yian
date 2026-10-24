@@ -95,19 +95,20 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, callee]
+  - - pool_commit
+    - callee
+    - from: {__start__: 6}
+      key: callee/__start__
+      value: {seed: 5}
   - - node_expanded
     - callee
     - prune_ids: []
       seed:
         seed: 5
   - [node_started, callee/__start__]
-  - - pool_commit
-    - callee/__start__
-    - value:
-        seed: 5
   - - node_succeeded
     - callee/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, callee/emit]
   - - pool_commit
     - callee/emit
@@ -122,6 +123,7 @@ expect:
     - value:
         n: 6
       key: callee
+      from: {callee/emit: 14}
   - - node_succeeded
     - callee/__end__
     - {commit: 17}

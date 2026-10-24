@@ -58,6 +58,21 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, each]
+  - - pool_commit
+    - each
+    - from: {}
+      key: each/__start__
+      value: {}
+  - - pool_commit
+    - each
+    - from: {}
+      key: each#0/__start__
+      value: {flag: true}
+  - - pool_commit
+    - each
+    - from: {}
+      key: each#1/__start__
+      value: {flag: false}
   - - node_expanded
     - each
     - prune_ids: []
@@ -65,28 +80,17 @@ expect:
       - flag: true
       - flag: false
   - [node_started, each/__start__]
-  - - pool_commit
-    - each/__start__
-    - value: {}
   - - node_succeeded
     - each/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, each#0/__start__]
-  - - pool_commit
-    - each#0/__start__
-    - value:
-        flag: true
   - - node_succeeded
     - each#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, each#1/__start__]
-  - - pool_commit
-    - each#1/__start__
-    - value:
-        flag: false
   - - node_succeeded
     - each#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, each#0/gate]
   - - node_routed
     - each#0/gate
@@ -103,7 +107,7 @@ expect:
     - each#0/mk
     - {commit: 24}
   - [node_started, each#1/__end__]
-  - [pool_commit, each#1/__end__]
+  - [pool_commit, each#1/__end__, {from: {}}]
   - - node_succeeded
     - each#1/__end__
     - {commit: 27}
@@ -111,6 +115,7 @@ expect:
   - - pool_commit
     - each#0/__end__
     - value: made
+      from: {each#0/mk: 24}
   - - node_succeeded
     - each#0/__end__
     - {commit: 30}
@@ -119,6 +124,7 @@ expect:
     - each/__end__
     - value: [made, null]
       key: each
+      from: {each#0/__end__: 30, each#1/__end__: 27}
   - - node_succeeded
     - each/__end__
     - {commit: 33}

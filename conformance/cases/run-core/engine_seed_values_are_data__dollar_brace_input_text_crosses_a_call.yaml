@@ -60,6 +60,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, echo]
+  - - pool_commit
+    - echo
+    - from: {__start__: 6}
+      key: echo/__start__
+      value: {text: '${input.text}'}
   - - node_expanded
     - echo
     - prune_ids: []
@@ -71,15 +76,11 @@ expect:
     - value: SECRET
   - - node_succeeded
     - probe
-    - {commit: 11}
+    - {commit: 12}
   - [node_started, echo/__start__]
-  - - pool_commit
-    - echo/__start__
-    - value:
-        text: ${input.text}
   - - node_succeeded
     - echo/__start__
-    - {commit: 14}
+    - commit: 9
   - [node_started, echo/inner]
   - - pool_commit
     - echo/inner
@@ -92,6 +93,7 @@ expect:
     - echo/__end__
     - value: ${input.text}
       key: echo
+      from: {echo/inner: 17}
   - - node_succeeded
     - echo/__end__
     - {commit: 20}

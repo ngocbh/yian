@@ -53,6 +53,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, loop]
+  - - pool_commit
+    - loop
+    - from: {}
+      key: loop#0/__start__
+      value: {acc: 0}
   - - node_expanded
     - loop
     - prune_ids: []
@@ -60,13 +65,9 @@ expect:
       - acc: 0
       - 0
   - [node_started, loop#0/__start__]
-  - - pool_commit
-    - loop#0/__start__
-    - value:
-        acc: 0
   - - node_succeeded
     - loop#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, loop#0/step]
   - - pool_commit
     - loop#0/step
@@ -79,10 +80,17 @@ expect:
     - loop#0/__end__
     - value:
         acc: [0]
+      from: {loop#0/step: 14}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 17}
   - [node_started, loop~1]
+  - - pool_commit
+    - loop~1
+    - from: {loop#0/__end__: 17}
+      key: loop#1/__start__
+      value:
+        acc: [0]
   - - node_expanded
     - loop~1
     - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
@@ -90,13 +98,9 @@ expect:
       - acc: [0]
       - 1
   - [node_started, loop#1/__start__]
-  - - pool_commit
-    - loop#1/__start__
-    - value:
-        acc: [0]
   - - node_succeeded
     - loop#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, loop#1/step]
   - - pool_commit
     - loop#1/step
@@ -111,6 +115,7 @@ expect:
     - value:
         acc:
         - [0]
+      from: {loop#1/step: 25}
   - - node_succeeded
     - loop#1/__end__
     - {commit: 28}
@@ -121,6 +126,7 @@ expect:
         acc:
         - [0]
       key: loop
+      from: {loop#1/__end__: 28}
   - - node_succeeded
     - loop~2
     - {commit: 31}

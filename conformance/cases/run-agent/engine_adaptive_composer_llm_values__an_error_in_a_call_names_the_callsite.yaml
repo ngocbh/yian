@@ -66,19 +66,20 @@ expect:
     - pick
     - {commit: 9}
   - [node_started, sub]
+  - - pool_commit
+    - sub
+    - from: {pick: 9}
+      key: sub/__start__
+      value: {p: nope}
   - - node_expanded
     - sub
     - prune_ids: []
       seed:
         p: nope
   - [node_started, sub/__start__]
-  - - pool_commit
-    - sub/__start__
-    - value:
-        p: nope
   - - node_succeeded
     - sub/__start__
-    - {commit: 14}
+    - commit: 12
   - [node_started, sub/ask__compose]
   - - node_failed
     - sub/ask__compose

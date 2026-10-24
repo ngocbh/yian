@@ -93,6 +93,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, repeat]
+  - - pool_commit
+    - repeat
+    - from: {__start__: 6}
+      key: repeat#0/__start__
+      value: {n: 0}
   - - node_expanded
     - repeat
     - prune_ids: []
@@ -100,13 +105,9 @@ expect:
       - n: 0
       - 0
   - [node_started, repeat#0/__start__]
-  - - pool_commit
-    - repeat#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - repeat#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, repeat#0/bump]
   - - pool_commit
     - repeat#0/bump
@@ -120,10 +121,16 @@ expect:
     - repeat#0/__end__
     - value:
         n: 1
+      from: {repeat#0/bump: 14}
   - - node_succeeded
     - repeat#0/__end__
     - {commit: 17}
   - [node_started, repeat~1]
+  - - pool_commit
+    - repeat~1
+    - from: {repeat#0/__end__: 17}
+      key: repeat#1/__start__
+      value: {n: 1}
   - - node_expanded
     - repeat~1
     - prune_ids: [repeat#0/__end__, repeat#0/__start__, repeat#0/bump, repeat~1]
@@ -131,13 +138,9 @@ expect:
       - n: 1
       - 1
   - [node_started, repeat#1/__start__]
-  - - pool_commit
-    - repeat#1/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - repeat#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, repeat#1/bump]
   - - pool_commit
     - repeat#1/bump
@@ -151,10 +154,16 @@ expect:
     - repeat#1/__end__
     - value:
         n: 2
+      from: {repeat#1/bump: 25}
   - - node_succeeded
     - repeat#1/__end__
     - {commit: 28}
   - [node_started, repeat~2]
+  - - pool_commit
+    - repeat~2
+    - from: {repeat#1/__end__: 28}
+      key: repeat#2/__start__
+      value: {n: 2}
   - - node_expanded
     - repeat~2
     - prune_ids: [repeat#1/__end__, repeat#1/__start__, repeat#1/bump, repeat~2]
@@ -162,13 +171,9 @@ expect:
       - n: 2
       - 2
   - [node_started, repeat#2/__start__]
-  - - pool_commit
-    - repeat#2/__start__
-    - value:
-        n: 2
   - - node_succeeded
     - repeat#2/__start__
-    - {commit: 33}
+    - commit: 31
   - [node_started, repeat#2/bump]
   - - pool_commit
     - repeat#2/bump
@@ -182,6 +187,7 @@ expect:
     - repeat#2/__end__
     - value:
         n: null
+      from: {repeat#2/bump: 36}
   - - node_succeeded
     - repeat#2/__end__
     - {commit: 39}
@@ -191,6 +197,7 @@ expect:
     - value:
         n: null
       key: repeat
+      from: {repeat#2/__end__: 39}
   - - node_succeeded
     - repeat~3
     - {commit: 42}

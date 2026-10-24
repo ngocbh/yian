@@ -147,6 +147,17 @@ expect:
           occurrence_path: []
           static_path: [__start__]
   - [node_started, outer]
+  - - pool_commit
+    - outer
+    - from: {__start__: 6}
+      key: outer/__start__
+      value:
+        payload:
+          rows:
+          - [a]
+          - [b, c]
+          title: unchanged
+        selected: true
   - - node_expanded
     - outer
     - forward_capture:
@@ -187,18 +198,9 @@ expect:
           title: unchanged
         selected: true
   - [node_started, outer/__start__]
-  - - pool_commit
-    - outer/__start__
-    - value:
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
-        selected: true
   - - node_succeeded
     - outer/__start__
-    - commit: 11
+    - commit: 9
       forward_capture:
         bound_inputs:
           payload:
@@ -242,7 +244,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 10
+              execution_seq: 11
               path: [selected]
               run_id: <id:1>
           kind: record
@@ -257,6 +259,17 @@ expect:
           static_path: [outer, gate]
       handle: chosen
   - [node_started, outer/chosen]
+  - - pool_commit
+    - outer/chosen
+    - from: {outer/__start__: 9}
+      key: outer/chosen/__start__
+      value:
+        local: child default
+        payload:
+          rows:
+          - [a]
+          - [b, c]
+          title: unchanged
   - - node_expanded
     - outer/chosen
     - forward_capture:
@@ -272,7 +285,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 10
+              execution_seq: 11
               path: [payload]
               run_id: <id:1>
           kind: record
@@ -293,18 +306,9 @@ expect:
           - [b, c]
           title: unchanged
   - [node_started, outer/chosen/__start__]
-  - - pool_commit
-    - outer/chosen/__start__
-    - value:
-        local: child default
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
   - - node_succeeded
     - outer/chosen/__start__
-    - commit: 18
+    - commit: 16
       forward_capture:
         bound_inputs:
           local: child default
@@ -351,6 +355,7 @@ expect:
           - [b, c]
           title: unchanged
       key: outer/chosen
+      from: {outer/chosen/__start__: 16}
   - - node_succeeded
     - outer/chosen/__end__
     - commit: 21
@@ -372,12 +377,12 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 17
+              execution_seq: 18
               path: [payload]
               run_id: <id:1>
           - kind: source
             source:
-              execution_seq: 17
+              execution_seq: 18
               path: [local]
               run_id: <id:1>
           kind: record
@@ -404,6 +409,7 @@ expect:
           - [b, c]
           title: unchanged
       key: outer
+      from: {outer/chosen: 21}
   - - node_succeeded
     - outer/__end__
     - commit: 24
@@ -500,7 +506,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 10
+            execution_seq: 11
             path: []
             run_id: <id:1>
         feedback:
@@ -538,7 +544,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 17
+            execution_seq: 18
             path: []
             run_id: <id:1>
         feedback:
@@ -556,7 +562,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 10
+          execution_seq: 11
           path: []
           run_id: <id:1>
       - attribution: []
@@ -615,7 +621,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 17
+          execution_seq: 18
           path: []
           run_id: <id:1>
       - attribution:

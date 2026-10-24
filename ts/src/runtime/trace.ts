@@ -42,6 +42,7 @@ import {
   sameOptional,
 } from "../nodes/contracts.ts";
 import { type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import type { VariablePool } from "../typesys/pool.ts";
 import {
   fieldOf,
   isList,
@@ -760,6 +761,34 @@ export function sourcePath(
   if (head === "input" && rest.length) return { name: startId, projection: rest };
   if (head === "system" && rest.length) return { name: `${SYSTEM_PREFIX}${rest[0]}`, projection: [] };
   return null;
+}
+
+/**
+ * Pair one `${path}` lookup's value and presence in `pool` with the source `sourceOf` names for
+ * the pool name it reads (`sourcePath`), projected to the lookup's field path; a miss, or a field
+ * the value lacks, is absent.
+ *
+ * @throws ExpressionError when a dotted segment of `path` is empty.
+ * @throws whatever `sourceOf` throws.
+ */
+export function resolvePoolPath(
+  path: string,
+  pool: VariablePool,
+  sourceOf: (name: string) => SourceRef | null,
+): ResolvedValue {
+  const read = sourcePath(path, pool.startId, (name) => pool.store.has(name));
+  if (read === null) return new ResolvedValue(null, false);
+  const { name, projection } = read;
+  const typed = name.startsWith(SYSTEM_PREFIX) ? pool.system.get(name.slice(SYSTEM_PREFIX.length)) : pool.store.get(name);
+  if (typed === undefined) return new ResolvedValue(null, false);
+  let value = typed.toObject();
+  for (const part of projection) {
+    const [present, next] = fieldOf(value, part);
+    if (!present) return new ResolvedValue(null, false);
+    value = next;
+  }
+  const source = sourceOf(name);
+  return new ResolvedValue(value, true, source === null ? null : new SourceRef(source.runId, source.executionSeq, projection));
 }
 
 /** The options of `prepareTrace`. */

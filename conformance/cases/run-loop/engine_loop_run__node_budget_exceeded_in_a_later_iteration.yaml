@@ -104,6 +104,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, loop]
+  - - pool_commit
+    - loop
+    - from: {}
+      key: loop#0/__start__
+      value: {exited: false, n: 0}
   - - node_expanded
     - loop
     - prune_ids: []
@@ -112,14 +117,9 @@ expect:
         n: 0
       - 0
   - [node_started, loop#0/__start__]
-  - - pool_commit
-    - loop#0/__start__
-    - value:
-        exited: false
-        n: 0
   - - node_succeeded
     - loop#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, loop#0/step]
   - - pool_commit
     - loop#0/step
@@ -135,6 +135,7 @@ expect:
     - value:
         exited: false
         n: 1
+      from: {loop#0/step: 14}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 17}

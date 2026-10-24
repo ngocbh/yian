@@ -98,6 +98,7 @@ expect:
     - value:
         exited: true
         n: 0
+      from: {}
   - - node_succeeded
     - loop
     - {commit: 9}

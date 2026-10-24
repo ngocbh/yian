@@ -105,6 +105,26 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, map_it]
+  - - pool_commit
+    - map_it
+    - from: {__start__: 6}
+      key: map_it/__start__
+      value: {}
+  - - pool_commit
+    - map_it
+    - from: {__start__: 6}
+      key: map_it#0/__start__
+      value: {n: 1}
+  - - pool_commit
+    - map_it
+    - from: {__start__: 6}
+      key: map_it#1/__start__
+      value: {n: -1}
+  - - pool_commit
+    - map_it
+    - from: {__start__: 6}
+      key: map_it#2/__start__
+      value: {n: 3}
   - - node_expanded
     - map_it
     - prune_ids: []
@@ -113,20 +133,13 @@ expect:
       - n: -1
       - n: 3
   - [node_started, map_it/__start__]
-  - - pool_commit
-    - map_it/__start__
-    - value: {}
   - - node_succeeded
     - map_it/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, map_it#0/__start__]
-  - - pool_commit
-    - map_it#0/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - map_it#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, map_it#1/__start__]
   - - node_failed
     - map_it#1/__start__

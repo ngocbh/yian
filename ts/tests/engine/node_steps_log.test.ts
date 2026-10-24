@@ -78,7 +78,6 @@ import {
 import {
   commitPrepared,
   PreparedTransition,
-  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -103,6 +102,7 @@ import {
   parentFlow,
   prepareOutput,
   routeInFlight,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
@@ -424,7 +424,7 @@ test("an expansion deletes the spawner's steps and starts", () => {
   commitPrepared(log, state, prepareNodeStep(state, "spawn", FAILED));
   expect(state.nodeStarts).toEqual(new Map([["spawn", 1]]));
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}), fragmentBuilder));
 
   expect(state.nodeSteps).toEqual(new Map());
   expect(state.nodeStarts).toEqual(new Map());
@@ -443,7 +443,7 @@ test("LOOP body steps go at the outcome and stay gone after the prune", async ()
   });
   loop.params = [];
   const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
-  const expansion = prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow);
+  const expansion = prepareGrowth(log, state, "spawn", new Grow([{}, 0n]), buildGrow);
   commitPrepared(log, state, expansion);
   const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = fragmentIds(expansion);
 
@@ -459,7 +459,7 @@ test("LOOP body steps go at the outcome and stay gone after the prune", async ()
   commitPrepared(log, state, prepareNodeStarted(state, "spawn~1"));
   commitPrepared(log, state, prepareNodeStep(state, "spawn~1", FAILED));
   const grow = await state.flow.nodes.get("spawn~1")!.run({});
-  const prepared = prepareExpanded(state, "spawn~1", grow as Grow, buildGrow);
+  const prepared = prepareGrowth(log, state, "spawn~1", grow as Grow, buildGrow);
   expect((prepared.record as NodeExpandedRecord).pruneIds).toContain(bodyStart);
   commitPrepared(log, state, prepared);
 

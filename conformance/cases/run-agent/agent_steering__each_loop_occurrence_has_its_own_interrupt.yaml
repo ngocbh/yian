@@ -112,6 +112,11 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, loop]
+  - - pool_commit
+    - loop
+    - from: {__start__: 6}
+      key: loop#0/__start__
+      value: {transcript: s}
   - - node_expanded
     - loop
     - prune_ids: []
@@ -119,13 +124,9 @@ expect:
       - transcript: s
       - 0
   - [node_started, loop#0/__start__]
-  - - pool_commit
-    - loop#0/__start__
-    - value:
-        transcript: s
   - - node_succeeded
     - loop#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, loop#0/reply]
   - - node_step
     - loop#0/reply
@@ -162,10 +163,16 @@ expect:
     - loop#0/__end__
     - value:
         transcript: s|partial
+      from: {loop#0/__start__: 9, loop#0/reply: 16}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 19}
   - [node_started, loop~1]
+  - - pool_commit
+    - loop~1
+    - from: {loop#0/__end__: 19}
+      key: loop#1/__start__
+      value: {transcript: s|partial}
   - - node_expanded
     - loop~1
     - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/reply, loop~1]
@@ -173,13 +180,9 @@ expect:
       - transcript: s|partial
       - 1
   - [node_started, loop#1/__start__]
-  - - pool_commit
-    - loop#1/__start__
-    - value:
-        transcript: s|partial
   - - node_succeeded
     - loop#1/__start__
-    - {commit: 24}
+    - commit: 22
   - [node_started, loop#1/reply]
   - - node_step
     - loop#1/reply
@@ -208,6 +211,7 @@ expect:
     - loop#1/__end__
     - value:
         transcript: s|partial|turn2
+      from: {loop#1/__start__: 22, loop#1/reply: 28}
   - - node_succeeded
     - loop#1/__end__
     - {commit: 31}
@@ -217,6 +221,7 @@ expect:
     - value:
         transcript: s|partial|turn2
       key: loop
+      from: {loop#1/__end__: 31}
   - - node_succeeded
     - loop~2
     - {commit: 34}

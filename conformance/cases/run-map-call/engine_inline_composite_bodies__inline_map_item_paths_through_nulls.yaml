@@ -85,6 +85,31 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, each]
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each/__start__
+      value: {}
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#0/__start__
+      value: {name: null, row: null}
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#1/__start__
+      value:
+        name: null
+        row: {detail: null}
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#2/__start__
+      value:
+        name: ready
+        row:
+          detail: {name: ready}
   - - node_expanded
     - each
     - prune_ids: []
@@ -99,42 +124,21 @@ expect:
           detail:
             name: ready
   - [node_started, each/__start__]
-  - - pool_commit
-    - each/__start__
-    - value: {}
   - - node_succeeded
     - each/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, each#0/__start__]
-  - - pool_commit
-    - each#0/__start__
-    - value:
-        name: null
-        row: null
   - - node_succeeded
     - each#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, each#1/__start__]
-  - - pool_commit
-    - each#1/__start__
-    - value:
-        name: null
-        row:
-          detail: null
   - - node_succeeded
     - each#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, each#2/__start__]
-  - - pool_commit
-    - each#2/__start__
-    - value:
-        name: ready
-        row:
-          detail:
-            name: ready
   - - node_succeeded
     - each#2/__start__
-    - {commit: 20}
+    - commit: 12
   - [node_started, each#0/collect]
   - - pool_commit
     - each#0/collect
@@ -171,6 +175,7 @@ expect:
     - value:
         name: null
         row: null
+      from: {each#0/collect: 23}
   - - node_succeeded
     - each#0/__end__
     - {commit: 32}
@@ -181,6 +186,7 @@ expect:
         name: null
         row:
           detail: null
+      from: {each#1/collect: 26}
   - - node_succeeded
     - each#1/__end__
     - {commit: 35}
@@ -192,6 +198,7 @@ expect:
         row:
           detail:
             name: ready
+      from: {each#2/collect: 29}
   - - node_succeeded
     - each#2/__end__
     - {commit: 38}
@@ -209,6 +216,7 @@ expect:
           detail:
             name: ready
       key: each
+      from: {each#0/__end__: 32, each#1/__end__: 35, each#2/__end__: 38}
   - - node_succeeded
     - each/__end__
     - {commit: 41}

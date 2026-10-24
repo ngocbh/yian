@@ -85,6 +85,12 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, picked]
+  - - pool_commit
+    - picked
+    - from: {__start__: 6}
+      key: picked/__start__
+      value:
+        decision: {action: sell, price: 1.5, qty: 2}
   - - node_expanded
     - picked
     - prune_ids: []
@@ -94,16 +100,9 @@ expect:
           price: 1.5
           qty: 2
   - [node_started, picked/__start__]
-  - - pool_commit
-    - picked/__start__
-    - value:
-        decision:
-          action: sell
-          price: 1.5
-          qty: 2
   - - node_succeeded
     - picked/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, picked/decide]
   - - pool_commit
     - picked/decide

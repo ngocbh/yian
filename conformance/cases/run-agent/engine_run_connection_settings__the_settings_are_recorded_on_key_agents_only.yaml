@@ -172,6 +172,11 @@ expect:
     - agent
     - {commit: 10}
   - [node_started, child]
+  - - pool_commit
+    - child
+    - from: {}
+      key: child/__start__
+      value: {}
   - - node_expanded
     - child
     - prune_ids: []
@@ -198,14 +203,11 @@ expect:
     - value: ok
   - - node_succeeded
     - other
-    - {commit: 16}
+    - {commit: 17}
   - [node_started, child/__start__]
-  - - pool_commit
-    - child/__start__
-    - value: {}
   - - node_succeeded
     - child/__start__
-    - {commit: 19}
+    - commit: 13
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -241,6 +243,7 @@ expect:
     - child/__end__
     - value: ok
       key: child
+      from: {child/nested: 26}
   - - node_succeeded
     - child/__end__
     - {commit: 29}

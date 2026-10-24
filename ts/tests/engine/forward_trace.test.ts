@@ -349,7 +349,6 @@ import {
   commitPrepared,
   type GrowBuilder,
   PreparedTransition,
-  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -391,6 +390,7 @@ import {
   terminalSkipRouteFlow,
   textReply,
   traceSnapshot,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
@@ -2395,7 +2395,7 @@ function preparedScopedOutcome(
     const failure = new Failure({ code: "node.execute", message: "failed", nodeId: node.id });
     prepared = prepareNodeFailed(state, failure, carriers);
   } else {
-    prepared = prepareExpanded(state, node.id, new Grow({}), fragmentBuilder, carriers);
+    prepared = prepareGrowth(log, state, node.id, new Grow({}), fragmentBuilder, carriers);
   }
   return { node, state, log, prepared, original };
 }
@@ -3962,7 +3962,7 @@ test("seed connections wait for the append and survive an unfinished start's ret
   );
   commitPrepared(log, state, prepareNodeStarted(state, "spawn"));
   const evaluated = await evaluateStarted(state, "spawn");
-  const prepared = prepareExpanded(state, "spawn", evaluated.outcome as Grow, built.growBuilder, {
+  const prepared = prepareGrowth(log, state, "spawn", evaluated.outcome as Grow, built.growBuilder, {
     forwardCapture: joinedCapture(evaluated),
   });
   const before = [traceSnapshot(state.trace!), [...state.flow.nodes.keys()], state.nextSequence];

@@ -83,6 +83,12 @@ expect:
           occurrence_path: []
           static_path: [__start__]
   - [node_started, outer]
+  - - pool_commit
+    - outer
+    - from: {__start__: 6}
+      key: outer/__start__
+      value:
+        values: [v, v, v]
   - - node_expanded
     - outer
     - forward_capture:
@@ -124,13 +130,9 @@ expect:
       seed:
         values: [v, v, v]
   - [node_started, outer/__start__]
-  - - pool_commit
-    - outer/__start__
-    - value:
-        values: [v, v, v]
   - - node_succeeded
     - outer/__start__
-    - commit: 11
+    - commit: 9
       forward_capture:
         bound_inputs:
           values: [v, v, v]
@@ -157,6 +159,7 @@ expect:
     - outer/__end__
     - value: [v, v, v]
       key: outer
+      from: {outer/__start__: 9}
   - - node_succeeded
     - outer/__end__
     - commit: 14
@@ -172,7 +175,7 @@ expect:
           children:
           - kind: source
             source:
-              execution_seq: 10
+              execution_seq: 11
               path: [values]
               run_id: r1
           kind: record
@@ -228,7 +231,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 10
+            execution_seq: 11
             path: []
             run_id: r1
         - contribution_index: 1
@@ -236,7 +239,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 10
+            execution_seq: 11
             path: []
             run_id: r1
         - contribution_index: 2
@@ -244,7 +247,7 @@ expect:
           message_index: 0
           parents: [0]
           sender:
-            execution_seq: 10
+            execution_seq: 11
             path: []
             run_id: r1
         feedback:
@@ -290,7 +293,7 @@ expect:
           self_feedback: []
           variable_feedback: {}
         source:
-          execution_seq: 10
+          execution_seq: 11
           path: []
           run_id: r1
       - attribution:

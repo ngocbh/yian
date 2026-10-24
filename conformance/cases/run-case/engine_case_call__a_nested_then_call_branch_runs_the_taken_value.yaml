@@ -94,19 +94,20 @@ expect:
     - gate
     - handle: __call_1
   - [node_started, __call_0]
+  - - pool_commit
+    - __call_0
+    - from: {}
+      key: __call_0/__start__
+      value: {stance: pro}
   - - node_expanded
     - __call_0
     - prune_ids: []
       seed:
         stance: pro
   - [node_started, __call_0/__start__]
-  - - pool_commit
-    - __call_0/__start__
-    - value:
-        stance: pro
   - - node_succeeded
     - __call_0/__start__
-    - {commit: 13}
+    - commit: 11
   - [node_started, __call_0/x]
   - - pool_commit
     - __call_0/x
@@ -119,23 +120,25 @@ expect:
     - __call_0/__end__
     - value: took:pro
       key: __call_0
+      from: {__call_0/x: 16}
   - - node_succeeded
     - __call_0/__end__
     - {commit: 19}
   - [node_started, __call_1]
+  - - pool_commit
+    - __call_1
+    - from: {__call_0: 19}
+      key: __call_1/__start__
+      value: {stance: took:pro}
   - - node_expanded
     - __call_1
     - prune_ids: []
       seed:
         stance: took:pro
   - [node_started, __call_1/__start__]
-  - - pool_commit
-    - __call_1/__start__
-    - value:
-        stance: took:pro
   - - node_succeeded
     - __call_1/__start__
-    - {commit: 24}
+    - commit: 22
   - [node_started, __call_1/x]
   - - pool_commit
     - __call_1/x
@@ -148,6 +151,7 @@ expect:
     - __call_1/__end__
     - value: took:took:pro
       key: __call_1
+      from: {__call_1/x: 27}
   - - node_succeeded
     - __call_1/__end__
     - {commit: 30}

@@ -109,19 +109,21 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, __call_0]
+  - - pool_commit
+    - __call_0
+    - from: {__start__: 6}
+      key: __call_0/__start__
+      value:
+        xs: [A, B]
   - - node_expanded
     - __call_0
     - prune_ids: []
       seed:
         xs: [A, B]
   - [node_started, __call_0/__start__]
-  - - pool_commit
-    - __call_0/__start__
-    - value:
-        xs: [A, B]
   - - node_succeeded
     - __call_0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, __call_0/x]
   - - pool_commit
     - __call_0/x
@@ -134,10 +136,26 @@ expect:
     - __call_0/__end__
     - value: [A, B]
       key: __call_0
+      from: {__call_0/x: 14}
   - - node_succeeded
     - __call_0/__end__
     - {commit: 17}
   - [node_started, each]
+  - - pool_commit
+    - each
+    - from: {__call_0: 17}
+      key: each/__start__
+      value: {}
+  - - pool_commit
+    - each
+    - from: {__call_0: 17}
+      key: each#0/__start__
+      value: {topic: A}
+  - - pool_commit
+    - each
+    - from: {__call_0: 17}
+      key: each#1/__start__
+      value: {topic: B}
   - - node_expanded
     - each
     - prune_ids: []
@@ -145,28 +163,17 @@ expect:
       - topic: A
       - topic: B
   - [node_started, each/__start__]
-  - - pool_commit
-    - each/__start__
-    - value: {}
   - - node_succeeded
     - each/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, each#0/__start__]
-  - - pool_commit
-    - each#0/__start__
-    - value:
-        topic: A
   - - node_succeeded
     - each#0/__start__
-    - {commit: 25}
+    - commit: 21
   - [node_started, each#1/__start__]
-  - - pool_commit
-    - each#1/__start__
-    - value:
-        topic: B
   - - node_succeeded
     - each#1/__start__
-    - {commit: 28}
+    - commit: 22
   - [node_started, each#0/x]
   - - pool_commit
     - each#0/x
@@ -185,6 +192,7 @@ expect:
   - - pool_commit
     - each#0/__end__
     - value: A
+      from: {each#0/x: 31}
   - - node_succeeded
     - each#0/__end__
     - {commit: 37}
@@ -192,6 +200,7 @@ expect:
   - - pool_commit
     - each#1/__end__
     - value: B
+      from: {each#1/x: 34}
   - - node_succeeded
     - each#1/__end__
     - {commit: 40}
@@ -200,6 +209,7 @@ expect:
     - each/__end__
     - value: [A, B]
       key: each
+      from: {each#0/__end__: 37, each#1/__end__: 40}
   - - node_succeeded
     - each/__end__
     - {commit: 43}

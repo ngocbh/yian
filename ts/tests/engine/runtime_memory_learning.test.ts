@@ -160,7 +160,6 @@ import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import {
   commitInitialPool,
   commitPrepared,
-  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -189,6 +188,7 @@ import {
   stacks,
   startTraceNode,
   terminalSkipRouteFlow,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 import { FakeMemory } from "./memory_fakes.ts";
 
@@ -554,7 +554,7 @@ test.each([
     route: () => prepareNodeRouted(state, node.id, "go", carriers),
     failure: () =>
       prepareNodeFailed(state, new Failure({ code: "node.execute", message: "Failed.", nodeId: node.id }), carriers),
-    growth: () => prepareExpanded(state, node.id, new Grow({}), fragmentBuilder, carriers),
+    growth: () => prepareGrowth(log, state, node.id, new Grow({}), fragmentBuilder, carriers),
   }[kind]();
 
   commitPrepared(log, state, prepared);
@@ -782,7 +782,7 @@ test("an expanded MAP occurrence projects and replays from the live node scope",
   commitPrepared(
     log,
     state,
-    prepareExpanded(state, spawner.id, new Grow([{}]), buildGrow, {
+    prepareGrowth(log, state, spawner.id, new Grow([{}]), buildGrow, {
       forwardCapture: forwardCapture(spawner, { over: [{}] }),
     }),
   );

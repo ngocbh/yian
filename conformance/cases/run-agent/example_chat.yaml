@@ -218,10 +218,10 @@ expect:
     - [pool_commit, __start__, {value: {opening: ""}}]
     - [node_succeeded, __start__, {commit: 6}]
     - [node_started, chat]
+    - [pool_commit, chat, {from: {__start__: 6}, key: chat#0/__start__, value: {exited: false, transcript: ''}}]
     - [node_expanded, chat, {seed: [{transcript: "", exited: false}, 0], prune_ids: []}]
     - [node_started, "chat#0/__start__"]
-    - [pool_commit, "chat#0/__start__", {value: {transcript: "", exited: false}}]
-    - [node_succeeded, chat#0/__start__, {commit: 11}]
+    - [node_succeeded, "chat#0/__start__", {commit: 9}]
     - [node_started, "chat#0/ask"]
     - [pool_commit, "chat#0/ask", {value: Hi}]
     - [node_succeeded, chat#0/ask, {commit: 14}]
@@ -231,10 +231,10 @@ expect:
     # The inline `call(...)` is the generated CALL node `__call_0` (docs/syntax.md, Inline
     # `call(...)`); its child commits to it.
     - [node_started, "chat#0/__call_0"]
+    - [pool_commit, chat#0/__call_0, {from: {chat#0/__start__: 9, chat#0/ask: 14}, key: chat#0/__call_0/__start__, value: {message: Hi, transcript: ''}}]
     - [node_expanded, "chat#0/__call_0", {seed: {transcript: "", message: Hi}, prune_ids: []}]
     - [node_started, "chat#0/__call_0/__start__"]
-    - [pool_commit, "chat#0/__call_0/__start__", {value: {transcript: "", message: Hi}}]
-    - [node_succeeded, chat#0/__call_0/__start__, {commit: 21}]
+    - [node_succeeded, "chat#0/__call_0/__start__", {commit: 19}]
     - [node_started, "chat#0/__call_0/reply"]
     - [node_step, chat#0/__call_0/reply, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: "Hello! How can I help?", type: text}], role: assistant}, purpose: chat, request_sha256: e965285560ee73522c9ec1980d4ae0d0b8e0fa1108f514a7147eed671fcca09f, response_id: null, usage: null}}]
     - [pool_commit, "chat#0/__call_0/reply", {value: "Hello! How can I help?"}]
@@ -253,6 +253,7 @@ expect:
           transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
           exited: false
         key: chat#0/__call_0
+        from: {chat#0/__call_0/fold: 28}
     - [node_succeeded, chat#0/__call_0/__end__, {commit: 31}]
     - [node_started, "chat#0/__end__"]
     - - pool_commit
@@ -260,10 +261,12 @@ expect:
       - value:
           transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
           exited: false
+        from: {chat#0/__call_0: 31}
     - [node_succeeded, chat#0/__end__, {commit: 34}]
     # `docs/` doesn't give the LOOP driver ids (`<loop>~k`), the seed `[carried, k]` or
     # `prune_ids`; see src/yian/nodes/loop/node.py.
     - [node_started, chat~1]
+    - [pool_commit, chat~1, {from: {chat#0/__end__: 34}, key: chat#1/__start__, value: {exited: false, transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"}}]
     - - node_expanded
       - chat~1
       - seed:
@@ -278,12 +281,9 @@ expect:
           - "chat#0/route"
           - chat~1
     - [node_started, "chat#1/__start__"]
-    - - pool_commit
+    - - node_succeeded
       - "chat#1/__start__"
-      - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
-          exited: false
-    - [node_succeeded, chat#1/__start__, {commit: 39}]
+      - commit: 37
     - [node_started, "chat#1/ask"]
     - [pool_commit, "chat#1/ask", {value: /exit}]
     - [node_succeeded, chat#1/ask, {commit: 42}]
@@ -303,6 +303,7 @@ expect:
       - value:
           transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
           exited: true
+        from: {chat#1/exited: 47}
     - [node_succeeded, chat#1/__end__, {commit: 50}]
     - [node_started, chat~2]
     # The stopping driver commits the carried record under the loop's own id.
@@ -312,6 +313,7 @@ expect:
           transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
           exited: true
         key: chat
+        from: {chat#1/__end__: 50}
     - [node_succeeded, chat~2, {commit: 53}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"}]

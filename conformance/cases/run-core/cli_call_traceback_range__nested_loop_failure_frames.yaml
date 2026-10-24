@@ -71,18 +71,25 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, outer]
+  - - pool_commit
+    - outer
+    - from: {}
+      key: outer/__start__
+      value: {}
   - - node_expanded
     - outer
     - prune_ids: []
       seed: {}
   - [node_started, outer/__start__]
-  - - pool_commit
-    - outer/__start__
-    - value: {}
   - - node_succeeded
     - outer/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, outer/repeat]
+  - - pool_commit
+    - outer/repeat
+    - from: {}
+      key: outer/repeat#0/__start__
+      value: {n: 0}
   - - node_expanded
     - outer/repeat
     - prune_ids: []
@@ -90,13 +97,9 @@ expect:
       - n: 0
       - 0
   - [node_started, outer/repeat#0/__start__]
-  - - pool_commit
-    - outer/repeat#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - outer/repeat#0/__start__
-    - {commit: 16}
+    - commit: 14
   - [node_started, outer/repeat#0/step]
   - - pool_commit
     - outer/repeat#0/step
@@ -110,6 +113,7 @@ expect:
     - outer/repeat#0/__end__
     - value:
         n: 0
+      from: {outer/repeat#0/step: 19}
   - - node_succeeded
     - outer/repeat#0/__end__
     - {commit: 22}

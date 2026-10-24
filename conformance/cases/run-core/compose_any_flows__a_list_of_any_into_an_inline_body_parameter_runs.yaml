@@ -66,19 +66,21 @@ expect:
     - mk
     - {commit: 9}
   - [node_started, c]
+  - - pool_commit
+    - c
+    - from: {mk: 9}
+      key: c/__start__
+      value:
+        xs: [1, two]
   - - node_expanded
     - c
     - prune_ids: []
       seed:
         xs: [1, two]
   - [node_started, c/__start__]
-  - - pool_commit
-    - c/__start__
-    - value:
-        xs: [1, two]
   - - node_succeeded
     - c/__start__
-    - {commit: 14}
+    - commit: 12
   - [node_started, c/inner]
   - - pool_commit
     - c/inner
@@ -91,6 +93,7 @@ expect:
     - c/__end__
     - value: [1, two]
       key: c
+      from: {c/inner: 17}
   - - node_succeeded
     - c/__end__
     - {commit: 20}

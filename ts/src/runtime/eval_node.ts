@@ -1106,7 +1106,7 @@ function bindFrom(
  * `BindingError` as `failure` and, as the evaluator keeps it, the capture of the routes collected
  * before it failed, with no bound inputs.
  *
- * @throws whatever `resolve` throws.
+ * @throws whatever `resolve` or a per-item node's `forward` throws besides a `BindingError`.
  */
 export function rebind(
   node: Node,
@@ -1119,14 +1119,7 @@ export function rebind(
   const collector = new BindingCollector();
   try {
     const { inputs, caps } = bindFrom(node, flow, sources, resolve, wiringOverride, collector, options.reserved ?? null);
-    if (node.bindsPerItem) {
-      try {
-        node.forward(inputs, caps);
-      } catch (error) {
-        // Any other error failed the node after its items bound, which the capture keeps.
-        if (error instanceof BindingError) throw error;
-      }
-    }
+    if (node.bindsPerItem) node.forward(inputs, caps);
     return { capture: collector.freeze(), failure: null };
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;

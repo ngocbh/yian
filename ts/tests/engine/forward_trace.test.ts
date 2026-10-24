@@ -4775,3 +4775,25 @@ test("a recorded interpolation route holding its text is refused", () => {
   wire.payload.forward_capture.route.children[0].value_json = '"n=3"';
   expectError(() => decodeWire(wire), RangeError, "an interpolation route records no value_json");
 });
+
+test("a MAP's forward failing otherwise when bound again is a fault, not kept (TS-only)", async () => {
+  const log = join(boundDir, "labels-fault.jsonl");
+  const labels = await loadFlow(LABELS, { sourceLabel: "flow.yaml" });
+  await runFlow(labels, { xs: ["a", null] }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(labels, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
+  }
+  const each = trace.occurrences.find((occurrence) => occurrence.nodeId === "each")!;
+  const spy = spyOn(MapNode.prototype, "forward").mockImplementation(() => {
+    throw new TypeError("forward broke");
+  });
+  try {
+    expectError(() => each.capture, TypeError, "forward broke");
+  } finally {
+    spy.mockRestore();
+  }
+});

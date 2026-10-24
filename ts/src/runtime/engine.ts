@@ -763,8 +763,7 @@ export class FlowEngine {
       commitPrepared(log, state, commit);
       return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, carriers));
     }
-    // The decision left is to wait. It isn't compared by name: "wait" is still a node kind, and the
-    // kind census counts that comparison.
+    // The decision left is to wait.
     return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry] }));
   }
 

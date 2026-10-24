@@ -233,7 +233,11 @@ test("a CASE can't route on new_messages, in on: or in a when:", async () => {
   ]) {
     const message = (await loadErrorAsync(loadFlow(ROUTED(gate)))).message;
     expect(message).toContain("node 'gate'");
-    expect(message).toContain(NOT_AN_AGENT("reply"));
+    expect(message).toContain(
+      "reference ${reply.new_messages}: a case can't route on an agent's new_messages yet; " +
+        "read it in a node input, and route on that node's output",
+    );
+    expect(message).not.toContain("isn't one there");
   }
 });
 

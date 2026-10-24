@@ -428,6 +428,11 @@ export function validateReferences(
         continue;
       }
       let err = classifyPath(path, messages ? validTargets : nodeTargets, flowInputs, extraHeads);
+      if (!messages && parts[1] === NEW_MESSAGES && validTargets.has(messagesKey(parts[0]!))) {
+        err =
+          `reference \${${path}}: a case can't route on an agent's new_messages yet; ` +
+          "read it in a node input, and route on that node's output";
+      }
       const producer = siteProducers.get(parts[0]!);
       const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {

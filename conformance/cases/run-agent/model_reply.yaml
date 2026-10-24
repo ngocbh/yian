@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: model-reply
   name: model_reply
@@ -42,7 +43,7 @@ host:
                 parts: [{type: text, text: Greet Ada.}]
 expect:
   output: {status: succeeded, output: Hello Ada}
-  # <id:1> is the model call's exchange id. The usage is a nested structure, so its unreported
+  # The model call events name its step (n 1). The usage is a nested structure, so its unreported
   # counts stay as nulls.
   events:
     - [RunStarted]
@@ -50,10 +51,9 @@ expect:
     - [NodeSucceeded, {node_id: __start__, output: {name: Ada}}]
     - [NodeStarted, {node_id: write}]
     - - ModelCallStarted
-      - {node_id: write, exchange_id: "<id:1>", purpose: chat, provider: openai, model: gpt-5.5}
+      - {node_id: write, purpose: chat, provider: openai, model: gpt-5.5, n: 1}
     - - ModelCallFinished
       - node_id: write
-        exchange_id: "<id:1>"
         purpose: chat
         provider: openai
         model: gpt-5.5
@@ -64,11 +64,12 @@ expect:
           cache_read_tokens: 4
           cache_creation_tokens: null
           reasoning_tokens: null
+        n: 1
     - [NodeSucceeded, {node_id: write, output: Hello Ada}]
     - [NodeStarted, {node_id: __end__}]
     - [NodeSucceeded, {node_id: __end__, output: Hello Ada}]
     - [RunSucceeded, {output: Hello Ada}]
   # A reply served to a streamed call streams as one chunk, then the final chunk.
   stream:
-    - {node_id: write, key: text, chunk: Hello Ada, final: false, exchange_id: "<id:1>"}
-    - {node_id: write, key: text, chunk: "", final: true, exchange_id: "<id:1>"}
+    - {node_id: write, key: text, chunk: Hello Ada, final: false, n: 1, index: 0}
+    - {node_id: write, key: text, chunk: "", final: true, n: 1, index: 1}

@@ -515,9 +515,9 @@ snake_case names, at every depth of yian's own structures (never inside a value 
 produced, such as an output or an answer); fields that are null are left out at the top level
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
-The `attempt` of `ModelCallStarted`, `ModelCallFinished` and `StreamChunk` is left out when it
-is 1 (a null one already is); cases never write `attempt: 1`, and the TS runner's check refuses
-a case that does.
+The `started_at` of `ModelCallStarted` is left out (a time). A model call event and an AGENT's
+stream chunk name the step their record becomes by `n` (with `node_id`), and a chunk's `index`
+counts that step's chunks from 0.
 
 - An **event** is `[<EventName>]` or `[<EventName>, <data form>]`, for example
   `[NodeSucceeded, {node_id: hello, output: hi Ada}]` and `[RunStarted]`.
@@ -625,8 +625,8 @@ expectation changes is regenerated with `--write-expect` and gets `rules: [run-l
 Python runner skips.
 
 **Placeholders.** Ids an implementation makes up are replaced by `<id:1>`, `<id:2>`, ...: a run id
-the case didn't give, and the values of `exchange_id`, `commit_id`, `mutation_id` and `note_id`
-fields. (This list grows only by fields no committed case holds yet.) The generated run id is the
+the case didn't give, and the values of `commit_id`, `mutation_id` and `note_id` fields. (This
+list grows only by fields no committed case holds yet.) The generated run id is the
 run's own id. Every occurrence inside a text value is replaced, so a call id `<run id>/fetch`
 becomes `<id:1>/fetch`; mapping keys are left alone. The ids are collected from every
 projection, expected or not, and numbered in order of first appearance (by position, within one

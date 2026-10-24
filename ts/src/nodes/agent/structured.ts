@@ -68,7 +68,7 @@ import {
 } from "../../typesys/values.ts";
 import type { ValuePath } from "../contracts.ts";
 import { type AgentSteps, requestSha256, type RetrySettings } from "./context.ts";
-import { callModel, type LiveSinks, newExchangeId } from "./live.ts";
+import { callModel, type LiveSinks } from "./live.ts";
 import { recordModelText, recordModelValue } from "./text.ts";
 
 // ValueKind -> JSON Schema type of a scalar slot. date and datetime persist as ISO strings.
@@ -430,8 +430,8 @@ export function userMessage(text: string): Message {
  * Generate a value of `typ` with `model`, correcting an invalid reply up to `retries` times.
  *
  * The schema is sent the way `planStructured` picks for the model; the prompt strategy appends its
- * instruction as a user message. Each call has a fresh exchange id and goes through `callModel`
- * with purpose `structured_fallback` for the prompt strategy, else `structured_native`. A reply
+ * instruction as a user message. Each call goes through `callModel` with purpose
+ * `structured_fallback` for the prompt strategy, else `structured_native`. A reply
  * holding no valid answer (`StructuredOutputError`) or failing `checkReply` is not kept in the
  * conversation: the next call gets the earlier messages and a correction naming the error. The
  * prompt strategy records every reply's text in `evaluationTrace`, the other strategies the
@@ -470,10 +470,8 @@ export async function generateStructured(
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
     const request = plan.apply(new Request({ messages: conversation }));
-    const exchangeId = newExchangeId();
     const { response } = await callModel(live, model, request, {
       purpose,
-      exchangeId,
       signal,
       retry,
       // No steers to leave out: a steerable agent's output is `str`, so it never calls here.

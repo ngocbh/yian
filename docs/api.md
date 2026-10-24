@@ -202,11 +202,15 @@ run before appending any record.
   never replayed on resume; filter them with
   `isinstance(event, yian.events.IN_LOOP_EVENTS)`. Observers from
   concurrently running nodes interleave (runs are pooled by default); correlate
-  them by `node_id` and `exchange_id`. `usage` is the provider's own count
+  them by `node_id` and `exchange_id` (TS yian: `n`, below). `usage` is the provider's own count
   (`None` when unreported) and `error` is an exception type name only, or
   `"interrupted"` for a tool call a [steering](#steering) interrupt skipped.
   Changed (TS yian): `conformance/schema/events.schema.json` describes each
-  event's JSON form, with the snake_case keys hosts forward. `ReplayDegraded`
+  event's JSON form, with the snake_case keys hosts forward. The model call and
+  tool events carry `n` in place of `exchange_id` and `attempt`: the AGENT's step
+  number, so `node_id` + `n` names the `model_call` step a call attempt becomes
+  (each attempt is its own step), and a tool call's `n` is its reply's step.
+  `ModelCallStarted` also carries `started_at`, when the attempt started. `ReplayDegraded`
   (`node_id`, `reason`) is in-loop too: the AGENT's model left out replay state
   it couldn't send back (another provider's or account's reasoning, an unknown
   record version), while the replayed turns' text and tool calls were still
@@ -238,12 +242,17 @@ run before appending any record.
   whitespace between content blocks. Without `on_stream`, AGENT calls `invoke`
   exactly as before.
   Changed (TS yian): every AGENT call streams on the wire; structured replies
-  still send no chunks. `ModelCallStarted`, `ModelCallFinished` and `StreamChunk`
-  carry `attempt`, starting at 1. A retried call ends the failed attempt with
-  `ModelCallFinished` holding its `error` and no final chunk, then starts
-  `attempt + 1` in the same exchange. A structured reply that fails the output
-  check finishes its call without `error`; the correction is sent as a new
-  exchange.
+  still send no chunks. A chunk carries `n` and `index` in place of
+  `exchange_id`: `node_id` + `n` names the `model_call` step the attempt becomes,
+  and `index` counts that step's chunks from 0, the final chunk included. A
+  retried call ends the failed attempt with `ModelCallFinished` holding its
+  `error` and no final chunk, then streams the next attempt under the next `n`.
+  A structured reply that fails the output check finishes its call without
+  `error`; the correction is a new call.
+- Changed (TS yian): `live` — a `LiveChannel` that gets each appended record and
+  each AGENT model call's start, chunks and end as plain-JSON frames, and keeps
+  the calls in flight for a late viewer (see
+  [Authoritative run logs](#authoritative-run-logs)).
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults (`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`,
   then the logins saved by `yian auth`) are captured at initialization. There is no
@@ -2554,6 +2563,23 @@ on replay. Each `step` is a JSON object with a string `kind`:
 
 A tool call's idempotency key (`ToolContext.callId`) is `<run id>/<node>/<n>/<index>`, `n` the
 reply's `model_call` step.
+
+Changed (TS yian): a run's live channel is separate from the log. `runFlow`'s and `resumeFlow`'s
+`live` option takes a `LiveChannel`, which sends plain-JSON frames (the log's snake_case keys) to
+each subscriber: `{type: "record", seq, line}` for each record, its line exactly as appended, once
+the append returned (`node_step` included); and `{type: "start", node, n, model, purpose,
+started_at}`, `{type: "chunk", node, n, index, text}` and `{type: "end", node, n, error}` for each
+AGENT model call attempt, named by the step its record becomes, its chunks numbered from 0
+(`error` is the error's name; a failed attempt's record comes first). Records never reach
+`on_event`, and frames never enter the log. `snapshot()` gives `{last_seq, calls: [{node, n,
+chunks, next_index}]}`: the last record's seq and each call in flight, one per `(node, n)`, so
+parallel calls stay apart; a call leaves it when its step record is appended (a failed attempt's
+comes before its `end` frame) or when its node settles. A late viewer subscribes and takes the
+snapshot in the same synchronous turn, buffering the frames that follow; reads the log up to
+`last_seq` (possibly async); then applies the buffered frames and follows. Every frame after the
+snapshot is new to it, so it skips nothing. The stream is ephemeral: a subscriber that throws is dropped and reported
+(`onSubscriberError`, a warning by default) and never affects the run. A host forwards frames to
+other processes over its own channel; yian ships no transport.
 
 ## Durable recovery with `resume_flow`
 

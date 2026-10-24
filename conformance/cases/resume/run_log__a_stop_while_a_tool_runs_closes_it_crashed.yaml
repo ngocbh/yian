@@ -119,5 +119,5 @@ expect:
     - [pool_commit, __end__, {value: lookup's outcome is unknown}]
     - [node_succeeded, __end__, {commit: 18}]
   stream:
-    - {chunk: lookup's outcome is unknown, exchange_id: <id:1>, final: false, key: text, node_id: research}
-    - {chunk: '', exchange_id: <id:1>, final: true, key: text, node_id: research}
+    - {chunk: lookup's outcome is unknown, final: false, key: text, node_id: research, n: 3, index: 0}
+    - {chunk: '', final: true, key: text, node_id: research, n: 3, index: 1}

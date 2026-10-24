@@ -306,17 +306,17 @@ expect:
   - - NodeStarted
     - node_id: writer
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: writer
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: writer
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: writer
       output: recorded answer
@@ -329,15 +329,17 @@ expect:
     - output: recorded answer
   stream:
   - chunk: recorded answer
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: writer
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: writer
+    n: 1
+    index: 1
   backward:
   - failure: null
     feedback:

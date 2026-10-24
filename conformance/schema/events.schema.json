@@ -115,16 +115,16 @@
       }
     },
     "StreamChunk": {
-      "description": "A streamed fragment of a node's output, such as model text. A completed or interrupted AGENT stream ends with one empty final chunk; a failed call ends without one (its ModelCallFinished.error is set), and a host discards that exchange's partial text.",
+      "description": "A streamed fragment of a node's output, such as model text. A completed or interrupted AGENT stream ends with one empty final chunk; a failed call ends without one (its ModelCallFinished.error is set), and a host discards that attempt's partial text.",
       "type": "object",
-      "required": ["node_id", "key", "chunk", "final", "exchange_id", "attempt"],
+      "required": ["node_id", "key", "chunk", "final", "n", "index"],
       "properties": {
         "node_id": {"type": "string"},
         "key": {"type": "string", "description": "What the stream carries: \"text\" for AGENT reply text."},
         "chunk": {"type": "string"},
         "final": {"type": "boolean", "description": "True on the empty chunk that ends a completed or interrupted stream."},
-        "exchange_id": {"type": ["string", "null"], "description": "The model exchange an AGENT text chunk belongs to; null for other streams."},
-        "attempt": {"type": ["integer", "null"], "minimum": 1, "description": "The AGENT model attempt the text belongs to, 1-based; null for other streams."}
+        "n": {"type": ["integer", "null"], "minimum": 1, "description": "The n of the AGENT model_call step the text belongs to (node_id + n is the step id; a retried attempt streams under the next n); null for other streams."},
+        "index": {"type": ["integer", "null"], "minimum": 0, "description": "The chunk's number within its step, dense from 0, the final chunk included; null for other streams."}
       }
     },
     "NodeSucceeded": {
@@ -183,10 +183,10 @@
     "ModelCallStarted": {
       "description": "An AGENT node is about to call its model (in-loop, transient).",
       "type": "object",
-      "required": ["node_id", "exchange_id", "purpose", "provider", "model", "attempt"],
+      "required": ["node_id", "n", "purpose", "provider", "model", "started_at"],
       "properties": {
         "node_id": {"type": "string"},
-        "exchange_id": {"type": "string", "description": "The model exchange; correlates the call's events with node_id."},
+        "n": {"type": "integer", "minimum": 1, "description": "The n of the model_call step the attempt becomes; node_id + n is the step id."},
         "purpose": {
           "description": "Why the node calls its model.",
           "type": "string",
@@ -194,16 +194,16 @@
         },
         "provider": {"type": ["string", "null"], "description": "The effective provider."},
         "model": {"type": ["string", "null"], "description": "The effective model."},
-        "attempt": {"type": "integer", "minimum": 1, "description": "The node's model attempt this call belongs to, 1-based."}
+        "started_at": {"type": "string", "description": "When the attempt started: a UTC RFC 3339 time with milliseconds."}
       }
     },
     "ModelCallFinished": {
       "description": "One model call returned or raised (in-loop, transient).",
       "type": "object",
-      "required": ["node_id", "exchange_id", "purpose", "provider", "model", "usage", "error", "attempt"],
+      "required": ["node_id", "n", "purpose", "provider", "model", "usage", "error"],
       "properties": {
         "node_id": {"type": "string"},
-        "exchange_id": {"type": "string", "description": "The model exchange; correlates the call's events with node_id."},
+        "n": {"type": "integer", "minimum": 1, "description": "The n of the attempt's model_call step, as on its ModelCallStarted."},
         "purpose": {
           "description": "Why the node called its model.",
           "type": "string",
@@ -215,17 +215,16 @@
           "description": "The provider's own token count, or null when it reported none; a cut stream reports the usage received so far.",
           "oneOf": [{"$ref": "#/$defs/token_usage"}, {"type": "null"}]
         },
-        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or a steering interrupt cut its stream."},
-        "attempt": {"type": "integer", "minimum": 1, "description": "The node's model attempt this call belongs to, 1-based."}
+        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or a steering interrupt cut its stream."}
       }
     },
     "ToolCallStarted": {
       "description": "An AGENT node is about to run one granted tool call from a model reply (in-loop, transient).",
       "type": "object",
-      "required": ["node_id", "exchange_id", "call_index", "tool_call_id", "name", "arguments"],
+      "required": ["node_id", "n", "call_index", "tool_call_id", "name", "arguments"],
       "properties": {
         "node_id": {"type": "string"},
-        "exchange_id": {"type": "string", "description": "The model exchange whose reply asked for the call."},
+        "n": {"type": "integer", "minimum": 1, "description": "The n of the model_call step whose reply asked for the call."},
         "call_index": {"type": "integer", "minimum": 0, "description": "The call's 0-based position in the reply."},
         "tool_call_id": {"type": "string", "description": "The provider's id for the call."},
         "name": {"type": "string", "description": "The tool's name."},
@@ -235,10 +234,10 @@
     "ToolCallFinished": {
       "description": "One tool call returned or raised (in-loop, transient).",
       "type": "object",
-      "required": ["node_id", "exchange_id", "call_index", "tool_call_id", "name", "result", "error"],
+      "required": ["node_id", "n", "call_index", "tool_call_id", "name", "result", "error"],
       "properties": {
         "node_id": {"type": "string"},
-        "exchange_id": {"type": "string", "description": "The model exchange whose reply asked for the call."},
+        "n": {"type": "integer", "minimum": 1, "description": "The n of the model_call step whose reply asked for the call."},
         "call_index": {"type": "integer", "minimum": 0, "description": "The call's 0-based position in the reply."},
         "tool_call_id": {"type": "string", "description": "The provider's id for the call."},
         "name": {"type": "string", "description": "The tool's name."},

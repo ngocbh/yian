@@ -120,6 +120,6 @@ expect:
     - [pool_commit, __end__, {value: found X1}]
     - [node_succeeded, __end__, {commit: 17}]
   stream:
-    - {chunk: '', exchange_id: <id:1>, final: true, key: text, node_id: research}
-    - {chunk: found X1, exchange_id: <id:2>, final: false, key: text, node_id: research}
-    - {chunk: '', exchange_id: <id:2>, final: true, key: text, node_id: research}
+    - {chunk: '', final: true, key: text, node_id: research, n: 1, index: 0}
+    - {chunk: found X1, final: false, key: text, node_id: research, n: 3, index: 0}
+    - {chunk: '', final: true, key: text, node_id: research, n: 3, index: 1}

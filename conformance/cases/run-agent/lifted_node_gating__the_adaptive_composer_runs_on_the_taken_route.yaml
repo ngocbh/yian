@@ -156,17 +156,17 @@ expect:
   - - NodeStarted
     - node_id: ask__compose
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: ask__compose
       provider: openai
       purpose: structured_native
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: ask__compose
       provider: openai
       purpose: structured_native
+      n: 1
   - - NodeSucceeded
     - node_id: ask__compose
       output:

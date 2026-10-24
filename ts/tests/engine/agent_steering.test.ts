@@ -545,10 +545,9 @@ test("skipped tool calls reach the host as interrupted tool events", async () =>
     onEvent: (event) => void events.push(event),
   });
   const brackets = events.filter((event) => event instanceof ToolCallStarted || event instanceof ToolCallFinished);
-  const exchangeId = (brackets[0] as ToolCallStarted).exchangeId;
   const ids = (callIndex: number) => ({
     nodeId: "chat",
-    exchangeId,
+    n: 1,
     callIndex,
     toolCallId: `call-${callIndex + 1}`,
     name: "lookup",
@@ -801,7 +800,7 @@ test("an interrupt mid-stream keeps the partial text and ends the stream", async
   ]);
   const finished = events.filter((event) => event instanceof ModelCallFinished);
   expect(finished).toHaveLength(1);
-  expect([finished[0]!.error, finished[0]!.usage, finished[0]!.attempt]).toEqual([null, null, 1]);
+  expect([finished[0]!.error, finished[0]!.usage, finished[0]!.n]).toEqual([null, null, 1]);
   expect(toolEvents(events)).toEqual([]);
   // The cut closes the provider stream.
   expect(model.closed).toBe(1);
@@ -1043,7 +1042,7 @@ test("an interrupt during a model-retry wait ends the wait at once with an empty
   const model = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 }), reply("never")], CONFIG);
   const scheduler = waitingScheduler();
   const interrupt = new AbortController();
-  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, retry: { scheduler } } as const;
+  const options = { purpose: "chat", interrupt: interrupt.signal, retry: { scheduler } } as const;
   const call = callModel(live, model, REQUEST, options);
   await scheduler.slept;
   interrupt.abort(new Error("interrupted"));
@@ -1072,7 +1071,7 @@ test("an interrupt already set when a model-retry wait begins ends it with an em
   const live = liveSinks({ nodeId: "chat", llmConfig: CONFIG, emitEvent });
   const model = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 }), reply("never")], CONFIG);
   const scheduler = waitingScheduler();
-  const options = { purpose: "chat", exchangeId: "x1", interrupt: interrupt.signal, retry: { scheduler } } as const;
+  const options = { purpose: "chat", interrupt: interrupt.signal, retry: { scheduler } } as const;
   const cut = await rejected(callModel(live, model, REQUEST, options));
   expect(cut).toBeInstanceOf(ReplyInterrupted);
   expect((cut as ReplyInterrupted).reply.parts).toEqual([]);
@@ -1094,7 +1093,6 @@ test("a stop during a model-retry wait still rejects with the stop", async () =>
   const interrupt = new AbortController();
   const call = callModel(null, model, REQUEST, {
     purpose: "chat",
-    exchangeId: "x1",
     signal: stop.signal,
     interrupt: interrupt.signal,
     retry: { scheduler },

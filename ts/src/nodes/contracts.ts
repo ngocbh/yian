@@ -1168,6 +1168,8 @@ export class NodeSteps {
    * mid-commit.
    */
   readonly record: (step: ValueRecord, options?: { settled?: boolean }) => number;
+  /** The `n` after the last step recorded through this object, or after `prior` before any. */
+  #next: number;
 
   /**
    * Check the field types and that the current start is counted; `prior` is copied.
@@ -1189,8 +1191,22 @@ export class NodeSteps {
     if (typeof record !== "function") throw new TypeError("record must be callable");
     this.starts = starts;
     this.prior = Object.freeze([...prior]);
-    this.record = record;
+    this.#next = prior.length + 1;
+    this.record = (step, options) => {
+      const n = record(step, options);
+      this.#next = n + 1;
+      return n;
+    };
     Object.freeze(this);
+  }
+
+  /**
+   * The `n` the next step recorded through this object gets: one past the last `n` `record`
+   * returned, or past `prior` before any. A call in flight names its step by it before the step is
+   * recorded.
+   */
+  get next(): number {
+    return this.#next;
   }
 }
 

@@ -167,34 +167,34 @@ expect:
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: chat
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: chat
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: chat
       output: chat done
   - - NodeStarted
     - node_id: after
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: after
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: after
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: after
       output: summary
@@ -207,22 +207,26 @@ expect:
     - output: summary
   stream:
   - chunk: chat done
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: chat
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: chat
+    n: 1
+    index: 1
   - chunk: summary
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: after
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: after
+    n: 1
+    index: 1

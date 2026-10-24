@@ -303,17 +303,17 @@ expect:
   - - NodeStarted
     - node_id: inherits
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: gpt-5.4
+    - model: gpt-5.4
       node_id: inherits
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: gpt-5.4
+    - model: gpt-5.4
       node_id: inherits
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: inherits
       output: ok
@@ -327,17 +327,17 @@ expect:
   - - NodeStarted
     - node_id: other
   - - ModelCallStarted
-    - exchange_id: <id:3>
-      model: claude-sonnet-4-5
+    - model: claude-sonnet-4-5
       node_id: other
       provider: anthropic
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:3>
-      model: claude-sonnet-4-5
+    - model: claude-sonnet-4-5
       node_id: other
       provider: anthropic
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: other
       output: ok
@@ -349,34 +349,34 @@ expect:
   - - NodeStarted
     - node_id: optout
   - - ModelCallStarted
-    - exchange_id: <id:4>
-      model: other-deployment
+    - model: other-deployment
       node_id: optout
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:4>
-      model: other-deployment
+    - model: other-deployment
       node_id: optout
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: optout
       output: ok
   - - NodeStarted
     - node_id: child/nested
   - - ModelCallStarted
-    - exchange_id: <id:5>
-      model: nested-model
+    - model: nested-model
       node_id: child/nested
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:5>
-      model: nested-model
+    - model: nested-model
       node_id: child/nested
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: child/nested
       output: ok
@@ -395,42 +395,50 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: inherits
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: inherits
+    index: 1
+    n: 1
   - chunk: ok
-    exchange_id: <id:3>
     final: false
     key: text
     node_id: other
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:3>
     final: true
     key: text
     node_id: other
+    index: 1
+    n: 1
   - chunk: ok
-    exchange_id: <id:4>
     final: false
     key: text
     node_id: optout
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:4>
     final: true
     key: text
     node_id: optout
+    index: 1
+    n: 1
   - chunk: ok
-    exchange_id: <id:5>
     final: false
     key: text
     node_id: child/nested
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:5>
     final: true
     key: text
     node_id: child/nested
+    index: 1
+    n: 1

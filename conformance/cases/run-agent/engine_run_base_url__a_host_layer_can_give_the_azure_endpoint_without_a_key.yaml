@@ -115,17 +115,17 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: d
+    - model: d
       node_id: agent
       provider: azure
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: d
+    - model: d
       node_id: agent
       provider: azure
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: agent
       output: ok
@@ -138,12 +138,14 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: agent
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: agent
+    index: 1
+    n: 1

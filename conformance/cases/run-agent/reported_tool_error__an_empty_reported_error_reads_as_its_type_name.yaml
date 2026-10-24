@@ -185,44 +185,44 @@ expect:
   - - NodeStarted
     - node_id: worker
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: test-model
+    - model: test-model
       node_id: worker
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: test-model
+    - model: test-model
       node_id: worker
       provider: openai
       purpose: chat
+      n: 1
   - - ToolCallStarted
     - arguments:
         path: a.txt
       call_index: 0
-      exchange_id: <id:1>
       name: read_file
       node_id: worker
       tool_call_id: c0
+      n: 1
   - - ToolCallFinished
     - call_index: 0
       error: ReportedToolError
-      exchange_id: <id:1>
       name: read_file
       node_id: worker
       tool_call_id: c0
+      n: 1
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: test-model
+    - model: test-model
       node_id: worker
       provider: openai
       purpose: chat
+      n: 3
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: test-model
+    - model: test-model
       node_id: worker
       provider: openai
       purpose: chat
+      n: 3
   - - NodeSucceeded
     - node_id: worker
       output: the file is missing
@@ -235,20 +235,23 @@ expect:
     - output: the file is missing
   stream:
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: worker
+    n: 1
+    index: 0
   - chunk: the file is missing
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: worker
+    n: 3
+    index: 0
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: worker
+    n: 3
+    index: 1
   tool_calls:
     read_file:
     - args:

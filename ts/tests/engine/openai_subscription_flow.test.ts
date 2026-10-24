@@ -209,8 +209,9 @@ describe("partial stream fails before composer executes tool", () => {
       expect(models.requests).toHaveLength(attempts);
       const started = events.filter((event) => event instanceof ModelCallStarted);
       const finished = events.filter((event) => event instanceof ModelCallFinished);
-      expect(started.map((event) => event.attempt)).toEqual(Array.from({ length: attempts }, (_, index) => index + 1));
-      expect(finished.map((event) => [event.attempt, event.error !== null])).toEqual(started.map((event) => [event.attempt, true]));
+      // Each attempt is its own model_call step.
+      expect(started.map((event) => event.n)).toEqual(Array.from({ length: attempts }, (_, index) => index + 1));
+      expect(finished.map((event) => [event.n, event.error !== null])).toEqual(started.map((event) => [event.n, true]));
       expect(calls).toEqual([]);
       expect(server.closed[0]).toBe(true);
     });

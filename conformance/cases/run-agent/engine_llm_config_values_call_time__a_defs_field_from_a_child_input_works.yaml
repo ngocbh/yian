@@ -154,17 +154,17 @@ expect:
   - - NodeStarted
     - node_id: a/chat
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: def-model
+    - model: def-model
       node_id: a/chat
       provider: openai
       purpose: chat
+      n: 2
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: def-model
+    - model: def-model
       node_id: a/chat
       provider: openai
       purpose: chat
+      n: 2
   - - NodeSucceeded
     - node_id: a/chat
       output: ok
@@ -183,12 +183,14 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: a/chat
+    index: 0
+    n: 2
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: a/chat
+    index: 1
+    n: 2

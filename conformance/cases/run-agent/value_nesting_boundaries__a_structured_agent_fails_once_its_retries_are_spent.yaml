@@ -136,29 +136,29 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-4o
+    - model: gpt-4o
       node_id: agent
       provider: openai
       purpose: structured_native
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-4o
+    - model: gpt-4o
       node_id: agent
       provider: openai
       purpose: structured_native
+      n: 1
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: gpt-4o
+    - model: gpt-4o
       node_id: agent
       provider: openai
       purpose: structured_native
+      n: 2
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: gpt-4o
+    - model: gpt-4o
       node_id: agent
       provider: openai
       purpose: structured_native
+      n: 2
   - - NodeFailed
     - failure:
         code: agent.output_invalid

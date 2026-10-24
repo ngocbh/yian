@@ -99,8 +99,7 @@ expect:
     - [pool_commit, __end__, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
     - [node_succeeded, __end__, {commit: 15}]
   # A model-requested call sets only `question` and `options` (docs/api.md, Blocking human
-  # interaction); the other request fields are null and left out. <id:1> is the first model
-  # call's exchange id.
+  # interaction); the other request fields are null and left out.
   tool_calls:
     ask_user:
       - args: {question: "How many people, and at what time?", options: [2 at 7 pm, 4 at 8 pm]}

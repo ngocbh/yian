@@ -216,10 +216,6 @@ const USAGE_COUNTS: readonly string[] = ["input_tokens", "output_tokens", "total
 const USAGE_DETAILS: readonly string[] = [
   "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens",
 ];
-/** The events and chunk whose `attempt` is left out when it is 1, as Python leaves it null. */
-const ATTEMPT_LEFT_OUT_AT_1: ReadonlySet<string> = new Set([
-  "ModelCallStarted", "ModelCallFinished", "StreamChunk",
-]);
 const RULES: ReadonlySet<string> = new Set([
   "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
   "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes", "run-log",
@@ -622,27 +618,6 @@ function checkStop(stop: Value | undefined): void {
 }
 
 /**
- * Throw if an `expect` mapping's `events` or `stream` write the `attempt: 1` the data form leaves
- * out of a model call event or stream chunk; `key` names the mapping.
- */
-function checkAttempts(key: string, expect: Case): void {
-  const isOne = (data: Value | undefined) =>
-    isMapping(data) && (data["attempt"] === 1n || data["attempt"] === 1);
-  const rejectAttemptOne = (where: string): never => {
-    throw new Error(`\`${where}\` writes \`attempt: 1\`, which the data form leaves out`);
-  };
-  const events = get(expect, "events", []);
-  (Array.isArray(events) ? events : []).forEach((event, index) => {
-    const named = Array.isArray(event) && ATTEMPT_LEFT_OUT_AT_1.has(String(event[0]));
-    if (named && isOne(event[1])) rejectAttemptOne(`${key}.events[${index}]`);
-  });
-  const stream = get(expect, "stream", []);
-  (Array.isArray(stream) ? stream : []).forEach((chunk, index) => {
-    if (isOne(chunk)) rejectAttemptOne(`${key}.stream[${index}]`);
-  });
-}
-
-/**
  * Throw unless `value`, the host, its tools, models and their scripts and its steering use only
  * the format's keys.
  */
@@ -851,7 +826,6 @@ export function checkCase(case_: Case): Case {
         throw new Error(`\`${key}.exists\`: \`${path}\` must be a relative path without \`..\``);
       }
     }
-    checkAttempts(key, expect);
   }
   if (Object.hasOwn(case_, "backward")) checkBackward("backward", case_["backward"]);
   if (Object.hasOwn(case_, "host")) checkHost(case_["host"], kind);
@@ -1955,13 +1929,14 @@ function failureForm(failure: Failure, flow: ComposedFlow): Case {
 }
 
 /**
- * Return the data form of an event or stream chunk, without its null fields: its `toJSON()`, with
- * a failure in failure form and every file as `{uri, mime, name}`.
+ * Return the data form of an event or stream chunk, without its null fields and without a model
+ * call's `started_at` (a time): its `toJSON()`, with a failure in failure form and every file as
+ * `{uri, mime, name}`.
  */
 function fields(event: RunEvent, flow: ComposedFlow): Case {
   const data: Case = {};
   for (const [key, item] of Object.entries(event.toJSON())) {
-    if (item === null || (key === "attempt" && item === 1 && ATTEMPT_LEFT_OUT_AT_1.has(event.type))) continue;
+    if (item === null || key === "started_at") continue;
     const failure = key === "failure" ? (event as { failure: Failure }).failure : null;
     data[key] = failure !== null ? failureForm(failure, flow) : dataForm(item as YianValue);
   }
@@ -2225,7 +2200,7 @@ function pooled(results: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** The fields whose text values are ids an implementation makes up. */
-const ID_FIELDS: ReadonlySet<string> = new Set(["exchange_id", "commit_id", "mutation_id", "note_id"]);
+const ID_FIELDS: ReadonlySet<string> = new Set(["commit_id", "mutation_id", "note_id"]);
 
 /**
  * Return `results` with each made-up id in their text replaced by `<id:N>`.
@@ -3026,14 +3001,17 @@ function codecMapping(value: Value): boolean {
 }
 
 /**
- * Return a new node holding `value` in case form: a float always with a fraction, and a
- * collection in flow style when `flow` says so or it holds only scalars.
+ * Return a new node holding `value` in case form: a float always with a fraction (with `byValue`,
+ * for a result that compares numbers by value, only a float that isn't whole), and a collection in
+ * flow style when `flow` says so or it holds only scalars.
  */
-function caseNode(doc: Document, value: Value, flow = false): YamlNode {
+function caseNode(doc: Document, value: Value, flow = false, byValue = false): YamlNode {
   const node = doc.createNode(encode(value)) as YamlNode;
   visit(node, {
     Scalar(_, scalar) {
-      if (typeof scalar.value === "number") scalar.minFractionDigits = 1;
+      if (typeof scalar.value === "number" && !(byValue && Number.isInteger(scalar.value))) {
+        scalar.minFractionDigits = 1;
+      }
     },
     Map(_, map) {
       map.flow = flow || map.items.every((pair) => isScalar(pair.value));
@@ -3063,7 +3041,7 @@ function updated(doc: Document, node: unknown, value: Value, flags: SameFlags): 
     node.items = node.items.filter((pair) => Object.hasOwn(value, keyOf(pair) as string));
     for (const [name, item] of Object.entries(value)) {
       const pair = node.items.find((old) => keyOf(old) === name);
-      if (pair === undefined) node.items.push(doc.createPair(name, caseNode(doc, item)));
+      if (pair === undefined) node.items.push(doc.createPair(name, caseNode(doc, item, false, flags.byValue)));
       else pair.value = updated(doc, pair.value, item, flags);
     }
     return node;
@@ -3102,7 +3080,9 @@ function updated(doc: Document, node: unknown, value: Value, flags: SameFlags): 
         // Between two matches, old items are dropped first, so a new item takes the place of a
         // dropped one, if any, and keeps what of its text still holds.
         const old = gone.shift();
-        items.push(old === undefined ? caseNode(doc, value[j]!, flow) : updated(doc, old, value[j]!, flags));
+        items.push(
+          old === undefined ? caseNode(doc, value[j]!, flow, flags.byValue) : updated(doc, old, value[j]!, flags),
+        );
         j += 1;
       } else {
         gone.push(olds[i]);
@@ -3112,7 +3092,7 @@ function updated(doc: Document, node: unknown, value: Value, flags: SameFlags): 
     node.items = items;
     return node;
   }
-  return caseNode(doc, value);
+  return caseNode(doc, value, false, flags.byValue);
 }
 
 /**

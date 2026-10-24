@@ -3,7 +3,7 @@
 # An interrupt set while tool call 1 runs (README: an interrupt before tool call 2 is
 # after: {tool_call: 1}) lets call 1 finish and skips call 2: one model call, one tool call,
 # the reply's text as the output, and the events Started/Finished for call-1 (result "found a")
-# then Started/Finished for call-2 with error `interrupted`, all under the one exchange.
+# then Started/Finished for call-2 with error `interrupted`, all under the reply's step.
 kind: run
 rules: [run-log]
 flow: |
@@ -150,47 +150,47 @@ expect:
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: chat
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: chat
       provider: openai
       purpose: chat
+      n: 1
   - - ToolCallStarted
     - arguments:
         topic: a
       call_index: 0
-      exchange_id: <id:1>
       name: lookup
       node_id: chat
       tool_call_id: call-1
+      n: 1
   - - ToolCallFinished
     - call_index: 0
-      exchange_id: <id:1>
       name: lookup
       node_id: chat
       result: found a
       tool_call_id: call-1
+      n: 1
   - - ToolCallStarted
     - arguments:
         topic: b
       call_index: 1
-      exchange_id: <id:1>
       name: lookup
       node_id: chat
       tool_call_id: call-2
+      n: 1
   - - ToolCallFinished
     - call_index: 1
       error: interrupted
-      exchange_id: <id:1>
       name: lookup
       node_id: chat
       tool_call_id: call-2
+      n: 1
   - - NodeSucceeded
     - node_id: chat
       output: Checking both.
@@ -203,15 +203,17 @@ expect:
     - output: Checking both.
   stream:
   - chunk: Checking both.
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: chat
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: chat
+    n: 1
+    index: 1
   tool_calls:
     lookup:
     - args:

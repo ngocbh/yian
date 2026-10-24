@@ -1,4 +1,5 @@
 kind: run
+rules: [run-log]
 flow: |
   id: model-stream-cut
   name: model_stream_cut
@@ -27,8 +28,8 @@ expect:
       message: connection reset
       node: write
       frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
-  # The chunks shown before the failure, and no final chunk: the host discards that exchange's
+  # The chunks shown before the failure, and no final chunk: the host discards that attempt's
   # partial text.
   stream:
-    - {node_id: write, key: text, chunk: hel, final: false, exchange_id: "<id:1>"}
-    - {node_id: write, key: text, chunk: lo, final: false, exchange_id: "<id:1>"}
+    - {node_id: write, key: text, chunk: hel, final: false, n: 1, index: 0}
+    - {node_id: write, key: text, chunk: lo, final: false, n: 1, index: 1}

@@ -541,7 +541,10 @@ Most are just the functional model (above) made enforceable:
   then every node start and accepted outcome. A transition is validated and prepared,
   appended to its `RunLog`, and only then applied to `RunState`; observers become
   visible after append + apply (transient `StreamChunk`s and in-loop AGENT
-  observers are the only exceptions and are never recorded). Recovery validates a contiguous prefix and folds
+  observers are the only exceptions and are never recorded; TS yian's `LiveChannel`
+  frames are a separate channel: records forwarded after their append, and model
+  call frames named by `node_id` + `n`, never in the log or `onEvent`). Recovery
+  validates a contiguous prefix and folds
   it through the same reducer path before recording an eligible ordered retry
   frontier. Logs use schema 9; readers reject schemas 7 and 8 rather than
   migrating them, and preserve canonical bytes through preparation, replay,

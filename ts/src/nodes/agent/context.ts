@@ -337,6 +337,14 @@ export class AgentSteps {
     }
   }
 
+  /**
+   * Return the `n` the next step this start writes gets, so a call in flight can name its step
+   * before writing it.
+   */
+  nextN(): number {
+    return this.#steps === undefined ? this.#count + 1 : this.#steps.next;
+  }
+
   /** Return the clock's reading, in epoch milliseconds. */
   now(): number {
     return this.#clock();

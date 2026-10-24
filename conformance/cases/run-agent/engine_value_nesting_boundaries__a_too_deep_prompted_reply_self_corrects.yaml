@@ -135,21 +135,21 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: no-structured-sentinel
+    - model: no-structured-sentinel
       node_id: agent
       provider: vllm
       purpose: structured_fallback
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: no-structured-sentinel
+    - model: no-structured-sentinel
       node_id: agent
       provider: vllm
       purpose: structured_fallback
+      n: 1
   - - ModelCallStarted
-    - {exchange_id: <id:3>, model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback}
+    - {model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback, n: 2}
   - - ModelCallFinished
-    - {exchange_id: <id:3>, model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback}
+    - {model: no-structured-sentinel, node_id: agent, provider: vllm, purpose: structured_fallback, n: 2}
   - - NodeSucceeded
     - node_id: agent
       output:

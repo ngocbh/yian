@@ -2,7 +2,7 @@
 # Also tests/engine/test_agent_live_events.py::test_two_tool_calls_in_one_reply_get_their_own_indexed_brackets.
 # Two tool calls stream as argument deltas, each split over two chunks sharing its index; they
 # are joined by index and run in order (topic a, then b), each with its own indexed
-# ToolCallStarted/Finished pair under the one exchange. The tool-only reply streams only its
+# ToolCallStarted/Finished pair under the reply's step. The tool-only reply streams only its
 # final "" chunk; the second reply streams "both", " fine", then its final chunk.
 kind: run
 rules: [run-log]
@@ -166,59 +166,59 @@ expect:
   - - NodeStarted
     - node_id: writer
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 1
   - - ToolCallStarted
     - arguments:
         topic: a
       call_index: 0
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       tool_call_id: call-a
+      n: 1
   - - ToolCallFinished
     - call_index: 0
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       result: found:a
       tool_call_id: call-a
+      n: 1
   - - ToolCallStarted
     - arguments:
         topic: b
       call_index: 1
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       tool_call_id: call-b
+      n: 1
   - - ToolCallFinished
     - call_index: 1
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       result: found:b
       tool_call_id: call-b
+      n: 1
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 4
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 4
   - - NodeSucceeded
     - node_id: writer
       output: both fine
@@ -231,25 +231,29 @@ expect:
     - output: both fine
   stream:
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: writer
+    n: 1
+    index: 0
   - chunk: both
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: writer
+    n: 4
+    index: 0
   - chunk: ' fine'
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: writer
+    n: 4
+    index: 1
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: writer
+    n: 4
+    index: 2
   tool_calls:
     lookup:
     - args:

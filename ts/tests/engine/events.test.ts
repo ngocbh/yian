@@ -67,6 +67,9 @@ const USAGE = new TokenUsage({
 });
 
 /** One sample per event class with its exact data form, keys in field order. */
+/** A model call's start time, 2026-10-20T14:02:11.123Z. */
+const STARTED_AT = Date.UTC(2026, 9, 20, 14, 2, 11, 123);
+
 const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   { event: new NodeStarted({ nodeId: "n" }), data: { node_id: "n" } },
   {
@@ -76,8 +79,8 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
       key: "text",
       chunk: "hi",
       final: false,
-      exchange_id: null,
-      attempt: null,
+      n: null,
+      index: null,
     },
   },
   {
@@ -86,10 +89,10 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
       key: "text",
       chunk: "",
       final: true,
-      exchangeId: "x",
-      attempt: 2,
+      n: 2,
+      index: 4,
     }),
-    data: { node_id: "n", key: "text", chunk: "", final: true, exchange_id: "x", attempt: 2 },
+    data: { node_id: "n", key: "text", chunk: "", final: true, n: 2, index: 4 },
   },
   {
     event: new NodeSucceeded({ nodeId: "n", output: "hi" }),
@@ -117,29 +120,28 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     data: { node_id: "n", crashed: 2 },
   },
   {
-    event: new ModelCallStarted({ nodeId: "n", exchangeId: "x", purpose: "chat", attempt: 1 }),
+    event: new ModelCallStarted({ nodeId: "n", n: 1, purpose: "chat", startedAt: STARTED_AT }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 1,
       purpose: "chat",
       provider: null,
       model: null,
-      attempt: 1,
+      started_at: "2026-10-20T14:02:11.123Z",
     },
   },
   {
     event: new ModelCallFinished({
       nodeId: "n",
-      exchangeId: "x",
+      n: 3,
       purpose: "structured_native",
       provider: "anthropic",
       model: "m",
       usage: USAGE,
-      attempt: 3,
     }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 3,
       purpose: "structured_native",
       provider: "anthropic",
       model: "m",
@@ -152,58 +154,54 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
         reasoning_tokens: 4,
       },
       error: null,
-      attempt: 3,
     },
   },
   {
     event: new ModelCallFinished({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       purpose: "chat",
       error: "TimeoutError",
-      attempt: 1,
     }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 1,
       purpose: "chat",
       provider: null,
       model: null,
       usage: null,
       error: "TimeoutError",
-      attempt: 1,
     },
   },
   {
     event: new ModelCallStarted({
       nodeId: "n",
-      exchangeId: "x",
+      n: 2,
       purpose: "structured_fallback",
       provider: "openai",
       model: "m",
-      attempt: 2,
+      startedAt: STARTED_AT,
     }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 2,
       purpose: "structured_fallback",
       provider: "openai",
       model: "m",
-      attempt: 2,
+      started_at: "2026-10-20T14:02:11.123Z",
     },
   },
   {
     event: new ModelCallFinished({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       purpose: "structured_native",
       usage: new TokenUsage({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
       error: "ValidationError",
-      attempt: 1,
     }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 1,
       purpose: "structured_native",
       provider: null,
       model: null,
@@ -216,13 +214,12 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
         reasoning_tokens: null,
       },
       error: "ValidationError",
-      attempt: 1,
     },
   },
   {
     event: new ToolCallStarted({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       callIndex: 0,
       toolCallId: "call-1",
       name: "lookup",
@@ -230,7 +227,7 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 1,
       call_index: 0,
       tool_call_id: "call-1",
       name: "lookup",
@@ -240,7 +237,7 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   {
     event: new ToolCallFinished({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       callIndex: 1,
       toolCallId: "call-2",
       name: "lookup",
@@ -248,7 +245,7 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 1,
       call_index: 1,
       tool_call_id: "call-2",
       name: "lookup",
@@ -259,7 +256,7 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   {
     event: new ToolCallFinished({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       callIndex: 0,
       toolCallId: "call-1",
       name: "lookup",
@@ -267,7 +264,7 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     }),
     data: {
       node_id: "n",
-      exchange_id: "x",
+      n: 1,
       call_index: 0,
       tool_call_id: "call-1",
       name: "lookup",
@@ -366,20 +363,19 @@ describe("in-loop observers", () => {
     ]);
     const finished = new ModelCallFinished({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       purpose: "chat",
       provider: "anthropic",
       model: "m",
       usage,
-      attempt: 1,
     });
     expect(finished.error).toBeNull();
     expect(
-      new ModelCallStarted({ nodeId: "n", exchangeId: "x", purpose: "chat", attempt: 1 }).provider,
+      new ModelCallStarted({ nodeId: "n", n: 1, purpose: "chat", startedAt: STARTED_AT }).provider,
     ).toBeNull();
     const started = new ToolCallStarted({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       callIndex: 0,
       toolCallId: "call-1",
       name: "lookup",
@@ -387,7 +383,7 @@ describe("in-loop observers", () => {
     expect(started.arguments).toBeNull();
     const tool = new ToolCallFinished({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       callIndex: 0,
       toolCallId: "call-1",
       name: "lookup",
@@ -475,7 +471,7 @@ describe("toJSON", () => {
     const args = { n: 1n };
     const started = new ToolCallStarted({
       nodeId: "n",
-      exchangeId: "x",
+      n: 1,
       callIndex: 0,
       toolCallId: "c",
       name: "t",
@@ -557,13 +553,12 @@ describe("events schema", () => {
 
   const modelCallFinished = {
     node_id: "n",
-    exchange_id: "x",
+    n: 1,
     purpose: "chat",
     provider: null,
     model: null,
     usage: null,
     error: null,
-    attempt: 1,
   };
 
   const modelCallRetried = {
@@ -585,10 +580,10 @@ describe("events schema", () => {
       ['$.purpose: "other" is not one of the enum'],
     ],
     [
-      "attempt: 0",
+      "n: 0",
       "ModelCallFinished",
-      { ...modelCallFinished, attempt: 0 },
-      ["$.attempt: 0 is below 1"],
+      { ...modelCallFinished, n: 0 },
+      ["$.n: 0 is below 1"],
     ],
     [
       "a retry's attempt: 0",
@@ -632,13 +627,11 @@ describe("events schema", () => {
   });
 
   test("minimum skips null where the type allows it", () => {
-    const chunk = { node_id: "n", key: "k", chunk: "", final: false, exchange_id: null };
-    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, attempt: null }, CLOSED)).toEqual([]);
-    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, attempt: 0 }, CLOSED)).toEqual([
-      "$.attempt: 0 is below 1",
-    ]);
-    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, attempt: 1.5 }, CLOSED)).toEqual([
-      "$.attempt: number is not integer or null",
+    const chunk = { node_id: "n", key: "k", chunk: "", final: false, index: null };
+    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, n: null }, CLOSED)).toEqual([]);
+    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, n: 0 }, CLOSED)).toEqual(["$.n: 0 is below 1"]);
+    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, n: 1.5 }, CLOSED)).toEqual([
+      "$.n: number is not integer or null",
     ]);
   });
 

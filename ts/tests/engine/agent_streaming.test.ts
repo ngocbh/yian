@@ -2,11 +2,12 @@
  * AGENT reply streaming, visible chat text reaching `emitStream` as it arrives: mirrors
  * `tests/engine/test_agent_streaming.py`.
  *
- * Ported: `test_stream_chunk_exchange_id_defaults_to_none` (with `attempt`).
+ * Changed: `test_stream_chunk_exchange_id_defaults_to_none` checks `n` and `index`, which replace
+ * the exchange id.
  *
  * Ported at the `callModel` level and through the node (`evalNode` with a `ScriptedModel` from
  * `models`): `test_plain_agent_streams_text_chunks_then_one_final_chunk` (each chunk also carries
- * `attempt`), `test_stream_sink_alone_streams_without_observers`,
+ * its step's `n` and its `index`), `test_stream_sink_alone_streams_without_observers`,
  * `test_stream_sink_failure_escapes_as_a_host_fault` (at the `callModel` level the sink throws a
  * `CapabilityFault`, as the evaluator's sink does; through the node the host's own error escapes)
  * and `test_mid_stream_failure_sends_no_final_chunk_and_fails_the_node`.
@@ -37,10 +38,17 @@
  * Not ported: `test_duck_typed_client_without_stream_emits_one_chunk` (every `ChatModel` streams;
  * there is no duck-typed client or LangChain normalization).
  *
- * TS-only: structured purposes stream nothing; a retried attempt's chunks carry `attempt: 2`;
+ * TS-only: chunks and call events name the step their record becomes (`n`, the `model_call`
+ * step's number, counting the steps the start recorded before the call; tool events carry their
+ * reply's), and `index` counts each step's chunks from 0; structured purposes stream nothing; a
+ * retried attempt streams under the next `n`;
  * empty text deltas send no chunk; a host interrupt cuts a chat call before its next non-empty
  * text delta, ending its stream with the final chunk, and the cut reply holds the text shown.
  */
+
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
@@ -61,12 +69,17 @@ import { Finish, type Event, TextDelta, ToolCallDelta, UsageReport } from "../..
 import { Message, Request, TextPart, ToolCallPart, ToolResultPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
+import { AgentSteps } from "../../src/nodes/agent/context.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type NodeCaps, type Output } from "../../src/nodes/base.ts";
+import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
+import { decodeRecord, NodeStepRecord } from "../../src/runtime/log.ts";
+import { runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
 import {
   agentFlow,
   drive,
@@ -107,32 +120,36 @@ function model(...replies: ScriptedReply[]): ScriptedModel {
   return new ScriptedModel(replies, CONFIG);
 }
 
-const chunk = (text: string, attempt = 1, final = false) =>
-  new StreamChunk({ nodeId: "writer", key: "text", chunk: text, final, exchangeId: "x1", attempt });
+/** Chunk `index` of step `n` of `writer`. */
+const chunk = (text: string, index: number, n = 1, final = false) =>
+  new StreamChunk({ nodeId: "writer", key: "text", chunk: text, final, n, index });
 
-test("stream chunk exchangeId and attempt default to null", () => {
-  expect(new StreamChunk({ nodeId: "n", key: "text", chunk: "hi" }).exchangeId).toBeNull();
-  expect(new StreamChunk({ nodeId: "n", key: "text", chunk: "hi" }).attempt).toBeNull();
-  expect(new StreamChunk({ nodeId: "n", key: "text", chunk: "hi", exchangeId: "x" }).exchangeId).toBe("x");
+/** A started event's time, which `callModel` reads from the real clock without `record`. */
+const ANY_TIME = expect.any(Number) as unknown as number;
+
+test("stream chunk n and index default to null", () => {
+  expect(new StreamChunk({ nodeId: "n", key: "text", chunk: "hi" }).n).toBeNull();
+  expect(new StreamChunk({ nodeId: "n", key: "text", chunk: "hi" }).index).toBeNull();
+  expect(new StreamChunk({ nodeId: "n", key: "text", chunk: "hi", n: 2, index: 0 }).n).toBe(2);
 });
 
 test("plain chat streams text chunks then one final chunk", async () => {
   const { live, events, chunks } = sinks();
   const usage = new Usage({ inputTokens: 5, outputTokens: 3, totalTokens: 8 });
   const replyEvents = [...streamed("hello", " big", " world").slice(0, -1), new UsageReport(usage), FINISH];
-  const { response } = await callModel(live, model(replyEvents), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const { response } = await callModel(live, model(replyEvents), REQUEST, { purpose: "chat" });
   expect(response.message.text()).toBe("hello big world");
-  expect(chunks).toEqual([chunk("hello"), chunk(" big"), chunk(" world"), chunk("", 1, true)]);
-  const identity = { nodeId: "writer", exchangeId: "x1", purpose: "chat" as const, ...CONFIG, attempt: 1 };
+  expect(chunks).toEqual([chunk("hello", 0), chunk(" big", 1), chunk(" world", 2), chunk("", 3, 1, true)]);
+  const identity = { nodeId: "writer", n: 1, purpose: "chat" as const, ...CONFIG };
   expect(events).toEqual([
-    new ModelCallStarted(identity),
+    new ModelCallStarted({ ...identity, startedAt: ANY_TIME }),
     new ModelCallFinished({ ...identity, usage: new TokenUsage({ inputTokens: 5, outputTokens: 3, totalTokens: 8 }) }),
   ]);
 });
 
 test("stream sink alone streams without observers", async () => {
   const { live, events, chunks } = sinks({ events: false });
-  await callModel(live, model(streamed("just", " text")), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  await callModel(live, model(streamed("just", " text")), REQUEST, { purpose: "chat" });
   expect(events).toEqual([]);
   expect(chunks.map((item) => [item.chunk, item.final])).toEqual([
     ["just", false],
@@ -144,7 +161,7 @@ test("stream sink alone streams without observers", async () => {
 test("structured purposes stream nothing", async () => {
   for (const purpose of ["structured_native", "structured_fallback"] satisfies ModelCallPurpose[]) {
     const { live, events, chunks } = sinks();
-    await callModel(live, model(streamed('{"value": ', "3}")), REQUEST, { purpose, exchangeId: "x1" });
+    await callModel(live, model(streamed('{"value": ', "3}")), REQUEST, { purpose });
     expect(chunks).toEqual([]);
     expect(events.map((event) => (event as ModelCallStarted).purpose)).toEqual([purpose, purpose]);
   }
@@ -153,10 +170,10 @@ test("structured purposes stream nothing", async () => {
 test("mid-stream failure sends no final chunk", async () => {
   const { live, events, chunks } = sinks();
   const cut = [new TextDelta(0, "partial"), new TextDelta(0, " answer"), new ProviderError("connection", "reset by sk-hidden")];
-  await callModel(live, model(cut), REQUEST, { purpose: "chat", exchangeId: "x1" }).catch(() => {});
-  expect(chunks).toEqual([chunk("partial"), chunk(" answer")]);
+  await callModel(live, model(cut), REQUEST, { purpose: "chat" }).catch(() => {});
+  expect(chunks).toEqual([chunk("partial", 0), chunk(" answer", 1)]);
   expect(events.at(-1)).toEqual(
-    new ModelCallFinished({ nodeId: "writer", exchangeId: "x1", purpose: "chat", ...CONFIG, error: "ProviderError", attempt: 1 }),
+    new ModelCallFinished({ nodeId: "writer", n: 1, purpose: "chat", ...CONFIG, error: "ProviderError" }),
   );
   expect(JSON.stringify(events)).not.toContain("sk-hidden");
 });
@@ -164,7 +181,7 @@ test("mid-stream failure sends no final chunk", async () => {
 test("a reply the assembler refuses sends no final chunk", async () => {
   const { live, events, chunks } = sinks();
   const unfinished = [new TextDelta(0, "hello"), new TextDelta(0, " world")];
-  const error = await callModel(live, model(unfinished), REQUEST, { purpose: "chat", exchangeId: "x1" }).catch((caught: unknown) => caught);
+  const error = await callModel(live, model(unfinished), REQUEST, { purpose: "chat" }).catch((caught: unknown) => caught);
   expect((error as ProviderError).kind).toBe("incomplete");
   expect(chunks.map((item) => [item.chunk, item.final])).toEqual([
     ["hello", false],
@@ -184,18 +201,18 @@ test("stream sink failure escapes unchanged, with no finished event", async () =
       throw fault;
     },
   });
-  const call = callModel(live, model(streamed("text")), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const call = callModel(live, model(streamed("text")), REQUEST, { purpose: "chat" });
   expect(await call.catch((caught: unknown) => caught)).toBe(fault);
   expect(events.map((event) => (event as { type: string }).type)).toEqual(["ModelCallStarted"]);
 });
 
-test("a retried attempt's chunks carry attempt 2", async () => {
+test("a retried attempt's chunks carry n 2 without steps, their index from 0", async () => {
   install({ ...BUILTIN, modelRetries: 1 });
   const { live, events, chunks } = sinks();
   const cut = [new TextDelta(0, "par"), new ProviderError("server", "boom", { retryAfter: 0.001 })];
-  await callModel(live, model(cut, streamed("whole")), REQUEST, { purpose: "chat", exchangeId: "x1" });
-  expect(chunks).toEqual([chunk("par"), chunk("whole", 2), chunk("", 2, true)]);
-  expect(events.map((event) => [(event as { type: string }).type, (event as ModelCallStarted).attempt])).toEqual([
+  await callModel(live, model(cut, streamed("whole")), REQUEST, { purpose: "chat" });
+  expect(chunks).toEqual([chunk("par", 0), chunk("whole", 0, 2), chunk("", 1, 2, true)]);
+  expect(events.map((event) => [(event as { type: string }).type, (event as ModelCallStarted).n])).toEqual([
     ["ModelCallStarted", 1],
     ["ModelCallFinished", 1],
     ["ModelCallStarted", 2],
@@ -205,8 +222,8 @@ test("a retried attempt's chunks carry attempt 2", async () => {
 
 test("empty text deltas send no chunk", async () => {
   const { live, chunks } = sinks({ events: false });
-  await callModel(live, model(streamed("", "hi", "")), REQUEST, { purpose: "chat", exchangeId: "x1" });
-  expect(chunks).toEqual([chunk("hi"), chunk("", 1, true)]);
+  await callModel(live, model(streamed("", "hi", "")), REQUEST, { purpose: "chat" });
+  expect(chunks).toEqual([chunk("hi", 0), chunk("", 1, 1, true)]);
 });
 
 test("an interrupted call ends its stream with the final chunk", async () => {
@@ -222,11 +239,11 @@ test("an interrupted call ends its stream with the final chunk", async () => {
       if (item.chunk === " big") interrupt.abort(new Error("interrupted"));
     },
   });
-  const options = { purpose: "chat" as const, exchangeId: "x1", interrupt: interrupt.signal };
+  const options = { purpose: "chat" as const, interrupt: interrupt.signal };
   const cut = await rejected(callModel(live, model(streamed("hello", " big", " world")), REQUEST, options));
   expect(cut).toBeInstanceOf(ReplyInterrupted);
   expect((cut as ReplyInterrupted).reply).toEqual(new Message({ role: "assistant", parts: [new TextPart("hello big")] }));
-  expect(chunks).toEqual([chunk("hello"), chunk(" big"), chunk("", 1, true)]);
+  expect(chunks).toEqual([chunk("hello", 0), chunk(" big", 1), chunk("", 2, 1, true)]);
   expect(events.map((event) => (event as { type: string }).type)).toEqual(["ModelCallStarted", "ModelCallFinished"]);
 });
 
@@ -255,13 +272,10 @@ test("a plain agent streams text chunks then one final chunk", async () => {
   const replyEvents = [...streamed("hello", " big", " world").slice(0, -1), new UsageReport(usage), FINISH];
   const { outcome, chunks, observed } = await evaluate(model(replyEvents));
   expect((outcome as Output).value).toBe("hello big world");
-  const exchangeId = (observed[0] as ModelCallStarted).exchangeId;
-  const at = (text: string, final = false) =>
-    new StreamChunk({ nodeId: "writer", key: "text", chunk: text, final, exchangeId, attempt: 1 });
-  expect(chunks).toEqual([at("hello"), at(" big"), at(" world"), at("", true)]);
-  const identity = { nodeId: "writer", exchangeId, purpose: "chat" as const, ...CONFIG, attempt: 1 };
+  expect(chunks).toEqual([chunk("hello", 0), chunk(" big", 1), chunk(" world", 2), chunk("", 3, 1, true)]);
+  const identity = { nodeId: "writer", n: 1, purpose: "chat" as const, ...CONFIG };
   expect(observed).toEqual([
-    new ModelCallStarted(identity),
+    new ModelCallStarted({ ...identity, startedAt: (observed[0] as ModelCallStarted).startedAt }),
     new ModelCallFinished({ ...identity, usage: new TokenUsage({ inputTokens: 5, outputTokens: 3, totalTokens: 8 }) }),
   ]);
 });
@@ -294,13 +308,12 @@ test("a mid-stream failure sends no final chunk and fails the node", async () =>
   const cut = [new TextDelta(0, "partial"), new TextDelta(0, " answer"), new ProviderError("connection", "reset by sk-hidden")];
   const { outcome, chunks, observed } = await evaluate(model(cut));
   expect(outcome).toBeInstanceOf(EvaluationFailure);
-  const exchangeId = (observed[0] as ModelCallStarted).exchangeId;
-  expect(chunks.map((item) => [item.exchangeId, item.chunk, item.final])).toEqual([
-    [exchangeId, "partial", false],
-    [exchangeId, " answer", false],
+  expect(chunks.map((item) => [item.n, item.index, item.chunk, item.final])).toEqual([
+    [1, 0, "partial", false],
+    [1, 1, " answer", false],
   ]);
   expect(observed.at(-1)).toEqual(
-    new ModelCallFinished({ nodeId: "writer", exchangeId, purpose: "chat", ...CONFIG, error: "ProviderError", attempt: 1 }),
+    new ModelCallFinished({ nodeId: "writer", n: 1, purpose: "chat", ...CONFIG, error: "ProviderError" }),
   );
   expect(JSON.stringify(observed)).not.toContain("sk-hidden");
 });
@@ -338,7 +351,12 @@ test.each([
 
 /** A tool set holding `lookup`, which records each argument record in `seen` and answers `found:<topic>`. */
 function lookupTools(seen: unknown[] = []): ToolSet {
-  const lookup = new FunctionTool({
+  return new ToolSet({ lookup: lookupTool(seen) });
+}
+
+/** The `lookup` tool: records each argument record in `seen` and answers `found:<topic>`. */
+function lookupTool(seen: unknown[] = []): FunctionTool {
+  return new FunctionTool({
     name: "lookup",
     description: "Look it up.",
     parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
@@ -347,7 +365,6 @@ function lookupTools(seen: unknown[] = []): ToolSet {
       return `found:${args.topic}`;
     },
   });
-  return new ToolSet({ lookup });
 }
 
 /**
@@ -372,18 +389,20 @@ test("a tool-calling agent streams each exchange between its observers", async (
   const { outcome, chunks, observed } = await evaluate(chat, { tools: lookupTools() });
 
   expect((outcome as Output).value).toBe("acme is fine");
-  const [first, second] = [(observed[0] as ModelCallStarted).exchangeId, (observed[4] as ModelCallStarted).exchangeId];
-  const call = { nodeId: "writer", exchangeId: first, callIndex: 0, toolCallId: "call-1", name: "lookup" };
+  // The reply is step 1, its tool result step 2, so the second reply is step 3.
+  const [first, second] = [(observed[0] as ModelCallStarted).n, (observed[4] as ModelCallStarted).n];
+  expect([first, second]).toEqual([1, 3]);
+  const call = { nodeId: "writer", n: first, callIndex: 0, toolCallId: "call-1", name: "lookup" };
   expect(observed[2]).toEqual(new ToolCallStarted({ ...call, arguments: { topic: "acme" } }));
-  expect(chunks.map((item) => [item.exchangeId, item.chunk, item.final])).toEqual([
-    [first, "let", false],
-    [first, " me", false],
-    [first, " check", false],
-    [first, "", true],
-    [second, "acme", false],
-    [second, " is", false],
-    [second, " fine", false],
-    [second, "", true],
+  expect(chunks.map((item) => [item.n, item.index, item.chunk, item.final])).toEqual([
+    [first, 0, "let", false],
+    [first, 1, " me", false],
+    [first, 2, " check", false],
+    [first, 3, "", true],
+    [second, 0, "acme", false],
+    [second, 1, " is", false],
+    [second, 2, " fine", false],
+    [second, 3, "", true],
   ]);
 });
 
@@ -444,4 +463,129 @@ test("a mid-stream failure sends no final chunk and reports the error", async ()
   expect(events.filter((event) => event instanceof ModelCallFinished).map((event) => event.error)).toEqual([
     "ProviderError",
   ]);
+});
+
+// ---------- step ids: chunks and call events name the step their record becomes ----------
+
+/** A fresh run log path in its own folder. */
+function stepLog(): string {
+  return join(mkdtempSync(join(tmpdir(), "yian-agent-streaming-")), "log.jsonl");
+}
+
+/** The `[n, kind]` of each step the log at `path` holds for `nodeId`. */
+function loggedSteps(path: string, nodeId = "agent"): [number, string][] {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .flatMap((line) => {
+      const { record } = decodeRecord(line);
+      return record instanceof NodeStepRecord && record.nodeId === nodeId ? [[record.n, String(record.step["kind"])]] : [];
+    }) as [number, string][];
+}
+
+/** Run `PLAIN_FLOW`-style `flow` over `chat` with a log, collecting its chunks and events. */
+async function streamedRun(
+  chat: ScriptedModel,
+  options: { tools?: Record<string, FunctionTool>; modelRetries?: number; flow?: string } = {},
+) {
+  const { tools, modelRetries = 0, flow = PLAIN_FLOW } = options;
+  const log = stepLog();
+  const chunks: StreamChunk[] = [];
+  const events: unknown[] = [];
+  const env = (name: string) => (name === "YIAN_MODEL_RETRIES" ? String(modelRetries) : NO_ENV(name));
+  const result = await runFlow(await loadFlow(flow), { question: "q1" }, {
+    log,
+    env,
+    random: () => 0,
+    models: serving(chat, env),
+    tools,
+    onStream: (item) => void chunks.push(item),
+    onEvent: (event) => void events.push(event),
+  });
+  return { log, result, chunks, events };
+}
+
+test("chunks carry their model_call step's n and a dense index from 0", async () => {
+  const flow = PLAIN_FLOW.replace("    output: str", "    tools: [lookup]\n    output: str");
+  const chat = model(streamedCalls("let me check", [["acme", "call-1"]]), streamed("acme", " is", " fine"));
+  const { log, result, chunks, events } = await streamedRun(chat, { tools: { lookup: lookupTool() }, flow });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(loggedSteps(log)).toEqual([
+    [1, "model_call"],
+    [2, "tool_result"],
+    [3, "model_call"],
+  ]);
+  expect(chunks.map((item) => [item.n, item.index, item.chunk, item.final])).toEqual([
+    [1, 0, "let", false],
+    [1, 1, " me", false],
+    [1, 2, " check", false],
+    [1, 3, "", true],
+    [3, 0, "acme", false],
+    [3, 1, " is", false],
+    [3, 2, " fine", false],
+    [3, 3, "", true],
+  ]);
+  // The call events name the same step, and a tool call names its reply's step.
+  const named = events.flatMap((event) =>
+    event instanceof ModelCallStarted || event instanceof ModelCallFinished || event instanceof ToolCallStarted
+      ? [[event.type, event.nodeId, event.n]]
+      : [],
+  );
+  expect(named).toEqual([
+    ["ModelCallStarted", "agent", 1],
+    ["ModelCallFinished", "agent", 1],
+    ["ToolCallStarted", "agent", 1],
+    ["ModelCallStarted", "agent", 3],
+    ["ModelCallFinished", "agent", 3],
+  ]);
+});
+
+test("a retried attempt streams under the next n, its index restarting at 0", async () => {
+  const cut = [new TextDelta(0, "par"), new TextDelta(0, "tial"), new ProviderError("server", "boom", { retryAfter: 0.001 })];
+  const { log, result, chunks, events } = await streamedRun(model(cut, streamed("whole", " reply")), { modelRetries: 1 });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(loggedSteps(log)).toEqual([
+    [1, "model_call"],
+    [2, "model_call"],
+  ]);
+  expect(chunks.map((item) => [item.n, item.index, item.chunk, item.final])).toEqual([
+    [1, 0, "par", false],
+    [1, 1, "tial", false],
+    [2, 0, "whole", false],
+    [2, 1, " reply", false],
+    [2, 2, "", true],
+  ]);
+  const calls = events.filter((event) => event instanceof ModelCallStarted || event instanceof ModelCallFinished);
+  expect(calls.map((event) => [event.type, event.n, event instanceof ModelCallFinished ? event.error : null])).toEqual([
+    ["ModelCallStarted", 1, null],
+    ["ModelCallFinished", 1, "ProviderError"],
+    ["ModelCallStarted", 2, null],
+    ["ModelCallFinished", 2, null],
+  ]);
+});
+
+test("a call's n follows the steps its start recorded before it", async () => {
+  const prior: ValueRecord[] = [{ kind: "llm_config" }];
+  const recorded: ValueRecord[] = [];
+  const nodeSteps = new NodeSteps(2, prior, (step) => {
+    recorded.push(step);
+    return prior.length + recorded.length;
+  });
+  expect(nodeSteps.next).toBe(2);
+  // A call-time agent records its config before the loop builds its steps.
+  nodeSteps.record({ kind: "llm_config" });
+  expect(nodeSteps.next).toBe(3);
+  const steps = new AgentSteps(nodeSteps, () => 0, null, (error) => error, "writer");
+  expect(steps.nextN()).toBe(3);
+  const { live, events, chunks } = sinks();
+  const record = { steps, digest: "d".repeat(64) };
+  const { n } = await callModel(live, model(streamed("hi", "!")), REQUEST, { purpose: "chat", record });
+  expect(n).toBe(3);
+  expect(chunks.map((item) => [item.n, item.index])).toEqual([
+    [3, 0],
+    [3, 1],
+    [3, 2],
+  ]);
+  expect(events.map((event) => (event as ModelCallStarted).n)).toEqual([3, 3]);
+  expect(steps.nextN()).toBe(4);
 });

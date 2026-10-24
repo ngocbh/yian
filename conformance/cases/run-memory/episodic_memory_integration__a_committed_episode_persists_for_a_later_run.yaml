@@ -141,17 +141,17 @@ expect:
   - - NodeStarted
     - node_id: answer
   - - ModelCallStarted
-    - exchange_id: <id:3>
-      model: test-model
+    - model: test-model
       node_id: answer
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:3>
-      model: test-model
+    - model: test-model
       node_id: answer
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: answer
       output: Use a queue again.
@@ -164,14 +164,16 @@ expect:
     - output: Use a queue again.
   stream:
   - chunk: Use a queue again.
-    exchange_id: <id:3>
     final: false
     key: text
     node_id: answer
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:3>
     final: true
     key: text
     node_id: answer
+    index: 1
+    n: 1
   memory:
     episodic: '{"entry_id":"<id:1>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":8,"failure":null,"inputs":{"topic":"queue ordering"},"interactions":[{"kind":"model_text","text":"Use a queue to preserve arrival order."}],"memory_sections":[],"occurrence_path":[],"output":"Use a queue to preserve arrival order.","owner_static_path":["answer"],"prompt":"Explain queue ordering.","run_id":"r1","status":"succeeded"}}'

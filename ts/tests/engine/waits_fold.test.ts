@@ -26,10 +26,13 @@ import {
 import {
   applyWaitsRecord,
   availableUnread,
+  dueTimeouts,
   isWakeable,
   nodeCalls,
   unreadEvents,
   wakeableNodes,
+  wakeAt,
+  waitInfos,
   WaitsState,
 } from "../../src/runtime/waits.ts";
 
@@ -268,4 +271,47 @@ test("a node waiting on two host calls is wakeable only when both settle", () =>
   applyWaitsRecord(w, { seq: 6, record: answer("agent", 4, "r/a/1") });
   expect(isWakeable(w, "agent")).toBe(true);
   expect(isWakeable(w, "nobody")).toBe(false);
+});
+
+const T9 = "2026-10-24T09:00:00.000Z";
+const T10 = "2026-10-24T10:00:00.000Z";
+const NOW = Date.UTC(2026, 9, 24, 9, 30);
+
+test("dueTimeouts names the waiting nodes a timeout would make wakeable", () => {
+  const w = fold(
+    ...START,
+    sleepWait("nap", T9),
+    sleepWait("later", T10),
+    takeWait("heard", "one", "msgs", T9),
+    send("msgs", "x"),
+    pending("agent", 1, "r/a/0", { deadline: T9 }),
+    pending("agent", 2, "r/a/1"),
+    new NodeWaitingRecord("agent", ["r/a/0", "r/a/1"]),
+    pending("ask", 1, "r/ask/1", { deadline: T9 }),
+    new NodeWaitingRecord("ask", ["r/ask/1"]),
+  );
+  // heard has an assigned event, so it is answered, never due; agent has another open call that isn't due.
+  expect(dueTimeouts(w, NOW)).toEqual(new Map([["nap", ["r/nap"]], ["ask", ["r/ask/1"]]]));
+  expect(dueTimeouts(w, Date.UTC(2026, 9, 24, 8))).toEqual(new Map());
+  expect(dueTimeouts(w, Date.parse(T9))).toEqual(new Map([["nap", ["r/nap"]], ["ask", ["r/ask/1"]]]));
+});
+
+test("wakeAt is the earliest open deadline of a waiting node", () => {
+  expect(wakeAt(fold(...START))).toBeNull();
+  expect(wakeAt(fold(...START, takeWait("heard", "one")))).toBeNull();
+  expect(wakeAt(fold(...START, sleepWait("later", T10), sleepWait("nap", T9)))).toBe(T9);
+  // An answered take's deadline no longer counts, nor a running node's call.
+  expect(wakeAt(fold(...START, takeWait("heard", "one", "msgs", T9), send("msgs", "x"), sleepWait("later", T10)))).toBe(T10);
+  expect(wakeAt(fold(...START, new NodeStartedRecord("ask"), pending("ask", 1, "r/ask/1", { deadline: T9 })))).toBeNull();
+  expect(wakeAt(fold(...START, sleepWait("nap", T9), new NodeWokenRecord("nap", ["r/nap"])))).toBeNull();
+});
+
+test("waitInfos lists each waiting node's calls, settled or not", () => {
+  const w = fold(...START, takeWait("heard", "one"), sleepWait("nap", T9), send("msgs", "x"), pending("ask", 1, "r/ask/1"), new NodeWaitingRecord("ask", ["r/ask/1"]));
+  expect(waitInfos(w)).toEqual([
+    { node: "heard", callId: "r/heard", tool: "take", inbox: "msgs", deadline: null, settled: true },
+    { node: "nap", callId: "r/nap", tool: "sleep", inbox: null, deadline: T9, settled: false },
+    { node: "ask", callId: "r/ask/1", tool: "ask", inbox: null, deadline: null, settled: false },
+  ]);
+  expect(waitInfos(fold(...START))).toEqual([]);
 });

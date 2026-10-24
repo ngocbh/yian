@@ -367,3 +367,59 @@ export function availableUnread(w: WaitsState, inbox: string): readonly number[]
   const held = new Set([...w._pendingTakes.values()].flatMap((take) => take.events));
   return (w.inboxes.get(inbox)?.unread ?? []).filter((seq) => !held.has(seq));
 }
+
+/** Return a call's deadline in epoch milliseconds, or `null` when it has none. */
+function deadlineMs(call: Call): number | null {
+  return call.deadline === null ? null : Date.parse(call.deadline);
+}
+
+/**
+ * Return, by waiting node in waiting order, the open calls whose deadline is at or before
+ * `nowMs`, for each node whose other calls are all settled, so timing these out makes it wakeable.
+ */
+export function dueTimeouts(w: WaitsState, nowMs: number): ReadonlyMap<string, readonly string[]> {
+  const due = new Map<string, readonly string[]>();
+  for (const [nodeId, waiting] of w.waiting) {
+    const open = waiting.callIds.map((callId) => w.calls.get(callId)).filter((call) => call?.state === "open") as Call[];
+    const past = open.filter((call) => {
+      const ms = deadlineMs(call);
+      return ms !== null && ms <= nowMs;
+    });
+    if (past.length > 0 && past.length === open.length) due.set(nodeId, past.map((call) => call.callId));
+  }
+  return due;
+}
+
+/** Return the earliest deadline of an open call of a waiting node, or `null` when none has one. */
+export function wakeAt(w: WaitsState): string | null {
+  let earliest: string | null = null;
+  for (const waiting of w.waiting.values()) {
+    for (const callId of waiting.callIds) {
+      const call = w.calls.get(callId);
+      // Record times have one fixed-width form, so text order is time order.
+      if (call?.state === "open" && call.deadline !== null && (earliest === null || call.deadline < earliest)) {
+        earliest = call.deadline;
+      }
+    }
+  }
+  return earliest;
+}
+
+/** Return the calls of each waiting node, in waiting order, then the order the node names them. */
+export function waitInfos(w: WaitsState): readonly WaitInfo[] {
+  const infos: WaitInfo[] = [];
+  for (const [node, waiting] of w.waiting) {
+    for (const callId of waiting.callIds) {
+      const call = w.calls.get(callId);
+      infos.push({
+        node,
+        callId,
+        tool: call?.tool ?? "",
+        inbox: call?.inbox ?? null,
+        deadline: call?.deadline ?? null,
+        settled: call !== undefined && call.state !== "open",
+      });
+    }
+  }
+  return infos;
+}

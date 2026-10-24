@@ -1,4 +1,5 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
@@ -10,10 +11,10 @@ flow: |
         proj: !str
       nodes:
         ask:
-          kind: human_input
+          kind: tool
+          tool_id: ask
           input:
-            proj: ${input.proj}
-          prompt: "${nope}"
+            prompt: "${nope}"
       output: ${ask.output}
   nodes:
     run:
@@ -28,10 +29,10 @@ expect:
     - code: compose.load
       message: |-
         defs entry 'confirm': flow has unresolved references:
-          node 'ask' prompt: ${nope} is not a declared input
+          node 'ask' input 'prompt' from: reference ${nope} uses unknown namespace 'nope'
       frames:
       - label: flow.yaml
         range: [7, 5, 16, 1]
         note: definition 'confirm'
       - label: flow.yaml
-        range: [14, 17, 14, 26]
+        range: [14, 19, 14, 28]

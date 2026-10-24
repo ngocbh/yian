@@ -1,13 +1,16 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
   input: {proj: !str }
   nodes:
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
-      prompt: "${a}"
+      kind: tool
+      tool_id: ask
+      input:
+        proj: ${input.proj}
+        prompt: "${a}"
       adaptive_questions:
         prompt: "${b}"
   output: ${ask.output}
@@ -18,7 +21,7 @@ expect:
       message: |-
         flow has unresolved references:
           node 'ask' adaptive_questions.prompt: ${b} is not a declared input or variable
-          node 'ask' prompt: ${a} is not a declared input
+          node 'ask' input 'prompt' from: reference ${a} uses unknown namespace 'a'
       frames:
       - label: flow.yaml
-        range: [10, 15, 10, 21]
+        range: [12, 15, 12, 21]

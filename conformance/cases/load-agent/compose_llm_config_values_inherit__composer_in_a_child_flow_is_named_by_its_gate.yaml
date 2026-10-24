@@ -1,8 +1,10 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
-  llm_config: {model: '${pick.output}'}
+  llm_config:
+    model: ${pick.output}
   nodes:
     pick:
       kind: agent
@@ -14,8 +16,10 @@ flow: |
       input: {}
       nodes:
         ask:
-          kind: human_input
-          prompt: hi
+          kind: tool
+          tool_id: ask
+          input:
+            prompt: hi
           adaptive_questions:
             prompt: Q
       output: ${ask.output}
@@ -25,7 +29,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'flow llm_config.model: node ''ask'' adaptive_questions.llm_config in ''c'' would inherit this value, which is read only when the flow runs; pass it to the child as an input and write `${input.model}` in the child''s llm_config'
+      message: "flow llm_config.model: node 'ask' adaptive_questions.llm_config in 'c' would inherit this value, which is read only when the flow runs; pass it to the child as an input and write `${input.model}` in the child's llm_config"
       frames:
       - label: flow.yaml
-        range: [3, 21, 3, 37]
+        range: [4, 10, 4, 24]

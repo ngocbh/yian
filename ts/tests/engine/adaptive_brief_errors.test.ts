@@ -8,7 +8,8 @@
  * `load-agent/engine_adaptive_brief_errors__brief_and_gate_prompt_errors_are_both_reported`, with
  * `full` (every frame and the notes).
  *
- * Changed: the flows assemble with `assembleText`, where Python loads them.
+ * Changed: the flows assemble with `assembleText`, where Python loads them. The gate is a TOOL
+ * `ask`, so its prompt is the input `prompt:`, a wiring template whose errors are a reference's.
  *
  * Ported through `loadFlow`: `test_defs_body_brief_error` (a `defs:` body).
  */
@@ -19,14 +20,14 @@ import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
 
-const GATE_PROMPT = '    prompt: "Pick one for ${proj}"\n';
+const GATE_PROMPT = '      prompt: "Pick one for ${input.proj}"\n';
 
 const SITE = "node 'ask' adaptive_questions.prompt: ";
 
 /**
- * Return the adaptive-gate flow whose gate has `prompt:` line `gatePrompt` and the brief `brief`:
- * the gate's `prompt:` is on line 8 and the brief on line 10; without the gate `prompt:`, the
- * brief moves up to line 9.
+ * Return the adaptive-gate flow whose `ask` has input `prompt:` line `gatePrompt` and the brief
+ * `brief`: the ask's `prompt:` is on line 10 and the brief on line 12; without the `prompt:`, the
+ * brief moves up to line 11.
  */
 const flow = (brief: string, gatePrompt = GATE_PROMPT) => `\
 id: f
@@ -34,8 +35,10 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${input.proj}'}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
 ${gatePrompt}    adaptive_questions:
       prompt: "${brief}"
 output: \${ask.output}
@@ -61,8 +64,8 @@ const BRIEFS = [
 test.each(
   (
     [
-      ["gate-prompt", GATE_PROMPT, 10],
-      ["no-gate-prompt", "", 9],
+      ["gate-prompt", GATE_PROMPT, 12],
+      ["no-gate-prompt", "", 11],
     ] as const
   ).flatMap(([id, gatePrompt, briefLine]) =>
     BRIEFS.map(([brief, fragment]) => [id, brief, gatePrompt, briefLine, fragment] as const),
@@ -78,17 +81,17 @@ test.each(
 });
 
 test("brief and gate prompt errors are both reported", () => {
-  const error = loadFails(flow("${b}", '    prompt: "${a}"\n'));
+  const error = loadFails(flow("${b}", '      prompt: "${a}"\n'));
   const lines = error.message
     .split("\n")
     .map((ln) => ln.trim())
     .filter((ln) => ln.startsWith("node 'ask' "));
 
-  expect(lines.map((ln) => ln.split(" is not ")[0])).toEqual([
-    "node 'ask' adaptive_questions.prompt: ${b}",
-    "node 'ask' prompt: ${a}",
+  expect(lines).toEqual([
+    "node 'ask' adaptive_questions.prompt: ${b} is not a declared input or variable",
+    "node 'ask' input 'prompt' from: reference ${a} uses unknown namespace 'a'",
   ]);
-  expect(lineOf(error)).toBe(10);
+  expect(lineOf(error)).toBe(12);
 });
 
 test("an aliased brief shares the anchor line", () => {
@@ -98,16 +101,19 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${input.proj}'}
-    prompt: &p "Q \${nope}"
-    adaptive_questions: {prompt: *p}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
+      prompt: &p "Q \${nope}"
+    adaptive_questions:
+      prompt: *p
 output: \${ask.output}
 `);
 
-  expect(error.message).toContain("node 'ask' prompt: ${nope}");
+  expect(error.message).toContain("node 'ask' input 'prompt' from: reference ${nope} uses unknown namespace 'nope'");
   expect(error.message).toContain("node 'ask' adaptive_questions.prompt: ${nope}");
-  expect(lineOf(error)).toBe(8);
+  expect(lineOf(error)).toBe(10);
 });
 
 test("a compact flow's brief error names the flow node", () => {
@@ -115,14 +121,15 @@ test("a compact flow's brief error names the flow node", () => {
 id: f
 name: f
 input: {proj: !str }
-kind: human_input
+kind: tool
+tool_id: ask
 adaptive_questions:
   prompt: "Q \${nope}"
 `);
 
   expect(error.message).toContain("node 'f' adaptive_questions.prompt: ${nope}");
   expect(error.message).not.toContain("f__compose");
-  expect(lineOf(error)).toBe(6);
+  expect(lineOf(error)).toBe(7);
 });
 
 test("a defs body's brief error", async () => {
@@ -138,7 +145,8 @@ defs:
       topic: !str
     nodes:
       ask:
-        kind: human_input
+        kind: tool
+        tool_id: ask
         input:
           topic: \${input.topic}
         adaptive_questions:
@@ -157,7 +165,7 @@ output: \${run.output}
   expect(error.message.startsWith("defs entry 'pick': ")).toBe(true);
   expect(error.message).toContain("node 'ask' adaptive_questions.prompt: ${nope}");
   expect(error.message).not.toContain("ask__compose");
-  expect(lineOf(error)).toBe(15);
+  expect(lineOf(error)).toBe(16);
 });
 
 test("a clean brief loads", () => {

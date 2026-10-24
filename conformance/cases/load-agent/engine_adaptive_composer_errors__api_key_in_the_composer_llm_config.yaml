@@ -1,12 +1,15 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
   input: {proj: !str }
   nodes:
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
+      kind: tool
+      tool_id: ask
+      input:
+        proj: ${input.proj}
       adaptive_questions:
         prompt: "Q ${proj}"
         llm_config: {api_key: x}
@@ -18,4 +21,4 @@ expect:
       message: node 'ask' adaptive_questions.llm_config.api_key is a host credential; pass it in the run's llm_config, not in a flow file
       frames:
       - label: flow.yaml
-        range: [10, 19, 10, 31]
+        range: [12, 19, 12, 31]

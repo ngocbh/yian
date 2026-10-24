@@ -64,11 +64,9 @@ test.each<CaseRow>([
   { id: "load-core/compose_node_when_hint__when_on_a_call_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_case_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_code_node", call: parsedNodes },
-  { id: "load-core/compose_node_when_hint__when_on_a_human_input_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_loop_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_map_node", call: parsedNodes },
   { id: "load-core/compose_node_when_hint__when_on_a_tool_node", call: parsedNodes },
-  { id: "load-core/compose_node_when_hint__when_on_a_wait_node", call: parsedNodes },
 ])("parseNodes: $id", runCase);
 
 test("when on a case node points at cases entries", () => {

@@ -8,9 +8,8 @@
  * Changed: its CODE reference is a TS fixture (`./fixtures/compose_codefns.ts:make_plan`), not
  * Python's `tests.seeds.fns:questions_seed`; the reader refuses the flow before the code matters.
  *
- * The harvested cases from this file, pinned at the end:
- * `load-leaves/engine_validate_human_questions__duplicate_question_headers` and
- * `load-leaves/engine_validate_human_questions__questions_ref_to_an_undeclared_input`.
+ * The harvested case from this file, pinned at the end:
+ * `load-leaves/engine_validate_human_questions__duplicate_question_headers`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -66,5 +65,4 @@ test("a node-output reference in the questions field is refused", () => {
 
 test.each<CaseRow>([
   { id: "load-leaves/engine_validate_human_questions__duplicate_question_headers", call: assembled },
-  { id: "load-leaves/engine_validate_human_questions__questions_ref_to_an_undeclared_input", call: assembled },
 ])("case $id", (row) => runCase(row));

@@ -521,29 +521,15 @@ test.each<CaseRow>([
     id: "load-core/compose_non_text_prompt__adaptive_questions_prompt_error_comes_before_exclusivity",
     call: parsedNodes,
   },
-  { id: "load-core/compose_non_text_prompt__compact_prompt_must_be_text", call: parsedNodes },
-  { id: "load-core/compose_non_text_prompt__flow_style_question_field_is_located", call: parsedNodes },
-  { id: "load-core/compose_non_text_prompt__non_text_adaptive_questions_prompt", call: parsedNodes },
-  { id: "load-core/compose_non_text_prompt__non_text_human_input_prompt", call: parsedNodes },
-  { id: "load-core/compose_non_text_prompt__non_text_question", call: parsedNodes },
-  // tests/compose/test_kind_human_input_parse.py
-  { id: "load-leaves/compose_kind_human_input_parse__a_gate_without_a_question_surface", call: parsedNodes },
-  { id: "load-leaves/compose_kind_human_input_parse__an_unknown_adaptive_questions_key", call: parsedNodes },
-  {
-    id: "load-leaves/compose_kind_human_input_parse__questions_and_adaptive_questions_are_exclusive",
-    call: parsedNodes,
-  },
 ])("parseNodes: $id", runCase);
 
 test.each<CaseRow>([
-  // tests/compose/test_kind_human_input_parse.py
-  { id: "load-leaves/compose_kind_human_input_parse__questions_not_a_list_or_ref", call: assembled },
-  { id: "load-leaves/compose_kind_human_input_parse__questions_text_around_a_ref", call: assembled },
+  // tests/compose/test_non_text_prompt.py
+  { id: "load-core/compose_non_text_prompt__flow_style_question_field_is_located", call: assembled },
+  { id: "load-core/compose_non_text_prompt__non_text_question", call: assembled },
 ])("assemble: $id", runCase);
 
 test.each<CaseRow>([
-  // tests/compose/test_kind_human_input_parse.py
-  { id: "load-leaves/compose_kind_human_input_parse__a_spaced_whole_questions_ref_loads", call: assembled },
   // tests/engine/test_human_input_text_load.py
   { id: "load-leaves/engine_human_input_text_load__a_clean_gate_loads", call: assembled },
 ])("assembles: $id", runCase);

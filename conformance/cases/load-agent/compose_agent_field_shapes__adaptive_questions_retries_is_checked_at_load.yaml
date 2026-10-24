@@ -1,10 +1,12 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: gate
   name: gate
   nodes:
     ask:
-      kind: human_input
+      kind: tool
+      tool_id: ask
       adaptive_questions:
         prompt: Ask what you need.
         retries: -1
@@ -13,7 +15,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''ask'' (kind=human_input): `adaptive_questions.retries:` must be a non-negative integer, got -1'
+      message: "node 'ask' (tool_id: ask): `adaptive_questions.retries:` must be a non-negative integer, got -1"
       frames:
       - label: flow.yaml
-        range: [7, 7, 9, 1]
+        range: [8, 7, 10, 1]

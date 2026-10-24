@@ -27,7 +27,9 @@
  * with `loadFlow`, `test_a_parent_cannot_use_a_childs_typedef` and
  * `test_a_uses_child_resolves_names_against_its_own_typedefs` (a load row, then a run row).
  *
- * Changed: CODE bodies are JS, getting ints as `number`s (decision 45), and ints read back as
+ * Changed: TS yian has no `wait` or `human_input`, so the wait-until and human-input-question rows
+ * use a `sleep` and an `ask`: `isinstance` is allowed in their inputs, and the error is the input's
+ * type check, at the same line. CODE bodies are JS, getting ints as `number`s (decision 45), and ints read back as
  * `bigint`s (decision 4a). The harvested `run-core/compose_isinstance_load__isinstance_in_a_node_input`
  * and `..._isinstance_in_a_searched_case_first_true_wins` hold one parameter row each, and a case
  * doesn't pin the type tables, so both tests are ported whole.
@@ -823,21 +825,23 @@ test("list is not an isinstance type name", () => {
   expect(loadError(() => loadedNodes(text)).message).toContain("unknown type 'list'");
 });
 
-test("isinstance in wait until is a located load error", () => {
+test("isinstance in a sleep until is a located load error", () => {
   const text = `id: w
 name: w
 input:
   when: !date
 nodes:
   w:
-    kind: wait
-    until: \${isinstance(input.when, date)}
+    kind: tool
+    tool_id: sleep
+    input:
+      until: \${isinstance(input.when, date)}
 output: \${w.output}
 `;
 
   const error = loadError(() => loadedNodes(text));
 
-  expect(error.message).toContain("isinstance is not supported in a wait node's until:");
+  expect(error.message).toContain("input 'until': must be a date or datetime, but the value is bool");
   expect(errorLine(error)).toBe(lineOf(text, "until:"));
 });
 
@@ -920,8 +924,8 @@ output: \${ask.output}
   expect(errorLine(error)).toBe(lineOf(text, "prompt:"));
 });
 
-test("isinstance in a human input question is a located load error", () => {
-  // The human-input node's own build refuses the question before any type table is filled.
+test("isinstance as an ask's questions is a located load error", () => {
+  // The check is a bool, not a list of questions.
   const text =
     "id: h\nname: h\n" +
     TYPEDEFS +
@@ -929,16 +933,16 @@ test("isinstance in a human input question is a located load error", () => {
   order: !object
 nodes:
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
-      order: \${input.order}
-    questions: '\${isinstance(order, Buy)}'
+      questions: '\${isinstance(input.order, Buy)}'
 output: \${ask.output}
 `;
 
   const error = loadError(() => loadedNodes(text));
 
-  expect(error.message).toContain("exactly one `${name}`");
+  expect(error.message).toContain("input 'questions': must be a list of questions, but the value is bool");
   expect(errorLine(error)).toBe(lineOf(text, "questions:"));
 });
 

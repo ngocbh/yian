@@ -515,8 +515,10 @@ name: f
 input: {proj: !str , m: !str , t: !float }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${input.proj}'}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
     adaptive_questions:
       prompt: "Q \${proj}"
       llm_config:

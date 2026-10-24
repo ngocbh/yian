@@ -1,5 +1,20 @@
 kind: load
+rules: [messages]
 flow: |
+  id: f
+  name: f
+  input:
+    proj: !str
+  nodes:
+    ask:
+      kind: tool
+      tool_id: ask
+      input:
+        questions:
+          - question: "Which framework for ${upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(upper(input.proj)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))}?"
+            header: Framework
+  output: ${ask.output}
+python_flow: |
   id: f
   name: f
   input:
@@ -14,6 +29,14 @@ flow: |
           header: Framework
   output: ${ask.output}
 expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "ask: expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps"
+      frames:
+      - label: flow.yaml
+        range: [11, 9, 13, 1]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

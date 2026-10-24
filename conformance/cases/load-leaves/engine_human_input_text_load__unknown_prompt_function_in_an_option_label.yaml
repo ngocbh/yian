@@ -1,27 +1,27 @@
 kind: load
+python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f
   input: {proj: !str }
   nodes:
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
-      prompt: "${proj}"
-      questions:
-        - question: "${proj}"
-          header: Framework
-          options:
-            - label: "${nosuch(proj)}"
-              description: "${proj}"
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "${input.proj}"
+        questions:
+          - question: "${input.proj}"
+            header: Framework
+            options:
+              - label: "${nosuch(input.proj)}"
+                description: "${input.proj}"
   output: ${ask.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      message: |-
-        flow has unresolved references:
-          node 'ask' questions[0].options[0].label: unknown prompt function 'nosuch'; prompts call only formatting builtins (join, lower, render_as_json, upper); build or check a typed value with a `typedefs:` constructor `T(...)` in an input binding
+      message: "ask: a flow call 'nosuch' inside ${...} is not supported — write it as the whole value with the call(...) directive: call(nosuch, ...)"
       frames:
       - label: flow.yaml
-        range: [13, 20, 13, 37]
+        range: [11, 9, 16, 1]

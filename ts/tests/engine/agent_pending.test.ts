@@ -19,8 +19,8 @@ import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Steering } from "../../src/nodes/base.ts";
-import { advance, cancel, complete, pendingCalls, runFlow } from "../../src/run.ts";
-import { decodeRecord, NodeStepRecord } from "../../src/runtime/log.ts";
+import { advance, cancel, complete, pendingCalls, runFlow, send } from "../../src/run.ts";
+import { decodeRecord, NodeStepRecord, NodeWaitingRecord } from "../../src/runtime/log.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { type ToolEntry, ToolSet } from "../../src/tools/registry.ts";
@@ -113,6 +113,33 @@ test("one call pends, its sibling's result is written, the agent waits; complete
     ["c2", "found", false],
   ]);
   expect(pendingCalls(log)).toEqual([]);
+});
+
+test("an agent with a steer inbox waits with it; a steer sent while it waits joins the call after its results", async () => {
+  const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("done")], CONFIG);
+  const log = freshLog();
+  const options = { env: hostEnv(dir), log, tools: { ask_user: () => pending() }, models: serving(model), runId: "r" };
+  const flow = await loadFlow(agentFlow("ask_user", true));
+  const result = await runFlow(flow, {}, options);
+
+  expect(result.status, result.failure?.message).toBe("waiting");
+  const records = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => decodeRecord(line).record);
+  const waiting = records.find((record) => record instanceof NodeWaitingRecord) as NodeWaitingRecord;
+  expect(waiting.steerInbox).toBe("notes");
+
+  await send(log, "notes", "only the 2024 rows");
+  await complete(log, "r/agent/1/0", { output: "yes" });
+  const resumed = await advance(options);
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("done");
+  const last = model.requests[1]!.messages.slice(-2).map((message) => [message.role, message.text()]);
+  expect(last).toEqual([
+    ["tool", ""],
+    ["user", "only the 2024 rows"],
+  ]);
+  expect(sentResults(model, 1)).toEqual([["c1", "yes", false]]);
+  expect(kinds(log).filter((kind) => kind === "steer")).toHaveLength(1);
 });
 
 test("a complete landing while a sibling still runs is accepted, and the node wakes at once", async () => {

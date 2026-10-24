@@ -264,7 +264,7 @@ test("a trailing recorded steer and a live read both join the first live call, i
   ]);
 });
 
-test("no live read while recorded attempts continue the call", async () => {
+test("no live read while recorded attempts continue the call; the queued steer joins late, after its answer", async () => {
   const request = new Request({ messages: [SYSTEM, userMessage("go"), ...steerMessages(["a"])], tools: [] });
   const failed: ValueRecord = {
     kind: "model_call",
@@ -279,12 +279,15 @@ test("no live read while recorded attempts continue the call", async () => {
     retry_in: 0,
   };
   const double = inboxDouble(["b"]);
-  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const model = new ScriptedModel([textReply("done"), textReply("done with b")], CONFIG);
   const steps = recording([steerStep(["a"]), failed]);
-  expect(((await runAgent(loopContext(model, { steerInbox: double.inbox, steps }))) as Output).value).toBe("done");
+  expect(((await runAgent(loopContext(model, { steerInbox: double.inbox, steps }))) as Output).value).toBe("done with b");
   expect(sent(model.requests[0]!).slice(-1)).toEqual([["user", ["a"]]]);
-  expect(double.reads).toEqual([]);
-  expect(double.queue).toEqual(["b"]);
+  expect(sent(model.requests[1]!).slice(-2)).toEqual([
+    ["assistant", ["done"]],
+    ["user", ["b"]],
+  ]);
+  expect(double.reads).toEqual([["b"]]);
 });
 
 // --- through runFlow and advance --- //

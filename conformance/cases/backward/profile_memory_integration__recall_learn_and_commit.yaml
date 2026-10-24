@@ -121,9 +121,6 @@ expect:
       forward_capture:
         evaluated_keys: [message]
         input_names: [message]
-        node_data:
-          input_output_paths:
-            message: [message]
         route:
           children:
           - kind: source
@@ -164,15 +161,6 @@ expect:
       forward_capture:
         evaluated_keys: [message]
         input_names: [message]
-        node_data:
-          effective_llm_config:
-            _connection: {endpoint: https://api.openai.com/v1, method: api_key, source: missing}
-            model: test-model
-            provider: openai
-          prompt_template: ${message}
-          rendered_prompt: hi
-          variable_domains: {}
-          variables: {}
         route:
           children:
           - kind: source
@@ -197,9 +185,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - kind: source

@@ -607,18 +607,17 @@ For example:
   It also leaves out every other field equal to its empty value (null, `[]`, `0`, `""`), except
   `kind`, which always stays, and its `value_json` text is read as JSON (codec form). The
   capture leaves out `evaluated_keys`, `items`, `input_names` and `variable_names` when they
-  are `[]`, and `node_data` when it is null or `{}`. A capture records no `bound_inputs`
-  (learning rebuilds them by binding the node again from what its route read), and a derived
+  are `[]`. A capture records no `bound_inputs` (learning rebuilds them by binding the node
+  again from what its route read) and no `node_data` (learning rebuilds it from the node: its
+  static material, and an AGENT's render and model config), and a derived
   record (a success naming a derived or expansion commit, and `node_expanded`) holds no
   `forward_capture`: it is rebuilt from the record's sources. An `interpolation` route (a
   template with literal text) records no `value_json` either: learning rebuilds its text the
   same way. Each `items` entry is `{index, capture}`, and its `capture` is projected by these
-  same rules. `node_data.effective_llm_config` is projected as below; everything else is kept
-  as recorded (sources, spans). An interpolation route's `spans` are offsets in code points into
+  same rules. Everything else is kept as recorded (sources, spans). An interpolation route's `spans` are offsets in code points into
   its rendered text.
 - An agent's LLM config (each value of `run_started.effective_llm_by_static_path` and of
-  `run_started.call_time_llm.agents`, the config of an `effective_llm_config` step, and a
-  `forward_capture`'s `node_data.effective_llm_config`) keeps its `llm_config` fields (keys
+  `run_started.call_time_llm.agents`, and the config of an `effective_llm_config` step) keeps its `llm_config` fields (keys
   not starting with `_`), `_header_names`, `_host_key`, and `_connection` cut to `method`,
   `source` and `endpoint` (key hashes and store paths are dropped); any other `_` key is
   dropped.

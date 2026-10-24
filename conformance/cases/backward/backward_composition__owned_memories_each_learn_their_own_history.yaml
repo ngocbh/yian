@@ -114,9 +114,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          input_output_paths:
-            topic: [topic]
         route:
           children:
           - kind: source
@@ -181,12 +178,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          effective_llm_config: {model: local-test, provider: ollama}
-          prompt_template: '${topic}: ${tone}'
-          rendered_prompt: 'reefs: concise'
-          variable_domains: {tone: str}
-          variables: {tone: concise}
         route:
           children:
           - kind: source
@@ -240,9 +231,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - children:

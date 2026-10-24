@@ -385,7 +385,7 @@ describe("learning reads the steps", () => {
       const record = occurrence.record;
       expect(record).toBeInstanceOf(stage === "success" ? NodeSucceededRecord : NodeFailedRecord);
       expect(occurrence.boundInputs).toEqual({ topic: "reefs" });
-      expect(record.forwardCapture!.nodeData).toEqual({
+      expect(occurrence.nodeData).toEqual({
         prompt_template: "${instruction}: ${topic}",
         variables: { instruction: "Summarize clearly" },
         variable_domains: { instruction: "str" },

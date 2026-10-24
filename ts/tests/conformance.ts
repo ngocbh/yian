@@ -98,7 +98,7 @@ import {
   runFlow,
 } from "../src/run.ts";
 import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
-import { addCrashedAttempts } from "../src/runtime/state.ts";
+import { addCrashedAttempts, type RunState } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -1995,7 +1995,7 @@ const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "defaults", "effective_llm_by_static_path", "call_time_llm", "parent", "waits", "timed_out", "closed_calls",
 ]);
 const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "evaluated_keys", "items", "node_data", "input_names", "variable_names",
+  "evaluated_keys", "items", "input_names", "variable_names",
 ]);
 const FAILURE_FIELDS: ReadonlyMap<string, string> = new Map([
   ["node_failed", "failure"],
@@ -2061,10 +2061,6 @@ function capture(captured: Case): Case {
     if (Object.hasOwn(lean, "snapshot")) lean["snapshot"] = route(lean["snapshot"] as Case);
     return lean;
   };
-  const data = get(captured, "node_data") ?? null;
-  if (isMapping(data) && (get(data, "effective_llm_config") ?? null) !== null) {
-    data["effective_llm_config"] = llm(data["effective_llm_config"] as Case);
-  }
   captured["route"] = route(captured["route"] as Case);
   for (const item of captured["items"] as Case[]) item["capture"] = capture(item["capture"] as Case);
   return Object.fromEntries(

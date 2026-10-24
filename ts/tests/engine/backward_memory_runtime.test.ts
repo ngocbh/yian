@@ -996,8 +996,8 @@ test("backward and memory replay call no callbacks or materialization", async ()
     Object.assign(node, {
       forward: fail("forward"),
       backward: fail("backward"),
-      captureBackwardContext: fail("capture"),
     });
+    // `captureBackwardContext` stays: it is pure, and the node data learning reads is rebuilt with it.
   }
   const propose = spyOn(MemoryRuntime.prototype, "proposeLearning").mockImplementation(fail("learner"));
   const commit = spyOn(MemoryRuntime.prototype, "commitLearning").mockImplementation(fail("commit"));

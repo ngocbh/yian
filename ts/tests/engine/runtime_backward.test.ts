@@ -256,6 +256,7 @@ import {
   commitStartSuccess,
   engine,
   feedbackEntries,
+  fixedNodeData,
   fixedRebinder,
   forwardCapture,
   FuncNode,
@@ -473,7 +474,6 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
   });
   const startCapture = new ForwardCapture(ValueRoute.record([["x", sourceRoute(0, ["x"])]]), {
     inputNames: ["x"],
-    nodeData: { input_output_paths: startPaths },
   });
   const pCapture = new ForwardCapture(ValueRoute.record([
       ["v", sourceRoute(2, ["x"])],
@@ -482,7 +482,6 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
     {
       inputNames: ["v", "w"],
       variableNames: ["tone"],
-      nodeData: pPaths === null ? null : { input_output_paths: pPaths },
       scope: pScope,
     },
   );
@@ -509,11 +508,16 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
   let trace = step(null, envelopes[0]!, null, { rootStartId: START_ID, rootEndId: END_ID, rootInputNames: ["x"] });
   trace = step(trace, envelopes[1]!, null, { initialCommit: true });
   const owners = [null, null, nodes.start, null, null, nodes.p, null, null, nodes.end];
-  // Each node's bound inputs, which its occurrence rebuilds.
+  // Each node's bound inputs and node data, which its occurrence rebuilds.
   const inputs = new Map<string, ValueRecord>([
     [START_ID, { x: 1n }],
     ["p", { v: 1n, w: 1n }],
     [END_ID, { value: pOutput } as ValueRecord],
+  ]);
+  const nodeData = new Map<string, JsonObject>([
+    [START_ID, { input_output_paths: startPaths }],
+    ["p", pPaths === null ? {} : { input_output_paths: pPaths }],
+    [END_ID, {}],
   ]);
   for (const [index, owner] of owners.entries()) {
     const envelope = envelopes[index + 2]!;
@@ -521,6 +525,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
     const options: PrepareTraceOptions = {};
     if (record instanceof NodeSucceededRecord) {
       options.rebinder = fixedRebinder(inputs.get(record.nodeId)!);
+      options.nodeDataRebuilder = fixedNodeData(nodeData.get(record.nodeId)!);
       const commit = envelopes[record.commit]!.record as PoolCommitRecord;
       options.committed = { key: commit.key, valueJson: logJson(commit.value) };
       if (record.nodeId === END_ID) {
@@ -2708,13 +2713,15 @@ test("a backward context is trace-owned, detached and survives replay", async ()
   const recapture = spyOn(Node.prototype, "captureBackwardContext").mockImplementation(() => {
     throw new Error("replay recaptured");
   });
+  let replay: RunState;
   try {
-    const replay = replayRecords(new RunState(copyGraph(original)), built.log.records(), { growBuilder: noGrowth });
-    expect(replay.trace!.backwardContext(occurrence.source)).toEqual(context);
-    expect(await computeBackward(replay.trace!, ["one", null])).toEqual(live);
+    replay = replayRecords(new RunState(copyGraph(original)), built.log.records(), { growBuilder: noGrowth });
   } finally {
     recapture.mockRestore();
   }
+  // Learning rebuilds the node data from the node when it reads it, not while replaying.
+  expect(replay.trace!.backwardContext(occurrence.source)).toEqual(context);
+  expect(await computeBackward(replay.trace!, ["one", null])).toEqual(live);
   expect(built.log.records()).toEqual(before);
 });
 
@@ -3042,11 +3049,11 @@ test("an AGENT's inventory is recorded and empty feedback does no backward work"
     const built = engine(graph([node], [[START_ID, "agent"]], {
       outputs: [new FlowOutput("result", "${agent.output}")],
       wiring: { agent: { topic: "${input.topic}" } },
-    }), { inputs: { topic: "reefs" }, learnable: true });
+    }), { inputs: { topic: "reefs" }, learnable: true, effectiveLlmByStaticPath: { agent: {} } });
     await built.run();
     const trace = built.state.trace!;
-    // The bound inputs are rebuilt from the node's binding, so they are read before it changes.
-    for (const occurrence of trace.occurrences) void occurrence.boundInputs;
+    // The bound inputs and node data are rebuilt from the node, so they are read before it changes.
+    for (const occurrence of trace.occurrences) void [occurrence.boundInputs, occurrence.nodeData];
     node.params = [];
     node.variables = [];
     node.captureBackwardContext = () => {

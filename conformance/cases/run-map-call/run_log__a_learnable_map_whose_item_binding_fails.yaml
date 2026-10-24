@@ -56,9 +56,6 @@ expect:
       forward_capture:
         evaluated_keys: [xs]
         input_names: [xs]
-        node_data:
-          input_output_paths:
-            xs: [xs]
         route:
           children:
           - kind: source

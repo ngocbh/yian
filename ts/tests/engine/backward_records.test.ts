@@ -147,8 +147,9 @@
  *   `dataclasses.replace`; that failure is no longer the interruption, so, as in Python, the
  *   commit-failure rule refuses it.
  * - `test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting`
- *   drops the module patches, as above; `forward`, `backward` and `captureBackwardContext` throw
- *   on the nodes of a `copyGraph` copy of the run's flow, each prefix replays over a fresh
+ *   drops the module patches, as above; `forward` and `backward` throw on the nodes of a
+ *   `copyGraph` copy of the run's flow (not `captureBackwardContext`, which rebuilds the node data
+ *   learning reads), each prefix replays over a fresh
  *   `copyGraph` of that copy with `noGrowth`, and `sameRuntimeBackwardState` is Python's `==`.
  *
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
@@ -2054,9 +2055,7 @@ test("backward replay matches every accepted prefix without callbacks", async ()
     node.backward = () => {
       throw new Error("replayed backward callback");
     };
-    node.captureBackwardContext = () => {
-      throw new Error("recaptured backward context");
-    };
+    // `captureBackwardContext` stays: it is pure, and the node data learning reads is rebuilt with it.
   }
   const prefixes: [number, RuntimeBackwardState][] = [[log.records().length, state.backwardState]];
   const records: RunRecord[] = [

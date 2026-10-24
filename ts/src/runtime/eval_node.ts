@@ -61,7 +61,7 @@ import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
-import type { JsonValue } from "../typesys/json.ts";
+import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import { isList, isRecord, jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
@@ -336,8 +336,8 @@ export class EvaluatedOutcome {
       if (!isExactly(backwardCapture, BackwardCapture)) {
         throw new TypeError("backward_capture must be a BackwardCapture or null");
       }
-      const { inputNames, variableNames, scope, nodeData } = backwardCapture;
-      new BackwardCapture({ inputNames, variableNames, scope, nodeData });
+      const { inputNames, variableNames, scope } = backwardCapture;
+      new BackwardCapture({ inputNames, variableNames, scope });
     }
     if ((bindings === null) !== (backwardCapture === null)) {
       throw new RangeError("binding capture and backward invocation metadata must be retained together");
@@ -498,8 +498,6 @@ export interface EvalNodeOptions {
   skills?: ReadonlyMap<string, Skill> | null;
   /** The paired value and source lookup used while capturing bindings. */
   sourceResolver?: SourceResolver | null;
-  /** The accepted run's model configuration by root-relative static path, for render capture. */
-  effectiveLlmByStaticPath?: Readonly<Record<string, JsonObject>> | null;
   /** The run's tool set, delivered only to a node declaring `needsTools`. */
   tools?: ToolSet | null;
   /** The run's host inbox, delivered only to a node declaring `needsSteering`. */
@@ -533,15 +531,14 @@ export interface EvalNodeOptions {
  * @returns The outcome, with captures when asked for.
  * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink,
- *   steering inbox, including a `drain` promise the node dropped, a refused or failing render
- *   capture, a repeated memory context open or a failing opener, a `CapabilityFault` from
- *   `steps.record`), whatever the node then returned or threw.
+ *   steering inbox, including a `drain` promise the node dropped, a repeated memory context open
+ *   or a failing opener, a `CapabilityFault` from `steps.record`), whatever the node then returned
+ *   or threw.
  * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
  *   exactly a `MemoryScope`; Error when a
  *   memory context node's scope has memories and no opener was injected.
  * @throws TypeError, RangeError or the hook's own error when capturing bindings and the input
- *   inventory, `boundLlmConfig` or `captureBackwardContext` fails, or their material isn't JSON;
- *   the body hasn't run.
+ *   inventory fails; the body hasn't run.
  * @throws The signal's reason when the signal is already aborted, before binding, or when the node
  *   rejects after it aborted.
  * @throws RangeError when a node reading its steps fails to bind its reserved keys after an earlier
@@ -563,7 +560,6 @@ export async function evalNode(
     memoryContextOpener = null,
     skills = null,
     sourceResolver = null,
-    effectiveLlmByStaticPath = null,
     tools = null,
     steering = null,
     models = null,
@@ -597,9 +593,6 @@ export async function evalNode(
   if (memoryScope !== null && !isExactly(memoryScope, MemoryScope)) {
     throw new TypeError("node memory_scope must be an exact MemoryScope or null");
   }
-  if (effectiveLlmByStaticPath !== null && !isRecord(effectiveLlmByStaticPath)) {
-    throw new TypeError("effective_llm_by_static_path must be a record or null");
-  }
   if (options.signal != null && !(options.signal instanceof AbortSignal)) {
     throw new TypeError("signal must be an AbortSignal or null");
   }
@@ -614,109 +607,33 @@ export async function evalNode(
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const collector = captureBindings ? new BindingCollector() : null;
-  let backwardCapture = captureBindings ? nodeBackwardCapture(node) : null;
-  let capturesClosed = false;
-  let renderRecorded = false;
-  let boundConfig: JsonValue | null = null;
+  const backwardCapture = captureBindings ? nodeBackwardCapture(node) : null;
 
-  /** Return the config backward records: the bound one, else the run's entry for the static path. */
-  const recordedModelConfig = (): JsonValue | null => {
-    const scope = backwardCapture!.scope;
-    if (scope === null || effectiveLlmByStaticPath === null) return null;
-    // A config resolved only when the node ran is bound with its inputs, so `captureInputs` has
-    // snapshotted it.
-    if (boundConfig !== null) return boundConfig;
-    const key = scope.staticPath.join("/");
-    if (!Object.hasOwn(effectiveLlmByStaticPath, key)) {
-      throw new RangeError(`recorded effective model configuration is missing static path ${reprText(key)}`);
-    }
-    const config: unknown = effectiveLlmByStaticPath[key];
-    if (!isRecord(config)) throw new TypeError("recorded effective model configuration must be a record");
-    return canonicalSeed(config)[1];
-  };
-
-  /** Snapshot the completed inputs and static material before the body can change them. */
+  /** Snapshot the completed inputs before the body can change them. */
   const captureInputs = (inputs: Record<string, unknown>): void => {
-    const config = node.boundLlmConfig(inputs);
-    if (config !== null) {
-      if (!isRecord(config)) throw new TypeError("bound model configuration must be a record");
-      boundConfig = canonicalSeed(config)[1];
-    }
     collector!.finish(inputs as ValueRecord);
-    const data: unknown = node.captureBackwardContext();
-    if (!isRecord(data)) throw new TypeError("capture_backward_context must return a record");
-    const { inputNames, variableNames, scope } = backwardCapture!;
-    const captured = new BackwardCapture({ inputNames, variableNames, scope, nodeData: data });
-    canonicalSeed(captured.nodeData);
-    backwardCapture = captured;
   };
 
-  /**
-   * Freeze the node's one actual render publication.
-   *
-   * @throws Error once the node and its capability promises have settled.
-   * @throws CapabilityFault carrying any other refusal or fault.
-   */
-  const captureRender = (data: Readonly<Record<string, unknown>>): void => {
-    if (capturesClosed) throw new Error("render capture is already closed");
-    try {
-      if (renderRecorded) throw new Error("render capture was already recorded");
-      if (!isRecord(data)) throw new TypeError("render capture must be a record");
-      if (Object.hasOwn(data, "effective_llm_config")) {
-        throw new RangeError("effective_llm_config belongs to recorded runtime authority");
-      }
-      const snapshot = canonicalSeed(data)[1] as Record<string, unknown>;
-      const { inputNames, variableNames, scope, nodeData } = backwardCapture!;
-      if (Object.keys(snapshot).some((key) => Object.hasOwn(nodeData, key))) {
-        throw new RangeError("render capture cannot replace static node data");
-      }
-      backwardCapture = new BackwardCapture({
-        inputNames,
-        variableNames,
-        scope,
-        nodeData: { ...nodeData, ...snapshot, effective_llm_config: recordedModelConfig() },
-      });
-      renderRecorded = true;
-    } catch (error) {
-      throw capabilityFault(error);
-    }
-  };
-
-  /**
-   * Close the render capture once the outcome is decided, so a later write is refused.
-   */
-  const closeCaptures = (): void => {
-    capturesClosed = true;
-  };
-
-  let outcome: WorkerOutcome;
-  try {
-    outcome = await evaluateNode(node, flow, pool, {
-      wiringOverride,
-      signal,
-      scheduler,
-      random,
-      runDir,
-      collector,
-      captureInputs: captureBindings ? captureInputs : null,
-      captureRender: captureBindings && node.needsRenderCapture === true ? captureRender : null,
-      closeCaptures,
-      memoryScope,
-      memoryContextOpener,
-      sourceResolver,
-      emitStream,
-      emitEvent,
-      skills,
-      tools,
-      steering,
-      models,
-      steps,
-      onFault,
-    });
-  } finally {
-    // The escape paths (a binder fault, a failing input capture) never reach the evaluator's close.
-    closeCaptures();
-  }
+  const outcome = await evaluateNode(node, flow, pool, {
+    wiringOverride,
+    signal,
+    scheduler,
+    random,
+    runDir,
+    collector,
+    captureInputs: captureBindings ? captureInputs : null,
+    memoryScope,
+    memoryContextOpener,
+    sourceResolver,
+    emitStream,
+    emitEvent,
+    skills,
+    tools,
+    steering,
+    models,
+    steps,
+    onFault,
+  });
   return new EvaluatedOutcome(outcome, collector?.freeze() ?? null, backwardCapture);
 }
 
@@ -735,10 +652,6 @@ async function evaluateNode(
     collector: BindingCollector | null;
     /** Receives the completed input record before the body runs, when capturing bindings. */
     captureInputs: ((inputs: Record<string, unknown>) => void) | null;
-    /** The render capture a node declaring `needsRenderCapture` receives, when capturing bindings. */
-    captureRender: NonNullable<NodeCaps["captureRender"]> | null;
-    /** Closes the captures once the node and its capability promises have settled. */
-    closeCaptures: () => void;
     /** The memory scope of a node declaring `needsMemoryContext`, else `null`. */
     memoryScope: MemoryScope | null;
     memoryContextOpener: MemoryContextOpener | null;
@@ -754,7 +667,7 @@ async function evaluateNode(
     onFault: ((original: unknown) => void) | null;
   },
 ): Promise<WorkerOutcome> {
-  const { wiringOverride, signal, collector, captureInputs, captureRender, closeCaptures, sourceResolver } = context;
+  const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
   const { memoryScope, memoryContextOpener } = context;
   const { emitStream, emitEvent, skills, tools, steering, models, steps, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
@@ -887,21 +800,9 @@ async function evaluateNode(
       }
     };
   }
-  if (captureRender !== null) {
-    // The capture throws its refusals and faults as capability faults; a write after the
-    // evaluation settled is a plain error with no evaluation left to fail.
-    caps.captureRender = (captured) => {
-      try {
-        captureRender(captured);
-      } catch (error) {
-        if (error instanceof CapabilityFault) onFault(error);
-        throw error;
-      }
-    };
-  }
   if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
-  // Closed with the captures, so a step, event or steering call the node's dropped code makes after
+  // Closed once the node settles, so a step, event or steering call the node's dropped code makes after
   // the outcome is decided is refused or dropped rather than reaching the run with no evaluation
   // left to fail.
   let closed = false;
@@ -939,7 +840,7 @@ async function evaluateNode(
   } catch (error) {
     rejection = { error };
   }
-  // The captures stay open while the evaluator waits, so a node's dropped code may start another
+  // The capabilities stay open while the evaluator waits, so a node's dropped code may start another
   // capability call meanwhile; one wait would miss it, and a late open's fault would never be
   // checked.
   for (let settled = 0; settled < pending.length; ) {
@@ -949,7 +850,6 @@ async function evaluateNode(
   }
   closed = true;
   memory.close();
-  closeCaptures();
 
   // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
   // the node returned or rejected with.
@@ -1010,15 +910,73 @@ function stageFailure(node: Node, error: unknown, usesBaseTemplate: boolean): Ev
 
 /**
  * The backward material `node` gives an evaluation: its backward input names, its variable names
- * and its execution scope, with `nodeData` (none by default).
+ * and its execution scope.
  */
-export function nodeBackwardCapture(node: Node, nodeData: Readonly<Record<string, unknown>> | null = null): BackwardCapture {
+export function nodeBackwardCapture(node: Node): BackwardCapture {
   return new BackwardCapture({
     inputNames: node.backwardInputNames(),
     variableNames: node.declaredVariables().map((parameter) => parameter.name),
     scope: node.executionScope,
-    nodeData,
   });
+}
+
+/**
+ * Rebuild the node data backward reads about one evaluation of `node`, which its record leaves
+ * out: none for a binding that didn't finish (`inputs` `null`); else the node's static material
+ * (`captureBackwardContext`), and, when the node renders (`renderCapture`) and its pre-asserts
+ * hold for `inputs`, so its `forward` ran, that render with the model config the invocation used
+ * as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`), else the run's
+ * entry for its static path.
+ *
+ * @param inputs The bound inputs, as binding the node again gives them.
+ * @param effectiveLlmByStaticPath The run's recorded model config by static path.
+ * @returns Canonical JSON.
+ * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
+ *   isn't JSON, and the hooks' own errors.
+ * @throws RangeError when the node renders and the run's map has no entry for its static path, or
+ *   its render holds `effective_llm_config` or a key of its static material.
+ */
+export function rebuildNodeData(
+  node: Node,
+  inputs: Readonly<Record<string, unknown>> | null,
+  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
+): WireObject {
+  if (inputs === null) return {};
+  const captured: unknown = node.captureBackwardContext();
+  if (!isRecord(captured)) throw new TypeError("capture_backward_context must return a record");
+  const data: Record<string, unknown> = { ...captured };
+  const render = node.renderCapture(inputs);
+  if (render !== null && node.preAssertsHold(inputs)) {
+    if (Object.hasOwn(render, "effective_llm_config")) {
+      throw new RangeError("effective_llm_config belongs to the run's model config");
+    }
+    const replaced = Object.keys(render).filter((key) => Object.hasOwn(data, key));
+    if (replaced.length > 0) throw new RangeError(`the render cannot replace static node data: ${replaced.join(", ")}`);
+    Object.assign(data, render, { effective_llm_config: invocationLlmConfig(node, inputs, effectiveLlmByStaticPath) });
+  }
+  return canonicalSeed(data)[1] as WireObject;
+}
+
+/**
+ * The model config one invocation of `node` used: the config bound with `inputs`, else the run's
+ * entry for the node's static path; `null` for a node with no scope.
+ *
+ * @throws RangeError when the run's map has no entry for the static path.
+ */
+function invocationLlmConfig(
+  node: Node,
+  inputs: Readonly<Record<string, unknown>>,
+  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
+): JsonValue | null {
+  const scope = node.executionScope;
+  if (scope === null) return null;
+  const bound = node.boundLlmConfig(inputs);
+  if (bound !== null) return canonicalSeed(bound)[1];
+  const key = scope.staticPath.join("/");
+  if (!Object.hasOwn(effectiveLlmByStaticPath, key)) {
+    throw new RangeError(`recorded effective model configuration is missing static path ${reprText(key)}`);
+  }
+  return canonicalSeed(effectiveLlmByStaticPath[key])[1];
 }
 
 /** The bound inputs and capabilities `rebind` and `rebuildDerived` share. */

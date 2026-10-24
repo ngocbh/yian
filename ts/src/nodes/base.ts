@@ -918,8 +918,6 @@ export interface NodeCaps {
    * rendered prompt; supplied to a node that declares `needsMemoryContext`.
    */
   readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
-  /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
-  readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */
   readonly steering?: Steering;
   /** The run's environment and model builder; supplied to a node that declares `needsModels`. */
@@ -990,11 +988,6 @@ export abstract class Node {
    * the run boundary injected them and this is set. AGENT is the only built-in kind that opts in.
    */
   readonly needsSkills: boolean = false;
-  /**
-   * Declares "I can publish actual render locals for retained backward context": the evaluator
-   * supplies a single-write capture callable only during retention.
-   */
-  readonly needsRenderCapture: boolean = false;
   /**
    * Declares "I look up or invoke tools": the evaluator supplies the run's own tool set, so
    * per-run tools and the per-run `ask_user` handler never leak between runs. TOOL, HUMAN_INPUT
@@ -1508,12 +1501,12 @@ export abstract class Node {
   }
 
   /**
-   * Return static backward material before this invocation runs.
+   * Return the node's static backward material.
    *
    * This pure hook reads authored layout only: it doesn't resolve defaults, render prompts or
-   * run the body. Input and variable names are captured separately. With retention on, the base
-   * `run` template calls it after defaults and before the assertions or the body; a kind that
-   * overrides `run` keeps the evaluator's pre-run boundary.
+   * run the body. Input and variable names are captured separately. No evaluation calls it:
+   * learning does, when it first reads an occurrence's node data (`rebuildNodeData`), for an
+   * invocation whose binding finished.
    *
    * @returns JSON material (infinity is a value; NaN is refused), empty by default. The reserved
    *   `input_output_paths` record addresses declared inputs by paths of string fields or
@@ -1521,6 +1514,28 @@ export abstract class Node {
    */
   captureBackwardContext(): Record<string, unknown> {
     return {};
+  }
+
+  /**
+   * Return what an invocation's `forward` renders for bound `inputs`, rendered again: the JSON
+   * material backward reads beside `captureBackwardContext`'s, with the parts established before
+   * a render that fails. Pure: it renders with the node's authored fields and calls no model.
+   *
+   * @returns The render material, or `null` (the default) for a kind that renders nothing.
+   */
+  renderCapture(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+    return null;
+  }
+
+  /**
+   * Return whether the `run` template's pre-asserts hold for bound `inputs` (defaults applied), so
+   * the template calls `forward`. The node's setup is validated first, as the template does.
+   *
+   * @throws as `validateExecutionSetup`.
+   */
+  preAssertsHold(inputs: Readonly<Record<string, unknown>>): boolean {
+    this.validateExecutionSetup();
+    return this.failingAssertion("pre-assert", this.preAsserts, { ...inputs }) === null;
   }
 
   /**

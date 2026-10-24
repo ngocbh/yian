@@ -161,9 +161,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          input_output_paths:
-            topic: [topic]
         route:
           children:
           - kind: source
@@ -204,15 +201,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          effective_llm_config:
-            model: gpt-5.5
-            provider: openai
-            _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
-          prompt_template: Draft a line about ${topic}.
-          rendered_prompt: Draft a line about reefs.
-          variable_domains: {}
-          variables: {}
         route:
           children:
           - kind: source
@@ -253,15 +241,6 @@ expect:
       forward_capture:
         evaluated_keys: [draft]
         input_names: [draft]
-        node_data:
-          effective_llm_config:
-            model: gpt-5.5
-            provider: openai
-            _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
-          prompt_template: ${draft}
-          rendered_prompt: 'Polish this: Reefs glow (one line)'
-          variable_domains: {}
-          variables: {}
         route:
           children:
           - children:
@@ -290,9 +269,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - children:

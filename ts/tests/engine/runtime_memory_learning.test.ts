@@ -1186,9 +1186,7 @@ test("owner context projection from replay doesn't reinvoke handlers", async () 
     current.backward = () => {
       throw new Error("replayed backward");
     };
-    current.captureBackwardContext = () => {
-      throw new Error("recaptured backward");
-    };
+    // `captureBackwardContext` stays: it is pure, and the node data learning reads is rebuilt with it.
   }
   const replayed = replayRecords(new RunState(original), built.log.records(), { growBuilder: noGrowth });
   Object.defineProperty(replayed.trace!, "backwardHandlers", {

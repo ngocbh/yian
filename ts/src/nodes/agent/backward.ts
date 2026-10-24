@@ -57,7 +57,10 @@ const REQUIRED = [
 
 const CHANNELS = ["input_feedback", "self_feedback", "variable_feedback"];
 
-/** Check the established render capture without reading mutable declarations. */
+/**
+ * Check the render material in the node data learning rebuilt from the node; this check reads no
+ * declaration itself.
+ */
 function recordedMaterial(context: BackwardContext): Readonly<Record<string, unknown>> {
   const data = context.nodeData;
   const missing = REQUIRED.filter((key) => !Object.hasOwn(data, key)).sort(compareCodeUnits);

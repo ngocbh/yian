@@ -150,7 +150,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 20) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 21) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -1074,10 +1074,11 @@ Node 22, and so does every unit test; a change keeps both green.
   `needsSteps`: it records its model calls and tool results as steps (below), and a call-time
   agent (`callTime` set) also records its config as an `llm_config` step.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
-  the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`, `captureRender`,
+  the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`,
   `openMemoryContext`, and `steering`, a `Steering` inbox given only to an agent authored
   `steerable: true`). It records nothing for learning; the backward driver rebuilds what learning
-  reads from its steps (`AgentNode.learningMaterial`).
+  reads from its steps (`AgentNode.learningMaterial`), and the node data AGENT backward reads from
+  its render (`renderCapture`, the same pure render as `forward`).
 - AGENT `forward` (`node.ts` → `loop.ts` `runAgent` → `structured.ts` `generateStructured` or
   `live.ts` `callModel`) reaches models only through `caps.models`, a `ModelAccess`
   (`defaultModelAccess(env)` in `src/llm_clients/factory.ts`; tests pass one returning a
@@ -1339,7 +1340,9 @@ Node 22, and so does every unit test; a change keeps both green.
   the node and wiring it ran with) from the values its capture route read, looked up in the
   trace's history by the producer each route source names (`traceResolver`); records hold none.
   The same binding gives each interpolation route its rendered text in `capture` and `inputRoute`,
-  which records leave out (`value_json: null`). `occurrenceMaterial(trace, source, caps)`
+  which records leave out (`value_json: null`), and `nodeData` is rebuilt from the node and those
+  inputs (`rebuildNodeData`: its static material, and an AGENT's render and model config), which
+  records leave out too. `occurrenceMaterial(trace, source, caps)`
   rebuilds what learning reads of an occurrence through its node's `learningMaterial` (an AGENT's
   render, recall and interactions, each recorded request checked against its digest), and
   `evaluationEvidence` shapes it as AGENT backward's `_evaluation_evidence`; `backwardContext`

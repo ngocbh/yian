@@ -437,13 +437,13 @@ output:
   const trace = replay.trace!;
   const acceptedAgents = new Map(
     trace.occurrences
-      .filter((item) => item.capture.nodeData?.["prompt_template"] === "${tone}: ${n}")
+      .filter((item) => item.nodeData["prompt_template"] === "${tone}: ${n}")
       .map((item) => [item.nodeId, item]),
   );
   expect(acceptedAgents.size).toBe(6);
   expect(forwardConfigs.map(logJson).sort()).toEqual(
     [...acceptedAgents.values()]
-      .map((item) => logJson(item.capture.nodeData!["effective_llm_config"]))
+      .map((item) => logJson(item.nodeData["effective_llm_config"]))
       .sort(),
   );
   const expectedMap = (all[0]!.record as RunStartedRecord).effectiveLlmByStaticPath;
@@ -458,7 +458,7 @@ output:
     const direct = scope.staticPath[0] === "one";
     expect(positions.map((position) => position.kind)).toEqual([direct ? "call" : "map_item", "loop_body", "call"]);
     expect(occurrence.boundInputs!["n"]).toBe(body.index === 1 ? 1n : direct ? 3n : [10n, 20n][positions[0]!.index!]!);
-    const data = capture.nodeData!;
+    const data = occurrence.nodeData;
     expect(data["variables"]).toEqual({ tone: "concise" });
     expect(data["variable_domains"]).toEqual({ tone: "str" });
     expect(data["rendered_prompt"]).toBe(`concise: ${occurrence.boundInputs!["n"]}`);
@@ -534,14 +534,14 @@ output:
     expect(forward["inputs"]).toEqual(asJson(occurrence.boundInputs));
     expect(forward["output"]).toEqual({ n: 1 });
     for (const key of ["prompt_template", "rendered_prompt", "variables", "variable_domains"]) {
-      expect(forward[key]).toEqual(asJson(capture.nodeData![key]));
+      expect(forward[key]).toEqual(asJson(occurrence.nodeData[key]!));
     }
     // Rebuilt from the occurrence's steps, render and recall.
     const evidence = forward["evaluation_evidence"] as Record<string, unknown>;
     expect(evidence["prompt"]).toBe(forward["rendered_prompt"]);
     expect(evidence["bound_inputs"]).toEqual(forward["inputs"]);
     expect(evidence["interactions"]).toHaveLength(1);
-    expect(config).toEqual(legacyConnectionConfig(capture.nodeData!["effective_llm_config"] as Record<string, unknown>));
+    expect(config).toEqual(legacyConnectionConfig(occurrence.nodeData["effective_llm_config"] as Record<string, unknown>));
     seen.push(occurrence.source.executionSeq);
   }
   expect(new Set(seen).size).toBe(acceptedAgents.size);

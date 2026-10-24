@@ -1991,8 +1991,8 @@ nodes:
   item it came from. For an unanswered call, that is the item holding the assistant message that
   made the call.
 - A spliced media part fails the node, because no model route sends media yet.
-- Memory recall and learning read the last message's text as the prompt. The render capture
-  (and so AGENT backward) holds the list as JSON text: the authored items as the template, the
+- Memory recall and learning read the last message's text as the prompt. The render learning
+  rebuilds for AGENT backward holds the list as JSON text: the authored items as the template, the
   `{role, text}` messages, and each spliced `Message` in its JSON form without `protocol` or
   `provider_payload`, as the rendered prompt.
 - A list prompt goes into the flow's identity as its item list; a text prompt's identity is

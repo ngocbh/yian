@@ -456,11 +456,6 @@ describe("evalNode checks its arguments", () => {
     ["skills", { skills: { s: {} } }, new TypeError("skills must be a map or null")],
     ["steps", { steps: { starts: 1, prior: [], record() {} } }, new TypeError("steps must be a NodeSteps or null")],
     ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
-    [
-      "effective_llm_by_static_path",
-      { effectiveLlmByStaticPath: new Map() },
-      new TypeError("effective_llm_by_static_path must be a record or null"),
-    ],
     ["signal", { signal: new AbortController() }, new TypeError("signal must be an AbortSignal or null")],
     [
       "steering",
@@ -486,7 +481,6 @@ describe("evalNode checks its arguments", () => {
       skills: new Map(),
       tools: new ToolSet(),
       steps: new NodeSteps(1, [], () => 1),
-      effectiveLlmByStaticPath: {},
       signal: new AbortController().signal,
       steering: { interruptSignal: () => new AbortController().signal, drain: () => [] },
       models: MODELS,

@@ -57,7 +57,9 @@
  * missing field, a non-text fingerprint, the retired `initial_pool`, a memory table or defaults of
  * the wrong JSON type, a float or negative worker count and a non-boolean `learnable`; a
  * `pool_commit` written flat (`{node_id, key, kind, value}`) keeping int and float apart; a
- * `node_succeeded` naming its commit's seq, and refusing the retired `value` and `commit_target`.
+ * `node_succeeded` naming its commit's seq, and refusing the retired `value` and `commit_target`;
+ * the inbox and wait record kinds and the take form of `pool_commit` in the round trip (their own
+ * checks are in `wait_records.test.ts`).
  *
  * Changed:
  * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
@@ -167,6 +169,7 @@ import {
   canonicalTyped,
   decodeRecord,
   encodeRecord,
+  InboxClosedRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
@@ -177,9 +180,13 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
   RecordEnvelope,
   RUN_RECORD_TYPES,
+  RunCancelledRecord,
+  RunFailedRecord,
   RUN_STOP_REASONS,
   type RunLog,
   RunLogSchemaError,
@@ -188,6 +195,7 @@ import {
   type RunStartedFields,
   RunStartedRecord,
   RunStoppedRecord,
+  RunWaitingRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import * as runLog from "../../src/runtime/log.ts";
@@ -527,6 +535,12 @@ test("RUN_RECORD_TYPES holds every record class", () => {
     RunStartedRecord,
     RunResumedRecord,
     RunStoppedRecord,
+    NodeWaitingRecord,
+    NodeWokenRecord,
+    RunWaitingRecord,
+    InboxClosedRecord,
+    RunCancelledRecord,
+    RunFailedRecord,
     NodeStartedRecord,
     NodeStepRecord,
     PoolCommitRecord,
@@ -611,7 +625,7 @@ test("a derived pool commit holds from and no value: an object with sorted keys 
     expectError(
       () => new PoolCommitRecord("e", "e", value as never, { from: both }),
       RangeError,
-      "a pool_commit holds either a value or from, not both or neither",
+      "a pool_commit holds exactly one of value, from and take",
     );
   }
 });
@@ -975,9 +989,24 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["RunStartedRecord with its sources", sourcedRunStarted()],
   ["RunResumedRecord", new RunResumedRecord(["slow", "later"], 4)],
   ["RunStoppedRecord", new RunStoppedRecord("callback", "the host callback threw", ["b", "a"])],
+  [
+    "NodeWaitingRecord",
+    new NodeWaitingRecord("heard", ["run/heard/1"], {
+      waits: [{ callId: "run/heard/1", tool: "take", inbox: "msgs", mode: "all", deadline: "2026-10-24T09:00:00.000Z" }],
+    }),
+  ],
+  ["NodeWokenRecord", new NodeWokenRecord("heard", ["run/heard/1"])],
+  ["RunWaitingRecord", new RunWaitingRecord(["heard", "ask"])],
+  ["InboxClosedRecord", new InboxClosedRecord("msgs")],
+  ["RunCancelledRecord", new RunCancelledRecord()],
+  [
+    "RunFailedRecord",
+    new RunFailedRecord(new Failure({ code: "graph.terminal_unreachable", message: "END is unreachable", nodeId: "choice" })),
+  ],
   ["NodeStartedRecord", new NodeStartedRecord("agent")],
   ["NodeStepRecord", new NodeStepRecord("agent", 2, { kind: "tool_attempt", event: "started", attempt: 2n })],
   ["PoolCommitRecord", new PoolCommitRecord("agent", "agent", { kind: "str", value: "done" })],
+  ["PoolCommitRecord, a take", new PoolCommitRecord("heard", "heard", null, { take: { inbox: "msgs", events: [4, 6], closed: true } })],
   ["NodeSucceededRecord", new NodeSucceededRecord("agent", 3)],
   ["NodeRoutedRecord", new NodeRoutedRecord("choice", "approved")],
   [

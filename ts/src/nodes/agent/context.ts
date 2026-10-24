@@ -158,7 +158,8 @@ export interface ToolResultFields {
   /**
    * Set only on a result yian wrote in place of running the call: `skipped` for one a host
    * interrupt skipped, `crashed` for one a resume closed because its run was cut off before its
-   * result, `timed_out` for an `ask_user` whose deadline passed.
+   * result, `timed_out` for an `ask_user` whose deadline passed, `interrupted` for a pending call a
+   * host interrupt closed.
    */
   readonly closed?: "skipped" | CloserReason;
 }
@@ -173,7 +174,7 @@ interface NumberedStep {
 export interface RecordedResult {
   readonly output: string;
   readonly isError: boolean;
-  /** `skipped`, `crashed` or `timed_out` for a result yian wrote in place of running the call, else `null`. */
+  /** `skipped`, `crashed`, `timed_out` or `interrupted` for a result yian wrote in place of running the call, else `null`. */
   readonly closed: string | null;
 }
 
@@ -210,7 +211,9 @@ export interface PriorAttempts {
  * failed attempts after the last one are the next live call's (`priorAttempts`). Each
  * `tool_result` is found by its reply and its call id (`recordedResult`). Each `steer` step is
  * handed back (`takeRecordedSteer`) before the logical call it preceded, with the values the
- * engine attached to its copy; one after the last call is handed back after it.
+ * engine attached to its copy; one after the last call is handed back after it. An
+ * `interrupted` step, the honor of a host interrupt, ends the replay where it was written
+ * (`honored`).
  * Steps of any other kind (`llm_config`, or a kind this version doesn't know) are not the loop's
  * and are skipped.
  */
@@ -232,6 +235,8 @@ export class AgentSteps {
   readonly #results = new Map<number, Map<string, ValueRecord>>();
   /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
   readonly #steers = new Map<number, NumberedStep>();
+  /** The `by` of a recorded `interrupted` step: the interrupt an earlier start honored, else `null`. */
+  readonly #honored: number | null = null;
 
   /**
    * @param steps This start's engine steps, or `undefined` to record nothing.
@@ -273,6 +278,8 @@ export class AgentSteps {
         // A steer is read only before a logical call, never between its attempts, so it belongs
         // to the next call.
         this.#steers.set(this.#calls.length, { n: index + 1, step });
+      } else if (step["kind"] === "interrupted") {
+        this.#honored = Number(step["by"]);
       }
     }
     this.#trailing = attempts;
@@ -317,6 +324,11 @@ export class AgentSteps {
   /** Whether a recorded call is still to be taken, so the loop is replaying. */
   replaying(): boolean {
     return this.#taken < this.#calls.length;
+  }
+
+  /** The `by` of the `interrupted` step an earlier start wrote, or `null`: the loop ends there once replay is over. */
+  honored(): number | null {
+    return this.#honored;
   }
 
   /**
@@ -516,6 +528,17 @@ export class AgentSteps {
     return this.#record(step, { settled: true });
   }
 
+  /**
+   * Write the honor of a host interrupt as an `interrupted` step: `by`, the seq of the
+   * `interrupted` record.
+   *
+   * @returns The step's `n`.
+   * @throws Whatever `NodeSteps.record` throws.
+   */
+  interrupted(by: number): number {
+    return this.#record({ kind: "interrupted", by: BigInt(by) });
+  }
+
   /** The fields every `model_call` step starts with. */
   #callStep(call: CallFields): ValueRecord {
     return {
@@ -591,16 +614,17 @@ export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering"
 }
 
 // --------------------------------------------------------------------------------------- //
-// The host interrupt on replay. A replaying loop doesn't read the host's interrupt: the recorded
-// calls already happened. Recorded steers replay as steps (`takeRecordedSteer`).
+// The host interrupt on replay. A replaying loop never reads the interrupt: the recorded calls
+// already happened. A recorded honor step ends it at the same point.
 // --------------------------------------------------------------------------------------- //
 
 /**
- * Whether the host interrupted this node, as the loop reads it between effects: never while
- * `steps` is replaying, since the recorded calls already happened.
+ * Whether the loop is to honor a host interrupt now, as it reads it between effects: never while
+ * `steps` is replaying, since the recorded calls already happened; once replay is over, when an
+ * earlier start recorded its honor or the interrupt signal aborted.
  */
 export function interruptRequested(interrupt: AbortSignal | undefined, steps: AgentSteps): boolean {
-  return interrupt?.aborted === true && !steps.replaying();
+  return !steps.replaying() && (steps.honored() !== null || interrupt?.aborted === true);
 }
 
 /**

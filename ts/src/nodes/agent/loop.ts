@@ -21,11 +21,12 @@
  * then the loop returns `Pending` naming every call of the reply that pended. A host's `complete`
  * writes the call's `tool_result`; the woken agent replays and calls the model with every result.
  *
- * An agent with a steer inbox reads it at the top of each iteration (a recorded `steer` step) and,
- * until the interrupt moves to the run log, stops at a host interrupt between effects or before a
- * later chunk of a streamed reply, returning its latest reply's text (a cut reply's text so far);
- * an interrupt never aborts a running tool call. A steer queued when the model gives its final
- * answer gets one more model call, within `maxToolIterations`.
+ * An agent with a steer inbox reads it at the top of each iteration (a recorded `steer` step) and
+ * stops at a host interrupt of that inbox between effects or before a later chunk of a streamed
+ * reply: the cut reply keeps its text so far, calls not started are skipped, the reply's pending
+ * calls get `interrupted` closers, and the loop writes `interrupted {by}` and returns
+ * `Interrupted`. An interrupt never aborts a running tool call. A steer queued when the model gives
+ * its final answer gets one more model call, within `maxToolIterations`.
  *
  * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
  *                tools, typesys, peer AGENT modules.
@@ -60,7 +61,7 @@ import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
-import { Output, Pending, type SteerInbox } from "../base.ts";
+import { CapabilityFault, Output, Pending, type SteerInbox } from "../base.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
@@ -70,12 +71,11 @@ import {
   interruptRequested,
   type RecordedResult,
   recordedResponse,
-  interruptSignal,
   requestSha256,
   sentCredentials,
   ToolIterationLimitError,
 } from "./context.ts";
-import { ReplyInterrupted } from "./interrupts.ts";
+import { Interrupted, ReplyInterrupted } from "./interrupts.ts";
 import {
   callModel,
   type LiveSinks,
@@ -85,7 +85,7 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
+import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
 import { type SteerRender, steerMessages } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
@@ -102,27 +102,28 @@ import { pushVisible, textOf } from "./text.ts";
  * `model_call` step and each tool result as a `tool_result` step, a failed attempt's error
  * scrubbed of every credential the call may have sent; the steps earlier starts recorded are
  * replayed first (`callModel`, `replayToolCalls`), and the host's interrupt is read only once they
- * end; recorded steers are fed back as replay reaches them.
+ * end (a recorded honor step ends the loop there); recorded steers are fed back as replay reaches
+ * them.
  *
  * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
  * then each iteration's steers, replies and tool results; a final structured call after tools
  * reads them all.
  *
- * @returns The checked structured value, or the final reply's visible text; after a host
- *   interrupt, the latest reply's visible text (`""` before any); or `Pending` naming the calls of
- *   the latest reply whose handler returned `pending()`, once the reply's other calls ran.
+ * @returns The checked structured value, or the final reply's visible text; `Interrupted` once it
+ *   honored a host interrupt (`honor`); or `Pending` naming the calls of the latest reply whose
+ *   handler returned `pending()`, once the reply's other calls ran.
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply repeats a tool call id or its tool call arguments nest too deep.
  * @throws ToolIterationLimitError when a reply calls tools at the `maxToolIterations`-th turn.
  * @throws AgentLoopError when a reply calls a tool that isn't granted.
  * @throws CapabilityFault when a recorded call doesn't match the rebuilt request
- *   (`AgentSteps.takeRecorded`).
+ *   (`AgentSteps.takeRecorded`), or the loop was cut with no pending interrupt.
  * @throws Whatever building or calling the model throws (marked by `markModelFailure`), a stop's
  *   reason, a tool's own error other than a reported one, a failed argument check, a result
  *   `toolText` refuses, or `generateStructured`'s `OutputInvalidError`. The host inbox's faults
  *   pass through.
  */
-export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> {
+export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending | Interrupted> {
   const systemPrompt = systemPromptWithMemory(ctx.baseSystemPrompt, ctx.memoryContext.sections);
   const system = new Message({ role: "system", parts: [new TextPart(systemPrompt)] });
   const live = liveSinks(ctx);
@@ -158,20 +159,29 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
   const retry = { scheduler: ctx.scheduler, random: ctx.random };
   const messages = [system, ...ctx.messages];
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
+  const interrupt = ctx.steerInbox?.interrupt;
   const structuredOptions = {
     retries: ctx.retries,
     live,
     signal: ctx.signal,
+    interrupt,
     retry,
     steps,
     baseSystemPrompt: ctx.baseSystemPrompt,
   };
+  /** The structured call's checked value, or the honor of an interrupt that cut it. */
+  const structured = async (): Promise<Output | Interrupted> => {
+    try {
+      return new Output(await generateStructured(model, messages, ctx.outputType!, structuredOptions));
+    } catch (error) {
+      if (error instanceof ReplyInterrupted) return honor(ctx, steps);
+      throw error;
+    }
+  };
   const toolset = ctx.toolset ?? new ToolSet();
   // A granted id may name a host-filled group; grants are checked by tool name.
   const granted = toolset.expand(ctx.tools);
-  if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) {
-    return new Output(await generateStructured(model, messages, ctx.outputType!, structuredOptions));
-  }
+  if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) return await structured();
 
   // The schema goes out as the host gave it; each protocol adapter lowers it for its provider.
   const bound = toolset
@@ -179,7 +189,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
     .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
   const skills = new Map(ctx.skills.map((skill) => [skill.name, skill]));
   if (skills.size > 0) bound.push(loadSkillTool());
-  const interrupt = interruptSignal(ctx);
   let iterations = 0;
   let reply: Message | null = null;
   const onDrop = (event: number, part: number) =>
@@ -194,7 +203,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
 
   while (true) {
     checkStopped(ctx);
-    if (interruptRequested(interrupt, steps)) return interrupted(reply);
+    // Before the steer read, so an interrupt leaves queued steers for the next reader.
+    if (interruptRequested(interrupt, steps)) return honor(ctx, steps);
     // Steers join only here, never between a reply's tool calls and their results. The read is
     // synchronous, so neither a stop nor an interrupt lands between it and the model call.
     for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
@@ -209,12 +219,9 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
         record: { steps, digest: requestSha256(digestRequest(request, ctx.baseSystemPrompt)) },
       });
     } catch (error) {
-      // The cut reply's text is kept; its calls, partial or not, never run.
-      if (error instanceof ReplyInterrupted) {
-        // A stop that lands after the cut, before this catch runs, still wins.
-        checkStopped(ctx);
-        return interrupted(error.reply);
-      }
+      // The cut reply's text is recorded; its calls, partial or not, never run. A stop that lands
+      // after the cut, before this catch runs, still wins (`honor`).
+      if (error instanceof ReplyInterrupted) return honor(ctx, steps);
       throw error;
     }
     // With `record`, `n` is the reply's `model_call` step.
@@ -230,15 +237,15 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
       (part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null,
     );
     if (calls.length === 0) {
-      // At the cap the answer stands and queued steers stay for the next reader: the cap is checked
-      // before anything is read, so nothing is consumed that won't be sent. The loop top checks a
-      // host interrupt before it reads, so an interrupt beats a late steer.
-      if (iterations !== ctx.maxToolIterations && lateSteer(steps, ctx.steerInbox)) continue;
-      const text = textOf(reply);
-      if (schema !== null) {
-        return new Output(await generateStructured(model, messages, ctx.outputType!, structuredOptions));
-      }
-      return new Output(text);
+      // A final answer that arrived before the loop saw an interrupt stands: nothing is left to
+      // cut. An interrupt seen now beats a late steer: the answer stands as if it never came (no
+      // steer, no honor step), and queued steers stay for the next reader. At the cap the answer
+      // stands too: the cap is checked before anything is read, so nothing is consumed that won't
+      // be sent. A structured agent's trailing call is cut like any model call.
+      const late = !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
+      if (late && lateSteer(steps, ctx.steerInbox)) continue;
+      if (schema !== null) return await structured();
+      return new Output(textOf(reply));
     }
 
     if (iterations === ctx.maxToolIterations) {
@@ -252,8 +259,12 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
 
     const pended = new Map<number, string>();
     const turn: ToolTurn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt, pended };
-    if (await (replayed ? replayToolCalls(turn) : runToolCalls(turn))) return interrupted(reply);
-    // An agent given the host's interrupt signal never pends, so no interrupted turn gets here with a pended call.
+    const skipped = await (replayed ? replayToolCalls(turn) : runToolCalls(turn));
+    // The interrupt closed the reply's pending calls; the agent doesn't wait on them.
+    if (skipped || (pended.size > 0 && interruptRequested(interrupt, steps))) {
+      closePended(turn);
+      return honor(ctx, steps);
+    }
     if (pended.size > 0) return new Pending([...pended].sort(([a], [b]) => a - b).map(([, callId]) => callId));
   }
 }
@@ -267,6 +278,46 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
 function lateSteer(steps: AgentSteps, inbox: SteerInbox | undefined): boolean {
   if (steps.hasRecordedSteer()) return true;
   return inbox !== undefined && !steps.replaying() && !steps.continuesCall() && inbox.queued();
+}
+
+/**
+ * Honor a host interrupt: once a stop is ruled out, write `interrupted {by}` (unless an earlier
+ * start wrote it, which replay reached) and return `Interrupted`. `by` is the seq of the
+ * `interrupted` record the node holds pending.
+ *
+ * @throws The stop's reason when the node stopped: a stop wins over an interrupt.
+ * @throws CapabilityFault carrying a RangeError when no interrupt is pending: the loop was cut by
+ *   a signal no `interrupted` record backs.
+ */
+function honor(ctx: AgentRunContext, steps: AgentSteps): Interrupted {
+  checkStopped(ctx);
+  const recorded = steps.honored();
+  const by = recorded ?? ctx.steerInbox?.interruptedBy() ?? null;
+  if (by === null) {
+    throw new CapabilityFault(new RangeError(`node ${reprText(ctx.nodeId)} was cut with no pending interrupt`));
+  }
+  if (recorded === null) steps.interrupted(by);
+  return new Interrupted(by);
+}
+
+/**
+ * Write a closer for each call of the turn that pended and was closed since (the interrupt closed
+ * it, or it was registered closed), in call order, with the word of what closed it. A call the
+ * host answered meanwhile keeps its answer.
+ */
+function closePended(turn: ToolTurn): void {
+  const views = turn.ctx.steps?.currentCalls() ?? [];
+  for (const [index, callId] of [...turn.pended].sort(([a], [b]) => a - b)) {
+    const view = views.find((each) => each.callId === callId);
+    if (view?.state !== "closed") continue;
+    const { output, closed } = closerResult(closerReason(view.closedReason));
+    turn.steps.toolResult({ callId: turn.calls[index]!.id, startedAt: null, output, isError: true, closed });
+  }
+}
+
+/** The closer word for a call closed for `reason`: a deadline's or an interrupt's, else `crashed` (its outcome is unknown). */
+function closerReason(reason: string | null): CloserReason {
+  return reason === "timed_out" || reason === "interrupted" ? reason : "crashed";
 }
 
 /**
@@ -385,11 +436,6 @@ export async function stepsMaterial(
   return { interactions, digestOk };
 }
 
-/** End an interrupted loop successfully with the latest reply's visible text (`""` before any). */
-function interrupted(reply: Message | null): Output {
-  return new Output(reply === null ? "" : textOf(reply));
-}
-
 /** What running one reply's tool calls reads and appends to. */
 interface ToolTurn {
   readonly ctx: AgentRunContext;
@@ -497,7 +543,8 @@ interface ReplayedCall {
  * open (it pended and waits on, beside a sibling a deadline closed) is pended again, with no
  * closer and no handler call, and gets no tool message: the loop then returns `Pending`. Any other
  * call is closed with the word of the record that closed it (`closerResult`: `timed_out` for an
- * ask whose deadline passed), `crashed` when none did (its run was cut off before its result),
+ * ask whose deadline passed, `interrupted` for a call a host interrupt closed), `crashed` when
+ * none did (its run was cut off before its result),
  * the closer written as its `tool_result` step. Unparsed calls are not in `turn.calls`, so they get
  * nothing, as live.
  *
@@ -539,7 +586,7 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
         turn.pended.set(index, callId);
         continue;
       }
-      const { output, closed } = closerResult(view?.closedReason === "timed_out" ? "timed_out" : "crashed");
+      const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
       result = { output, isError: true, closed };
       steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     }
@@ -671,7 +718,7 @@ async function failCall(
  * finishes with a result, its text is computed and written as a `tool_result` step at once, in
  * finish order, unless the node has stopped by then; a call whose handler returned `pending()` is
  * written as a `pending` step instead and gets no tool message (the loop returns `Pending`). An
- * agent given the host's interrupt signal, or one outside a run, can't pend: that fails the group.
+ * agent outside a durable run can't pend: that fails the group.
  * Every started call is awaited; then a stop wins, else the first failure is thrown with nothing of
  * the group committed. A stop, then a host
  * interrupt, is checked before the group starts; the interrupt skips from the group's first call.
@@ -704,13 +751,6 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     const { call, index, callId, deadline } = planned;
     try {
       if (!reported && isPending(value)) {
-        if (turn.interrupt !== undefined) {
-          // The host's in-memory interrupt can't reach a node that waits.
-          throw new AgentLoopError(
-            `agent node ${reprText(turn.ctx.nodeId)}: tool ${reprText(call.name)} returned pending(), but an agent given ` +
-              "the host's interrupt signal can't wait for a later answer yet; answer it inline",
-          );
-        }
         if (callId === undefined || turn.ctx.steps === undefined || !turn.ctx.steps.durable) {
           throw new AgentLoopError(
             `agent node ${reprText(turn.ctx.nodeId)}: tool ${reprText(call.name)} returned pending() outside a durable run; ` +

@@ -301,6 +301,12 @@ export function checkModelConversation(messages: readonly ConversationMessage[])
 
 // --- An AGENT's new messages ------------------------------------------------------------------ //
 
+/**
+ * The message that ends an interrupted AGENT's new messages: the user's act, so the next turn's
+ * history shows why the reply stopped.
+ */
+export const INTERRUPTED_MARKER = "[interrupted by the user]";
+
 /** Whether a `model_call` step's `purpose` is a structured-output call's. */
 function isStructured(purpose: unknown): boolean {
   return purpose === "structured_native" || purpose === "structured_fallback";
@@ -308,9 +314,10 @@ function isStructured(purpose: unknown): boolean {
 
 /**
  * Return the `n`s of the AGENT steps its new messages are made of: each chat `model_call` whose
- * reply arrived, every `tool_result`, every `steer` read, and the accepted structured reply (the
- * last `model_call`, when it is a structured call with no error that wasn't cut), in order. Failed
- * attempts, earlier structured calls and steps of any other kind are left out.
+ * reply arrived (a cut one included), every `tool_result`, every `steer` read, the honor of a
+ * host interrupt (`interrupted`), and the accepted structured reply (the last `model_call`, when
+ * it is a structured call with no error that wasn't cut), in order. Failed attempts, earlier
+ * structured calls and steps of any other kind are left out.
  *
  * @param steps The agent's recorded steps across its starts; step `n` is `steps[n - 1]`.
  */
@@ -321,7 +328,8 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
     const arrived = step["kind"] === "model_call" && !Object.hasOwn(step, "error");
     const chat = arrived && step["purpose"] === "chat";
     const accepted = arrived && index === last && isStructured(step["purpose"]) && step["finish"] !== "interrupted";
-    if (chat || accepted || step["kind"] === "tool_result" || step["kind"] === "steer") picked.push(index + 1);
+    const kept = step["kind"] === "tool_result" || step["kind"] === "steer" || step["kind"] === "interrupted";
+    if (chat || accepted || kept) picked.push(index + 1);
   });
   return picked;
 }
@@ -335,7 +343,9 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
  * call becomes one assistant message holding `output` as JSON text; its recorded reply (an
  * internal output-tool call, or the raw JSON) isn't shown. A `steer` step, which carries the
  * events it read as `values`, adds the user messages `steerMessages` makes of them where it was
- * read: after the previous reply's results, before the next reply.
+ * read: after the previous reply's results, before the next reply. An `interrupted` step adds the
+ * user message `INTERRUPTED_MARKER` after the cut reply (kept only when it holds text) and its
+ * results.
  *
  * @param output The node's output value, read only for a structured call.
  * @param render The agent's steer render, which steer events render through as the live loop
@@ -382,6 +392,11 @@ export function rebuildMessages(
       const values = step["values"];
       if (!Array.isArray(values)) throw new RangeError("a steer step without its values");
       for (const message of steerMessages(values, { render })) messages.push(fromModelMessage(message));
+      continue;
+    }
+    if (step["kind"] === "interrupted") {
+      flush();
+      messages.push(fromModelMessage(new ModelMessage({ role: "user", parts: [new TextPart(INTERRUPTED_MARKER)] })));
       continue;
     }
     if (step["kind"] !== "model_call") continue;

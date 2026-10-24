@@ -36,11 +36,13 @@ import {
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
 import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
-import { CapabilityFault, type Steering } from "../../src/nodes/base.ts";
+import { CapabilityFault } from "../../src/nodes/base.ts";
+import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { advance, inspectRun, runFlow, send } from "../../src/run.ts";
+import { decodeRecord, InterruptedRecord, NodeStepRecord, PoolCommitRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
+import { advance, foldRunLog, inspectRun, interrupt, runFlow, send } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
@@ -150,20 +152,19 @@ async function run(
     flow?: string;
     tools?: Tools;
     modelRetries?: number;
-    steering?: Steering;
     learnable?: boolean;
+    models?: ModelAccess;
   } = {},
 ): Promise<{ log: string; result: Awaited<ReturnType<typeof runFlow>> }> {
-  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, steering, learnable = false } = options;
+  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, learnable = false, models = serving(model) } = options;
   const result = await runFlow(await loadFlow(flow), {}, {
     llmConfig: CONFIG,
     env: retriesEnv(modelRetries),
     scheduler: virtualScheduler(START),
     random: () => 1,
-    models: serving(model),
+    models,
     runId: RUN_ID,
     tools,
-    steering,
     learnable,
     log,
   });
@@ -174,9 +175,9 @@ async function run(
 async function cutRun(
   k: number,
   model: ChatModel,
-  options: { flow?: string; tools?: Tools; modelRetries?: number; steering?: Steering; learnable?: boolean } = {},
+  options: { flow?: string; tools?: Tools; modelRetries?: number; learnable?: boolean; log?: string } = {},
 ): Promise<string> {
-  const log = runLog();
+  const log = options.log ?? runLog();
   await crashAfter(k, () => run(model, { ...options, log }));
   return log;
 }
@@ -185,17 +186,16 @@ async function cutRun(
 function resume(
   log: string,
   model: ChatModel,
-  options: { tools?: Tools; modelRetries?: number; steering?: Steering; at?: number; events?: RunEvent[] } = {},
+  options: { tools?: Tools; modelRetries?: number; at?: number; events?: RunEvent[]; models?: ModelAccess } = {},
 ) {
-  const { tools = {}, modelRetries = 0, steering, at = START + 60_000, events } = options;
+  const { tools = {}, modelRetries = 0, at = START + 60_000, events, models = serving(model) } = options;
   return advance({
     log,
     tools,
-    steering,
     env: retriesEnv(modelRetries),
     scheduler: virtualScheduler(at),
     random: () => 1,
-    models: serving(model),
+    models,
     onEvent: events === undefined ? null : (event) => void events.push(event),
   });
 }
@@ -667,15 +667,6 @@ test("replay uses the recorded tool call ids, and a re-run call's idempotency ke
   expect(sentResults(model, 0).map((part) => part.callId)).toEqual(["call-a"]);
 });
 
-/** A host inbox with no steers whose `interrupt()` interrupts every node. */
-function interruptible(): { steering: Steering; interrupt: () => void } {
-  const controller = new AbortController();
-  return {
-    steering: { interruptSignal: () => controller.signal },
-    interrupt: () => controller.abort(new Error("interrupted")),
-  };
-}
-
 /** Return `model` with `hook(k)` run after the `k`-th event of each stream (from 1), `Infinity` at its end. */
 function hooked(model: ChatModel, hook: (k: number) => void): ChatModel {
   return {
@@ -696,30 +687,67 @@ function hooked(model: ChatModel, hook: (k: number) => void): ChatModel {
   };
 }
 
-test("a recorded interrupted reply replays as the interrupt: its text is the output, no model is called", async () => {
-  const flow = flowText([], { steerInbox: true });
-  const cutReply = () => [new TextDelta(0, "hel"), new TextDelta(0, "lo"), new Finish({ reason: "stop" })];
-  const first = interruptible();
-  const uncut = await run(
-    hooked(new ScriptedModel([cutReply()], CONFIG), (k) => k === 1 && first.interrupt()),
-    { flow, steering: first.steering },
-  );
-  expect(uncut.result.output).toBe("hel");
-  const second = interruptible();
-  const log = await cutRun(
-    seqOf(uncut.log, "model_call") + 1,
-    hooked(new ScriptedModel([cutReply()], CONFIG), (k) => k === 1 && second.interrupt()),
-    { flow, steering: second.steering },
-  );
-  const model = new ScriptedModel([], CONFIG);
-  const resumed = await resume(log, model, { steering: interruptible().steering });
-  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(resumed.output).toBe("hel");
-  expect(model.requests.length).toBe(0);
+/** Deliver an interrupt of `notes` to the live run at `log`; it lands in this tick. */
+const interruptAt = (log: string) => void interrupt(log, "notes");
+
+/** The seq of the `interrupted` record in the log at `path`. */
+const interruptSeq = (path: string) => records(path).find(({ record }) => record instanceof InterruptedRecord)!.seq;
+
+/** The honor steps of `writer` in the log at `path`, as their `by`. */
+const honors = (path: string) => steps(path).flatMap((step) => (step["kind"] === "interrupted" ? [Number(step["by"])] : []));
+
+/** `writer.new_messages` of the run at `path`, as `[role, text or part types]` per message. */
+async function newMessages(path: string): Promise<[string, string][]> {
+  const folded = await foldRunLog(path, { env: retriesEnv(0) });
+  const value = folded.records.findLast(
+    ({ entry }) => entry.envelope.record instanceof PoolCommitRecord && entry.envelope.record.key === "writer.new_messages",
+  )!.value!.toObject() as { role: string; parts: { type: string; text?: string }[] }[];
+  return value.map((message) => [message.role, message.parts.map((part) => part.text ?? part.type).join("|")]);
+}
+
+const cutReply = () => [new TextDelta(0, "hel"), new TextDelta(0, "lo"), new Finish({ reason: "stop" })];
+
+test("a recorded cut and honor step replay to null; no model is called", async () => {
+  const flow = flowText([], { steerInbox: true, output: "Optional(str)" });
+  const uncutLog = runLog();
+  const uncut = await run(hooked(new ScriptedModel([cutReply()], CONFIG), (k) => k === 1 && interruptAt(uncutLog)), {
+    flow,
+    log: uncutLog,
+  });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  expect(uncut.result.output).toBeNull();
+  expect(honors(uncutLog)).toEqual([interruptSeq(uncutLog)]);
+  expect(await newMessages(uncutLog)).toEqual([
+    ["assistant", "hel"],
+    ["user", INTERRUPTED_MARKER],
+  ]);
+  for (const kind of ["interrupted", "model_call"]) {
+    // After the honor step, or after the cut call and before the honor step.
+    const log = runLog();
+    await cutRun(seqOf(uncutLog, kind) + 1, hooked(new ScriptedModel([cutReply()], CONFIG), (k) => k === 1 && interruptAt(log)), {
+      flow,
+      log,
+    });
+    const model = new ScriptedModel([], CONFIG);
+    const resumed = await resume(log, model);
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toBeNull();
+    expect(model.requests.length).toBe(0);
+    expect(honors(log)).toEqual([interruptSeq(log)]);
+  }
 });
 
-test("an interrupt set before the resume lets the replay finish, then returns the latest reply", async () => {
-  const flow = flowText(["save"], { steerInbox: true });
+test("a cut with no text leaves only the marker in new_messages", async () => {
+  const flow = flowText([], { steerInbox: true, output: "Optional(str)" });
+  const log = runLog();
+  // Interrupted before the first event's text: a later empty-text event can't cut; the second text does.
+  const reply = [new TextDelta(0, ""), new TextDelta(0, "x"), new Finish({ reason: "stop" })];
+  await run(hooked(new ScriptedModel([reply], CONFIG), (k) => k === 1 && interruptAt(log)), { flow, log });
+  expect(await newMessages(log)).toEqual([["user", INTERRUPTED_MARKER]]);
+});
+
+test("an interrupt delivered during replay is honored after it, with no live model call", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
   const checking = new Response({
     message: new Message({
       role: "assistant",
@@ -731,61 +759,94 @@ test("an interrupt set before the resume lets the replay finish, then returns th
   const tools = { save: topicTool("save") };
   const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
   const log = await cutRun(seqOf(uncut.log, "tool_result") + 1, new ScriptedModel(replies(), CONFIG), { flow, tools });
-  const host = interruptible();
-  host.interrupt();
   const model = new ScriptedModel([], CONFIG);
-  const resumed = await resume(log, model, { tools, steering: host.steering });
+  const base = serving(model);
+  // The agent opens its steer inbox, then builds its model: the interrupt lands before the replay.
+  const models = { ...base, createModel: (config: Readonly<Record<string, unknown>>, opts: never) => (interruptAt(log), base.createModel(config, opts)) };
+  const resumed = await resume(log, model, { tools, models });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(resumed.output).toBe("Checking.");
+  expect(resumed.output).toBeNull();
   expect(model.requests.length).toBe(0);
+  expect(steps(log).map((step) => step["kind"])).toEqual(["model_call", "tool_result", "interrupted"]);
+});
+
+test("a recorded steer read before an interrupt honored on resume stays in new_messages", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
+  const replies = () => [calls(["call-a", "save", "a"]), textReply("done")];
+  const tools = { save: topicTool("save") };
+  const uncutLog = runLog();
+  // The steer is sent while `save` runs, so the next model call reads it.
+  const sending = (log: string) => ({ save: topicTool("save", { run: (topic) => (void send(log, "notes", "use B"), `save:${topic}`) }) });
+  await run(new ScriptedModel(replies(), CONFIG), { flow, tools: sending(uncutLog), log: uncutLog });
+  const log = runLog();
+  await cutRun(seqOf(uncutLog, "steer") + 1, new ScriptedModel(replies(), CONFIG), { flow, tools: sending(log), log });
+  const model = new ScriptedModel([], CONFIG);
+  const base = serving(model);
+  const models = { ...base, createModel: (config: Readonly<Record<string, unknown>>, opts: never) => (interruptAt(log), base.createModel(config, opts)) };
+  const resumed = await resume(log, model, { tools, models });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(model.requests.length).toBe(0);
+  expect(await newMessages(log)).toEqual([
+    ["assistant", "tool_call"],
+    ["tool", "tool_result"],
+    ["user", "use B"],
+    ["user", INTERRUPTED_MARKER],
+  ]);
 });
 
 test("recorded skipped results replay the host interrupt that skipped them", async () => {
-  const flow = flowText(["save"], { steerInbox: true });
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
   const reply = () => [calls(["call-a", "save", "a"], ["call-b", "save", "b"])];
   const ran: string[] = [];
   const tools = { save: topicTool("save", { log: ran }) };
-  const first = interruptible();
-  const uncut = await run(
-    hooked(new ScriptedModel(reply(), CONFIG), (k) => k === Infinity && first.interrupt()),
-    { flow, tools, steering: first.steering },
-  );
+  const uncutLog = runLog();
+  const uncut = await run(hooked(new ScriptedModel(reply(), CONFIG), (k) => k === Infinity && interruptAt(uncutLog)), {
+    flow,
+    tools,
+    log: uncutLog,
+  });
   expect(uncut.result.status).toBe("succeeded");
-  const second = interruptible();
-  // Cut after both skipped results, before the node's commit.
-  const log = await cutRun(
-    seqOf(uncut.log, "tool_result", 1) + 1,
-    hooked(new ScriptedModel(reply(), CONFIG), (k) => k === Infinity && second.interrupt()),
-    { flow, tools, steering: second.steering },
-  );
-  expect(steps(log).map((step) => step["closed"] ?? null)).toEqual([null, "skipped", "skipped"]);
-  const model = new ScriptedModel([], CONFIG);
-  const resumed = await resume(log, model, { tools, steering: interruptible().steering });
-  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(resumed.output).toBe(uncut.result.output);
-  expect(model.requests.length).toBe(0);
+  expect(await newMessages(uncutLog)).toEqual([
+    ["assistant", "tool_call|tool_call"],
+    ["tool", "tool_result"],
+    ["tool", "tool_result"],
+    ["user", INTERRUPTED_MARKER],
+  ]);
+  for (const cut of [seqOf(uncutLog, "tool_result", 1) + 1, seqOf(uncutLog, "interrupted") + 1]) {
+    // After both skipped results (before the honor step), or after the honor step.
+    const log = runLog();
+    await cutRun(cut, hooked(new ScriptedModel(reply(), CONFIG), (k) => k === Infinity && interruptAt(log)), { flow, tools, log });
+    const model = new ScriptedModel([], CONFIG);
+    const resumed = await resume(log, model, { tools });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toBeNull();
+    expect(model.requests.length).toBe(0);
+    expect(steps(log).map((step) => step["closed"] ?? step["kind"])).toEqual(["model_call", "skipped", "skipped", "interrupted"]);
+    expect(honors(log)).toEqual([interruptSeq(log)]);
+  }
   expect(ran).toEqual([]);
-  expect(steps(log).map((step) => step["output"])).toContain(SKIPPED_TOOL_RESULT);
 });
 
 test("calls a group committed before a host interrupt skipped the rest keep their evidence on replay", async () => {
-  const flow = flowText(["lookup", "save"], { steerInbox: true });
+  const flow = flowText(["lookup", "save"], { steerInbox: true, output: "Optional(str)" });
   const replies = () => [calls(["call-x", "lookup", "x"], ["call-y", "lookup", "y"], ["call-z", "save", "z"])];
-  const options = () => {
-    const host = interruptible();
+  const options = (log: string) => {
     // The interrupt lands while the safe group runs, so only `save z` is skipped.
-    const lookup = topicTool("lookup", { safe: true, run: (topic) => (host.interrupt(), `lookup:${topic}`) });
-    return { flow, tools: { lookup, save: topicTool("save") }, steering: host.steering, learnable: true };
+    const lookup = topicTool("lookup", { safe: true, run: (topic) => (interruptAt(log), `lookup:${topic}`) });
+    return { flow, tools: { lookup, save: topicTool("save") }, learnable: true, log };
   };
-  const uncut = await run(new ScriptedModel(replies(), CONFIG), options());
+  const uncutLog = runLog();
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), options(uncutLog));
   expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
-  expect(steps(uncut.log).map((step) => step["closed"] ?? null)).toEqual([null, null, null, "skipped"]);
-  // Cut after the skipped result, before the node's commit.
-  const log = await cutRun(seqOf(uncut.log, "tool_result", 2) + 1, new ScriptedModel(replies(), CONFIG), options());
-  const resumed = await resume(log, new ScriptedModel([], CONFIG), { tools: options().tools });
+  expect(steps(uncut.log).map((step) => step["closed"] ?? null)).toEqual([null, null, null, "skipped", null]);
+  // Cut after the honor step, before the node's commit.
+  const log = runLog();
+  await cutRun(seqOf(uncutLog, "interrupted") + 1, new ScriptedModel(replies(), CONFIG), options(log));
+  const resumed = await resume(log, new ScriptedModel([], CONFIG), { tools: options(log).tools });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   // The node's success, its evidence included, is the uncut run's.
-  expect(comparable(log)).toEqual(comparable(uncut.log));
+  expect(comparable(log)).toEqual(comparable(uncutLog));
 });
 
 test("a reply whose arguments nest too deep fails the resumed node again after its step", async () => {

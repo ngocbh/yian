@@ -395,6 +395,7 @@ const CODES = [
   "provider.refused",
   "condition.evaluate",
   "tool.timeout",
+  "agent.interrupted",
 ] as const;
 
 /**

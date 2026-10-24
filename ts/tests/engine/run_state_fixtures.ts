@@ -51,6 +51,7 @@ import {
   type NodeResult,
   Output,
   Route,
+  type SteerInbox,
 } from "../../src/nodes/base.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -2092,4 +2093,26 @@ export async function runCli(
   } finally {
     globalThis.fetch = send;
   }
+}
+
+/**
+ * A steer inbox `owner` with no steers, for an AGENT driven without an engine, whose
+ * `interrupt(by)` interrupts it as the record at seq `by` (7 by default) would.
+ */
+export function interruptible(): { steerInbox: SteerInbox; interrupt: (by?: number) => void } {
+  const controller = new AbortController();
+  let pending: number | null = null;
+  return {
+    steerInbox: {
+      inbox: "owner",
+      queued: () => false,
+      read: () => null,
+      interrupt: controller.signal,
+      interruptedBy: () => pending,
+    },
+    interrupt: (by = 7) => {
+      pending = by;
+      controller.abort();
+    },
+  };
 }

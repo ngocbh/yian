@@ -8,7 +8,8 @@
  * `test_structured_agent_without_tools_makes_one_structured_call`,
  * `test_steer_joins_the_single_request_after_the_prompt` (the steer is a send to the agent's steer
  * inbox, from `onEvent(RunStarted)`) and
- * `test_interrupt_while_streaming_keeps_the_partial_text` load the flow and run it through
+ * `test_interrupt_while_streaming_keeps_the_partial_text` (an `interrupt(log, inbox)` from
+ * `onStream`; the `Optional(str)` agent ends null, its cut text in the step) load the flow and run it through
  * `runWith` (`runFlow` with a `ScriptedModel` served by `models`, where Python patches
  * `model_from_config`); the request sending no tools stands for Python's unbound and structured
  * calls, and the reply streams as listed text deltas.
@@ -17,9 +18,7 @@
  * `test_python_built_agent_with_tools_runs_the_tool_loop` (the bound tools read from the request).
  *
  * TS-only (pins): an `Optional(str)` agent without tools makes one unbound call with no output
- * format and returns the text; an empty reply is `""`, not null; an interrupt before the first
- * call gives `""`, not null. The interrupt pin changes to a null output once an interrupted
- * `Optional(str)` agent returns null.
+ * format and returns the text; an empty reply is `""`, not null.
  */
 
 import { mkdtempSync } from "node:fs";
@@ -35,7 +34,8 @@ import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/message
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
-import { type RunFlowOptions, send } from "../../src/run.ts";
+import { interrupt, type RunFlowOptions, send } from "../../src/run.ts";
+import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { drive, runWith, serving } from "./run_state_fixtures.ts";
@@ -128,26 +128,30 @@ test("a steer joins the single request after the prompt", async () => {
   ]);
 });
 
-test("an interrupt while streaming keeps the partial text", async () => {
+test("an interrupt while streaming records the partial text; an Optional(str) agent ends null", async () => {
   const model = new ScriptedModel(
     [[new TextDelta(0, "hello"), new TextDelta(0, " big"), new TextDelta(0, " world"), new Finish({ reason: "stop" })]],
     CONFIG,
   );
-  const interrupt = new AbortController();
-  const steering = { interruptSignal: () => interrupt.signal };
+  const log = join(mkdtempSync(join(tmpdir(), "yian-no-tools-")), "log.jsonl");
   const chunks: StreamChunk[] = [];
   const onStream = (chunk: StreamChunk) => {
     chunks.push(chunk);
-    if (chunk.chunk === " big") interrupt.abort(new Error("interrupted"));
+    // A live delivery lands in this tick, before the next chunk.
+    if (chunk.chunk === " big") void interrupt(log, "notes");
   };
-  // Serial delivery, so the interrupt is set before the next chunk.
-  const options = { steering, onStream, numWorkers: 0 };
-  expect(await run([STEER, "output: str"], model, options)).toBe("hello big");
+  expect(await run([STEER, "output: Optional(str)"], model, { log, onStream, numWorkers: 0 })).toBeNull();
   expect(chunks.map((chunk) => [chunk.chunk, chunk.final])).toEqual([
     ["hello", false],
     [" big", false],
     ["", true],
   ]);
+  const cut = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord ? [record.step] : []));
+  expect(cut.map((step) => [step["kind"], step["finish"] ?? null])).toEqual([
+    ["model_call", "interrupted"],
+    ["interrupted", null],
+  ]);
+  expect((cut[0]!["output"] as { parts: { text: string }[] }).parts[0]!.text).toBe("hello big");
 });
 
 test("an Optional(str) agent without tools makes one unbound call and returns the text", async () => {
@@ -161,14 +165,4 @@ test("an Optional(str) agent without tools makes one unbound call and returns th
 test("an empty reply from an Optional(str) agent is empty text, not null", async () => {
   const model = new ScriptedModel([reply("")], CONFIG);
   expect(await run(["output: Optional(str)"], model)).toBe("");
-});
-
-test('an interrupt before the first call gives an Optional(str) agent "", not null', async () => {
-  // Null is reserved for an interrupt under the inbox model; until then an interrupt keeps text.
-  const interrupt = new AbortController();
-  interrupt.abort(new Error("interrupted"));
-  const model = new ScriptedModel([], CONFIG);
-  const steering = { interruptSignal: () => interrupt.signal };
-  expect(await run([STEER, "output: Optional(str)"], model, { steering })).toBe("");
-  expect(model.requests).toEqual([]);
 });

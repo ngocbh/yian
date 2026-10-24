@@ -18,7 +18,6 @@ import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
-import type { Steering } from "../../src/nodes/base.ts";
 import { advance, cancel, complete, pendingCalls, runFlow, send } from "../../src/run.ts";
 import { decodeRecord, NodeStepRecord, NodeWaitingRecord } from "../../src/runtime/log.ts";
 import { pending } from "../../src/tools/context.ts";
@@ -74,11 +73,12 @@ async function start(
   model: ScriptedModel,
   tools: Record<string, ToolEntry>,
   granted = "ask_user, lookup",
-  extra: { onEvent?: (event: RunEvent) => void; steering?: Steering } = {},
+  extra: { onEvent?: (event: RunEvent) => void; steerInbox?: boolean } = {},
 ) {
   const log = freshLog();
-  const options = { env: hostEnv(dir), log, tools, models: serving(model), runId: "r", ...extra };
-  const flow = await loadFlow(agentFlow(granted, extra.steering !== undefined));
+  const { steerInbox = false, ...hooks } = extra;
+  const options = { env: hostEnv(dir), log, tools, models: serving(model), runId: "r", ...hooks };
+  const flow = await loadFlow(agentFlow(granted, steerInbox));
   return { log, options, result: await runFlow(flow, {}, options) };
 }
 
@@ -218,17 +218,12 @@ test("an ask_user answered inline works as before", async () => {
   expect(sentResults(model, 1)).toEqual([["c1", "yes", false]]);
 });
 
-test("an agent given the host's interrupt signal can't pend yet", async () => {
+test("an agent with a steer inbox whose tool returns pending() waits", async () => {
   const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"])], CONFIG);
-  const steering: Steering = { interruptSignal: () => new AbortController().signal };
-  const { result } = await start(model, { ask_user: () => pending() }, "ask_user", { steering });
+  const { log, result } = await start(model, { ask_user: () => pending() }, "ask_user", { steerInbox: true });
 
-  expect(result.status).toBe("failed");
-  expect(result.failure?.nodeId).toBe("agent");
-  expect(result.failure?.message).toBe(
-    "agent node 'agent': tool 'ask_user' returned pending(), but an agent given the host's interrupt signal can't wait " +
-      "for a later answer yet; answer it inline",
-  );
+  expect(result.status, result.failure?.message).toBe("waiting");
+  expect(pendingCalls(log).map((call) => call.callId)).toEqual(["r/agent/1/0"]);
 });
 
 test("pending() outside a durable run fails the agent", async () => {

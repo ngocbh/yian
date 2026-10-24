@@ -23,7 +23,7 @@ import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import { isValue, LLM_CONFIG_KEY, valueLeaves } from "../../nodes/agent/llm_values.ts";
-import { AgentNode, isMaxToolIterations, isTextOutput, type PromptItem, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
+import { AgentNode, isMaxToolIterations, type PromptItem, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
   Binding,
@@ -877,10 +877,6 @@ export class AgentDescriptor extends NodeDescriptor {
           { range: outputsRange, cause: error },
         );
       }
-    }
-    if (this.steerInbox !== null && !isTextOutput(node.outputContract)) {
-      // Checked here too so the error points at the `steer_inbox:` line.
-      throw ctx.diagnostics.error(`node ${id}: a steer inbox needs \`str\` output`, { range: steerInboxRange });
     }
     node.params = this.sinkParams();
     const inputNames = new Set(node.params.map((parameter) => parameter.name));

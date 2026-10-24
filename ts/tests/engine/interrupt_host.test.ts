@@ -8,9 +8,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import type { StreamChunk } from "../../src/events.ts";
+import { Finish, TextDelta } from "../../src/llm/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { FileLockError, lockFile } from "../../src/platform.ts";
 import {
+  advance,
   close,
   complete,
   DeliveryRefused,
@@ -147,4 +150,43 @@ test("a crashed run: an offline interrupt names only waiting readers", async () 
   const before = readFileSync(log);
   expect(await interrupt(log, "m", { env })).toEqual([]);
   expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+test("advance after an idle interrupt: the wake, the interrupted closer, the honor step; output null", async () => {
+  const model = new ScriptedModel([callReply(["hold", {}, "c1"], ["lookup", {}, "c2"])], CONFIG);
+  const { log, options } = await waitingReply(model);
+  await interrupt(log, "m", { env });
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(kinds(log).slice(-9, -5)).toEqual(["node_woken", "tool_result", "interrupted", "pool_commit"]);
+  const steps = stepsOf(log, "reply");
+  expect(steps.at(-2)).toMatchObject({ call_id: "c1", closed: "interrupted", is_error: true });
+  const record = readRunLog(log).find(({ record }) => record instanceof InterruptedRecord)!;
+  expect(steps.at(-1)).toEqual({ kind: "interrupted", by: BigInt(record.seq) });
+  // The model was asked once: the woken agent honored the interrupt instead of calling it again.
+  expect(model.requests).toHaveLength(1);
+});
+
+test("an idle interrupt of a str agent fails it agent.interrupted on advance", async () => {
+  const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
+  const { log, options } = await waitingReply(model, "str");
+  await interrupt(log, "m", { env });
+  const done = await advance(options);
+  expect(done.status).toBe("failed");
+  expect(done.failure?.code).toBe("agent.interrupted");
+});
+
+test("a live interrupt from onStream cuts the reply at the next chunk", async () => {
+  const log = freshLog();
+  const flow = await loadFlow(replyFlow());
+  const model = new ScriptedModel([[new TextDelta(0, "hello"), new TextDelta(0, " big"), new TextDelta(0, " world"), new Finish({ reason: "stop" })]], CONFIG);
+  const onStream = (chunk: StreamChunk) => void (chunk.chunk === " big" && interrupt(log, "m", { env }));
+  const result = await runFlow(flow, {}, { env, log, tools: tools(), models: serving(model), runId: "r", onStream, numWorkers: 0 });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBeNull();
+  expect(stepsOf(log, "reply").map((step) => [step["kind"], step["finish"] ?? null])).toEqual([
+    ["model_call", "interrupted"],
+    ["interrupted", null],
+  ]);
 });

@@ -63,6 +63,7 @@ import {
   type NodeCaps,
   NodeKind,
   type Output,
+  type Pending,
 } from "../base.ts";
 import { applyDefaults, BindingError, copyValue, type ReservedBinder } from "../binding.ts";
 import {
@@ -865,7 +866,7 @@ export class AgentNode extends Node {
    * @param caps The node's signal, checked before recall and the model call, its scheduler and
    *   random draw for model-retry waits, and the capabilities its traits ask for: memory context,
    *   tools, live sinks, skills, steering, model access and steps.
-   * @returns The model's answer.
+   * @returns The model's answer, or Pending when a tool call waits for a later answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
    *   null, a spliced value isn't a message (a `Message` or a `{role, text}` record) or holds a
@@ -877,7 +878,7 @@ export class AgentNode extends Node {
    *   request; the evaluator rethrows its original host error.
    * @throws The signal's reason once the host stopped the node.
    */
-  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
+  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output | Pending> {
     if (caps.steps !== undefined && this.callTime !== null) {
       this.recordConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, caps.steps);
     }

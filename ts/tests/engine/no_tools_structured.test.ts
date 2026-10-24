@@ -43,7 +43,7 @@ import {
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
-import type { Steering } from "../../src/nodes/base.ts";
+import type { Output, Steering } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { loadSkillTool } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -121,7 +121,7 @@ test("test_no_tools_uses_structured_output_for_record", async () => {
   const events: unknown[] = [];
   const ctx = context(model, { outputType: RECORD, emitEvent: (event) => void events.push(event) });
   const out = await runAgent(ctx);
-  expect(out.value).toEqual({ name: "Ada", score: 9n });
+  expect((out as Output).value).toEqual({ name: "Ada", score: 9n });
   expect(model.requests).toHaveLength(1);
   expect(purposes(events)).toEqual(["structured_native"]);
 });
@@ -137,7 +137,7 @@ test("test_no_tools_uses_ollama_structured_output_for_literal (Changed: the nati
     outputType: typ,
     emitEvent: (event) => void events.push(event),
   });
-  expect((await runAgent(ctx)).value).toBe("neutral");
+  expect(((await runAgent(ctx)) as Output).value).toBe("neutral");
   expect(purposes(events)).toEqual(["structured_native"]);
   expect(model.requests[0]!.outputFormat).not.toBeNull();
 });
@@ -146,7 +146,7 @@ test("test_no_tools_bare_str_text_passthrough", async () => {
   const model = new ScriptedModel([textReply("hello")]);
   const events: unknown[] = [];
   const ctx = context(model, { outputType: Type.scalar(ValueKind.STRING), emitEvent: (event) => void events.push(event) });
-  expect((await runAgent(ctx)).value).toBe("hello");
+  expect(((await runAgent(ctx)) as Output).value).toBe("hello");
   expect(purposes(events)).toEqual(["chat"]);
   const request = model.requests[0]!;
   expect(request.outputFormat).toBeNull();
@@ -180,7 +180,7 @@ test("the memory sections follow the system prompt in the request", async () => 
 test("a steering inbox's steers join the loop's request after the prompt", async () => {
   const model = new ScriptedModel([textReply("ok")]);
   const steering: Steering = { interruptSignal: () => new AbortController().signal, drain: () => ["be brief"] };
-  expect((await runAgent(context(model, { steering }))).value).toBe("ok");
+  expect(((await runAgent(context(model, { steering }))) as Output).value).toBe("ok");
   expect(model.requests[0]!.messages.map((message) => [message.role, message.text()])).toEqual([
     ["system", DEFAULT_SYSTEM],
     ["user", "x"],
@@ -199,7 +199,7 @@ test("a granted tool runs in the loop", async () => {
   });
   const model = new ScriptedModel([reply(CALL), textReply("done")]);
   const ctx = context(model, { tools: ["lookup"], toolset: new ToolSet({ lookup }) });
-  expect((await runAgent(ctx)).value).toBe("done");
+  expect(((await runAgent(ctx)) as Output).value).toBe("done");
   expect(model.requests[1]!.messages.at(-1)!.parts).toEqual([
     new ToolResultPart({ callId: "c1", name: "lookup", content: "found x" }),
   ]);
@@ -216,7 +216,7 @@ test("a granted tool without a tool set fails as unknown to the registry before 
 test("a granted skill binds load_skill", async () => {
   const model = new ScriptedModel([textReply("done")]);
   const skills = [new Skill({ name: "review", description: "Review code.", instructions: "" })];
-  expect((await runAgent(context(model, { skills }))).value).toBe("done");
+  expect(((await runAgent(context(model, { skills }))) as Output).value).toBe("done");
   expect(model.requests[0]!.tools).toEqual([loadSkillTool()]);
 });
 
@@ -240,7 +240,7 @@ test("a parsed tool call with no grant fails with AgentLoopError", async () => {
 test("an unparsed tool call is ignored", async () => {
   const unparsed = new ToolCallPart({ id: "c1", name: "lookup", arguments: null, rawArguments: "{not json" });
   const model = new ScriptedModel([reply(new TextPart("answer"), unparsed)]);
-  expect((await runAgent(context(model, { maxToolIterations: 1 }))).value).toBe("answer");
+  expect(((await runAgent(context(model, { maxToolIterations: 1 }))) as Output).value).toBe("answer");
 });
 
 for (const [name, response] of [

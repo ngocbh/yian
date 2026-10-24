@@ -413,6 +413,22 @@ export class AgentSteps {
     return this.#record(step, options);
   }
 
+  /**
+   * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
+   * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`) and `index` (the call's
+   * place among the reply's runnable calls).
+   *
+   * @returns The step's `n`.
+   * @throws Whatever `NodeSteps.record` throws.
+   */
+  pending(call: { callId: string; tool: string; toolCallId: string; reply: number; index: number }): number {
+    const { callId, tool, toolCallId, reply, index } = call;
+    return this.#record(
+      { kind: "pending", call_id: callId, tool, tool_call_id: toolCallId, reply: BigInt(reply), index: BigInt(index) },
+      { settled: true },
+    );
+  }
+
   /** The fields every `model_call` step starts with. */
   #callStep(call: CallFields): ValueRecord {
     return {

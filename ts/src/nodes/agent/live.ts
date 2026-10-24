@@ -17,8 +17,8 @@
  * unchanged; provider and tool errors are reported by name only, because their text can contain
  * credentials, then rethrown.
  *
- * Knows about:   diagnostics, events, llm, llm_clients auth, nodes/base, nodes/binding, typesys,
- *                peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, llm_clients auth, nodes/base, nodes/binding, tools
+ *                context, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -38,6 +38,7 @@ import { callWithRetries } from "../../llm/executor.ts";
 import { Message, type Request, Response, TextPart } from "../../llm/messages.ts";
 import { AuthError, isAuthFailure } from "../../llm_clients/auth/common.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
+import { isPending } from "../../tools/context.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import type { Value } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps } from "../base.ts";
@@ -400,8 +401,8 @@ function toolEventIdentity(live: LiveSinks, identity: ToolCallIdentity) {
  * Emits `ToolCallStarted` with a copy of the arguments, awaits `invoke()`, then emits
  * `ToolCallFinished` with `result: text(result)` (`null` when `text` throws), or with the
  * rejection's `name` (`typeof` for a non-`Error`) as `error`. No finished event is emitted once
- * `signal` has aborted, and a `CapabilityFault` passes through with none. Without an event sink
- * nothing is emitted.
+ * `signal` has aborted, or for a call whose handler returned `pending()` (it hasn't finished), and
+ * a `CapabilityFault` passes through with none. Without an event sink nothing is emitted.
  *
  * @returns What `invoke()` resolves to.
  * @throws Whatever `invoke()` rejects with, unchanged.
@@ -426,6 +427,8 @@ export async function observeToolCall(
     }
     throw error;
   }
+  // A call that waits for a later answer hasn't finished; hosts learn of the wait from the run.
+  if (isPending(result)) return result;
   if (!signal?.aborted) emitEvent(new ToolCallFinished({ ...ids, result: shownResult(result, text) }));
   return result;
 }

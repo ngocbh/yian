@@ -16,6 +16,8 @@ import { typeRelation } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.ts";
+import { siteLabel } from "../../nodes/human_input/node.ts";
+import { parseQuestions, QuestionSpecError } from "../../nodes/human_input/questions.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
@@ -226,8 +228,9 @@ export class ToolDescriptor extends NodeDescriptor {
    * Sets the node's `params` from the authored `input:` and its output contract from the
    * optional `output:` (`null` when absent); `_finish` stamps the descriptor origin. A built-in
    * checks its inputs first and infers its output: `take` gives `{events: list(T), closed: bool}`
-   * for its `Inbox(T)`, `sleep` gives `None`. A literal duration (`timeout`, `for`) is wired as
-   * its seconds.
+   * for its `Inbox(T)`, `sleep` gives `None`. An `ask` keeps its declared `output:` (a questions
+   * ask with none answers an `object`, a prompt-only one is free form) and derives its
+   * `answerSchema` from it. A literal duration (`timeout`, `for`) is wired as its seconds.
    *
    * @throws LoadError when `output:` isn't a valid type expression, or a built-in's input is
    *   unknown, missing or of the wrong type (at the input).
@@ -245,6 +248,16 @@ export class ToolDescriptor extends NodeDescriptor {
       this.checkSleep(ctx);
       this.wireDuration(ctx, wiring, "for");
       node.outputContract = new ValueContract(Type.scalar(ValueKind.NONE));
+    } else if (this.toolId === ASK) {
+      this.checkAskInputs(ctx);
+      this.wireDuration(ctx, wiring, "timeout");
+      node.outputContract = this.outputContract(ctx);
+      // A questions ask with no declared answer gets a free-form record, as human_input does.
+      const asksQuestions = [QUESTIONS_INPUT, "questions"].some((name) => Object.hasOwn(this.inputs, name));
+      if (node.outputContract === null && (asksQuestions || this.adaptiveQuestions !== null)) {
+        node.outputContract = new ValueContract(Type.scalar(ValueKind.OBJECT));
+      }
+      node.answerSchema = answerSchema(isExactly(node.outputContract, ValueContract) ? node.outputContract.type : null);
     } else {
       node.outputContract = this.outputContract(ctx);
     }
@@ -357,6 +370,73 @@ export class ToolDescriptor extends NodeDescriptor {
   }
 
   /**
+   * Check an ask's base surface: `prompt` is text, and `questions` (or the `__questions` the
+   * adaptive desugar wires) is a valid question list. A reference passes when its type may be
+   * one. Any other input is a host extra, checked against the host's declaration at run start.
+   *
+   * @throws LoadError at the input for a non-text `prompt`, a literal question list
+   *   `parseQuestions` refuses, or a reference whose type can't be what the input needs.
+   */
+  private checkAskInputs(ctx: BuildContext): void {
+    if (Object.hasOwn(this.inputs, "prompt")) {
+      const subject = this.inputSubject("prompt");
+      const literal = literalValue(bindingSource(this.inputs["prompt"]));
+      if (literal !== NOT_LITERAL) {
+        if (literal !== null && typeof literal !== "string") {
+          throw ctx.diagnostics.error(`${subject}: ${notTextError("prompt", literal)}`, { range: this.inputRange("prompt") });
+        }
+      } else {
+        const typ = this.inputType(ctx, "prompt");
+        if (typ !== null && typeRelation(typ, Type.scalar(ValueKind.STRING)) === "disjoint") {
+          throw ctx.diagnostics.error(`${subject}: must be text, but the value is ${canonicalTypeLabel(typ)}`, {
+            range: this.inputRange("prompt"),
+          });
+        }
+      }
+    }
+    for (const name of ["questions", QUESTIONS_INPUT]) {
+      if (Object.hasOwn(this.inputs, name)) this.checkQuestions(ctx, name);
+    }
+  }
+
+  /**
+   * Check ask input `name`'s question list: a literal list must pass `parseQuestions`, and a
+   * reference's type must be able to hold a list of records.
+   *
+   * @throws LoadError at the input otherwise.
+   */
+  private checkQuestions(ctx: BuildContext, name: string): void {
+    const subject = this.inputSubject(name);
+    const range = this.inputRange(name);
+    const literal = literalValue(bindingSource(this.inputs[name]));
+    if (literal === NOT_LITERAL) {
+      const typ = this.inputType(ctx, name);
+      if (typ === null || typeRelation(typ, QUESTION_LIST) !== "disjoint") return;
+      throw ctx.diagnostics.error(
+        `${subject}: must be a list of questions, but the value is ${canonicalTypeLabel(typ)}`,
+        { range },
+      );
+    }
+    if (!isList(literal)) {
+      throw ctx.diagnostics.error(
+        `${subject}: must be a list of questions (each item \`- question: ...\`), got ${valueRepr(literal)}`,
+        { range },
+      );
+    }
+    const found = nonTextQuestionField(literal);
+    if (found !== null) {
+      const [path, value] = found;
+      throw ctx.diagnostics.error(`${subject}: ${notTextError(siteLabel(path), value)}`, { range });
+    }
+    try {
+      parseQuestions(literal);
+    } catch (error) {
+      if (!(error instanceof QuestionSpecError)) throw error;
+      throw ctx.diagnostics.error(`${subject}: ${error.message}`, { range, cause: error });
+    }
+  }
+
+  /**
    * Rewrite duration input `name`'s wiring source, when present: a literal to its seconds (a
    * bigint); a reference stays as written once its type is `str`, and is parsed when the node runs.
    *
@@ -420,6 +500,8 @@ const TAKE_INPUTS: ReadonlySet<string> = new Set(["from", "take", "timeout"]);
 const DATE = Type.scalar(ValueKind.DATE);
 const DATETIME = Type.scalar(ValueKind.DATETIME);
 const UNTIL_FIX = "write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`";
+/** What an ask's question list reference must be able to hold. */
+const QUESTION_LIST = new Type({ kind: ValueKind.LIST_OBJECT, element: Type.scalar(ValueKind.OBJECT) });
 /** The values of a take's `take:`. */
 const TAKE_MODE = new Type({ kind: ValueKind.STRING, tags: new Set(["one", "all"]) });
 

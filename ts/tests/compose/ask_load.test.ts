@@ -5,6 +5,9 @@ import { siteKey } from "../../src/compose/nodes/base.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
+import { bindingSource, outputContractType } from "../../src/nodes/contracts.ts";
+import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "./declarations.ts";
 
 /** Return a flow with one TOOL node `q` of tool id `toolId` and `body` lines. */
@@ -73,4 +76,88 @@ test("ask with adaptive_questions parses and ranges the brief and llm_config", (
   expect(desc.adaptiveQuestions).toEqual({ prompt: "Ask what matters", llm_config: { model: "m" } });
   expect(desc.fieldRanges.get(siteKey("text", "adaptive_questions.prompt"))).toBeInstanceOf(SourceRange);
   expect(desc.fieldRanges.get(siteKey("field", "adaptive_questions.llm_config"))).toBeInstanceOf(SourceRange);
+});
+
+const ESCALATION = `id: approve_plan
+name: approve_plan
+typedefs:
+  Approval:
+    decision: Literal(approve, reject)
+    note: Optional(str)
+input:
+  plan: !str
+nodes:
+  lead:
+    kind: tool
+    tool_id: ask
+    input:
+      to: lead
+      prompt: "Approve this plan?\\n\\n\${input.plan}"
+      timeout: 24h
+    output: Optional(Approval)
+  escalate:
+    kind: case
+    cases:
+      - when: \${lead.output == null}
+        then: manager
+  manager:
+    kind: tool
+    tool_id: ask
+    input:
+      to: manager
+      prompt: "No answer from the lead in 24h. Approve this plan?\\n\\n\${input.plan}"
+      timeout: 48h
+    output: Optional(Approval)
+output: !Optional(Approval) \${lead.output | manager.output}
+`;
+
+test("the escalation flow loads: answer schema, timeout seconds and host extras", () => {
+  const compiled = assembleText(ESCALATION).flow.compiled;
+  const lead = compiled.nodes.get("lead") as ToolNode;
+  expect(lead.builtin).toBe("ask");
+  expect(lead.answerSchema.map((field) => field["name"])).toEqual(["decision", "note"]);
+  expect(lead.answerSchema[0]).toEqual({ name: "decision", type: "str", required: true, enum: ["approve", "reject"] });
+  const wiring = compiled.wiring.get("lead")!;
+  expect(bindingSource(wiring.get("timeout"))).toBe(86400n);
+  expect(bindingSource(wiring.get("to"))).toBe("lead");
+  expect((compiled.nodes.get("manager") as ToolNode).retries).toBe(0);
+});
+
+/** Return a flow whose one ask node `q` has `inputs` lines and `extra` body lines. */
+const askWith = (inputs: string, extra = "") => `id: f
+name: f
+input:
+  qs: !list(object)
+  n: !int
+nodes:
+  q:
+    kind: tool
+    tool_id: ask
+    input:
+${inputs}${extra}output: \${q.output}
+`;
+
+test("a questions ask answers an object; a prompt ask is free form", () => {
+  const questions = assembleText(askWith("      questions:\n        - question: Ship?\n          header: Ship\n"));
+  const node = questions.flow.compiled.nodes.get("q") as ToolNode;
+  expect(canonicalTypeLabel(outputContractType(node.outputContract)!)).toBe("object");
+  expect(node.answerSchema).toEqual([{ name: "answer", type: "object", required: true }]);
+  const prompt = assembleText(askWith("      prompt: Ship?\n")).flow.compiled.nodes.get("q") as ToolNode;
+  expect(prompt.outputContract).toBeNull();
+  expect(prompt.answerSchema).toEqual([]);
+});
+
+test("a questions reference loads", () => {
+  assembleText(askWith("      questions: ${input.qs}\n"));
+});
+
+test.each([
+  ["a question without its question", "      questions:\n        - header: Ship\n", "question[0] is invalid"],
+  ["a non-text header", "      questions:\n        - question: Ship?\n          header: 5\n", "`questions[0].header:` must be text"],
+  ["questions that aren't a list", "      questions: ship\n", "must be a list of questions"],
+  ["a questions reference that isn't a list", "      questions: ${input.n}\n", "must be a list of questions, but the value is int"],
+  ["prompt: 5", "      prompt: 5\n", "`prompt:` must be text, but YAML read it as an integer"],
+  ["a prompt reference that isn't text", "      prompt: ${input.n}\n", "must be text, but the value is int"],
+])("ask refuses %s", (_label, inputs, message) => {
+  expect(refused(askWith(inputs))).toContain(message);
 });

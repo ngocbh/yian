@@ -813,11 +813,15 @@ interface RunResumedDelta {
   readonly closedCalls: readonly string[];
 }
 
-/** Appending one canonical step to an in-flight node's steps. */
+/**
+ * Appending one canonical step to an in-flight node's steps; `closedCalls` is the host call a
+ * `pending` step registers already closed, on a node holding a pending interrupt.
+ */
 interface NodeStepDelta {
   readonly kind: "step";
   readonly nodeId: string;
   readonly step: Readonly<JsonObject>;
+  readonly closedCalls: readonly string[];
 }
 
 /** Recording a stop over the in-flight nodes; it changes nothing but the sequence. */
@@ -851,6 +855,13 @@ interface InboxClosedDelta {
   readonly inbox: string;
 }
 
+/** Interrupting steer-inbox readers; the waits fold applies it. `closedCalls` are the host calls it closes. */
+interface InterruptedDelta {
+  readonly kind: "interrupted";
+  readonly nodeIds: readonly string[];
+  readonly closedCalls: readonly string[];
+}
+
 /**
  * One pool commit. A run-start commit (`initial`) applies at once; a node's waits for its success.
  * `valueJson` is the value's canonical typed wire text.
@@ -872,7 +883,7 @@ interface CommitPlan extends PlanAnchors {
   readonly messagesJson: string | null;
 }
 
-/** One dispatch, resume, step, stop, wait, wake, run wait or inbox close. */
+/** One dispatch, resume, step, stop, wait, wake, run wait, inbox close or interrupt. */
 interface FrontierPlan extends PlanAnchors {
   readonly kind: "frontier";
   readonly delta:
@@ -883,7 +894,8 @@ interface FrontierPlan extends PlanAnchors {
     | NodeWaitingDelta
     | NodeWokenDelta
     | RunWaitingDelta
-    | InboxClosedDelta;
+    | InboxClosedDelta
+    | InterruptedDelta;
 }
 
 /** The touched coordinates of one successful output commit. */
@@ -1334,6 +1346,40 @@ export function prepareRunCancelled(state: RunState): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareRunCancelled expects a RunState");
   requireDeliverable(state);
   return prepareRecord(state, new RunCancelledRecord());
+}
+
+/**
+ * Prepare a host's interrupt of the agents reading `inbox` as their steer inbox: `running` (the
+ * engine's in-flight readers, in flight order) then each waiting node whose `node_waiting` named
+ * `inbox`, leaving out nodes that already hold a pending interrupt. The record closes the named
+ * nodes' open calls (`interrupted`); a closed inbox can still be interrupted, since a reply may
+ * still run on what it already read.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @param running The in-flight nodes reading `inbox` as their steer inbox, which only the engine
+ *   knows; none offline.
+ * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
+ *   per open host call of the named nodes; `null` when no node is left to name.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
+ *   such inbox.
+ * @throws RangeError when a running node can't be interrupted (see `validateInterrupted`).
+ */
+export function prepareInterrupt(state: RunState, inbox: string, running: readonly string[] = []): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareInterrupt expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string")) {
+    throw new TypeError("running must be an array of node ids");
+  }
+  requireDeliverable(state);
+  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  const w = state.waits;
+  const waiting = [...w.waiting].filter(([, node]) => node.steerInbox === inbox).map(([nodeId]) => nodeId);
+  const nodes = [...running, ...waiting].filter((nodeId) => !w.interrupts.has(nodeId));
+  if (nodes.length === 0) return null;
+  return prepareRecord(state, new InterruptedRecord(inbox, nodes));
 }
 
 /**
@@ -1860,8 +1906,6 @@ export function prepareRecord(
   if (isExactly(record, RunCancelledRecord) || isExactly(record, RunFailedRecord)) {
     return prepareEndingTransition(state, record);
   }
-  // The kind is in the schema so interrupts need no later bump; this version doesn't apply it.
-  if (isExactly(record, InterruptedRecord)) throw new RangeError("interrupted records are not accepted yet");
   if (isExactly(record, NodeSucceededRecord)) {
     validateSuccessCommit(state, record);
     return prepareSuccessTransition(state, record);
@@ -1893,6 +1937,8 @@ export function prepareRecord(
     validateRunWaiting(state, record);
   } else if (isExactly(record, InboxClosedRecord)) {
     validateInboxClosed(state, record);
+  } else if (isExactly(record, InterruptedRecord)) {
+    validateInterrupted(state, record);
   } else {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
@@ -1921,10 +1967,12 @@ export function prepareRecord(
     observers = [new RunResumed(), ...canonical.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(canonical, NodeStepRecord)) {
     validateNodeStep(state, canonical);
+    const closedCalls = bornClosedCalls(state, canonical);
     // The decoded copy keeps the applied step apart from the returned record.
-    delta = { kind: "step", nodeId: canonical.nodeId, step: canonicalSeed(canonical.step)[1] as JsonObject };
-    // A step is node-owned detail; no observer event announces it.
-    observers = [];
+    delta = { kind: "step", nodeId: canonical.nodeId, step: canonicalSeed(canonical.step)[1] as JsonObject, closedCalls };
+    // A step is node-owned detail; no observer event announces it, except that a host call
+    // registered closed is withdrawn.
+    observers = closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else if (isExactly(canonical, RunStoppedRecord)) {
     validateRunStopped(state, canonical);
     delta = { kind: "stopped", nodeIds: canonical.nodeIds };
@@ -1949,6 +1997,14 @@ export function prepareRecord(
     validateInboxClosed(state, canonical);
     delta = { kind: "inboxClosed", inbox: canonical.inbox };
     observers = [];
+  } else if (isExactly(canonical, InterruptedRecord)) {
+    validateInterrupted(state, canonical);
+    const open = canonical.nodes.flatMap((nodeId) =>
+      nodeCalls(state.waits, nodeId).filter((call) => call.state === "open").map((call) => call.callId),
+    );
+    const closedCalls = hostCalls(state, open);
+    delta = { kind: "interrupted", nodeIds: canonical.nodes, closedCalls };
+    observers = closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else {
     // An exhaustive codec invariant.
     throw new TypeError("frontier envelope decoded to a different record kind");
@@ -3129,10 +3185,11 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       isExactly(record, NodeWaitingRecord) ||
       isExactly(record, NodeWokenRecord) ||
       isExactly(record, RunWaitingRecord) ||
-      isExactly(record, InboxClosedRecord)
+      isExactly(record, InboxClosedRecord) ||
+      isExactly(record, InterruptedRecord)
     )
   ) {
-    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake, run-wait or close record");
+    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake, run-wait, close or interrupt record");
   }
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
@@ -3156,7 +3213,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     if (delta.nodeId !== record.nodeId || logJson(delta.step) !== logJson(record.step)) {
       throw new RangeError("frontier step delta disagrees with its record");
     }
-    observers = [];
+    observers = delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else if (isExactly(record, RunStoppedRecord) && delta.kind === "stopped") {
     if (!sameItems(delta.nodeIds, record.nodeIds)) {
       throw new RangeError("frontier stop delta disagrees with its record");
@@ -3177,6 +3234,9 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
     if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
     observers = [];
+  } else if (isExactly(record, InterruptedRecord) && delta.kind === "interrupted") {
+    if (!sameItems(delta.nodeIds, record.nodes)) throw new RangeError("frontier interrupt delta disagrees with its record");
+    observers = delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else {
     throw new TypeError("frontier record and prevalidated delta disagree");
   }
@@ -3235,6 +3295,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "runWaiting":
     case "inboxClosed":
+    case "interrupted":
       break;
   }
   state.nextSequence = prepared.expectedSequence + 1;
@@ -3485,7 +3546,12 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace step must only advance the accepted sequence");
     }
-  } else if (isExactly(record, RunStoppedRecord) || isExactly(record, RunWaitingRecord) || isExactly(record, InboxClosedRecord)) {
+  } else if (
+    isExactly(record, RunStoppedRecord) ||
+    isExactly(record, RunWaitingRecord) ||
+    isExactly(record, InboxClosedRecord) ||
+    isExactly(record, InterruptedRecord)
+  ) {
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace stop must only advance the accepted sequence");
     }
@@ -3498,7 +3564,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
       throw new RangeError("frontier trace wake must bring back its node's parked start");
     }
   } else {
-    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait or close record");
+    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait, close or interrupt record");
   }
   if (!isExactly(record, NodeWaitingRecord) && delta.parked !== null) {
     throw new RangeError("only a wait can park a start");
@@ -4036,7 +4102,12 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
         `NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken and had settled by then`,
       );
     }
-    if (call.state === "closed") throw new RangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
+    // An interrupt can land between an agent's `Pending` and the engine's `node_waiting`; the node
+    // is wakeable at once and honors it.
+    const interrupted = call.closedReason === "interrupted" && w.interrupts.has(nodeId);
+    if (call.state === "closed" && !interrupted) {
+      throw new RangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
+    }
   }
   for (const call of nodeCalls(w, nodeId)) {
     if (call.state === "open" && !record.callIds.includes(call.callId)) {
@@ -4076,6 +4147,42 @@ function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
   }
   if (state.waits.inboxes.get(record.inbox)?.closed === true) {
     throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is already closed`);
+  }
+}
+
+/**
+ * Require an interrupt record to name, once each, nodes reading its declared inbox as their steer
+ * inbox: in flight with `readsSteerInbox` (which inbox a running node opened is the engine's word,
+ * bound at run time), or waiting with `node_waiting.steer_inbox` equal to it; none holding a
+ * pending interrupt already; and every waiting reader of the inbox without one among them.
+ */
+function validateInterrupted(state: RunState, record: InterruptedRecord): void {
+  const { inbox, nodes } = record;
+  if (inboxElementType(state, inbox) === null) {
+    throw new RangeError(`Interrupted inbox ${reprText(inbox)} is no inbox the START declares`);
+  }
+  if (nodes.length === 0) throw new RangeError("Interrupted names at least one node");
+  if (new Set(nodes).size !== nodes.length) throw new RangeError("Interrupted names each node once");
+  const w = state.waits;
+  for (const nodeId of nodes) {
+    const node = state.flow.nodes.get(nodeId);
+    if (node === undefined) throw new RangeError(`Interrupted node ${reprText(nodeId)} does not exist in the flow`);
+    const waiting = w.waiting.get(nodeId);
+    if (waiting !== undefined) {
+      if (waiting.steerInbox !== inbox) {
+        throw new RangeError(`Interrupted node ${reprText(nodeId)} waits without reading steer inbox ${reprText(inbox)}`);
+      }
+    } else if (!state.inFlight.has(nodeId)) {
+      throw new RangeError(`Interrupted node ${reprText(nodeId)} is neither in flight nor waiting`);
+    } else if (!node.readsSteerInbox) {
+      throw new RangeError(`Interrupted node ${reprText(nodeId)} reads no steer inbox`);
+    }
+    if (w.interrupts.has(nodeId)) throw new RangeError(`Interrupted node ${reprText(nodeId)} already holds a pending interrupt`);
+  }
+  for (const [nodeId, waiting] of w.waiting) {
+    if (waiting.steerInbox === inbox && !w.interrupts.has(nodeId) && !nodes.includes(nodeId)) {
+      throw new RangeError(`Interrupted must name waiting node ${reprText(nodeId)}, which reads steer inbox ${reprText(inbox)}`);
+    }
   }
 }
 
@@ -4147,7 +4254,35 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
     validatePendingStep(state, nodeId, step);
   } else if (step["kind"] === "steer") {
     validateSteerStep(state, nodeId, step);
+  } else if (step["kind"] === "interrupted") {
+    validateInterruptedStep(state, nodeId, step);
   }
+}
+
+/**
+ * Require a running node's `interrupted` step, its honor of a host interrupt, to hold only `kind`
+ * and `by`, the seq of the `interrupted` record the node holds pending.
+ */
+function validateInterruptedStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  const keys = Object.keys(step);
+  if (keys.length !== 2 || !Object.hasOwn(step, "by")) throw new RangeError("an interrupted step holds only kind and by");
+  const pending = state.waits.interrupts.get(nodeId);
+  if (pending === undefined) throw new RangeError(`an interrupted step on node ${reprText(nodeId)}, which holds no pending interrupt`);
+  // An int, so the log writes it as an int.
+  const by = typeof step["by"] === "bigint" ? stepInt(step["by"]) : null;
+  if (by !== pending) {
+    throw new RangeError(`node ${reprText(nodeId)}'s interrupted step must name its pending interrupt ${pending}, got ${writeAsText(step["by"] ?? null)}`);
+  }
+}
+
+/**
+ * The host call a `pending` step registers already closed: the node holds a pending interrupt,
+ * whose record closed its calls before a tool already running pended. None for any other step.
+ */
+function bornClosedCalls(state: RunState, record: NodeStepRecord): string[] {
+  const { step } = record;
+  if (step["kind"] !== "pending" || !state.waits.interrupts.has(record.nodeId) || typeof step["call_id"] !== "string") return [];
+  return [step["call_id"]];
 }
 
 /** The keys a `steer` step holds. */

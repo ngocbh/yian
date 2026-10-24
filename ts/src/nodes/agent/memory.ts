@@ -1,6 +1,7 @@
 /**
  * How an AGENT uses memory: recalled notes framed into the system prompt, and the text the model
- * reads for a tool result, a reported tool error, a skipped call or a call cut off by a crash.
+ * reads for a tool result, a reported tool error, a skipped call, or a call a crash, a deadline or
+ * an interrupt closed.
  *
  * Python's `nodes/agent/memory.py` also records model and tool effects into a session memory's
  * transcript and projects that history for the model; TS yian has no session memory, so an
@@ -48,12 +49,23 @@ export const TOOL_OUTCOME_UNKNOWN =
 /** The result the model reads for an `ask_user` call nobody answered before its deadline. */
 export const ASK_TIMED_OUT_RESULT = "timed out: no answer";
 
+/** The result the model reads for a pending call a host interrupt closed before its answer. */
+export const TOOL_INTERRUPTED_OUTCOME =
+  "The user interrupted this tool call; its outcome is unknown. Check its effect before retrying.";
+
 /** Why a call was closed without its result, as an agent's closer records it. */
-export type CloserReason = "crashed" | "timed_out";
+export type CloserReason = "crashed" | "timed_out" | "interrupted";
+
+/** The text the model reads for a call closed for each reason. */
+const CLOSER_TEXT: Readonly<Record<CloserReason, string>> = {
+  crashed: TOOL_OUTCOME_UNKNOWN,
+  timed_out: ASK_TIMED_OUT_RESULT,
+  interrupted: TOOL_INTERRUPTED_OUTCOME,
+};
 
 /** Return the closer an agent writes for a call closed for `reason`: the text the model reads and the `closed` word. */
 export function closerResult(reason: CloserReason): { readonly output: string; readonly closed: CloserReason } {
-  return { output: reason === "timed_out" ? ASK_TIMED_OUT_RESULT : TOOL_OUTCOME_UNKNOWN, closed: reason };
+  return { output: CLOSER_TEXT[reason], closed: reason };
 }
 
 /**

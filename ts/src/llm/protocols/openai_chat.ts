@@ -8,7 +8,7 @@
  * as `reasoning_content`, MiniMax's reasoning models get `reasoning_split`, some models refuse a
  * named tool choice, and most Azure deployments refuse `parallel_tool_calls`. A user message's
  * author is folded into its first and last texts as the author wrapper (`name` is built, but no
- * route sends it yet).
+ * route sends it).
  *
  * Replies stream text, reasoning and tool calls as deltas; a refusal is collected into one part.
  * A call without an id gets one (`yian_call_<n>`). The finish is held until the stream ends, so
@@ -159,7 +159,8 @@ export function chatOptions(provider: string, model: string): ChatOptions {
     // kept so today's requests stay the same.
     sendParallelToolCalls: !azure || model === "gpt-4o",
     streamUsage: true,
-    // Off everywhere until a recorded cassette shows a route reads `name`.
+    // Off on every route: the wrapper attributes the same way everywhere, and some servers drop
+    // `name` silently.
     messageName: false,
   });
 }

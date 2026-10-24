@@ -3060,7 +3060,7 @@ wrote it when that isn't the flow's user or the model (a person or an agent). An
 it, but adapters send only a user message's author. On every route the message's parts are sent
 inside a closed `<authored_message author="NAME">` … `</authored_message>` wrapper, `NAME`
 XML-escaped; on Chat Completions the tags are folded into the first and last text, so a one-text
-message is still a string. Chat Completions `name` is not sent yet. An unauthored user message
+message is still a string. Chat Completions `name` is not sent. An unauthored user message
 is not wrapped: text outside every wrapper is the flow's own user. An authored message with no
 text goes unchanged. In every user and tool text, each opening of the tag (`<authored_message` or
 `</authored_message`, in any case, and with whitespace, `\`, `/` or invisible format or

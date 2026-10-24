@@ -2495,7 +2495,8 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   step: `tool` is its tool, `call_id` its call id, no agent fields, `deadline` only on `ask`, and
   the whole step within `YIAN_MAX_EVENT_BYTES`. A second `pending` for a call the node holds is
   refused: a call belongs to its node until the node settles. A `tool_result` for a registered
-  call must answer an open call of its own node (an answered, timed-out or closed one is refused);
+  call must answer an open host call of its own node (a take's or sleep's call, which the run
+  settles itself, and an answered, timed-out or closed one are refused);
   a result no call registered, such as an agent's, stays the node's own detail.
 - `node_waiting` moves an in-flight node with no pending commit to the waiting set. Its `waits`
   entry is a take or sleep node's own call, not yet registered; a take may wait only on an open

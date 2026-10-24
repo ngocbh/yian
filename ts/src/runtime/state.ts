@@ -4020,7 +4020,8 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
 
 /**
  * Require a `tool_result` step for a registered call (its `tool_call_id ?? call_id` is the call's
- * result key) to answer an open call of this node, within the run's `MAX_EVENT_BYTES`. A result no
+ * result key) to answer an open host call of this node (never a take or sleep, which the run
+ * settles itself), within the run's `MAX_EVENT_BYTES`. A result no
  * call registered (an agent's) is the node's own detail, refused only on a waiting node.
  */
 function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
@@ -4034,6 +4035,9 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   }
   if (call.nodeId !== nodeId) {
     throw new RangeError(`tool_result for call ${reprText(call.callId)} of node ${reprText(call.nodeId)}, not ${reprText(nodeId)}`);
+  }
+  if (call.tool === TAKE || call.tool === SLEEP) {
+    throw new RangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
   }
   if (call.state !== "open") {
     const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";

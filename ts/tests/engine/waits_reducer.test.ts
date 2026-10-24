@@ -952,3 +952,16 @@ describe("run_cancelled and run_failed", () => {
     expect(commitPrepared(log, state, prepared)).toEqual(prepared.observers);
   });
 });
+
+test("a tool_result can't answer a take's or a sleep's call; only the run settles those", () => {
+  const { log, state } = started(waitFlow(tool("heard", "take"), tool("nap", "sleep")));
+  start(log, state, "heard");
+  start(log, state, "nap");
+  wait(log, state, "heard", takeEntry("heard"));
+  wait(log, state, "nap", sleepEntry("nap"));
+  for (const node of ["heard", "nap"]) {
+    expect(() => prepareNodeStep(state, node, resultStep(node))).toThrow(/settles itself/);
+    expect(state.waits.calls.get(call(node))!.state).toBe("open");
+  }
+  expect(wakeableNodes(state.waits)).toEqual([]);
+});

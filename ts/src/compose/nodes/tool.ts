@@ -20,7 +20,7 @@ import { siteLabel } from "../../nodes/human_input/node.ts";
 import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
-import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
+import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
 import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
@@ -120,7 +120,7 @@ export class ToolDescriptor extends NodeDescriptor {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
     const toolId = cursor.get("tool_id");
     if (typeof toolId === "string" && cursor.has("adaptive_questions")) {
-      if (toolId !== ASK) {
+      if (toolId !== ASK && toolId !== ASK_USER) {
         throw diagnostics.error(
           `node ${reprText(nodeId)} (tool_id: ${toolId}): \`adaptive_questions:\` applies only to tool_id: ask`,
           { range: cursor.keyRangeOf("adaptive_questions") },
@@ -144,7 +144,8 @@ export class ToolDescriptor extends NodeDescriptor {
    * built-in refuses, and a bad `retries:`; store `retries` as a `number`, then run the base checks.
    *
    * `take` and `sleep` refuse `retries:`, `asserts:` and `output:` (they make no tool call, and
-   * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user` is a plain tool call.
+   * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user`, `ask`'s old name, is
+   * rewritten to `ask` first, so the node and its manifest are an `ask`'s.
    *
    * @throws LoadError at the field for a bad shape or a refused field.
    */
@@ -159,6 +160,7 @@ export class ToolDescriptor extends NodeDescriptor {
     rejectNonText(this.kind, nodeId, "tool_id", fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics, {
       required: true,
     });
+    if (fields["toolId"] === ASK_USER) fields["toolId"] = ASK;
     const toolId = fields["toolId"] as string;
     if (toolId === LOAD_SKILL) {
       throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): tool id \`${LOAD_SKILL}\` is reserved by yian`, {

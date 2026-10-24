@@ -2817,7 +2817,7 @@ a `date` or `datetime` input, fails here, though the tool would have converted i
 Before any of these, a `tool_id:` the run's tools lack fails, naming a close match
 when there is one:
 `TOOL node 'place' names tool 'place_ordr', which isn't in this run's tools; known tools: ['place_order']; did you mean 'place_order'?`.
-A `tool_id:` naming a tool group, or `ask_user` with no handler, fails the same way.
+A `tool_id:` naming a tool group, or `ask` with no handler, fails the same way.
 How yian reads a host tool's types is in
 [Typed tools](api.md#typed-tools).
 
@@ -2871,7 +2871,7 @@ run starts. `output:` is the answer's type and gives the request's answer schema
 questions ask without one answers an `object`, and a prompt-only one is free form.
 `asserts:` apply; `retries:` fails, since the host owns retries of a call it holds.
 
-`tool_id: ask_user` still calls the agent's `ask_user` surface as a plain tool for now.
+`tool_id: ask_user` is an alias of `ask` (its old name).
 
 **Durations.** `timeout:` and `for:` take a positive integer and a unit, `s`, `m`, `h` or
 `d` (`90s`, `30m`, `24h`, `2d`), expanded to seconds at load, so `24h` and `86400s` give

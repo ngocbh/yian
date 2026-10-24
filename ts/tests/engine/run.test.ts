@@ -664,7 +664,7 @@ output: \${agent.output}
   );
 });
 
-test("a TOOL node naming ask_user without a handler fails at run start", async () => {
+test("a TOOL node naming ask_user, ask's old name, without a handler fails at run start", async () => {
   const flow = await load(`
 id: asking
 name: asking
@@ -673,13 +673,12 @@ nodes:
     kind: tool
     tool_id: ask_user
     input:
-      question: Proceed?
-      options: "yes, no"
+      prompt: Proceed?
 output: \${ask.output}
 `);
   const error = await runStartError(flow, { tools: {} });
   expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toStartWith("TOOL node 'ask' names 'ask_user': no ask handler for this run");
+  expect(error.message).toStartWith("TOOL node 'ask' names 'ask': no ask handler for this run");
 });
 
 test("an input the tool does not take fails at run start", async () => {

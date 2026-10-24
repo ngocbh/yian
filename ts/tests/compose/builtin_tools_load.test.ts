@@ -18,21 +18,16 @@ ${extra}output: null
 
 const refused = (text: string) => loadError(() => assembleText(text)).message;
 
-test("tool_id: ask_user stays a plain tool call", () => {
+test("tool_id: ask_user is the ask built-in, its old name", () => {
   const text = toolFlow(
     "ask_user",
-    `    retries: 2
-    input:
-      question: Ship it?
-      options:
-        - yes
-        - no
+    `    input:
+      prompt: Ship?
 `,
   );
   const node = assembleText(text).flow.compiled.nodes.get("t") as ToolNode;
-  expect(node.toolId).toBe("ask_user");
-  expect(node.builtin).toBeNull();
-  expect(node.retries).toBe(2);
+  expect(node.toolId).toBe("ask");
+  expect(node.builtin).toBe("ask");
 });
 
 test("load_skill is refused as a tool id", () => {

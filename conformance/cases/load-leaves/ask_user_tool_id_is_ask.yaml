@@ -1,4 +1,4 @@
-# TS-only: tool_id: ask_user still calls the agent surface as a plain tool, options and all.
+# TS-only: tool_id: ask_user is the ask built-in under its old name, so it takes ask's inputs.
 kind: load
 python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
@@ -8,12 +8,9 @@ flow: |
     q:
       kind: tool
       tool_id: ask_user
-      retries: 2
       input:
-        question: Ship it?
-        options:
-          - yes
-          - no
+        prompt: Ship it?
+      output: Literal(yes, no)
   output: ${q.output}
 expect:
   load: ok

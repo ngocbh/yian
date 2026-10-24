@@ -1343,7 +1343,7 @@ is for debugging only; don't branch on it.
 | `provider.context_length` (TS yian) | The request is longer than the model's context window. | Shorten the inputs or history, or pick a model with a larger window. | No |
 | `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply, or the provider's content filter rejected the request (an HTTP 4xx naming `content_filter`, `content_policy_violation` or `ResponsibleAIPolicyViolation`). | Read `failure.message`; change the input. | Rarely |
 | `condition.evaluate` (TS yian) | A LOOP `while:`/`until:`, a CASE `when:`, or an `asserts:` condition can't be evaluated (an error, as opposed to evaluating false). | Fix the flow or its inputs. | No |
-| `tool.timeout` (TS yian) | A TOOL `ask` timed out with no answer and its declared output doesn't allow null. | Route on null with `output: Optional(T)`, or extend the timeout. | Only if someone may answer next time |
+| `tool.timeout` (TS yian) | A TOOL `ask` timed out with no answer and its declared output doesn't allow null, or it declares no `output:` (which reads as `str`). | Route on null with `output: Optional(T)`, or extend the timeout. | Only if someone may answer next time |
 
 Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian
 reports these failures as `node.execute`, except that an `asserts:` condition that
@@ -2613,8 +2613,9 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   answered and commits `{events: [], closed: true}`. `run_cancelled` ends the run;
   `run_failed` ends it at quiescence with nodes waiting, none wakeable, once a route proved END
   unreachable, holding that failure. Both close every open call, and, being terminal, refuse
-  every later record. `run_resumed.closed_calls` must be the retried agents' open calls (a TOOL
-  node's re-run reuses its call instead). The reducer publishes `CallClosed` for each host call it
+  every later record. `run_resumed.closed_calls` must be the retried agents' open calls registered
+  since their last wake (a call a timeout wake left open stays pending; a TOOL node's re-run
+  reuses its call). The reducer publishes `CallClosed` for each host call it
   closes: a timed-out `ask` in `node_woken`, a resume's closed calls, `run_cancelled`,
   `run_failed` and a `node_failed`; takes and sleeps get none.
 
@@ -3154,7 +3155,8 @@ that result without running. A replayed call with no result (a crash or a stop c
 checked as live and, when its check passes, closed with a `tool_result` written as
 `closed: "crashed"`, which the model reads as "outcome unknown"; it isn't run again. A call that
 pended is closed by the record: when a crash or a stop retries the AGENT, `run_resumed.closed_calls`
-names its open calls, the host gets `CallClosed {reason: "crashed"}`, the calls leave
+names its open calls (not those a timeout wake left open: they are still pending at the host, and
+the replay waits on them again), the host gets `CallClosed {reason: "crashed"}`, the calls leave
 `pendingCalls` and `complete` refuses them (`call_settled`); a `complete` made while the run was
 down, before the resume, is kept and replayed. The replay writes the closer with the word of the
 record that closed the call (`crashed`, or `timed_out` for an ask whose deadline passed), and the

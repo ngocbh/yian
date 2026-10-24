@@ -524,22 +524,32 @@ output: \${agent.output}
   expect(wakes(log)).toEqual([[CALL]]);
 }, 5000);
 
-test("a crash between the timeout wake and the closer: the closer says timed_out, the open call crashed", async () => {
+test("a crash between the timeout wake and the re-wait: the ask's closer says timed_out; the host call stays pending", async () => {
   const hold = holdTool();
   const log = await waitingOnAsk("30m", [["hold", {}, "c2"]], hold);
   await crashAfter(records(log).length + 1, () =>
     advance(resumeOf(log, scripted(), () => pending(), START + 31 * MINUTE, undefined, hold)),
   );
   expect(kinds(log).at(-1)).toBe("node_woken");
-  const m = scripted(textReply("done"));
-  const done = await advance(resumeOf(log, m, () => pending(), START + 32 * MINUTE, undefined, hold));
+  const events: RunEvent[] = [];
+  const quiet = scripted();
+  const rewait = await advance(resumeOf(log, quiet, () => pending(), START + 32 * MINUTE, events, hold));
 
-  expect(done.status, done.failure?.message).toBe("succeeded");
+  // The hold call was still open at the wake: it is pending at the host, not an unknown outcome.
+  expect(rewait.status, rewait.failure?.message).toBe("waiting");
   const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
-  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([HOLD_CALL]);
-  expect(closers(log)).toEqual(["timed_out", "crashed"]);
+  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([]);
+  expect(closedEvents(events)).toEqual([]);
+  expect(closers(log)).toEqual(["timed_out"]);
+  expect(quiet.requests).toHaveLength(0);
+  expect(pendingCalls(log).map((call) => call.callId)).toEqual([HOLD_CALL]);
+
+  await complete(log, HOLD_CALL, { output: "held" });
+  const m = scripted(textReply("done"));
+  const done = await advance(resumeOf(log, m, () => pending(), START + 40 * MINUTE, undefined, hold));
+  expect(done.status, done.failure?.message).toBe("succeeded");
   expect(sentResults(m, 0)).toEqual([
     ["c1", "timed out: no answer", true],
-    ["c2", TOOL_OUTCOME_UNKNOWN, true],
+    ["c2", "held", false],
   ]);
 });

@@ -3915,11 +3915,19 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
 
 /**
  * The open calls a resume closes, in registration order: those of retried (in-flight) nodes that
- * make no direct host tool call, the agents'. A TOOL node's re-run reuses its call instead.
+ * make no direct host tool call, the agents'. A TOOL node's re-run reuses its call instead. An
+ * agent's call registered before its last wake and still open (a timeout wake left it open) is
+ * still pending at the host, not an unknown outcome: the replay waits on it again.
  */
 function retriedAgentCalls(state: RunState): string[] {
-  return [...state.waits.calls.values()]
-    .filter((call) => call.state === "open" && state.inFlight.has(call.nodeId) && state.flow.nodes.get(call.nodeId)?.hostToolCall() === null)
+  const w = state.waits;
+  return [...w.calls.values()]
+    .filter((call) => {
+      if (call.state !== "open" || !state.inFlight.has(call.nodeId)) return false;
+      if (state.flow.nodes.get(call.nodeId)?.hostToolCall() !== null) return false;
+      const lastWoken = w._lastWoken.get(call.nodeId);
+      return lastWoken === undefined || call.seq > lastWoken;
+    })
     .map((call) => call.callId);
 }
 

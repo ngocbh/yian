@@ -1,8 +1,8 @@
 /**
- * `runFlow`/`resumeFlow` `skills`: early checks and durable resume with on-demand skills; a port
+ * `runFlow`/`advance` `skills`: early checks and durable resume with on-demand skills; a port
  * of `tests/engine/test_run_skills.py`.
  *
- * Ported: every test, through `loadFlow`, `runFlow` and `resumeFlow` (`runWith`, `resumeWith`),
+ * Ported: every test, through `loadFlow`, `runFlow` and `advance` (`runWith`, `resumeWith`),
  * with a `ScriptedModel` serving every AGENT and the skills read by `loadSkills` from a temp root.
  *
  * Changed:

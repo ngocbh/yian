@@ -31,7 +31,7 @@ import { MediaPart, Message, Request, TextPart, ToolSpec } from "../../src/llm/m
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, fileToInline, inlineToFile, writeRunFile } from "../../src/nodes/agent/context.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { crashAfter, serving, textReply } from "./run_state_fixtures.ts";
@@ -326,7 +326,7 @@ test("a resumed run gives its AGENT the same run folder", async () => {
   const flow = await loadFlow(FLOW);
   await crashAfter(BEFORE_REPLY_SUCCESS, () => runFlow(flow, { message: "hi" }, { log, ...served("lost") }));
   const dirs = await runDirs(async () => {
-    const resumed = await resumeFlow({ log, ...served("ok") });
+    const resumed = await advance({ log, ...served("ok") });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   });
   expect(dirs).toEqual([run]);

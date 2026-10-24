@@ -13,7 +13,7 @@
  * Integers are bigints (decision 4a); the CODE reference is the TS fixture's
  * (`./fixtures/compose_codefns.ts:make_report`).
  *
- * Ported through `runFlow` and `resumeFlow`, in `hostEnv`: `test_call_post_assert_survives_recovery_true`
+ * Ported through `runFlow` and `advance`, in `hostEnv`: `test_call_post_assert_survives_recovery_true`
  * and `test_call_post_assert_survives_recovery_false`. Changed: the interruption before the human
  * answer is the run's `signal`, which the `ask_user` handler aborts (Python: the handler raises
  * `_HostStop`).
@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import { RunFailed } from "../../src/events.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { childResolver, rejected } from "./run_state_fixtures.ts";
@@ -187,7 +187,7 @@ async function driveDurable(name: string, asserts: string, answer: string) {
     ),
   );
   expect(caught).toBe(interruption);
-  return resumeFlow({ log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
+  return advance({ log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
 }
 
 test("call post assert survives recovery true", async () => {

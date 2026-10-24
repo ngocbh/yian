@@ -116,7 +116,7 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
+import { advance, type RunResult, runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { decodeRecord, encodeRecord } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -1013,7 +1013,7 @@ test("replay accepts a value recorded before the limit", async () => {
   lines[0] = encodeRecord(decodeRecord(JSON.stringify(envelope))) + "\n";
   writeFileSync(path, lines.join(""));
 
-  const replayed = await resumeFlow({ log: path, env: hostEnv(dir) });
+  const replayed = await advance({ log: path, env: hostEnv(dir) });
 
   expect(replayed.status).toBe("succeeded");
   expect(replayed.failure).toBeNull();

@@ -31,7 +31,7 @@
  * `test_inline_loop_over_an_optional_seed_carries_the_null` (2),
  * `test_named_loop_body_sets_a_skipped_field_to_null`,
  * `test_map_inline_body_returns_null_per_skipped_element`, `test_replay_returns_the_same_null`
- * (with `resumeFlow`) and `test_child_routing_on_a_literal_input_passes_to_a_str_input`.
+ * (with `advance`) and `test_child_routing_on_a_literal_input_passes_to_a_str_input`.
  *
  * Ported, the load-time rows (all errors but the comparison, which loads):
  * `test_inline_loop_over_an_untyped_seed_asks_for_its_type` (the loop
@@ -88,7 +88,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { FailureCode } from "../../src/diagnostics.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
-import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
+import { advance, type RunResult, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -612,7 +612,7 @@ test("a replay returns the same null", async () => {
     expect(readFileSync(seen, "utf8")).toBe("rejected\n");
 
     writeFileSync(seen, "");
-    const resumed = await resumeFlow({ log });
+    const resumed = await advance({ log });
     expect(resumed.status).toBe(first.status);
     expect(resumed.output).toEqual(first.output);
     expect(readFileSync(seen, "utf8")).toBe("");

@@ -106,10 +106,10 @@ import { Binding } from "../../src/nodes/contracts.ts";
 import {
   inspectRun,
   iterRunRecords,
-  type ResumeFlowOptions,
+  type AdvanceOptions,
   RunResult,
   type RunInspection,
-  resumeFlow,
+  advance,
   runFlow,
   type RunFlowOptions,
   RunLogSchemaError,
@@ -1092,11 +1092,11 @@ output: \${input.x}
 `;
 
 /**
- * `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`; `flow` is passed only when it was
+ * `advance` in `hostEnv(dir)` unless `options` sets `env`; `flow` is passed only when it was
  * built in code, since resume compiles a loaded flow's recorded files.
  */
-function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow({ env: hostEnv(dir), ...(flow.source === null ? { flow } : {}), ...options });
+function resume(flow: ComposedFlow, options: AdvanceOptions) {
+  return advance({ env: hostEnv(dir), ...(flow.source === null ? { flow } : {}), ...options });
 }
 
 /**

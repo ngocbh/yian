@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { rejected } from "./run_state_fixtures.ts";
 
@@ -245,7 +245,7 @@ test("replaying a finished run reproduces the union branch", async () => {
   const first = await run({ decision: SELL, note: { text: "hi" } }, log);
   succeeded(first);
 
-  const replayed = await resumeFlow({ log, env });
+  const replayed = await advance({ log, env });
 
   expect(succeeded(replayed)).toEqual(first.output);
   expect(first.output).toEqual({ action: "sell", trade: 3n, note: "HI" });
@@ -257,7 +257,7 @@ test("resume after the union value continues down its branch", async () => {
   succeeded(first);
   cutAfterD(log);
 
-  const resumed = await resumeFlow({ log, env });
+  const resumed = await advance({ log, env });
 
   expect(succeeded(resumed)).toEqual(first.output);
 });
@@ -277,7 +277,7 @@ test.each([
   lines[end - 1] = JSON.stringify(record);
   writeFileSync(log, lines.join("\n") + "\n");
 
-  const error = await rejected(resumeFlow({ log, env }));
+  const error = await rejected(advance({ log, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain(message);

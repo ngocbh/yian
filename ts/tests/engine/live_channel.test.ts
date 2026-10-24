@@ -29,7 +29,7 @@ import {
   type RecordEnvelope,
 } from "../../src/runtime/log.ts";
 import { withWarnings } from "../../src/platform.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { callTexts, CONFIG, GatedModel, key, MAP_AGENTS, ONE_AGENT, runLog, until } from "./live_fixtures.ts";
 import { crashAfter, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
@@ -334,7 +334,7 @@ test("a resumed run's channel starts after the records the log holds and forward
   const seqs: number[] = [];
   live.subscribe((frame) => void (frame.type === "record" && seqs.push(frame.seq)));
   const model = new GatedModel({ t: ["again"] });
-  const resumed = resumeFlow({ log, env: NO_ENV, models: serving(model), live });
+  const resumed = advance({ log, env: NO_ENV, models: serving(model), live });
   await until(() => live.snapshot().calls.length === 1);
   expect(seqs[0]).toBe(held);
   model.release("t");
@@ -504,7 +504,7 @@ test("a resumed run that replays a recorded model call sends no start or chunk f
   const live = new LiveChannel();
   const frames: LiveFrame[] = [];
   live.subscribe((frame) => void frames.push(frame));
-  const resumed = await resumeFlow({ log, env: NO_ENV, models: serving(new ScriptedModel([], CONFIG)), live });
+  const resumed = await advance({ log, env: NO_ENV, models: serving(new ScriptedModel([], CONFIG)), live });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("replay");
   expect(new Set(frames.map((frame) => frame.type))).toEqual(new Set(["record"]));

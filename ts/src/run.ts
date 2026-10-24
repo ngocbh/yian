@@ -2,18 +2,18 @@
  * The package-root run boundary over one authoritative append-only log.
  *
  * `runFlow` initializes a private copy of a loaded flow, commits its complete canonical start
- * state, and drives only post-durable observer notifications. `resumeFlow` replays a durable log
+ * state, and drives only post-durable observer notifications. `advance` replays a durable log
  * silently onto a private copy and drives the unfinished rest the same way.
  *
  * The runtime borrows an already-open log. This module owns log creation and closure after the
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
- * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `resumeFlow` and
- * `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and `Steering`
- * (`nodes/base.ts`). For hosts that show runs it also exports `inspectRun`, which reads where a run
- * log stands, and `staticNodes`, which names each node of a flow, and re-exports `staticPathOf`
- * (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
+ * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `advance` (Python's
+ * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and
+ * `Steering` (`nodes/base.ts`). For hosts that show runs it also exports `inspectRun`, which reads
+ * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
+ * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
  * `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
  * the host's runs folder and names its log there, and `updateRunIndex` and `readRunIndex`
  * (`runtime/run_index.ts`) keep and read the runs folder's rebuildable `index.sqlite`, one row per
@@ -233,7 +233,7 @@ export class RunResult {
   readonly status: "succeeded" | "failed";
   /** The durable identity shared by the state and its run log. */
   readonly runId: string;
-  /** The JSONL log path as given to `runFlow` or `resumeFlow`, or `null` for a process-local run. */
+  /** The JSONL log path as given to `runFlow` or `advance`, or `null` for a process-local run. */
   readonly log: string | null;
   /** The terminal flow value on success; otherwise `null`. */
   readonly output: unknown;
@@ -1085,8 +1085,8 @@ export type LlmConfigsCheck = (
   options: { callTimeHost: Record<string, unknown> | null },
 ) => unknown;
 
-/** The options of one `resumeFlow` call. */
-export interface ResumeFlowOptions {
+/** The options of one `advance` call. */
+export interface AdvanceOptions {
   /** The existing JSONL run log to lock, repair to its last complete line, check and replay. */
   log: string;
   /**
@@ -1186,7 +1186,7 @@ export interface ResumeFlowOptions {
  * starts the log left unfinished are retried first, in their recorded order, after one
  * `RunResumed` observer and one `NodeAttemptResumed` per retried node.
  *
- * @param options See `ResumeFlowOptions`.
+ * @param options See `AdvanceOptions`.
  * @returns The recorded terminal result, or the terminal result of the resumed segment with its
  *   post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`, a `tools`
@@ -1218,7 +1218,7 @@ export interface ResumeFlowOptions {
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the lock, repair, append, sync or
  *   close error of the log.
  */
-export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult> {
+export async function advance(options: AdvanceOptions): Promise<RunResult> {
   // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
   // here, before the log is opened.
   const env = options.env ?? processEnv;
@@ -1234,7 +1234,7 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
       codeRoot = null,
     } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
-      throw new TypeError("resumeFlow flow must be a ComposedFlow or null");
+      throw new TypeError("advance's flow must be a ComposedFlow or null");
     }
     if (signal !== null && !(signal instanceof AbortSignal)) {
       throw new TypeError("signal must be an AbortSignal or null");
@@ -1398,7 +1398,7 @@ async function resumedFlow(
 ): Promise<ComposedFlow> {
   if (start.flow === null) {
     if (hostFlow === null) {
-      throw new RangeError(`run log ${log}: this run's flow was built in code; resume it with resumeFlow({log, flow})`);
+      throw new RangeError(`run log ${log}: this run's flow was built in code; resume it with advance({log, flow})`);
     }
     return hostFlow;
   }
@@ -1409,14 +1409,14 @@ async function resumedFlow(
 }
 
 /**
- * Compile the flow the run log at `log` recorded, as `resumeFlow` does: its flow files as the
+ * Compile the flow the run log at `log` recorded, as `advance` does: its flow files as the
  * loader first read them, never the files on disk now, under `env`'s `YIAN_*` values, which must
  * be the ones the run recorded. The log is read without its lock.
  *
  * @param log The JSONL run log.
  * @param options.env The environment the load reads the `YIAN_*` values from (default
  *   `processEnv`).
- * @param options.codeRoot As `resumeFlow`'s.
+ * @param options.codeRoot As `advance`'s.
  * @returns The recorded flow, or `null` when the run's flow was built in code.
  * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`,
  *   besides `iterRunRecords`' errors.
@@ -1552,8 +1552,8 @@ export interface RunInspection {
  * read from the records too: `failed` after a node failure; `succeeded` after the top-level END
  * succeeded, and `failed` after a route proved END unreachable, each with nothing in flight. The
  * records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
- * that proof) but before a node already ready started reads as finished, though `resumeFlow` would
- * still run that node. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
+ * that proof) but before a node already ready started reads as finished, though `advance` would
+ * still run that node. With `flow`, the log is replayed as `advance` replays it, so the status
  * is exact; pass the flow when you have it. The lock is probed before and after the records are
  * read, so a writer that holds it at either probe makes the run `running`. Without `flow`, the
  * records are streamed (`iterRunRecords`), so memory is bounded by the largest record. When a
@@ -1562,7 +1562,7 @@ export interface RunInspection {
  * @param log The JSONL run log's path.
  * @param options.flow The loaded flow the run was started with, for an exact status.
  * @param options.env The environment whose `YIAN_*` values the replay with `flow` checks the
- *   recorded ones against, as `resumeFlow`'s `env`; without one, the values already in effect.
+ *   recorded ones against, as `advance`'s `env`; without one, the values already in effect.
  *   Reading without `flow` doesn't use it.
  * @returns The status, the nodes in flight, the crashed counts, the run's id, schema, flow
  *   fingerprint, learnable flag, last seq, start time and (once finished) end time, and a failed
@@ -1660,7 +1660,7 @@ export interface FoldedRecord {
  *   `processEnv`).
  * @param options.flow The flow, required when the run's flow was built in code (`flow: null`),
  *   refused otherwise.
- * @param options.codeRoot As `resumeFlow`'s: a recorded CODE reference whose file's real path is
+ * @param options.codeRoot As `advance`'s: a recorded CODE reference whose file's real path is
  *   outside it rejects with `LoadError` before the replay; not used for a flow built in code.
  * @throws RangeError when the log is empty, ends inside its run start, or the replay refuses it;
  *   when the run's flow was built in code and `options.flow` is missing, or the log holds its
@@ -2231,7 +2231,7 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
 }
 
 /**
- * Replay `envelopes` read-only over a private copy of `flow`, as `resumeFlow` replays its log, and
+ * Replay `envelopes` read-only over a private copy of `flow`, as `advance` replays its log, and
  * read the same parts as `scanRunRecords` from the state.
  *
  * @throws RangeError, and the other errors of `replayRunLog`.

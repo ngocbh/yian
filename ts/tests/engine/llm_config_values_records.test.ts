@@ -11,7 +11,7 @@
  * - A host dying in a model call is `crashAfter` refusing the record after the agent's step (the
  *   model call has run; its result is never recorded), where Python's model raises a
  *   `BaseException`.
- * - Python's `_resume_flow_controlled` with `check_llm_configs` is `resumeFlow`'s internal
+ * - Python's `_resume_flow_controlled` with `check_llm_configs` is `advance`'s internal
  *   `checkLlmConfigs`; Python's `_check_resume_credentials`, which TS keeps private to the CLI, is
  *   reached through `yian run --resume` with no terminal, whose output carries its message ("a
  *   host's" for Python's "a Python host's").
@@ -46,7 +46,7 @@ import { Node } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
-import { checkRecordedLlmFields, type ResumeFlowOptions, resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { checkRecordedLlmFields, type AdvanceOptions, advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { FakeInput, FakeOutput } from "../cli/terminal_both_runtimes.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
@@ -95,9 +95,9 @@ async function run(text: string, options: RunFlowOptions = {}) {
 }
 
 /** Resume `log` of `text` in the file's environment. */
-async function resume(text: string, log: string, options: Omit<ResumeFlowOptions, "log"> = {}) {
+async function resume(text: string, log: string, options: Omit<AdvanceOptions, "log"> = {}) {
   const runEnv = options.env ?? env;
-  return resumeFlow({ ...options, log, env: runEnv });
+  return advance({ ...options, log, env: runEnv });
 }
 
 /** The records of the JSONL log at `path`. */
@@ -235,7 +235,7 @@ output: \${later.output}
 `;
 
 /** Resume `log`; return the map and host its key check received, appending nothing. */
-async function resumeChecks(log: string, flowText: string, options: Omit<ResumeFlowOptions, "log"> = {}) {
+async function resumeChecks(log: string, flowText: string, options: Omit<AdvanceOptions, "log"> = {}) {
   const seen: [Record<string, any>, Record<string, unknown> | null][] = [];
   const stop = new Error("stop");
   const before = readFileSync(log, "utf8");

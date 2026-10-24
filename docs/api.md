@@ -129,7 +129,7 @@ path is outside the real path of `codeRoot` (symlinks are followed on both sides
 `codeRoot` on. An inline `code:` body and a module's own imports aren't confined; without
 `codeRoot`, nothing is. A relative `codeRoot` resolves against the current directory, and one
 that doesn't exist refuses every reference. The check runs at load: the file is imported by
-path when the node runs, so a file replaced after the load isn't checked again; `resumeFlow`
+path when the node runs, so a file replaced after the load isn't checked again; `advance`
 and `foldRunLog` with `codeRoot` check the recorded flow's files again (see [Durable recovery with
 `resume_flow`](#durable-recovery-with-resume_flow)). `env` is the environment this load reads
 the `YIAN_*` values from. The default is the process environment, or the calling load's when a
@@ -2369,7 +2369,7 @@ DeepSeek Harness's request header are the counterparts.
 Changed (TS yian): every record carries `at`, when the log appended it: a UTC RFC 3339
 time with milliseconds, such as `"at":"2026-10-20T14:02:11.123Z"` (the form of
 `Date.prototype.toISOString`, years 0000 to 9999), read from the log's clock as it appends.
-`runFlow` and `resumeFlow` stamp from their `scheduler`'s clock (the wall clock by default),
+`runFlow` and `advance` stamp from their `scheduler`'s clock (the wall clock by default),
 and `MemoryRunLog` and `JsonlRunLog` take a `clock` option (epoch milliseconds, default
 `Date.now`). `at` is metadata: replay, the reducer, the flow fingerprint and recovery ignore
 it, and a resume keeps the recorded times while its own records carry the resume's times,
@@ -2378,7 +2378,7 @@ since the clock can move; `seq` is the order. A node's duration is its outcome r
 `at` (`NodeSucceeded`, `NodeRouted`, `NodeExpanded` or `NodeFailed`) less its `NodeStarted`
 record's `at`. `RecordEnvelope.at` is `null` only on an envelope no log has appended, such
 as one the engine prepares; `encodeRecord` writes such an envelope without `at`, and
-`decodeRecord` reads that text back with `at: null`, but every log reader (`resumeFlow`,
+`decodeRecord` reads that text back with `at: null`, but every log reader (`advance`,
 `JsonlRunLog.resume`, `MemoryRunLog.fromRecords`, `readRunLog`, `iterRunRecords`) refuses a
 line without `at`. A clock reading that isn't a finite time in those years fails the append
 with a `RangeError` before anything is written, without poisoning the log. Python yian's
@@ -2406,7 +2406,7 @@ at once, and START is ready only after the last.
   keeps a crashed step's pending writes; yian drops them, since the success is what accepts the
   commit.
 - A log that ends inside its run start (before the START inputs' commit) can't be resumed, since
-  it doesn't hold the run's inputs yet: `resumeFlow` refuses it with "run log PATH ends inside its
+  it doesn't hold the run's inputs yet: `advance` refuses it with "run log PATH ends inside its
   run start; start the run again" and leaves it as it is (`replayRunLog` too; `inspectRun`
   without the flow reads it as `crashed` with nothing in flight).
 - `runRecordOffsets(path)` (from `yian/run`) returns the byte offset where each record's line
@@ -2445,7 +2445,7 @@ non-learnable runs, so both write the same `from`.
   record. It is how a host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`.
   A log whose flow was built in code needs `flow`. With `codeRoot`, it refuses a recorded CODE
   reference whose file's real path is now outside it with `LoadError` before the replay, as
-  `resumeFlow` does; a run whose flow was built in code ignores it.
+  `advance` does; a run whose flow was built in code ignores it.
 
 Temporal stamps every history event with an `eventTime`, LangGraph every checkpoint with a
 `ts`, and Codex and Claude Code each session record with a `timestamp` of the same form; yian's
@@ -2566,7 +2566,7 @@ on replay. Each `step` is a JSON object with a string `kind`:
 A tool call's idempotency key (`ToolContext.callId`) is `<run id>/<node>/<n>/<index>`, `n` the
 reply's `model_call` step.
 
-Changed (TS yian): a run's live channel is separate from the log. `runFlow`'s and `resumeFlow`'s
+Changed (TS yian): a run's live channel is separate from the log. `runFlow`'s and `advance`'s
 `live` option takes a `LiveChannel`, which sends plain-JSON frames (the log's snake_case keys) to
 each subscriber: `{type: "record", seq, line}` for each record, its line exactly as appended, once
 the append returned (`node_step` included); and `{type: "start", node, n, model, purpose,
@@ -2667,7 +2667,10 @@ to the key's provider, before its model call; it is a host error, not a failure 
 with the key. `context` re-supplies the host's app
 object; the log does not hold it (see [Tool context](#tool-context)).
 
-Changed (TS yian): `resumeFlow({ log, numWorkers, onEvent, onStream, memory, tools, skills,
+Changed (TS yian): `resume_flow` is `advance` (options `AdvanceOptions`); the CLI's `--resume`
+calls it.
+
+Changed (TS yian): `advance({ log, numWorkers, onEvent, onStream, memory, tools, skills,
 steering, apiKey, headers, context, signal, env, codeRoot })` returns a Promise of the
 `RunResult`, and the
 errors are its rejections. `memory` and `skills` are `Map`s and `tools` a plain record, as for
@@ -2678,14 +2681,14 @@ the log is locked. `env` is the environment the resume reads connections, creden
 are for tests, as for `runFlow`. Header names that aren't the recorded ones, a negative
 `numWorkers` and an invalid log prefix raise `RangeError`, not `ValueError`.
 
-Changed (TS yian): `resumeFlow({ log, flow, ... })` takes no flow argument. It compiles the
+Changed (TS yian): `advance({ log, flow, ... })` takes no flow argument. It compiles the
 flow files `RunStarted` recorded, never the files on disk now, so an edited flow file means a
 new run; the fingerprint is still checked, against the compiled recorded flow. The load
 (`loadFlowSource(source)`, which takes a loaded flow's `source` or a run's recorded `flow`)
 starts at the root and follows each file's `refs` inside the log: no disk, search path or
 symlink. A CODE reference's file is not recorded and must still be there, in the folder of
 the file's key below `dir`. CODE files are read from disk on resume, so an edited CODE file is picked up, as a
-reference-mode CODE node's function is today. `resumeFlow({ log, codeRoot })` runs
+reference-mode CODE node's function is today. `advance({ log, codeRoot })` runs
 `loadFlow`'s `codeRoot` check over every recorded file, a host child's included: a CODE
 reference whose file's real path is now outside `codeRoot` (say, the file or its folder was
 replaced by a symlink pointing out) raises `LoadError` before anything is appended, even for
@@ -2695,7 +2698,7 @@ logs](#authoritative-run-logs)). `loadRecordedFlow(log, { env, codeRoot })` (fro
 compiles a log's recorded flow
 the same way without locking it, for a host that needs the flow before it resumes (the CLI
 reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is
-resumed with `resumeFlow({ log, flow })`, the flow fingerprint-checked as before; passing `flow`
+resumed with `advance({ log, flow })`, the flow fingerprint-checked as before; passing `flow`
 for a run with recorded files raises `RangeError`. For an unfinished run, once the MCP servers
 are open and before anything is appended, the description and parameters of each tool an AGENT
 grants, and the description and instructions of each granted skill, must be the recorded ones:
@@ -2898,11 +2901,11 @@ finished, `stopped` when the host stopped its last segment (a `RunStoppedRecord`
 can be resumed. `inFlight` lists the nodes started and not settled, in start order (`[]` for a
 finished run), and `crashedAttempts` the attempts a resume counted after a crash, plus, for a
 run that is neither running nor finished, one for each node in flight that no stop covers: what
-`resumeFlow` would count. With `flow`, the log is replayed as `resumeFlow` replays it, so the status
+`advance` would count. With `flow`, the log is replayed as `advance` replays it, so the status
 is exact, and `env`'s `YIAN_*` values must match the recorded ones. Without it, the status is read
 from the records, which don't hold the ready nodes: a run whose process ended after the top-level
 END succeeded (or after a route proved END unreachable) but before a node already ready started
-reads as finished, though `resumeFlow` would still run that node. Pass the flow when you have it.
+reads as finished, though `advance` would still run that node. Pass the flow when you have it.
 The result also holds `runId`, `schema`, `flowFingerprint` and `learnable` from the log's
 `RunStarted`, `lastSeq`, the seq of its last complete record, and `failure`, the `Failure` that
 ended a `failed` run (a node's failure, or the `graph.terminal_unreachable` failure of a route that
@@ -2968,7 +2971,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 16); a line of another schema raises
+- It reads every schema `advance` reads (schema 16); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

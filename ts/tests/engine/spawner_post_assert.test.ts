@@ -20,7 +20,7 @@
  * `test_python_built_unparseable_spawner_post_assert_fails_before_the_run`. Integers are bigints
  * (decision 4a); the CODE reference is the TS fixture's (`./fixtures/compose_codefns.ts:double`).
  *
- * Ported through `runFlow` and `resumeFlow`, in `hostEnv`: `test_spawner_post_assert_fires_after_log_recovery`.
+ * Ported through `runFlow` and `advance`, in `hostEnv`: `test_spawner_post_assert_fires_after_log_recovery`.
  * Changed: the interruption before the human answer is the run's `signal`, which the `ask_user`
  * handler aborts (Python: the handler raises `_HostStop`).
  */
@@ -39,7 +39,7 @@ import { RunFailed } from "../../src/events.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { childResolver, rejected } from "./run_state_fixtures.ts";
@@ -215,7 +215,7 @@ test("spawner post assert fires after log recovery", async () => {
   );
   expect(caught).toBe(interruption);
 
-  const res = await resumeFlow({ log: path, tools: { ask_user: () => 120 }, env: hostEnv(dir) });
+  const res = await advance({ log: path, tools: { ask_user: () => 120 }, env: hostEnv(dir) });
 
   expect(res.status).toBe("failed");
   const failed = res.events.filter((event) => event instanceof RunFailed);

@@ -20,7 +20,7 @@
  * Changed:
  * - Python's `ValueError` is a `RangeError`; a CODE failure's message and traceback name the JS
  *   error, `Error: boom` (Python: the message `boom`, the traceback `ValueError: boom`).
- * - `test_final_run_boundary_signatures_and_result_fields_are_exact`: `resumeFlow(options)`
+ * - `test_final_run_boundary_signatures_and_result_fields_are_exact`: `advance(options)`
  *   takes an options record, so its keys are checked once, with `runFlow`'s and `RunResult`'s, in
  *   `retired_runtime_surface.test.ts` (the same check as that file's `resume_flow` row).
  * - `test_terminal_resume_is_read_only_silent_and_unlocks[succeeded]`,
@@ -35,7 +35,7 @@
  *   `test_outcome_append_failure_leaves_started_work_recoverable_and_closes`: `JsonlRunLog.create`
  *   is spied on to return the tracking log (which keeps no path: the run boundary never reads it
  *   back); the action's runs are counted by spying on `CodeNode.prototype.forward`.
- * - `test_resume_callback_exception_closes_and_unlocks_nonterminal_log`: a public `resumeFlow`
+ * - `test_resume_callback_exception_closes_and_unlocks_nonterminal_log`: a public `advance`
  *   (Python's `_resume_flow_controlled`); TS appends one `run_stopped` (reason `callback`) after
  *   the second start.
  * - `test_resume_hook_sees_recorded_configs_before_run_resumed`: the hook is the `checkLlmConfigs`
@@ -59,7 +59,7 @@
  * the child is killed with SIGKILL once the log holds k+1 lines, for each k that is a slow node's
  * `node_started` (the child's CODE bodies wait 1 s, so the kill lands while that node runs). The
  * records-only `inspectRun` then reads `crashed` with the killed node in flight, counted once,
- * and `resumeFlow` in the test process gives an uncut run's output and node outcomes
+ * and `advance` in the test process gives an uncut run's output and node outcomes
  * (`node_succeeded`, `node_routed`, `node_failed`, by node and value or handle).
  *
  * Covered by a case: `test_terminal_resume_is_read_only_silent_and_unlocks[failed]` and
@@ -106,10 +106,10 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import {
   inspectRun,
-  type ResumeFlowOptions,
+  type AdvanceOptions,
   type RunFlowOptions,
   type RunResult,
-  resumeFlow,
+  advance,
   runFlow,
 } from "../../src/run.ts";
 import {
@@ -177,11 +177,11 @@ function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
 }
 
 /**
- * `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`; `flow` is passed only when it was
+ * `advance` in `hostEnv(dir)` unless `options` sets `env`; `flow` is passed only when it was
  * built in code, since resume compiles a loaded flow's recorded files.
  */
-function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow({ env: hostEnv(dir), ...(flow.source === null ? { flow } : {}), ...options });
+function resume(flow: ComposedFlow, options: AdvanceOptions) {
+  return advance({ env: hostEnv(dir), ...(flow.source === null ? { flow } : {}), ...options });
 }
 
 /** Read one closed durable log's records, proving its lock was released. */

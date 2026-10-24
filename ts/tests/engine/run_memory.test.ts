@@ -2,7 +2,7 @@
  * Public fresh and resume orchestration for host-injected memory policies: mirrors
  * `tests/engine/test_run_memory.py`.
  *
- * Ported, through `runFlow` and `resumeFlow`:
+ * Ported, through `runFlow` and `advance`:
  * `test_memory_context_opener_uses_same_runtime_on_fresh_and_resume` (fresh and resume ×
  * `num_workers` 0 and 2 × `learnable` false and true; the AGENT recalls notes from a `FakeMemory`,
  * since TS yian has no session memory to open a turn in),
@@ -54,7 +54,7 @@ import {
 } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
-import { resumeFlow, type RunResult, runFlow } from "../../src/run.ts";
+import { advance, type RunResult, runFlow } from "../../src/run.ts";
 import {
   BackwardFinishedRecord,
   BackwardStartedRecord,
@@ -190,7 +190,7 @@ for (const resume of [false, true]) {
             expect((stop as Error).message).toBe("interrupt before body");
             expect(entered).toEqual([]);
             const before = readFileSync(path);
-            result = await resumeFlow({ log: path, memory: registry });
+            result = await advance({ log: path, memory: registry });
             expect(readFileSync(path).subarray(0, before.length)).toEqual(before);
           } else {
             result = await runFlow(flow, {}, { log: path, memory: registry, numWorkers, learnable });
@@ -324,7 +324,7 @@ test("precommit failure requires an explicit whole pass retry", async () => {
   expect(first.status).toBe("succeeded");
   expect(first.learning).not.toBeNull();
   expect(first.learning!.status).toBe("failed");
-  const resumed = await resumeFlow({ log: path, memory: registry });
+  const resumed = await advance({ log: path, memory: registry });
   expect(resumed.learning).toEqual(first.learning);
   expect(records(path)).toHaveLength(primaryPrefix);
   expect(memory.learnContexts).toHaveLength(1);
@@ -342,7 +342,7 @@ test("precommit failure requires an explicit whole pass retry", async () => {
   const settledCount = records(path).length;
   // Ignored: the primary run and its learning are settled.
   const ignored = new Map([["test", {} as Memory]]);
-  const silent = await resumeFlow({ log: path, memory: ignored });
+  const silent = await advance({ log: path, memory: ignored });
   expect(silent.learning).not.toBeNull();
   expect(silent.learning!.status).toBe("succeeded");
   expect(records(path)).toHaveLength(settledCount);
@@ -356,7 +356,7 @@ test("explicit retry uses static layout after map growth", async () => {
 
   const first = await runFlow(flow, { values: [1n, 4n] }, { log: path, memory, learnable: true });
   await first.backward();
-  const resumed = await resumeFlow({ log: path, memory });
+  const resumed = await advance({ log: path, memory });
 
   expect(first.status).toBe("succeeded");
   expect(first.output).toEqual([2n, 5n]);
@@ -378,7 +378,7 @@ test("unfinished primary resume uses static layout after map growth", async () =
   const onEvent = stopAt((event) => event instanceof NodeExpanded, "host stop after map growth");
   const stop = await rejected(runFlow(flow, { values: [1n, 4n] }, { log: path, memory, onEvent }));
   expect((stop as Error).message).toBe("host stop after map growth");
-  const resumed = await resumeFlow({ log: path, memory });
+  const resumed = await advance({ log: path, memory });
   expect(resumed.status).toBe("succeeded");
   expect(resumed.output).toEqual([2n, 5n]);
 });
@@ -390,10 +390,10 @@ test("unfinished primary requires the recorded memory mapping on resume", async 
   const options = { log: path, memory: new Map([["test", memory]]), onEvent };
   const stop = await rejected(runFlow(await loadFlow(FLOW), {}, options));
   expect((stop as Error).message).toBe("host stop");
-  const missing = await rejected(resumeFlow({ log: path }));
+  const missing = await rejected(advance({ log: path }));
   expect(missing).toBeInstanceOf(MemorySetupError);
   expect((missing as Error).message).toContain("requires");
-  const resumed = await resumeFlow({ log: path, memory: new Map([["test", memory]]) });
+  const resumed = await advance({ log: path, memory: new Map([["test", memory]]) });
   expect(resumed.status).toBe("succeeded");
   expect(resumed.output).toBe(7n);
   expect(memory.openSnapshots).toEqual([null, { namespace: "test" }]);
@@ -433,7 +433,7 @@ for (const tampered of ["stacks", "table"] as const) {
     }
     lines[0] = encodeRecord(new RecordEnvelope(envelope.schema, envelope.runId, envelope.seq, changed, envelope.at));
     writeFileSync(path, lines.join("\n") + "\n");
-    const error = await rejected(resumeFlow({ log: path, memory }));
+    const error = await rejected(advance({ log: path, memory }));
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toContain("memory table or stacks");
   });

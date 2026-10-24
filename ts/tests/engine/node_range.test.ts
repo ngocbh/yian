@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { flowManifest } from "../../src/compile/manifest.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 
@@ -87,7 +87,7 @@ test("render only node metadata does not ride run log", async () => {
 
   // A terminal resume is read-only and rebuilds the same result from clean topology.
   const before = readFileSync(path);
-  const res2 = await resumeFlow({ log: path, env });
+  const res2 = await advance({ log: path, env });
   expect(res2.status).toBe("succeeded");
   expect(res2.output).toBe("cancel");
   expect(res2.events).toEqual([]);

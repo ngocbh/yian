@@ -14,7 +14,7 @@
  * kind `auth`, so `causeType` is `"ProviderError"`, the JS error name, where Python's fake raises
  * an `AuthenticationError`.
  *
- * Ported through `runFlow` and `resumeFlow`, in `hostEnv`:
+ * Ported through `runFlow` and `advance`, in `hostEnv`:
  * `test_tool_calling_agent_in_loop_retries_whole_node_after_process_loss`. Changed: the process
  * loss is `crashAfter`'s log refusing the append of the second turn's AGENT success, after its
  * tool call ran and its model answered (Python: the model's fourth call raises).
@@ -30,7 +30,7 @@ import { IN_LOOP_EVENTS, type RunEvent } from "../../src/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { Message, Response, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { NodeStartedRecord, NodeStepRecord, NodeSucceededRecord, readRunLog, RunResumedRecord } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { loadConformanceFlow } from "../compose/declarations.ts";
@@ -173,7 +173,7 @@ test("tool calling agent in loop replays its recorded steps after process loss",
 
   const recoveredModel = new ScriptedModel([], CONFIG);
   const recoveredEvents: RunEvent[] = [];
-  const recovered = await resumeFlow({
+  const recovered = await advance({
     log: path,
     tools,
     onEvent: (event) => void recoveredEvents.push(event),
@@ -203,7 +203,7 @@ test("tool calling agent in loop replays its recorded steps after process loss",
   };
   const before = readFileSync(path);
   const terminalEvents: RunEvent[] = [];
-  const terminal = await resumeFlow({
+  const terminal = await advance({
     log: path,
     tools,
     onEvent: (event) => void terminalEvents.push(event),

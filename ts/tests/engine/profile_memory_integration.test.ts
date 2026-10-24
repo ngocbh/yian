@@ -8,7 +8,7 @@
  * `test_profile_notes_and_a_session_transcript_share_one_agent_context` (profile only: TS yian has
  * no session memory),
  * `test_human_edit_during_learning_fails_the_commit_without_a_model` and
- * `test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document`; through `resumeFlow` too:
+ * `test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document`; through `advance` too:
  * `test_resume_reopens_the_recorded_version_for_backward` and
  * `test_an_attempt_killed_after_its_write_is_unknown_and_findable_in_provenance`.
  *

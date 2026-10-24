@@ -1,6 +1,6 @@
 /**
  * Explicit public backward attempts over retained forward run authority: a port of
- * `tests/engine/test_run_backward.py`, through `runFlow`, `resumeFlow` and `RunResult.backward` in
+ * `tests/engine/test_run_backward.py`, through `runFlow`, `advance` and `RunResult.backward` in
  * an environment holding only the test's credential store. Memory keys are served by the shared
  * `FakeMemory` (Python's `_Memory`).
  *
@@ -52,7 +52,7 @@
  *   `commit` that writes a marker and never settles.
  *
  * TS-only: a run whose `env` sets a non-default `YIAN_*` value records it, and a later
- * `result.backward` (after `runFlow` or `resumeFlow` returned) replays in that `env` and bounds its
+ * `result.backward` (after `runFlow` or `advance` returned) replays in that `env` and bounds its
  * feedback by that `env`'s nesting limit (51 levels under a limit of 50 is a `TypeCheckError` that
  * appends nothing); a resume in another `env` is refused. `result.backward`'s `onEvent` receives an
  * AGENT backward model call's retry as one `ModelCallRetried` with consumer `backward`. A memory
@@ -87,10 +87,10 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
 import {
   replayRunLog,
-  type ResumeFlowOptions,
+  type AdvanceOptions,
   type RunFlowOptions,
   type RunResult,
-  resumeFlow,
+  advance,
   runFlow,
 } from "../../src/run.ts";
 import { virtualScheduler } from "../../src/platform.ts";
@@ -138,9 +138,9 @@ function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
   return runFlow(flow, inputs, { env: hostEnv(dir), ...options });
 }
 
-/** `resumeFlow` in `hostEnv(dir)` unless `options` sets `env`. */
-function resume(flow: ComposedFlow, options: ResumeFlowOptions) {
-  return resumeFlow({ env: hostEnv(dir), ...options });
+/** `advance` in `hostEnv(dir)` unless `options` sets `env`. */
+function resume(flow: ComposedFlow, options: AdvanceOptions) {
+  return advance({ env: hostEnv(dir), ...options });
 }
 
 /** A `Map` serving the memory key `test` with `backend`. */
@@ -901,7 +901,7 @@ for (const phase of ["learn", "commit"]) {
         script,
         `const { writeFileSync } = await import("node:fs");
 const { loadFlow } = await import(${url("src/compose/loader.ts")});
-const { resumeFlow } = await import(${url("src/run.ts")});
+const { advance } = await import(${url("src/run.ts")});
 const { FakeMemory, FakeSession } = await import(${url("tests/engine/memory_fakes.ts")});
 const auth = ${JSON.stringify(join(dir, "auth.json"))};
 const block = () => {
@@ -912,7 +912,7 @@ const backend = new FakeMemory(${phase === "learn" ? "{ learnOutcomes: [block] }
 ${phase === "commit" ? "FakeSession.prototype.commit = block;" : ""}
 const flow = await loadFlow(${JSON.stringify(WITH_MEMORY)});
 const env = (name) => (name === "YIAN_AUTH_FILE" ? auth : undefined);
-const resumed = await resumeFlow({ log: ${JSON.stringify(path)}, memory: new Map([["test", backend]]), env });
+const resumed = await advance({ log: ${JSON.stringify(path)}, memory: new Map([["test", backend]]), env });
 await resumed.backward("Second review.");
 `,
       );

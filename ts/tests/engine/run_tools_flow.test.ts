@@ -1,5 +1,5 @@
 /**
- * `runFlow` and `resumeFlow` give each run its own tools and `ask_user` handler: a port of
+ * `runFlow` and `advance` give each run its own tools and `ask_user` handler: a port of
  * `tests/engine/test_run_tools_flow.py`.
  *
  * An AGENT's model is the test's `ChatModel` given as `models` (a fresh one per build, as
@@ -51,7 +51,7 @@ import { Message, type Request, Response, ToolCallPart, ToolResultPart } from ".
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskUserRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -199,7 +199,7 @@ test("concurrent runs never see each other's tools or handler", async () => {
   expect(bob.output).toBe("bob answers Hello bob?");
 });
 
-test("resumeFlow asks through the handler passed to resume", async () => {
+test("advance asks through the handler passed to resume", async () => {
   const path = freshLog();
   const flow = await loadFlow(GREETING_FLOW);
   const host = new AbortController();
@@ -219,7 +219,7 @@ test("resumeFlow asks through the handler passed to resume", async () => {
   );
   expect(error).toBe(stop);
 
-  const resumed = await resumeFlow({
+  const resumed = await advance({
     log: path,
     env: hostEnv(dir),
     tools: { whoami: fixed("whoami", () => "unused"), ask_user: answerWithQuestion },
@@ -399,17 +399,17 @@ test("resume uses the group contents passed to resume", async () => {
   expect(error).toBe(stop);
 
   const refused = await rejected(
-    resumeFlow({ log: path, env: hostEnv(dir), models: chats, tools: { workspace: [], company: [] } }),
+    advance({ log: path, env: hostEnv(dir), models: chats, tools: { workspace: [], company: [] } }),
   );
   expect(refused).toBeInstanceOf(RangeError);
   expect((refused as Error).message).toContain("unknown tool or group 'toolbox'");
   // The recorded tool specs are the run's, so a group holding another tool is refused too.
   const other = await rejected(
-    resumeFlow({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("new")]) }),
+    advance({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("new")]) }),
   );
   expect(other).toBeInstanceOf(RangeError);
   expect((other as Error).message).toBe("resume refused: tools.new isn't recorded; the run started without it");
-  const resumed = await resumeFlow({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("old")]) });
+  const resumed = await advance({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("old")]) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   // The stop cut the call off before its result, so the resume closes it, outcome unknown, rather

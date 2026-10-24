@@ -33,7 +33,7 @@ import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { resumeFlow, runFlow, type RunFlowOptions } from "../../src/run.ts";
+import { advance, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { recording, rejected, responsesText, serving, textReply } from "./run_state_fixtures.ts";
 
@@ -102,7 +102,7 @@ test("saved identity is recorded and resume refuses reconnect", async () => {
   expect(config["_connection"]["credential_id"]).toBe(selected.credentialId);
   expect(readFileSync(path, "utf8")).not.toContain("secret");
   await new AuthStore(null, { env }).save("openai", new ApiKeyCredentials("new-key"), "different-model");
-  const result = await resumeFlow({ log: path, models, env });
+  const result = await advance({ log: path, models, env });
   expect(result.status).toBe("failed");
   expect(result.failure!.message).toContain("changed");
 });
@@ -114,7 +114,7 @@ test("old api record resumes via api despite saved subscription", async () => {
   dropConnection(path);
   await connect(env);
   const models = recording(env, responsesText("ok"));
-  const result = await resumeFlow({ log: path, models, env });
+  const result = await advance({ log: path, models, env });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(new URL(models.requests[0]!.url).host).toBe("api.openai.com");
   expect(models.requests[0]!.headers.get("Authorization")).toBe("Bearer old-api-key");
@@ -144,7 +144,7 @@ test("an old api run resumes with the legacy connection", async () => {
   writeFileSync(auth, "not json", { mode: 0o600 });
   const reading = await rejected(runFlow(flow, {}, { models, env }));
   expect((reading as Error).message).toContain("Credential storage is malformed");
-  const resumed = await resumeFlow({ log: path, models, env });
+  const resumed = await advance({ log: path, models, env });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(model.requests.at(-1)!.messages.map((message) => message.text()).slice(1)).toEqual(["hi"]);
   expect((models.configs.at(-1)!["_connection"] as Record<string, unknown>)["source"]).toBe("legacy_environment");

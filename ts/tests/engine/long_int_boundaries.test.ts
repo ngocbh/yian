@@ -36,7 +36,7 @@ import { applyDefaults, BindingError } from "../../src/nodes/binding.ts";
 import { Parameter, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { commitPrepared, NodeDataError, prepareNodeStarted } from "../../src/runtime/state.ts";
 import { Type, TypeCheckError, type Value, ValueKind } from "../../src/typesys/index.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -69,7 +69,7 @@ async function run(text: string): Promise<RunResult> {
   const flow = await loadFlow(text, { env });
   const log = join(dir, `run-${runs++}.jsonl`);
   const result = await runFlow(flow, { n: 4999n }, { env, log });
-  const resumed = await resumeFlow({ log, env });
+  const resumed = await advance({ log, env });
   expect(resumed.status).toBe(result.status);
   if (result.failure !== null) expect(resumed.failure!.message).toBe(result.failure.message);
   else expect(resumed.output).toEqual(result.output);

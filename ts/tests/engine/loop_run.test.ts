@@ -74,7 +74,7 @@
  *   `resume/loop_run__a_while_loop_cut_mid_run_resumes_to_the_same_output`, whose header names
  *   it (the same flow, cut mid-run, resumed to the same output).
  *
- * Ported through `runFlow`, a log cut to its first half, and `resumeFlow`:
+ * Ported through `runFlow`, a log cut to its first half, and `advance`:
  * `test_partial_loop_resumes_from_its_log`, `test_nested_growth_loop_resumes_from_a_cut_log` and
  * `test_loop_with_a_kept_body_node_resumes_from_a_cut_log`, the last two replaying the log with
  * `replayRunLog` (Python's `_replay_run_log`). The kept body node's sleep is 200 ms (Python: 0.2 s).
@@ -93,7 +93,7 @@ import { RunSucceeded } from "../../src/events.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { PartialRecordContract, type ValueContract } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
-import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
+import { replayRunLog, advance, runFlow } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { JsonlRunLog, NodeExpandedRecord } from "../../src/runtime/log.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
@@ -1341,7 +1341,7 @@ async function runCutAndResume(
   // Cut mid-run, so the resume replays the recorded drivers and runs the rest live.
   const lines = readFileSync(path, "utf8").split(/(?<=\n)/);
   writeFileSync(path, lines.slice(0, Math.floor(lines.length / 2)).join(""));
-  const resumed = await resumeFlow({ log: path, numWorkers, env: hostEnv(dir) });
+  const resumed = await advance({ log: path, numWorkers, env: hostEnv(dir) });
   expect(resumed.failure).toBeNull();
   expect(resumed.output).toEqual(first.output);
   return path;

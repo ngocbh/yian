@@ -7,7 +7,7 @@
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here: also the recording `send`, reply streams and secret
  * scan the provider and host-credential tests share (Python's `_chat_completions`, `_rejecting`,
- * `_plain` and `_assert_hidden` of `test_run_api_key.py`), and the `runFlow` and `resumeFlow`
+ * `_plain` and `_assert_hidden` of `test_run_api_key.py`), and the `runFlow` and `advance`
  * helpers of the run-level AGENT and memory tests (`PLAIN_FLOW`, `runWith`, `resumeWith`,
  * `CrashAt`, `crashes`, `sentTexts`, `reply`, `backwardReply`,
  * `memorySections`, `memorySnapshot`) and the in-process `yian run` over a fake chat endpoint
@@ -81,8 +81,8 @@ import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { chatModelFromConfig, type ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { Send } from "../../src/platform.ts";
 import {
-  type ResumeFlowOptions,
-  resumeFlow,
+  type AdvanceOptions,
+  advance,
   type RunFlowOptions,
   type RunInspection,
   type RunResult,
@@ -1890,17 +1890,17 @@ export function runWith(
 }
 
 /**
- * `resumeFlow` of `flow` from `log`, with `runWith`'s `memory`, `model` and `NO_ENV`; the other
- * options go to `resumeFlow`.
+ * `advance` of `flow` from `log`, with `runWith`'s `memory`, `model` and `NO_ENV`; the other
+ * options go to `advance`.
  */
 export function resumeWith(
   flow: ComposedFlow,
   log: string,
   memory: ReadonlyMap<string, Memory> | null,
   model: ChatModel,
-  options: Omit<ResumeFlowOptions, "log"> = {},
+  options: Omit<AdvanceOptions, "log"> = {},
 ): Promise<RunResult> {
-  return resumeFlow({ log, memory, models: serving(model), env: NO_ENV, ...options });
+  return advance({ log, memory, models: serving(model), env: NO_ENV, ...options });
 }
 
 /**

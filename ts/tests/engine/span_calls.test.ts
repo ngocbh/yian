@@ -39,7 +39,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import type { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
 import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "./run_state_fixtures.ts";
@@ -458,7 +458,7 @@ test("a code-built binding mis-calling a builtin fails before resume appends", a
       rewire(flow.compiled, "b", "n", "${render_as_json(a.output, 1, 2)}"),
     );
 
-    const error = await rejected(resumeFlow({ log: path, flow }));
+    const error = await rejected(advance({ log: path, flow }));
     expect(error).toBeInstanceOf(ExpressionError);
     expect((error as Error).message).toMatch(
       /^node 'b' input 'n': expression function 'render_as_json' takes \(value, indent=2\): too many positional arguments$/,

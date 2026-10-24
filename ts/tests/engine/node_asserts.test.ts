@@ -25,7 +25,7 @@
  * assert's text holding a lone surrogate is a located load error in the aggregate (Python yian
  * loads it); the TS-only row pins the message.
  *
- * Ported through `loadFlow` and `runFlow` (and `resumeFlow`): `test_pre_assert_passes_and_runs`,
+ * Ported through `loadFlow` and `runFlow` (and `advance`): `test_pre_assert_passes_and_runs`,
  * `test_post_assert_violated_fails`, `test_def_internal_node_assert_via_call`,
  * `test_def_internal_node_assert_via_map` and the two `test_python_built_unparseable_assert_*`
  * rows, each failing run checked for `assertion.failed` where Python checks the status. The
@@ -73,7 +73,7 @@ import {
   PartialRecordContract,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -512,7 +512,7 @@ test("a code-built unparseable assert fails before resume appends", async () => 
     const path = join(dir, "run.jsonl");
     const lines = await stoppedRunLog(flow, { v: 1 }, path, "a", () => breakAssert(flow));
 
-    const error = await rejected(resumeFlow({ log: path, flow }));
+    const error = await rejected(advance({ log: path, flow }));
     expect(error).toBeInstanceOf(ExpressionError);
     expect((error as Error).message).toMatch(/^node 'b' pre-assert 'n non-negative'/);
     expect(readFileSync(path, "utf8")).toBe(lines);

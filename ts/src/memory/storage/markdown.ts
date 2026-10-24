@@ -47,7 +47,7 @@ export class MarkdownVersionMismatch extends Error {
  * `MarkdownVersionMismatch` for a stale base version, and a Node system error (an `Error` with a
  * string `code` and a string `syscall` or a numeric `errno`) when storage can't be reached. In a
  * run, profile memory turns these, and on restore a `TypeError`, into typed memory failures; any
- * other error passes through it, `runFlow`, `resumeFlow` and `backward` unchanged.
+ * other error passes through it, `runFlow`, `advance` and `backward` unchanged.
  */
 export interface MarkdownStore {
   /**

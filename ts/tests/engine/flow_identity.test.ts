@@ -159,7 +159,7 @@
  * writes an inline CODE body as `{inline: <body>}` (design 6.7) where Python writes the bare text,
  * and the inline bodies are TS (`+ 1n`); with both put back, Python's pins reproduce.
  *
- * Ported through `loadFlow`, `runFlow` and `resumeFlow`:
+ * Ported through `loadFlow`, `runFlow` and `advance`:
  * `test_resume_rejects_a_flow_with_an_edited_literal`, the mismatch a `RangeError` where Python
  * raises a `ValueError`; resume compiles the flow the run recorded, so the literal is edited in
  * the recorded text (Python passes the edited flow).
@@ -217,7 +217,7 @@ import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
-import { resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, runFlow } from "../../src/run.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
 import { editRecordedFlow } from "./run_state_fixtures.ts";
@@ -2812,7 +2812,7 @@ test.each([
     // Resume compiles the recorded flow, so the edit is to the recorded text.
     editRecordedFlow(log, () => resumeLiteralFlow(after[0], after[1]));
 
-    const resumed = resumeFlow({ log, numWorkers: 0 });
+    const resumed = advance({ log, numWorkers: 0 });
     await expect(resumed).rejects.toThrow(RangeError);
     await expect(resumed).rejects.toThrow("flow fingerprint mismatch");
   } finally {

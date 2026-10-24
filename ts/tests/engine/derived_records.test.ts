@@ -24,7 +24,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { Grow, Node, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { NodeExpanded, NodeSucceeded, type RunEvent } from "../../src/events.ts";
-import { foldRunLog, replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
+import { foldRunLog, replayRunLog, advance, runFlow } from "../../src/run.ts";
 import { rebuildDerived } from "../../src/runtime/eval_node.ts";
 import {
   canonicalSeed,
@@ -213,7 +213,7 @@ async function cutChat(cut: (envelopes: readonly RecordEnvelope[]) => number) {
   const options = chatOptions(log);
   await crashAfter(at + 1, () => runFlow(flow, {}, options));
   expect(readRunLog(log).length).toBe(at + 1);
-  const resumed = await resumeFlow({ log, env: NO_ENV, models: options.models, tools: options.tools });
+  const resumed = await advance({ log, env: NO_ENV, models: options.models, tools: options.tools });
   return { whole, resumed, envelopes: readRunLog(log) };
 }
 

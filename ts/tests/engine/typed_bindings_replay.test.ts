@@ -28,7 +28,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { type RunResult, resumeFlow, runFlow } from "../../src/run.ts";
+import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { editRecordedFlow, rejected, startedIds } from "./run_state_fixtures.ts";
@@ -93,7 +93,7 @@ test("resuming a completed typed run replays without running code", async () => 
   expect(first.output).toEqual({ total: 40n, rounds: 2n });
   expect(codeRuns(first)).toEqual(["bump", "bump", "p", "use"]);
 
-  const resumed = await resumeFlow({ log: path, env });
+  const resumed = await advance({ log: path, env });
 
   expect(resumed.status).toBe(first.status);
   expect(resumed.output).toEqual(first.output);
@@ -131,7 +131,7 @@ async function interruptThenResume(answer: unknown): Promise<RunResult> {
   );
   expect(caught).toBe(interruption);
 
-  return resumeFlow({ log: path, env, tools: { ask_user: () => answer } });
+  return advance({ log: path, env, tools: { ask_user: () => answer } });
 }
 
 test("typed consumer after resume rejects a mistyped answer", async () => {
@@ -158,7 +158,7 @@ test("resume rejects a changed declared binding type", async () => {
   // Resume compiles the recorded flow, so the change is to the recorded text.
   editRecordedFlow(path, () => changed);
 
-  const error = await rejected(resumeFlow({ log: path, env }));
+  const error = await rejected(advance({ log: path, env }));
 
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("flow fingerprint mismatch");
@@ -197,7 +197,7 @@ output:
   expect(edited).toBe(1);
   writeFileSync(path, lines.join("\n") + "\n");
 
-  const error = await rejected(resumeFlow({ log: path, env }));
+  const error = await rejected(advance({ log: path, env }));
 
   expect(error).toBeInstanceOf(TypeCheckError);
   expect((error as Error).message).toContain("does not match declared type int");

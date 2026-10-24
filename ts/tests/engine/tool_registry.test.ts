@@ -88,7 +88,7 @@ function loose(tools: unknown): ToolSet {
 describe("registerTool", () => {
   test("test_generic_registration_rejects_reserved_ask_user_id", () => {
     expect(thrown(() => registerTool("ask_user", tool("ask_user")), RangeError)).toBe(
-      "tool id 'ask_user' is reserved; pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow",
+      "tool id 'ask_user' is reserved; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
     );
     expect(TOOL_REGISTRY.has("ask_user")).toBe(false);
   });
@@ -120,7 +120,7 @@ describe("registerTool", () => {
   test("checks the reserved id before a duplicate, and a duplicate before the target", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user"));
     expect(thrown(() => registerTool("ask_user", tool("ask_user")), RangeError)).toBe(
-      "tool id 'ask_user' is reserved; pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow",
+      "tool id 'ask_user' is reserved; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
     );
     registerTool("echo", tool("echo"));
     expect(thrown(() => registerTool("echo", null as unknown as FunctionTool), RangeError)).toBe(
@@ -323,7 +323,7 @@ describe("ToolSet lookup", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
     for (const tools of [new ToolSet(), new ToolSet({})]) {
       expect(thrown(() => tools.resolve(["ask_user"]), RangeError)).toBe(
-        "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow",
+        "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
       );
     }
   });
@@ -546,7 +546,7 @@ describe("ask_user invocation", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
     for (const tools of [new ToolSet(), new ToolSet({})]) {
       expect(await rejected(tools.invoke("ask_user", { question: "Approve?" }), RangeError)).toBe(
-        "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or resumeFlow",
+        "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
       );
     }
   });

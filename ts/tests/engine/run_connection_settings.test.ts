@@ -38,7 +38,7 @@ import { type HostConnection, popHostCredentials } from "../../src/llm_clients/c
 import { ProfileMemory } from "../../src/memory/profile.ts";
 import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
-import { checkRecordedLlmFields, resumeFlow, runFlow } from "../../src/run.ts";
+import { checkRecordedLlmFields, advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import {
   adaStore,
@@ -404,7 +404,7 @@ test("a finished run with recorded settings replays without the key", async () =
   const path = join(fresh(), "run.jsonl");
   const first = await runFlow(await loadFlow(FLOW, { env }), {}, { log: path, llmConfig: ALL_SETTINGS, models, env });
   expect(first.status, first.failure?.message).toBe("succeeded");
-  const replayed = await resumeFlow({ log: path, models, env });
+  const replayed = await advance({ log: path, models, env });
   expect(replayed.status, replayed.failure?.message).toBe("succeeded");
   expect(replayed.output).toBe(first.output);
 });
@@ -422,7 +422,7 @@ test("resume with the key keeps the recorded organization", async () => {
     runFlow(await loadFlow(FLOW, { env }), {}, { log: path, onEvent: stopBeforeModel, llmConfig, models, env }),
   );
   expect((stopped as Error).message).toContain("host stopped");
-  const result = await resumeFlow({ log: path, apiKey: SENTINEL, models, env });
+  const result = await advance({ log: path, apiKey: SENTINEL, models, env });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(seen(models)).toEqual({ "gpt-5.4": ["org-abc", "proj-abc", null] });
 });
@@ -452,7 +452,7 @@ test("resume sends the given headers to the key agents", async () => {
   const path = await interruptedHeaderRun(models);
   // Names compare without case, as they do in HTTP.
   const headers = { "x-gateway": HEADER_VALUE, "X-TRACE": OTHER_VALUE };
-  const result = await resumeFlow({ log: path, apiKey: SENTINEL, headers, models, env });
+  const result = await advance({ log: path, apiKey: SENTINEL, headers, models, env });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(seen(models)).toEqual({ "gpt-5.4": ["org-abc", "proj-abc", { "x-gateway": HEADER_VALUE, "X-TRACE": OTHER_VALUE }] });
   expect(readFileSync(path, "utf8")).not.toContain(HEADER_VALUE);
@@ -469,7 +469,7 @@ describe("resume needs exactly the recorded header names", () => {
       const path = await interruptedHeaderRun(models);
       const before = readFileSync(path);
       const error = await rejected(
-        resumeFlow({ log: path, apiKey: SENTINEL, headers, models, env }),
+        advance({ log: path, apiKey: SENTINEL, headers, models, env }),
       );
       expect(error).toBeInstanceOf(RangeError);
       const message = (error as Error).message;
@@ -485,7 +485,7 @@ test("resume reports extra header names beside missing ones", async () => {
   const models = fakeModels();
   const path = await interruptedHeaderRun(models);
   const error = await rejected(
-    resumeFlow({
+    advance({
       log: path,
       apiKey: SENTINEL,
       headers: { "X-Gateway": HEADER_VALUE, "X-Other": OTHER_VALUE },
@@ -502,7 +502,7 @@ test("resume without recorded headers refuses given ones", async () => {
   const path = await interruptedHeaderRun(models, KEYED);
   const before = readFileSync(path);
   const error = await rejected(
-    resumeFlow({
+    advance({
       log: path,
       apiKey: SENTINEL,
       headers: { "X-Gateway": HEADER_VALUE },
@@ -520,7 +520,7 @@ test("resume checks the given header values", async () => {
   const path = await interruptedHeaderRun(models);
   const before = readFileSync(path);
   const error = await rejected(
-    resumeFlow({
+    advance({
       log: path,
       apiKey: SENTINEL,
       headers: { "X-Gateway": HEADER_VALUE, "X-Trace": "bad\nvalue-77" },
@@ -538,7 +538,7 @@ test("resume ignores headers on a run with no key agents", async () => {
   const keyed = envWith({ OPENAI_API_KEY: "sk-env" });
   const models = fakeModels(keyed);
   const path = await interruptedHeaderRun(models, { provider: "openai", model: "gpt-5.4" }, keyed);
-  const result = await resumeFlow({
+  const result = await advance({
     log: path,
     apiKey: SENTINEL,
     headers: { "X-Anything": HEADER_VALUE },
@@ -562,7 +562,7 @@ test("a finished run checks the given header names", async () => {
   expect(first.status, first.failure?.message).toBe("succeeded");
   const before = readFileSync(path);
   let error = await rejected(
-    resumeFlow({
+    advance({
       log: path,
       apiKey: SENTINEL,
       headers: { "X-Gateway": HEADER_VALUE },
@@ -572,10 +572,10 @@ test("a finished run checks the given header names", async () => {
   );
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("missing X-Trace");
-  error = await rejected(resumeFlow({ log: path, apiKey: SENTINEL, models, env }));
+  error = await rejected(advance({ log: path, apiKey: SENTINEL, models, env }));
   expect(error).toBeInstanceOf(RangeError);
   expect((error as Error).message).toContain("X-Gateway, X-Trace");
-  const replayed = await resumeFlow({
+  const replayed = await advance({
     log: path,
     apiKey: SENTINEL,
     headers: HEADERS,
@@ -660,7 +660,7 @@ test("backward sends the headers the result kept", async () => {
   expect(result.status, result.failure?.message).toBe("succeeded");
   const outcome = await result.backward("Be brief.");
   expect(outcome.status, outcome.failure?.message).toBe("succeeded");
-  const recovered = await resumeFlow({
+  const recovered = await advance({
     log: path,
     apiKey: SENTINEL,
     headers: HEADERS,
@@ -685,7 +685,7 @@ test("backward sends the headers it is given after resume", async () => {
     env,
   });
   expect(first.status, first.failure?.message).toBe("succeeded");
-  const recovered = await resumeFlow({ log: path, models, env });
+  const recovered = await advance({ log: path, models, env });
   // Names compare without case.
   const headers = { "x-gateway": HEADER_VALUE, "X-TRACE": OTHER_VALUE };
   const outcome = await recovered.backward("Be brief.", { apiKey: SENTINEL, headers });
@@ -699,7 +699,7 @@ test("backward without the headers fails naming them", async () => {
   const path = join(fresh(), "run.jsonl");
   const models = recording(env, inOrder(chatText("ok"), chatText(NO_FEEDBACK)));
   await runFlow(await loadFlow(FLOW, { env }), {}, { log: path, learnable: true, llmConfig: VLLM_HEADERS, models, env });
-  const recovered = await resumeFlow({ log: path, models, env });
+  const recovered = await advance({ log: path, models, env });
   const outcome = await recovered.backward("Be brief.", { apiKey: SENTINEL });
   expect(outcome.status).toBe("failed");
   expect(outcome.failure!.causeType).toBe("AuthError");
@@ -727,7 +727,7 @@ describe("backward checks the given headers before appending", () => {
       });
       expect(first.status, first.failure?.message).toBe("succeeded");
       models.configs.length = 0;
-      const recovered = await resumeFlow({ log: path, models, env });
+      const recovered = await advance({ log: path, models, env });
       const before = readFileSync(path);
       const error = await rejected(recovered.backward("Be brief.", { apiKey: SENTINEL, headers }));
       expect(error).toBeInstanceOf(RangeError);

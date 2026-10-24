@@ -65,12 +65,12 @@ import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { FileLockError, sqliteErrorCode, withWarnings } from "../platform.ts";
 import {
+  advance,
   hostInputs,
   inspectRun,
   type LlmConfigsCheck,
   loadRecordedFlow,
   readRunIndex,
-  resumeFlow,
   type RunIndexRow,
   type RunInspection,
   type RunResult,
@@ -1117,7 +1117,7 @@ function hostKeyRefusal(provider: string, headerNames: unknown): ResumeKeyError 
 }
 
 /**
- * Check that the recorded model configs of a resumed run can authenticate (`resumeFlow`'s
+ * Check that the recorded model configs of a resumed run can authenticate (`advance`'s
  * `checkLlmConfigs`).
  *
  * Like a fresh run's preflight, it requires each provider's environment key unless the agent
@@ -1232,7 +1232,7 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  *
  * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
  * never a file on disk, and its memories, skills and MCP config are read as for a fresh run; then
- * the log path is printed and `resumeFlow` recovers the run, with no input prompts, no
+ * the log path is printed and `advance` recovers the run, with no input prompts, no
  * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count. A
  * log whose flow was built in code can't be resumed here and prints `resume failed: ...`.
  * Before anything is appended, the keys the recorded configs need are checked: a missing one is
@@ -1344,7 +1344,7 @@ async function startRun(
   if (options.resume !== undefined) {
     let recorded: ComposedFlow | null;
     try {
-      // `resumeFlow` compiles it again: it refuses a flow for a run with recorded files.
+      // `advance` compiles it again: it refuses a flow for a run with recorded files.
       recorded = await loadRecordedFlow(options.resume, { env: io.env });
     } catch (error) {
       if (error instanceof LoadError) {
@@ -1357,7 +1357,7 @@ async function startRun(
     }
     if (recorded === null) {
       return setupFailed(
-        new RangeError("this run's flow was built in code; resume it with resumeFlow({log, flow})"),
+        new RangeError("this run's flow was built in code; resume it with advance({log, flow})"),
       );
     }
     flow = recorded;
@@ -1477,7 +1477,7 @@ async function startRun(
         const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
           checkResumeCredentials(effective, callTimeHost, keyContext);
         return startLogged(log, (tools) =>
-          resumeFlow({
+          advance({
             log,
             numWorkers: options.numWorkers ?? null,
             onEvent,

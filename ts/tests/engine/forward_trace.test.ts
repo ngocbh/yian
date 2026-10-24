@@ -1003,14 +1003,16 @@ test.each([
   "${absent | absent}",
   "partial: ${partial()}",
   "score: ${score()}",
-])("the codec preserves evaluated route variants: %s", (expression) => {
+])("the codec preserves evaluated route variants, an interpolation's text left out: %s", (expression) => {
   // A file is the TS leaf JSON can't hold, so `partial()` gives a partial snapshot.
   standIn("partial", () => ({ kept: [1n], lost: new FileRef({ uri: "file:///tmp/x" }) }));
   standIn("score", () => Infinity);
   const traced = evalBinding(expression, resolveVariants, { trace: true });
+  const withoutText = (route: ValueRoute): ValueRoute =>
+    route.with({ children: route.children.map(withoutText), ...(route.kind === "interpolation" ? { valueJson: null } : {}) });
   const capture = new ForwardCapture(ValueRoute.record([["x", traced.route]]));
-  const envelope = capturedEnvelope(capture);
-  expect(decodeRecord(encodeRecord(envelope))).toEqual(envelope);
+  const recorded = new ForwardCapture(ValueRoute.record([["x", withoutText(traced.route)]]));
+  expect(decodeRecord(encodeRecord(capturedEnvelope(capture)))).toEqual(capturedEnvelope(recorded));
 });
 
 // TS builtins take named parameters, so `collect_args` takes `first`, `second` and `value`, each
@@ -4685,25 +4687,25 @@ async function replayedOccurrences(log: string): Promise<(nodeId: string) => Tra
   return (nodeId) => trace.occurrences.find((occurrence) => occurrence.nodeId === nodeId)!;
 }
 
-/** Rewrite the `value_json` of every interpolation route in the log at `log` with `rewrite`. */
-function rewriteInterpolations(log: string, rewrite: (text: unknown) => unknown): void {
+/** The `value_json` of every interpolation route in the log at `log`, in line order. */
+function interpolationTexts(log: string): unknown[] {
+  const texts: unknown[] = [];
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) value.forEach(visit);
     else if (value !== null && typeof value === "object") {
       const wire = value as Wire;
-      if (wire["kind"] === "interpolation") wire["value_json"] = rewrite(wire["value_json"]);
+      if (wire["kind"] === "interpolation") texts.push(wire["value_json"]);
       Object.values(wire).forEach(visit);
     }
   };
-  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);
-  lines.forEach(visit);
-  writeFileSync(log, `${lines.map((line) => logJson(line)).join("\n")}\n`);
+  readFileSync(log, "utf8").trimEnd().split("\n").forEach((line) => visit(parseJson(line, "codec")));
+  return texts;
 }
 
-test("an interpolation route's text is rebuilt by binding its node again, not read from the record (TS-only)", async () => {
+test("an interpolation route's text isn't recorded: learning rebuilds it by binding its node again (TS-only)", async () => {
   const log = await greetLog("greet", "A");
-  // Same-length texts, so the recorded spans still fit.
-  rewriteInterpolations(log, (text) => (typeof text === "string" ? text.replaceAll("Ann", "Bob") : text));
+  // `shout`'s `line` and END's output.
+  expect(interpolationTexts(log)).toEqual([null, null]);
   const of = await replayedOccurrences(log);
   for (const [nodeId, text] of [
     ["shout", "Hello, Ann!"],
@@ -4717,7 +4719,7 @@ test("an interpolation route's text is rebuilt by binding its node again, not re
 
 test("a binding that didn't finish rebuilds the interpolation route it collected first (TS-only)", async () => {
   const log = await greetLog("greet-failed", null);
-  rewriteInterpolations(log, (text) => (typeof text === "string" ? text.replaceAll("Ann", "Bob") : text));
+  expect(interpolationTexts(log)).toEqual([null]);
   const of = await replayedOccurrences(log);
   const shout = of("shout");
   expect(shout.record).toBeInstanceOf(NodeFailedRecord);
@@ -4747,8 +4749,7 @@ test("a MAP whose item binding failed rebuilds each item's interpolation route (
   const labels = await loadFlow(LABELS, { sourceLabel: "flow.yaml" });
   const result = await runFlow(labels, { xs: ["a", null] }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
   expect(result.status).toBe("failed");
-  // Same-length texts, so the recorded spans still fit.
-  rewriteInterpolations(log, (text) => (typeof text === "string" ? text.replaceAll("Item", "Itxm") : text));
+  expect(interpolationTexts(log)).toEqual([null, null]);
   const reopened = JsonlRunLog.resume(log);
   let trace: RetainedTrace;
   try {
@@ -4763,4 +4764,14 @@ test("a MAP whose item binding failed rebuilds each item's interpolation route (
     [0, JSON.stringify("Item a.")],
     [1, JSON.stringify("Item .")],
   ]);
+});
+
+test("a recorded interpolation route holding its text is refused", () => {
+  const capture = new ForwardCapture(ValueRoute.record([["x", new ValueRoute("interpolation", {
+    children: [new ValueRoute("source", { source: new SourceRef("run", 1) })],
+    spans: [[2, 3]],
+  })]]));
+  const wire = wireOf(capturedEnvelope(capture));
+  wire.payload.forward_capture.route.children[0].value_json = '"n=3"';
+  expectError(() => decodeWire(wire), RangeError, "an interpolation route records no value_json");
 });

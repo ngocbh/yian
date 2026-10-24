@@ -97,8 +97,8 @@ import {
   type RunResult,
   runFlow,
 } from "../src/run.ts";
-import { capturePayload, JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
-import { addCrashedAttempts, type RunState } from "../src/runtime/state.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
+import { addCrashedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -2780,7 +2780,6 @@ async function checkInvariants(
   // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
   // agrees with a replay, not a second statement of its rules.
   const state = replay(envelopes.length);
-  checkCaptureRebuild(state, fail);
   const terminal = state.result;
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
   const counts = new Map(state.crashedAttempts);
@@ -2836,23 +2835,6 @@ async function checkInvariants(
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
   }
   if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
-}
-
-/**
- * Fail unless every occurrence of a learnable replay rebuilds what its record holds: its capture,
- * with each interpolation route's text rebuilt by binding the node again, equals the recorded one
- * byte for byte.
- */
-function checkCaptureRebuild(state: RunState, fail: (problem: string) => never): void {
-  for (const occurrence of state.trace?.occurrences ?? []) {
-    const recorded = occurrence.record.forwardCapture;
-    if (recorded === null) continue;
-    const at = `${occurrence.record.constructor.name} of ${occurrence.nodeId} (seq ${occurrence.outcomeSeq})`;
-    const capture = logJson(capturePayload(occurrence.capture));
-    if (capture !== logJson(capturePayload(recorded))) {
-      fail(`${at}: capture rebuilds to ${capture}, not ${logJson(capturePayload(recorded))}`);
-    }
-  }
 }
 
 /** The trace entries of node outcomes, which a crash sweep's strong oracle compares. */

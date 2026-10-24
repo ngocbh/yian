@@ -2372,16 +2372,16 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 19, and readers accept only schema 19. The schema
+Changed (TS yian): records use schema 20, and readers accept only schema 20. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 18 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 19 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
 backward attempt was `backward.unfinished`, before derived commits held `from` pointers,
-before outcome records dropped `evidence`, before the inbox and wait records, or before
-forward captures dropped their bound inputs)
-with "run log schema N predates schema 19 and is not supported", and any other schema with
-"unsupported run-record schema: N" (a float token shows as `19.0`); the "predates" message for schemas 7
+before outcome records dropped `evidence`, before the inbox and wait records, before
+forward captures dropped their bound inputs, or before they dropped their interpolation text)
+with "run log schema N predates schema 20 and is not supported", and any other schema with
+"unsupported run-record schema: N" (a float token shows as `20.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2457,6 +2457,15 @@ at once, and START is ready only after the last.
   starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
   Read the record at seq `k`, such as the commit a success names, with
   `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
+
+Changed (TS yian, schema 20): an interpolation route in a `forward_capture` (a template with
+literal text, such as `"Hello, ${input.name}!"`) records `value_json: null`; a literal's,
+scalar's or opaque call's `value_json` stays. Learning reads the rendered text (the `result` of
+an `interpolation` route context, and what feedback through it is checked against) from the
+same binding evaluation that rebuilds the bound inputs: `TraceOccurrence.capture` and
+`inputRoute` give each interpolation route the text binding the node again renders, on the
+first read. A binding that didn't finish rebuilds the routes it collected before it failed. A
+decoder refuses an interpolation route that holds `value_json`.
 
 Changed (TS yian, schema 19): a `forward_capture` holds no `bound_inputs`, and a derived
 record holds none: a success naming a derived or expansion commit, and every `node_expanded`,
@@ -3108,7 +3117,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `advance` reads (schema 19); a line of another schema raises
+- It reads every schema `advance` reads (schema 20); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

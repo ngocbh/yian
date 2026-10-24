@@ -1,6 +1,6 @@
 # TS-only (run-log). Pins: a learnable node whose binding fails after a template with literal text
-# records the partial capture: the interpolation route of `line`, which learning rebuilds by
-# binding the node again up to the same failure.
+# records the partial capture: the interpolation route of `line`, without its text, which
+# learning rebuilds by binding the node again up to the same failure.
 kind: run
 rules: [run-log]
 flow: |
@@ -104,7 +104,6 @@ expect:
             kind: interpolation
             spans:
             - [7, 10]
-            value_json: Hello, Ann!
           kind: record
           names: [line]
         scope:

@@ -1,7 +1,7 @@
 # TS-only (run-log). Pins: feedback routes through two templates with literal text, each an
 # interpolation route in a recorded capture: the top-level END's output and `writer`'s `draft`
 # input. Each AGENT's backward request shows the downstream context with the template's text
-# (`result`), which learning rebuilds by binding the node again.
+# (`result`), which the record leaves out and learning rebuilds by binding the node again.
 kind: backward
 rules: [run-log]
 flow: |
@@ -273,7 +273,6 @@ expect:
             kind: interpolation
             spans:
             - [13, 23]
-            value_json: 'Polish this: Reefs glow (one line)'
           kind: record
           names: [draft]
         scope:
@@ -305,7 +304,6 @@ expect:
             kind: interpolation
             spans:
             - [7, 27]
-            value_json: 'Final: Reefs glow at night.'
           kind: record
           names: [result]
         scope:

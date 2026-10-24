@@ -71,10 +71,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -2586,12 +2586,15 @@ export function routePayload(route: ValueRoute): JsonObject {
   return encodeRoute(route);
 }
 
-/** Encode a route that `validateRoute` already accepted, without checking it again. */
+/**
+ * Encode a route that `validateRoute` already accepted, without checking it again. An
+ * interpolation's text is left out: learning rebuilds it by binding the node again.
+ */
 function encodeRoute(route: ValueRoute): JsonObject {
   return {
     kind: route.kind,
     source: route.source === null ? null : sourcePayload(route.source),
-    value_json: route.valueJson,
+    value_json: route.kind === "interpolation" ? null : route.valueJson,
     children: route.children.map(encodeRoute),
     expression: route.expression,
     names: [...route.names],
@@ -2640,6 +2643,9 @@ export function routeFromPayload(payload: unknown): ValueRoute {
   if (valueJson !== null && typeof valueJson !== "string") {
     throw new TypeError("route value_json must be a string or null");
   }
+  if (wire["kind"] === "interpolation" && valueJson !== null) {
+    throw new RangeError("an interpolation route records no value_json");
+  }
   const childWires = wireArray(children, "route children");
   const expression = wire["expression"];
   if (typeof expression !== "string") throw new TypeError("route expression must be a string");
@@ -2685,7 +2691,7 @@ export function routeFromPayload(payload: unknown): ValueRoute {
  * @throws RangeError when an evaluated key names no captured route, besides `routePayload`'s
  *   errors.
  */
-export function capturePayload(capture: ForwardCapture): JsonObject {
+function capturePayload(capture: ForwardCapture): JsonObject {
   const route = routePayload(capture.route);
   // `evaluatedKeys` is a `Set`, which stays mutable inside a frozen capture, so it is the one
   // field checked again.

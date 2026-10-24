@@ -195,11 +195,13 @@ export function validateRoute(route: unknown, options: { deep?: boolean } = {}):
     }
   }
   if (kind === "interpolation") {
-    if (typeof result !== "string" || route.children.length === 0 || route.spans.length !== route.children.length) {
-      throw new RangeError("interpolation requires a string result and one span per child");
+    // A recorded interpolation holds no text: learning rebuilds it (`TraceOccurrence.capture`).
+    const textless = route.valueJson === null;
+    if ((!textless && typeof result !== "string") || route.children.length === 0 || route.spans.length !== route.children.length) {
+      throw new RangeError("interpolation requires a string result or none, and one span per child");
     }
     // Spans count code points, as interpolation contexts do.
-    const length = [...result].length;
+    const length = textless ? Infinity : [...(result as string)].length;
     let previousEnd = 0;
     for (const [start, end] of route.spans) {
       if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
@@ -271,8 +273,9 @@ export class BackwardCapture {
  * Detached canonical routes from one actual binding operation. Frozen.
  *
  * The bound inputs aren't kept: learning rebuilds them by binding the node again from the values
- * its route read (`TraceOccurrence.boundInputs`). An unfinished binding keeps its safe partial
- * routes. Item captures retain explicit indices and actual second-template evaluation flags.
+ * its route read (`TraceOccurrence.boundInputs`). Its record holds no interpolation route's text
+ * either; the same binding rebuilds it (`TraceOccurrence.capture`). An unfinished binding keeps
+ * its safe partial routes. Item captures retain explicit indices and actual second-template evaluation flags.
  * Outcomes and visible interactions stay on their accepted record. Scope may be absent for
  * synthetic nodes awaiting instantiation. JSON values are deep-frozen copies made by the
  * constructor; copy one before you modify it.

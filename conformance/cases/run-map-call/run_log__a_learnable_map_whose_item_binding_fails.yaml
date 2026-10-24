@@ -1,6 +1,6 @@
 # TS-only (run-log). Pins: a learnable MAP whose second item's binding fails records each item's
-# capture: the interpolation route of `line` in both, which learning rebuilds by binding the MAP
-# and its items again up to the same failure.
+# capture: the interpolation route of `line` in both, without its text, which learning rebuilds
+# by binding the MAP and its items again up to the same failure.
 kind: run
 rules: [run-log]
 flow: |
@@ -102,7 +102,6 @@ expect:
                 kind: interpolation
                 spans:
                 - [5, 6]
-                value_json: Item a.
               - children:
                 - children:
                   - kind: source
@@ -131,7 +130,6 @@ expect:
                 kind: interpolation
                 spans:
                 - [5, 5]
-                value_json: Item .
               kind: record
               names: [line]
             scope: null

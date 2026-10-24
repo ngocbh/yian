@@ -7,10 +7,12 @@ import { describe, expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
-import { RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
+import { NodeStepRecord, RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
   callResultStep,
   commitPrepared,
+  DeliveryRefused,
+  prepareComplete,
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeWaiting,
@@ -18,7 +20,7 @@ import {
   type RunState,
 } from "../../src/runtime/state.ts";
 import { RUN_ID } from "./run_state_fixtures.ts";
-import { paramFlow, started } from "./waits_fixtures.ts";
+import { call, paramFlow, started, tool } from "./waits_fixtures.ts";
 
 const agent = (id: string) => new AgentNode(id, { prompt: "go", tools: ["ask_user", "lookup"] });
 
@@ -162,5 +164,59 @@ describe("an agent's tool_result", () => {
     step(log, state, "a", reply(["c1", "ask_user", { question: "q" }]));
     step(log, state, "a", pendingOf("a", 1, 0, "c1"));
     expect(() => prepareNodeStep(state, "a", result("c1", "x", { closed: "crashed" }))).toThrow(/open/);
+  });
+});
+
+describe("complete on an agent's call", () => {
+  const waitingAgent = () => {
+    const { log, state, path } = started(paramFlow([], agent("a")));
+    start(log, state, "a");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q" }]));
+    step(log, state, "a", pendingOf("a", 1, 0, "c1"));
+    return { log, state, path, id: agentCall("a", 1, 0) };
+  };
+
+  test("a call's view names the key its answer is stored under", () => {
+    const { log, state } = started(paramFlow([], agent("a"), tool("t", "ask")));
+    start(log, state, "a");
+    start(log, state, "t");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q" }]));
+    step(log, state, "a", pendingOf("a", 1, 0, "c1"));
+    step(log, state, "t", { kind: "pending", call_id: call("t"), tool: "ask", arguments: {} });
+    // complete builds the agent call's view; its key is the provider id.
+    expect((prepareComplete(state, agentCall("a", 1, 0), { output: "yes" })!.record as NodeStepRecord).step["call_id"]).toBe("c1");
+    expect(state.waits.calls.get(agentCall("a", 1, 0))!.resultKey).toBe("c1");
+    expect(state.waits.calls.get(call("t"))!.resultKey).toBe(call("t"));
+  });
+
+  test("an output becomes the text the model reads", () => {
+    const { state, id } = waitingAgent();
+    expect(prepareComplete(state, id, { output: { n: 1 } })!.record).toEqual(
+      new NodeStepRecord("a", 3, { kind: "tool_result", call_id: "c1", started_at: null, output: '{"n":1}', is_error: false }),
+    );
+  });
+
+  test("an error is a reported error result", () => {
+    const { state, id } = waitingAgent();
+    expect((prepareComplete(state, id, { error: "no" })!.record as NodeStepRecord).step).toEqual({
+      kind: "tool_result",
+      call_id: "c1",
+      started_at: null,
+      output: "no",
+      is_error: true,
+    });
+  });
+
+  test("an output that isn't a yian value is refused; the call stays open", () => {
+    const { state, id } = waitingAgent();
+    expect(() => prepareComplete(state, id, { output: () => 1 })).toThrow(DeliveryRefused);
+    expect(state.waits.calls.get(id)!.state).toBe("open");
+  });
+
+  test("a repeat of the same answer is a no-op; another answer is refused", () => {
+    const { log, state, id } = waitingAgent();
+    commitPrepared(log, state, prepareComplete(state, id, { output: "yes" })!);
+    expect(prepareComplete(state, id, { output: "yes" })).toBeNull();
+    expect(() => prepareComplete(state, id, { output: "no" })).toThrow(/already answered/);
   });
 });

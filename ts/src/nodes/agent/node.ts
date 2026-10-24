@@ -34,7 +34,7 @@ import {
 } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
-import { logJson } from "../../typesys/json.ts";
+import { type JsonObject, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
@@ -56,6 +56,7 @@ import {
   type BackwardResult,
   CapabilityFault,
   checkNamedPrompt,
+  type CompleteResult,
   type LearningMaterial,
   type MaterialCaps,
   Node,
@@ -66,6 +67,7 @@ import {
 import { applyDefaults, BindingError, copyValue, type ReservedBinder } from "../binding.ts";
 import {
   Binding,
+  type CallView,
   isExactly,
   iterOriginCarrier,
   type NodeSteps,
@@ -89,7 +91,7 @@ import {
   typesNullable,
 } from "./llm_values.ts";
 import { runAgent, stepsMaterial } from "./loop.ts";
-import { systemPromptWithMemory } from "./memory.ts";
+import { reportedText, systemPromptWithMemory, toolText } from "./memory.ts";
 import {
   checkMessage,
   checkModelConversation,
@@ -655,6 +657,21 @@ export class AgentNode extends Node {
   /** Return the authored `tools:` grants, which may name host-filled groups. */
   override grantedTools(): readonly string[] {
     return [...this.tools];
+  }
+
+  /**
+   * Shape the `tool_result` step for a host's `complete` on one of this agent's pending calls: the
+   * text the model reads (`toolText`, or a reported error's text), keyed by the provider's tool
+   * call id. Pure.
+   *
+   * @throws TypeCheckError when the output isn't a yian value.
+   */
+  override waitResultStep(call: CallView, result: CompleteResult): JsonObject {
+    const reported = Object.hasOwn(result, "error");
+    const output = reported
+      ? reportedText(call.tool, (result as { error: string }).error)
+      : toolText(call.tool, (result as { output: unknown }).output);
+    return { kind: "tool_result", call_id: call.resultKey, started_at: null, output, is_error: reported };
   }
 
   /**

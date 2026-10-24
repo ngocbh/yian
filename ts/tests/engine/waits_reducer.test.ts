@@ -8,9 +8,13 @@ import { describe, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { CallClosed, NodeWaiting, NodeWoken, RunSucceeded, RunWaiting } from "../../src/events.ts";
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import type { CompleteResult } from "../../src/nodes/base.ts";
+import { type CallView, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { ToolNode } from "../../src/nodes/tool/node.ts";
 import {
+  canonicalTyped,
   MemoryRunLog,
+  NodeStepRecord,
   NodeWaitingRecord,
   PoolCommitRecord,
   type RunLog,
@@ -18,8 +22,10 @@ import {
   type WaitEntry,
 } from "../../src/runtime/log.ts";
 import {
+  callResultStep,
   commitPrepared,
   DeliveryRefused,
+  prepareComplete,
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeWaiting,
@@ -35,9 +41,9 @@ import {
 } from "../../src/runtime/state.ts";
 import { TraceDelta } from "../../src/runtime/trace.ts";
 import { wakeableNodes } from "../../src/runtime/waits.ts";
-import { eventBytes, logJson } from "../../src/typesys/json.ts";
+import { eventBytes, type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { expectUnchanged, FIXED_CLOCK, RUN_ID, snapshot, startData } from "./run_state_fixtures.ts";
+import { expectUnchanged, FINGERPRINT, FIXED_CLOCK, RUN_ID, snapshot, startData } from "./run_state_fixtures.ts";
 import { call, MSGS, paramFlow, started, succeed, tool, waitFlow, work } from "./waits_fixtures.ts";
 
 describe("DeliveryRefused", () => {
@@ -454,5 +460,90 @@ describe("pending and tool_result steps", () => {
     ]);
     expect(() => prepareNodeWaiting(state, "ask", { callIds: [call("ask")] })).toThrow(/before the node's last node_woken/);
     expect(() => prepareNodeStep(state, "ask", resultStep("ask"))).toThrow(/closed/);
+  });
+});
+
+/** An `ask` TOOL node that shapes a host's answer as a `str` output, or its error. */
+class AskNode extends ToolNode {
+  constructor(id: string) {
+    super(id, { toolId: "ask" });
+  }
+
+  override waitResultStep(view: CallView, result: CompleteResult): JsonObject {
+    if ("error" in result) return { kind: "tool_result", call_id: view.callId, error: { type: "CompletedError", message: result.error } };
+    if (typeof result.output !== "string") throw new TypeCheckError(`ask answers a str, got ${typeof result.output}`);
+    return { kind: "tool_result", call_id: view.callId, output: canonicalTyped(result.output, null)[0] as unknown as JsonObject };
+  }
+}
+
+/** A state whose `ask` (an `AskNode`) waits on its pending call and whose `heard` take waits too. */
+function askWaiting(options: { defaults?: Record<string, bigint> } = {}) {
+  const run = started(waitFlow(new AskNode("ask"), tool("heard", "take")), { fingerprint: FINGERPRINT, ...options });
+  start(run.log, run.state, "ask");
+  start(run.log, run.state, "heard");
+  step(run.log, run.state, "ask", pendingStep("ask"));
+  commitPrepared(run.log, run.state, prepareNodeWaiting(run.state, "ask", { callIds: [call("ask")] }));
+  wait(run.log, run.state, "heard", takeEntry("heard"));
+  return run;
+}
+
+describe("complete", () => {
+  test("appends the host's answer as the call's tool_result; an identical repeat is a no-op", () => {
+    const { log, state } = askWaiting();
+    const prepared = prepareComplete(state, call("ask"), { output: "yes" })!;
+    expect(prepared.record).toEqual(new NodeStepRecord("ask", 2, resultStep("ask") as JsonObject));
+    commitPrepared(log, state, prepared);
+    expect(wakeableNodes(state.waits)).toEqual(["ask"]);
+    expect(callResultStep(state, call("ask"))).toEqual(resultStep("ask") as JsonObject);
+    expect(prepareComplete(state, call("ask"), { output: "yes" })).toBeNull();
+  });
+
+  test("refusals come in order and append nothing", () => {
+    const fresh = new RunState(waitFlow(new AskNode("ask")));
+    const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
+    commitPrepared(log, fresh, prepareRunStarted(fresh, startData()));
+    expect(refused(fresh, log, () => prepareComplete(fresh, call("ask"), { output: "yes" })).reason).toBe("not_started");
+
+    const run = askWaiting();
+    const reason = (callId: string, result: CompleteResult) => refused(run.state, run.log, () => prepareComplete(run.state, callId, result));
+    expect(reason("nobody", { output: "yes" }).reason).toBe("unknown_call");
+    expect(reason(call("heard"), { output: "yes" }).reason).toBe("not_host_call");
+    const invalid = reason(call("ask"), { output: 3 });
+    expect(invalid.reason).toBe("invalid_value");
+    expect(invalid.cause).toBeInstanceOf(TypeCheckError);
+    commitPrepared(run.log, run.state, prepareComplete(run.state, call("ask"), { output: "yes" })!);
+    const different = reason(call("ask"), { output: "no" });
+    expect([different.reason, different.callState]).toEqual(["call_settled", "answered"]);
+
+    const small = askWaiting({ defaults: { MAX_EVENT_BYTES: BigInt(eventBytes(pendingStep("ask"))) } });
+    const long = "y".repeat(200);
+    expect(refused(small.state, small.log, () => prepareComplete(small.state, call("ask"), { output: long })).reason).toBe(
+      "too_large",
+    );
+  });
+
+  test("a call closed by its timeout refuses any answer", () => {
+    const { log, state } = askWaiting();
+    commitPrepared(log, state, prepareNodeWoken(state, "ask", [call("ask")]));
+    const closed = refused(state, log, () => prepareComplete(state, call("ask"), { output: "yes" }));
+    expect([closed.reason, closed.callState]).toEqual(["call_settled", "closed"]);
+  });
+
+  test("a run that ended refuses any answer first", () => {
+    const run = started(waitFlow(new AskNode("ask")), { fingerprint: FINGERPRINT });
+    finish(run.log, run.state, "ask", "done");
+    expect(refused(run.state, run.log, () => prepareComplete(run.state, call("ask"), { output: "yes" })).reason).toBe("ended");
+  });
+
+  test("an answer to a running node's call is accepted", () => {
+    const run = started(waitFlow(new AskNode("ask")), { fingerprint: FINGERPRINT });
+    start(run.log, run.state, "ask");
+    step(run.log, run.state, "ask", pendingStep("ask"));
+    commitPrepared(run.log, run.state, prepareComplete(run.state, call("ask"), { error: "nobody knows" })!);
+    expect(callResultStep(run.state, call("ask"))).toEqual({
+      kind: "tool_result",
+      call_id: call("ask"),
+      error: { type: "CompletedError", message: "nobody knows" },
+    });
   });
 });

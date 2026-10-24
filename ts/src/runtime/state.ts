@@ -47,10 +47,11 @@ import {
   type MemoryStack,
 } from "../memory/index.ts";
 import { sameMemoryScope } from "../memory/contracts.ts";
-import { ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
+import { type CompleteResult, ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
 import { BindingError } from "../nodes/binding.ts";
 import {
   type Binding,
+  type CallView,
   comparePaths,
   fileFieldsType,
   isExactly,
@@ -147,6 +148,7 @@ import { ASK, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import {
   applyWaitsRecord,
   availableUnread,
+  type Call,
   type CallStateKind,
   nodeCalls,
   WaitsState,
@@ -1223,6 +1225,95 @@ function inboxElementType(state: RunState, name: string): Type | null {
   const start = state.flow.nodes.get(state.flow.startId);
   const type = (start?.params ?? []).find((param) => param.name === name)?.contract?.type;
   return type !== undefined && isInboxType(type) ? type.element! : null;
+}
+
+/**
+ * Prepare a host's answer to the pending host call `callId`: the `tool_result` step its node
+ * shapes (`Node.waitResultStep`), on that node, whether it waits or still runs.
+ *
+ * @param state The run's state.
+ * @param callId The call's id, as its `pending` step names it.
+ * @param result The answer: `{output}` or `{error}`.
+ * @returns The canonical `NodeStepRecord` and its plan, with no observers; `null` when the call
+ *   is already answered with exactly this step (a host's repeat).
+ * @throws TypeError when `state` or `callId` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_call` when no open or settled call
+ *   has the id (its node settled, or its handler hasn't returned `pending()`); `not_host_call` for
+ *   a take or sleep; `call_settled` (with the call's state) for an answered, timed-out or closed
+ *   call, unless it is an identical repeat; `invalid_value` when the node refuses the answer (the
+ *   `TypeCheckError` is the cause); `too_large` when the step is over the run's
+ *   `MAX_EVENT_BYTES`.
+ */
+export function prepareComplete(state: RunState, callId: string, result: CompleteResult): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareComplete expects a RunState");
+  if (typeof callId !== "string") throw new TypeError("call_id must be a string");
+  requireDeliverable(state);
+  const call = state.waits.calls.get(callId);
+  if (call === undefined) throw new DeliveryRefused("unknown_call", `the run has no pending call ${reprText(callId)}`);
+  if (call.tool === TAKE || call.tool === SLEEP) {
+    throw new DeliveryRefused("not_host_call", `call ${reprText(callId)} is a ${call.tool}, which the run settles itself`);
+  }
+  const node = state.flow.nodes.get(call.nodeId)!;
+  const view = callView(state, call);
+  if (call.state !== "open") {
+    if (call.state === "answered" && sameStep(shapedRepeat(node, view, result), view.result)) return null;
+    const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
+    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${why}`, { callState: call.state });
+  }
+  let step: JsonObject;
+  try {
+    step = node.waitResultStep(view, result);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new DeliveryRefused("invalid_value", `call ${reprText(callId)} refuses the answer: ${error.message}`, { cause: error });
+  }
+  const size = eventBytes(step);
+  if (size > state.runDefaults.maxEventBytes) {
+    throw new DeliveryRefused("too_large", eventTooLarge(`the answer to ${reprText(callId)}`, size, state));
+  }
+  return prepareNodeStep(state, call.nodeId, step);
+}
+
+/** The step `node` shapes for a repeated answer, or `null` when it refuses the answer. */
+function shapedRepeat(node: Node, view: CallView, result: CompleteResult): JsonObject | null {
+  try {
+    return node.waitResultStep(view, result);
+  } catch (error) {
+    if (error instanceof TypeCheckError) return null;
+    throw error;
+  }
+}
+
+/** Whether two steps have the same canonical JSON; `null` matches nothing. */
+function sameStep(a: Readonly<JsonObject> | null, b: Readonly<JsonObject> | null): boolean {
+  return a !== null && b !== null && logJson(canonicalSeed(a)[0]) === logJson(canonicalSeed(b)[0]);
+}
+
+/** `call` as its node reads it: its state, closing reason, answer and deadline. */
+function callView(state: RunState, call: Call): CallView {
+  return Object.freeze({
+    callId: call.callId,
+    tool: call.tool,
+    state: call.state,
+    closedReason: call.closedReason,
+    result: callResultStep(state, call.callId),
+    deadline: call.deadline,
+  });
+}
+
+/**
+ * Return the `tool_result` step that answered the registered call `callId`, as its node recorded
+ * it; `null` when the call is unknown or no step answered it (it is open, closed, timed out, or a
+ * take answered by its events).
+ */
+export function callResultStep(state: RunState, callId: string): Readonly<JsonObject> | null {
+  const call = state.waits.calls.get(callId);
+  if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
+  const steps = state.nodeSteps.get(call.nodeId) ?? [];
+  return (
+    steps.findLast((step) => step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey) ?? null
+  );
 }
 
 /**

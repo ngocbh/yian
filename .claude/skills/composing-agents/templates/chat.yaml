@@ -1,89 +1,99 @@
-# Conversational REPL — the turn-by-turn LOOP shape of examples/chat.yaml.
+# Conversational REPL — the turn-by-turn LOOP shape of examples/chat.yaml, with the
+# older turns folded into a rolling summary by compact_history.yaml.
 # The host sends each line the person types to the `messages` inbox (`send`), and each
 # turn's `take` reads everything sent since the last one. A take with nothing to read
-# waits: the run ends `waiting` and holds no worker until the next send. Closing the inbox
-# (`close`) ends the loop once the queued messages are answered: the take returns no events
-# and the CASE routes to the `ended` value entry, which keeps the transcript and sets
-# `closed: true`. Anything else calls `respond`, where an AGENT node fills the reply and the
-# `turn_end` value entry folds it into the transcript. The LLM only fills the reply.
+# waits: the run ends `waiting` and holds no worker until the next send. Beside the take,
+# `compacted` CALLs compact_history on the turns so far (no model call under its budget),
+# so a fold runs while the run waits for the next message. `answered` calls `respond` with
+# the summary and the kept turns flattened by a comprehension in the CALL's binding; the
+# reply's system prompt renders the summary. Closing the inbox (`close`) ends the loop once
+# the queued messages are answered: `closed` comes from the take, and a closed take with no
+# events skips `answered` (the routing-only CASE matches nothing), so `answered.output :- []`
+# appends nothing.
 #
-# Carried record ('a): {transcript: str, closed: bool} — threaded turn to turn ('a -> 'a).
-# The inbox rides along as a carried input but is never returned. A tagged `nodes:` entry
-# such as `ended: !Turn` is a value: its tag checks the fields written out under it.
-# `${route.output}` reads whichever branch ran, so the CASE must be exhaustive (`else:`
-# here). `!Turn` on the body's output types the branch result as the carried record.
+# Carried record ('a): {summary: str, history: list(list(Msg)), closed: bool} — one inner
+# list per turn, threaded turn to turn ('a -> 'a). The inbox rides along as a carried input
+# but is never returned. The AGENT records only its reply; CALL, LOOP and child END commits
+# are pointers, so the run log grows linearly with the conversation.
+# Run from this directory so the `uses:` sibling resolves.
 
 id: chat
 name: chat
-description: A turn-by-turn conversational assistant (one model call per turn, no tools).
+description: A turn-by-turn conversational assistant that folds older turns into a rolling summary.
+
+uses:
+  compact_history: compact_history        # compact_history.yaml beside this file
 
 input:
-  messages: !Inbox(str)     # the lines the person types, sent while the run is live
+  messages: !Inbox(str)
 
 typedefs:
-  Turn:                     # the carried record, and each turn's result
-    transcript: str
-    closed: bool
+  Msg:                    # one message of the history the AGENT sends
+    role: Literal(user, assistant)
+    text: str
+  State: {summary: str, history: list(list(Msg)), closed: bool}   # the carried record
+  Transcript: {summary: str, history: list(Msg)}                  # the flow's output
 
 defs:
-  respond:                  # a CASE result is the routed node's output, so the reply chain is a def
-    input:
-      transcript: !str
-      said: !str
+  respond:                # a def, so its CALL flattens the history in a derived binding
+    input: {summary: !str, history: !list(Msg), message: !str}
     nodes:
       reply:
         kind: agent
         input:
-          transcript: ${input.transcript}
-          said: ${input.said}
-        output: str
-        prompt: |-
+          summary: ${input.summary}
+          history: ${input.history}      # a plain reference: one route in a learnable capture
+          message: ${input.message}
+        output: str                      # only this turn's reply is recorded
+        system_prompt: |-
           You are a helpful conversational assistant.
 
-          Conversation so far:
-          ${transcript}
+          Conversation so far: ${summary}
+        prompt:
+          - ${history}
+          - user: ${message}
+    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}   # one new turn
 
-          User: ${said}
-      turn_end: !Turn
-        transcript: |-
-          ${input.transcript}
-
-          User: ${input.said}
-
-          Assistant: ${reply.output}
-        closed: false
-    output: ${turn_end.output}
-
-  turn:                     # body: 'a -> 'a over {transcript, closed}
+  turn:                   # body: 'a -> 'a over {summary, history, closed, messages}
     input:
-      transcript: !str
+      summary: !str
+      history: !list(list(Msg))
       closed: !bool
       messages: !Inbox(str)
     nodes:
+      compacted:          # beside `heard`: compacts the last reply's history
+        kind: call
+        call: compact_history
+        input: {summary: "${input.summary}", history: "${input.history}"}
       heard:
         kind: tool
-        tool_id: take               # waits until a message arrives or the inbox closes
+        tool_id: take                    # waits until a message arrives or the inbox closes
         input:
           from: ${input.messages}
-          take: all                 # every unread message, oldest first
-      ended: !Turn                  # a value entry: the closing record itself
-        transcript: ${input.transcript}
-        closed: true
+          take: all
       route:
         kind: case
         cases:
-          - when: ${heard.output.events == []}   # closed, nothing left to answer
-            then: ended
-        else: call(respond, transcript=${input.transcript}, said=${join(heard.output.events)})
-    output: !Turn ${route.output}
+          - when: ${heard.output.events != []}   # skipped when the inbox closed with nothing left
+            then: answered
+      answered:
+        kind: call
+        call: respond
+        input:
+          summary: ${compacted.output.summary}
+          history: ${[m for t in compacted.output.history for m in t]}
+          message: ${join(heard.output.events)}  # one line per send
+    output: !State
+      summary: ${compacted.output.summary}
+      history: ${compacted.output.history + (answered.output :- [])}
+      closed: ${heard.output.closed}
 
 nodes:
   chat:
     kind: loop
     call: turn
-    input:                          # the SEED carried record — defines 'a
-      transcript: ""
-      closed: false
-      messages: ${input.messages}
-    while: not closed               # pre-check over a carried field
-output: ${chat.output.transcript}
+    input: {summary: "", history: [], closed: false, messages: "${input.messages}"}
+    while: not closed
+output: !Transcript
+  summary: ${chat.output.summary}
+  history: ${[m for t in chat.output.history for m in t]}

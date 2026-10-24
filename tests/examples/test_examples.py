@@ -16,8 +16,9 @@ from yian.compose.loader import load_flow
 
 EXAMPLES = sorted((Path(__file__).resolve().parents[2] / "examples").glob("*.yaml"))
 # TS-only examples: they use TS-only built-ins and syntax (chat.yaml also renders its history
-# with the `prompt:` list style). tests/cli/chat_example.yaml is Python yian's chat example.
-TS_ONLY = {"approve-plan.yaml", "chat.yaml", "human-approval.yaml"}
+# with the `prompt:` list style; chat.yaml and compact_history.yaml use list comprehensions,
+# len() and slices). tests/cli/chat_example.yaml is Python yian's chat example.
+TS_ONLY = {"approve-plan.yaml", "chat.yaml", "compact_history.yaml", "human-approval.yaml"}
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)

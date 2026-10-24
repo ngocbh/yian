@@ -1029,7 +1029,6 @@ describe("assistant messages: reasoning replay records", () => {
     ["a malformed envelope", { ...signed, provider: 1n }, "malformed", null],
     ["an unknown field", record({ signature: "sig-1", extra: "x" }), "unknown_field", null],
     ["both signature and redacted", record({ signature: "sig-1", redacted: "opaque" }), "malformed", null],
-    ["neither signature nor redacted", record({}), "malformed", null],
     ["an empty signature", record({ signature: "" }), "malformed", null],
     ["an empty redacted value", record({ redacted: "" }), "malformed", null],
     ["a non-string signature", record({ signature: 1n }), "malformed", null],
@@ -1100,6 +1099,18 @@ describe("assistant messages: reasoning replay records", () => {
       ],
       [],
     ]);
+  });
+
+  test("an own envelope-only record is left out silently", () => {
+    const parts = [thinking("Signed."), new ReasoningPart("Unsigned.", record({})), text("Calling."), call1()];
+    expect(nonFinal(parts)).toEqual([[CALLING, TOOL_USE], []]);
+  });
+
+  test("another route's envelope-only record is left out and signalled", () => {
+    const azure = new ReasoningPart("Hm.", record({}, { ...KEY, provider: "azure" }));
+    expect(nonFinal([azure, text("Hello.")])).toEqual(["Hello.", ["other_provider"]]);
+    const ollama = new ReasoningPart("Hm.", record({}, { protocol: "ollama_chat", provider: "ollama", model: "qwen3" }));
+    expect(nonFinal([ollama, text("Hello.")])).toEqual(["Hello.", ["other_protocol"]]);
   });
 
   test("reasoning from an openai_chat record is left out as another protocol's", () => {

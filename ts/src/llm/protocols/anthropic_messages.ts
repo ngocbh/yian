@@ -12,10 +12,11 @@
  *
  * Replies stream text, thinking and tool calls as deltas; each content block becomes a part,
  * with dense part indexes in the order the blocks open. Thinking parts carry replay records
- * holding their signature or redacted data. Usage merges across `message_start` and
- * `message_delta`, and the finish comes at `message_stop` or the end of the stream. A reply that
- * failed, was refused, paused or ended early raises `ProviderError`; an error message holds the
- * provider's text uncapped, which `RouteModel` scrubs of the route's credentials and then caps.
+ * holding their signature or redacted data, envelope-only when unsigned. Usage merges across
+ * `message_start` and `message_delta`, and the finish comes at `message_stop` or the end of the
+ * stream. A reply that failed, was refused, paused or ended early raises `ProviderError`; an
+ * error message holds the provider's text uncapped, which `RouteModel` scrubs of the route's
+ * credentials and then caps.
  */
 
 import { createHash } from "node:crypto";
@@ -213,8 +214,8 @@ export class AnthropicMessages implements SseProtocol {
    * part order: thinking, redacted thinking, text and `tool_use` (an invalid call with empty
    * `input`), one lone text as a string; refusals are not sent. Its reasoning goes back from its
    * replay records to the provider and account that wrote it, from any Claude model, only with a
-   * text or call, and is all left out when any reasoning part has no record or one that can't be
-   * used, `onReplayDegraded` being called once for the latter (a throw from the callback
+   * text or call, and is all left out when any reasoning part is unsigned or has a record that
+   * can't be used, `onReplayDegraded` being called once for the latter (a throw from the callback
    * propagates). The final assistant message is stripped at the end, and an empty assistant
    * message is skipped unless it is the final one.
    *
@@ -389,16 +390,17 @@ export class AnthropicMessages implements SseProtocol {
 
   /**
    * Build a streamed block's part: a thinking part with a record of its signature, a redacted
-   * one of its data, each only when non-empty; text and calls carry no payload.
+   * one of its data, each an envelope-only record when that is empty, so every reasoning part
+   * names the route that wrote it; text and calls carry no payload.
    */
   #part(block: Block): Part {
     if (block.kind === "text") return new TextPart(block.text);
     if (block.kind === "thinking") {
-      const record = block.signature ? replayRecord(this.#key, { signature: block.signature }) : null;
-      return new ReasoningPart(block.text, record);
+      const fields: JsonObject = block.signature ? { signature: block.signature } : {};
+      return new ReasoningPart(block.text, replayRecord(this.#key, fields));
     }
     if (block.kind === "redacted") {
-      return new ReasoningPart("", block.data ? replayRecord(this.#key, { redacted: block.data }) : null);
+      return new ReasoningPart("", replayRecord(this.#key, block.data ? { redacted: block.data } : {}));
     }
     const [args, rawArguments] = block.args === null ? startInput(block.input) : parseArguments(block.args);
     return new ToolCallPart({ id: block.id, name: block.name, arguments: args, rawArguments });
@@ -457,9 +459,9 @@ export class AnthropicMessages implements SseProtocol {
    * Read an assistant message's reasoning records, calling `onReplayDegraded` once with the first
    * reason when one can't be used.
    *
-   * All of the message's reasoning is left out when any reasoning part has no record or an
-   * unusable one: with preserved thinking a signature binds every block before it, so sending
-   * part of a turn's reasoning risks a refusal.
+   * All of the message's reasoning is left out when any reasoning part is unsigned (no record, or
+   * this route's envelope-only record) or has an unusable record: with preserved thinking a
+   * signature binds every block before it, so sending part of a turn's reasoning risks a refusal.
    *
    * @returns Each part's `thinking` or `redacted_thinking` block, `null` for a part that isn't
    *   reasoning, all `null` when the reasoning is left out.
@@ -483,10 +485,11 @@ export class AnthropicMessages implements SseProtocol {
       }
       const read = reasoningBlock(part, this.#key);
       if (!read.ok) reason ??= read.reason;
+      else if (read.block === null) unsigned = true;
       blocks.push(read.ok ? read.block : null);
     }
     if (reason !== null) this.#onReplayDegraded?.(reason);
-    // A part without a record is no record mismatch, so nothing is signalled for it.
+    // An unsigned part is no record mismatch, so nothing is signalled for it.
     return reason !== null || unsigned ? message.parts.map(() => null) : blocks;
   }
 
@@ -599,17 +602,19 @@ function assistantContent(message: Message, final: boolean, reasoning: readonly 
 
 /**
  * Read a reasoning part's replay record and return the block it replays as: `thinking` with its
- * `signature`, or `redacted_thinking` with its `redacted` data.
+ * `signature`, or `redacted_thinking` with its `redacted` data; `null` for an envelope-only
+ * record, which this route writes for unsigned thinking.
  *
- * A record without exactly one of them as a non-empty string is `malformed`.
+ * A record with fields but not exactly one of them as a non-empty string is `malformed`.
  */
 function reasoningBlock(
   part: ReasoningPart,
   key: ReplayKey,
-): { ok: true; block: JsonObject } | { ok: false; reason: ReplayDegradedReason } {
+): { ok: true; block: JsonObject | null } | { ok: false; reason: ReplayDegradedReason } {
   // Anthropic accepts thinking another Claude model wrote, so the model need not match.
   const read = readReplayRecord(part.providerPayload, key, REASONING_FIELDS, { matchModel: false });
   if (!read.ok) return read;
+  if (Object.keys(read.fields).length === 0) return { ok: true, block: null };
   const { signature, redacted } = read.fields;
   if (Object.keys(read.fields).length === 1) {
     if (typeof signature === "string" && signature !== "") {

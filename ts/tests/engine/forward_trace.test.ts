@@ -279,7 +279,7 @@ import { evalBinding } from "../../src/expr/template.ts";
 import { MemoryScope, ModelTextInteraction } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { DeclSite, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
-import { BindingCapture } from "../../src/nodes/binding.ts";
+import { BindingCapture, BindingError } from "../../src/nodes/binding.ts";
 import {
   BackwardContext,
   BackwardResult,
@@ -4824,4 +4824,73 @@ test("a tool body failing with a binding code after its binding finished rebuild
   expect(occurrence.record).toBeInstanceOf(NodeFailedRecord);
   expect(interpolationIn(occurrence.capture.route)!.valueJson).toBe(JSON.stringify("not a date soon"));
   expect(interpolationIn(occurrence.inputRoute)!.valueJson).toBe(JSON.stringify("not a date soon"));
+});
+
+/**
+ * The occurrence of a TraceNode `a` whose binding failed (`binding.evaluate`), recorded with
+ * `capture`, and whose node binds again as `rebinder`.
+ */
+function failedBindingOccurrence(capture: ForwardCapture, rebinder: Rebinder): TraceOccurrence {
+  const failure = new Failure({ code: "binding.evaluate", message: "Missing.", nodeId: "a" });
+  const trace = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: capture }), {
+    rebinder,
+    terminalSucceeded: false,
+    terminalFailure: failure,
+  });
+  return trace.occurrences[0]!;
+}
+
+/** A rebinder whose binding fails after collecting `route` (and `items`); it counts its calls. */
+function partialRebinder(route: ValueRoute, items: readonly (readonly [number, BindingCapture])[] = []) {
+  const calls = { count: 0 };
+  const rebinder: Rebinder = () => {
+    calls.count += 1;
+    return {
+      capture: new BindingCapture(null, route, new Set(), items),
+      failure: new BindingError("Missing.", { failureCode: "binding.evaluate" }),
+    };
+  };
+  return { rebinder, calls };
+}
+
+/** An interpolation over source 0's `x` with `text`, or no text. */
+function textRoute(text: string | null): ValueRoute {
+  return new ValueRoute("interpolation", {
+    children: [sourceRoute(0, ["x"])],
+    spans: [[2, 3]],
+    valueJson: text === null ? null : JSON.stringify(text),
+  });
+}
+
+test("a capture without an interpolation route is read as held, without binding again (TS-only)", () => {
+  let rebinds = 0;
+  const counted: Rebinder = (sources, resolve, route) => {
+    rebinds += 1;
+    return fixedRebinder({ v: 1n })(sources, resolve, route);
+  };
+  const occurrence = drivenTrace(new TraceNode("a"), { rebinder: counted }).occurrences[0]!;
+  expect(occurrence.capture.route).toEqual(captureV().route);
+  expect(occurrence.inputRoute).toEqual(captureV().route);
+  expect(rebinds).toBe(0);
+  expect(occurrence.boundInputs).toEqual({ v: 1n });
+  expect(rebinds).toBe(1);
+});
+
+test("an interpolation route's text rebuilds from the same binding; another shape is refused (TS-only)", () => {
+  const recorded = new ForwardCapture(ValueRoute.record([["v", textRoute(null)]]), { inputNames: ["v"] });
+  const rebound = partialRebinder(ValueRoute.record([["v", textRoute("x=1")]]));
+  const filled = failedBindingOccurrence(recorded, rebound.rebinder);
+  expect(filled.capture.route.children[0]!.valueJson).toBe('"x=1"');
+  expect(filled.inputRoute.children[0]!.valueJson).toBe('"x=1"');
+  expect(rebound.calls.count).toBe(1);
+
+  const missing = failedBindingOccurrence(recorded, partialRebinder(ValueRoute.record([])).rebinder);
+  expectError(() => missing.capture, RangeError, "binding again collects no input 'v'");
+  const other = failedBindingOccurrence(recorded, partialRebinder(ValueRoute.record([["v", sourceRoute(0, ["x"])]])).rebinder);
+  expectError(() => other.capture, RangeError, "binding again collects a source route where the record has a interpolation route");
+
+  const item = new ForwardCapture(ValueRoute.record([["n", textRoute(null)]]));
+  const withItem = new ForwardCapture(ValueRoute.record([["v", sourceRoute(0, ["x"])]]), { inputNames: ["v"], items: [[0, item]] });
+  const noItem = failedBindingOccurrence(withItem, partialRebinder(ValueRoute.record([["v", sourceRoute(0, ["x"])]])).rebinder);
+  expectError(() => noItem.inputRoute, RangeError, "binding again collects no item 0");
 });

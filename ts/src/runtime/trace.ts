@@ -302,24 +302,28 @@ export class TraceOccurrence {
   readonly #capture: ForwardCapture;
   /** Binds the node again, or `null` when none was given. */
   readonly #rebind: (() => ReboundOccurrence) | null;
+  /** Whether binding again rebuilds the capture's interpolation text. */
+  readonly #fillsText: boolean;
   /** What binding the node again gave, once read. */
   #rebound: ReboundOccurrence | null = null;
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
    *
+   * @param inputRoute The effective input route: the captured route joined with pending seed
+   *   routes.
    * @param options.memoryScope The receiver's memory scope; defaults to `null`.
    * @param options.hiddenInputs The bound inputs its node keeps from models; defaults to none.
    * @param options.seed An expansion's canonical seed; defaults to `null`.
    * @param options.steps The node's recorded steps; defaults to none.
-   * @param inputRoute The effective input route: the captured route joined with pending seed
-   *   routes.
    * @param options.capture The occurrence's forward capture; defaults to the record's.
-   * @param options.rebind Binds the node again, which rebuilds the bound inputs and the
-   *   interpolation routes' text; `null` (the default) leaves `boundInputs` unreadable and the
-   *   routes as given.
+   * @param options.rebind Binds the node again, which rebuilds the bound inputs; `null` (the
+   *   default) leaves `boundInputs` unreadable.
+   * @param options.fillsText Whether `rebind` also rebuilds the capture's interpolation text,
+   *   which `capture` and `inputRoute` then read; defaults to `false` (they give it as held).
    * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
    *   `null` or exactly a `MemoryScope`, or there is no capture.
+   * @throws RangeError when `fillsText` is given without `rebind`.
    */
   constructor(
     source: SourceRef,
@@ -334,6 +338,7 @@ export class TraceOccurrence {
       steps?: readonly ValueRecord[];
       capture?: ForwardCapture | null;
       rebind?: (() => ReboundOccurrence) | null;
+      fillsText?: boolean;
     } = {},
   ) {
     const {
@@ -343,7 +348,9 @@ export class TraceOccurrence {
       steps = [],
       capture = null,
       rebind = null,
+      fillsText = false,
     } = options;
+    if (fillsText && rebind === null) throw new RangeError("rebuilding interpolation text requires a rebinder");
     this.source = source;
     this.nodeId = nodeId;
     this.outcomeSeq = outcomeSeq;
@@ -353,6 +360,7 @@ export class TraceOccurrence {
     if (!isExactly(held, ForwardCapture)) throw new TypeError("a trace occurrence requires its forward capture");
     this.#capture = held;
     this.#rebind = rebind;
+    this.#fillsText = fillsText;
     this.#inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
@@ -368,13 +376,15 @@ export class TraceOccurrence {
   }
 
   /**
-   * The occurrence's forward capture: its record's, or the one rebuilt for a derived record, with
-   * each interpolation route's text rebuilt by binding the node again.
+   * The occurrence's forward capture: its record's, or the one rebuilt for a derived record. A
+   * recorded capture holding an interpolation route gets each one's text by binding the node
+   * again on the first read; any other capture is given as held.
    *
-   * @throws RangeError as `boundInputs`, or when binding again collects routes of another shape.
+   * @throws RangeError, when it binds again, as `boundInputs`, or when binding again collects
+   *   routes of another shape.
    */
   get capture(): ForwardCapture {
-    return this.#rebind === null ? this.#capture : this.#reboundOccurrence().capture;
+    return this.#fillsText ? this.#reboundOccurrence().capture : this.#capture;
   }
 
   /**
@@ -384,7 +394,7 @@ export class TraceOccurrence {
    * @throws RangeError as `capture`.
    */
   get inputRoute(): ValueRoute {
-    return this.#rebind === null ? this.#inputRoute : this.#reboundOccurrence().inputRoute;
+    return this.#fillsText ? this.#reboundOccurrence().inputRoute : this.#inputRoute;
   }
 
   /**
@@ -469,7 +479,7 @@ function holdsInterpolation(capture: ForwardCapture): boolean {
 /**
  * Return `capture` with each interpolation route's text taken from `binding`, the capture binding
  * its node again collects: inputs matched by name, items by index, everything inside by position.
- * Everything else stays as recorded.
+ * Everything else stays as recorded; `capture` itself when no route changed.
  *
  * @throws RangeError when `binding` lacks an input or item, or has a route of another shape.
  */
@@ -481,13 +491,15 @@ function withInterpolationText(capture: ForwardCapture, binding: BindingCapture)
     if (at < 0) throw new RangeError(`binding again collects no input ${reprText(name)}`);
     return [name, withRouteText(route.children[index]!, again.children[at]!)] as const;
   });
+  const reboundItems = new Map(binding.items);
   const items = capture.items.map(([index, item]) => {
-    const rebound = binding.items.find(([at]) => at === index);
+    const rebound = reboundItems.get(index);
     if (rebound === undefined) throw new RangeError(`binding again collects no item ${index}`);
-    return [index, withInterpolationText(item, rebound[1])] as const;
+    return [index, withInterpolationText(item, rebound)] as const;
   });
-  const unchanged = fields.every(([, child], index) => child === route.children[index]);
-  return new ForwardCapture(unchanged ? route : ValueRoute.record(fields), {
+  const routeUnchanged = fields.every(([, child], index) => child === route.children[index]);
+  if (routeUnchanged && items.every(([, item], index) => item === capture.items[index]![1])) return capture;
+  return new ForwardCapture(routeUnchanged ? route : ValueRoute.record(fields), {
     evaluatedKeys: capture.evaluatedKeys,
     items,
     scope: capture.scope,
@@ -1351,11 +1363,12 @@ export function prepareTrace(
   const fillsText = rebuilt === null && holdsInterpolation(capture);
   const bound = !unbound(record);
   const rebind = (): ReboundOccurrence => {
-    const rebound = bound || fillsText ? reboundCapture(trace, capture.route, rebinder!) : null;
-    const inputs = bound ? finishedInputs(node.id, rebound!) : null;
+    if (!bound && !fillsText) return { inputs: null, capture, inputRoute };
+    const rebound = reboundCapture(trace, capture.route, rebinder!);
+    const inputs = bound ? finishedInputs(node.id, rebound) : null;
     if (!fillsText) return { inputs, capture, inputRoute };
-    const filled = withInterpolationText(capture, rebound!.capture);
-    return { inputs, capture: filled, inputRoute: joinSeedRoutes(filled, candidates) };
+    const filled = withInterpolationText(capture, rebound.capture);
+    return { inputs, capture: filled, inputRoute: filled === capture ? inputRoute : joinSeedRoutes(filled, candidates) };
   };
   const occurrence = new TraceOccurrence(source, node.id, envelope.seq, envelope, inputRoute, {
     memoryScope: node.memoryScope,
@@ -1364,6 +1377,7 @@ export function prepareTrace(
     steps,
     capture,
     rebind: rebinder !== null ? rebind : bound ? null : () => ({ inputs: null, capture, inputRoute }),
+    fillsText: fillsText && rebinder !== null,
   });
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);

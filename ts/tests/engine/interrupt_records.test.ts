@@ -14,6 +14,7 @@ import {
 } from "../../src/runtime/log.ts";
 import { applyWaitsRecord, isWakeable, nodeCalls, wakeableNodes, WaitsState } from "../../src/runtime/waits.ts";
 import type { CallClosed } from "../../src/events.ts";
+import { prepareDelivery } from "../../src/runtime/engine.ts";
 import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -350,4 +351,12 @@ test("a timeout re-wait whose open call an interrupt closed in between is accept
   commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
   commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [hold], steerInbox: "msgs" }));
   expect(wakeableNodes(state.waits)).toEqual(["a"]);
+});
+
+test("the interrupt delivery op prepares the interrupt; a missing running is none", () => {
+  const { state } = interruptible();
+  const viaOp = prepareDelivery(state, { kind: "interrupt", inbox: "msgs", running: ["a"] })!;
+  expect([...(viaOp.record as InterruptedRecord).nodes]).toEqual(["a", "w"]);
+  expect([...(prepareDelivery(state, { kind: "interrupt", inbox: "msgs" })!.record as InterruptedRecord).nodes]).toEqual(["w"]);
+  expect(() => prepareDelivery(state, { kind: "nope" } as never)).toThrow(/send, complete, close, interrupt or cancel/);
 });

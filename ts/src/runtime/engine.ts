@@ -78,6 +78,7 @@ import {
   prepareExpansionCommit,
   prepareComplete,
   prepareInboxClosed,
+  prepareInterrupt,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -244,17 +245,23 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
   );
 }
 
-/** One host delivery: a send, a completed call, an inbox close or a cancel. */
+/**
+ * One host delivery: a send, a completed call, an inbox close, an interrupt or a cancel. An
+ * interrupt's `running` are the in-flight readers of its inbox, which only the engine knows; none
+ * when absent.
+ */
 export type DeliveryOp =
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "close"; readonly inbox: string }
+  | { readonly kind: "interrupt"; readonly inbox: string; readonly running?: readonly string[] }
   | { readonly kind: "cancel" };
 
 /**
  * @internal Prepare `op` on `state`; the engine and the run boundary share it.
  *
- * @returns null for a no-op (an identical repeat complete, or closing a closed inbox).
+ * @returns null for a no-op (an identical repeat complete, closing a closed inbox, or an interrupt
+ *   no node reads).
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
@@ -266,8 +273,12 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
     return prepareComplete(state, callId, result);
   }
   if (kind === "close") return prepareInboxClosed(state, (op as { inbox: string }).inbox);
+  if (kind === "interrupt") {
+    const { inbox, running = [] } = op as Extract<DeliveryOp, { kind: "interrupt" }>;
+    return prepareInterrupt(state, inbox, running);
+  }
   if (kind === "cancel") return prepareRunCancelled(state);
-  throw new TypeError(`a delivery's kind must be send, complete, close or cancel, got ${reprText(String(kind))}`);
+  throw new TypeError(`a delivery's kind must be send, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
 }
 
 /** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */

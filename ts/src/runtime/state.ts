@@ -260,7 +260,7 @@ export class NodeDataError extends Error {
   }
 }
 
-/** Why a host delivery (a send, complete, close or cancel) was refused. */
+/** Why a host delivery (a send, complete, close, interrupt or cancel) was refused. */
 export type DeliveryRefusal =
   | "unknown_inbox"
   | "not_started"
@@ -272,7 +272,7 @@ export type DeliveryRefusal =
   | "call_settled"
   | "not_host_call";
 
-/** A send, complete, close or cancel the run refuses; nothing was appended. */
+/** A send, complete, close, interrupt or cancel the run refuses; nothing was appended. */
 export class DeliveryRefused extends RangeError {
   override name = "DeliveryRefused";
   /** Why the delivery was refused. */

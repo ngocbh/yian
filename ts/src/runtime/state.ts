@@ -133,7 +133,7 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
-import { WaitsState } from "./waits.ts";
+import { type CallStateKind, WaitsState } from "./waits.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
 export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
@@ -230,6 +230,47 @@ export class NodeDataError extends Error {
     this.original = original;
     this.origin = origin;
   }
+}
+
+/** Why a host delivery (a send, complete, close or cancel) was refused. */
+export type DeliveryRefusal =
+  | "unknown_inbox"
+  | "not_started"
+  | "ended"
+  | "inbox_closed"
+  | "invalid_value"
+  | "too_large"
+  | "unknown_call"
+  | "call_settled"
+  | "not_host_call";
+
+/** A send, complete, close or cancel the run refuses; nothing was appended. */
+export class DeliveryRefused extends RangeError {
+  override name = "DeliveryRefused";
+  /** Why the delivery was refused. */
+  readonly reason: DeliveryRefusal;
+  /** The call's state for `call_settled`; `null` otherwise. */
+  readonly callState: CallStateKind | null;
+
+  /** Hold `reason` and the message; `options.cause` becomes the error's cause. */
+  constructor(
+    reason: DeliveryRefusal,
+    message: string,
+    options: { callState?: CallStateKind | null; cause?: unknown } = {},
+  ) {
+    super(message, Object.hasOwn(options, "cause") ? { cause: options.cause } : {});
+    this.reason = reason;
+    this.callState = options.callState ?? null;
+  }
+}
+
+/**
+ * Refuse a delivery to a run that has ended (`ended`) or whose run start is incomplete
+ * (`not_started`), in that order.
+ */
+function requireDeliverable(state: RunState): void {
+  if (state.result !== null) throw new DeliveryRefused("ended", "the run has ended");
+  if (!state.inputsCommitted) throw new DeliveryRefused("not_started", "the run hasn't started");
 }
 
 /** Mark one explicit live node-produced growth rejection. */

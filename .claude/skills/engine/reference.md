@@ -247,15 +247,15 @@ Runtime and compile validation read these node members instead of branching on
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `forward` and every condition parses (`validate_conditions`: assertions, CASE `when`, LOOP `while`/`until`) → baked child on call/map/loop; complete predicates on case |
-| `validate_prompts()` | run boundary only (`run.py`'s pre-run check): reject a prompt span that doesn't parse, calls a non-builtin, or mis-calls a builtin, before any record | no-op → AGENT prompt/`system_prompt`; HUMAN_INPUT prompt and question text |
+| `validate_prompts()` | run boundary only (`run.py`'s pre-run check): reject a prompt span that doesn't parse, calls a non-builtin, or mis-calls a builtin, before any record | no-op → AGENT prompt/`system_prompt`; HUMAN_INPUT prompt and question text (TS: AGENT only; an `ask`'s prompt and questions are input bindings) |
 | `exception_code(exc)` | evaluator body boundary: select the body failure's code | `node.execute` → LOOP `loop.max_exceeded`; AGENT `agent.max_tool_iterations`, `provider.auth` |
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, generated-schema path in the AGENT node |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
 | `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
-| `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait/tool |
-| `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
+| `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait/tool (TS: agent/tool) |
+| `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent (TS: tool/agent) |
 | `host_tool_call() -> HostToolCall \| None` | run boundary only (`run.py`): check a direct tool call against the run's tool types before any record | `None` → the TOOL node's call |
 | `needs_steps: bool` | read boundary (`eval_node`): pass this start's `NodeSteps` as `caps['steps']` | `False` → `True` on tool |
 | `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |

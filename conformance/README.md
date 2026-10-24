@@ -448,10 +448,10 @@ A case can't hold code, so its host is declared under `host`.
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
 attempt, node}`.
 Calls answered from `human` are listed too, under the name they were made by (`ask` for a
-TOOL `ask`, `ask_user` for an agent's or a HUMAN_INPUT's call); their `args` are the request in
+TOOL `ask`, `ask_user` for an agent's call or Python's HUMAN_INPUT); their `args` are the request in
 data form (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`, `deadline`
 and the host's extras; nulls left out).
-HUMAN_INPUT never sends `options`; a model's `ask_user` call can.
+A TOOL `ask` (and Python's HUMAN_INPUT) never sends `options`; a model's `ask_user` call can.
 
 `expect.memory` (it needs `host.memory`) is `{<key>: <text>}`: after the main run and its
 backward calls, the runner builds the memories afresh and reads each listed key's whole recall

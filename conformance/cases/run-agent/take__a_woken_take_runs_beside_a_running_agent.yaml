@@ -1,0 +1,113 @@
+# TS-only: a woken TOOL node takes no worker. With one worker, `heard`'s take waits on the inbox
+# and `chat` takes the worker; a send during chat's model call wakes `heard`, which decides its
+# take beside the running AGENT. The in-flight invariant counts the woken take as holding no
+# worker (a woken AGENT would hold one).
+kind: run
+rules: [run-log]
+python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
+flow: |
+  id: woken_take
+  name: woken_take
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.notes}
+        take: all
+    chat:
+      kind: agent
+      prompt: Help the user.
+      output: str
+  output:
+    answer: ${chat.output}
+    heard: ${heard.output.events}
+run:
+  run_id: r1
+  num_workers: 1
+host:
+  sends:
+  - {inbox: notes, event: hi, after: {node: chat, model_call: 1, chunk: 1}}
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+expect:
+  output:
+    status: succeeded
+    output: {answer: done, heard: [hi]}
+  trace:
+  - [run_started, null, {effective_llm_by_static_path: {chat: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}}, learnable: false, num_workers: 1}]
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        answer: done
+        heard: [hi]
+  - [node_succeeded, __end__]
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - [node_succeeded, __start__]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: hi}
+  - [node_started, chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: done, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 8480e0c6fbe2bb9c3ada3605f9c864a8581ce044ad1c099e3436bf9550c39a13
+        response_id: null
+        usage: null
+  - - pool_commit
+    - chat
+    - {value: done}
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages}
+  - [node_succeeded, chat]
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - {call_id: r1/heard, inbox: notes, mode: all, tool: take}
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - closed: false
+      events: [11]
+      inbox: notes
+  - [node_succeeded, heard]

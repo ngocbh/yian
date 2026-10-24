@@ -499,3 +499,28 @@ test("a steer read, more sends, then a crash and advance: the read values surviv
     ["user", ["b", "c"]],
   ]);
 });
+
+test("a crash after every record, then advance: the same output, and each send read by one steer step", async () => {
+  const replies = [callReply(["lookup", { topic: "t" }, "c1"]), textReply("done")];
+  const sending = (log: string) => lookup(() => void send(log, "notes", "a").catch(() => {}));
+  const uncut = freshLog();
+  await runSteer(steerFlow(), uncut, new ScriptedModel([...replies], CONFIG), sending(uncut));
+  const total = readRunLog(uncut).length;
+  const chatStarted = readRunLog(uncut).findIndex(
+    ({ kind, record }) => kind === "node_started" && (record as { nodeId?: string }).nodeId === "chat",
+  );
+  expect(chatStarted).toBeGreaterThan(0);
+  for (let k = chatStarted + 1; k < total; k++) {
+    const log = freshLog();
+    await crashAfter(k, () => runSteer(steerFlow(), log, new ScriptedModel([...replies], CONFIG), sending(log)));
+    // The send is lost with the crash when its record was refused; the host sends it again while down.
+    if (sendSeqs(log).length === 0) await send(log, "notes", "a", { env: NO_ENV });
+    const made = stepsOf(log).filter(({ kind, step }) => kind === "model_call" && !Object.hasOwn(step, "error")).length;
+    const model = new ScriptedModel(replies.slice(made), CONFIG);
+    const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+    expect([k, resumed.status, resumed.output]).toEqual([k, "succeeded", "done"]);
+    const read = stepsOf(log).flatMap(({ kind, step }) => (kind === "steer" ? (step["from"] as bigint[]).map(Number) : []));
+    expect([k, read]).toEqual([k, sendSeqs(log)]);
+    expect([k, resumed.unread]).toEqual([k, new Map()]);
+  }
+});

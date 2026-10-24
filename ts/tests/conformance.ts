@@ -111,7 +111,7 @@ import type { AskUserHandler, AskUserRequest, ToolEntry } from "../src/tools/reg
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
-import { buildValueAs, FileRef, fromHost, isRecord } from "../src/typesys/values.ts";
+import { buildValueAs, FileRef, fromHost, InboxRef, isRecord } from "../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
 import { validate } from "./schema.ts";
 import type { Schema } from "./schema.ts";
@@ -3188,9 +3188,13 @@ function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): strin
 
 // ---- expr ----
 
-/** Return `value` in data form: every `FileRef` in it as its mapping `{uri, mime, name}`. */
+/**
+ * Return `value` in data form: every `FileRef` in it as its mapping `{uri, mime, name}`, and
+ * every `InboxRef` as `{inbox}`.
+ */
 function dataForm(value: YianValue): Value {
   if (FileRef.isFileRef(value)) return { uri: value.uri, mime: value.mime, name: value.name };
+  if (InboxRef.isInboxRef(value)) return { inbox: value.inbox };
   if (Array.isArray(value)) return value.map(dataForm);
   if (isRecord(value)) {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, dataForm(item)]));

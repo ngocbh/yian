@@ -585,7 +585,8 @@ interface ToHostFrame {
  * Return a yian value as a fresh host value, by design 3.2.1's host boundary (D9A).
  *
  * An int within ±(2^53−1) becomes a `number`; a bigger one stays a `bigint`. A float
- * (`±Infinity` included), text, a boolean, `null` and a `FileRef` are handed over as they are.
+ * (`±Infinity` included), text, a boolean, `null`, a `FileRef` and an `InboxRef` are handed over
+ * as they are.
  * Arrays and records become fresh arrays and records, their entries taken the same way; a
  * record key is set as an own data property, so a `__proto__` key stays data. A value shared
  * by two parents is copied once, and the walk uses an explicit stack, so any depth works.
@@ -602,7 +603,9 @@ export function toHost(value: Value): unknown {
       const n = Number(item);
       return Number.isSafeInteger(n) ? n : item;
     }
-    if (item === null || typeof item !== "object" || FileRef.isFileRef(item)) return item;
+    if (item === null || typeof item !== "object" || FileRef.isFileRef(item) || InboxRef.isInboxRef(item)) {
+      return item;
+    }
     const shared = copies.get(item);
     if (shared !== undefined) return shared;
     const keys = Array.isArray(item) ? null : Object.keys(item);
@@ -646,6 +649,8 @@ export function toHost(value: Value): unknown {
  * `object`, `list[Any]`, ...). The list kinds keep the bracket storage spelling
  * (`list[str]`); type labels spell them `list(str)`. `date` and `datetime` are stored
  * as strings and never inferred; `file` is reserved: never inferred, not authorable yet.
+ * `inbox` is a handle on a top-level inbox, an `Inbox(T)` input's value; never inferred from a
+ * record.
  */
 export const ValueKind = {
   NONE: "None",
@@ -657,6 +662,7 @@ export const ValueKind = {
   BOOLEAN: "bool",
   OBJECT: "object",
   FILE: "file",
+  INBOX: "inbox",
   ANY: "Any",
   LIST_ANY: "list[Any]",
   LIST_STRING: "list[str]",
@@ -679,9 +685,10 @@ const STORAGE_KINDS: ReadonlySet<string> = new Set(
 
 /**
  * A yian value as JS holds it: `null`, a `boolean`, an int as a `bigint`, a float as a
- * `number` (never NaN), a `string` (well-formed), a `FileRef`, an array or a `ValueRecord`.
+ * `number` (never NaN), a `string` (well-formed), a `FileRef`, an `InboxRef`, an array or a
+ * `ValueRecord`.
  */
-export type Value = null | boolean | bigint | number | string | FileRef | Value[] | ValueRecord;
+export type Value = null | boolean | bigint | number | string | FileRef | InboxRef | Value[] | ValueRecord;
 
 /**
  * A record: a plain object (prototype `Object.prototype` or `null`) whose own enumerable
@@ -765,6 +772,51 @@ function checkFileField(field: string, value: unknown, nullable: boolean): void 
 
 /** A file's fields: the keys of its JSON form and the only names a dotted read gives. */
 const FILE_FIELDS: readonly ("uri" | "mime" | "name")[] = ["uri", "mime", "name"];
+
+/** An inbox handle's one field: the key of its JSON form. */
+const INBOX_FIELDS: readonly "inbox"[] = ["inbox"];
+
+/**
+ * A handle on a top-level inbox: the value of an `Inbox(T)` input. Its JSON form is the mapping
+ * `{"inbox": <name>}`; an `Inbox(T)` slot reads that mapping as an `InboxRef`. Frozen.
+ */
+export class InboxRef {
+  readonly inbox: string;
+  // Set only by the constructor, so an object merely given this prototype isn't an InboxRef.
+  readonly #built = true;
+
+  /** Whether `value` is an `InboxRef` its constructor built. */
+  static isInboxRef(value: unknown): value is InboxRef {
+    return typeof value === "object" && value !== null && #built in value;
+  }
+
+  /**
+   * Build a handle on the top-level inbox `inbox`.
+   *
+   * @throws RangeError when `inbox` isn't non-empty text or holds a lone surrogate.
+   */
+  constructor(inbox: string) {
+    if (typeof inbox !== "string" || inbox === "") {
+      throw new RangeError(`inbox name must be non-empty text, got ${valueRepr(inbox)}`);
+    }
+    if (!inbox.isWellFormed()) throw new RangeError("inbox name holds a lone surrogate");
+    this.inbox = inbox;
+    Object.freeze(this);
+  }
+}
+
+/** Whether `value` is an inbox handle's JSON form: a record with exactly a usable `inbox` name. */
+function isInboxForm(value: unknown): value is { inbox: string } {
+  if (!isRecord(value) || Object.keys(value).length !== 1) return false;
+  const inbox = value["inbox"];
+  return typeof inbox === "string" && inbox !== "" && inbox.isWellFormed();
+}
+
+/** Return the inbox name an `InboxRef` or its JSON form holds, else `null`. */
+export function inboxName(value: unknown): string | null {
+  if (InboxRef.isInboxRef(value)) return value.inbox;
+  return isInboxForm(value) ? value.inbox : null;
+}
 
 /**
  * Read field `name` of `value`, as a dotted `${x.name}` read sees it.

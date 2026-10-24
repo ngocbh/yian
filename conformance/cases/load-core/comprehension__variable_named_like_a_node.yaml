@@ -1,0 +1,24 @@
+kind: load
+python_skip: "TS-only: list comprehensions (#1086)"
+# Variables named like a node (step), an input (xs), a typedef (Msg) and a builtin (len) load;
+# a call len(...) is never a variable read.
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Msg: {role: str, text: str}
+  input:
+    xs: !list(int)
+  nodes:
+    step:
+      kind: code
+      output: int
+      code: "return 99"
+    use:
+      kind: code
+      input:
+        v: '${[[step, xs, Msg, len(len)] for step in input.xs for xs in [step * 10] for Msg in [xs + 1] for len in ["ab"]]}'
+      code: "return inputs['v']"
+  output: ${use.output}
+expect:
+  load: ok

@@ -1,0 +1,107 @@
+kind: run
+rules: [run-log]
+python_skip: "TS-only: list comprehensions (#1086)"
+# A documented limit: iterating a node a CASE may skip loads, and fails at run time with the
+# null-iterable error, which names the fix.
+flow: |
+  id: p
+  name: p
+  input:
+    s: !str
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: "input.s == 'go'"
+          then: maybe
+      else: other
+    maybe:
+      kind: code
+      output: list(int)
+      code: "return [1]"
+    other:
+      kind: code
+      code: "return 0"
+  output: ${[x for x in maybe.output]}
+inputs:
+  s: stop
+run:
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [19, 9, 19, 37]
+      message: 'comprehension `for x in maybe.output` iterates over null; give a default, e.g. `(maybe.output :- [])`'
+      node: __end__
+  trace:
+  - - run_started
+    - null
+    - {learnable: false, num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {s: stop}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {s: stop}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, gate]
+  - - node_routed
+    - gate
+    - {handle: '#else'}
+  - [node_started, __end__]
+  - - node_failed
+    - __end__
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [19, 9, 19, 37]
+        message: comprehension `for x in maybe.output` iterates over null; give a default, e.g. `(maybe.output :- [])`
+        node: __end__
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {s: stop}
+  - - NodeStarted
+    - {node_id: gate}
+  - - NodeRouted
+    - {handle: '#else', node_id: gate}
+  - - NodeSkipped
+    - {node_id: maybe}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [19, 9, 19, 37]
+        message: comprehension `for x in maybe.output` iterates over null; give a default, e.g. `(maybe.output :- [])`
+        node: __end__
+  - - RunFailed
+    - failure:
+        code: binding.evaluate
+        frames:
+        - label: flow.yaml
+          range: [19, 9, 19, 37]
+        message: comprehension `for x in maybe.output` iterates over null; give a default, e.g. `(maybe.output :- [])`
+        node: __end__

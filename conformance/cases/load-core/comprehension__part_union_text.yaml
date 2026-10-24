@@ -1,0 +1,18 @@
+kind: load
+python_skip: "TS-only: list comprehensions (#1086)"
+# p.text on Message parts (a union, not every member has text) loads, with and without a tag check.
+flow: |
+  id: p
+  name: p
+  input:
+    ms: !list(Message)
+  nodes:
+    use:
+      kind: code
+      input:
+        checked: '${[p.text for m in input.ms for p in m.parts if p.type == "text"]}'
+        unchecked: ${[p.text for m in input.ms for p in m.parts]}
+      code: "return inputs['checked']"
+  output: ${use.output}
+expect:
+  load: ok

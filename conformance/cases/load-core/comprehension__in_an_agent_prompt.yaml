@@ -1,0 +1,19 @@
+kind: load
+python_skip: "TS-only: list comprehensions (#1086)"
+# A prompt may hold a comprehension; its variables pass the prompt's name checks.
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Msg: {role: str, text: str}
+  input:
+    ms: !list(Msg)
+  nodes:
+    ag:
+      kind: agent
+      input:
+        ms: ${input.ms}
+      prompt: '${join([m.text for m in ms])}'
+  output: ${ag.output}
+expect:
+  load: ok

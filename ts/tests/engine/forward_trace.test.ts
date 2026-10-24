@@ -4798,20 +4798,30 @@ test("a MAP's forward failing otherwise when bound again is a fault, not kept (T
   }
 });
 
-test("a binding that failed but finishes when bound again is a rebuild mismatch (TS-only)", async () => {
-  const log = await greetLog("greet-mismatch", null);
-  // The run's START inputs now hold a nick, so `shout` binds where its record failed.
-  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);
-  for (const line of lines) {
-    const payload = line["payload"] as Wire;
-    if (line["kind"] !== "pool_commit" || payload["key"] !== "__start__" || payload["value"] === undefined) continue;
-    (payload["value"] as Wire)["nick"] = "A";
+/** A TOOL `sleep` whose `until` renders a template that isn't a date: its body fails after binding. */
+const NAP = `
+id: nap
+name: nap
+input: {x: !str}
+nodes:
+  nap: {kind: tool, tool_id: sleep, input: {until: "not a date \${input.x}"}}
+output: \${nap.output}
+`;
+
+test("a tool body failing with a binding code after its binding finished rebuilds its text (TS-only)", async () => {
+  const log = join(boundDir, "nap.jsonl");
+  const nap = await loadFlow(NAP, { sourceLabel: "flow.yaml" });
+  const result = await runFlow(nap, { x: "soon" }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
+  expect(result.status).toBe("failed");
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(nap, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
   }
-  writeFileSync(log, `${lines.map((line) => logJson(line)).join("\n")}\n`);
-  const of = await replayedOccurrences(log);
-  expectError(
-    () => of("shout").capture,
-    RangeError,
-    "the binding of 'shout' finishes when bound again, but its record failed at a binding stage",
-  );
+  const occurrence = trace.occurrences.find((each) => each.nodeId === "nap")!;
+  expect(occurrence.record).toBeInstanceOf(NodeFailedRecord);
+  expect(interpolationIn(occurrence.capture.route)!.valueJson).toBe(JSON.stringify("not a date soon"));
+  expect(interpolationIn(occurrence.inputRoute)!.valueJson).toBe(JSON.stringify("not a date soon"));
 });

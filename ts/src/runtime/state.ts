@@ -121,6 +121,7 @@ import {
   type RunStopReason,
   RunStoppedRecord,
   RunWaitingRecord,
+  requireRecordTime,
   SCHEMA_VERSION,
   type WaitEntry,
 } from "./log.ts";
@@ -142,7 +143,7 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
-import { SLEEP, TAKE, toolCallId } from "../tools/context.ts";
+import { ASK, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import {
   applyWaitsRecord,
   availableUnread,
@@ -3547,7 +3548,11 @@ function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
   if (w.lastFrontier === "run_waiting") throw new RangeError("RunWaiting follows a RunWaiting with nothing changed");
 }
 
-/** Require a step record to name an existing unknown in-flight node and be its next step. */
+/**
+ * Require a step record to name an existing unknown node, in flight or waiting, and be its next
+ * step. A `pending` step registers a host call; a `tool_result` for a registered call answers it.
+ * A waiting node records only a `tool_result` answering one of its open calls.
+ */
 function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   const nodeId: unknown = record.nodeId;
   if (typeof nodeId !== "string") throw new TypeError("NodeStepRecord node_id must be a string");
@@ -3557,11 +3562,82 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
     throw new RangeError(`NodeStep node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
+  const waiting = state.waits.waiting.has(nodeId);
+  if (!state.inFlight.has(nodeId) && !waiting) throw new RangeError(`NodeStep node ${reprText(nodeId)} is not in-flight`);
   const expected = (state.nodeSteps.get(nodeId)?.length ?? 0) + 1;
   if (record.n !== expected) {
     throw new RangeError(`node step n is not dense: node ${reprText(nodeId)} step ${record.n}, expected ${expected}`);
   }
+  const step = record.step;
+  if (step["kind"] === "tool_result") {
+    validateToolResultStep(state, nodeId, step, waiting);
+  } else if (waiting) {
+    throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
+  } else if (step["kind"] === "pending") {
+    validatePendingStep(state, nodeId, step);
+  }
+}
+
+/** The steps' fields only an AGENT's `pending` step holds. */
+const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index"] as const;
+
+/**
+ * Require a running node's `pending` step to register its own host call: the node makes a host
+ * tool call that isn't a take or sleep, `tool` is its tool, `call_id` its TOOL call id, not yet
+ * registered; no agent fields; a `deadline` only on an `ask`, as a record time; `arguments` an
+ * object; and the whole step within the run's `MAX_EVENT_BYTES`.
+ */
+function validatePendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  const toolId = state.flow.nodes.get(nodeId)!.hostToolCall()?.toolId ?? null;
+  if (toolId === null) throw new RangeError(`a pending step on node ${reprText(nodeId)}, which calls no host tool`);
+  if (toolId === TAKE || toolId === SLEEP) {
+    throw new RangeError(`a pending step on node ${reprText(nodeId)}, whose ${toolId} the engine decides`);
+  }
+  const { call_id: callId, tool } = step;
+  if (tool !== toolId) throw new RangeError(`pending tool ${writeAsText(tool ?? null)} isn't node ${reprText(nodeId)}'s tool ${reprText(toolId)}`);
+  if (callId !== toolCallId(state.runId!, nodeId)) {
+    throw new RangeError(`pending call_id ${writeAsText(callId ?? null)} isn't node ${reprText(nodeId)}'s call id`);
+  }
+  for (const field of AGENT_PENDING_FIELDS) {
+    if (Object.hasOwn(step, field)) throw new RangeError(`a TOOL node's pending step holds no ${field}`);
+  }
+  if (Object.hasOwn(step, "deadline")) {
+    if (tool !== ASK) throw new RangeError(`a pending ${reprText(tool)} call has no deadline; only ask times out`);
+    const deadline = step["deadline"];
+    if (typeof deadline !== "string") throw new RangeError("pending deadline must be a record time");
+    requireRecordTime(deadline, "pending deadline");
+  }
+  if (!isRecord(step["arguments"])) throw new RangeError("pending arguments must be an object");
+  const size = eventBytes(step);
+  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the pending step of ${reprText(callId)}`, size, state));
+  if (state.waits.calls.has(callId)) {
+    throw new RangeError(`call ${reprText(callId)} is already registered; it belongs to its node until the node settles`);
+  }
+}
+
+/**
+ * Require a `tool_result` step for a registered call (its `tool_call_id ?? call_id` is the call's
+ * result key) to answer an open call of this node, within the run's `MAX_EVENT_BYTES`. A result no
+ * call registered (an agent's) is the node's own detail, refused only on a waiting node.
+ */
+function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
+  const key = typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"];
+  const call = [...state.waits.calls.values()].find((each) => each.resultKey === key);
+  if (call === undefined) {
+    if (waiting) {
+      throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
+    }
+    return;
+  }
+  if (call.nodeId !== nodeId) {
+    throw new RangeError(`tool_result for call ${reprText(call.callId)} of node ${reprText(call.nodeId)}, not ${reprText(nodeId)}`);
+  }
+  if (call.state !== "open") {
+    const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
+    throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${why}`);
+  }
+  const size = eventBytes(step);
+  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
 }
 
 /**

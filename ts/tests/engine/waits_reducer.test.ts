@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { NodeWaiting, NodeWoken, RunSucceeded, RunWaiting } from "../../src/events.ts";
+import { CallClosed, NodeWaiting, NodeWoken, RunSucceeded, RunWaiting } from "../../src/events.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import {
   MemoryRunLog,
@@ -34,10 +34,11 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { TraceDelta } from "../../src/runtime/trace.ts";
-import { logJson } from "../../src/typesys/json.ts";
+import { wakeableNodes } from "../../src/runtime/waits.ts";
+import { eventBytes, logJson } from "../../src/typesys/json.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { expectUnchanged, FIXED_CLOCK, RUN_ID, snapshot, startData } from "./run_state_fixtures.ts";
-import { call, MSGS, paramFlow, started, succeed, tool, waitFlow } from "./waits_fixtures.ts";
+import { call, MSGS, paramFlow, started, succeed, tool, waitFlow, work } from "./waits_fixtures.ts";
 
 describe("DeliveryRefused", () => {
   test("is a RangeError naming why, with the call's state and cause when given", () => {
@@ -314,5 +315,144 @@ describe("node_waiting, node_woken and run_waiting", () => {
     expect(state.trace!._parked.size).toBe(0);
     state.trace!._parked.set("ghost", 1);
     expect(() => prepareNodeStep(state, "heard", { kind: "note" })).toThrow(/parks other starts/);
+  });
+});
+
+/** An `ask` node's pending step for its own call. */
+function pendingStep(node: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { kind: "pending", call_id: call(node), tool: "ask", arguments: { prompt: "ok?" }, deadline: DEADLINE, ...extra };
+}
+
+/** A tool_result step answering `node`'s call with `answer`. */
+function resultStep(node: string, answer = "yes"): Record<string, unknown> {
+  return { kind: "tool_result", call_id: call(node), output: { kind: "str", value: answer } };
+}
+
+/** Commit `step` on `node` and return its seq. */
+function step(log: RunLog, state: RunState, node: string, body: Record<string, unknown>): number {
+  return commit(log, state, prepareNodeStep(state, node, body));
+}
+
+describe("pending and tool_result steps", () => {
+  test("a running host tool node's pending step registers an open call", () => {
+    const { log, state } = started(waitFlow(tool("ask", "ask")));
+    start(log, state, "ask");
+    const seq = step(log, state, "ask", pendingStep("ask"));
+    const registered = state.waits.calls.get(call("ask"))!;
+    expect([registered.nodeId, registered.tool, registered.state, registered.pendingSeq, registered.deadline]).toEqual([
+      "ask",
+      "ask",
+      "open",
+      seq,
+      DEADLINE,
+    ]);
+  });
+
+  test("pending refusals", () => {
+    const { log, state } = started(waitFlow(tool("ask", "ask"), tool("heard", "take"), tool("echo", "echo"), work()));
+    for (const node of ["ask", "heard", "echo", "work"]) start(log, state, node);
+    const refuse = (node: string, body: Record<string, unknown>) =>
+      expect(() => prepareNodeStep(state, node, body)).toThrow(RangeError);
+    refuse("work", pendingStep("work", { tool: "work" })); // no host tool call
+    refuse("heard", pendingStep("heard", { tool: "take", deadline: undefined })); // the engine decides a take
+    refuse("ask", pendingStep("ask", { tool: "take" }));
+    refuse("ask", pendingStep("ask", { tool: "sleep" }));
+    refuse("ask", pendingStep("ask", { tool: "echo" }));
+    refuse("ask", pendingStep("ask", { call_id: call("echo") }));
+    for (const key of ["tool_call_id", "reply", "index"]) refuse("ask", pendingStep("ask", { [key]: "x" }));
+    refuse("echo", { kind: "pending", call_id: call("echo"), tool: "echo", arguments: {}, deadline: DEADLINE });
+    refuse("ask", pendingStep("ask", { deadline: "tomorrow" }));
+    refuse("ask", pendingStep("ask", { arguments: ["ok?"] }));
+    step(log, state, "echo", { kind: "pending", call_id: call("echo"), tool: "echo", arguments: {} });
+    step(log, state, "ask", pendingStep("ask"));
+    refuse("ask", pendingStep("ask")); // a second registration of an open call
+    step(log, state, "ask", resultStep("ask"));
+    refuse("ask", pendingStep("ask")); // or of an answered one
+  });
+
+  test("a pending step fits the run's MAX_EVENT_BYTES, measured over the whole step", () => {
+    const size = eventBytes(pendingStep("ask"));
+    const at = started(waitFlow(tool("ask", "ask")), { defaults: { MAX_EVENT_BYTES: BigInt(size) } });
+    start(at.log, at.state, "ask");
+    step(at.log, at.state, "ask", pendingStep("ask"));
+    const over = started(waitFlow(tool("ask", "ask")), { defaults: { MAX_EVENT_BYTES: BigInt(size - 1) } });
+    start(over.log, over.state, "ask");
+    expect(() => prepareNodeStep(over.state, "ask", pendingStep("ask"))).toThrow(/over the run's limit/);
+  });
+
+  test("tool_result rules hold for registered calls only", () => {
+    const { log, state } = started(waitFlow(tool("a", "ask"), tool("b", "ask")));
+    start(log, state, "a");
+    start(log, state, "b");
+    step(log, state, "a", pendingStep("a"));
+    expect(() => prepareNodeStep(state, "b", resultStep("a"))).toThrow(/of node 'a', not 'b'/);
+    // An agent's result, which no pending step registered, is the node's own detail.
+    step(log, state, "b", { kind: "tool_result", call_id: "call-1", output: "skipped", is_error: true, closed: "skipped" });
+    step(log, state, "a", resultStep("a"));
+    expect(state.waits.calls.get(call("a"))!.state).toBe("answered");
+    expect(() => prepareNodeStep(state, "a", resultStep("a"))).toThrow(/answered/);
+  });
+
+  test("a waiting node takes only a tool_result answering one of its open calls", () => {
+    const { log, state } = started(waitFlow(tool("ask", "ask")));
+    start(log, state, "ask");
+    step(log, state, "ask", pendingStep("ask"));
+    commitPrepared(log, state, prepareNodeWaiting(state, "ask", { callIds: [call("ask")] }));
+    expect(() => prepareNodeStep(state, "ask", { kind: "note" })).toThrow(/waiting node/);
+    expect(() => prepareNodeStep(state, "ask", pendingStep("ask"))).toThrow(/waiting node/);
+    expect(() => prepareNodeStep(state, "ask", { kind: "tool_result", call_id: "call-1", output: "x" })).toThrow(/waiting node/);
+    step(log, state, "ask", resultStep("ask"));
+    expect(wakeableNodes(state.waits)).toEqual(["ask"]);
+    expect(() => prepareNodeStep(state, "ask", resultStep("ask"))).toThrow(/answered/);
+  });
+
+  test("node_waiting naming a call answered while the node ran is wakeable at once", () => {
+    const { log, state } = started(waitFlow(tool("ask", "ask")));
+    start(log, state, "ask");
+    step(log, state, "ask", pendingStep("ask"));
+    step(log, state, "ask", resultStep("ask"));
+    commitPrepared(log, state, prepareNodeWaiting(state, "ask", { callIds: [call("ask")] }));
+    expect(wakeableNodes(state.waits)).toEqual(["ask"]);
+  });
+
+  test("a crashed run accepts an answer; the restarted node commits from it without waiting", () => {
+    const { log, state } = started(waitFlow(tool("ask", "ask")));
+    start(log, state, "ask");
+    step(log, state, "ask", pendingStep("ask"));
+    step(log, state, "ask", resultStep("ask"));
+    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    start(log, state, "ask");
+    succeed(log, state, "ask", "yes");
+    expect(state.waits.calls.size).toBe(0);
+  });
+
+  test("a restart after a pending step waits on the same call, with no second pending step", () => {
+    const { log, state } = started(waitFlow(tool("ask", "ask")));
+    start(log, state, "ask");
+    step(log, state, "ask", pendingStep("ask"));
+    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    start(log, state, "ask");
+    expect(() => prepareNodeStep(state, "ask", pendingStep("ask"))).toThrow(/already registered/);
+    commitPrepared(log, state, prepareNodeWaiting(state, "ask", { callIds: [call("ask")] }));
+    expect(state.waits.waiting.get("ask")!.callIds).toEqual([call("ask")]);
+  });
+
+  test("a timed-out ask closes, publishing CallClosed, and can't be waited on again", () => {
+    const { log, state } = started(waitFlow(tool("ask", "ask")));
+    start(log, state, "ask");
+    step(log, state, "ask", pendingStep("ask"));
+    commitPrepared(log, state, prepareNodeWaiting(state, "ask", { callIds: [call("ask")] }));
+    const woken = prepareNodeWoken(state, "ask", [call("ask")]);
+    expect(woken.observers).toEqual([
+      new NodeWoken({ nodeId: "ask", timedOut: [call("ask")] }),
+      new CallClosed({ callId: call("ask"), reason: "timed_out" }),
+    ]);
+    commitPrepared(log, state, woken);
+    expect([state.waits.calls.get(call("ask"))!.state, state.waits.calls.get(call("ask"))!.closedReason]).toEqual([
+      "closed",
+      "timed_out",
+    ]);
+    expect(() => prepareNodeWaiting(state, "ask", { callIds: [call("ask")] })).toThrow(/before the node's last node_woken/);
+    expect(() => prepareNodeStep(state, "ask", resultStep("ask"))).toThrow(/closed/);
   });
 });

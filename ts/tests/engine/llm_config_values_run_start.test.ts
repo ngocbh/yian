@@ -6,7 +6,9 @@
  * through `serving` where Python patches `model_from_config`; Python's `fake_model` (the messages
  * of each model call) is the model's `requests`. The `run_started`, `node_succeeded` and
  * `node_failed` records are read from the run's JSONL log. Saved logins go to the run's own
- * credential store (`YIAN_AUTH_FILE` in its `env`).
+ * credential store (`YIAN_AUTH_FILE` in its `env`). The adaptive gates are TOOL `ask` nodes where
+ * Python's are HUMAN_INPUT nodes (TS yian has no HUMAN_INPUT kind), so their runs pass an ask
+ * handler.
  *
  * Every run's environment holds Python's conftest default provider and model.
  *
@@ -450,12 +452,13 @@ async function failsBeforeAnyNode(
   inputs: Record<string, unknown>,
   pattern: RegExp,
   runEnv = env,
+  tools: RunFlowOptions["tools"] = undefined,
 ): Promise<string> {
   const log = fresh("failed.jsonl");
   const events: RunEvent[] = [];
   const { model, models } = fakeModel(runEnv);
   const error = await raised(
-    run(text, inputs, { log, env: runEnv, models, onEvent: (event) => void events.push(event) }),
+    run(text, inputs, { log, env: runEnv, models, onEvent: (event) => void events.push(event), ...(tools && { tools }) }),
     RangeError,
   );
   expect(error.message).toMatch(pattern);
@@ -512,13 +515,18 @@ name: f
 input: {proj: !str , m: !str , p: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${input.proj}'}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
     adaptive_questions:
       prompt: "Q \${proj}"
       llm_config: {provider: '\${input.p}', model: '\${input.m}'}
 output: \${ask.output}
 `;
+
+/** The run's ask handler, declaring the gate's context input `proj`; never reached. */
+const UNUSED_ASK = { ask: { handler: () => "unused", inputs: { proj: { type: "string" } } } };
 
 test("a composer value from an input resolves at run start", async () => {
   const flow = (await loadFlow(COMPOSER, { env })).compiled;
@@ -534,11 +542,15 @@ test("a composer value error names the gate", async () => {
     COMPOSER,
     { proj: "x", p: "openai" },
     new RegExp(`^${site}\\.model: input 'm' is required and was not given`),
+    env,
+    UNUSED_ASK,
   );
   await failsBeforeAnyNode(
     COMPOSER,
     { proj: "x", m: "m", p: "nope" },
     new RegExp(`^${site}\\.provider: not a known provider`),
+    env,
+    UNUSED_ASK,
   );
 });
 
@@ -706,8 +718,10 @@ input: {d: !D }
 llm_config: {provider: openai}
 nodes:
   ask:
-    kind: human_input
-    prompt: hi
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: hi
     adaptive_questions:
       prompt: Q
       llm_config: {model: !str '\${input.d.zzz}'}
@@ -717,6 +731,8 @@ output: \${ask.output}
     text,
     { d: {} },
     /^node 'ask' adaptive_questions\.llm_config\.model: null does not match declared type str$/,
+    env,
+    { ask: () => "unused" },
   );
 });
 

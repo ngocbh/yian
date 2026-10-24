@@ -45,8 +45,10 @@ input:
   settle_at: !date
 nodes:
   settle:
-    kind: human_input
-    prompt: "continue?"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "continue?"
     output: Optional(str)
   done:
     kind: code
@@ -76,7 +78,7 @@ test("render only node metadata does not ride run log", async () => {
   node.bindingLabels = new Map([["__on", "on: value"]]); // a binding error's label
   expect(flowManifest(loaded.compiled)).toEqual(manifest);
 
-  const res = await runFlow(loaded, { settle_at: "2026-07-01" }, { log: path, env, tools: { ask_user: () => null } });
+  const res = await runFlow(loaded, { settle_at: "2026-07-01" }, { log: path, env, tools: { ask: () => null } });
   expect(res.status).toBe("succeeded");
   expect(res.output).toBe("cancel");
 

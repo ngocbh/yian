@@ -43,6 +43,9 @@
  *   `CodeError`, as `code_inline.test.ts` pins.
  * - `test_loop_body_blocks_for_each_human_turn`: TS has no `chat_fold` fixture; the body folds
  *   each message in an inline TS CODE body.
+ * - `test_loop_body_blocks_for_each_human_turn` and
+ *   `test_loop_body_can_compute_carried_boolean_in_its_output_binding`: each turn asks through a
+ *   TOOL `ask` where Python's uses a HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind).
  * - `test_while_loop_predicate_runtime_error_fails_run`: a `while:` evaluation error is code
  *   `condition.evaluate` (decision 36), not `node.execute`.
  * - `test_loop_budget_exceeded_in_step_fails_run`: `set_defaults(MAX_TOTAL_NODES=6)` is an `env`
@@ -226,7 +229,7 @@ test("nested call loop respawn failure keeps each authored origin once", async (
   expect(result.failure!.trace).toEqual([outer.origin!, repeat.origin!]);
 });
 
-// The chat scenario: a body blocks each turn on a `human_input` leaf, folds the returned message
+// The chat scenario: a body blocks each turn on an `ask` leaf, folds the returned message
 // into the carried {messages, exited} record, and loops until "bye".
 const LOOP_CHAT = `
 id: chat
@@ -237,8 +240,10 @@ defs:
       messages: !list(str)
     nodes:
       ask:
-        kind: human_input
-        prompt: "your message"
+        kind: tool
+        tool_id: ask
+        input:
+          prompt: "your message"
         output: str
       fold:
         kind: code
@@ -266,7 +271,7 @@ output: \${loop.output}
 test("loop body blocks for each human turn", async () => {
   const loaded = await loadConformanceFlow(LOOP_CHAT);
   const answers = ["hi", "bye"][Symbol.iterator]();
-  const result = await runFlow(loaded, {}, { tools: { ask_user: () => answers.next().value } });
+  const result = await runFlow(loaded, {}, { tools: { ask: () => answers.next().value } });
 
   expect(result.status).toBe("succeeded");
   expect(result.output).toEqual({ messages: ["hi", "bye"], exited: true });
@@ -284,8 +289,10 @@ defs:
       exited: !bool
     nodes:
       ask:
-        kind: human_input
-        prompt: "your message"
+        kind: tool
+        tool_id: ask
+        input:
+          prompt: "your message"
         output: str
     output:
       messages: \${input.messages}
@@ -312,7 +319,7 @@ test("loop body can compute carried boolean in its output binding", async () => 
     return "/exit";
   };
 
-  const result = await runFlow(loaded, { initial_exited: false }, { tools: { ask_user: answer } });
+  const result = await runFlow(loaded, { initial_exited: false }, { tools: { ask: answer } });
 
   const bodyType = (loaded.compiled.nodes.get("loop")!.outputContract as ValueContract).type;
   expect(bodyType.fields!.get("exited")!.kind).toBe(ValueKind.BOOLEAN);

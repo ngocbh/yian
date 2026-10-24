@@ -1,18 +1,18 @@
 /**
  * The node-owned read hooks of the `Node` base: a port of `tests/engine/test_node_read_hooks.py`.
- * Ported: `test_wait_bind_reserved_resolves_until`, `test_plain_node_defaults`,
- * `test_map_binds_per_item_and_resolves_over` and `test_map_over_not_a_list_raises`.
+ * Ported: `test_plain_node_defaults`, `test_map_binds_per_item_and_resolves_over` and
+ * `test_map_over_not_a_list_raises`.
  *
  * Changed: the node wiring is a `Map`; the `binds_per_item` trait is read on an instance.
+ *
+ * Not ported: `test_wait_bind_reserved_resolves_until`. TS yian has no WAIT kind; the `sleep`
+ * built-in reads `until` as an ordinary input.
  *
  * TS-only: the base reserves no wiring keys (`reservedWiringKeys`), and the default
  * `reservedKeyLabel` and `wiringRefLabel` phrases; MAP reserves `over`, labelled `map over`; a MAP
  * wiring without `over` throws a plain `Error` (Python's `KeyError`), not a `BindingError`; a
  * `bind` capability gets `over`, its source and the normalizer, whose result comes back as `over`;
- * a resolved list holding NaN is a `binding.evaluate` `BindingError`. WAIT's `until` is labelled
- * `wait until`; a WAIT wiring without `until` throws a plain `Error`; a `bind` capability gets
- * `until`, its source and the normalizer, whose result comes back as `until`, and the normalizer
- * still refuses a non-date under `bind`.
+ * a resolved list holding NaN is a `binding.evaluate` `BindingError`.
  */
 
 import { expect, test } from "bun:test";
@@ -22,64 +22,12 @@ import { Node, NodeKind } from "../../src/nodes/base.ts";
 import { BindingError, type ReservedBinder } from "../../src/nodes/binding.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
 
 /** A minimal ordinary node (no reserved keys, binds up front) for the default-hook check. */
 class PlainNode extends Node {
   readonly kind = NodeKind.CODE;
 }
-
-test("wait bind reserved resolves until", () => {
-  // WAIT pre-resolves its `until` source (from nodeWiring) into a concrete ISO deadline.
-  const pool = new VariablePool();
-  pool.set("deadline", "2026-01-01T00:00:00");
-  const node = new WaitNode("w");
-  const got = node.bindReserved(new Map([["until", "${deadline.output}"]]), pool);
-  expect(got).toEqual({ until: "2026-01-01T00:00:00" });
-});
-
-test("WAIT labels until as wait until, and a wiring without it is a setup fault", () => {
-  const node = new WaitNode("w");
-  expect(node.reservedKeyLabel("until")).toBe("wait until");
-
-  let caught: unknown = null;
-  try {
-    node.bindReserved(new Map(), new VariablePool());
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(Error);
-  expect(caught).not.toBeInstanceOf(BindingError);
-  expect((caught as Error).message).toBe("WAIT node 'w' has no `until` wiring");
-});
-
-test("WAIT hands until, its source and its normalizer to a bind capability", () => {
-  const node = new WaitNode("w");
-  const calls: [string, unknown][] = [];
-  const bind: ReservedBinder = (name, source, normalize) => {
-    calls.push([name, source]);
-    return normalize("2026-01-01");
-  };
-
-  expect(node.bindReserved(new Map([["until", "${deadline.output}"]]), new VariablePool(), { bind })).toEqual({
-    until: "2026-01-01",
-  });
-  expect(calls).toEqual([["until", "${deadline.output}"]]);
-});
-
-test("WAIT's normalizer refuses a non-date under a bind capability", () => {
-  const node = new WaitNode("w");
-  const bind: ReservedBinder = (_name, _source, normalize) => normalize(5n);
-  let caught: unknown = null;
-  try {
-    node.bindReserved(new Map([["until", "${deadline.output}"]]), new VariablePool(), { bind });
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).toBeInstanceOf(BindingError);
-  expect((caught as BindingError).failureCode).toBe("contract.input");
-});
 
 test("plain node defaults", () => {
   // An ordinary node reserves no keys and binds up front (not per item).

@@ -7,8 +7,9 @@
  *
  * Changed: an AGENT's model comes from the `models` option, which records the config it is built
  * from (Python patches `model_from_config`); the interruption is the run's `signal`, which the
- * `ask_user` handler aborts, and the run rejects with its reason (Python: the handler raises
- * `_HostStop`); a child flow's identity is compared by reference. CODE references resolve from the
+ * `ask` handler aborts, and the run rejects with its reason (Python: the handler raises
+ * `_HostStop`); the child's gate is a TOOL `ask` (Python's is a HUMAN_INPUT node, a kind TS yian
+ * doesn't have); a child flow's identity is compared by reference. CODE references resolve from the
  * conformance fixtures, and every run sees only the test's credential store in its environment.
  *
  * Covered by a case: none.
@@ -129,8 +130,10 @@ defs:
   approval:
     nodes:
       ask:
-        kind: human_input
-        prompt: approve?
+        kind: tool
+        tool_id: ask
+        input:
+          prompt: approve?
         output: str
     output: \${ask.output}
 nodes:
@@ -231,14 +234,14 @@ test("test_log_resume_restores_into_a_private_graph", async () => {
   };
 
   const caught = await rejected(
-    runFlow(source, {}, { log: path, env: hostEnv(dir), signal: host.signal, tools: { ask_user: interrupt } }),
+    runFlow(source, {}, { log: path, env: hostEnv(dir), signal: host.signal, tools: { ask: interrupt } }),
   );
   expect(caught).toBe(interruption);
   expectSameGraph(graphSnapshot(source.compiled), sourceStatic);
 
   const fresh = await loadFlow(BLOCKING_CALL);
   const original = graphSnapshot(fresh.compiled);
-  const resumed = await advance({ log: path, env: hostEnv(dir), tools: { ask_user: () => "yes" } });
+  const resumed = await advance({ log: path, env: hostEnv(dir), tools: { ask: () => "yes" } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.status).toBe("succeeded");

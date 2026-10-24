@@ -12,8 +12,9 @@
  * written as text whole where Python fails with its digit-limit message: the text binding, `join`
  * and `render_as_json` rows succeed with the whole digits (the CODE node returns its input where
  * Python's returns `1`, so the result shows the text), the AGENT's model receives the whole
- * prompt (a scripted model, where Python patches `model_from_config`), and `ask_user` receives
- * the whole question. `%` text formatting was removed (decision 7), so the `%` rows fail at the
+ * prompt (a scripted model, where Python patches `model_from_config`), and the `ask` handler
+ * receives the whole question (the question is a TOOL `ask`'s prompt: TS yian has no HUMAN_INPUT
+ * kind). `%` text formatting was removed (decision 7), so the `%` rows fail at the
  * binding with that message. `render_as_json` writes indented JSON.
  *
  * Not ported: `test_a_long_int_in_a_text_binding_fails_with_pythons_limit_off`,
@@ -34,7 +35,7 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
-import type { AskUserRequest, ToolEntry } from "../../src/tools/registry.ts";
+import type { AskRequest, ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { serving, textReply } from "./run_state_fixtures.ts";
 
@@ -119,8 +120,8 @@ output: \${a.output}
 });
 
 test("a long int in a human input question fails the node", async () => {
-  const requests: AskUserRequest[] = [];
-  const askUser = (request: AskUserRequest) => {
+  const requests: AskRequest[] = [];
+  const askUser = (request: AskRequest) => {
     requests.push(request);
     return "yes";
   };
@@ -133,14 +134,14 @@ input:
   n: !int
 nodes:
   ask:
-    kind: human_input
-    prompt: "v=\${10 ** n}"
+    kind: tool
+    tool_id: ask
     input:
-      n: \${input.n}
+      prompt: "v=\${10 ** input.n}"
     output: str
 output: \${ask.output}
 `,
-    { tools: { ask_user: askUser } },
+    { tools: { ask: askUser } },
   );
 
   assertSucceeds(result, "yes");

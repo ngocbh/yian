@@ -3,7 +3,7 @@
  * `tests/engine/test_tool_context.py`, with rows for the call's abort signal. TS has no
  * signatures, so every tool gets a context. Not ported: the signature, docstring, bound-method,
  * partial and handler-detection rows, and `test_human_input_passes_its_node_id_to_the_ask_user_handler`
- * (needs the HUMAN_INPUT node).
+ * (TS yian has no HUMAN_INPUT kind; `run_tools.test.ts` shows a TOOL `ask` passing its node id).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

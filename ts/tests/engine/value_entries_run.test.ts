@@ -16,9 +16,10 @@
  * Ported: every row but those covered below. The CODE bodies are Python's where they read the
  * same in JS (decision 11); `reply`'s and `other`'s Python dicts, the `f` def's `.upper()` and
  * `d`'s branch are written in JS. Ints read as `bigint`s (decision 4a), and Python's check of the
- * output's type is a check of its JS `typeof`. A host stop is the `ask_user` handler aborting the
+ * output's type is a check of its JS `typeof`. A host stop is the `ask` handler aborting the
  * run's signal and throwing its reason, where Python raises `_HostStop`; the run rejects with that
- * reason. `run-case/engine_value_entries_run__a_case_routes_to_a_value_entry`,
+ * reason. The gate is a TOOL `ask` where Python's is a HUMAN_INPUT node (TS yian has no
+ * HUMAN_INPUT kind). `run-case/engine_value_entries_run__a_case_routes_to_a_value_entry`,
  * `__an_untaken_flow_call_entry_skips_its_call` and `__a_routed_entry_reads_the_selected_union_field`
  * pin one of their rows' two runs each, so those rows are ported.
  *
@@ -412,8 +413,10 @@ input:
   t: !str
 nodes:
   ask:
-    kind: human_input
-    prompt: "Command?"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Command?"
   route:
     kind: case
     on: \${ask.output}
@@ -441,12 +444,12 @@ test("a resumed run routes to a value entry and replays it", async () => {
   };
 
   const caught = await rejected(
-    runFlow(await loadFlow(GATE_FLOW, { env }), { t: "bye" }, { env, log: path, signal: host.signal, tools: { ask_user: interrupt } }),
+    runFlow(await loadFlow(GATE_FLOW, { env }), { t: "bye" }, { env, log: path, signal: host.signal, tools: { ask: interrupt } }),
   );
   expect(caught).toBe(interruption);
   expect("exit_result" in succeededValues(path)).toBe(false);
 
-  const answered = await advance({ log: path, env, tools: { ask_user: () => "exit" } });
+  const answered = await advance({ log: path, env, tools: { ask: () => "exit" } });
 
   expect(answered.failure).toBeNull();
   expect(answered.status).toBe("succeeded");

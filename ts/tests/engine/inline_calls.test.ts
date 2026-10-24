@@ -8,6 +8,8 @@
  *
  * Changed: Python loads and runs each flow; the load rows check the load (the synth node, its
  * edges, and the argument binding a run would read), and the runs are listed below.
+ * `test_inline_call_in_human_input_synthesizes_and_wires_the_call` puts the call in a TOOL `ask`'s
+ * input (TS yian has no HUMAN_INPUT kind).
  * `test_inline_call_seed_21_loads` is the harvested `load-map-call/seed_21_inline_call`, pinned at
  * the end. `test_inline_call_e06_type_mismatch_is_loud`
  * pins the whole message, where Python matches fragments; its harvested case
@@ -184,19 +186,20 @@ output: \${use.output}
   expect(result.output).toBe("ACME");
 });
 
-test("inline call in human_input synthesizes and wires the call", () => {
+test("inline call in an ask input synthesizes and wires the call", () => {
   const compiled = load(`
-id: ic_human_input
-name: ic_human_input
+id: ic_ask
+name: ic_ask
 input:
   topic: !str
 ${ENRICH_DEF}
 nodes:
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
+      prompt: Review
       context: call(enrich, topic=\${input.topic})
-    prompt: "Review \${context}"
     output: str
 output: \${ask.output}
 `);

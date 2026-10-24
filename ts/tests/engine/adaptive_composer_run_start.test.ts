@@ -11,6 +11,9 @@
  * `test_run_start_error_names_the_gate` and `test_plain_agent_run_start_error_is_unchanged`; the
  * run-start errors are `RangeError`s too.
  *
+ * Changed: the gate is a TOOL `ask` where Python's is a HUMAN_INPUT node (TS yian has no
+ * HUMAN_INPUT kind), so a run passes an ask handler declaring the gate's `proj` input.
+ *
  * Covered by `run-agent/engine_adaptive_composer_run_start__an_error_in_a_child_flow_names_the_callsite`,
  * the harvested `test_run_start_error_in_a_child_flow_names_the_gate_and_callsite` (the same
  * flow and input; it pins the whole message).
@@ -41,8 +44,10 @@ name: f
 input: {proj: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {proj: '\${input.proj}'}
+    kind: tool
+    tool_id: ask
+    input:
+      proj: \${input.proj}
     adaptive_questions:
       prompt: "Q \${proj}"
       llm_config: ${OPENAI}
@@ -110,9 +115,12 @@ const AZURE = "{provider: azure, model: d}";
 const dir = mkdtempSync(join(tmpdir(), "yian-adaptive-run-start-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
+/** The run's ask handler, declaring the gate's context input `proj`; never reached. */
+const ASK_TOOL = { handler: () => "unused", inputs: { proj: { type: "string" } } };
+
 /** The message of the `RangeError` running `text` on `inputs` rejects with. */
 async function runStartError(text: string, inputs: Record<string, unknown>): Promise<string> {
-  const error = await rejected(runFlow(await loadFlow(text), inputs, { env: hostEnv(dir) }));
+  const error = await rejected(runFlow(await loadFlow(text), inputs, { env: hostEnv(dir), tools: { ask: ASK_TOOL } }));
   expect(error).toBeInstanceOf(RangeError);
   return (error as RangeError).message;
 }

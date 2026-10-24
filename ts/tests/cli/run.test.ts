@@ -1017,13 +1017,16 @@ describe("run's input prompts on a TTY", () => {
 });
 
 const ASK_FLOW =
-  "id: ask\nname: ask\nnodes:\n  ok:\n    kind: human_input\n" +
-  '    prompt: "Proceed?"\n    output: str\noutput: ${ok.output}\n';
+  "id: ask\nname: ask\nnodes:\n  ok:\n    kind: tool\n    tool_id: ask\n" +
+  '    input:\n      prompt: "Proceed?"\n    output: str\noutput: ${ok.output}\n';
 
-// A WAIT that never ends on its own, after a node whose progress line says the run is going.
+// A CODE node that runs until the run is stopped (or 30 s pass), after a node whose progress line
+// says the run is going.
 const PAUSE_FLOW =
   "id: pause\nname: pause\nnodes:\n  first: {kind: code, output: str, code: return 'x'}\n" +
-  '  settle: {kind: wait, until: "2999-01-01", depends_on: [first]}\noutput: ${first.output}\n';
+  "  settle:\n    kind: code\n    depends_on: [first]\n    code: |\n" +
+  "      await new Promise((resolve) => setTimeout(resolve, 30_000));\n      return null;\n" +
+  "output: ${first.output}\n";
 
 describe("run's stops", () => {
   test("Ctrl-C at a prompt during the run: cancelled by user, exit 130, no document", async () => {
@@ -1067,14 +1070,21 @@ describe("run's stops", () => {
     const before = signalListeners();
     let sigintWhileDraining = -1;
     const io: CliIo = { ...testIo().io, stderr, stop: stop.signal };
-    expect(await main(["run", flow, "--log", log], io)).toBe(130);
+    let code: number;
+    try {
+      code = await main(["run", flow, "--log", log], io);
+    } finally {
+      // The blocker never outlives the test, even if the progress line never comes.
+      stop.abort(new HostStop("SIGTERM"));
+    }
+    expect(code).toBe(130);
     expect(chunks.at(-1)).toBe("cancelled by user\n");
     // A forwarded stop leaves the signal listeners, so a real signal still stops the drain.
     expect(sigintWhileDraining).toBe(before[0]! + 1);
     expect(existsSync(log)).toBe(true);
     expect(getEventListeners(stop.signal, "abort")).toHaveLength(0);
     expect(signalListeners()).toEqual(before);
-  });
+  }, 20_000);
 
   test("io.stop aborting while an input prompt is up closes it: exit 130", async () => {
     const flow = file("flow.yaml", REQUIRED_INPUTS_FLOW);

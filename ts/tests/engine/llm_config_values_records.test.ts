@@ -21,7 +21,7 @@
  * - Spies patch `AgentNode.prototype.bindReserved` and the producer's prototype `backward`; the
  *   drift row patches `bindReserved` to throw the `BindingError` Python's patched
  *   `call_time_config` raises. Resume errors are `RangeError`s where Python raises `ValueError`.
- * - WAIT and MAP inherit `modelHiddenInputs` and `learningMaterial` from `Node`'s prototype
+ * - MAP inherits `modelHiddenInputs` and `learningMaterial` from `Node`'s prototype
  *   (Python's class attributes).
  */
 
@@ -45,7 +45,6 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { WaitNode } from "../../src/nodes/wait/node.ts";
 import {
   checkRecordedLlmFields,
   type AdvanceOptions,
@@ -514,11 +513,10 @@ test("only an agent with the key hides it from the model", async () => {
   expect(flow.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set(["__llm_config"]));
   const fixed = await loadFlow(PICKED.replace("{model: '${pick.output}'}", "{model: m1}"), { env });
   expect(fixed.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set());
-  // WAIT and MAP keep their reserved inputs; neither shows a learner a prompt.
-  for (const node of [new WaitNode("w"), new MapNode("m", { flowId: "f" })]) {
-    expect(Object.getPrototypeOf(node).modelHiddenInputs).toBe(Node.prototype.modelHiddenInputs);
-    expect(Object.getPrototypeOf(node).learningMaterial).toBe(Node.prototype.learningMaterial);
-  }
+  // MAP keeps its reserved input; it shows a learner no prompt.
+  const map = new MapNode("m", { flowId: "f" });
+  expect(Object.getPrototypeOf(map).modelHiddenInputs).toBe(Node.prototype.modelHiddenInputs);
+  expect(Object.getPrototypeOf(map).learningMaterial).toBe(Node.prototype.learningMaterial);
 });
 
 test("resume without the host key raises before a call time agent calls", async () => {

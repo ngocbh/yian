@@ -15,8 +15,9 @@
  *
  * Ported through `runFlow` and `advance`, in `hostEnv`: `test_call_post_assert_survives_recovery_true`
  * and `test_call_post_assert_survives_recovery_false`. Changed: the interruption before the human
- * answer is the run's `signal`, which the `ask_user` handler aborts (Python: the handler raises
- * `_HostStop`).
+ * answer is the run's `signal`, which the `ask` handler aborts (Python: the handler raises
+ * `_HostStop`); the child's gate is a TOOL `ask` where Python's is a HUMAN_INPUT node (TS yian has
+ * no HUMAN_INPUT kind).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -130,7 +131,7 @@ test("call post assert reads input true", async () => {
 
 // --- 4. durable: the input record survives interruption and recovery --- //
 
-// A child whose HUMAN_INPUT leaf the host interrupts; the parent's call post-assert reads both
+// A child whose `ask` leaf the host interrupts; the parent's call post-assert reads both
 // the declared input `action` and `${output}`.
 const BLOCKING_CHILD = `
 id: approver
@@ -139,10 +140,10 @@ input:
   action: !str
 nodes:
   approve:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
-      action: \${input.action}
-    prompt: "Approve \${action}?"
+      prompt: "Approve \${input.action}?"
     output: str
 output: \${approve.output}
 `;
@@ -170,7 +171,7 @@ output: \${gate.output}
   );
 }
 
-/** Interrupt the started HUMAN_INPUT, then recover it from its run log with `answer`. */
+/** Interrupt the started ask, then recover it from its run log with `answer`. */
 async function driveDurable(name: string, asserts: string, answer: string) {
   const path = join(dir, `${name}.jsonl`);
   const interruption = new Error("interrupt before human answer");
@@ -183,11 +184,11 @@ async function driveDurable(name: string, asserts: string, answer: string) {
     runFlow(
       await loadBlocking(asserts),
       { action: "deploy" },
-      { log: path, signal: host.signal, tools: { ask_user: interrupt }, env: hostEnv(dir) },
+      { log: path, signal: host.signal, tools: { ask: interrupt }, env: hostEnv(dir) },
     ),
   );
   expect(caught).toBe(interruption);
-  return advance({ log: path, tools: { ask_user: () => answer }, env: hostEnv(dir) });
+  return advance({ log: path, tools: { ask: () => answer }, env: hostEnv(dir) });
 }
 
 test("call post assert survives recovery true", async () => {

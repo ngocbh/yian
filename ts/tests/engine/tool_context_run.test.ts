@@ -17,8 +17,9 @@
  * `test_a_direct_agent_outside_a_run_gives_each_call_a_fresh_id` (through `node.run` with a
  * `ToolSet` holding the context) and
  * `test_ask_user_from_an_agent_and_a_human_input_node_sees_the_context` (the request is
- * camelCase, `nodeId`). TS tools are all `FunctionTool`s, so the "function tool" rows build one
- * with `new FunctionTool` where the others use `tool()`.
+ * camelCase, `nodeId`; the node is a TOOL `ask`, whose call is named `ask`, where Python's is a
+ * HUMAN_INPUT node: TS yian has no HUMAN_INPUT kind). TS tools are all `FunctionTool`s, so the
+ * "function tool" rows build one with `new FunctionTool` where the others use `tool()`.
  *
  * Covered by `run-leaves/tool_context_run__each_loop_iteration_gets_its_own_call_id`:
  * `test_each_loop_iteration_gets_its_own_call_id`; by
@@ -374,9 +375,10 @@ nodes:
     prompt: go
     tools: [ask_user]
   confirm:
-    kind: human_input
-    input: {draft: "\${worker.output}"}
-    prompt: "Ship \${draft}?"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Ship \${worker.output}?"
 output: \${confirm.output}
 `;
 
@@ -389,7 +391,7 @@ test("ask_user from an agent and a human input node sees the context", async () 
   };
 
   const result = await runFlow(await loadFlow(ASK_FLOW), {}, {
-    tools: { ask_user: ask },
+    tools: { ask },
     context: db,
     runId: "run-7f3a",
     ...agentHost([callReply(["ask_user", { question: "Which?" }, "c0"]), textReply("draft")]),
@@ -406,6 +408,6 @@ test("ask_user from an agent and a human input node sees the context", async () 
   expect(humanRequest.nodeId).toBe("confirm");
   expect(humanCtx.context).toBe(db);
   expect(humanCtx.node).toBe("confirm");
-  expect(humanCtx.toolName).toBe("ask_user");
+  expect(humanCtx.toolName).toBe("ask");
   expect(humanCtx.callId).toBe("run-7f3a/confirm");
 });

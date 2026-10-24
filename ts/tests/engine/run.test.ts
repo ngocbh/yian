@@ -63,7 +63,7 @@
  * (a node's, and an unreachable END's); a running log with no record; a log that doesn't start
  * with `RunStarted`, and one of schema 9 or 10; a locked log a writer's rollback shrinks under the
  * read reads `running`; on a virtual clock, a run's start and end times and a node's duration (its
- * outcome's time less its start's), and a crashed run with no end time that a resume on a later
+ * outcome's time less its start's: a `sleep` the run waits on, advanced once due), and a crashed run with no end time that a resume on a later
  * clock finishes, keeping the recorded times and stamping its own records with the resume's.
  * `staticNodes` of a flow with CALL and MAP children, and the paths a run's effective model map
  * uses; `staticPathOf` on MAP, LOOP and nested ids, and every node id of a MAP run and a LOOP run
@@ -840,17 +840,6 @@ test("a bad template span set in code fails at run start, named by its subject",
   const output = await load(SPAN_FLOW);
   rewire(output, "__end__", "result", "${upper(x.output, 1)}");
   expect((await runStartError(output, {}, { v: "a" })).message).toBe(`flow output: ${UPPER}`);
-
-  const waiting = await load(`
-id: f
-name: f
-input: {d: !str }
-nodes:
-  w: {kind: wait, until: '\${input.d}'}
-output: ok
-`);
-  rewire(waiting, "w", "until", "${upper(input.d, 1)}");
-  expect((await runStartError(waiting, {}, { d: "2026-01-01" })).message).toBe(`node 'w' wait until: ${UPPER}`);
 });
 
 test("a boundary callback whose promise rejects stops the run", async () => {
@@ -1071,8 +1060,8 @@ nodes:
     code: ./compose_codefns.ts:boom
     output: str
   waiter:
-    kind: wait
-    until: "2099-01-01T00:00:00+00:00"
+    kind: tool
+    tool_id: waiter
 output:
   fail: \${fail.output}
   waiter: \${waiter.output}
@@ -1239,7 +1228,18 @@ test("inspectRun: END succeeded with another node ready but unstarted is succeed
 test("inspectRun: a finished pooled failure has nothing in flight and adds nothing", async () => {
   const path = join(dir, "pooled-failure.jsonl");
   const flow = await load(POOLED_FAILURE_FLOW);
-  const result = await run(flow, {}, { log: path, numWorkers: 2 });
+  // The sibling holds its worker until the failure aborts the run.
+  const waiter = tool({
+    name: "waiter",
+    description: "Wait for the run's signal.",
+    parameters: { type: "object", properties: {} },
+    execute: (_args, ctx) =>
+      new Promise<never>((_resolve, reject) => {
+        if (ctx.signal.aborted) reject(ctx.signal.reason);
+        else ctx.signal.addEventListener("abort", () => reject(ctx.signal.reason), { once: true });
+      }),
+  });
+  const result = await run(flow, {}, { log: path, numWorkers: 2, tools: { waiter } });
   expect(result.status).toBe("failed");
   // The abandoned sibling started and never settled.
   expect(readRunLog(path).some((envelope) => envelope.payload["node_id"] === "waiter")).toBe(true);
@@ -1395,8 +1395,10 @@ id: inspect-timed
 name: inspect_timed
 nodes:
   settle:
-    kind: wait
-    until: "2026-10-20T14:05:00+00:00"
+    kind: tool
+    tool_id: sleep
+    input:
+      until: "2026-10-20T14:05:00+00:00"
 output: \${settle.output}
 `;
 
@@ -1408,7 +1410,10 @@ function octoberTwentieth(hours: number, minutes: number): number {
 test("inspectRun reads when a run started and ended, and a node's outcome less its start is its duration", async () => {
   const path = join(dir, "timed.jsonl");
   const flow = await load(TIMED_FLOW);
-  await run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) });
+  const waited = await run(flow, {}, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 0)) });
+  expect(waited.status).toBe("waiting");
+  // The sleep is due when the run is advanced at 14:05.
+  await resume(flow, { log: path, numWorkers: 0, scheduler: virtualScheduler(octoberTwentieth(14, 5)) });
 
   const inspection = inspectWithAndWithout(path, flow);
   expect(inspection.status).toBe("succeeded");

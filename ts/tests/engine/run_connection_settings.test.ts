@@ -131,7 +131,8 @@ const adaptive = (layer: string) => `id: f
 name: f
 nodes:
   ask:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     adaptive_questions:
       prompt: "Ask about the project"
       llm_config: ${layer}

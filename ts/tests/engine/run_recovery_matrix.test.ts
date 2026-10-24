@@ -26,15 +26,18 @@
  * - The live snapshot after each commit is taken by the log, before the next append and once at
  *   the end (the engine changes the state only in its commits), where Python patches the engine's
  *   `commit_prepared`.
- * - `test_effect_start_prefix_replays_without_running_effect_work` (`human_input`, `wait`) and
+ * - TS yian has no HUMAN_INPUT or WAIT kind: each human interaction is a TOOL `ask` and each
+ *   wait a TOOL `sleep` (so the effect rows are `[ask]` and `[sleep]`, Python's `[human_input]`
+ *   and `[wait]`).
+ * - `test_effect_start_prefix_replays_without_running_effect_work` and
  *   `test_namespaced_human_input_start_replays_without_host_interaction[call]`: an async engine
  *   can't be paused between a start and its evaluation, so the host callback throws at the
  *   effect's `NodeStarted` while the log refuses further appends: the engine's `RunStopped` is
- *   refused, nothing evaluates (the `ask_user` handler, the scheduler's sleep and the model fail
+ *   refused, nothing evaluates (the `ask` handler, the scheduler's sleep and the model fail
  *   the test if called), and the log ends with the start, as Python's closed generator leaves it.
- * - `test_recovered_wait_recomputes_from_the_authored_absolute_deadline`: the remaining duration is
- *   the sleep `evalNode` asks the scheduler for, whose clock reads 12:00:04 then 12:00:07 and
- *   moves past each sleep, which returns at once.
+ * - `test_recovered_wait_recomputes_from_the_authored_absolute_deadline`: the recovered `sleep`
+ *   asks for the authored deadline in UTC whether the clock reads 12:00:04 or 12:00:07; the engine,
+ *   not the node, turns it into a wait.
  * - `test_recorded_nested_growth_resumes_with_exact_memory_and_trace`: the prefix is the first 25
  *   lines of a live learnable TS run (schema 13 is the only TS schema) whose memory keys are served
  *   by `FakeMemory`, and the CODE reruns are seen by spying on `CodeNode.prototype.forward`.
@@ -42,7 +45,7 @@
  * Covered by a case: `test_effect_start_prefix_replays_without_running_effect_work[agent]`
  * (`resume/run_recovery_matrix__an_agent_started_before_the_crash_runs_again`) and
  * `test_namespaced_human_input_start_replays_without_host_interaction[map]`
- * (`resume/run_recovery_matrix__a_human_input_in_a_map_retries_under_its_namespaced_id`). Also
+ * (`resume/run_recovery_matrix__an_ask_in_a_map_retries_under_its_namespaced_id`). Also
  * covered by a case, besides their rows here: `[serial-named]`
  * (`resume/run_recovery_matrix__a_cut_after_nested_growth_resumes_the_grown_nodes`, which covers
  * `test_recorded_nested_growth_resumes_with_exact_memory_and_trace` without its memory) and the
@@ -66,12 +69,12 @@ import { NodeStarted, type RunEvent, RunSucceeded } from "../../src/events.ts";
 import { ValueRoute } from "../../src/expr/lineage.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
-import { type Node, NodeKind, Output } from "../../src/nodes/base.ts";
+import { type Node, NodeKind, Pending } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import type { Scheduler } from "../../src/platform.ts";
+import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { replayRunLog, advance, runFlow } from "../../src/run.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
@@ -229,8 +232,10 @@ defs:
       token: !str
     nodes:
       ask:
-        kind: human_input
-        prompt: nested call input
+        kind: tool
+        tool_id: ask
+        input:
+          prompt: nested call input
         output: str
     output: \${ask.output}
 nodes:
@@ -390,23 +395,27 @@ output: \${repeated.output}
 `;
 
 const EFFECT_FLOWS: Record<string, string> = {
-  human_input: `
+  ask: `
 id: recovery-human
 name: recovery_human
 nodes:
   effect:
-    kind: human_input
-    prompt: this host interaction must never be invoked
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: this host interaction must never be invoked
     output: str
 output: \${effect.output}
 `,
-  wait: `
+  sleep: `
 id: recovery-wait
 name: recovery_wait
 nodes:
   effect:
-    kind: wait
-    until: '${WAIT_DEADLINE}'
+    kind: tool
+    tool_id: sleep
+    input:
+      until: '${WAIT_DEADLINE}'
 output: \${effect.output}
 `,
 };
@@ -421,18 +430,22 @@ nodes:
     output: str
     code: ./compose_codefns.ts:echo_x
   wait:
-    kind: wait
+    kind: tool
+    tool_id: sleep
     depends_on: [release]
-    until: '${WAIT_DEADLINE}'
+    input:
+      until: '${WAIT_DEADLINE}'
   agent:
     kind: agent
     depends_on: [release]
     prompt: never invoked
     llm_config: {provider: openai, model: offline-test}
   human:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     depends_on: [release]
-    prompt: never invoked
+    input:
+      prompt: never invoked
     output: str
   later:
     kind: code
@@ -532,7 +545,7 @@ function expectEveryPrefixReplays(loaded: ComposedFlow, log: CapturingLog): void
 /** A tool set, model access and scheduler that fail the test if an effect runs. */
 const NO_EFFECTS = {
   tools: new ToolSet({
-    ask_user: () => {
+    ask: () => {
       throw new Error("effect work ran after only its durable NodeStarted");
     },
   }),
@@ -667,7 +680,7 @@ test("test_namespaced_human_input_start_replays_without_host_interaction[call]",
   const loaded = await load(NESTED_HUMAN_CALL);
   const { state, log, target } = await pauseAfterStarted(
     loaded,
-    (live, nodeId) => live.flow.nodes.get(nodeId)!.kind === NodeKind.HUMAN_INPUT,
+    (live, nodeId) => live.flow.nodes.get(nodeId)!.kind === NodeKind.TOOL,
   );
 
   expect(target).toContain("/ask");
@@ -680,7 +693,7 @@ test("test_namespaced_human_input_start_replays_without_host_interaction[call]",
 });
 
 test("test_recovered_wait_recomputes_from_the_authored_absolute_deadline", async () => {
-  const loaded = await load(EFFECT_FLOWS["wait"]!);
+  const loaded = await load(EFFECT_FLOWS["sleep"]!);
   const { log } = await pauseAfterStarted(loaded, (_state, nodeId) => nodeId === "effect");
   const recovered = replayRunLog(loaded, log);
   const authored = loaded.compiled.wiring.get("effect")!.get("until") as Binding;
@@ -693,24 +706,14 @@ test("test_recovered_wait_recomputes_from_the_authored_absolute_deadline", async
   commitPrepared(log, recovered, prepareRunResumed(recovered, { numWorkers: 0 }));
   const node = recovered.flow.nodes.get("effect")!;
 
-  const observed: number[][] = [];
+  // Whatever the clock reads, the sleep asks for the authored deadline in UTC; the engine decides.
   for (const second of [4, 7]) {
-    const sleeps: number[] = [];
-    let now = Date.UTC(2026, 7, 14, 12, 0, second);
-    // A sleep returns at once with the clock moved past it.
-    const scheduler: Scheduler = {
-      now: () => now,
-      sleep: async (ms) => {
-        sleeps.push(ms);
-        now += ms;
-      },
-    };
+    const scheduler = virtualScheduler(Date.UTC(2026, 7, 14, 12, 0, second));
     const { outcome } = await evalNode(node, recovered.flow, recovered.pool, { scheduler });
-    expect(outcome).toEqual(new Output(null));
-    observed.push(sleeps);
+    expect(outcome).toEqual(
+      new Pending([], { wait: { tool: "sleep", until: "2026-08-14T12:00:10.000Z", forSeconds: null } }),
+    );
   }
-
-  expect(observed).toEqual([[6000], [3000]]);
 });
 
 test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async () => {

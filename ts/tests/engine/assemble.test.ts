@@ -21,9 +21,10 @@
  * and the value-entry rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter
  * and binding at the entry itself) and `splitTypedInputs` (a value entry is returned unchanged).
  *
- * The wiring parity rows (`test_wiring_parity_*`) call `checkWiringParity` on built CODE and WAIT
- * descriptors. Changed: the parity message spells its key lists in the text form
- * (`["orphan","x"]`), where Python prints `['orphan', 'x']`.
+ * The wiring parity rows (`test_wiring_parity_*`) call `checkWiringParity` on built CODE
+ * descriptors; the WAIT reserved-key row isn't ported, as TS yian has no WAIT kind. Changed: the
+ * parity message spells its key lists in the text form (`["orphan","x"]`), where Python prints
+ * `['orphan', 'x']`.
  *
  * The seed edge and boundary rows: `test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
  * `test_seed02_branch_target_has_control_edge`, `test_seed02_coalesce_both_producers_terminal`,
@@ -64,7 +65,6 @@ import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BuildContext, BuildResult, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
-import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes, type ValueReader } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
@@ -1152,11 +1152,6 @@ describe("checkWiringParity", () => {
   test("matched keys are accepted", () => {
     const result = leaf({ x: "${input.x}", y: "${input.y}" });
     checkWiringParity(new Map([["n", result]]), new Map([["n", result.wiring]]));
-  });
-
-  test("WAIT's reserved until key is accepted", () => {
-    const result = new WaitDescriptor({ id: "w", until: "${input.t}" }).build(new BuildContext({ registry: EMPTY }));
-    checkWiringParity(new Map([["w", result]]), new Map([["w", result.wiring]]));
   });
 
   test("an orphan source is refused", () => {

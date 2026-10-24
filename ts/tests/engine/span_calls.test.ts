@@ -22,6 +22,12 @@
  * sets the bad binding and writes the edited flow's fingerprint into the log's `RunStarted`, where
  * Python stubs the run's template check during the first run; replay checks the fingerprint by
  * plain equality and the log has no hash chain. The CODE bodies are inline JavaScript.
+ *
+ * Changed: TS yian has no HUMAN_INPUT or WAIT kind. The question sites are a TOOL `ask`'s `prompt`
+ * and `questions` inputs, wiring templates that read `${input.v}`, so each is named as that input;
+ * the adaptive brief reads the ask's input `t`; the `until` site is a TOOL `sleep`'s input. The
+ * code-built question row rewires the ask's `questions` input, and the code-built WAIT `until` row
+ * is gone: a `sleep`'s `until` is an ordinary input, as in the code-built binding row.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -37,7 +43,6 @@ import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
-import type { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -164,12 +169,16 @@ nodes:
 output: \${r.output}
 `;
 
-const WAIT = `
+const SLEEP = `
 id: f
 name: f
 input: {d: !str }
 nodes:
-  w: {kind: wait, until: '<until>'}
+  w:
+    kind: tool
+    tool_id: sleep
+    input:
+      until: '<until>'
 output: ok
 `;
 
@@ -214,15 +223,16 @@ name: f
 input: {v: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {t: '\${input.v}'}
-    prompt: '<prompt>'
-    questions:
-      - question: '<question>'
-        header: H
-        options:
-          - label: '<label>'
-            description: '<description>'
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: '<prompt>'
+      questions:
+        - question: '<question>'
+          header: H
+          options:
+            - label: '<label>'
+              description: '<description>'
 output: \${ask.output}
 `;
 
@@ -232,15 +242,17 @@ name: f
 input: {v: !str }
 nodes:
   ask:
-    kind: human_input
-    input: {t: '\${input.v}'}
+    kind: tool
+    tool_id: ask
+    input:
+      t: \${input.v}
     adaptive_questions:
       prompt: '<prompt>'
 output: \${ask.output}
 `;
 
 const GOOD_CODE = { n: "${input.v}", out: "${x.output}" };
-const GOOD_HUMAN = { prompt: "${t}", question: "${t}", label: "${t}", description: "${t}" };
+const GOOD_HUMAN = { prompt: "${input.v}", question: "${input.v}", label: "${input.v}", description: "${input.v}" };
 
 /** Each site's flow and the prefix its error line carries. */
 const SITES: Record<string, [text: string, where: string]> = {
@@ -265,7 +277,7 @@ const SITES: Record<string, [text: string, where: string]> = {
   "map-over": [fill(MAP, { over: "${upper(input.v, 1)}", item: "${item}" }), "node 'm' map over: "],
   "map-item-input": [fill(MAP, { over: "${[input.v]}", item: "${upper(item, 1)}" }), "node 'm' map input 'item' from: "],
   "loop-seed": [fill(LOOP, { n: "${upper(input.v, 1)}" }), "node 'r' input 'n' from: "],
-  "wait-until": [fill(WAIT, { until: "${upper(input.d, 1)}" }), "node 'w' wait until: "],
+  "sleep-until": [fill(SLEEP, { until: "${upper(input.d, 1)}" }), "node 'w' input 'until' from: "],
   "case-on": [fill(CASE_ON, { on: "${upper(input.v, 1)}" }), "node 'g' on: from: "],
   "value-entry": [fill(VALUE_ENTRY, { value: "${upper(input.v, 1)}" }), "value entry 'e' from: "],
   "agent-prompt": [fill(AGENT, { prompt: "Say ${upper(t, 1)}", system: "S" }), "node 'a' prompt: "],
@@ -275,13 +287,13 @@ const SITES: Record<string, [text: string, where: string]> = {
     (
       [
         ["prompt", "prompt"],
-        ["question", "questions[0].question"],
-        ["label", "questions[0].options[0].label"],
-        ["description", "questions[0].options[0].description"],
+        ["question", "questions"],
+        ["label", "questions"],
+        ["description", "questions"],
       ] as const
-    ).map(([site, label]) => [
-      `human-${site}`,
-      [fill(HUMAN, { ...GOOD_HUMAN, [site]: "${upper(t, 1)}" }), `node 'ask' ${label}: `],
+    ).map(([site, input]) => [
+      `ask-${site}`,
+      [fill(HUMAN, { ...GOOD_HUMAN, [site]: "${upper(input.v, 1)}" }), `node 'ask' input '${input}' from: `],
     ]),
   ),
 };
@@ -310,8 +322,8 @@ test("well-called builtins in every site load", () => {
   load(fill(CODE, { n: "${upper(input.v)}", out: "${render_as_json(x.output, indent=0)}" }));
   load(fill(MAP, { over: "${[upper(input.v)]}", item: "${lower(item)}" }));
   load(fill(AGENT, { prompt: "Say ${upper(t)}", system: 'S ${join([t], sep="-")}' }));
-  load(fill(HUMAN, { ...GOOD_HUMAN, question: "${upper(t)}" }));
-  load(fill(WAIT, { until: "${lower(input.d)}" }));
+  load(fill(HUMAN, { ...GOOD_HUMAN, question: "${upper(input.v)}" }));
+  load(fill(SLEEP, { until: "${lower(input.d)}" }));
 });
 
 // ---------- bindings set in code, checked before the run ----------
@@ -375,10 +387,6 @@ test("code-built reserved and synthetic keys use their site labels", async () =>
   const mapped = await loadFlow(fill(MAP, { over: "${[input.v]}", item: "${item}" }));
   rewire(mapped.compiled, "m", "item", "${upper(item, 1)}");
   await expectFailsBeforeTheRun(mapped, { v: "a" }, new RegExp(`^node 'm' map input 'item': ${UPPER_RUN}`));
-
-  const waiting = await loadFlow(fill(WAIT, { until: "${input.d}" }));
-  rewire(waiting.compiled, "w", "until", "${upper(input.d, 1)}");
-  await expectFailsBeforeTheRun(waiting, { d: "2026-01-01" }, new RegExp(`^node 'w' wait until: ${UPPER_RUN}`));
 });
 
 test("a code-built reserved key constructor is checked without a type table", async () => {
@@ -404,9 +412,9 @@ test("a code-built agent prompt mis-calling a builtin fails before the run", asy
 
 test("a code-built question text mis-calling a builtin fails before the run", async () => {
   const flow = await loadFlow(fill(HUMAN, GOOD_HUMAN));
-  const node = flow.compiled.nodes.get("ask") as HumanInputNode;
-  node.questions = [{ ...(node.questions![0] as object), question: "${upper(t, 1)}" }];
-  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'ask' questions\\[0\\]\\.question: ${UPPER_RUN}`));
+  const question = { question: "${upper(input.v, 1)}", header: "H", options: [{ label: "a", description: "b" }] };
+  rewire(flow.compiled, "ask", "questions", new ValueTemplate([question]));
+  await expectFailsBeforeTheRun(flow, { v: "a" }, new RegExp(`^node 'ask' input 'questions': ${UPPER_RUN}`));
 });
 
 test("a code-built binding calling an unknown function fails before the run", async () => {

@@ -1,5 +1,5 @@
 /**
- * `runFlow` and `advance` give each run its own tools and `ask_user` handler: a port of
+ * `runFlow` and `advance` give each run its own tools and ask handler: a port of
  * `tests/engine/test_run_tools_flow.py`.
  *
  * An AGENT's model is the test's `ChatModel` given as `models` (a fresh one per build, as
@@ -15,7 +15,6 @@
  * `test_concurrent_runs_never_see_each_others_tools_or_handler`,
  * `test_resume_flow_asks_through_the_handler_passed_to_resume`, the `map` row of
  * `test_each_map_item_and_call_asks_with_its_own_node_id`,
- * `test_human_input_without_a_run_handler_fails_the_node`,
  * `test_agent_sees_the_union_of_three_host_filled_groups`,
  * `test_concurrent_runs_with_different_toolboxes_never_cross`, `test_bad_groups_fail_at_run_start`
  * (all three rows), `test_resume_uses_the_group_contents_passed_to_resume`, the `call` and `loop`
@@ -24,7 +23,10 @@
  * `RangeError` where Python raises `ValueError`, and the missing-group message lists the run's
  * groups as JSON text (`["toolbox","workspace"]`, decision 7).
  *
- * Changed: `test_resume_uses_the_group_contents_passed_to_resume`: the run records the specs of
+ * Changed: the asks are TOOL `ask` nodes, answered by the `ask` handler, where Python's are
+ * HUMAN_INPUT nodes answered by `ask_user` (TS yian has no HUMAN_INPUT kind). So
+ * `test_human_input_without_a_run_handler_fails_the_node` is refused at run start, before the log
+ * exists, where Python fails the node. `test_resume_uses_the_group_contents_passed_to_resume`: the run records the specs of
  * the tools its AGENTs grant, so a resume whose group holds another tool is refused, and the
  * resume uses a tool of the same spec that acts differently (Python resumes with another tool).
  * `test_bad_tools_fail_before_the_log_is_created`: TS tools are `FunctionTool`s, tool
@@ -53,7 +55,7 @@ import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
-import { type AskUserRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
+import { type AskRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { barrier, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 
@@ -82,9 +84,10 @@ nodes:
     kind: tool
     tool_id: whoami
   ask:
-    kind: human_input
-    input: {name: "\${who.output}"}
-    prompt: "Hello \${name}?"
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Hello \${who.output}?"
 output: \${ask.output}
 `;
 
@@ -108,8 +111,10 @@ defs:
       last: !str
     nodes:
       ask:
-        kind: human_input
-        prompt: "next turn"
+        kind: tool
+        tool_id: ask
+        input:
+          prompt: "next turn"
         output: str
     output:
       count: \${input.count + 1}
@@ -135,8 +140,10 @@ defs:
       item: !str
     nodes:
       ask:
-        kind: human_input
-        prompt: "item?"
+        kind: tool
+        tool_id: ask
+        input:
+          prompt: "item?"
         output: str
     output: \${ask.output}
 input:
@@ -156,16 +163,16 @@ const fixed = (name: string, value: () => unknown) =>
   tool({ name, description: `Return ${name}.`, parameters: { type: "object", properties: {} }, execute: () => value() });
 
 /** Echo the rendered question back as the answer. */
-const answerWithQuestion = (request: AskUserRequest) => `answer to ${request.question}`;
+const answerWithQuestion = (request: AskRequest) => `answer to ${request.question}`;
 
 test("runFlow uses per-run tools and ask_user handler", async () => {
   const result = await run(GREETING_FLOW, {}, {
-    tools: { whoami: fixed("whoami", () => "alice"), ask_user: answerWithQuestion },
+    tools: { whoami: fixed("whoami", () => "alice"), ask: answerWithQuestion },
   });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("answer to Hello alice?");
-  expect(TOOL_REGISTRY.has("whoami") || TOOL_REGISTRY.has("ask_user")).toBe(false);
+  expect(TOOL_REGISTRY.has("whoami") || TOOL_REGISTRY.has("ask")).toBe(false);
 });
 
 test("a tools mapping hides the global registry", async () => {
@@ -186,7 +193,7 @@ test("concurrent runs never see each other's tools or handler", async () => {
     run(GREETING_FLOW, {}, {
       tools: {
         whoami: fixed("whoami", () => name),
-        ask_user: async (request: AskUserRequest) => {
+        ask: async (request: AskRequest) => {
           await bothAsking();
           return `${name} answers ${request.question}`;
         },
@@ -204,7 +211,7 @@ test("advance asks through the handler passed to resume", async () => {
   const flow = await loadFlow(GREETING_FLOW);
   const host = new AbortController();
   const stop = new Error("host stop");
-  const interrupt = (_request: AskUserRequest) => {
+  const interrupt = (_request: AskRequest) => {
     host.abort(stop);
     throw stop;
   };
@@ -214,7 +221,7 @@ test("advance asks through the handler passed to resume", async () => {
       log: path,
       env: hostEnv(dir),
       signal: host.signal,
-      tools: { whoami: fixed("whoami", () => "carol"), ask_user: interrupt },
+      tools: { whoami: fixed("whoami", () => "carol"), ask: interrupt },
     }),
   );
   expect(error).toBe(stop);
@@ -222,7 +229,7 @@ test("advance asks through the handler passed to resume", async () => {
   const resumed = await advance({
     log: path,
     env: hostEnv(dir),
-    tools: { whoami: fixed("whoami", () => "unused"), ask_user: answerWithQuestion },
+    tools: { whoami: fixed("whoami", () => "unused"), ask: answerWithQuestion },
   });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
@@ -234,7 +241,7 @@ test("each map item asks with its own node id", async () => {
 
   const result = await run(MAP_ASK_FLOW, { items: ["a", "b"] }, {
     tools: {
-      ask_user: (request: AskUserRequest) => {
+      ask: (request: AskRequest) => {
         nodeIds.push(request.nodeId);
         return "ok";
       },
@@ -270,11 +277,17 @@ for (const [name, tools, message] of [
   });
 }
 
-test("human input without a run handler fails the node", async () => {
-  const result = await run(LOOP_ASK_FLOW, {});
+test("an ask without a run handler fails at run start", async () => {
+  const path = freshLog();
 
-  expect(result.status).toBe("failed");
-  expect(result.failure!.message).toContain("no ask handler for this run");
+  const error = await rejected(run(LOOP_ASK_FLOW, {}, { log: path }));
+
+  expect(error).toEqual(
+    new RangeError(
+      "TOOL node 'loop/ask' names 'ask': no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
+    ),
+  );
+  expect(existsSync(path)).toBe(false);
 });
 
 // --- AGENT tool groups ------------------------------------------------------------------ //

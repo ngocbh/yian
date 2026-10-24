@@ -5,7 +5,8 @@
  * `test_eval_node_passes_the_run_toolset_to_a_tool_node`,
  * `test_flow_engine_passes_its_toolset_to_every_tool_node`,
  * `test_human_input_asks_the_run_ask_user_handler` (the request is camelCase) and
- * `test_eval_node_gives_human_input_the_run_toolset`.
+ * `test_eval_node_gives_human_input_the_run_toolset`, on a TOOL `ask` node answered by the run's
+ * `ask` handler (TS yian has no HUMAN_INPUT kind; the prompt is the ask's input).
  *
  * Ported (adapted): `test_only_nodes_that_declare_needs_tools_receive_the_toolset`: every node also
  * receives `signal`, and the opted-in node's `tools` is the run's tool set itself.
@@ -50,7 +51,6 @@ import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/m
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
-import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -150,10 +150,10 @@ test("flow engine passes its toolset to every tool node", async () => {
 
 test("human input asks the run ask_user handler", async () => {
   const seen: AskRequest[] = [];
-  const tools = new ToolSet({ ask_user: recordingHandler(seen, "yes") });
-  const node = new HumanInputNode("approval", { prompt: "Ship ${plan}?", title: "Gate" });
+  const tools = new ToolSet({ ask: recordingHandler(seen, "yes") });
+  const node = new ToolNode("approval", { toolId: "ask", title: "Gate" });
 
-  expect(await node.run({ plan: "v2" }, { tools })).toEqual(new Output("yes"));
+  expect(await node.run({ prompt: "Ship v2?" }, { tools })).toEqual(new Output("yes"));
   expect(seen).toEqual([
     {
       question: "Ship v2?",
@@ -172,9 +172,9 @@ test("human input asks the run ask_user handler", async () => {
 
 test("eval node gives human input the run toolset", async () => {
   const seen: AskRequest[] = [];
-  const tools = new ToolSet({ ask_user: recordingHandler(seen, "yes") });
+  const tools = new ToolSet({ ask: recordingHandler(seen, "yes") });
 
-  const node = new HumanInputNode("ask", { prompt: "Ready?" });
+  const node = new ToolNode("ask", { toolId: "ask" });
 
   const evaluated = await evalNode(node, null, new VariablePool(), { tools });
 

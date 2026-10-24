@@ -27,9 +27,9 @@ import {
   ToolCallFinished,
 } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
+import { CapabilityFault, Grow, markerMessage, Output, Pending, Route, type Steering } from "../nodes/base.ts";
 import type { SourceResolver } from "../nodes/binding.ts";
-import { isExactly, NodeSteps } from "../nodes/contracts.ts";
+import { type CallView, isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
@@ -47,6 +47,7 @@ import {
 import { LiveChannel } from "./live.ts";
 import type { NodeStepRecord, OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
 import {
+  callResultStep,
   commitPrepared,
   type GrowBuilder,
   isDerivedCommit,
@@ -60,13 +61,17 @@ import {
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeSucceeded,
+  prepareNodeWaiting,
   preparePoolCommit,
+  prepareRunFailed,
   prepareRunStopped,
+  prepareRunWaiting,
   RunState,
   requireExpansionOutput,
   resolveFromPool,
 } from "./state.ts";
 import { captureBindings, sourcePath } from "./trace.ts";
+import { nodeCalls } from "./waits.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -184,6 +189,21 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
   );
 }
 
+/** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */
+function callViews(state: RunState, nodeId: string): CallView[] {
+  return nodeCalls(state.waits, nodeId).map((call) => {
+    const answer = callResultStep(state, call.callId);
+    return {
+      callId: call.callId,
+      tool: call.tool,
+      state: call.state,
+      closedReason: call.closedReason,
+      result: answer === null ? null : structuredClone(answer),
+      deadline: call.deadline,
+    };
+  });
+}
+
 /**
  * Drive a prepared append-only run frontier without owning its log.
  *
@@ -248,6 +268,10 @@ export class FlowEngine {
    */
   readonly #reads = new Map<string, Map<string, number>>();
   #ran = false;
+  /** Whether a loop is driving the run; a delivery made after it ended publishes without it. */
+  #looping = false;
+  /** The run's post-durable observers so far, in order. */
+  readonly #events: RunEvent[] = [];
 
   /**
    * Borrow a prepared state and log and configure one drive.
@@ -349,22 +373,28 @@ export class FlowEngine {
     }
     const onHostAbort = (): void => this.#stop("signal", host!.reason);
     host?.addEventListener("abort", onHostAbort, { once: true });
+    this.#looping = true;
     try {
-      return this.numWorkers === 0 ? await this.#runSerial() : await this.#runPooled();
+      await (this.numWorkers === 0 ? this.#runSerial() : this.#runPooled());
+      return [...this.#events];
     } finally {
+      this.#looping = false;
       host?.removeEventListener("abort", onHostAbort);
     }
   }
 
   /** Execute each durably started node inline. */
-  async #runSerial(): Promise<readonly RunEvent[]> {
+  async #runSerial(): Promise<void> {
     const { state, log } = this;
     const signal = this.#controller.signal;
-    const events: RunEvent[] = [];
+    const events = this.#events;
     try {
       while (state.result === null) {
         signal.throwIfAborted();
-        if (state.ready.length === 0) throw new Error("FlowEngine reached nonterminal quiescence");
+        if (state.ready.length === 0) {
+          this.#quiesce(events);
+          break;
+        }
         const nodeId = state.ready[0]!;
         const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
         this.#publish(started, events);
@@ -379,7 +409,6 @@ export class FlowEngine {
     } catch (error) {
       throw this.#fail(error);
     }
-    return events;
   }
 
   /**
@@ -389,10 +418,10 @@ export class FlowEngine {
    * block. Any other error aborts the run signal, waits for every active worker and rethrows the
    * initiating error.
    */
-  async #runPooled(): Promise<readonly RunEvent[]> {
+  async #runPooled(): Promise<void> {
     const { state, log } = this;
     const signal = this.#controller.signal;
-    const events: RunEvent[] = [];
+    const events = this.#events;
     const completions = new CompletionQueue();
     const active = new Map<string, Promise<void>>();
     try {
@@ -412,7 +441,10 @@ export class FlowEngine {
           );
           active.set(nodeId, worker);
         }
-        if (active.size === 0) throw new Error("FlowEngine reached nonterminal quiescence");
+        if (active.size === 0) {
+          this.#quiesce(events);
+          break;
+        }
         const completion = await completions.take();
         active.delete(completion.nodeId);
         // An entry taken after the abort is discarded; the abort's error is the run's.
@@ -423,7 +455,7 @@ export class FlowEngine {
           this.#controller.abort();
           this.#publish(settled, events);
           await Promise.all(active.values());
-          return events;
+          return;
         }
         this.#publish(settled, events);
       }
@@ -433,8 +465,25 @@ export class FlowEngine {
       await Promise.all(active.values());
       throw initiating;
     }
-    // A success result means nothing else is ready or in flight, so there is nothing to drain.
-    return events;
+    // A success result, or quiescence, means nothing else is ready or in flight, so there is
+    // nothing to drain.
+  }
+
+  /**
+   * End a quiescent segment: `run_failed` when END can't be reached whatever the waiting nodes do,
+   * else `run_waiting` unless it is already the last frontier record.
+   *
+   * @throws Error when no node waits (nonterminal quiescence).
+   */
+  #quiesce(events: RunEvent[]): void {
+    const { state, log } = this;
+    if (state.waits.waiting.size === 0) throw new Error("FlowEngine reached nonterminal quiescence");
+    if (state.terminalUnreachableFailure !== null) {
+      this.#publish(commitPrepared(log, state, prepareRunFailed(state)), events);
+      this.#controller.abort();
+      return;
+    }
+    if (state.waits.lastFrontier !== "run_waiting") this.#publish(commitPrepared(log, state, prepareRunWaiting(state)), events);
   }
 
   /**
@@ -446,7 +495,7 @@ export class FlowEngine {
     if (state.flow.nodes.get(nodeId)!.needsSteps !== true) return null;
     // The recorded steps are frozen; the node gets copies it may change.
     const prior = structuredClone(state.nodeSteps.get(nodeId) ?? []) as ValueRecord[];
-    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, (step, options) => {
+    const record: NodeSteps["record"] = (step, options) => {
       // A stopping run takes only a settled call's step, until it has a result; the stop is
       // control flow, not a host fault.
       if (signal.aborted && !(options?.settled === true && state.result === null)) throw signal.reason;
@@ -458,7 +507,10 @@ export class FlowEngine {
         // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);
       }
-    });
+    };
+    // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
+    // calling its handler again after a wake or a crash.
+    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, callViews(state, nodeId), state.runDefaults.maxEventBytes);
   }
 
   /** Prepare one outcome's record, append it and apply its plan, returning its observers. */
@@ -513,10 +565,23 @@ export class FlowEngine {
         if (!(error instanceof GrowthRejected)) throw error;
         prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);
       }
+    } else if (outcome instanceof Pending) {
+      return this.#commitPending(nodeId, outcome);
     } else {
       throw new TypeError(`raw evaluator returned an unsupported outcome ${jsTypeName(outcome)}`);
     }
     return commitPrepared(this.log, state, prepared);
+  }
+
+  /**
+   * Commit a Pending outcome. Host calls: `node_waiting` naming them. A take or sleep: decide now
+   * and append the result in this synchronous section, so no delivery lands between the decision
+   * and its records.
+   */
+  #commitPending(nodeId: string, outcome: Pending): readonly RunEvent[] {
+    const { state, log } = this;
+    if (outcome.wait === null) return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: outcome.callIds }));
+    throw new TypeError("take and sleep outcomes aren't decided yet");
   }
 
   /**

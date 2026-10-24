@@ -7,16 +7,23 @@ flow: |
   nodes:
     pick: {kind: code, output: str, code: "return 'nope'"}
     ask:
-      kind: human_input
-      input: {proj: '${input.proj}'}
+      kind: tool
+      tool_id: ask
+      input:
+        proj: ${input.proj}
       adaptive_questions:
         prompt: "Q ${proj}"
-        llm_config: {provider: '${pick.output}', model: m}
+        llm_config:
+          provider: ${pick.output}
+          model: m
   output: ${ask.output}
 inputs:
   proj: x
 run:
   num_workers: 0
+# A run with an ask needs the ask handler; the composer fails before the ask asks.
+host:
+  human: {}
 expect:
   output:
     status: failed
@@ -24,7 +31,7 @@ expect:
       code: contract.input
       frames:
       - label: flow.yaml
-        range: [11, 30, 11, 46]
+        range: [14, 19, 14, 33]
       message: 'node ''ask'' adaptive_questions.llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
       node: ask__compose
   trace:
@@ -69,7 +76,7 @@ expect:
         code: contract.input
         frames:
         - label: flow.yaml
-          range: [11, 30, 11, 46]
+          range: [14, 19, 14, 33]
         message: 'node ''ask'' adaptive_questions.llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
         node: ask__compose
   events:
@@ -92,7 +99,7 @@ expect:
         code: contract.input
         frames:
         - label: flow.yaml
-          range: [11, 30, 11, 46]
+          range: [14, 19, 14, 33]
         message: 'node ''ask'' adaptive_questions.llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
         node: ask__compose
   - - RunFailed
@@ -100,6 +107,6 @@ expect:
         code: contract.input
         frames:
         - label: flow.yaml
-          range: [11, 30, 11, 46]
+          range: [14, 19, 14, 33]
         message: 'node ''ask'' adaptive_questions.llm_config.provider: not a known provider; use one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
         node: ask__compose

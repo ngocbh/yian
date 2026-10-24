@@ -1,11 +1,39 @@
 # From tests/engine/test_lifted_node_gating.py::test_adaptive_composer_runs_on_the_taken_route.
-# On the taken CASE route, the gate's synthetic composer AGENT `ask__compose` makes one
+# On the taken CASE route, the ask's synthetic composer AGENT `ask__compose` makes one
 # structured call (consumer `compose`); its one question (header DB) reaches the host's
-# ask_user from node `ask` (its question is the gate's prompt), and the answer is the gate's
+# ask from node `ask` (its question is the ask's prompt), and the answer is the ask's
 # output: {r: {DB: Postgres}}.
 kind: run
 rules: [llm, run-log]
 flow: |
+  id: t
+  name: t
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    go: !bool
+  nodes:
+    router:
+      kind: case
+      cases:
+        - when: ${input.go}
+          then: ask
+      else: done
+    ask:
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "Pick one"
+        ctx: ${input.go}
+      adaptive_questions:
+        prompt: "Design one question for: ${ctx}"
+    done:
+      kind: code
+      output: str
+      code: return "done"
+  output:
+    r: ${router.output}
+# Python yian has no ask built-in: it runs the human_input gate.
+python_flow: |
   id: t
   name: t
   llm_config: {provider: openai, model: gpt-5.5}
@@ -194,23 +222,21 @@ expect:
         r:
           DB: Postgres
   tool_calls:
-    ask_user:
+    ask:
     - args:
-        answer_schema:
-        - name: answer
-          required: true
-          type: object
-        node_id: ask
         question: Pick one
         questions:
-        - header: DB
-          multi_select: false
+        - question: Which database?
+          header: DB
           options:
-          - description: Relational.
-            label: Postgres
-          question: Which database?
-      attempt: 1
+          - {label: Postgres, description: Relational.}
+          multi_select: false
+        answer_schema:
+        - {name: answer, type: object, required: true}
+        node_id: ask
+        ctx: true
       call_id: r1/ask
+      attempt: 1
       node: ask
 python_expect:
   output:

@@ -1,6 +1,6 @@
 # From tests/engine/test_human_input_questions_models.py::test_parse_questions_rejects_empty_too_many_dups_badtype
 # and docs/syntax.md ("1–4 questions").
-# Five upstream questions fail the gate before it asks.
+# Five upstream questions fail the ask before it asks.
 kind: run
 rules: [run-log]
 flow: |
@@ -10,9 +10,10 @@ flow: |
     qs: !list(object)
   nodes:
     ask:
-      kind: human_input
-      input: {qs: "${input.qs}"}
-      questions: "${qs}"
+      kind: tool
+      tool_id: ask
+      input:
+        questions: ${input.qs}
   output: ${ask.output}
 inputs:
   qs:

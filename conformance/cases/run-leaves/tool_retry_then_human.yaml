@@ -13,10 +13,10 @@ flow: |
       input:
         q: ${input.q}
     ok:
-      kind: human_input
+      kind: tool
+      tool_id: ask
       input:
-        found: ${fetch.output}
-      prompt: "Use ${found}?"
+        prompt: "Use ${fetch.output}?"
       output: str
   output:
     found: ${fetch.output}
@@ -46,7 +46,7 @@ expect:
     lookup:
       - {args: {q: x}, call_id: <id:1>/fetch, attempt: 1, node: fetch}
       - {args: {q: x}, call_id: <id:1>/fetch, attempt: 2, node: fetch}
-    ask_user:
+    ask:
       - args:
           question: Use F1?
           answer_schema: [{name: answer, type: str, required: true}]

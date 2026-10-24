@@ -1,8 +1,8 @@
 # From tests/engine/test_human_questions_e2e.py::test_manual_ref_questions_block_and_return_answer and
 # tests/engine/test_blocking_human_input.py::test_questions_input_is_validated_before_trusted_invocation.
-# A gate reading its questions from an input (`questions: "${qs}"`) sends them validated (defaults
-# filled) and returns the answer record; a flow input stands in for the test's CODE source. The gate
-# has a `prompt:` because a questions-only gate's `question` is undocumented (seed_26 leaves it out).
+# An ask whose `questions` input reads a reference sends them validated (defaults filled) and
+# returns the answer record; a flow input stands in for the test's CODE source. The ask has a
+# `prompt` because a questions-only ask's `question` is undocumented (seed_26 leaves it out).
 kind: run
 rules: [run-log]
 flow: |
@@ -12,10 +12,11 @@ flow: |
     qs: !list(object)
   nodes:
     ask:
-      kind: human_input
-      input: {qs: "${input.qs}"}
-      prompt: "Pick one"
-      questions: "${qs}"
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "Pick one"
+        questions: ${input.qs}
   output: ${ask.output}
 inputs:
   qs:
@@ -113,7 +114,7 @@ expect:
     - output:
         H: A
   tool_calls:
-    ask_user:
+    ask:
     - args:
         question: Pick one
         questions:

@@ -1,7 +1,7 @@
 # From tests/engine/test_blocking_wait.py::test_deadline_at_or_before_now_returns_immediately, with the
 # forms of ::test_naive_datetime_means_utc, ::test_aware_datetime_is_normalized_to_utc and
 # ::test_deadline_accepts_z_short_fraction_and_space_separator, moved into the past (no clock).
-# A WAIT whose deadline has passed returns null at once, in each accepted spelling.
+# A sleep whose deadline has passed returns null at once, in each accepted spelling.
 kind: run
 rules: [run-log]
 flow: |
@@ -9,17 +9,25 @@ flow: |
   name: waits
   nodes:
     naive:
-      kind: wait
-      until: "2020-01-01T01:02:03"
+      kind: tool
+      tool_id: sleep
+      input:
+        until: "2020-01-01T01:02:03"
     aware:
-      kind: wait
-      until: "2020-01-02T05:30:00+05:30"
+      kind: tool
+      tool_id: sleep
+      input:
+        until: "2020-01-02T05:30:00+05:30"
     zulu:
-      kind: wait
-      until: "2020-01-02T00:00:00Z"
+      kind: tool
+      tool_id: sleep
+      input:
+        until: "2020-01-02T00:00:00Z"
     spaced:
-      kind: wait
-      until: "2020-01-01 01:00"
+      kind: tool
+      tool_id: sleep
+      input:
+        until: "2020-01-01 01:00"
   output:
     naive: ${naive.output}
     aware: ${aware.output}

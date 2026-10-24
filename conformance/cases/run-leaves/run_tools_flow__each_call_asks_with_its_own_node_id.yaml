@@ -1,5 +1,5 @@
 # From tests/engine/test_run_tools_flow.py::test_each_map_item_and_call_asks_with_its_own_node_id[call].
-# A HUMAN_INPUT in a called child asks with the CALL occurrence's id (c1/ask, c2/ask).
+# An ask in a called child asks with the CALL occurrence's id (c1/ask, c2/ask).
 kind: run
 rules: [run-log]
 flow: |
@@ -9,8 +9,10 @@ flow: |
     one:
       nodes:
         ask:
-          kind: human_input
-          prompt: "q"
+          kind: tool
+          tool_id: ask
+          input:
+            prompt: "q"
           output: str
       output: ${ask.output}
   nodes:
@@ -179,7 +181,7 @@ expect:
   - - RunSucceeded
     - output: second
   tool_calls:
-    ask_user:
+    ask:
     - args:
         question: q
         answer_schema:

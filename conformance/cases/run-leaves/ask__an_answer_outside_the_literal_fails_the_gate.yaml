@@ -1,10 +1,25 @@
 # From tests/engine/test_answer_schema.py::test_literal_enum_carries_values (the gate's enum) and
 # docs/syntax.md, `human_input`: "The answer is validated against the declared `output:` before the
 # flow continues." (no Python test runs it).
-# An answer outside the gate's Literal fails the gate with contract.output.
+# An answer outside the ask's Literal fails the ask with contract.output.
 kind: run
 rules: [messages, run-log]
 flow: |
+  id: approval
+  name: approval
+  input:
+    plan: !str
+  nodes:
+    approval:
+      kind: tool
+      tool_id: ask
+      node_name: Plan approval
+      input:
+        prompt: "Approve ${input.plan}?"
+      output: Literal(approve, revise)
+  output: ${approval.output}
+# Python yian has no ask built-in: it runs the human_input gate.
+python_flow: |
   id: approval
   name: approval
   input:
@@ -98,7 +113,7 @@ expect:
           range: [12, 13, 12, 37]
         node: approval
   tool_calls:
-    ask_user:
+    ask:
     - args:
         question: Approve release?
         answer_schema:

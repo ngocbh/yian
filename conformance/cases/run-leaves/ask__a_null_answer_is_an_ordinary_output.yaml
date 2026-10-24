@@ -1,5 +1,5 @@
 # From tests/engine/test_blocking_human_input.py::test_none_answer_is_an_ordinary_output.
-# A null answer is the gate's output, not a cancellation.
+# A null answer is the ask's output, not a cancellation.
 kind: run
 rules: [run-log]
 flow: |
@@ -7,8 +7,10 @@ flow: |
   name: optional
   nodes:
     optional:
-      kind: human_input
-      prompt: "Anything to add?"
+      kind: tool
+      tool_id: ask
+      input:
+        prompt: "Anything to add?"
   output: ${optional.output}
 run:
   run_id: r1
@@ -71,7 +73,7 @@ expect:
     - node_id: __end__
   - [RunSucceeded]
   tool_calls:
-    ask_user:
+    ask:
     - args:
         question: Anything to add?
         node_id: optional

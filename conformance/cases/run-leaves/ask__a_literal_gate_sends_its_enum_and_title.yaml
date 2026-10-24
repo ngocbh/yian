@@ -1,7 +1,7 @@
 # From tests/engine/test_blocking_human_input.py::test_prompt_only_returns_host_answer_with_trusted_metadata
 # and tests/engine/test_answer_schema.py::test_literal_enum_carries_values.
-# A HUMAN_INPUT gate typed Literal(...) sends its tags as the answer schema's enum, and its
-# `node_name:` as the title.
+# An ask typed Literal(...) sends its tags as the answer schema's enum, and its `node_name:` as
+# the title.
 kind: run
 rules: [run-log]
 flow: |
@@ -11,11 +11,11 @@ flow: |
     plan: !str
   nodes:
     approval:
-      kind: human_input
+      kind: tool
+      tool_id: ask
       node_name: Plan approval
       input:
-        plan: ${input.plan}
-      prompt: "Approve ${plan}?"
+        prompt: "Approve ${input.plan}?"
       output: Literal(approve, revise)
   output: ${approval.output}
 inputs:
@@ -90,7 +90,7 @@ expect:
   - - RunSucceeded
     - output: approve
   tool_calls:
-    ask_user:
+    ask:
     - args:
         question: Approve release?
         answer_schema:

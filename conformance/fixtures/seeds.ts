@@ -79,8 +79,8 @@ export function echo_value(inputs: Record<string, any>): unknown {
   return Object.values(inputs)[0] ?? null;
 }
 
-// --- human_input questions ref source ---
-/** `{seed}` -> a one-element `list[object]` of question records (a gate's `questions:` ref). */
+// --- ask questions ref source ---
+/** `{seed}` -> a one-element `list[object]` of question records (an ask's `questions` input). */
 export function questions_seed(inputs: Record<string, any>): Record<string, unknown>[] {
   return [{ question: inputs.seed, header: "H", options: [{ label: "A" }, { label: "B" }] }];
 }

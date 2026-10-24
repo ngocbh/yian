@@ -1,5 +1,5 @@
 # From tests/engine/test_blocking_human_input.py::test_literal_questions_are_rendered_validated_and_injected.
-# A gate's literal questions render `${...}` in the question, and in each option's label and
+# An ask's literal questions render `${...}` in the question, and in each option's label and
 # description; the request carries the validated list.
 kind: run
 rules: [run-log]
@@ -11,17 +11,16 @@ flow: |
     candidate: !str
   nodes:
     choose:
-      kind: human_input
+      kind: tool
+      tool_id: ask
       input:
-        project: ${input.project}
-        candidate: ${input.candidate}
-      prompt: "Choose for ${project}"
-      questions:
-        - question: "Which framework for ${project}?"
-          header: Framework
-          options:
-            - label: "${candidate}"
-              description: "Use ${candidate}"
+        prompt: "Choose for ${input.project}"
+        questions:
+          - question: "Which framework for ${input.project}?"
+            header: Framework
+            options:
+              - label: "${input.candidate}"
+                description: "Use ${input.candidate}"
   output: ${choose.output}
 inputs:
   project: Atlas
@@ -105,7 +104,7 @@ expect:
     - output:
         Framework: Vue
   tool_calls:
-    ask_user:
+    ask:
     - args:
         question: Choose for Atlas
         questions:

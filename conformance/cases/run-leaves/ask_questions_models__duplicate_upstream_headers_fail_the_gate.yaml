@@ -1,9 +1,22 @@
 # From tests/engine/test_human_input_questions_models.py::test_parse_questions_rejects_empty_too_many_dups_badtype
 # and docs/syntax.md ("headers unique").
-# Upstream questions with a repeated header fail the gate before it asks.
+# Upstream questions with a repeated header fail the ask before it asks.
 kind: run
 rules: [messages, run-log]
 flow: |
+  id: manual_ref
+  name: manual_ref
+  input:
+    qs: !list(object)
+  nodes:
+    ask:
+      kind: tool
+      tool_id: ask
+      input:
+        questions: ${input.qs}
+  output: ${ask.output}
+# Python yian has no ask built-in: it runs the human_input gate.
+python_flow: |
   id: manual_ref
   name: manual_ref
   input:

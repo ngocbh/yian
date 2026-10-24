@@ -2,7 +2,17 @@
 import { describe, expect, test } from "bun:test";
 
 import { canonicalSeed, canonicalTyped } from "../../src/runtime/log.ts";
-import { InboxRef, inboxName, TypedValue, ValueKind } from "../../src/typesys/values.ts";
+import {
+  fromHost,
+  InboxRef,
+  inboxName,
+  rejectDeepNesting,
+  toHost,
+  TypedValue,
+  ValueKind,
+  valueRepr,
+  writeAsJson,
+} from "../../src/typesys/values.ts";
 
 describe("InboxRef", () => {
   test("holds a top-level inbox name and is frozen", () => {
@@ -56,5 +66,23 @@ describe("inbox wire", () => {
   test("an untyped record holding a handle commits as its mapping", () => {
     const [wire] = canonicalTyped({ m: new InboxRef("m") }, null);
     expect(wire).toEqual({ kind: "object", value: { m: { inbox: "m" } } });
+  });
+});
+
+describe("inbox at the host boundary", () => {
+  const ref = new InboxRef("m");
+
+  test("host intake and hand-over keep the handle", () => {
+    expect((fromHost({ a: ref }, "x") as { a: unknown }).a).toBe(ref);
+    expect((toHost({ a: ref }) as { a: unknown }).a).toBe(ref);
+  });
+
+  test("the nesting check walks into a handle as one level", () => {
+    expect(() => rejectDeepNesting({ a: ref }, "x")).not.toThrow();
+  });
+
+  test("a handle renders as its mapping", () => {
+    expect(valueRepr(ref)).toBe(valueRepr({ inbox: "m" }));
+    expect(writeAsJson({ a: ref })).toBe(writeAsJson({ a: { inbox: "m" } }));
   });
 });

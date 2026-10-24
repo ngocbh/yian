@@ -74,9 +74,10 @@ export function shownText(text: string): string {
  *
  * The text form is compact JSON with JS number spelling: `true`, `null`, `2.5`, `2` for the
  * float 2, `Infinity`, an int's digits, text JSON-quoted, a `FileRef` as its mapping
- * `{"uri":…,"mime":…,"name":…}`, records in JS property order. A part that isn't a yian
- * value (a `Date`, a `Map`, a class instance, a symbol, a function, `undefined`) shows as
- * `<Name object>`, and an int the runtime can't stringify as `<int too large to display>`.
+ * `{"uri":…,"mime":…,"name":…}`, an `InboxRef` as `{"inbox":…}`, records in JS property
+ * order. A part that isn't a yian value (a `Date`, a `Map`, a class instance, a symbol, a
+ * function, `undefined`) shows as `<Name object>`, and an int the runtime can't stringify as
+ * `<int too large to display>`.
  * The value never makes it throw: when a getter or proxy trap throws, the whole value shows as
  * `<Name object>`. The writer stops once it has more than the cap can show, so a long list,
  * a deep value or a cyclic one costs time bounded by the cap.
@@ -142,10 +143,11 @@ function textForm(root: unknown, budget: number): string {
       out += bigintText(value);
     } else if (typeof value === "string") {
       out += quoteHead(value, budget);
-    } else if (FileRef.isFileRef(value)) {
+    } else if (FileRef.isFileRef(value) || InboxRef.isInboxRef(value)) {
       out += "{";
       const container = value as unknown as { readonly [key: string]: unknown };
-      stack.push({ container, keys: FILE_FIELDS, index: 0 });
+      const keys = FileRef.isFileRef(value) ? FILE_FIELDS : INBOX_FIELDS;
+      stack.push({ container, keys, index: 0 });
     } else if (isList(value)) {
       out += "[";
       stack.push({ container: value, keys: null, index: 0 });
@@ -214,8 +216,8 @@ export function writeAsText(value: Value): string {
  * more, each item sits on its own line indented by `indent` spaces per level, items end with
  * `,`, and a key is followed by `": "`; an empty list or record is `[]` or `{}`. Text is
  * JSON-quoted with non-ASCII kept, an int is its digits, a float its JS spelling (`1` for the
- * float 1, bare `Infinity`), and a `FileRef` its mapping `{"uri", "mime", "name"}`; records keep
- * JS property order.
+ * float 1, bare `Infinity`), a `FileRef` its mapping `{"uri", "mime", "name"}`, and an
+ * `InboxRef` its mapping `{"inbox"}`; records keep JS property order.
  *
  * @throws TypeError `integer is too large for this runtime` when the runtime can't stringify an
  *   int, or `text is too long for this runtime` when the text passes the engine's string limit.
@@ -249,7 +251,11 @@ function jsonText(value: Value, indent: number | null, level: number): string {
     items = value.map((item) => jsonText(item, indent, level + 1));
   } else {
     const record = value as ValueRecord;
-    const keys = FileRef.isFileRef(value) ? FILE_FIELDS : Object.keys(record);
+    const keys = FileRef.isFileRef(value)
+      ? FILE_FIELDS
+      : InboxRef.isInboxRef(value)
+        ? INBOX_FIELDS
+        : Object.keys(record);
     const colon = indent === null ? ":" : ": ";
     items = keys.map((key) => JSON.stringify(key) + colon + jsonText(record[key] as Value, indent, level + 1));
   }
@@ -290,7 +296,8 @@ export function renderValuePath(path: readonly (string | number)[]): string {
 /**
  * Throw if a value nests deeper than `YIAN_MAX_VALUE_NESTING` levels (100 by default).
  *
- * Each array, record and `FileRef` is one level; a `TypedValue` is unwrapped and adds none.
+ * Each array, record, `FileRef` and `InboxRef` is one level; a `TypedValue` is unwrapped and
+ * adds none.
  * The walk is depth first and in order. A container already on the current path is skipped;
  * the codecs refuse cycles.
  *
@@ -411,10 +418,11 @@ function* walkNesting(value: unknown): Generator<NestingEntry> {
   }
 }
 
-/** Return the open frame of `container`, an array, record or `FileRef`, at `key`. */
+/** Return the open frame of `container`, an array, record, `FileRef` or `InboxRef`, at `key`. */
 function nestingFrame(container: object, key: string | number | null): NestingFrame {
   let keys: readonly string[] | null = null;
   if (FileRef.isFileRef(container)) keys = FILE_FIELDS;
+  else if (InboxRef.isInboxRef(container)) keys = INBOX_FIELDS;
   else if (!isList(container)) keys = Object.keys(container);
   return { container, keys, key, index: 0 };
 }
@@ -426,9 +434,9 @@ function framePath(
   return stack.slice(1).map((frame) => frame.key!);
 }
 
-/** Whether `value` is a nesting level: an array, a record or a `FileRef`. */
+/** Whether `value` is a nesting level: an array, a record, a `FileRef` or an `InboxRef`. */
 function isNestingLevel(value: unknown): value is object {
-  return isList(value) || isRecord(value) || FileRef.isFileRef(value);
+  return isList(value) || isRecord(value) || FileRef.isFileRef(value) || InboxRef.isInboxRef(value);
 }
 
 /** Return `value` with any `TypedValue` wrapping it removed. */
@@ -472,7 +480,8 @@ interface HostFrame {
 /**
  * Return a host value (a tool's result, a CODE body's return value) as a fresh yian value.
  *
- * `null`, a boolean, well-formed text, a `bigint` and a `FileRef` are taken as they are. A
+ * `null`, a boolean, well-formed text, a `bigint`, a `FileRef` and an `InboxRef` are taken as
+ * they are. A
  * `number` that is an integer within ±(2^53−1) becomes an int (`-0` becomes `0n`); any other
  * number but NaN (`±Infinity`, `1e20`, `2.5`, `9007199254740992`) is a float. A plain array
  * (prototype `Array.prototype`) and a plain record (prototype `Object.prototype` or `null`)
@@ -532,7 +541,7 @@ export function fromHost(value: unknown, where: string): Value {
     // Checked first: every later check (FileRef.isFileRef, isList, isRecord, jsTypeName) could
     // run a trap.
     if (types.isProxy(item)) fail("Proxy is not a yian value", ...at);
-    if (item === null || FileRef.isFileRef(item)) return item;
+    if (item === null || FileRef.isFileRef(item) || InboxRef.isInboxRef(item)) return item;
     const list = isList(item);
     if (list || isRecord(item)) {
       if (active.has(item)) fail("value contains itself", ...at);

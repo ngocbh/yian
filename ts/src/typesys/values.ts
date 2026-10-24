@@ -1863,19 +1863,22 @@ function admitsNone(typ: Type): boolean {
 }
 
 /**
- * Whether `file` appears anywhere in `typ`: itself, a field, the element, or a member, so some
- * value of `typ` may hold a file. A type without `file` holds only JSON values, so every value
- * of it is an `Any` value.
+ * Whether `file` or `Inbox(T)` appears anywhere in `typ`: itself, a field, the element, or a
+ * member, so some value of `typ` may hold a file or an inbox handle, a value that isn't plain
+ * JSON (callers: `fileReadingType`, the `Any` relations, `compose/helpers/tags.ts`). A type
+ * without either holds only JSON values, so every value of it is an `Any` value.
  */
 export function hasFile(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
   if (typ.element !== undefined && hasFile(typ.element)) return true;
   if (typ.fields !== undefined && [...typ.fields.values()].some(hasFile)) return true;
   return typ.variants !== undefined && typ.variants.some(hasFile);
 }
 
 /**
- * Whether every non-null value of `typ` holds a file, so none is an `Any` value.
+ * Whether every non-null value of `typ` holds a file or an inbox handle, a value that isn't
+ * plain JSON (callers: `fileReadingType`, the `Any` relations, `compose/helpers/tags.ts`), so
+ * none is an `Any` value. An `Inbox(T)` always counts.
  *
  * A list counts when its element is a non-nullable type that requires a file: the empty list
  * is shared by every list type and is not counted as a shared value. A record counts when a
@@ -1884,7 +1887,7 @@ export function hasFile(typ: Type): boolean {
  * `Any` value) at runtime, where load can't tell.
  */
 export function requiresFile(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
   if (typ.variants !== undefined) return typ.variants.every(requiresFile);
   if (isListKind(typ.kind)) {
     const element = typ.element;
@@ -2554,9 +2557,10 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
 /**
  * Return `value` with only its file and object representation read as `typ` reads it.
  *
- * At a `file` position a file's JSON form becomes a `FileRef`; at an `object` position (a
- * plain `object` value, a `list(object)` item, an `object` record field) each nested `FileRef`
- * becomes its mapping. Nothing else converts: an int at a `float` position stays an int, and a
+ * At a `file` position a file's JSON form becomes a `FileRef`, and at an `Inbox(T)` position
+ * an inbox handle's JSON form becomes an `InboxRef`; at an `object` position (a plain `object`
+ * value, a `list(object)` item, an `object` record field) each nested `FileRef` becomes its
+ * mapping. Nothing else converts: an int at a `float` position stays an int, and a
  * value that doesn't fit `typ` is walked as far as it fits and otherwise kept. A union member
  * is picked as `buildValueAs` picks it: by its tag, else the first member the value
  * satisfies. Only the containers on the path to a change are copied; `value` itself is
@@ -2604,6 +2608,7 @@ export function normalizeFiles(typ: Type, value: Value): Value {
     const fits = FILE_FIELDS.every((name) => nonValueReason(value[name]) === null);
     return fits ? new FileRef(value) : value;
   }
+  if (typ.kind === ValueKind.INBOX) return isInboxForm(value) ? new InboxRef(value.inbox) : value;
   if (typ.kind === ValueKind.OBJECT && (isList(value) || isRecord(value))) {
     try {
       return jsonPart(value, [], "mapping");
@@ -2634,12 +2639,14 @@ export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedV
 }
 
 /**
- * Whether `typ` has a `file` or an unrefined `object` position at any depth, so reading a
- * value through it may change how a file is held. Unlike `hasFile`, it also counts plain
- * `object` and flat `list(object)`, whose nested `FileRef`s are read as mappings.
+ * Whether `typ` has a `file`, `Inbox(T)` or unrefined `object` position at any depth, so
+ * reading a value through it may change how a file or inbox handle is held. Unlike `hasFile`,
+ * it also counts plain `object` and flat `list(object)`, whose nested `FileRef`s are read as
+ * mappings.
  */
 function readsFiles(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE || isPlainObject(typ)) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
+  if (isPlainObject(typ)) return true;
   if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;
   if (typ.element !== undefined && readsFiles(typ.element)) return true;
   if (typ.fields !== undefined && [...typ.fields.values()].some(readsFiles)) return true;

@@ -6,10 +6,13 @@ import {
   buildValue,
   buildValueAs,
   fromHost,
+  hasFile,
   InboxRef,
   inboxName,
   inboxType,
+  normalizeFiles,
   rejectDeepNesting,
+  requiresFile,
   toHost,
   Type,
   TypeCheckError,
@@ -115,5 +118,24 @@ describe("inbox at the write boundary", () => {
 
   test.each([[ValueKind.ANY], [ValueKind.OBJECT]])("%p refuses a handle", (kind) => {
     expect(() => buildValueAs(kind, ref)).toThrow(TypeCheckError);
+  });
+});
+
+describe("inbox reading type", () => {
+  const STR = Type.scalar(ValueKind.STRING);
+
+  test("a record's inbox field reads its mapping back as a handle", () => {
+    const record = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([["m", inboxType(STR)]]),
+      required: new Set(["m"]),
+    });
+    const read = normalizeFiles(record, { m: { inbox: "m" } }) as { m: unknown };
+    expect(InboxRef.isInboxRef(read.m) && read.m.inbox).toBe("m");
+  });
+
+  test("an inbox type holds a value that isn't plain JSON", () => {
+    expect(hasFile(inboxType(STR))).toBe(true);
+    expect(requiresFile(inboxType(STR))).toBe(true);
   });
 });

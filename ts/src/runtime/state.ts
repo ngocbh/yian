@@ -362,6 +362,10 @@ export class RunState {
   memories: readonly MemorySpec[] | null = null;
   /** The recorded key stacks. */
   memoryStacks: readonly MemoryStack[] | null = null;
+  /** The skills `RunStarted` recorded, by name, which learning renders prompts with. */
+  recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
+  /** The tool specs `RunStarted` recorded, by name, which learning rebuilds requests with. */
+  recordedTools: Readonly<Record<string, RecordedTool>> = {};
   /** Whether accepted eligible outcomes must project durable learning evidence. */
   learnable = false;
   /**
@@ -2068,6 +2072,7 @@ function prepareRecordTrace(
   const started = isExactly(record, RunStartedRecord);
   return prepareTrace(state.trace, envelope, nodeId === null ? null : (state.flow.nodes.get(nodeId) ?? null), {
     ...options,
+    steps: nodeId === null ? [] : (state.nodeSteps.get(nodeId) ?? []),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
     rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
@@ -2624,6 +2629,7 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
     delta.started,
     delta.occurrence,
     delta.handler,
+    delta.material,
     delta.writer,
     delta.systemValue,
     delta.consumedConnection,
@@ -2688,6 +2694,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     delta.initialized,
     delta.occurrence,
     delta.handler,
+    delta.material,
     delta.writer,
     delta.systemValue,
     delta.consumedConnection,
@@ -4890,6 +4897,8 @@ interface RunStartedApply {
   memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
   memories: readonly MemorySpec[] | null;
   memoryStacks: readonly MemoryStack[] | null;
+  recordedSkills: Readonly<Record<string, RecordedSkill>>;
+  recordedTools: Readonly<Record<string, RecordedTool>>;
   learnable: boolean;
   runDefaults: Defaults;
   backwardState: RuntimeBackwardState;
@@ -4940,6 +4949,8 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     memorySnapshots: record.memorySnapshots,
     memories: record.memories,
     memoryStacks: record.memoryStacks,
+    recordedSkills: record.skills,
+    recordedTools: record.tools,
     learnable: record.learnable,
     runDefaults: fromRecorded(record.defaults),
     backwardState,
@@ -4976,6 +4987,8 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.memorySnapshots = apply.memorySnapshots;
   state.memories = apply.memories;
   state.memoryStacks = apply.memoryStacks;
+  state.recordedSkills = apply.recordedSkills;
+  state.recordedTools = apply.recordedTools;
   state.learnable = apply.learnable;
   state.runDefaults = apply.runDefaults;
   state.backwardState = apply.backwardState;

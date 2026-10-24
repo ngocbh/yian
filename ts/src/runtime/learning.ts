@@ -50,6 +50,7 @@ import {
   BackwardContext,
   BackwardResult,
   copyBackwardValue,
+  type LearningMaterial,
   sameBackwardResult,
   validateBackwardResult,
 } from "../nodes/base.ts";
@@ -85,7 +86,7 @@ import {
   type RunRecord,
   SCHEMA_VERSION,
 } from "./log.ts";
-import { type OutcomeRecord, RetainedTrace, type TraceOccurrence, TraceTerminal } from "./trace.ts";
+import { type OutcomeRecord, RetainedTrace, type TraceOccurrence, TraceTerminal, visibleInputs } from "./trace.ts";
 
 /** The root flow's declaration site: the source-free root channel goes to the keys it owns. */
 const ROOT_FLOW_SITE = new DeclSite([], ["root"]);
@@ -1346,7 +1347,7 @@ export function projectOwnerContexts(
   submittedFeedback: FeedbackValue,
   rootResult: BackwardResult,
   attributedResults: readonly AttributedBackwardResult[],
-  options: { cache?: ContextCache | null } = {},
+  options: { cache?: ContextCache | null; materials?: ReadonlyMap<string, LearningMaterial> | null } = {},
 ): readonly LearnContext[] {
   if (!isList(memories) || memories.some((spec) => !isExactly(spec, MemorySpec))) {
     throw new TypeError("owner contexts require the complete recorded memory table");
@@ -1408,7 +1409,7 @@ export function projectOwnerContexts(
       const record = occurrence.record;
       // An accepted outcome holds its forward capture while learning.
       const capture = record.forwardCapture!;
-      const evidence = record.evidence;
+      const material = options.materials?.get(key) ?? null;
       // A success's committed value, or an expansion's seed, which neither record holds.
       const committed = isExactly(record, NodeSucceededRecord)
         ? trace.lookupSource(occurrence.source)
@@ -1425,21 +1426,18 @@ export function projectOwnerContexts(
       };
       const local = feedbackBySource.get(key)!;
       const entries = local.map((entry) => ({ ...coordinates, ...entry }));
-      let inputs = capture.boundInputs;
-      if (inputs !== null && occurrence.hiddenInputs.size > 0) {
-        // Episodes reach learn prompts and storage; inputs that only configured the call stay in
-        // the bound record for backward and resume.
-        inputs = Object.fromEntries(Object.entries(inputs).filter(([name]) => !occurrence.hiddenInputs.has(name)));
-      }
+      // Episodes reach learn prompts and storage; inputs that only configured the call stay in the
+      // bound record for backward and resume.
+      const inputs = visibleInputs(occurrence);
       try {
         episodes.push(
           new MemoryEpisode(trace.runId, scope.occurrencePath, scope.staticPath, status, inputs, {
             output,
             failure,
-            interactions: evidence === null ? [] : evidence.interactions,
-            baseSystemPrompt: evidence === null ? null : evidence.baseSystemPrompt,
-            prompt: evidence === null ? null : evidence.prompt,
-            memorySections: evidence === null ? [] : evidence.memorySections,
+            interactions: material === null ? [] : material.interactions,
+            baseSystemPrompt: material === null ? null : material.baseSystemPrompt,
+            prompt: material === null ? null : material.prompt,
+            memorySections: material === null ? [] : material.memorySections,
             executionSeq: occurrence.source.executionSeq,
           }),
         );

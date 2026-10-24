@@ -42,7 +42,13 @@ import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
-import { rejectDeepNesting, writeAsText } from "../../typesys/values.ts";
+import { rejectDeepNesting, type Type, type ValueRecord, writeAsText } from "../../typesys/values.ts";
+import {
+  ModelTextInteraction,
+  ToolCallInteraction,
+  ToolResultInteraction,
+  type VisibleInteraction,
+} from "../../memory/contracts.ts";
 import { Output } from "../base.ts";
 import {
   AgentLoopError,
@@ -68,8 +74,8 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, TOOL_OUTCOME_UNKNOWN, toolText } from "./memory.ts";
-import { generateStructured, typeToSchema, userMessage } from "./structured.ts";
-import { recordModelText, recordToolCall, recordToolResult, textOf } from "./text.ts";
+import { generateStructured, structuredMaterial, typeToSchema, userMessage } from "./structured.ts";
+import { pushVisible, recordModelText, recordToolCall, recordToolResult, textOf } from "./text.ts";
 
 /**
  * Run one AGENT invocation.
@@ -230,6 +236,81 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     const turn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt };
     if (await (replayed ? replayToolCalls(turn) : runToolCalls(turn))) return interrupted(reply);
   }
+}
+
+/**
+ * Rebuild what one AGENT invocation showed a learner from the steps it recorded, and check each
+ * recorded request against the one rebuilt from them, as `runAgent` builds it.
+ *
+ * Interactions follow step order: each chat reply's text when it makes no runnable tool call,
+ * else its runnable calls, then the results recorded for them in call order (a `skipped` result
+ * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
+ * and a reply a host interrupt cut, show nothing. Steps of another kind are skipped. A request's
+ * digest leaves steers out, as the writer does, so steers never break the check.
+ *
+ * @param steps The invocation's steps across its starts.
+ * @param options `messages` are the system message (memory sections included) and the prompt's
+ *   messages; `tools` the specs every chat request carries, `null` when they can't be rebuilt
+ *   (no chat request then matches); `structured` builds the model the structured calls read
+ *   their plan off and gives the output type, or `null` when it can't (no structured request
+ *   then matches).
+ * @returns The interactions, and whether every recorded request matched.
+ */
+export async function stepsMaterial(
+  steps: readonly ValueRecord[],
+  options: {
+    messages: readonly Message[];
+    tools: readonly ToolSpec[] | null;
+    structured: () => Promise<{ model: ChatModel; typ: Type } | null>;
+  },
+): Promise<{ interactions: VisibleInteraction[]; digestOk: boolean }> {
+  const messages = [...options.messages];
+  const interactions: VisibleInteraction[] = [];
+  let digestOk = true;
+  // The latest reply's runnable calls and the results recorded for them, by call id.
+  let calls: ToolCallPart[] = [];
+  let results = new Map<string, ValueRecord>();
+  const commit = () => {
+    for (const call of calls) {
+      const result = results.get(call.id);
+      if (result === undefined) continue;
+      const content = result["output"] as string;
+      if (result["closed"] !== "skipped") {
+        pushVisible(interactions, () => new ToolResultInteraction(call.name, content));
+      }
+      const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError: result["is_error"] === true });
+      messages.push(new Message({ role: "tool", parts: [part] }));
+    }
+    calls = [];
+    results = new Map();
+  };
+  for (const [index, step] of steps.entries()) {
+    if (step["kind"] === "tool_result") {
+      results.set(step["call_id"] as string, step);
+      continue;
+    }
+    if (step["kind"] !== "model_call") continue;
+    commit();
+    if (step["purpose"] !== "chat") {
+      const rest = steps.slice(index).filter((later) => later["kind"] === "model_call");
+      const structured = await options.structured();
+      if (structured === null) return { interactions, digestOk: false };
+      const material = structuredMaterial(structured.model, messages, structured.typ, rest);
+      interactions.push(...material.interactions);
+      return { interactions, digestOk: digestOk && material.digestOk };
+    }
+    const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
+    if (request === null || step["request_sha256"] !== requestSha256(request, new Set())) digestOk = false;
+    if (Object.hasOwn(step, "error")) continue;
+    const reply = Message.fromJSON(step["output"]);
+    messages.push(reply);
+    if (step["finish"] === "interrupted") continue;
+    calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
+    if (calls.length === 0) pushVisible(interactions, () => new ModelTextInteraction(reply.text()));
+    for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
+  }
+  commit();
+  return { interactions, digestOk };
 }
 
 /** End an interrupted loop successfully with the latest reply's visible text (`""` before any). */

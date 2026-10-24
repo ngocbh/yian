@@ -269,7 +269,7 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
-import { EvaluationEvidence, MemoryScope, MemorySection } from "../../src/memory/contracts.ts";
+import { EvaluationEvidence, MemoryScope, MemorySection, ModelTextInteraction } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { DeclSite, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
@@ -1489,11 +1489,18 @@ test("occurrence finds an accepted occurrence by its start", () => {
   );
 });
 
-test("backwardContext adds the evaluation evidence and reads a success's output", () => {
-  const evidence = new EvaluationEvidence(null, { v: 1n }, "System.", "Prompt.");
+test("backwardContext adds the evaluation evidence from the material and reads a success's output", () => {
   const { forwardCapture } = learnableRun()[2]!.record as NodeSucceededRecord;
-  const trace = learnableTrace(new NodeSucceededRecord("a", 1, { evidence, forwardCapture }));
-  const context = trace.backwardContext(new SourceRef(RUN, 1), { downstreamContext: [{ index: 0n }] });
+  const trace = learnableTrace(new NodeSucceededRecord("a", 1, { forwardCapture }));
+  const material = {
+    interactions: [new ModelTextInteraction("Done.")],
+    baseSystemPrompt: "System.",
+    prompt: "Prompt.",
+    memorySections: [],
+    digestOk: true,
+  };
+  const source = new SourceRef(RUN, 1);
+  const context = trace.backwardContext(source, { downstreamContext: [{ index: 0n }], material });
 
   expect(context.inputs).toEqual({ v: 1n });
   expect(context.inputNames).toEqual(["v"]);
@@ -1502,9 +1509,19 @@ test("backwardContext adds the evaluation evidence and reads a success's output"
   expect(context.runId).toBe(RUN);
   expect(context.nodeId).toBe("a");
   expect(context.nodeStartedSeq).toBe(1);
-  expect(context.nodeData).toEqual({ _evaluation_evidence: evidencePayload(evidence) });
-  expect((context.nodeData["_evaluation_evidence"] as { prompt: string }).prompt).toBe("Prompt.");
+  expect(context.nodeData).toEqual({
+    _evaluation_evidence: {
+      scope: null,
+      bound_inputs: { v: 1n },
+      base_system_prompt: "System.",
+      prompt: "Prompt.",
+      memory_sections: [],
+      interactions: [{ kind: "model_text", text: "Done." }],
+    },
+  });
   expect(context.downstreamContext).toEqual([{ index: 0n }]);
+  // Without material, AGENT backward reads no evidence.
+  expect(trace.backwardContext(source).nodeData).toEqual({ _evaluation_evidence: null });
 });
 
 test("backwardContext refuses captured node data using the reserved evidence key", () => {
@@ -4493,10 +4510,10 @@ output: {left: '\${left.output}', right: '\${right.output}'}
     }
     for (const occurrence of agents) {
       const { _evaluation_evidence: evidence, ...data } = replay.trace!.backwardContext(occurrence.source).nodeData;
-      // The real agent loop records its one model reply, where Python's patched `run_agent` recorded none.
-      expect((evidence as Record<string, unknown>)["interactions"]).toEqual([
-        { kind: "model_value", value: { topic: data["rendered_prompt"] } },
-      ]);
+      // The evidence is rebuilt from the steps by a backward pass; the replayed occurrence keeps
+      // its one model call, where Python's patched `run_agent` recorded none.
+      expect(evidence).toBeNull();
+      expect(replay.trace!.occurrence(occurrence.source).steps.map((step) => step["kind"])).toEqual(["model_call"]);
       expect(data).toEqual(captureOf(occurrence).nodeData!);
     }
   } finally {

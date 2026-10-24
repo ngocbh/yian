@@ -12,6 +12,7 @@ import {
   ModelValueInteraction,
   ToolCallInteraction,
   ToolResultInteraction,
+  type VisibleInteraction,
 } from "../../memory/contracts.ts";
 
 /**
@@ -28,6 +29,18 @@ export function textOf(message: Message | string): string {
 /** Whether `error` is a carrier's refusal of its fields, which the trace helpers ignore. */
 function isCarrierError(error: unknown): boolean {
   return error instanceof TypeError || error instanceof RangeError;
+}
+
+/**
+ * Append `make()`'s interaction to `interactions`, unless its carrier refuses the fields: what
+ * learning reads is observational and never fails the node or the pass.
+ */
+export function pushVisible(interactions: VisibleInteraction[], make: () => VisibleInteraction): void {
+  try {
+    interactions.push(make());
+  } catch (error) {
+    if (!isCarrierError(error)) throw error;
+  }
 }
 
 /** Record encodable visible model text without affecting node behavior. */

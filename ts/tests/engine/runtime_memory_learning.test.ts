@@ -107,6 +107,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { CompiledFlow, copyGraph, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
+import { sourceKey } from "../../src/expr/lineage.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import {
@@ -128,6 +129,7 @@ import {
   BackwardResult,
   ELSE_HANDLE,
   Grow,
+  type LearningMaterial,
   Node,
   NodeKind,
   type NodeResult,
@@ -245,6 +247,20 @@ function evidence(memoryScope: MemoryScope | null): EvaluationEvidence {
   return new EvaluationEvidence(memoryScope, { question: "q" }, "system", "prompt", [], [
     new ModelTextInteraction("answer"),
   ]);
+}
+
+/** What learning reads of the occurrences of `nodeIds`: the material `evidence()` describes. */
+function materialsFor(trace: RetainedTrace, ...nodeIds: string[]): Map<string, LearningMaterial> {
+  const material: LearningMaterial = {
+    interactions: [new ModelTextInteraction("answer")],
+    baseSystemPrompt: "system",
+    prompt: "prompt",
+    memorySections: [],
+    digestOk: true,
+  };
+  return new Map(
+    trace.occurrences.filter((item) => nodeIds.includes(item.nodeId)).map((item) => [sourceKey(item.source), material]),
+  );
 }
 
 /** The root flow's declaration site. */
@@ -492,10 +508,16 @@ function successfulTerminal(): { state: RunState; log: MemoryRunLog; table: Memo
   return { state, log, table };
 }
 
-/** Return the learner contexts of a terminal run's retained trace, keyed by memory. */
-async function contexts(state: RunState): Promise<Map<string, LearnContext>> {
+/**
+ * Return the learner contexts of a terminal run's retained trace, keyed by memory; the
+ * occurrences of `nodeIds` read `materialsFor`'s material.
+ */
+async function contexts(state: RunState, ...nodeIds: string[]): Promise<Map<string, LearnContext>> {
   const [root, results] = await computeBackward(state.trace!, null);
-  const projected = learning.projectOwnerContexts(state.trace!, state.memories!, state.memoryStacks!, null, root, results);
+  const materials = materialsFor(state.trace!, ...nodeIds);
+  const projected = learning.projectOwnerContexts(state.trace!, state.memories!, state.memoryStacks!, null, root, results, {
+    materials,
+  });
   return new Map(projected.map((context) => [context.memory, context]));
 }
 
@@ -510,7 +532,7 @@ test("RunStarted retains a defensive memory authority and projects episodes", as
   expect(state.learnable).toBe(true);
   expect(state.backwardState.memoryOrder).toEqual(["local", "outer"]);
 
-  const byKey = await contexts(state);
+  const byKey = await contexts(state, "agent");
   const outerEpisode = byKey.get("outer")!.episodes;
   const localEpisode = byKey.get("local")!.episodes;
   expect(outerEpisode).toHaveLength(1);
@@ -813,7 +835,7 @@ test("an expanded MAP occurrence projects and replays from the live node scope",
   succeed(END_ID, null);
   expect(state.result).toBeInstanceOf(RunSucceeded);
 
-  const episodes = (await contexts(state)).get("outer")!.episodes;
+  const episodes = (await contexts(state, "map#0/agent")).get("outer")!.episodes;
   const owned = episodes.filter((item) => comparePaths(item.ownerStaticPath, dynamicScope.staticPath) === 0);
   expect(owned).toHaveLength(1);
   expect(owned[0]!.occurrencePath).toEqual([
@@ -822,7 +844,7 @@ test("an expanded MAP occurrence projects and replays from the live node scope",
   expect(owned[0]!.interactions).toEqual([new ModelTextInteraction("answer")]);
 
   const replayed = replayRecords(new RunState(pristineFlow), log.records(), { growBuilder: buildGrow });
-  expect((await contexts(replayed)).get("outer")!.episodes).toEqual(episodes);
+  expect((await contexts(replayed, "map#0/agent")).get("outer")!.episodes).toEqual(episodes);
 });
 
 // Owner contexts over engine runs.
@@ -1298,6 +1320,7 @@ test.each([false, true])(
       "review",
       root,
       results,
+      { materials: materialsFor(state.trace!, "agent") },
     );
     for (const context of projected) {
       for (const entry of feedbackEntries(context)) {

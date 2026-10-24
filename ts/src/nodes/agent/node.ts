@@ -33,7 +33,7 @@ import {
   rewriteMemoryDeclOrigins,
 } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
-import { LOAD_SKILL, systemPromptWithSkills } from "../../skills/tool.ts";
+import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
 import { logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
@@ -56,6 +56,8 @@ import {
   type BackwardResult,
   CapabilityFault,
   checkNamedPrompt,
+  type LearningMaterial,
+  type MaterialCaps,
   Node,
   type NodeCaps,
   NodeKind,
@@ -86,7 +88,7 @@ import {
   type Nullable,
   typesNullable,
 } from "./llm_values.ts";
-import { runAgent } from "./loop.ts";
+import { runAgent, stepsMaterial } from "./loop.ts";
 import {
   checkMessage,
   checkModelConversation,
@@ -95,6 +97,7 @@ import {
   type Message,
   toModelMessage,
 } from "./messages.ts";
+import { systemPromptWithMemory } from "./memory.ts";
 import { OutputInvalidError } from "./structured.ts";
 
 /** The step key under which a call-time agent records the config it resolved. */
@@ -284,7 +287,7 @@ function renderPromptList(nodeId: string, items: readonly PromptItem[], record: 
 
 /** The prompt one AGENT invocation sends, rendered from its inputs, variables and granted skills. */
 export interface AgentPrompt {
-  /** The prompt's model messages, after the system message; the last is the user's. */
+  /** The prompt's model messages, after the system message, built when read; the last is the user's. */
   readonly messages: readonly ModelMessage[];
   /** The last message's text, which recall and learning read as the prompt. */
   readonly promptText: string;
@@ -349,8 +352,7 @@ export function renderAgentPrompt(
         ),
       );
     }
-    // The validated literal defaults, resolved into one detached invocation record.
-    const variables = copyValue(applyDefaults(node.variables, {}) as ValueRecord) as ValueRecord;
+    const variables = node.resolveVariables();
     if (captured !== null) {
       captured["variables"] = captureValue(() => copyValue(variables));
     }
@@ -369,13 +371,28 @@ export function renderAgentPrompt(
   signal?.throwIfAborted();
   const granted = node.grantedSkills(skills);
   return {
-    messages: messages.map(modelMessage),
+    // Built when read: forward reads them after recall, so a text a model message refuses fails
+    // the node after recall has refused it, as before.
+    get messages() {
+      return messages.map(modelMessage);
+    },
     // The last message is always the user's.
     promptText: messages.at(-1)!.text,
     systemPrompt,
     baseSystemPrompt: systemPromptWithSkills(systemPrompt, granted),
     skills: granted,
   };
+}
+
+/** Whether `error` is a render's or recall's refusal, which leaves an invocation's prompt unrebuilt. */
+function isRebuildRefusal(error: unknown): boolean {
+  return (
+    error instanceof ExpressionError ||
+    error instanceof SkillError ||
+    error instanceof MemoryRecallError ||
+    error instanceof TypeError ||
+    error instanceof RangeError
+  );
 }
 
 /** Return `make()`; its error is a capability fault, since the render capture is the host's. */
@@ -993,6 +1010,11 @@ export class AgentNode extends Node {
     return invocationConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, this.hostCredentials);
   }
 
+  /** @internal Resolve the validated literal defaults into one detached invocation record. */
+  resolveVariables(): ValueRecord {
+    return copyValue(applyDefaults(this.variables, {}) as ValueRecord) as ValueRecord;
+  }
+
   /**
    * Return the host key and header values bound to this node for the run, if any.
    *
@@ -1038,6 +1060,66 @@ export class AgentNode extends Node {
     // The only live fields: a host key and its header values, which are never recorded.
     const { apiKey, headers } = this.hostSecrets(context.nodeData["effective_llm_config"]);
     return backwardAgent(context, feedback, { ...options, apiKey, headers });
+  }
+
+  /**
+   * Rebuild what learning reads about one accepted invocation: its prompt rendered with the
+   * recorded skills (`renderAgentPrompt`), its memory sections recalled against the recorded
+   * snapshots, and its interactions read from its steps (`stepsMaterial`), each recorded request
+   * checked against the one rebuilt from them.
+   *
+   * An invocation with no `model_call` step showed no model anything, so it has no prompt, no
+   * sections and no interactions. One whose render or recall now fails (the run rendered and
+   * recalled it before its first model call) has no prompt either, and fails the digest check.
+   */
+  override async learningMaterial(
+    inputs: Readonly<Record<string, unknown>> | null,
+    steps: readonly ValueRecord[],
+    caps: MaterialCaps,
+  ): Promise<LearningMaterial> {
+    const none = { interactions: [], baseSystemPrompt: null, prompt: null, memorySections: [], digestOk: true };
+    if (inputs === null || !steps.some((step) => step["kind"] === "model_call")) return none;
+    let rendered: AgentPrompt;
+    let memoryContext: MemoryContext;
+    try {
+      rendered = renderAgentPrompt(this, inputs, caps.skills);
+      memoryContext = await caps.openMemoryContext(rendered.systemPrompt, rendered.promptText);
+    } catch (error) {
+      if (!isRebuildRefusal(error)) throw error;
+      return { ...none, digestOk: false };
+    }
+    const sections = memoryContext.sections;
+    const system = new ModelMessage({
+      role: "system",
+      parts: [new TextPart(systemPromptWithMemory(rendered.baseSystemPrompt, sections))],
+    });
+    const specs = caps.toolSpecs(this.tools);
+    const tools = specs === null ? null : [...specs, ...(rendered.skills.length > 0 ? [loadSkillTool()] : [])];
+    const contract = this.outputContract;
+    const structured = async () => {
+      if (!isExactly(contract, ValueContract) || caps.models === null) return null;
+      try {
+        const config = this.callConfig(inputs) ?? {};
+        const model = await caps.models.createModel(config, { nodeId: this.id, signal: new AbortController().signal });
+        return { model, typ: contract.type };
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        // A model that can't be built now can't give the plan; the requests stay unchecked.
+        return null;
+      }
+    };
+    const { interactions, digestOk } = await stepsMaterial(steps, {
+      messages: [system, ...rendered.messages],
+      tools,
+      structured,
+    });
+    return {
+      interactions,
+      baseSystemPrompt: rendered.baseSystemPrompt,
+      prompt: rendered.promptText,
+      memorySections: sections,
+      digestOk,
+    };
   }
 
   /** Return the canonical local declarations in their authored order. */

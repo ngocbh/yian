@@ -1075,6 +1075,7 @@ test("the post-terminal trace delta validation covers the closed field inventory
       "resumed",
       "occurrence",
       "handler",
+      "material",
       "writer",
       "systemValue",
       "pruneIds",

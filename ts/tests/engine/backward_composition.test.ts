@@ -519,9 +519,12 @@ output:
       },
     }),
   );
-  expect(backwardChats).toHaveLength(acceptedAgents.size);
+  // Learning also builds each agent's forward model, uncalled, to read its structured plan off.
+  const called = backwardChats.filter(([, chat]) => chat.requests.length > 0);
+  expect(backwardChats).toHaveLength(2 * acceptedAgents.size);
+  expect(called).toHaveLength(acceptedAgents.size);
   const seen: number[] = [];
-  for (const [config, chat] of backwardChats) {
+  for (const [config, chat] of called) {
     expect(chat.requests).toHaveLength(1);
     expect(chat.requests[0]!.tools).toEqual([]);
     const forward = material(chat)["forward"];
@@ -553,7 +556,7 @@ output:
   expect(recovered.backwardOutcome).toEqual(outcome);
   expect(recovered.output).toEqual(result.output);
   expect(readFileSync(path)).toEqual(after);
-  expect(access.configs).toHaveLength(12);
+  expect(access.configs).toHaveLength(18);
 });
 
 test("concat repeat and opaque routes cross public call without reevaluation", async () => {

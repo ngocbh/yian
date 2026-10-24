@@ -2163,7 +2163,7 @@ function occurrenceSegmentFromPayload(value: unknown, label: string): MemoryOccu
 }
 
 /** Encode one compiled node's memory scope. */
-function scopePayload(scope: MemoryScope): JsonObject {
+export function scopePayload(scope: MemoryScope): JsonObject {
   return {
     static_path: [...scope.staticPath],
     memories: [...scope.memories],
@@ -2313,7 +2313,7 @@ function memoryStackFromPayload(value: unknown, label: string): MemoryStack {
 }
 
 /** Encode one recalled-memory section. */
-function memorySectionPayload(section: MemorySection): JsonObject {
+export function memorySectionPayload(section: MemorySection): JsonObject {
   return { memory: section.memory, text: section.text };
 }
 
@@ -2329,7 +2329,7 @@ function memorySectionFromPayload(value: unknown, label: string): MemorySection 
 }
 
 /** Encode one member of the closed visible-interaction vocabulary. */
-function interactionPayload(interaction: VisibleInteraction): JsonObject {
+export function interactionPayload(interaction: VisibleInteraction): JsonObject {
   // Memory's JSON types are the read-only form of the same frozen values.
   if (interaction instanceof ModelTextInteraction) return { kind: "model_text", text: interaction.text };
   if (interaction instanceof ModelValueInteraction) {

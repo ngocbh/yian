@@ -47,7 +47,12 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { Message, Request, TextPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
-import type { EvaluationTrace } from "../../memory/contracts.ts";
+import {
+  type EvaluationTrace,
+  ModelTextInteraction,
+  ModelValueInteraction,
+  type VisibleInteraction,
+} from "../../memory/contracts.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
   type Bounds,
@@ -67,9 +72,9 @@ import {
   ValueKind,
 } from "../../typesys/values.ts";
 import type { ValuePath } from "../contracts.ts";
-import { type AgentSteps, requestSha256, type RetrySettings } from "./context.ts";
+import { type AgentSteps, recordedResponse, requestSha256, type RetrySettings } from "./context.ts";
 import { callModel, type LiveSinks } from "./live.ts";
-import { recordModelText, recordModelValue } from "./text.ts";
+import { pushVisible, recordModelText, recordModelValue } from "./text.ts";
 
 // ValueKind -> JSON Schema type of a scalar slot. date and datetime persist as ISO strings.
 const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
@@ -495,6 +500,45 @@ export async function generateStructured(
     if (!prompted) recordModelValue(evaluationTrace, value);
     return value;
   }
+}
+
+/**
+ * Rebuild what `generateStructured(model, messages, typ)` showed a learner from its recorded
+ * `model_call` steps, in order: each prompt-strategy reply's text, or the other strategies'
+ * checked value. A failed attempt shows nothing; an invalid reply adds the correction the next
+ * request carries.
+ *
+ * @param steps The structured calls' `model_call` steps.
+ * @returns The interactions, and whether each step recorded the purpose and the digest of the
+ *   request rebuilt for it.
+ */
+export function structuredMaterial(
+  model: ChatModel,
+  messages: readonly Message[],
+  typ: Type,
+  steps: readonly ValueRecord[],
+): { interactions: VisibleInteraction[]; digestOk: boolean } {
+  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
+  const prompted = plan.strategy === "prompt";
+  const purpose = prompted ? "structured_fallback" : "structured_native";
+  let conversation = [...messages, ...(prompted ? [userMessage(plan.instruction())] : [])];
+  const interactions: VisibleInteraction[] = [];
+  let digestOk = true;
+  for (const step of steps) {
+    const request = plan.apply(new Request({ messages: conversation }));
+    if (step["purpose"] !== purpose || step["request_sha256"] !== requestSha256(request, new Set())) digestOk = false;
+    if (Object.hasOwn(step, "error")) continue;
+    const response = recordedResponse(step);
+    if (prompted) pushVisible(interactions, () => new ModelTextInteraction(response.message.text()));
+    try {
+      const value = checkReply(plan.parse(response), typ);
+      if (!prompted) pushVisible(interactions, () => new ModelValueInteraction(value));
+    } catch (error) {
+      if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
+      conversation = [...conversation, userMessage(plan.correction(error.message))];
+    }
+  }
+  return { interactions, digestOk };
 }
 
 /** Whether `typ` is a non-nullable record, whose schema is not wrapped. */

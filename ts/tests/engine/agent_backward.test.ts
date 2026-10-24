@@ -73,12 +73,14 @@ import {
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
+import { sourceKey } from "../../src/expr/lineage.ts";
 import { backwardAgent } from "../../src/nodes/agent/backward.ts";
+import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { BackwardContext, BackwardResult, CapabilityFault, validateBackwardResult } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
-import { BackwardComputeError, computeBackward } from "../../src/runtime/backward.ts";
+import { BackwardComputeError, computeBackward, learningMaterials } from "../../src/runtime/backward.ts";
 import { validateAttributedBackward } from "../../src/runtime/learning.ts";
 import { evidencePayload } from "../../src/runtime/log.ts";
 import {
@@ -170,9 +172,23 @@ test("the backward context exposes only accepted evidence and replays without ag
 
   const occurrence = run.state.trace!.occurrences.find((item) => item.nodeId === "writer")!;
   const accepted = occurrence.record.forwardCapture!.nodeData!;
-  const expected = { ...accepted, _evaluation_evidence: evidencePayload(occurrence.record.evidence) };
+  const evidence = {
+    scope: null,
+    bound_inputs: { topic: "reefs", tags: ["a", "b"] },
+    base_system_prompt: DEFAULT_SYSTEM,
+    prompt: "reefs: concise",
+    memory_sections: [],
+    interactions: [{ kind: "model_text", text: "forward answer" }],
+  };
+  const expected = { ...accepted, _evaluation_evidence: evidence };
   expect(Object.hasOwn(accepted, "_evaluation_evidence")).toBe(false);
-  expect(run.state.trace!.backwardContext(occurrence.source).nodeData).toEqual(expected);
+  /** The context backward reads for the occurrence, its material rebuilt from `state`'s trace. */
+  const contextOf = async (state: RunState) => {
+    const options = { memory: null, models: null, expandTools: null, onEvent: null };
+    const material = (await learningMaterials(state, options)).get(sourceKey(occurrence.source)) ?? null;
+    return state.trace!.backwardContext(occurrence.source, { material });
+  };
+  expect((await contextOf(run.state)).nodeData).toEqual(expected);
   node.prompt = "later prompt";
   node.llmConfig = { ...llmConfig, model: "later model" };
   const forbidden = (): never => {
@@ -186,13 +202,9 @@ test("the backward context exposes only accepted evidence and replays without ag
 
   const replay = replayRecords(new RunState(original), run.log.records(), { growBuilder: noGrowth });
 
-  expect(replay.trace!.backwardContext(occurrence.source).nodeData).toEqual(expected);
+  expect((await contextOf(replay)).nodeData).toEqual(expected);
   expect(replay.trace!.occurrence(occurrence.source).record.forwardCapture!.nodeData).toEqual(accepted);
   expect(built).toBe(1);
-  // Clearing the expected copy leaves the replayed context's evidence whole.
-  (expected._evaluation_evidence as { interactions: unknown[] }).interactions.length = 0;
-  const evidence = replay.trace!.backwardContext(occurrence.source).nodeData!["_evaluation_evidence"];
-  expect((evidence as { interactions: unknown[] }).interactions).not.toEqual([]);
 });
 
 // ---------- AGENT backward ----------

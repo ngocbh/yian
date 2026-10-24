@@ -458,7 +458,7 @@ function errorStep(error: unknown): { kind: string; message: string } {
 }
 
 /** Return the reply a successful `model_call` step recorded, as a `Response`. */
-function recordedResponse(step: ValueRecord): Response {
+export function recordedResponse(step: ValueRecord): Response {
   const usage = step["usage"] as ValueRecord | null;
   const count = (value: unknown) => (value == null ? null : Number(value));
   return new Response({

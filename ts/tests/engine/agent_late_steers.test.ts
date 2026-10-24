@@ -12,20 +12,23 @@ import { afterAll, expect, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
-import { type Request, TextPart } from "../../src/llm/messages.ts";
+import { Message, type Request, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
+import { MemoryContext, type ModelTextInteraction } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
-import { runAgent } from "../../src/nodes/agent/loop.ts";
+import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
+import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { send } from "../../src/run.ts";
 import { NodeStepRecord, PoolCommitRecord, readRunLog } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
 import { callReply, crashAfter, NO_ENV, resumeWith, runWith, serving, textReply } from "./run_state_fixtures.ts";
 
 const CONFIG = { provider: "anthropic", model: "claude-test" };
+const SYSTEM = new Message({ role: "system", parts: [new TextPart(DEFAULT_SYSTEM)] });
 
 /** A steer inbox double: `queue` is what a read takes; `reads` logs each read's values, `null` for none. */
 function inboxDouble(queue: string[] = []) {
@@ -190,6 +193,23 @@ test("an interrupt that lands during the final reply beats a queued steer: the a
   expect(model.requests).toHaveLength(1);
   expect(queue).toEqual(["late"]);
   expect(reads).toEqual([null]);
+});
+
+test("stepsMaterial rebuilds a late-steered occurrence with a matching digest", async () => {
+  const { inbox, queue, reads } = inboxDouble();
+  const model = hooked(new ScriptedModel([textReply("draft"), textReply("final")], CONFIG), (i) => {
+    if (i === 1) queue.push("use 2024");
+  });
+  const recorded: ValueRecord[] = [];
+  const steps = new NodeSteps(1, [], (step) => recorded.push(step));
+  expect(await output(loopContext(model, { steerInbox: inbox, steps }))).toBe("final");
+  // The engine writes the steer step a read makes; here it goes between the two calls by hand.
+  const occurrence = [recorded[0]!, { kind: "steer", inbox: "notes", from: [100n], values: reads[1]! } as unknown as ValueRecord, recorded[1]!];
+  const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null, baseSystemPrompt: DEFAULT_SYSTEM };
+  const { interactions, digestOk } = await stepsMaterial(occurrence, options);
+  expect(digestOk).toBe(true);
+  expect(interactions.map((each) => (each as ModelTextInteraction).text)).toEqual(["draft", "final"]);
+  expect((await stepsMaterial([recorded[0]!, recorded[1]!], options)).digestOk).toBe(false);
 });
 
 // --- through the engine, and across a crash --- //

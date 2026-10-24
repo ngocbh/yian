@@ -314,6 +314,11 @@ A case can't hold code, so its host is declared under `host`.
   every input the flow's TOOL `ask` nodes pass beyond `prompt`, `questions` and `timeout` (such
   as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
   `ask` or `ask_user`.
+- **`sends`** (TS-only; a case using it has `python_skip`): a list of `{inbox: <name>, event:
+  <value>}` and `{close: <name>}` items. While the run ends `waiting` and items are left, the
+  runner delivers the next one (`send` or `close`) and moves the run on with `advance`, with the
+  same host, clock and observers, so `events` and `stream` cover the whole run. A run still
+  waiting when the items run out fails the case. A case with `sends` gets no crash sweep.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
   and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules

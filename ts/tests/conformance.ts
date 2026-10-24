@@ -93,10 +93,12 @@ import {
   replayRunLog,
   type AdvanceOptions,
   advance,
+  close,
   type RunInspection,
   type RunFlowOptions,
   type RunResult,
   runFlow,
+  send,
   staticNodes,
 } from "../src/run.ts";
 import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
@@ -203,7 +205,7 @@ const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "hea
 // Host keys the format reserves and this runner doesn't support yet.
 const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "memory", "steering", "stop", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "memory", "steering", "stop", "sends", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -619,6 +621,18 @@ function checkStop(stop: Value | undefined): void {
   }
 }
 
+/** Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` and `{close}` items. */
+function checkSends(value: Value | undefined): void {
+  if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
+  for (const item of value) {
+    const fields = isMapping(item) ? Object.keys(item).sort(compareCodeUnits).join(",") : null;
+    const valid =
+      (fields === "event,inbox" && typeof (item as Case)["inbox"] === "string") ||
+      (fields === "close" && typeof (item as Case)["close"] === "string");
+    if (!valid) throw new Error("`host.sends` items are {inbox, event} or {close}");
+  }
+}
+
 /**
  * Throw unless `value`, the host, its tools, models and their scripts and its steering use only
  * the format's keys.
@@ -673,6 +687,7 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
   checkSteering(get(host, "steering", {}));
   checkStop(get(host, "stop", {}));
+  checkSends(get(host, "sends", []));
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
     throw new Error("`host.human` maps node ids to lists of answers");
@@ -2182,12 +2197,16 @@ export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
   });
 }
 
-/** Return `result` in the form of `expect.output`. */
+/**
+ * Return `result` in the form of `expect.output`. A waiting or cancelled run has no failure, so
+ * its form is its status alone, which no expectation matches.
+ */
 function output(result: RunResult, flow: ComposedFlow): Case {
   if (result.status === "succeeded") {
     return { status: "succeeded", output: dataForm(result.output as YianValue) };
   }
-  return { status: result.status, failure: failureForm(result.failure!, flow) };
+  if (result.failure === null) return { status: result.status };
+  return { status: result.status, failure: failureForm(result.failure, flow) };
 }
 
 /**
@@ -2530,6 +2549,11 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
   let start = (memory: MemoryRegistry | null) =>
     runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory });
+  // After each `host.sends` item, the run moves on with the arguments `advance` shares with `run`.
+  const sharedArgs = Object.fromEntries(
+    Object.entries(run).filter(([key]) => Object.hasOwn(RESUME_OPTIONS, key)),
+  );
+  let advanceArguments = runOptions<AdvanceOptions>(sharedArgs, RESUME_OPTIONS);
   let result: RunResult | undefined;
   let caught: Record<string, unknown> = {};
   inbox.armed = true;
@@ -2551,17 +2575,30 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       events.length = 0;
       chunks.length = 0;
       const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
+      advanceArguments = resumeArguments;
       start = (memory) => advance({ ...resumeArguments, ...hooks, memory });
     }
   }
   let outcomes: Value[] = [];
   if (!Object.hasOwn(caught, "raises")) {
     let memory: MemoryRegistry | null = null;
+    const sends = [...(get(spec, "sends", []) as Case[])];
     try {
       memory = await memories();
       result = await start(memory);
+      // Each item is delivered while the run waits; the same collectors see every `advance`.
+      while (result.status === "waiting" && sends.length > 0) {
+        const item = sends.shift()!;
+        if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
+        else await send(log, item["inbox"] as string, item["event"], { env });
+        result = await advance({ ...advanceArguments, ...hooks, ...signal, memory });
+      }
     } catch (error) {
       caught = { raises: raised(error), error };
+    }
+    if (Object.hasOwn(spec, "sends") && result?.status === "waiting") {
+      await memory?.close();
+      throw new CaseFailure("the run is still waiting after host.sends ran out");
     }
     // The memories stay open for the backward calls, and close even when one fails the case; the
     // close is outside the run's `try`, so a close error never replaces its `raises`.
@@ -2899,7 +2936,7 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.steering`, `host.memory` or `host.stop`.
+ * `pending`, with no `host.steering`, `host.memory`, `host.stop` or `host.sends`.
  */
 export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
@@ -2908,7 +2945,7 @@ export function sweepable(case_: Case): boolean {
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["steering", "memory", "stop"].some((key) => Object.hasOwn(spec, key))
+    !["steering", "memory", "stop", "sends"].some((key) => Object.hasOwn(spec, key))
   );
 }
 

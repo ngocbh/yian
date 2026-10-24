@@ -1,0 +1,10 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+# A comprehension is one level, like a list; its clauses add none.
+expr: "[[[x]] for x in xs]"
+values: {xs: [1, 2]}
+env: {YIAN_MAX_VALUE_NESTING: "2"}
+expect:
+  raises:
+    class: ExpressionError
+    message: expression nests deeper than 2 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps

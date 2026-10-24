@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "(x for x in xs)"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression '(x for x in xs)': `for` makes a list comprehension only: write `[x for x in xs]` at line 1, column 4"

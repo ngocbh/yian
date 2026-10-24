@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[a, b for x in xs]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression '[a, b for x in xs]': a comprehension has one element before `for`; write `[[a, b] for x in xs]` at line 1, column 7"

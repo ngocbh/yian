@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[x for a#0 in xs]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression '[x for a#0 in xs]': a comprehension's `for` takes a name, then `in` at line 1, column 8"

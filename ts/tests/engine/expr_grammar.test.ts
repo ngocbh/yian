@@ -9,7 +9,7 @@
  * of the reserved-keyword tests.
  *
  * TS-only: subscripts (list slices), their tree, how tightly they bind, and the colon rule inside
- * a subscript's brackets.
+ * a subscript's brackets; list comprehensions, their tree and clause order.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -856,5 +856,57 @@ describe("subscripts", () => {
     expect(result.data).toBe("subscript");
     expect(kindOf(result.children[0]!)).toBe(base);
     if (base === "refcall") expect((result.children[0] as Tree).children.map(kindOf)).toContain("call_suffix");
+  });
+});
+
+describe("comprehensions", () => {
+  /** The rule name of `node`, or its token type. */
+  const kindOf = (node: ExprNode) => (node instanceof Tree ? node.data : node.type);
+  /** Each clause of the comprehension `text` parses to, as its kind and, for a `for`, target and source. */
+  const clausesOf = (text: string) => {
+    const result = tree(text);
+    expect(result.data).toBe("list_comp");
+    return (result.children.slice(1) as Tree[]).map((clause) =>
+      clause.data === "comp_for" ? [clause.data, String(clause.children[0]), String(clause.children[2])] : [clause.data],
+    );
+  };
+
+  test("a map is a list_comp of its elem and one for", () => {
+    const result = tree("[x * 2 for x in xs]");
+    expect(result.data).toBe("list_comp");
+    expect(kindOf(result.children[0]!)).toBe("product");
+    expect(clausesOf("[x * 2 for x in xs]")).toEqual([["comp_for", "x", "xs"]]);
+    const source = (result.children[1] as Tree).children[2] as Token;
+    expect(source.type).toBe("SOURCE");
+  });
+
+  test("clauses keep source order", () => {
+    expect(clausesOf('[m for t in ts for m in t if m.role == "user"]')).toEqual([
+      ["comp_for", "t", "ts"],
+      ["comp_for", "m", "t"],
+      ["comp_if"],
+    ]);
+    expect(clausesOf("[x for x in xs if x > 0 if x < 3]")).toEqual([["comp_for", "x", "xs"], ["comp_if"], ["comp_if"]]);
+  });
+
+  test("an elem may be a comprehension or an escape", () => {
+    expect(kindOf(tree("[[c for c in r] for r in rows]").children[0]!)).toBe("list_comp");
+    expect(kindOf(tree("[a :- b for x in xs]").children[0]!)).toBe("default_expr");
+  });
+
+  test("SOURCE keeps the iterable's text, parentheses included", () => {
+    expect(clausesOf("[x for x in (a :- [])]")).toEqual([["comp_for", "x", "(a :- [])"]]);
+  });
+
+  test("for and if stay names in operand position", () => {
+    const list = tree("[for, if]");
+    expect(list.data).toBe("list_lit");
+    expect(list.children.map(kindOf)).toEqual(["refcall", "refcall"]);
+    expect(parsed("for.x")).toEqual(plain(ref("for", "x")));
+  });
+
+  test("5,000 if clauses parse, with no recursion and no clause cap", () => {
+    const result = tree(`[x for x in xs${" if true".repeat(5000)}]`);
+    expect(result.children.length).toBe(5002);
   });
 });

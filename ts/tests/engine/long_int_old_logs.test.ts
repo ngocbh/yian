@@ -124,7 +124,7 @@ async function oldStartedLog(): Promise<OldLog> {
   writeFileSync(path, lines.join("\n"));
   const read = (record: RunRecord) =>
     record instanceof PoolCommitRecord && record.key === "__start__"
-      ? (record.value.value as Record<string, unknown>)["n"]
+      ? (record.value!.value as Record<string, unknown>)["n"]
       : undefined;
   return { flow: STARTED_FLOW, path, output: "done", read };
 }
@@ -136,7 +136,7 @@ async function oldCodeLog(): Promise<OldLog> {
   expect(text.split(recorded)).toHaveLength(2);
   writeFileSync(path, text.replace(recorded, recorded.replace(SENTINEL, D)));
   const read = (record: RunRecord) =>
-    record instanceof PoolCommitRecord && record.nodeId === "c" ? record.value.value : undefined;
+    record instanceof PoolCommitRecord && record.nodeId === "c" ? record.value!.value : undefined;
   return { flow: CODE_FLOW, path, output: BigInt(SENTINEL), read };
 }
 

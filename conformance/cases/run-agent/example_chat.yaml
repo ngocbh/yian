@@ -1,190 +1,62 @@
 # From examples/chat.yaml.
-# Turn 0's message takes the `else:` call to `respond`, whose AGENT reply is folded into the
-# transcript; turn 1's `/exit` takes the `exited` entry, and the loop stops on `not exited`.
-# Its header's `yian chat` is the Python CLI; TS yian drops that command.
+# Turn 0's message takes the `else:` call to `respond`, whose AGENT gets the history as messages
+# (the `prompt:` list style) and replies; `respond`'s output binding appends both messages. Turn
+# 1's `/exit` takes the `exited` entry, and the loop stops on `not exited`.
 # No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
 kind: run
 rules: [run-log]
+python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
-  # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
+  # chat — a turn-by-turn conversational REPL (agent without tools; deterministic history).
   #
   # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-  # Exact exit text routes to the `exited` value entry, which keeps the transcript and sets
-  # `exited: true`. Anything else calls `respond`, where the AGENT fills the reply and a CODE
-  # node folds it into the transcript. The LLM only fills the reply.
-  # Run it with:  yian chat examples/chat.yaml
+  # Exact exit text routes to the `exited` value entry, which keeps the history and sets
+  # `exited: true`. Anything else calls `respond`, where the AGENT sends the history as messages
+  # and replies; `respond`'s output binding appends the turn's two messages. The AGENT outputs only
+  # its reply and a binding does the append, so the run log grows linearly with the conversation.
+  # The `prompt:` list style is TS-only (#1002).
   id: chat
   name: chat
   description: A turn-by-turn conversational assistant (one model call per turn, no tools).
 
-  input:
-    opening: !str            # seed transcript; the CLI passes "" (empty)
-
   typedefs:
-    Turn:                   # the carried record, and each turn's result
-      transcript: str
-      exited: bool
+    Msg:                    # one message of the history the AGENT sends
+      role: Literal(user, assistant)
+      text: str
+    Turn: {history: list(Msg), exited: bool}   # the carried record, and each turn's result
 
   defs:
     respond:                # a CASE result is the routed node's output, so the reply chain is a def
-      input:
-        transcript: !str
-        message: !str
+      input: {history: !list(Msg), message: !str}
       nodes:
         reply:
           kind: agent
-          input:
-            transcript: ${input.transcript}
-            message:    ${input.message}
-          output: str
-          prompt: |-
-            You are a helpful conversational assistant.
+          input: {history: "${input.history}", message: "${input.message}"}
+          output: str                      # only this turn's reply is recorded
+          system_prompt: You are a helpful conversational assistant.
+          prompt:
+            - ${history}
+            - user: ${message}
+      output: !Turn
+        history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
+        exited: false
 
-            Conversation so far:
-            ${transcript}
-
-            User: ${message}
-        fold:
-          kind: code
-          input:
-            transcript: ${input.transcript}
-            message: ${input.message}
-            reply: ${reply.output}
-          output: Turn
-          code: |
-            return {
-                "transcript": inputs["transcript"]
-                + "\n\nUser: " + inputs["message"]
-                + "\n\nAssistant: " + inputs["reply"],
-                "exited": false,
-            }
-      output: ${fold.output}
-
-    turn:                   # body: 'a -> 'a over {transcript, exited}
-      input:
-        transcript: !str
-        exited: !bool
+    turn:                   # body: 'a -> 'a over {history, exited}
+      input: {history: !list(Msg), exited: !bool}
       nodes:
-        ask:
-          kind: human_input       # blocks a worker until the broker returns the message
-          prompt: "You:"
-          output: str
-        exited: !Turn             # a value entry: the exit record itself
-          transcript: ${input.transcript}
-          exited: true
+        ask: {kind: human_input, prompt: "You:", output: str}
+        exited: !Turn {history: "${input.history}", exited: true}   # a value entry: the exit record
         route:
           kind: case
           on: ${ask.output}
-          cases:
-            - when: /exit
-              then: exited
-            - when: /quit
-              then: exited
-          else: call(respond, transcript=${input.transcript}, message=${ask.output})
+          cases: [{when: /exit, then: exited}, {when: /quit, then: exited}]
+          else: call(respond, history=${input.history}, message=${ask.output})
       output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
   nodes:
-    chat:
-      kind: loop
-      call: turn
-      input:
-        transcript: ${input.opening}
-        exited: false                 # the `exited` entry sets true for exact /exit or /quit
-      while: not exited               # a carried-field predicate
-  output: ${chat.output.transcript}
-# The CODE body differs by language: `flow` holds the TS body, this the Python one.
-# Its `False` is `false` in the TS body.
-python_flow: |
-  # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
-  #
-  # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-  # Exact exit text routes to the `exited` value entry, which keeps the transcript and sets
-  # `exited: true`. Anything else calls `respond`, where the AGENT fills the reply and a CODE
-  # node folds it into the transcript. The LLM only fills the reply.
-  # Run it with:  yian chat examples/chat.yaml
-  id: chat
-  name: chat
-  description: A turn-by-turn conversational assistant (one model call per turn, no tools).
-
-  input:
-    opening: !str            # seed transcript; the CLI passes "" (empty)
-
-  typedefs:
-    Turn:                   # the carried record, and each turn's result
-      transcript: str
-      exited: bool
-
-  defs:
-    respond:                # a CASE result is the routed node's output, so the reply chain is a def
-      input:
-        transcript: !str
-        message: !str
-      nodes:
-        reply:
-          kind: agent
-          input:
-            transcript: ${input.transcript}
-            message:    ${input.message}
-          output: str
-          prompt: |-
-            You are a helpful conversational assistant.
-
-            Conversation so far:
-            ${transcript}
-
-            User: ${message}
-        fold:
-          kind: code
-          input:
-            transcript: ${input.transcript}
-            message: ${input.message}
-            reply: ${reply.output}
-          output: Turn
-          code: |
-            return {
-                "transcript": inputs["transcript"]
-                + "\n\nUser: " + inputs["message"]
-                + "\n\nAssistant: " + inputs["reply"],
-                "exited": False,
-            }
-      output: ${fold.output}
-
-    turn:                   # body: 'a -> 'a over {transcript, exited}
-      input:
-        transcript: !str
-        exited: !bool
-      nodes:
-        ask:
-          kind: human_input       # blocks a worker until the broker returns the message
-          prompt: "You:"
-          output: str
-        exited: !Turn             # a value entry: the exit record itself
-          transcript: ${input.transcript}
-          exited: true
-        route:
-          kind: case
-          on: ${ask.output}
-          cases:
-            - when: /exit
-              then: exited
-            - when: /quit
-              then: exited
-          else: call(respond, transcript=${input.transcript}, message=${ask.output})
-      output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
-
-  nodes:
-    chat:
-      kind: loop
-      call: turn
-      input:
-        transcript: ${input.opening}
-        exited: false                 # the `exited` entry sets true for exact /exit or /quit
-      while: not exited               # a carried-field predicate
-  output: ${chat.output.transcript}
-# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
-# them, and the key makes the recorded connection source `environment`, which the trace pins.
+    chat: {kind: loop, call: turn, input: {history: [], exited: false}, while: not exited}
+  output: ${chat.output.history}
 env: {OPENAI_API_KEY: "<key:1>"}
-inputs: {opening: ""}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
   # Each turn's HUMAN_INPUT, by expanded id: one message, then the exit text.
@@ -199,120 +71,160 @@ host:
             role: assistant
             parts: [{type: text, text: "Hello! How can I help?"}]
 expect:
-  output: {status: succeeded, output: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"}
+  output:
+    status: succeeded
+    output:
+      - {role: user, text: Hi}
+      - {role: assistant, text: "Hello! How can I help?"}
   trace:
-    - - run_started
-      - null
-      - learnable: false
-        num_workers: 0
-        effective_llm_by_static_path:
-          chat/__call_0/reply:
-            provider: openai
-            model: gpt-5.5
-            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
-    - [pool_commit, __start__, {key: system.now}]
-    - [pool_commit, __start__, {key: system.run_id, value: r1}]
-    - [pool_commit, __start__, {key: system.today}]
-    - [pool_commit, __start__, {value: {opening: ''}}]
+    - [run_started, null, {effective_llm_by_static_path: {chat/__call_0/reply: {_connection: {endpoint: https://api.openai.com/v1, method: api_key, source: environment}, model: gpt-5.5, provider: openai}}, learnable: false, num_workers: 0}]
+    - - pool_commit
+      - __start__
+      - {key: system.now}
+    - - pool_commit
+      - __start__
+      - {key: system.run_id, value: r1}
+    - - pool_commit
+      - __start__
+      - {key: system.today}
+    - - pool_commit
+      - __start__
+      - value: {}
     - [node_started, __start__]
-    - [pool_commit, __start__, {value: {opening: ""}}]
-    - [node_succeeded, __start__, {commit: 6}]
+    - - pool_commit
+      - __start__
+      - value: {}
+    - - node_succeeded
+      - __start__
+      - {commit: 6}
     - [node_started, chat]
-    - [node_expanded, chat, {seed: [{transcript: "", exited: false}, 0], prune_ids: []}]
-    - [node_started, "chat#0/__start__"]
-    - [pool_commit, "chat#0/__start__", {value: {transcript: "", exited: false}}]
-    - [node_succeeded, chat#0/__start__, {commit: 11}]
-    - [node_started, "chat#0/ask"]
-    - [pool_commit, "chat#0/ask", {value: Hi}]
-    - [node_succeeded, chat#0/ask, {commit: 14}]
-    - [node_started, "chat#0/route"]
-    # The `else:` route's handle is `#else` (docs/syntax.md, `case`).
-    - [node_routed, "chat#0/route", {handle: "#else"}]
-    # The inline `call(...)` is the generated CALL node `__call_0` (docs/syntax.md, Inline
-    # `call(...)`); its child commits to it.
-    - [node_started, "chat#0/__call_0"]
-    - [node_expanded, "chat#0/__call_0", {seed: {transcript: "", message: Hi}, prune_ids: []}]
-    - [node_started, "chat#0/__call_0/__start__"]
-    - [pool_commit, "chat#0/__call_0/__start__", {value: {transcript: "", message: Hi}}]
-    - [node_succeeded, chat#0/__call_0/__start__, {commit: 21}]
-    - [node_started, "chat#0/__call_0/reply"]
-    - [node_step, chat#0/__call_0/reply, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: "Hello! How can I help?", type: text}], role: assistant}, purpose: chat, request_sha256: e965285560ee73522c9ec1980d4ae0d0b8e0fa1108f514a7147eed671fcca09f, response_id: null, usage: null}}]
-    - [pool_commit, "chat#0/__call_0/reply", {value: "Hello! How can I help?"}]
-    - [node_succeeded, chat#0/__call_0/reply, {commit: 25}]
-    - [node_started, "chat#0/__call_0/fold"]
     - - pool_commit
-      - "chat#0/__call_0/fold"
-      - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
-          exited: false
-    - [node_succeeded, chat#0/__call_0/fold, {commit: 28}]
-    - [node_started, "chat#0/__call_0/__end__"]
+      - chat
+      - from: {}
+        key: chat#0/__start__
+    - - node_expanded
+      - chat
+      - prune_ids: []
+    - [node_started, chat#0/__start__]
+    - - node_succeeded
+      - chat#0/__start__
+      - {commit: 9}
+    - [node_started, chat#0/ask]
     - - pool_commit
-      - "chat#0/__call_0/__end__"
-      - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
-          exited: false
+      - chat#0/ask
+      - {value: Hi}
+    - - node_succeeded
+      - chat#0/ask
+      - {commit: 14}
+    - [node_started, chat#0/route]
+    - - node_routed
+      - chat#0/route
+      - {handle: '#else'}
+    - [node_started, chat#0/__call_0]
+    - - pool_commit
+      - chat#0/__call_0
+      - from: {chat#0/__start__: 9, chat#0/ask: 14}
+        key: chat#0/__call_0/__start__
+    - - node_expanded
+      - chat#0/__call_0
+      - prune_ids: []
+    - [node_started, chat#0/__call_0/__start__]
+    - - node_succeeded
+      - chat#0/__call_0/__start__
+      - {commit: 19}
+    - [node_started, chat#0/__call_0/reply]
+    - - node_step
+      - chat#0/__call_0/reply
+      - n: 1
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - {text: "Hello! How can I help?", type: text}
+            role: assistant
+          purpose: chat
+          request_sha256: ed99023b61c8c609346ad7da086201e12ce8eb58a64d9e8bb91e23bbcabea198
+          response_id: null
+          usage: null
+    - - pool_commit
+      - chat#0/__call_0/reply
+      - {value: "Hello! How can I help?"}
+    - - node_succeeded
+      - chat#0/__call_0/reply
+      - {commit: 25}
+    - [node_started, chat#0/__call_0/__end__]
+    - - pool_commit
+      - chat#0/__call_0/__end__
+      - from: {chat#0/__call_0/__start__: 19, chat#0/__call_0/reply: 25}
         key: chat#0/__call_0
-    - [node_succeeded, chat#0/__call_0/__end__, {commit: 31}]
-    - [node_started, "chat#0/__end__"]
+    - - node_succeeded
+      - chat#0/__call_0/__end__
+      - {commit: 28}
+    - [node_started, chat#0/__end__]
     - - pool_commit
-      - "chat#0/__end__"
-      - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
-          exited: false
-    - [node_succeeded, chat#0/__end__, {commit: 34}]
-    # `docs/` doesn't give the LOOP driver ids (`<loop>~k`), the seed `[carried, k]` or
-    # `prune_ids`; see src/yian/nodes/loop/node.py.
+      - chat#0/__end__
+      - from: {chat#0/__call_0: 28}
+    - - node_succeeded
+      - chat#0/__end__
+      - {commit: 31}
     - [node_started, chat~1]
+    - - pool_commit
+      - chat~1
+      - from: {chat#0/__end__: 31}
+        key: chat#1/__start__
     - - node_expanded
       - chat~1
-      - seed:
-          - {transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?", exited: false}
-          - 1
-        prune_ids:
-          - "chat#0/__call_0"
-          - "chat#0/__end__"
-          - "chat#0/__start__"
-          - "chat#0/ask"
-          - "chat#0/exited"
-          - "chat#0/route"
-          - chat~1
-    - [node_started, "chat#1/__start__"]
+      - prune_ids: [chat#0/__call_0, chat#0/__end__, chat#0/__start__, chat#0/ask, chat#0/exited, chat#0/route, chat~1]
+    - [node_started, chat#1/__start__]
+    - - node_succeeded
+      - chat#1/__start__
+      - {commit: 34}
+    - [node_started, chat#1/ask]
     - - pool_commit
-      - "chat#1/__start__"
-      - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
-          exited: false
-    - [node_succeeded, chat#1/__start__, {commit: 39}]
-    - [node_started, "chat#1/ask"]
-    - [pool_commit, "chat#1/ask", {value: /exit}]
-    - [node_succeeded, chat#1/ask, {commit: 42}]
-    - [node_started, "chat#1/route"]
-    - [node_routed, "chat#1/route", {handle: exited}]
-    # The value entry runs as a node under its own id (docs/syntax.md, How a value entry runs).
-    - [node_started, "chat#1/exited"]
+      - chat#1/ask
+      - {value: /exit}
+    - - node_succeeded
+      - chat#1/ask
+      - {commit: 39}
+    - [node_started, chat#1/route]
+    - - node_routed
+      - chat#1/route
+      - {handle: exited}
+    - [node_started, chat#1/exited]
     - - pool_commit
-      - "chat#1/exited"
+      - chat#1/exited
       - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
           exited: true
-    - [node_succeeded, chat#1/exited, {commit: 47}]
-    - [node_started, "chat#1/__end__"]
+          history:
+            - {role: user, text: Hi}
+            - {role: assistant, text: "Hello! How can I help?"}
+    - - node_succeeded
+      - chat#1/exited
+      - {commit: 44}
+    - [node_started, chat#1/__end__]
     - - pool_commit
-      - "chat#1/__end__"
-      - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
-          exited: true
-    - [node_succeeded, chat#1/__end__, {commit: 50}]
+      - chat#1/__end__
+      - from: {chat#1/exited: 44}
+    - - node_succeeded
+      - chat#1/__end__
+      - {commit: 47}
     - [node_started, chat~2]
-    # The stopping driver commits the carried record under the loop's own id.
     - - pool_commit
       - chat~2
-      - value:
-          transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
-          exited: true
+      - from: {chat#1/__end__: 47}
         key: chat
-    - [node_succeeded, chat~2, {commit: 53}]
+    - - node_succeeded
+      - chat~2
+      - {commit: 50}
     - [node_started, __end__]
-    - [pool_commit, __end__, {value: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"}]
-    - [node_succeeded, __end__, {commit: 56}]
+    - - pool_commit
+      - __end__
+      - value:
+          - {role: user, text: Hi}
+          - {role: assistant, text: "Hello! How can I help?"}
+    - - node_succeeded
+      - __end__
+      - {commit: 53}

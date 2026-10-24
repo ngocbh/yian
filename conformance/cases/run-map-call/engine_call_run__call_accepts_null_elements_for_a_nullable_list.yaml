@@ -80,24 +80,22 @@ expect:
     - source
     - {commit: 9}
   - [node_started, invoke]
+  - - pool_commit
+    - invoke
+    - from: {source: 9}
+      key: invoke/__start__
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed:
-        values: [null]
   - [node_started, invoke/__start__]
-  - - pool_commit
-    - invoke/__start__
-    - value:
-        values: [null]
   - - node_succeeded
     - invoke/__start__
-    - {commit: 14}
+    - commit: 12
   - [node_started, invoke/__end__]
   - - pool_commit
     - invoke/__end__
-    - value: [null]
-      key: invoke
+    - key: invoke
+      from: {invoke/__start__: 12}
   - - node_succeeded
     - invoke/__end__
     - {commit: 17}

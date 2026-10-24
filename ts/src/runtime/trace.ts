@@ -42,6 +42,7 @@ import {
   sameOptional,
 } from "../nodes/contracts.ts";
 import { type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import type { VariablePool } from "../typesys/pool.ts";
 import {
   fieldOf,
   isList,
@@ -240,6 +241,8 @@ export class TraceOccurrence {
   readonly memoryScope: MemoryScope | null;
   /** The bound inputs the node keeps from models; a private copy, read-only by contract. */
   readonly hiddenInputs: ReadonlySet<string>;
+  /** An expansion's canonical seed, which its record leaves out; `null` for another outcome. */
+  readonly seed: JsonValue | null;
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
@@ -255,6 +258,7 @@ export class TraceOccurrence {
     inputRoute: ValueRoute,
     memoryScope: MemoryScope | null = null,
     hiddenInputs: ReadonlySet<string> = new Set(),
+    seed: JsonValue | null = null,
   ) {
     this.source = source;
     this.nodeId = nodeId;
@@ -264,6 +268,7 @@ export class TraceOccurrence {
     this.inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
+    this.seed = seed === null ? null : canonicalSeed(seed)[0];
     Object.freeze(this);
   }
 
@@ -762,6 +767,34 @@ export function sourcePath(
   return null;
 }
 
+/**
+ * Pair one `${path}` lookup's value and presence in `pool` with the source `sourceOf` names for
+ * the pool name it reads (`sourcePath`), projected to the lookup's field path; a miss, or a field
+ * the value lacks, is absent.
+ *
+ * @throws ExpressionError when a dotted segment of `path` is empty.
+ * @throws whatever `sourceOf` throws.
+ */
+export function resolvePoolPath(
+  path: string,
+  pool: VariablePool,
+  sourceOf: (name: string) => SourceRef | null,
+): ResolvedValue {
+  const read = sourcePath(path, pool.startId, (name) => pool.store.has(name));
+  if (read === null) return new ResolvedValue(null, false);
+  const { name, projection } = read;
+  const typed = name.startsWith(SYSTEM_PREFIX) ? pool.system.get(name.slice(SYSTEM_PREFIX.length)) : pool.store.get(name);
+  if (typed === undefined) return new ResolvedValue(null, false);
+  let value = typed.toObject();
+  for (const part of projection) {
+    const [present, next] = fieldOf(value, part);
+    if (!present) return new ResolvedValue(null, false);
+    value = next;
+  }
+  const source = sourceOf(name);
+  return new ResolvedValue(value, true, source === null ? null : new SourceRef(source.runId, source.executionSeq, projection));
+}
+
 /** The options of `prepareTrace`. */
 export interface PrepareTraceOptions {
   /** The seed connections the outcome's growth installs; defaults to none. */
@@ -788,6 +821,8 @@ export interface PrepareTraceOptions {
   committed?: { readonly key: string; readonly valueJson: string } | null;
   /** Whether a `PoolCommitRecord` is one of the run start's commits, which apply at once. */
   initialCommit?: boolean;
+  /** An accepted expansion's canonical seed, which its record leaves out. */
+  seed?: JsonValue | null;
 }
 
 /**
@@ -827,6 +862,7 @@ export function prepareTrace(
     writerFiles = null,
     committed = null,
     initialCommit = false,
+    seed = null,
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -908,6 +944,7 @@ export function prepareTrace(
     inputRoute,
     node.memoryScope,
     node.modelHiddenInputs(),
+    seed,
   );
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);

@@ -63,35 +63,33 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, invoke]
+  - - pool_commit
+    - invoke
+    - from: {}
+      key: invoke/__start__
+  - - pool_commit
+    - invoke
+    - from: {}
+      key: invoke#0/__start__
+  - - pool_commit
+    - invoke
+    - from: {}
+      key: invoke#1/__start__
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed:
-      - token: a
-      - token: b
   - [node_started, invoke/__start__]
-  - - pool_commit
-    - invoke/__start__
-    - value: {}
   - - node_succeeded
     - invoke/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, invoke#0/__start__]
-  - - pool_commit
-    - invoke#0/__start__
-    - value:
-        token: a
   - - node_succeeded
     - invoke#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, invoke#1/__start__]
-  - - pool_commit
-    - invoke#1/__start__
-    - value:
-        token: b
   - - node_succeeded
     - invoke#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, invoke#0/ask]
   - - run_resumed
     - null
@@ -114,22 +112,22 @@ expect:
   - [node_started, invoke#0/__end__]
   - - pool_commit
     - invoke#0/__end__
-    - value: A
+    - from: {invoke#0/ask: 22}
   - - node_succeeded
     - invoke#0/__end__
     - {commit: 28}
   - [node_started, invoke#1/__end__]
   - - pool_commit
     - invoke#1/__end__
-    - value: B
+    - from: {invoke#1/ask: 25}
   - - node_succeeded
     - invoke#1/__end__
     - {commit: 31}
   - [node_started, invoke/__end__]
   - - pool_commit
     - invoke/__end__
-    - value: [A, B]
-      key: invoke
+    - key: invoke
+      from: {invoke#0/__end__: 28, invoke#1/__end__: 31}
   - - node_succeeded
     - invoke/__end__
     - {commit: 34}

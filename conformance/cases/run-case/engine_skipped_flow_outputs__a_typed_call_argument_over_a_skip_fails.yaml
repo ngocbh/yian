@@ -92,19 +92,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, c1]
+  - - pool_commit
+    - c1
+    - from: {__start__: 6}
+      key: c1/__start__
   - - node_expanded
     - c1
     - prune_ids: []
-      seed:
-        approve: false
   - [node_started, c1/__start__]
-  - - pool_commit
-    - c1/__start__
-    - value:
-        approve: false
   - - node_succeeded
     - c1/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, c1/gate]
   - - node_routed
     - c1/gate
@@ -112,9 +110,8 @@ expect:
   - [node_started, c1/__end__]
   - - pool_commit
     - c1/__end__
-    - value:
-        order: null
-      key: c1
+    - key: c1
+      from: {}
   - - node_succeeded
     - c1/__end__
     - {commit: 16}

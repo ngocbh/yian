@@ -96,33 +96,31 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, __call_0]
+  - - pool_commit
+    - __call_0
+    - from: {__start__: 6}
+      key: __call_0/__start__
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        x: Ada
   - [node_started, a]
   - - pool_commit
     - a
     - value: 2
   - - node_succeeded
     - a
-    - {commit: 11}
+    - {commit: 12}
   - [node_started, b]
   - - pool_commit
     - b
     - value: 3
   - - node_succeeded
     - b
-    - {commit: 14}
+    - {commit: 15}
   - [node_started, __call_0/__start__]
-  - - pool_commit
-    - __call_0/__start__
-    - value:
-        x: Ada
   - - node_succeeded
     - __call_0/__start__
-    - {commit: 17}
+    - commit: 9
   - [node_started, __call_0/up]
   - - pool_commit
     - __call_0/up
@@ -133,8 +131,8 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: ADA
-      key: __call_0
+    - key: __call_0
+      from: {__call_0/up: 20}
   - - node_succeeded
     - __call_0/__end__
     - {commit: 23}

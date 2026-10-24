@@ -90,19 +90,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, __call_0]
+  - - pool_commit
+    - __call_0
+    - from: {__start__: 6}
+      key: __call_0/__start__
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        topic: hi ACME
   - [node_started, __call_0/__start__]
-  - - pool_commit
-    - __call_0/__start__
-    - value:
-        topic: hi ACME
   - - node_succeeded
     - __call_0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, __call_0/x]
   - - pool_commit
     - __call_0/x
@@ -113,8 +111,8 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: hi ACME
-      key: __call_0
+    - key: __call_0
+      from: {__call_0/x: 14}
   - - node_succeeded
     - __call_0/__end__
     - {commit: 17}

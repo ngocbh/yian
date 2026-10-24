@@ -43,6 +43,7 @@ import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import {
   type BackwardContext,
   type BackwardResult,
+  Grow,
   Node,
   type NodeCaps,
   NodeKind,
@@ -98,22 +99,27 @@ import {
   type RunRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
-import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitInitialPool,
   commitPrepared,
   type GrowBuilder,
   type GrowthIndex,
   growthIndex,
+  isDerivedCommit,
+  planExpansion,
+  prepareExpanded,
+  prepareExpansionCommit,
   prepareNodeStarted,
   prepareNodeSucceeded,
   preparePoolCommit,
   prepareRecord,
   type PreparedTransition,
   prepareRunStarted,
+  rebuildCommitValue,
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
+import { decodeTyped, type RetainedTrace } from "../../src/runtime/trace.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
@@ -1117,7 +1123,8 @@ export function initializedAndStarted(
 
 /**
  * Commit `output` as in-flight `nodeId`'s pool commit (under `options.commitAs` when given), then
- * prepare the success that accepts it, with the other `options`.
+ * prepare the success that accepts it, with the other `options`. A derived node's value is the one
+ * its binding rebuilds, whatever `output` is.
  */
 export function prepareOutput(
   log: RunLog,
@@ -1127,8 +1134,51 @@ export function prepareOutput(
   options: { commitAs?: string | null } & OutcomeCarriers = {},
 ): PreparedTransition {
   const { commitAs = null, ...carriers } = options;
-  commitPrepared(log, state, preparePoolCommit(state, nodeId, output, { commitAs }));
+  // A child START's expansion committed its value already; its success only names it. A derived
+  // node's commit points at every pool name, which holds what its binding reads; its success
+  // rebuilds the value from them.
+  if (!state.pendingCommits.has(nodeId)) {
+    const from = isDerivedCommit(state, nodeId) ? new Map(state.producers) : null;
+    commitPrepared(log, state, preparePoolCommit(state, nodeId, output, { commitAs, from }));
+  }
+  const pending = state.pendingCommits.get(nodeId)!;
+  if (pending.valueJson === null) {
+    // The success checks a derived value against the one evaluated: here, its own rebuild.
+    const rebuilt = decodeTyped(rebuildCommitValue(state, nodeId, pending.key, pending.from!));
+    return prepareNodeSucceeded(state, nodeId, { ...carriers, output: rebuilt });
+  }
   return prepareNodeSucceeded(state, nodeId, carriers);
+}
+
+/**
+ * Commit in-flight spawner `nodeId`'s expansion commits for `grow`, as the engine does before its
+ * `NodeExpanded`, each with `from` (empty by default); return how many it committed.
+ */
+export function commitExpansion(
+  log: RunLog,
+  state: RunState,
+  nodeId: string,
+  grow: Grow,
+  growBuilder: GrowBuilder,
+  from: ReadonlyMap<string, number> = new Map(),
+): number {
+  const { commits } = planExpansion(state, nodeId, grow, growBuilder);
+  for (const [key] of commits) commitPrepared(log, state, prepareExpansionCommit(state, nodeId, key, from));
+  return commits.length;
+}
+
+/** `commitExpansion`, then prepare the expansion with the carriers in `options`. */
+export function prepareGrowth(
+  log: RunLog,
+  state: RunState,
+  nodeId: string,
+  grow: Grow,
+  growBuilder: GrowBuilder,
+  options: OutcomeCarriers & { from?: ReadonlyMap<string, number> } = {},
+): PreparedTransition {
+  const { from, ...carriers } = options;
+  commitExpansion(log, state, nodeId, grow, growBuilder, from);
+  return prepareExpanded(state, nodeId, grow, growBuilder, carriers);
 }
 
 /**
@@ -1327,6 +1377,14 @@ export class Spawner extends Node {
   readonly kind = NodeKind.CALL;
   override readonly isSpawner = true;
   override readonly growDepthDelta = 1;
+  // A spawner's seed is rebuilt from its binding on replay, so the double is derived too.
+  override readonly derived = true;
+  /** The growth `forward` returns; a test that grows with another sets it before a replay. */
+  grow = new Grow({});
+
+  override forward(): Grow {
+    return this.grow;
+  }
 }
 
 /** Return a complete static graph whose one spawner can be put in flight. */

@@ -56,17 +56,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, use]
+  - - pool_commit
+    - use
+    - from: {}
+      key: use/__start__
   - - node_expanded
     - use
     - prune_ids: []
-      seed: {}
   - [node_started, use/__start__]
-  - - pool_commit
-    - use/__start__
-    - value: {}
   - - node_succeeded
     - use/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, use/n]
   - - pool_commit
     - use/n

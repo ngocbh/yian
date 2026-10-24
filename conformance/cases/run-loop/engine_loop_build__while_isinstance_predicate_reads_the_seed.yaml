@@ -98,21 +98,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, ask]
+  - - pool_commit
+    - ask
+    - from: {}
+      key: ask#0/__start__
   - - node_expanded
     - ask
     - prune_ids: []
-      seed:
-      - n: 0
-        r: null
-      - 0
   - [node_started, ask#0/__start__]
-  - - pool_commit
-    - ask#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - ask#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, ask#0/step]
   - - pool_commit
     - ask#0/step
@@ -126,21 +122,15 @@ expect:
   - [node_started, ask#0/__end__]
   - - pool_commit
     - ask#0/__end__
-    - value:
-        n: 1
-        r:
-          answer: ok
+    - from: {ask#0/step: 14}
   - - node_succeeded
     - ask#0/__end__
     - {commit: 17}
   - [node_started, ask~1]
   - - pool_commit
     - ask~1
-    - value:
-        n: 1
-        r:
-          answer: ok
-      key: ask
+    - key: ask
+      from: {ask#0/__end__: 17}
   - - node_succeeded
     - ask~1
     - {commit: 20}

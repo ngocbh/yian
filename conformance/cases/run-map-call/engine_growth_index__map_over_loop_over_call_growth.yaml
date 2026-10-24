@@ -107,93 +107,81 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, each]
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each/__start__
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#0/__start__
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#1/__start__
   - - node_expanded
     - each
     - prune_ids: []
-      seed:
-      - x: 1
-      - x: 2
   - [node_started, each/__start__]
-  - - pool_commit
-    - each/__start__
-    - value: {}
   - - node_succeeded
     - each/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, each#0/__start__]
-  - - pool_commit
-    - each#0/__start__
-    - value:
-        x: 1
   - - node_succeeded
     - each#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, each#1/__start__]
-  - - pool_commit
-    - each#1/__start__
-    - value:
-        x: 2
   - - node_succeeded
     - each#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, each#0/repeat]
+  - - pool_commit
+    - each#0/repeat
+    - from: {each#0/__start__: 10}
+      key: each#0/repeat#0/__start__
   - - node_expanded
     - each#0/repeat
     - prune_ids: []
-      seed:
-      - n: 1
-      - 0
   - [node_started, each#1/repeat]
+  - - pool_commit
+    - each#1/repeat
+    - from: {each#1/__start__: 11}
+      key: each#1/repeat#0/__start__
   - - node_expanded
     - each#1/repeat
     - prune_ids: []
-      seed:
-      - n: 2
-      - 0
   - [node_started, each#0/repeat#0/__start__]
-  - - pool_commit
-    - each#0/repeat#0/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - each#0/repeat#0/__start__
-    - {commit: 24}
+    - commit: 20
   - [node_started, each#1/repeat#0/__start__]
-  - - pool_commit
-    - each#1/repeat#0/__start__
-    - value:
-        n: 2
   - - node_succeeded
     - each#1/repeat#0/__start__
-    - {commit: 27}
+    - commit: 23
   - [node_started, each#0/repeat#0/inner]
+  - - pool_commit
+    - each#0/repeat#0/inner
+    - from: {each#0/repeat#0/__start__: 20}
+      key: each#0/repeat#0/inner/__start__
   - - node_expanded
     - each#0/repeat#0/inner
     - prune_ids: []
-      seed:
-        n: 1
   - [node_started, each#1/repeat#0/inner]
+  - - pool_commit
+    - each#1/repeat#0/inner
+    - from: {each#1/repeat#0/__start__: 23}
+      key: each#1/repeat#0/inner/__start__
   - - node_expanded
     - each#1/repeat#0/inner
     - prune_ids: []
-      seed:
-        n: 2
   - [node_started, each#0/repeat#0/inner/__start__]
-  - - pool_commit
-    - each#0/repeat#0/inner/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - each#0/repeat#0/inner/__start__
-    - {commit: 34}
+    - commit: 30
   - [node_started, each#1/repeat#0/inner/__start__]
-  - - pool_commit
-    - each#1/repeat#0/inner/__start__
-    - value:
-        n: 2
   - - node_succeeded
     - each#1/repeat#0/inner/__start__
-    - {commit: 37}
+    - commit: 33
   - [node_started, each#0/repeat#0/inner/a]
   - - pool_commit
     - each#0/repeat#0/inner/a
@@ -211,36 +199,38 @@ expect:
   - [node_started, each#0/repeat#0/inner/__end__]
   - - pool_commit
     - each#0/repeat#0/inner/__end__
-    - value: 2
-      key: each#0/repeat#0/inner
+    - key: each#0/repeat#0/inner
+      from: {each#0/repeat#0/inner/a: 40}
   - - node_succeeded
     - each#0/repeat#0/inner/__end__
     - {commit: 46}
   - [node_started, each#1/repeat#0/inner/__end__]
   - - pool_commit
     - each#1/repeat#0/inner/__end__
-    - value: 3
-      key: each#1/repeat#0/inner
+    - key: each#1/repeat#0/inner
+      from: {each#1/repeat#0/inner/a: 43}
   - - node_succeeded
     - each#1/repeat#0/inner/__end__
     - {commit: 49}
   - [node_started, each#0/repeat#0/__end__]
   - - pool_commit
     - each#0/repeat#0/__end__
-    - value:
-        n: 2
+    - from: {each#0/repeat#0/inner: 46}
   - - node_succeeded
     - each#0/repeat#0/__end__
     - {commit: 52}
   - [node_started, each#1/repeat#0/__end__]
   - - pool_commit
     - each#1/repeat#0/__end__
-    - value:
-        n: 3
+    - from: {each#1/repeat#0/inner: 49}
   - - node_succeeded
     - each#1/repeat#0/__end__
     - {commit: 55}
   - [node_started, each#0/repeat~1]
+  - - pool_commit
+    - each#0/repeat~1
+    - from: {each#0/repeat#0/__end__: 52}
+      key: each#0/repeat#1/__start__
   - - node_expanded
     - each#0/repeat~1
     - prune_ids:
@@ -248,10 +238,11 @@ expect:
       - each#0/repeat#0/__start__
       - each#0/repeat#0/inner
       - each#0/repeat~1
-      seed:
-      - n: 2
-      - 1
   - [node_started, each#1/repeat~1]
+  - - pool_commit
+    - each#1/repeat~1
+    - from: {each#1/repeat#0/__end__: 55}
+      key: each#1/repeat#1/__start__
   - - node_expanded
     - each#1/repeat~1
     - prune_ids:
@@ -259,53 +250,38 @@ expect:
       - each#1/repeat#0/__start__
       - each#1/repeat#0/inner
       - each#1/repeat~1
-      seed:
-      - n: 3
-      - 1
   - [node_started, each#0/repeat#1/__start__]
-  - - pool_commit
-    - each#0/repeat#1/__start__
-    - value:
-        n: 2
   - - node_succeeded
     - each#0/repeat#1/__start__
-    - {commit: 62}
+    - commit: 58
   - [node_started, each#1/repeat#1/__start__]
-  - - pool_commit
-    - each#1/repeat#1/__start__
-    - value:
-        n: 3
   - - node_succeeded
     - each#1/repeat#1/__start__
-    - {commit: 65}
+    - commit: 61
   - [node_started, each#0/repeat#1/inner]
+  - - pool_commit
+    - each#0/repeat#1/inner
+    - from: {each#0/repeat#1/__start__: 58}
+      key: each#0/repeat#1/inner/__start__
   - - node_expanded
     - each#0/repeat#1/inner
     - prune_ids: []
-      seed:
-        n: 2
   - [node_started, each#1/repeat#1/inner]
+  - - pool_commit
+    - each#1/repeat#1/inner
+    - from: {each#1/repeat#1/__start__: 61}
+      key: each#1/repeat#1/inner/__start__
   - - node_expanded
     - each#1/repeat#1/inner
     - prune_ids: []
-      seed:
-        n: 3
   - [node_started, each#0/repeat#1/inner/__start__]
-  - - pool_commit
-    - each#0/repeat#1/inner/__start__
-    - value:
-        n: 2
   - - node_succeeded
     - each#0/repeat#1/inner/__start__
-    - {commit: 72}
+    - commit: 68
   - [node_started, each#1/repeat#1/inner/__start__]
-  - - pool_commit
-    - each#1/repeat#1/inner/__start__
-    - value:
-        n: 3
   - - node_succeeded
     - each#1/repeat#1/inner/__start__
-    - {commit: 75}
+    - commit: 71
   - [node_started, each#0/repeat#1/inner/a]
   - - pool_commit
     - each#0/repeat#1/inner/a
@@ -323,36 +299,38 @@ expect:
   - [node_started, each#0/repeat#1/inner/__end__]
   - - pool_commit
     - each#0/repeat#1/inner/__end__
-    - value: 3
-      key: each#0/repeat#1/inner
+    - key: each#0/repeat#1/inner
+      from: {each#0/repeat#1/inner/a: 78}
   - - node_succeeded
     - each#0/repeat#1/inner/__end__
     - {commit: 84}
   - [node_started, each#1/repeat#1/inner/__end__]
   - - pool_commit
     - each#1/repeat#1/inner/__end__
-    - value: 4
-      key: each#1/repeat#1/inner
+    - key: each#1/repeat#1/inner
+      from: {each#1/repeat#1/inner/a: 81}
   - - node_succeeded
     - each#1/repeat#1/inner/__end__
     - {commit: 87}
   - [node_started, each#0/repeat#1/__end__]
   - - pool_commit
     - each#0/repeat#1/__end__
-    - value:
-        n: 3
+    - from: {each#0/repeat#1/inner: 84}
   - - node_succeeded
     - each#0/repeat#1/__end__
     - {commit: 90}
   - [node_started, each#1/repeat#1/__end__]
   - - pool_commit
     - each#1/repeat#1/__end__
-    - value:
-        n: 4
+    - from: {each#1/repeat#1/inner: 87}
   - - node_succeeded
     - each#1/repeat#1/__end__
     - {commit: 93}
   - [node_started, each#0/repeat~2]
+  - - pool_commit
+    - each#0/repeat~2
+    - from: {each#0/repeat#1/__end__: 90}
+      key: each#0/repeat#2/__start__
   - - node_expanded
     - each#0/repeat~2
     - prune_ids:
@@ -360,10 +338,11 @@ expect:
       - each#0/repeat#1/__start__
       - each#0/repeat#1/inner
       - each#0/repeat~2
-      seed:
-      - n: 3
-      - 2
   - [node_started, each#1/repeat~2]
+  - - pool_commit
+    - each#1/repeat~2
+    - from: {each#1/repeat#1/__end__: 93}
+      key: each#1/repeat#2/__start__
   - - node_expanded
     - each#1/repeat~2
     - prune_ids:
@@ -371,53 +350,38 @@ expect:
       - each#1/repeat#1/__start__
       - each#1/repeat#1/inner
       - each#1/repeat~2
-      seed:
-      - n: 4
-      - 2
   - [node_started, each#0/repeat#2/__start__]
-  - - pool_commit
-    - each#0/repeat#2/__start__
-    - value:
-        n: 3
   - - node_succeeded
     - each#0/repeat#2/__start__
-    - {commit: 100}
+    - commit: 96
   - [node_started, each#1/repeat#2/__start__]
-  - - pool_commit
-    - each#1/repeat#2/__start__
-    - value:
-        n: 4
   - - node_succeeded
     - each#1/repeat#2/__start__
-    - {commit: 103}
+    - commit: 99
   - [node_started, each#0/repeat#2/inner]
+  - - pool_commit
+    - each#0/repeat#2/inner
+    - from: {each#0/repeat#2/__start__: 96}
+      key: each#0/repeat#2/inner/__start__
   - - node_expanded
     - each#0/repeat#2/inner
     - prune_ids: []
-      seed:
-        n: 3
   - [node_started, each#1/repeat#2/inner]
+  - - pool_commit
+    - each#1/repeat#2/inner
+    - from: {each#1/repeat#2/__start__: 99}
+      key: each#1/repeat#2/inner/__start__
   - - node_expanded
     - each#1/repeat#2/inner
     - prune_ids: []
-      seed:
-        n: 4
   - [node_started, each#0/repeat#2/inner/__start__]
-  - - pool_commit
-    - each#0/repeat#2/inner/__start__
-    - value:
-        n: 3
   - - node_succeeded
     - each#0/repeat#2/inner/__start__
-    - {commit: 110}
+    - commit: 106
   - [node_started, each#1/repeat#2/inner/__start__]
-  - - pool_commit
-    - each#1/repeat#2/inner/__start__
-    - value:
-        n: 4
   - - node_succeeded
     - each#1/repeat#2/inner/__start__
-    - {commit: 113}
+    - commit: 109
   - [node_started, each#0/repeat#2/inner/a]
   - - pool_commit
     - each#0/repeat#2/inner/a
@@ -435,76 +399,68 @@ expect:
   - [node_started, each#0/repeat#2/inner/__end__]
   - - pool_commit
     - each#0/repeat#2/inner/__end__
-    - value: 4
-      key: each#0/repeat#2/inner
+    - key: each#0/repeat#2/inner
+      from: {each#0/repeat#2/inner/a: 116}
   - - node_succeeded
     - each#0/repeat#2/inner/__end__
     - {commit: 122}
   - [node_started, each#1/repeat#2/inner/__end__]
   - - pool_commit
     - each#1/repeat#2/inner/__end__
-    - value: 5
-      key: each#1/repeat#2/inner
+    - key: each#1/repeat#2/inner
+      from: {each#1/repeat#2/inner/a: 119}
   - - node_succeeded
     - each#1/repeat#2/inner/__end__
     - {commit: 125}
   - [node_started, each#0/repeat#2/__end__]
   - - pool_commit
     - each#0/repeat#2/__end__
-    - value:
-        n: 4
+    - from: {each#0/repeat#2/inner: 122}
   - - node_succeeded
     - each#0/repeat#2/__end__
     - {commit: 128}
   - [node_started, each#1/repeat#2/__end__]
   - - pool_commit
     - each#1/repeat#2/__end__
-    - value:
-        n: 5
+    - from: {each#1/repeat#2/inner: 125}
   - - node_succeeded
     - each#1/repeat#2/__end__
     - {commit: 131}
   - [node_started, each#0/repeat~3]
   - - pool_commit
     - each#0/repeat~3
-    - value:
-        n: 4
-      key: each#0/repeat
+    - key: each#0/repeat
+      from: {each#0/repeat#2/__end__: 128}
   - - node_succeeded
     - each#0/repeat~3
     - {commit: 134}
   - [node_started, each#1/repeat~3]
   - - pool_commit
     - each#1/repeat~3
-    - value:
-        n: 5
-      key: each#1/repeat
+    - key: each#1/repeat
+      from: {each#1/repeat#2/__end__: 131}
   - - node_succeeded
     - each#1/repeat~3
     - {commit: 137}
   - [node_started, each#0/__end__]
   - - pool_commit
     - each#0/__end__
-    - value:
-        n: 4
+    - from: {each#0/repeat: 134}
   - - node_succeeded
     - each#0/__end__
     - {commit: 140}
   - [node_started, each#1/__end__]
   - - pool_commit
     - each#1/__end__
-    - value:
-        n: 5
+    - from: {each#1/repeat: 137}
   - - node_succeeded
     - each#1/__end__
     - {commit: 143}
   - [node_started, each/__end__]
   - - pool_commit
     - each/__end__
-    - value:
-      - n: 4
-      - n: 5
-      key: each
+    - key: each
+      from: {each#0/__end__: 140, each#1/__end__: 143}
   - - node_succeeded
     - each/__end__
     - {commit: 146}

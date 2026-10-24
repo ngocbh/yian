@@ -250,7 +250,7 @@ test("an orphan commit never enters the index", async () => {
   }
 }, 60_000);
 
-test("in a learnable run, each name's commit is by the node whose start the retained trace names", async () => {
+test("in a learnable run, each name's commit is by the node whose start the retained trace names, or its expansion's", async () => {
   const { state, records } = await liveRun(CALL_IN_LOOP, { learnable: true });
   const trace = state.trace!;
   let checked = 0;
@@ -259,7 +259,10 @@ test("in a learnable run, each name's commit is by the node whose start the reta
     const source = trace.resolve(`${name}.output`).source as SourceRef;
     const started = records[source.executionSeq]!;
     expect(started.kind).toBe("node_started");
-    expect([name, records[seq]!.payload["node_id"]]).toEqual([name, started.payload["node_id"]]);
+    // A child START's commit is its expansion's, by the spawner, under the START's key.
+    const commit = records[seq]!.payload;
+    const writer = commit["key"] !== commit["node_id"] && commit["key"] === started.payload["node_id"] ? commit["key"] : commit["node_id"];
+    expect([name, writer]).toEqual([name, started.payload["node_id"]]);
     checked += 1;
   }
   expect(checked).toBeGreaterThan(1);

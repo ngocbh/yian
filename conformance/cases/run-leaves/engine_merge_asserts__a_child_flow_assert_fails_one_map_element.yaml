@@ -105,44 +105,41 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, fan]
+  - - pool_commit
+    - fan
+    - from: {__start__: 6}
+      key: fan/__start__
+  - - pool_commit
+    - fan
+    - from: {__start__: 6}
+      key: fan#0/__start__
+  - - pool_commit
+    - fan
+    - from: {__start__: 6}
+      key: fan#1/__start__
+  - - pool_commit
+    - fan
+    - from: {__start__: 6}
+      key: fan#2/__start__
   - - node_expanded
     - fan
     - prune_ids: []
-      seed:
-      - seed: 5
-      - seed: -5
-      - seed: 7
   - [node_started, fan/__start__]
-  - - pool_commit
-    - fan/__start__
-    - value: {}
   - - node_succeeded
     - fan/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, fan#0/__start__]
-  - - pool_commit
-    - fan#0/__start__
-    - value:
-        seed: 5
   - - node_succeeded
     - fan#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, fan#1/__start__]
-  - - pool_commit
-    - fan#1/__start__
-    - value:
-        seed: -5
   - - node_succeeded
     - fan#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, fan#2/__start__]
-  - - pool_commit
-    - fan#2/__start__
-    - value:
-        seed: 7
   - - node_succeeded
     - fan#2/__start__
-    - {commit: 20}
+    - commit: 12
   - [node_started, fan#0/emit]
   - - pool_commit
     - fan#0/emit
@@ -170,8 +167,7 @@ expect:
   - [node_started, fan#0/__end__]
   - - pool_commit
     - fan#0/__end__
-    - value:
-        n: 6
+    - from: {fan#0/emit: 23}
   - - node_succeeded
     - fan#0/__end__
     - {commit: 32}

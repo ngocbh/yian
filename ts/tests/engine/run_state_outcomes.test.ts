@@ -179,7 +179,6 @@ import {
   type GrowBuilder,
   NodeDataError,
   type PreparedTransition,
-  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -207,6 +206,7 @@ import {
   RUN_ID,
   snapshot,
   terminalSkipRouteFlow,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`; return it. */
@@ -826,7 +826,7 @@ test("a success's canonical copies isolate the input, the record, the pool and t
   const observers = commitPrepared(log, state, prepared);
   const commitRecord = log.records().at(-2)!.record;
   expect(commitRecord).toBeInstanceOf(PoolCommitRecord);
-  const recorded = (commitRecord as PoolCommitRecord).value;
+  const recorded = (commitRecord as PoolCommitRecord).value!;
   expect(recorded.value).toEqual(expected);
   expect(state.pool.get(START_ID)).toEqual(expected);
   expect(observers).toStrictEqual([new NodeSucceeded({ nodeId: START_ID, output: expected, commitAs: null })]);
@@ -1821,7 +1821,7 @@ test.each([false, true])("the terminal-unreachable latch survives pruning its dy
   commitPrepared(log, state, prepareNodeStarted(state, "creator"));
   commitPrepared(log, state, prepareNodeStarted(state, "pruner"));
   const routerBuilder: GrowBuilder = (spawner) => terminalRouterFragment(spawner.id);
-  commitPrepared(log, state, prepareExpanded(state, "creator", new Grow({}), routerBuilder, capture("creator")));
+  commitPrepared(log, state, prepareGrowth(log, state, "creator", new Grow({}), routerBuilder, capture("creator")));
   const routerId = "creator/child/router";
   commitPrepared(log, state, prepareNodeStarted(state, "creator/child/start"));
   commitPrepared(log, state, prepareOutput(log, state, "creator/child/start", {}, capture("creator/child/start")));
@@ -1848,7 +1848,7 @@ test.each([false, true])("the terminal-unreachable latch survives pruning its dy
   commitPrepared(
     log,
     state,
-    prepareExpanded(state, "pruner", new Grow({}, [routerId]), prunerBuilder, capture("pruner")),
+    prepareGrowth(log, state, "pruner", new Grow({}, [routerId]), prunerBuilder, capture("pruner")),
   );
 
   expect(state.flow.nodes.has(routerId)).toBe(false);

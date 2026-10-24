@@ -198,10 +198,13 @@ expect:
     - inherits
     - {commit: 10}
   - [node_started, child]
+  - - pool_commit
+    - child
+    - from: {}
+      key: child/__start__
   - - node_expanded
     - child
     - prune_ids: []
-      seed: {}
   - [node_started, other]
   - - node_step
     - other
@@ -224,14 +227,11 @@ expect:
     - value: ok
   - - node_succeeded
     - other
-    - {commit: 16}
+    - {commit: 17}
   - [node_started, child/__start__]
-  - - pool_commit
-    - child/__start__
-    - value: {}
   - - node_succeeded
     - child/__start__
-    - {commit: 19}
+    - commit: 13
   - [node_started, optout]
   - - node_step
     - optout
@@ -288,8 +288,8 @@ expect:
   - [node_started, child/__end__]
   - - pool_commit
     - child/__end__
-    - value: ok
-      key: child
+    - key: child
+      from: {child/nested: 27}
   - - node_succeeded
     - child/__end__
     - {commit: 33}

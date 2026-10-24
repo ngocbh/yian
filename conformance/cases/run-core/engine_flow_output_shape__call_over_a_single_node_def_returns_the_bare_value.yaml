@@ -46,17 +46,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, c]
+  - - pool_commit
+    - c
+    - from: {}
+      key: c/__start__
   - - node_expanded
     - c
     - prune_ids: []
-      seed: {}
   - [node_started, c/__start__]
-  - - pool_commit
-    - c/__start__
-    - value: {}
   - - node_succeeded
     - c/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, c/greet]
   - - pool_commit
     - c/greet
@@ -67,8 +67,8 @@ expect:
   - [node_started, c/__end__]
   - - pool_commit
     - c/__end__
-    - value: hi
-      key: c
+    - key: c
+      from: {c/greet: 14}
   - - node_succeeded
     - c/__end__
     - {commit: 17}

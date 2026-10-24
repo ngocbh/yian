@@ -90,21 +90,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat_loop]
+  - - pool_commit
+    - chat_loop
+    - from: {}
+      key: chat_loop#0/__start__
   - - node_expanded
     - chat_loop
     - prune_ids: []
-      seed:
-      - n: 0
-        state: init
-      - 0
   - [node_started, chat_loop#0/__start__]
-  - - pool_commit
-    - chat_loop#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - chat_loop#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, chat_loop#0/step]
   - - pool_commit
     - chat_loop#0/step
@@ -116,13 +112,15 @@ expect:
   - [node_started, chat_loop#0/__end__]
   - - pool_commit
     - chat_loop#0/__end__
-    - value:
-        state:
-          n: 100
+    - from: {chat_loop#0/step: 14}
   - - node_succeeded
     - chat_loop#0/__end__
     - {commit: 17}
   - [node_started, chat_loop~1]
+  - - pool_commit
+    - chat_loop~1
+    - from: {chat_loop#0/__end__: 17}
+      key: chat_loop#1/__start__
   - - node_expanded
     - chat_loop~1
     - prune_ids:
@@ -130,19 +128,10 @@ expect:
       - chat_loop#0/__start__
       - chat_loop#0/step
       - chat_loop~1
-      seed:
-      - n: 0
-        state:
-          n: 100
-      - 1
   - [node_started, chat_loop#1/__start__]
-  - - pool_commit
-    - chat_loop#1/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - chat_loop#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, chat_loop#1/step]
   - - pool_commit
     - chat_loop#1/step
@@ -154,20 +143,15 @@ expect:
   - [node_started, chat_loop#1/__end__]
   - - pool_commit
     - chat_loop#1/__end__
-    - value:
-        state:
-          n: 100
+    - from: {chat_loop#1/step: 25}
   - - node_succeeded
     - chat_loop#1/__end__
     - {commit: 28}
   - [node_started, chat_loop~2]
   - - pool_commit
     - chat_loop~2
-    - value:
-        n: 0
-        state:
-          n: 100
-      key: chat_loop
+    - key: chat_loop
+      from: {chat_loop#1/__end__: 28}
   - - node_succeeded
     - chat_loop~2
     - {commit: 31}

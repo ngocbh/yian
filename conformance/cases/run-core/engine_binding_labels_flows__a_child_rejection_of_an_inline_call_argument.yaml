@@ -75,8 +75,6 @@ expect:
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        y: x
   - [node_started, __call_0/__start__]
   - - node_failed
     - __call_0/__start__

@@ -87,44 +87,41 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, each]
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each/__start__
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#0/__start__
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#1/__start__
+  - - pool_commit
+    - each
+    - from: {__start__: 6}
+      key: each#2/__start__
   - - node_expanded
     - each
     - prune_ids: []
-      seed:
-      - topic: A
-      - topic: B
-      - topic: C
   - [node_started, each/__start__]
-  - - pool_commit
-    - each/__start__
-    - value: {}
   - - node_succeeded
     - each/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, each#0/__start__]
-  - - pool_commit
-    - each#0/__start__
-    - value:
-        topic: A
   - - node_succeeded
     - each#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, each#1/__start__]
-  - - pool_commit
-    - each#1/__start__
-    - value:
-        topic: B
   - - node_succeeded
     - each#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, each#2/__start__]
-  - - pool_commit
-    - each#2/__start__
-    - value:
-        topic: C
   - - node_succeeded
     - each#2/__start__
-    - {commit: 20}
+    - commit: 12
   - [node_started, each#0/x]
   - - pool_commit
     - each#0/x
@@ -149,29 +146,29 @@ expect:
   - [node_started, each#0/__end__]
   - - pool_commit
     - each#0/__end__
-    - value: A
+    - from: {each#0/x: 23}
   - - node_succeeded
     - each#0/__end__
     - {commit: 32}
   - [node_started, each#1/__end__]
   - - pool_commit
     - each#1/__end__
-    - value: B
+    - from: {each#1/x: 26}
   - - node_succeeded
     - each#1/__end__
     - {commit: 35}
   - [node_started, each#2/__end__]
   - - pool_commit
     - each#2/__end__
-    - value: C
+    - from: {each#2/x: 29}
   - - node_succeeded
     - each#2/__end__
     - {commit: 38}
   - [node_started, each/__end__]
   - - pool_commit
     - each/__end__
-    - value: [A, B, C]
-      key: each
+    - key: each
+      from: {each#0/__end__: 32, each#1/__end__: 35, each#2/__end__: 38}
   - - node_succeeded
     - each/__end__
     - {commit: 41}

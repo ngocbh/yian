@@ -675,7 +675,7 @@ const FAILED = new Failure({ code: "node.execute", message: "failed", nodeId: "a
 test.each<[string, () => RunRecord]>([
   ["NodeSucceededRecord", () => new NodeSucceededRecord("agent", 1, { evidence: evidence() })],
   ["NodeRoutedRecord", () => new NodeRoutedRecord("agent", "yes", { evidence: evidence() })],
-  ["NodeExpandedRecord", () => new NodeExpandedRecord("agent", {}, [], DIGEST, { evidence: evidence() })],
+  ["NodeExpandedRecord", () => new NodeExpandedRecord("agent", [], DIGEST, { evidence: evidence() })],
   ["NodeFailedRecord", () => new NodeFailedRecord(FAILED, { evidence: evidence() })],
 ])("all outcome records round trip closed evidence: %s", (_name, build) => {
   const record = build();
@@ -686,7 +686,7 @@ test("existing outcome records round trip with no evidence", () => {
   for (const record of [
     new NodeSucceededRecord("agent", 1),
     new NodeRoutedRecord("agent", "yes"),
-    new NodeExpandedRecord("agent", {}, [], DIGEST),
+    new NodeExpandedRecord("agent", [], DIGEST),
     new NodeFailedRecord(FAILED),
   ]) {
     expect((roundTrip(record) as NodeSucceededRecord).evidence).toBeNull();

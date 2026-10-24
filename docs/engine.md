@@ -222,10 +222,11 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
-Changed (TS yian): records use schema 15, with a `RunStoppedRecord`, every payload field
+Changed (TS yian): records use schema 16, with a `RunStoppedRecord`, every payload field
 required, the time each record was appended (`at`), a `RunStartedRecord` that holds the
 flow files, the skills and tool specs the AGENTs grant, the yian version and the parent run,
-a `PoolCommitRecord` for every write to the variable pool, and node steps numbered within their
+a `PoolCommitRecord` for every write to the variable pool (a derived value's holding `from`
+pointers, not the value), no seed on `NodeExpandedRecord`, and node steps numbered within their
 node (`n`), an AGENT's model calls and tool results among them; see
 [Authoritative run logs](api.md#authoritative-run-logs).
 
@@ -240,7 +241,17 @@ name maps to the seq of the accepted `pool_commit` that last wrote it, pruned wi
 rebuilt by replay. A derived node (START, END, LOOP, CALL, MAP, whose value only reads earlier
 values through its binding) gets an input route in every run; in a non-learnable run its sources
 are those commits, and the route is kept in memory only, so such a run still keeps no retained
-trace and writes nothing more.
+trace.
+
+Changed (TS yian): derived values are rebuilt on replay, not read. A derived commit (a non-top
+`__end__`'s, the stopping LOOP driver's, and the commits an expansion writes for its child STARTs
+before its `node_expanded`) holds `from`, the seq of the commit that wrote each pool name its
+binding read. When the reducer accepts it, live or on replay, it rebinds the node from those
+values, read from the pool and checked against the producer index (a seq that isn't the name's
+producer is a `RangeError`: the log and the flow disagree), and runs its pure `forward`. Records
+apply in log order, so the pool then holds exactly what the binding read; no seq-to-value store is
+kept. A growth's seed is rebuilt the same way from its commits' `from`, before its prune applies,
+and checked by `topology_digest`. A child START names its expansion commit in its success.
 
 `RunStartedRecord` holds the complete effective model map of the agents resolved at
 run start. An agent whose `llm_config` reads a value known only when it runs (see

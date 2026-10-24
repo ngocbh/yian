@@ -67,22 +67,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, loop]
+  - - pool_commit
+    - loop
+    - from: {}
+      key: loop#0/__start__
   - - node_expanded
     - loop
     - prune_ids: []
-      seed:
-      - count: 0
-        last: ''
-      - 0
   - [node_started, loop#0/__start__]
-  - - pool_commit
-    - loop#0/__start__
-    - value:
-        count: 0
-        last: ''
   - - node_succeeded
     - loop#0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, loop#0/ask]
   - - pool_commit
     - loop#0/ask
@@ -93,29 +88,22 @@ expect:
   - [node_started, loop#0/__end__]
   - - pool_commit
     - loop#0/__end__
-    - value:
-        count: 1
-        last: ok
+    - from: {loop#0/__start__: 9, loop#0/ask: 14}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 17}
   - [node_started, loop~1]
+  - - pool_commit
+    - loop~1
+    - from: {loop#0/__end__: 17}
+      key: loop#1/__start__
   - - node_expanded
     - loop~1
     - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/ask, loop~1]
-      seed:
-      - count: 1
-        last: ok
-      - 1
   - [node_started, loop#1/__start__]
-  - - pool_commit
-    - loop#1/__start__
-    - value:
-        count: 1
-        last: ok
   - - node_succeeded
     - loop#1/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, loop#1/ask]
   - - pool_commit
     - loop#1/ask
@@ -126,19 +114,15 @@ expect:
   - [node_started, loop#1/__end__]
   - - pool_commit
     - loop#1/__end__
-    - value:
-        count: 2
-        last: ok
+    - from: {loop#1/__start__: 20, loop#1/ask: 25}
   - - node_succeeded
     - loop#1/__end__
     - {commit: 28}
   - [node_started, loop~2]
   - - pool_commit
     - loop~2
-    - value:
-        count: 2
-        last: ok
-      key: loop
+    - key: loop
+      from: {loop#1/__end__: 28}
   - - node_succeeded
     - loop~2
     - {commit: 31}

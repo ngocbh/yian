@@ -87,7 +87,6 @@ import {
 import {
   commitPrepared,
   HistoricalLogCursor,
-  prepareExpanded,
   prepareInitialCommit,
   prepareNodeStarted,
   prepareNodeSucceeded,
@@ -111,6 +110,7 @@ import {
   startData,
   startedRun,
   thrownBy,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message is `message`. */
@@ -441,7 +441,7 @@ async function agentGrowthHistory(): Promise<{
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   commitPrepared(log, state, prepareOutput(log, state, START_ID, {}));
   commitPrepared(log, state, prepareNodeStarted(state, "gate"));
-  commitPrepared(log, state, prepareExpanded(state, "gate", new Grow({}), buildGrow));
+  commitPrepared(log, state, prepareGrowth(log, state, "gate", new Grow({}), buildGrow));
   return { loaded, live: state, log, effective };
 }
 
@@ -572,7 +572,7 @@ test("test_replay_rejects_changed_but_valid_growth_digest", async () => {
   const envelopes = [...log.records()];
   const last = envelopes.pop()!;
   const grown = last.record as NodeExpandedRecord;
-  const changed = new NodeExpandedRecord(grown.spawnerId, grown.seed, grown.pruneIds, "0".repeat(64));
+  const changed = new NodeExpandedRecord(grown.spawnerId, grown.pruneIds, "0".repeat(64));
   expect(grown.topologyDigest).not.toBe(changed.topologyDigest);
   envelopes.push(new RecordEnvelope(SCHEMA_VERSION, last.runId, last.seq, changed));
 

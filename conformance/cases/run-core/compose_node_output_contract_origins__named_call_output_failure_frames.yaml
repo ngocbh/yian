@@ -59,17 +59,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, invoke]
+  - - pool_commit
+    - invoke
+    - from: {}
+      key: invoke/__start__
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed: {}
   - [node_started, invoke/__start__]
-  - - pool_commit
-    - invoke/__start__
-    - value: {}
   - - node_succeeded
     - invoke/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, invoke/emit]
   - - node_failed
     - invoke/emit

@@ -111,19 +111,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, __call_0]
+  - - pool_commit
+    - __call_0
+    - from: {__start__: 6}
+      key: __call_0/__start__
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        n: 3
   - [node_started, __call_0/__start__]
-  - - pool_commit
-    - __call_0/__start__
-    - value:
-        n: 3
   - - node_succeeded
     - __call_0/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, __call_0/echo]
   - - pool_commit
     - __call_0/echo
@@ -134,26 +132,23 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: 3
-      key: __call_0
+    - key: __call_0
+      from: {__call_0/echo: 14}
   - - node_succeeded
     - __call_0/__end__
     - {commit: 17}
   - [node_started, repeat]
+  - - pool_commit
+    - repeat
+    - from: {__call_0: 17}
+      key: repeat#0/__start__
   - - node_expanded
     - repeat
     - prune_ids: []
-      seed:
-      - n: 3
-      - 0
   - [node_started, repeat#0/__start__]
-  - - pool_commit
-    - repeat#0/__start__
-    - value:
-        n: 3
   - - node_succeeded
     - repeat#0/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, repeat#0/step]
   - - pool_commit
     - repeat#0/step
@@ -165,17 +160,15 @@ expect:
   - [node_started, repeat#0/__end__]
   - - pool_commit
     - repeat#0/__end__
-    - value:
-        n: 2
+    - from: {repeat#0/step: 25}
   - - node_succeeded
     - repeat#0/__end__
     - {commit: 28}
   - [node_started, repeat~1]
   - - pool_commit
     - repeat~1
-    - value:
-        n: 2
-      key: repeat
+    - key: repeat
+      from: {repeat#0/__end__: 28}
   - - node_succeeded
     - repeat~1
     - {commit: 31}

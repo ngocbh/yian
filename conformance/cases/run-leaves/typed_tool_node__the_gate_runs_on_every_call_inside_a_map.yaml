@@ -72,35 +72,33 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, each]
+  - - pool_commit
+    - each
+    - from: {}
+      key: each/__start__
+  - - pool_commit
+    - each
+    - from: {}
+      key: each#0/__start__
+  - - pool_commit
+    - each
+    - from: {}
+      key: each#1/__start__
   - - node_expanded
     - each
     - prune_ids: []
-      seed:
-      - x: 1
-      - x: 2
   - [node_started, each/__start__]
-  - - pool_commit
-    - each/__start__
-    - value: {}
   - - node_succeeded
     - each/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, each#0/__start__]
-  - - pool_commit
-    - each#0/__start__
-    - value:
-        x: 1
   - - node_succeeded
     - each#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, each#1/__start__]
-  - - pool_commit
-    - each#1/__start__
-    - value:
-        x: 2
   - - node_succeeded
     - each#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, each#0/place]
   - - pool_commit
     - each#0/place

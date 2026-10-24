@@ -547,14 +547,21 @@ Most are just the functional model (above) made enforceable:
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
   no conversation records; session history lives only in the backend. TS yian
-  (schema 15) writes every pool write as a `pool_commit`: the run start's system
+  (schema 16) writes every pool write as a `pool_commit`: the run start's system
   values and START inputs right after `run_started` (applied at once; a log cut
   before the START inputs isn't resumable), and a node's output before the
   `node_succeeded` that names its seq; the success applies it, and a resume drops
   an orphan commit so the node reruns. `RunState.producers` maps each pool name
   to the seq of the accepted `pool_commit` that last wrote it (pruned with the
   pool, rebuilt by replay); a `derived` node (START, END, LOOP, CALL, MAP) gets an
-  in-memory input route from it in a run with no retained trace.
+  in-memory input route from it in a run with no retained trace. A derived node's
+  commit (except the top-level START's and END's) holds `from`, `{pool name: seq}`,
+  not its value, and the reducer rebuilds the value when its success accepts it
+  (`rebind`/`rebuildDerived`, reading the pool through `poolResolver`, which checks
+  each seq against `producers`). An expansion first writes one such commit per START
+  of its fragment, keyed by the child START; `node_expanded` holds no seed (replay
+  rebuilds it from that `from` before the prune) and the child START's success names
+  its commit. The rule is kind-blind: the `derived` trait and the commit's key.
 - **Defaults are read once and recorded** — every predefined default and limit is an
   entry in `yian.defaults` (`docs/defaults.md`), overridable by `YIAN_<NAME>`.
   `current()` reads the environment once per process; the CLI callback, `load_flow`,

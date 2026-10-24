@@ -3211,7 +3211,9 @@ test.each([false, true])(
     const [context] = projectOwnerContexts(trace, memories, stacks, feedback, root, results);
     const stopped = feedbackEntries(context!).filter((entry) => entry.channel === "stopped");
     expect(stopped.map((entry) => entry.value)).toEqual(stops);
-    expect(calls).toEqual(opaque ? [null] : []);
+    // The expansion checks its growth against the rebuild from its commits' `from`, which runs the
+    // MAP's binding, and so the builtin, once more; backward reevaluates nothing.
+    expect(calls).toEqual(opaque ? [null, null] : []);
   },
 );
 
@@ -3259,7 +3261,8 @@ test.each([
     expect(root).toEqual(new BackwardResult());
     expect(routed.contributions).toEqual([]);
     expect(routed.stopped.map((stop) => stop.feedback)).toEqual([[{ uri: "Review." }]]);
-    expect(calls).toEqual([null]);
+    // Once live and once in the expansion's check against its rebuild from `from`.
+    expect(calls).toEqual([null, null]);
   },
 );
 

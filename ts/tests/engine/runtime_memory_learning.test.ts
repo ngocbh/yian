@@ -160,7 +160,6 @@ import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import {
   commitInitialPool,
   commitPrepared,
-  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -189,6 +188,7 @@ import {
   stacks,
   startTraceNode,
   terminalSkipRouteFlow,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 import { FakeMemory } from "./memory_fakes.ts";
 
@@ -367,10 +367,10 @@ test("causal route episode retains the accepted failure", () => {
 
 test("route and growth projection use closed source-neutral envelopes", () => {
   const [, route] = learning.episodeOutcome(new NodeRoutedRecord("agent", "yes"), null);
-  const [, growth] = learning.episodeOutcome(
-    new NodeExpandedRecord("agent", { value: [1n, 2n] }, ["a", "z"], "b".repeat(64)),
-    null,
-  );
+  // An expansion's seed comes from its trace occurrence; the record holds none.
+  const [, growth] = learning.episodeOutcome(new NodeExpandedRecord("agent", ["a", "z"], "b".repeat(64)), {
+    value: [1n, 2n],
+  });
 
   expect(route).toEqual({ kind: "route", handle: "yes" });
   expect(growth).toEqual({ kind: "grow", seed: { value: [1n, 2n] }, prune_ids: ["a", "z"] });
@@ -554,7 +554,7 @@ test.each([
     route: () => prepareNodeRouted(state, node.id, "go", carriers),
     failure: () =>
       prepareNodeFailed(state, new Failure({ code: "node.execute", message: "Failed.", nodeId: node.id }), carriers),
-    growth: () => prepareExpanded(state, node.id, new Grow({}), fragmentBuilder, carriers),
+    growth: () => prepareGrowth(log, state, node.id, new Grow({}), fragmentBuilder, carriers),
   }[kind]();
 
   commitPrepared(log, state, prepared);
@@ -777,12 +777,14 @@ test("an expanded MAP occurrence projects and replays from the live node scope",
     learnable: true,
     stacks: stacks(spawner.memoryScope, ...[...child.nodes.values()].map((node) => node.memoryScope!)),
   });
+  // The replay rebuilds the seed from the spawner's binding.
+  state.flow.wiring.set(spawner.id, new Map([["over", new Binding([{}])]]));
   const pristineFlow = copyGraph(state.flow);
 
   commitPrepared(
     log,
     state,
-    prepareExpanded(state, spawner.id, new Grow([{}]), buildGrow, {
+    prepareGrowth(log, state, spawner.id, new Grow([{}]), buildGrow, {
       forwardCapture: forwardCapture(spawner, { over: [{}] }),
     }),
   );

@@ -58,17 +58,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, c1]
+  - - pool_commit
+    - c1
+    - from: {}
+      key: c1/__start__
   - - node_expanded
     - c1
     - prune_ids: []
-      seed: {}
   - [node_started, c1/__start__]
-  - - pool_commit
-    - c1/__start__
-    - value: {}
   - - node_succeeded
     - c1/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, c1/ask]
   - - pool_commit
     - c1/ask
@@ -79,23 +79,23 @@ expect:
   - [node_started, c1/__end__]
   - - pool_commit
     - c1/__end__
-    - value: first
-      key: c1
+    - key: c1
+      from: {c1/ask: 14}
   - - node_succeeded
     - c1/__end__
     - {commit: 17}
   - [node_started, c2]
+  - - pool_commit
+    - c2
+    - from: {}
+      key: c2/__start__
   - - node_expanded
     - c2
     - prune_ids: []
-      seed: {}
   - [node_started, c2/__start__]
-  - - pool_commit
-    - c2/__start__
-    - value: {}
   - - node_succeeded
     - c2/__start__
-    - {commit: 22}
+    - commit: 20
   - [node_started, c2/ask]
   - - pool_commit
     - c2/ask
@@ -106,8 +106,8 @@ expect:
   - [node_started, c2/__end__]
   - - pool_commit
     - c2/__end__
-    - value: second
-      key: c2
+    - key: c2
+      from: {c2/ask: 25}
   - - node_succeeded
     - c2/__end__
     - {commit: 28}

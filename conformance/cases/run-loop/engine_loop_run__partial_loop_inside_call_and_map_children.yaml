@@ -129,97 +129,81 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, mapped]
+  - - pool_commit
+    - mapped
+    - from: {}
+      key: mapped/__start__
+  - - pool_commit
+    - mapped
+    - from: {}
+      key: mapped#0/__start__
+  - - pool_commit
+    - mapped
+    - from: {}
+      key: mapped#1/__start__
   - - node_expanded
     - mapped
     - prune_ids: []
-      seed:
-      - tag: a
-      - tag: b
   - [node_started, outer]
+  - - pool_commit
+    - outer
+    - from: {}
+      key: outer/__start__
   - - node_expanded
     - outer
     - prune_ids: []
-      seed:
-        tag: kept
   - [node_started, mapped/__start__]
-  - - pool_commit
-    - mapped/__start__
-    - value: {}
   - - node_succeeded
     - mapped/__start__
-    - {commit: 13}
+    - commit: 9
   - [node_started, outer/__start__]
-  - - pool_commit
-    - outer/__start__
-    - value:
-        tag: kept
   - - node_succeeded
     - outer/__start__
-    - {commit: 16}
+    - commit: 14
   - [node_started, mapped#0/__start__]
-  - - pool_commit
-    - mapped#0/__start__
-    - value:
-        tag: a
   - - node_succeeded
     - mapped#0/__start__
-    - {commit: 19}
+    - commit: 10
   - [node_started, mapped#1/__start__]
-  - - pool_commit
-    - mapped#1/__start__
-    - value:
-        tag: b
   - - node_succeeded
     - mapped#1/__start__
-    - {commit: 22}
+    - commit: 11
   - [node_started, outer/loop]
+  - - pool_commit
+    - outer/loop
+    - from: {outer/__start__: 14}
+      key: outer/loop#0/__start__
   - - node_expanded
     - outer/loop
     - prune_ids: []
-      seed:
-      - n: 0
-        tag: kept
-      - 0
   - [node_started, mapped#0/loop]
+  - - pool_commit
+    - mapped#0/loop
+    - from: {mapped#0/__start__: 10}
+      key: mapped#0/loop#0/__start__
   - - node_expanded
     - mapped#0/loop
     - prune_ids: []
-      seed:
-      - n: 0
-        tag: a
-      - 0
   - [node_started, mapped#1/loop]
+  - - pool_commit
+    - mapped#1/loop
+    - from: {mapped#1/__start__: 11}
+      key: mapped#1/loop#0/__start__
   - - node_expanded
     - mapped#1/loop
     - prune_ids: []
-      seed:
-      - n: 0
-        tag: b
-      - 0
   - [node_started, outer/loop#0/__start__]
-  - - pool_commit
-    - outer/loop#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - outer/loop#0/__start__
-    - {commit: 31}
+    - commit: 25
   - [node_started, mapped#0/loop#0/__start__]
-  - - pool_commit
-    - mapped#0/loop#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - mapped#0/loop#0/__start__
-    - {commit: 34}
+    - commit: 28
   - [node_started, mapped#1/loop#0/__start__]
-  - - pool_commit
-    - mapped#1/loop#0/__start__
-    - value:
-        n: 0
   - - node_succeeded
     - mapped#1/loop#0/__start__
-    - {commit: 37}
+    - commit: 31
   - [node_started, outer/loop#0/step]
   - - pool_commit
     - outer/loop#0/step
@@ -247,28 +231,29 @@ expect:
   - [node_started, outer/loop#0/__end__]
   - - pool_commit
     - outer/loop#0/__end__
-    - value:
-        n: 1
+    - from: {outer/loop#0/step: 40}
   - - node_succeeded
     - outer/loop#0/__end__
     - {commit: 49}
   - [node_started, mapped#0/loop#0/__end__]
   - - pool_commit
     - mapped#0/loop#0/__end__
-    - value:
-        n: 1
+    - from: {mapped#0/loop#0/step: 43}
   - - node_succeeded
     - mapped#0/loop#0/__end__
     - {commit: 52}
   - [node_started, mapped#1/loop#0/__end__]
   - - pool_commit
     - mapped#1/loop#0/__end__
-    - value:
-        n: 1
+    - from: {mapped#1/loop#0/step: 46}
   - - node_succeeded
     - mapped#1/loop#0/__end__
     - {commit: 55}
   - [node_started, outer/loop~1]
+  - - pool_commit
+    - outer/loop~1
+    - from: {outer/loop#0/__end__: 49}
+      key: outer/loop#1/__start__
   - - node_expanded
     - outer/loop~1
     - prune_ids:
@@ -276,11 +261,11 @@ expect:
       - outer/loop#0/__start__
       - outer/loop#0/step
       - outer/loop~1
-      seed:
-      - n: 1
-        tag: kept
-      - 1
   - [node_started, mapped#0/loop~1]
+  - - pool_commit
+    - mapped#0/loop~1
+    - from: {mapped#0/loop#0/__end__: 52}
+      key: mapped#0/loop#1/__start__
   - - node_expanded
     - mapped#0/loop~1
     - prune_ids:
@@ -288,11 +273,11 @@ expect:
       - mapped#0/loop#0/__start__
       - mapped#0/loop#0/step
       - mapped#0/loop~1
-      seed:
-      - n: 1
-        tag: a
-      - 1
   - [node_started, mapped#1/loop~1]
+  - - pool_commit
+    - mapped#1/loop~1
+    - from: {mapped#1/loop#0/__end__: 55}
+      key: mapped#1/loop#1/__start__
   - - node_expanded
     - mapped#1/loop~1
     - prune_ids:
@@ -300,34 +285,18 @@ expect:
       - mapped#1/loop#0/__start__
       - mapped#1/loop#0/step
       - mapped#1/loop~1
-      seed:
-      - n: 1
-        tag: b
-      - 1
   - [node_started, outer/loop#1/__start__]
-  - - pool_commit
-    - outer/loop#1/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - outer/loop#1/__start__
-    - {commit: 64}
+    - commit: 58
   - [node_started, mapped#0/loop#1/__start__]
-  - - pool_commit
-    - mapped#0/loop#1/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - mapped#0/loop#1/__start__
-    - {commit: 67}
+    - commit: 61
   - [node_started, mapped#1/loop#1/__start__]
-  - - pool_commit
-    - mapped#1/loop#1/__start__
-    - value:
-        n: 1
   - - node_succeeded
     - mapped#1/loop#1/__start__
-    - {commit: 70}
+    - commit: 64
   - [node_started, outer/loop#1/step]
   - - pool_commit
     - outer/loop#1/step
@@ -355,94 +324,75 @@ expect:
   - [node_started, outer/loop#1/__end__]
   - - pool_commit
     - outer/loop#1/__end__
-    - value:
-        n: 2
+    - from: {outer/loop#1/step: 73}
   - - node_succeeded
     - outer/loop#1/__end__
     - {commit: 82}
   - [node_started, mapped#0/loop#1/__end__]
   - - pool_commit
     - mapped#0/loop#1/__end__
-    - value:
-        n: 2
+    - from: {mapped#0/loop#1/step: 76}
   - - node_succeeded
     - mapped#0/loop#1/__end__
     - {commit: 85}
   - [node_started, mapped#1/loop#1/__end__]
   - - pool_commit
     - mapped#1/loop#1/__end__
-    - value:
-        n: 2
+    - from: {mapped#1/loop#1/step: 79}
   - - node_succeeded
     - mapped#1/loop#1/__end__
     - {commit: 88}
   - [node_started, outer/loop~2]
   - - pool_commit
     - outer/loop~2
-    - value:
-        n: 2
-        tag: kept
-      key: outer/loop
+    - key: outer/loop
+      from: {outer/loop#1/__end__: 82}
   - - node_succeeded
     - outer/loop~2
     - {commit: 91}
   - [node_started, mapped#0/loop~2]
   - - pool_commit
     - mapped#0/loop~2
-    - value:
-        n: 2
-        tag: a
-      key: mapped#0/loop
+    - key: mapped#0/loop
+      from: {mapped#0/loop#1/__end__: 85}
   - - node_succeeded
     - mapped#0/loop~2
     - {commit: 94}
   - [node_started, mapped#1/loop~2]
   - - pool_commit
     - mapped#1/loop~2
-    - value:
-        n: 2
-        tag: b
-      key: mapped#1/loop
+    - key: mapped#1/loop
+      from: {mapped#1/loop#1/__end__: 88}
   - - node_succeeded
     - mapped#1/loop~2
     - {commit: 97}
   - [node_started, outer/__end__]
   - - pool_commit
     - outer/__end__
-    - value:
-        n: 2
-        tag: kept
-      key: outer
+    - key: outer
+      from: {outer/loop: 91}
   - - node_succeeded
     - outer/__end__
     - {commit: 100}
   - [node_started, mapped#0/__end__]
   - - pool_commit
     - mapped#0/__end__
-    - value:
-        n: 2
-        tag: a
+    - from: {mapped#0/loop: 94}
   - - node_succeeded
     - mapped#0/__end__
     - {commit: 103}
   - [node_started, mapped#1/__end__]
   - - pool_commit
     - mapped#1/__end__
-    - value:
-        n: 2
-        tag: b
+    - from: {mapped#1/loop: 97}
   - - node_succeeded
     - mapped#1/__end__
     - {commit: 106}
   - [node_started, mapped/__end__]
   - - pool_commit
     - mapped/__end__
-    - value:
-      - n: 2
-        tag: a
-      - n: 2
-        tag: b
-      key: mapped
+    - key: mapped
+      from: {mapped#0/__end__: 103, mapped#1/__end__: 106}
   - - node_succeeded
     - mapped/__end__
     - {commit: 109}

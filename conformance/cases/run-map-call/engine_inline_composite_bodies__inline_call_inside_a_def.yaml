@@ -75,29 +75,29 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, invoke]
+  - - pool_commit
+    - invoke
+    - from: {}
+      key: invoke/__start__
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed: {}
   - [node_started, invoke/__start__]
-  - - pool_commit
-    - invoke/__start__
-    - value: {}
   - - node_succeeded
     - invoke/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, invoke/wrapper]
+  - - pool_commit
+    - invoke/wrapper
+    - from: {}
+      key: invoke/wrapper/__start__
   - - node_expanded
     - invoke/wrapper
     - prune_ids: []
-      seed: {}
   - [node_started, invoke/wrapper/__start__]
-  - - pool_commit
-    - invoke/wrapper/__start__
-    - value: {}
   - - node_succeeded
     - invoke/wrapper/__start__
-    - {commit: 16}
+    - commit: 14
   - [node_started, invoke/wrapper/constant]
   - - pool_commit
     - invoke/wrapper/constant
@@ -108,16 +108,16 @@ expect:
   - [node_started, invoke/wrapper/__end__]
   - - pool_commit
     - invoke/wrapper/__end__
-    - value: inline-ok
-      key: invoke/wrapper
+    - key: invoke/wrapper
+      from: {invoke/wrapper/constant: 19}
   - - node_succeeded
     - invoke/wrapper/__end__
     - {commit: 22}
   - [node_started, invoke/__end__]
   - - pool_commit
     - invoke/__end__
-    - value: inline-ok
-      key: invoke
+    - key: invoke
+      from: {invoke/wrapper: 22}
   - - node_succeeded
     - invoke/__end__
     - {commit: 25}

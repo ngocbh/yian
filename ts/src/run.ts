@@ -19,8 +19,10 @@
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
  * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
- * the built-in message value (`Message`, `MessagePart`, `checkMessage`, which reads a decoded
- * `Message` back with its files, `checkConversation` and `ConversationError`, from
+ * `foldRunLog`, which replays a log and gives each accepted `pool_commit`'s value, a derived one
+ * rebuilt from its `from` pointers, with `PoolCommitRecord` (`runtime/log.ts`) to read the records
+ * it returns, and the built-in message value (`Message`, `MessagePart`, `checkMessage`, which reads
+ * a decoded `Message` back with its files, `checkConversation` and `ConversationError`, from
  * `nodes/agent/messages.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
@@ -128,15 +130,18 @@ import {
   type RecordedTool,
   type RecordEnvelope,
   type RunLog,
+  type RunLogEntry,
   RunResumedRecord,
   RunStartedRecord,
   RunStoppedRecord,
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import {
+  acceptedCommit,
   addCrashedAttempts,
   commitInitialPool,
   commitPrepared,
+  type PreparedTransition,
   prepareRunResumed,
   prepareRunStarted,
   RunState,
@@ -158,6 +163,7 @@ import {
   setField,
   type Type,
   TypeCheckError,
+  type TypedValue,
   type Value,
   ValueKind,
   type ValueRecord,
@@ -176,6 +182,7 @@ export { staticPathOf } from "./nodes/ids.ts";
 export {
   type IterRunRecordsOptions,
   iterRunRecords,
+  PoolCommitRecord,
   RunLogChangedError,
   type RunLogEntry,
   RunLogSchemaError,
@@ -1581,6 +1588,61 @@ export function inspectRun(
   };
 }
 
+/** A run log replayed through the run reducer (see `foldRunLog`). */
+export interface FoldedRun {
+  /** The flow the replay ran: the recorded one, or the host's for a flow built in code. */
+  readonly flow: ComposedFlow;
+  /** Every record, in log order, with its accepted value. */
+  readonly records: readonly FoldedRecord[];
+}
+
+/** One record of a folded run log. */
+export interface FoldedRecord {
+  /** The record as `iterRunRecords` reads it. */
+  readonly entry: RunLogEntry;
+  /**
+   * For a `pool_commit` the run accepted, the value it writes: the one it holds, or for a derived
+   * commit the one rebuilt from its `from`. `null` for an orphan commit and any other record.
+   */
+  readonly value: TypedValue | null;
+}
+
+/**
+ * Replay the run log at `log` through the run reducer, as resume does, and return each record with
+ * the value of each accepted `pool_commit`: hosts read derived values this way, such as a LOOP
+ * iteration's `<loop>#k/__end__`, which the log records only as `from` pointers. The recorded flow
+ * is compiled first, under `env`'s `YIAN_*` values, which must be the run's. No seq-to-value map
+ * is kept beside the reducer: a derived value is rebuilt from the pool when its commit is accepted.
+ *
+ * @param options.env The environment the load reads the `YIAN_*` values from (default
+ *   `processEnv`).
+ * @param options.flow The flow, required when the run's flow was built in code (`flow: null`),
+ *   refused otherwise.
+ * @throws RangeError when the log is empty, ends inside its run start, or the replay refuses it;
+ *   when the run's flow was built in code and `options.flow` is missing, or the log holds its
+ *   flow files and `options.flow` is given.
+ * @throws LoadError, DefaultsMismatchError as `loadRecordedFlow`, and `iterRunRecords`' errors.
+ */
+export async function foldRunLog(log: string, options: { env?: Env | null; flow?: ComposedFlow | null } = {}): Promise<FoldedRun> {
+  const env = options.env ?? processEnv;
+  const entries = [...iterRunRecords(log)];
+  const start = startRecord(entries[0]?.envelope);
+  const flow = await withEnv(env, () => {
+    checkRecorded(start.defaults);
+    return resumedFlow(log, start, options.flow ?? null, null);
+  });
+  const values = new Map<number, TypedValue>();
+  withEnv(env, () =>
+    replayRunLog(flow, MemoryRunLog.fromRecords(entries.map((entry) => entry.envelope)), {
+      onPrepared: (prepared) => {
+        const accepted = acceptedCommit(prepared);
+        if (accepted !== null) values.set(accepted.seq, accepted.value);
+      },
+    }),
+  );
+  return { flow, records: entries.map((entry, seq) => ({ entry, value: values.get(seq) ?? null })) };
+}
+
 /** Yield the envelope of each record of the log at `log`, read by `iterRunRecords`. */
 function* streamedEnvelopes(log: string): Generator<RecordEnvelope, void, undefined> {
   for (const entry of iterRunRecords(log)) yield entry.envelope;
@@ -1954,7 +2016,11 @@ function collectStaticNodes(graph: Flow, path: readonly string[], found: [string
 export function replayRunLog(
   flow: ComposedFlow,
   log: RunLog,
-  options: { apiKey?: string | null; headers?: Readonly<Record<string, string>> | null } = {},
+  options: {
+    apiKey?: string | null;
+    headers?: Readonly<Record<string, string>> | null;
+    onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
+  } = {},
 ): RunState {
   if (!(flow instanceof ComposedFlow)) throw new TypeError("replayRunLog expects a ComposedFlow");
   return replayCompiledRunLog(flow.compiled, log, { ...options, resultContract: childSignature(flow).output });
@@ -1982,9 +2048,10 @@ export function replayCompiledRunLog(
     apiKey?: string | null;
     headers?: Readonly<Record<string, string>> | null;
     resultContract?: OutputContract | null;
+    onPrepared?: ((prepared: PreparedTransition, state: RunState) => void) | null;
   } = {},
 ): RunState {
-  const { apiKey = null, headers = null, resultContract = null } = options;
+  const { apiKey = null, headers = null, resultContract = null, onPrepared = null } = options;
   const sourceRunId = log.runId;
   const sourceSequence = log.nextSequence;
   if (typeof sourceRunId !== "string" || sourceRunId === "") {
@@ -2049,7 +2116,10 @@ export function replayCompiledRunLog(
     const replayed = resolveRuntimeMemoryLayout(privateFlow);
     checkRecordedMemoryTable(first.memories, first.memoryStacks, replayed.memories, replayed.stacks, "supplied flow");
   }
-  const state = replayRecords(new RunState(privateFlow, { resultContract }), canonical, { growBuilder: buildGrow });
+  const state = replayRecords(new RunState(privateFlow, { resultContract }), canonical, {
+    growBuilder: buildGrow,
+    onPrepared,
+  });
   if (log.runId !== sourceRunId || log.nextSequence !== sourceSequence) {
     throw new RangeError("run log changed while its historical prefix was replayed");
   }

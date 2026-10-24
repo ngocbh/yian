@@ -136,35 +136,33 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, m]
+  - - pool_commit
+    - m
+    - from: {__start__: 6}
+      key: m/__start__
+  - - pool_commit
+    - m
+    - from: {__start__: 6}
+      key: m#0/__start__
+  - - pool_commit
+    - m
+    - from: {__start__: 6}
+      key: m#1/__start__
   - - node_expanded
     - m
     - prune_ids: []
-      seed:
-      - go: true
-      - go: false
   - [node_started, m/__start__]
-  - - pool_commit
-    - m/__start__
-    - value: {}
   - - node_succeeded
     - m/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, m#0/__start__]
-  - - pool_commit
-    - m#0/__start__
-    - value:
-        go: true
   - - node_succeeded
     - m#0/__start__
-    - {commit: 14}
+    - commit: 10
   - [node_started, m#1/__start__]
-  - - pool_commit
-    - m#1/__start__
-    - value:
-        go: false
   - - node_succeeded
     - m#1/__start__
-    - {commit: 17}
+    - commit: 11
   - [node_started, m#0/gate]
   - - node_routed
     - m#0/gate
@@ -174,30 +172,28 @@ expect:
     - m#1/gate
     - handle: '#else'
   - [node_started, m#0/__call_0]
+  - - pool_commit
+    - m#0/__call_0
+    - from: {}
+      key: m#0/__call_0/__start__
   - - node_expanded
     - m#0/__call_0
     - prune_ids: []
-      seed:
-        tag: child
   - [node_started, m#1/skip_it]
   - - pool_commit
     - m#1/skip_it
     - value: skipped
   - - node_succeeded
     - m#1/skip_it
-    - {commit: 26}
+    - {commit: 27}
   - [node_started, m#0/__call_0/__start__]
-  - - pool_commit
-    - m#0/__call_0/__start__
-    - value:
-        tag: child
   - - node_succeeded
     - m#0/__call_0/__start__
-    - {commit: 29}
+    - commit: 24
   - [node_started, m#1/__end__]
   - - pool_commit
     - m#1/__end__
-    - value: skipped
+    - from: {m#1/skip_it: 27}
   - - node_succeeded
     - m#1/__end__
     - {commit: 32}
@@ -211,8 +207,8 @@ expect:
   - [node_started, m#0/__call_0/__end__]
   - - pool_commit
     - m#0/__call_0/__end__
-    - value: child
-      key: m#0/__call_0
+    - key: m#0/__call_0
+      from: {m#0/__call_0/fx: 35}
   - - node_succeeded
     - m#0/__call_0/__end__
     - {commit: 38}
@@ -226,15 +222,15 @@ expect:
   - [node_started, m#0/__end__]
   - - pool_commit
     - m#0/__end__
-    - value: child
+    - from: {m#0/publish: 41}
   - - node_succeeded
     - m#0/__end__
     - {commit: 44}
   - [node_started, m/__end__]
   - - pool_commit
     - m/__end__
-    - value: [child, skipped]
-      key: m
+    - key: m
+      from: {m#0/__end__: 44, m#1/__end__: 32}
   - - node_succeeded
     - m/__end__
     - {commit: 47}

@@ -6,7 +6,7 @@
  * `test_node_step_record_rejects_invalid_values` (list, text, null, NaN, a class instance, a
  * `Set`, an empty and a non-text node id; each with its exact error).
  *
- * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 15),
+ * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 16),
  * `test_node_step_wire_payload_rejects_invalid_shapes` (list, text, empty node id, missing step,
  * extra field; each with its exact class and message),
  * `test_node_step_wire_payload_rejects_non_finite_numbers` (`invalid run-record JSON`, caused by
@@ -78,7 +78,6 @@ import {
 import {
   commitPrepared,
   PreparedTransition,
-  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -103,6 +102,7 @@ import {
   parentFlow,
   prepareOutput,
   routeInFlight,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
@@ -145,14 +145,14 @@ test("a node step round trips under its wire kind", () => {
   expect(encodeRecord(decoded)).toBe(encoded);
   const wire = parseJson(encoded, "codec") as Record<string, unknown>;
   expect(wire["kind"]).toBe("node_step");
-  expect(wire["schema"]).toBe(15n);
+  expect(wire["schema"]).toBe(16n);
   expect(wire["payload"]).toEqual({ node_id: "a", n: 1n, step: FAILED });
 });
 
 test("a wire step keeps yian's infinity tag", () => {
   const text =
     '{"kind":"node_step","payload":{"n":1,"node_id":"a","step":{"high":{"$float":"inf"},"kind":"x"}},' +
-    '"run_id":"run-1","schema":15,"seq":0}';
+    '"run_id":"run-1","schema":16,"seq":0}';
   const record = decodeRecord(text).record as NodeStepRecord;
   expect(record.step).toEqual({ high: Infinity, kind: "x" });
   expect(record.n).toBe(1);
@@ -181,7 +181,7 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
 
 test("a node step wire payload rejects non-finite numbers", () => {
   const text =
-    '{"schema":15,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","n":1,"step":{"retry_in":NaN}}}';
+    '{"schema":16,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","n":1,"step":{"retry_in":NaN}}}';
   const caught = expectError(() => decodeRecord(text), RangeError, "invalid run-record JSON") as Error;
   expect((caught.cause as Error).constructor).toBe(JSONDecodeError);
   expect((caught.cause as Error).message).toStartWith("NaN is not JSON");
@@ -424,7 +424,7 @@ test("an expansion deletes the spawner's steps and starts", () => {
   commitPrepared(log, state, prepareNodeStep(state, "spawn", FAILED));
   expect(state.nodeStarts).toEqual(new Map([["spawn", 1]]));
 
-  commitPrepared(log, state, prepareExpanded(state, "spawn", new Grow({}), fragmentBuilder));
+  commitPrepared(log, state, prepareGrowth(log, state, "spawn", new Grow({}), fragmentBuilder));
 
   expect(state.nodeSteps).toEqual(new Map());
   expect(state.nodeStarts).toEqual(new Map());
@@ -443,7 +443,7 @@ test("LOOP body steps go at the outcome and stay gone after the prune", async ()
   });
   loop.params = [];
   const { state, log } = initializedSpawner(parentFlow({ spawner: loop }));
-  const expansion = prepareExpanded(state, "spawn", new Grow([{}, 0n]), buildGrow);
+  const expansion = prepareGrowth(log, state, "spawn", new Grow([{}, 0n]), buildGrow);
   commitPrepared(log, state, expansion);
   const { fragmentStartId: bodyStart, fragmentEndId: bodyEnd } = fragmentIds(expansion);
 
@@ -459,7 +459,7 @@ test("LOOP body steps go at the outcome and stay gone after the prune", async ()
   commitPrepared(log, state, prepareNodeStarted(state, "spawn~1"));
   commitPrepared(log, state, prepareNodeStep(state, "spawn~1", FAILED));
   const grow = await state.flow.nodes.get("spawn~1")!.run({});
-  const prepared = prepareExpanded(state, "spawn~1", grow as Grow, buildGrow);
+  const prepared = prepareGrowth(log, state, "spawn~1", grow as Grow, buildGrow);
   expect((prepared.record as NodeExpandedRecord).pruneIds).toContain(bodyStart);
   commitPrepared(log, state, prepared);
 

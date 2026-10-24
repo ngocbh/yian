@@ -177,7 +177,7 @@ test("the run start writes its system values, then the START inputs, as commits 
   expect(envelopes[5]!.kind).toBe("node_started");
 });
 
-test("every node_succeeded names its own node's earlier commit, and each commit is named once", async () => {
+test("every node_succeeded names an earlier commit of its node, or a child START its expansion's, and each commit is named once", async () => {
   const log = freshLog();
   await run(await load(CALL_IN_LOOP), log);
   const envelopes = readRunLog(log);
@@ -185,24 +185,30 @@ test("every node_succeeded names its own node's earlier commit, and each commit 
   expect(commits.size).toBeGreaterThan(5);
   for (const [seq, commit] of commits) {
     const named = envelopes[commit]!;
+    const nodeId = envelopes[seq]!.payload["node_id"];
     expect(named.kind).toBe("pool_commit");
     expect(commit).toBeLessThan(seq);
-    expect(named.payload["node_id"]).toBe(envelopes[seq]!.payload["node_id"]);
+    // A child START's commit is its spawner's, under the START's key.
+    if (named.payload["node_id"] !== nodeId) expect([nodeId, named.payload["key"]]).toEqual([nodeId, nodeId]);
   }
   const nodeCommits = envelopes.filter(({ kind, seq }) => kind === "pool_commit" && seq > 4).map(({ seq }) => seq);
   expect([...commits.values()].sort((a, b) => a - b)).toEqual(nodeCommits);
 });
 
-test("each commit's key is the node's commit target: a CALL's child END and the stopping LOOP driver commit under their spawner", async () => {
+test("each commit's key is its target: a CALL's child END and the stopping LOOP driver commit under their spawner, an expansion under its child START", async () => {
   const log = freshLog();
   await run(await load(CALL_IN_LOOP), log);
   const envelopes = readRunLog(log);
   const moved = envelopes
     .filter(({ kind, seq, payload }) => kind === "pool_commit" && seq > 4 && payload["key"] !== payload["node_id"])
     .map(({ payload }) => [payload["node_id"], payload["key"]]);
-  // Schema 12 recorded these as the successes' `commit_target`s.
+  // Schema 12 recorded the END and driver keys as the successes' `commit_target`s.
   expect(moved).toEqual([
+    ["count", "count#0/__start__"],
+    ["count#0/step", "count#0/step/__start__"],
     ["count#0/step/__end__", "count#0/step"],
+    ["count~1", "count#1/__start__"],
+    ["count#1/step", "count#1/step/__start__"],
     ["count#1/step/__end__", "count#1/step"],
     ["count~2", "count"],
   ]);
@@ -244,8 +250,9 @@ test("a cut between a node's commit and its success reruns the node, leaving the
     const commits = envelopes.filter(({ kind, payload }) => kind === "pool_commit" && payload["node_id"] === node);
     const rerun = commits.find(({ seq }) => seq > k)!;
     expect(rerun).toBeDefined();
-    const success = envelopes.find(({ kind, seq, payload }) => kind === "node_succeeded" && seq > k && payload["node_id"] === node);
-    expect(Number(success!.payload["commit"])).toBe(rerun.seq);
+    // An expansion commit is named by its child START's success, any other by its node's.
+    const success = envelopes.find(({ kind, payload }) => kind === "node_succeeded" && Number(payload["commit"]) === rerun.seq);
+    expect(success!.payload["node_id"]).toBe(key.endsWith("/__start__") ? key : node);
   }
 }, 60_000);
 
@@ -393,15 +400,15 @@ test("every pool_commit line of the conformance golden logs round-trips byte for
     if (!name.endsWith(".log.jsonl")) continue;
     for (const line of lines(join(cases, name))) {
       const { kind, payload } = parseJson(line, "codec") as { kind: string; payload: JsonObject };
-      // The conformance masks `system.now` and `system.today`.
-      if (kind !== "pool_commit" || payload["value"] === "<masked>") continue;
+      // The conformance masks `system.now` and `system.today`; a derived commit holds no value.
+      if (kind !== "pool_commit" || payload["value"] === "<masked>" || Object.hasOwn(payload, "from")) continue;
       expect(roundTrip(line)).toBe(line);
       kinds.add(payload["kind"] as string);
       checked++;
     }
   }
   // So a moved fixture folder can't pass empty.
-  expect(checked).toBeGreaterThanOrEqual(100);
+  expect(checked).toBeGreaterThanOrEqual(80);
   expect([...kinds]).toEqual(expect.arrayContaining(["object", "str", "int", "float", "list[int]"]));
 });
 
@@ -464,7 +471,7 @@ test.if(process.versions.bun !== undefined)("on Bun the run entry is the source 
 const WRITTEN_LINE =
   '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
   '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
-  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":15,"seq":9}';
+  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":16,"seq":9}';
 
 test("a fixed pool_commit line with a big int, infinities and an escaped record round-trips through the public JSON form", () => {
   expect(roundTrip(WRITTEN_LINE)).toBe(WRITTEN_LINE);

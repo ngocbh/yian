@@ -1986,10 +1986,10 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["run_stopped", [null, ["reason", "node_ids"]]],
   ["node_started", ["node_id", []]],
   ["node_step", ["node_id", ["n", "step"]]],
-  ["pool_commit", ["node_id", ["key", "value"]]],
+  ["pool_commit", ["node_id", ["key", "value", "from"]]],
   ["node_succeeded", ["node_id", ["commit", "forward_capture"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
-  ["node_expanded", ["spawner_id", ["seed", "prune_ids", "forward_capture"]]],
+  ["node_expanded", ["spawner_id", ["prune_ids", "forward_capture"]]],
   ["node_failed", ["failure", ["failure", "forward_capture"]]],
   ...["memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"].map(
     (kind): [string, TraceRow] => [
@@ -2839,8 +2839,9 @@ const OUTCOMES: ReadonlySet<string> = new Set([
 /**
  * Return the node outcome entries of a run log's trace `entries`, each capture source's
  * `execution_seq` replaced by the kind and node of the record it names, and each success's
- * `commit` by the trace fields of the `pool_commit` it names: captures and successes name records
- * by seq, and a resume adds records, so a crash sweep compares the records instead.
+ * `commit` by the trace fields of the `pool_commit` it names, whose `from` seqs are replaced the
+ * same way: captures, successes and `from` name records by seq, and a resume adds records, so a
+ * crash sweep compares the records instead.
  */
 export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
   const rename = (value: unknown): void => {
@@ -2866,7 +2867,16 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
     const commit = (payload as Case)["commit"] as bigint;
     const named = entries[Number(commit)];
     if (named?.[0] !== "pool_commit") throw new CaseFailure(`a success names seq ${commit}, which isn't a pool_commit`);
-    (payload as Case)["commit"] = named[2] ?? {};
+    const fields = { ...((named[2] ?? {}) as Case) };
+    if (isMapping(fields["from"])) {
+      fields["from"] = Object.fromEntries(
+        Object.entries(fields["from"]).map(([name, seq]) => {
+          const source = entries[Number(seq)];
+          return [name, `${String(source?.[0])} ${String(source?.[1])}`];
+        }),
+      );
+    }
+    (payload as Case)["commit"] = fields;
   }
   return kept;
 }

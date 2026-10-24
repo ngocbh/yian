@@ -349,7 +349,6 @@ import {
   commitPrepared,
   type GrowBuilder,
   PreparedTransition,
-  prepareExpanded,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -391,6 +390,7 @@ import {
   terminalSkipRouteFlow,
   textReply,
   traceSnapshot,
+  prepareGrowth,
 } from "./run_state_fixtures.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;
@@ -2123,7 +2123,7 @@ test("an expansion prunes current names only, and other outcomes ignore retired 
   });
   expect(trace.currentWriters.has("a")).toBe(true);
 
-  const expanded = new NodeExpandedRecord("g", { v: 1n }, ["a", "b"], "b".repeat(64), { forwardCapture: captureV() });
+  const expanded = new NodeExpandedRecord("g", ["a", "b"], "b".repeat(64), { forwardCapture: captureV() });
   runNode(trace, 3, new TraceNode("g"), expanded, { retiredIds: ["a", "b", "s1"] });
 
   expect(trace.currentWriters.has("a")).toBe(false);
@@ -2358,6 +2358,12 @@ type OutcomeKind = (typeof OUTCOME_KINDS)[number];
 /** A CODE node that may grow the graph, Python's `FuncNode` subclass `Spawner`. */
 class FuncSpawner extends FuncNode {
   override readonly isSpawner = true;
+  // A spawner's seed is rebuilt from its binding on replay, so the double is derived and grows `{}`.
+  override readonly derived = true;
+
+  override forward(): Grow {
+    return new Grow({});
+  }
 }
 
 /**
@@ -2395,7 +2401,7 @@ function preparedScopedOutcome(
     const failure = new Failure({ code: "node.execute", message: "failed", nodeId: node.id });
     prepared = prepareNodeFailed(state, failure, carriers);
   } else {
-    prepared = prepareExpanded(state, node.id, new Grow({}), fragmentBuilder, carriers);
+    prepared = prepareGrowth(log, state, node.id, new Grow({}), fragmentBuilder, carriers);
   }
   return { node, state, log, prepared, original };
 }
@@ -3854,7 +3860,7 @@ test.each(["selector-digest", "missing-field", "missing-item", "boundary-role"] 
     });
     if (change === "missing-field" || change === "missing-item") {
       const changed = changedBuilder(replay.flow.nodes.get("spawn")!, { x: 7n });
-      record = new NodeExpandedRecord(record.spawnerId, record.seed, record.pruneIds, expansionDigest(changed), {
+      record = new NodeExpandedRecord(record.spawnerId, record.pruneIds, expansionDigest(changed), {
         evidence: record.evidence,
         forwardCapture: record.forwardCapture,
       });
@@ -3962,7 +3968,7 @@ test("seed connections wait for the append and survive an unfinished start's ret
   );
   commitPrepared(log, state, prepareNodeStarted(state, "spawn"));
   const evaluated = await evaluateStarted(state, "spawn");
-  const prepared = prepareExpanded(state, "spawn", evaluated.outcome as Grow, built.growBuilder, {
+  const prepared = prepareGrowth(log, state, "spawn", evaluated.outcome as Grow, built.growBuilder, {
     forwardCapture: joinedCapture(evaluated),
   });
   const before = [traceSnapshot(state.trace!), [...state.flow.nodes.keys()], state.nextSequence];
@@ -4002,6 +4008,8 @@ test.each([false, true])(
     class Prune extends Node {
       readonly kind = NodeKind.CODE;
       override readonly isSpawner = true;
+      // A live growth is checked against its rebuild from `from`, so the spawner double is derived.
+      override readonly derived = true;
 
       override forward(): NodeResult {
         return new Grow({}, [sharedStart, sharedEnd]);

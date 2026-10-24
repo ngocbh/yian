@@ -74,19 +74,17 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, go]
+  - - pool_commit
+    - go
+    - from: {__start__: 6}
+      key: go/__start__
   - - node_expanded
     - go
     - prune_ids: []
-      seed:
-        topic: null
   - [node_started, go/__start__]
-  - - pool_commit
-    - go/__start__
-    - value:
-        topic: null
   - - node_succeeded
     - go/__start__
-    - {commit: 11}
+    - commit: 9
   - [node_started, go/child]
   - [pool_commit, go/child]
   - - node_succeeded
@@ -96,6 +94,7 @@ expect:
   - - pool_commit
     - go/__end__
     - key: go
+      from: {go/child: 14}
   - - node_succeeded
     - go/__end__
     - {commit: 17}

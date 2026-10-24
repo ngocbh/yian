@@ -86,12 +86,12 @@ const routed = (caseFields: string) =>
 /** A routed flow with one searched branch on `condition`. */
 const searched = (condition: string) => routed('    cases:\n      - when: "' + condition + '"\n        then: yes\n');
 
-/** A HUMAN_INPUT flow whose question text holds an `n`-level span. */
-const human = (n: number) =>
-  "id: f\nname: f\ninput:\n  proj: !str\nnodes:\n  ask:\n    kind: human_input\n" +
-  "    input:\n      proj: ${input.proj}\n    questions:\n" +
-  '      - question: "Which framework for ${' + upper(n, "proj") + '}?"\n' +
-  "        header: Framework\n" +
+/** An `ask` flow whose question text holds an `n`-level span. */
+const asked = (n: number) =>
+  "id: f\nname: f\ninput:\n  proj: !str\nnodes:\n  ask:\n    kind: tool\n    tool_id: ask\n" +
+  "    input:\n      questions:\n" +
+  '        - question: "Which framework for ${' + upper(n, "input.proj") + '}?"\n' +
+  "          header: Framework\n" +
   "output: ${ask.output}\n";
 
 const SEED_05 = "load-map-call/seed_05_call_map";
@@ -132,7 +132,7 @@ const SITES: Record<string, (n: number) => [string, string]> = {
     "topic: call(",
   ],
   "typed binding": (n) => [codeFlow("!int ${" + neg(n) + "}"), "topic:"],
-  "human question": (n) => [human(n), "- question:"],
+  "ask question": (n) => [asked(n), "- question:"],
 };
 
 test.each(Object.keys(SITES).flatMap((site) => [101, CHAIN].map((depth) => [site, depth] as const)))(

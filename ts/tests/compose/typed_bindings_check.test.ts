@@ -70,9 +70,10 @@ import { BuildResult } from "../../src/compose/nodes/base.ts";
 import { LocalInput, localInputContracts, shownLiteral } from "../../src/compose/validate/typed_bindings.ts";
 import { forget } from "../../src/defaults.ts";
 import { Binding, type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { WaitNode } from "../../src/nodes/wait/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
@@ -586,7 +587,7 @@ describe("localInputContracts", () => {
       buildResults,
     );
 
-  const built = (node: MapNode | WaitNode | LoopNode, wiring: Record<string, unknown>): Map<string, BuildResult> =>
+  const built = (node: MapNode | AgentNode | LoopNode, wiring: Record<string, unknown>): Map<string, BuildResult> =>
     new Map([[node.id, new BuildResult({ node, wiring: new Map(Object.entries(wiring)) })]]);
 
   test("a typed binding keeps the declared contract, then the inferred one when it fits", () => {
@@ -614,9 +615,11 @@ describe("localInputContracts", () => {
   test("a map node and reserved keys are skipped", () => {
     const wiring = { over: "${d.output}", x: "${d.output}" };
     expect(contracts({ m: wiring }, built(new MapNode("m", { flowId: "child" }), wiring))).toEqual(new Map());
-    const waitWiring = { until: "${t.output}", x: "${d.output}" };
-    expect(contracts({ w: waitWiring }, built(new WaitNode("w"), waitWiring))).toEqual(
-      new Map([["w", new Map([["x", new LocalInput([INT], "d.output")]])]]),
+    const agent = new AgentNode("a");
+    agent.wiresLlmConfig = true;
+    const agentWiring = { [LLM_CONFIG_KEY]: "${t.output}", x: "${d.output}" };
+    expect(contracts({ a: agentWiring }, built(agent, agentWiring))).toEqual(
+      new Map([["a", new Map([["x", new LocalInput([INT], "d.output")]])]]),
     );
   });
 

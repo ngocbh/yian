@@ -94,10 +94,10 @@ const agent = (header: string, value: string) =>
   `${header}id: f\nname: f\nnodes:\n  use:\n    kind: agent\n    prompt: hi\n` +
   `    output: ${value}\noutput: \${use.output}\n`;
 
-/** A flow whose HUMAN_INPUT node `use` declares `output: value`. */
-const humanInput = (header: string, value: string) =>
-  `${header}id: f\nname: f\nnodes:\n  use:\n    kind: human_input\n    prompt: hi\n` +
-  `    output: ${value}\noutput: \${use.output}\n`;
+/** A flow whose `ask` node `use` declares `output: value`. */
+const ask = (header: string, value: string) =>
+  `${header}id: f\nname: f\nnodes:\n  use:\n    kind: tool\n    tool_id: ask\n` +
+  `    input:\n      prompt: hi\n    output: ${value}\noutput: \${use.output}\n`;
 
 /** A flow whose TOOL node `use` declares `output: value`. */
 const toolSite = (header: string, value: string) =>
@@ -127,7 +127,7 @@ const multiDef = (header: string, value: string) =>
 const SITES: Record<string, (header: string, value: string) => string> = {
   code,
   agent,
-  human_input: humanInput,
+  ask,
   tool: toolSite,
   compact,
   "single-node-def": singleDef,

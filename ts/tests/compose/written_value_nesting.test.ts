@@ -26,7 +26,8 @@
  *
  * Changed: Python also asserts no `RecursionError` in the error's chain; here a stack overflow
  * would be a `RangeError`, not the `LoadError` the rows expect, so `loadError` fails on it. The
- * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
+ * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`). Python's `wait-until` site is
+ * `sleep-until` here: a sleep's `until` input, named as an input.
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -127,9 +128,9 @@ const mapFlow: Flow = (header, value) =>
   `nodes:\n  m:\n    kind: map\n    call: wrap\n    over: ${value}\n` +
   "    input:\n      v: ${item}\noutput: ${m.output}\n";
 
-/** A flow whose WAIT `w` waits `until: value`. */
-const waitFlow: Flow = (header, value) =>
-  `id: f\nname: f\n${header}nodes:\n  w:\n    kind: wait\n    until: ${value}\n` +
+/** A flow whose sleep `w` sleeps `until: value`. */
+const sleepFlow: Flow = (header, value) =>
+  `id: f\nname: f\n${header}nodes:\n  w:\n    kind: tool\n    tool_id: sleep\n    input:\n      until: ${value}\n` +
   `  use:\n${ECHO}    input:\n      topic: x\n    runs_after: [w]\n` +
   "output: ${use.output}\n";
 
@@ -230,14 +231,14 @@ const BINDING_SITES: Readonly<Record<string, BindingSite>> = {
     line: "    over:",
     runs: true,
   },
-  // A list `until:` isn't a date: at the limit it is a type error at load, and past the limit the
+  // A list `until` isn't a date: at the limit it is a type error at load, and past the limit the
   // nesting error comes first.
-  "wait-until": {
-    flow: waitFlow,
+  "sleep-until": {
+    flow: sleepFlow,
     text: list,
     alias: listAlias,
-    where: "node 'w' field 'until' at ",
-    line: "    until:",
+    where: "node 'w' input 'until' at ",
+    line: "      until:",
     runs: false,
   },
   "value-entry": {
@@ -300,10 +301,10 @@ describe("node bindings", () => {
       const { flow, text, alias } = BINDING_SITES[site]!;
       const [header, value] = (aliased ? alias : text)(MAX_VALUE_NESTING);
 
-      if (site === "wait-until") {
+      if (site === "sleep-until") {
         // Past the nesting check, a list `until:` meets the type check.
         const error = loadError(() => assembleText(flow(header, value)));
-        expect(error.message).toContain("`until:` must be a date or datetime, but YAML read it as a list");
+        expect(error.message).toContain("node 'w' (tool_id: sleep) input 'until': must be a date or datetime, got [[[");
         return;
       }
       assembleText(flow(header, value));

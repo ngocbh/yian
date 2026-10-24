@@ -91,8 +91,10 @@ nodes:
     input: {}
     nodes:
       ask:
-        kind: human_input
-        prompt: hi
+        kind: tool
+        tool_id: ask
+        input:
+          prompt: hi
         adaptive_questions:
           prompt: Q
     output: \${ask.output}

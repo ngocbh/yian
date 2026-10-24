@@ -114,7 +114,7 @@ test("nested branch call records the outer call as host", () => {
 
 test("adaptive composer records the gate as host", () => {
   const descriptors = descriptorsOf(
-    "  ask:\n    kind: human_input\n" +
+    "  ask:\n    kind: tool\n    tool_id: ask\n" +
       "    adaptive_questions:\n      prompt: Ask about ${topic}\n" +
       "    input:\n      topic: ${input.topic}\n",
   );

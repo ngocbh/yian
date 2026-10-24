@@ -13,7 +13,8 @@
  * `test_a_builtin_type_name_in_a_binding_is_not_a_conversion`,
  * `test_a_builtin_type_name_in_a_case_when_is_not_a_conversion`,
  * `test_an_unknown_name_in_a_case_when_is_an_unknown_function`,
- * `test_a_constructor_in_wait_until_is_a_located_load_error`,
+ * `test_a_constructor_in_wait_until_is_a_located_load_error` (on a sleep's `until`, a TOOL input
+ * where a constructor builds a value that must be a date),
  * `test_a_constructor_in_an_agent_prompt_is_a_located_load_error`,
  * `test_a_field_read_on_a_constructor_result_type_checks`,
  * `test_a_field_read_on_a_constructor_in_a_case_when_type_checks`,
@@ -544,7 +545,8 @@ test("an unknown name in a case when is an unknown function", () => {
   expect(loadError(() => loadedNodes(text)).message.split("\n")[0]).toMatch(/unknown expression function 'Hold'$/);
 });
 
-test("a constructor in wait until is a located load error", () => {
+test("a constructor in a sleep's until is a binding, checked as a date", () => {
+  // A sleep's until: is a TOOL input, where a constructor builds a value; its type must fit.
   const text =
     "id: w\nname: w\n" +
     TYPEDEFS +
@@ -552,14 +554,18 @@ test("a constructor in wait until is a located load error", () => {
   when: !date
 nodes:
   w:
-    kind: wait
-    until: \${Size(input.when)}
+    kind: tool
+    tool_id: sleep
+    input:
+      until: \${Size(input.when)}
 output: \${w.output}
 `;
 
   const error = loadError(() => loadedNodes(text));
 
-  expect(error.message).toContain("Size(...) is not supported in a wait node's until:");
+  expect(error.message).toContain(
+    "node 'w' (tool_id: sleep) input 'until': must be a date or datetime, but the value is Literal(l, m, s)",
+  );
   expect(errorLine(error)).toBe(lineOf(text, "until:"));
 });
 

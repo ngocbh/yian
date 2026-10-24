@@ -10,7 +10,9 @@
  * `::test_adaptive_brief_field_read_is_reported_on_the_gate`, `::test_literal_input_field_read`,
  * `::test_null_literal_input_field_read`, `::test_field_read_inside_a_builtin_argument`,
  * `::test_agent_variable_field_read`, `::test_human_input_prompt_field_read`,
- * `::test_human_input_question_field_read`, `::test_prompt_field_error_is_reported_once_per_ref`,
+ * `::test_human_input_question_field_read` (both on an `ask`, whose prompt and questions are input
+ * wiring templates reading the pool, so the error names the input),
+ * `::test_prompt_field_error_is_reported_once_per_ref`,
  * `::test_prompt_inside_a_def_reads_unknown_field`,
  * `::test_readable_fields_still_load` (6), `::test_narrowed_input_reads_the_branch_member`,
  * `::test_defaulted_union_binding_hint_names_the_bound_source` and
@@ -281,9 +283,10 @@ test("optional binding field reads", () => {
 test("adaptive brief field read is reported on the gate", () => {
   const gate =
     "  h:\n" +
-    "    kind: human_input\n" +
+    "    kind: tool\n" +
+    "    tool_id: ask\n" +
     "    input:\n      v: ${step.output}\n" +
-    '    prompt: "Pick for ${v.a}"\n' +
+    '      prompt: "Pick for ${step.output.a}"\n' +
     "    adaptive_questions:\n" +
     '      prompt: "${v.b}"\n';
   expect(loadMessage(flow(gate, "${h.output}"))).toContain(
@@ -334,27 +337,28 @@ test("agent variable field read", () => {
   );
 });
 
-test("human_input prompt field read", () => {
-  const gate = '  h:\n    kind: human_input\n    input:\n      v: ${step.output}\n    prompt: "${v.b}"\n';
+test("ask prompt field read", () => {
+  const gate = '  h:\n    kind: tool\n    tool_id: ask\n    input:\n      prompt: "${step.output.b}"\n';
   expect(loadMessage(flow(gate, "${h.output}"))).toContain(
-    "node 'h' prompt: reference ${v.b} reads unknown field 'b' on record",
+    "node 'h' input 'prompt' from: reference ${step.output.b} reads unknown field 'b' on record",
   );
 });
 
-test("human_input question field read", () => {
+test("ask question field read", () => {
   const gate =
     "  h:\n" +
-    "    kind: human_input\n" +
-    "    input:\n      v: ${step.output}\n" +
-    '    prompt: "Pick for ${v.a}"\n' +
-    "    questions:\n" +
-    '      - question: "${v.b}"\n' +
-    "        header: Pick\n" +
-    "        options:\n" +
-    "          - label: one\n" +
-    "            description: the first\n";
+    "    kind: tool\n" +
+    "    tool_id: ask\n" +
+    "    input:\n" +
+    '      prompt: "Pick for ${step.output.a}"\n' +
+    "      questions:\n" +
+    '        - question: "${step.output.b}"\n' +
+    "          header: Pick\n" +
+    "          options:\n" +
+    "            - label: one\n" +
+    "              description: the first\n";
   expect(loadMessage(flow(gate, "${h.output}"))).toContain(
-    "node 'h' questions[0].question: reference ${v.b} reads unknown field 'b' on record",
+    "node 'h' input 'questions' from: reference ${step.output.b} reads unknown field 'b' on record",
   );
 });
 

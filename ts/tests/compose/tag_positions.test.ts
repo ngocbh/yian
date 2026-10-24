@@ -19,7 +19,11 @@
  * `./fixtures/compose_codefns.ts:echo`), matching the message's end as Python does: every other
  * row. The `uses:` child rows write the child into a temporary directory linked to the conformance
  * fixtures. `test_loading_the_same_document_twice_behaves_the_same` calls the loader's
- * `loadFlowFile`, exported for it (Python's `_load_flow`).
+ * `loadFlowFile`, exported for it (Python's `_load_flow`). The null-key row puts its value under a
+ * sleep's `until` input.
+ *
+ * Dropped: `test_tag_on_wait_until_is_rejected_at_its_line`. A sleep's `until` is a TOOL input,
+ * where a tag types the binding, so it loads.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -221,20 +225,6 @@ output: \${each.output}
   await expectLoadError(text, generic("over"), "    over: !list(int) [1, 2]");
 });
 
-test("a tag on wait until is rejected at its line", async () => {
-  const text = `id: f
-name: f
-input:
-  deadline: !datetime
-nodes:
-  settle:
-    kind: wait
-    until: !datetime \${input.deadline}
-output: \${settle.output}
-`;
-  await expectLoadError(text, generic("until"), "    until: !datetime ${input.deadline}");
-});
-
 test("a tag inside a non-slot value names its key", async () => {
   const line = "env: {sampling: {temperature: !float 0.5}}";
   await expectLoadError(CODE.replace("name: f\n", `name: f\n${line}\n`), generic("temperature"), line);
@@ -294,16 +284,18 @@ test("a null key is reported before a tag under it", async () => {
 name: f
 nodes:
   settle:
-    kind: wait
-    until:
-      null: !int 3
+    kind: tool
+    tool_id: sleep
+    input:
+      until:
+        null: !int 3
 output: \${settle.output}
 `;
   await expectLoadError(
     text,
     "the key `null` was read by YAML as null, but names in a flow must be text. " +
       'Quote it ("null") or choose another name.',
-    "      null: !int 3",
+    "        null: !int 3",
   );
 });
 

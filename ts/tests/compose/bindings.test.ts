@@ -1,8 +1,8 @@
 /**
  * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The rows use the
- * real `AgentDescriptor`, `ToolDescriptor`, `HumanInputDescriptor`, `WaitDescriptor`,
- * `CaseDescriptor`, `CallDescriptor`, `MapDescriptor` and `LoopDescriptor` with the registered
- * `BINDING_FIELDS`, as Python does.
+ * real `AgentDescriptor`, `ToolDescriptor`, `CaseDescriptor`, `CallDescriptor`, `MapDescriptor` and
+ * `LoopDescriptor` with the registered `BINDING_FIELDS`, as Python does (an `ask` and a `sleep` are
+ * TOOL nodes, so they walk their inputs like any tool).
  *
  * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
  * a scalar field, and `keyless` drops the field and key.
@@ -14,11 +14,9 @@ import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { keyless, mapBindingSources, mapBindingStrings } from "../../src/compose/nodes/bindings.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
-import { HumanInputDescriptor } from "../../src/compose/nodes/human_input.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
-import { WaitDescriptor } from "../../src/compose/nodes/wait.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
 
@@ -81,22 +79,19 @@ describe("mapBindingStrings", () => {
   });
 
   test("no binding fields pass through unchanged", () => {
-    // CASE and WAIT have no authored input-binding mapping -> identity (same object).
-    for (const desc of [
-      new CaseDescriptor({ id: "k", on: "${sel}", cases: [] }),
-      new WaitDescriptor({ id: "w", until: "${t}" }),
-    ]) {
-      expect(mapBindingStrings(desc, up)).toBe(desc);
-    }
+    // CASE has no authored input-binding mapping -> identity (same object).
+    const desc = new CaseDescriptor({ id: "k", on: "${sel}", cases: [] });
+    expect(mapBindingStrings(desc, up)).toBe(desc);
   });
 
-  test("human_input and loop inputs rewritten", () => {
-    for (const desc of [
-      new HumanInputDescriptor({ id: "h", inputs: { q: "${qs}" }, prompt: "hi" }),
-      new LoopDescriptor({ id: "l", call: "body", inputs: { q: "${qs}" } }),
-    ]) {
+  test("ask, sleep and loop inputs rewritten", () => {
+    for (const [desc, inputs] of [
+      [new ToolDescriptor({ id: "h", toolId: "ask", inputs: { questions: "${qs}" } }), { questions: "${QS}" }],
+      [new ToolDescriptor({ id: "w", toolId: "sleep", inputs: { until: "${t}" } }), { until: "${T}" }],
+      [new LoopDescriptor({ id: "l", call: "body", inputs: { q: "${qs}" } }), { q: "${QS}" }],
+    ] as const) {
       const out = mapBindingStrings(desc, up);
-      expect(out.inputs).toEqual({ q: "${QS}" });
+      expect(out.inputs).toEqual(inputs);
       expect(out).not.toBe(desc);
     }
   });

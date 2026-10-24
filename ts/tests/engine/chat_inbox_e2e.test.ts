@@ -1,7 +1,7 @@
 /**
  * TS-only: `examples/chat.yaml` driven through the host calls across every Phase 2 feature: send,
- * reply, a steer mid-reply, a pending call completed, a crash and `advance`, `close`. The output
- * equals the expected history.
+ * reply, a steer mid-reply, an interrupt, a pending call completed, a crash and `advance`, `close`.
+ * The output equals the expected history.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -11,13 +11,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { type ChatModel, EventStream } from "../../src/llm/events.ts";
+import { NodeSucceeded, type RunEvent } from "../../src/events.ts";
+import { type ChatModel, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
 import type { Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
-import { advance, close, complete, foldRunLog, pendingCalls, runFlow, send } from "../../src/run.ts";
+import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
+import { advance, close, complete, foldRunLog, interrupt, pendingCalls, runFlow, send } from "../../src/run.ts";
 import {
   InboxClosedRecord,
+  InterruptedRecord,
   NodeStepRecord,
   PoolCommitRecord,
   readRunLog,
@@ -56,18 +59,25 @@ const tools = {
   }),
 };
 
-/** `model`, running `during(n)` before its nth request (from 1) streams, awaiting what it returns. */
-function hooked(model: ScriptedModel, during: (request: number) => unknown): ChatModel {
+/**
+ * `model`, running `during(n, k)` in its nth request (from 1) before its stream starts (`k` 0) and
+ * after each of its events (`k` from 1), awaiting what it returns before the stream goes on.
+ */
+function hooked(model: ScriptedModel, during: (request: number, events: number) => unknown): ChatModel {
   return {
     provider: model.provider,
     model: model.model,
     stream(request: Request, options?: { signal?: AbortSignal }): EventStream {
       const inner = model.stream(request, options);
-      const settled = during(model.requests.length);
+      const n = model.requests.length;
       return new EventStream(
         (async function* () {
-          await settled;
-          yield* inner;
+          let k = 0;
+          await during(n, k);
+          for await (const event of inner) {
+            yield event;
+            await during(n, ++k);
+          }
         })(),
         () => inner.close(),
       );
@@ -97,13 +107,14 @@ function milestones(log: string): string[] {
     if (record instanceof NodeStepRecord && ["steer", "pending"].includes(String(record.step["kind"]))) {
       return [`${String(record.step["kind"])} ${record.nodeId}`];
     }
+    if (record instanceof InterruptedRecord) return [`interrupted ${record.nodes.join(", ")}`];
     if (record instanceof RunResumedRecord) return ["run_resumed"];
     if (record instanceof InboxClosedRecord) return ["inbox_closed"];
     return [];
   });
 }
 
-test("the Phase 2 chat end to end: steer, pending call, crash and advance, close", async () => {
+test("the Phase 2 chat end to end: steer, interrupt, pending call, crash and advance, close", async () => {
   const flow = await chatFlow();
   const log = join(tmp, "chat.jsonl");
   const env = { env: NO_ENV };
@@ -112,6 +123,7 @@ test("the Phase 2 chat end to end: steer, pending call, crash and advance, close
       textReply("hello"),
       callReply(["lookup", { topic: "x" }, "c1"]),
       textReply("x, briefly"),
+      [new TextDelta(0, "Once upon"), new TextDelta(0, " a time"), new TextDelta(0, " there was"), new Finish({ reason: "stop" })],
       callReply(["ask_owner", { question: "ok?" }, "c2"]),
       textReply("the owner said yes"),
     ],
@@ -119,8 +131,18 @@ test("the Phase 2 chat end to end: steer, pending call, crash and advance, close
   );
   // The owner steers during the lookup call's reply (request 2): the steer lands live and the
   // agent reads it once the lookup result is in.
-  const model = hooked(script, (n) => (n === 2 ? send(log, "owner_messages", user("briefly"), env) : undefined));
-  const options = { ...env, numWorkers: 0, tools, models: serving(model) };
+  // The owner steers during the lookup call's reply (request 2), and interrupts the story (request
+  // 4) once its second chunk is shown, then sends the next message at once.
+  const model = hooked(script, async (n, k) => {
+    if (n === 2 && k === 0) await send(log, "owner_messages", user("briefly"), env);
+    if (n === 4 && k === 2) {
+      await interrupt(log, "owner_messages", env);
+      await send(log, "owner_messages", user("ask the owner"), env);
+    }
+  });
+  const cut: string[] = [];
+  const onEvent = (event: RunEvent) => void (event instanceof NodeSucceeded && event.interrupted && cut.push(event.nodeId));
+  const options = { ...env, numWorkers: 0, tools, models: serving(model), onEvent };
 
   // 1. Start: the first take waits.
   expect((await runFlow(flow, {}, { ...options, log, llmConfig: CONFIG })).status).toBe("waiting");
@@ -130,15 +152,19 @@ test("the Phase 2 chat end to end: steer, pending call, crash and advance, close
   // 3. Turn 2: a steer mid-reply joins the request after the lookup result.
   await send(log, "owner_messages", user("tell me about x"), env);
   expect((await advance({ ...options, log })).status).toBe("waiting");
-  // 4. Turn 3: the reply's call to the owner pends; the host completes it.
-  await send(log, "owner_messages", user("ask the owner"), env);
+  // 4. Turn 3: the host interrupts the streaming reply, which keeps both chunks shown; its output
+  //    is null and the turn ends. The message sent after the interrupt isn't read as a steer: it
+  //    stays queued, so turn 4 takes it at once.
+  // 5. Turn 4: the reply's call to the owner pends; the host completes it.
+  await send(log, "owner_messages", user("a story please"), env);
   expect((await advance({ ...options, log })).status).toBe("waiting");
+  expect(cut).toEqual(["chat#2/answered/reply"]);
   const open = pendingCalls(log);
   expect(open.map((call) => [call.node, call.tool, call.arguments])).toEqual([
-    ["chat#2/answered/reply", "ask_owner", { question: "ok?" }],
+    ["chat#3/answered/reply", "ask_owner", { question: "ok?" }],
   ]);
   await complete(log, open[0]!.callId, { output: "yes" }, env);
-  // 5. The process is lost as the woken reply's final model call returns, before its record.
+  // 6. The process is lost as the woken reply's final model call returns, before its record.
   //    A sibling run of the same log, with no crash, gives that record's seq.
   const sibling = join(tmp, "sibling.jsonl");
   copyFileSync(log, sibling);
@@ -149,15 +175,15 @@ test("the Phase 2 chat end to end: steer, pending call, crash and advance, close
     ({ seq, record }) =>
       seq > copied &&
       record instanceof NodeStepRecord &&
-      record.nodeId === "chat#2/answered/reply" &&
+      record.nodeId === "chat#3/answered/reply" &&
       record.step["kind"] === "model_call",
   )!.seq;
   await crashAfter(k, () => advance({ ...options, log }));
-  // The crashed attempt used up reply 5; the advance after the crash asks for it again, once.
+  // The crashed attempt used up the last reply; the advance after the crash asks for it again, once.
   const again = new ScriptedModel([textReply("the owner said yes")], CONFIG);
   expect((await advance({ ...options, log, models: serving(again) })).status).toBe("waiting");
   expect(again.requests).toHaveLength(1);
-  // 6. Close: the last take gets nothing and the loop ends.
+  // 7. Close: the last take gets nothing and the loop ends.
   await close(log, "owner_messages", env);
   const done = await advance({ ...options, log });
   expect(done.status, done.failure?.message).toBe("succeeded");
@@ -170,6 +196,9 @@ test("the Phase 2 chat end to end: steer, pending call, crash and advance, close
     tool("c1", "lookup", "about x"),
     user("briefly"),
     assistant("x, briefly"),
+    user("a story please"),
+    assistant("Once upon a time"),
+    user(INTERRUPTED_MARKER),
     user("ask the owner"),
     calls(["c2", "ask_owner", { question: "ok?" }]),
     tool("c2", "ask_owner", "yes"),
@@ -177,7 +206,8 @@ test("the Phase 2 chat end to end: steer, pending call, crash and advance, close
   ]);
   expect(milestones(log)).toEqual([
     "steer chat#1/answered/reply",
-    "pending chat#2/answered/reply",
+    "interrupted chat#2/answered/reply",
+    "pending chat#3/answered/reply",
     "run_resumed",
     "inbox_closed",
   ]);
@@ -189,21 +219,25 @@ test("the Phase 2 chat end to end: steer, pending call, crash and advance, close
   const ends = records(log).flatMap(({ record }) =>
     record instanceof PoolCommitRecord && /^chat#\d+\/__end__$/.test(record.nodeId) ? [record] : [],
   );
-  expect(ends).toHaveLength(4);
+  expect(ends).toHaveLength(5);
   for (const end of ends) expect([end.value, end.from === null]).toEqual([null, false]);
-  // The reply's messages commit holds its new messages, the steer included.
+  // The replies' messages commits hold their new messages: the steer, and the cut text then the
+  // interrupt marker.
   const folded = await foldRunLog(log, env);
-  const messages = folded.records.find(
-    ({ entry }) =>
-      entry.envelope.record instanceof PoolCommitRecord &&
-      entry.envelope.record.key === "chat#1/answered/reply.new_messages",
-  )!;
-  expect(messages.value!.toObject() as unknown).toEqual([
+  const newMessages = (node: string) =>
+    folded.records
+      .find(
+        ({ entry }) =>
+          entry.envelope.record instanceof PoolCommitRecord && entry.envelope.record.key === `${node}.new_messages`,
+      )!
+      .value!.toObject() as unknown;
+  expect(newMessages("chat#1/answered/reply")).toEqual([
     calls(["c1", "lookup", { topic: "x" }]),
     tool("c1", "lookup", "about x"),
     user("briefly"),
     assistant("x, briefly"),
   ]);
+  expect(newMessages("chat#2/answered/reply")).toEqual([assistant("Once upon a time"), user(INTERRUPTED_MARKER)]);
   expect(pendingCalls(log)).toEqual([]);
 }, 60_000);
 

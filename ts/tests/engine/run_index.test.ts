@@ -31,6 +31,7 @@ import { openSqlite, withWarnings } from "../../src/platform.ts";
 import { inspectRun, readRunIndex, RunIndexBusyError, type RunIndexRow, runLogPath, updateRunIndex } from "../../src/run.ts";
 import { emptyRunScan, foldRunScan, type RunScan, runScanFromJson, scanStatus } from "../../src/runtime/run_index.ts";
 import { WaitsState } from "../../src/runtime/waits.ts";
+import { DEADLINE, runStart, sleepWait, send as sendTo, takeWait as takeWaitOn, WAIT_LOGS } from "./wait_logs.ts";
 import {
   InboxClosedRecord,
   JsonlRunLog,
@@ -201,6 +202,9 @@ describe("updateRunIndex and readRunIndex", () => {
         cacheReadTokens: 64,
         reasoningTokens: 8,
         offset: readFileSync(join(runs, "run-succeeded", "log.jsonl")).length,
+        waits: [],
+        ready: false,
+        wakeAt: null,
       });
       expect(rows["run-failed"]).toMatchObject({
         status: "failed",
@@ -661,3 +665,137 @@ describe("the run scan, shared by inspectRun and the index", () => {
     expect(copy.waits.lastFrontier).toBe("run_waiting");
   });
 });
+
+describe("waiting runs in the index", () => {
+  /** Write the run `runId` of the run start then `records`; keep it open when `keep`. */
+  function waitRun(runs: string, runId: string, records: readonly RunRecord[], { keep = false } = {}): JsonlRunLog {
+    return writeRun(
+      runs,
+      runId,
+      (log) => {
+        for (const record of [...runStart(), ...records]) log.append(record);
+      },
+      { keep },
+    );
+  }
+  const WAITING = [new NodeStartedRecord("heard"), takeWaitOn("heard"), new RunWaitingRecord(["heard"])];
+
+  test("a waiting take: waiting, not ready, no wake time; a send makes only its row ready, reading only the send", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-a", succeededRun);
+    const log = waitRun(runs, "run-w", WAITING, { keep: true });
+    try {
+      log.close();
+      updateRunIndex(runs);
+      const before = byId(readRunIndex(runs));
+      expect(before["run-w"]).toMatchObject({
+        status: "waiting",
+        endedAt: null,
+        ready: false,
+        wakeAt: null,
+        waits: [{ node: "heard", callId: "r/heard", tool: "take", inbox: "msgs", deadline: null, settled: false }],
+      });
+      const path = join(runs, "run-w", "log.jsonl");
+      const size = readFileSync(path).length;
+      const reopened = JsonlRunLog.resume(path, { clock: steppingClock() });
+      reopened.append(sendTo("hi"));
+      reopened.close();
+      const appended = readFileSync(path).length - size;
+      const reads = spyOn(fs, "readSync");
+      let bytes: number;
+      try {
+        updateRunIndex(runs);
+        bytes = reads.mock.results.reduce((sum, result) => sum + (result.value as number), 0);
+      } finally {
+        reads.mockRestore();
+      }
+      expect(bytes).toBe(appended + 1);
+      const after = byId(readRunIndex(runs));
+      expect(after["run-a"]).toEqual(before["run-a"]!);
+      expect(after["run-w"]).toMatchObject({ status: "waiting", ready: true, wakeAt: null, lastSeq: 5 });
+      expect(after["run-w"]!.waits[0]!.settled).toBe(true);
+    } finally {
+      log.close();
+    }
+  });
+
+  test("a sleep gives a wake time; outside waiting there is none and nothing is ready", () => {
+    const runs = freshRuns();
+    waitRun(runs, "run-nap", [new NodeStartedRecord("nap"), sleepWait("nap"), new RunWaitingRecord(["nap"])]);
+    waitRun(runs, "run-woken", [new NodeStartedRecord("nap"), sleepWait("nap"), new RunWaitingRecord(["nap"]), new NodeWokenRecord("nap", ["r/nap"])]);
+    updateRunIndex(runs);
+    const rows = byId(readRunIndex(runs));
+    expect(rows["run-nap"]).toMatchObject({ status: "waiting", ready: false, wakeAt: DEADLINE });
+    expect(rows["run-woken"]).toMatchObject({ status: "crashed", ready: false, wakeAt: null, waits: [] });
+  });
+
+  test("cancelled and run_failed runs end with an end time; a woken take after END's success reads crashed", () => {
+    const runs = freshRuns();
+    for (const [name, records] of Object.entries(WAIT_LOGS)) waitRun(runs, name.toLowerCase().replaceAll(/[^a-z]+/g, "-"), records);
+    updateRunIndex(runs);
+    const rows = byId(readRunIndex(runs));
+    expect(rows["two-takes-a-close-then-a-cancel"]).toMatchObject({ status: "cancelled", ready: false, waits: [] });
+    expect(rows["two-takes-a-close-then-a-cancel"]!.endedAt).not.toBeNull();
+    expect(rows["end-unreachable-while-a-take-waits-then-run-failed"]).toMatchObject({ status: "failed" });
+    expect(rows["end-unreachable-while-a-take-waits-then-run-failed"]!.endedAt).not.toBeNull();
+    expect(rows["end-succeeds-while-a-take-waits-the-woken-take-crashes"]).toMatchObject({ status: "crashed", endedAt: null });
+    // Deleting the index and building it again gives the same rows.
+    rmSync(join(runs, "index.sqlite"));
+    updateRunIndex(runs);
+    expect(byId(readRunIndex(runs))).toEqual(rows);
+  });
+
+  test("while a writer holds the lock, a waiting row reads running and a terminal one keeps its status; inspectRun reads both running", () => {
+    const runs = freshRuns();
+    const waiting = waitRun(runs, "run-w", WAITING, { keep: true });
+    const ended = waitRun(runs, "run-x", [...WAITING, new RunCancelledRecord()], { keep: true });
+    try {
+      updateRunIndex(runs);
+      const rows = byId(readRunIndex(runs));
+      expect(rows["run-w"]).toMatchObject({ status: "running", ready: false, wakeAt: null, waits: [] });
+      expect(rows["run-x"]!.status).toBe("cancelled");
+      // The intended difference: inspectRun reads any locked log as running, since a terminal run
+      // may still append backward records; the index overlays only runs that haven't ended.
+      expect(inspectRun(join(runs, "run-x", "log.jsonl")).status).toBe("running");
+    } finally {
+      waiting.close();
+      ended.close();
+    }
+    const released = byId(readRunIndex(runs));
+    expect([released["run-w"]!.status, released["run-x"]!.status]).toEqual(["waiting", "cancelled"]);
+  });
+
+  test.each(Object.entries(WAIT_LOGS))("the index and inspectRun agree at every cut: %s", (_name, scenario) => {
+    const records = [...runStart(), ...scenario];
+    for (let k = 1; k <= records.length; k++) {
+      const runs = freshRuns();
+      const log = JsonlRunLog.create(runLogPath(runs, "run-1"), "run-1", { clock: steppingClock() });
+      for (const record of records.slice(0, k)) log.append(record);
+      log.close();
+      updateRunIndex(runs);
+      const [row] = readRunIndex(runs);
+      const inspection = inspectRun(join(runs, "run-1", "log.jsonl"));
+      const parts = ({ status, ready, wakeAt, waits, endedAt }: typeof row & {}) => ({ status, ready, wakeAt, waits, endedAt });
+      expect(parts(row!)).toEqual(parts(inspection as never));
+    }
+  });
+
+  test("a stored scan that can't be read is rebuilt from 0", () => {
+    const runs = freshRuns();
+    waitRun(runs, "run-w", WAITING);
+    updateRunIndex(runs);
+    const before = readRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    try {
+      db.exec(`UPDATE runs SET scan = '{"inFlight": "junk"}', "offset" = 0`);
+    } finally {
+      db.close();
+    }
+    const warnings: string[] = [];
+    expect(withWarnings((message) => warnings.push(message), () => readRunIndex(runs))).toEqual([]);
+    expect(warnings).toEqual([expect.stringContaining("run index skipped run-w: run scan inFlight must be")]);
+    updateRunIndex(runs);
+    expect(readRunIndex(runs)).toEqual(before);
+  });
+});
+

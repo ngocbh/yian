@@ -1253,7 +1253,8 @@ Node 22, and so does every unit test; a change keeps both green.
   at a time by `foldRunScan`, read by `scanStatus`, read back by `runScanFromJson`) in a `scan`
   column. `inspectRun`'s record scan is a
   loop over the same `foldRunScan`, so both read a status by one set of rules. `readRunIndex` puts
-  `running` on top while a writer holds a run's lock. One `BEGIN IMMEDIATE` transaction with a busy
+  `running` on top while a writer holds a run's lock, and reads a waiting run's `waits`, `ready` and
+  `wakeAt` from the scan. One `BEGIN IMMEDIATE` transaction with a busy
   timeout serializes builders. Never imported by the reducer or the engine.
 - `src/runtime/waits.ts` (TS-only) holds the waits state a run's records build (`WaitsState`: the
   waiting nodes, registered calls and inboxes; run status stays with `RunScan`) and its one fold,

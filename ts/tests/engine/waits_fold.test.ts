@@ -1,11 +1,14 @@
 /**
  * The waits fold (`applyWaitsRecord`) over records alone, no reducer: sends, absorbing takes,
- * inline take commits, host calls, wakes, closes and settles; its queries; and `decideWait`.
+ * inline take commits, host calls, wakes, closes and settles; its queries; `decideWait`; and its
+ * JSON form, which resumes the fold at any cut.
  * TS-only: Python yian has no inboxes or waits.
  */
 import { expect, test } from "bun:test";
 import { Failure } from "../../src/diagnostics.ts";
 import type { WaitRequest } from "../../src/nodes/base.ts";
+import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { runStart, WAIT_LOGS } from "./wait_logs.ts";
 import {
   canonicalTyped,
   InboxClosedRecord,
@@ -404,4 +407,73 @@ test("decideWait refuses a call still open or one that isn't a take or sleep", (
   expect(() => decideWait(ask, "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' isn't a take or sleep (tool 'ask')");
   const cancelled = fold(...START, takeWait("heard", "one"), new RunCancelledRecord());
   expect(() => decideWait(cancelled, "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' was closed (cancelled)");
+});
+
+test.each(Object.entries(WAIT_LOGS))("the fold resumes from its JSON form at every cut: %s", (_name, scenario) => {
+  const records = [...runStart(), ...scenario];
+  const whole = JSON.stringify(fold(...records));
+  for (let k = 1; k < records.length; k++) {
+    const head = fold(...records.slice(0, k));
+    const resumed = WaitsState.fromJSON(parseJson(logJson(head.toJSON()), "plain") as never);
+    records.slice(k).forEach((record, index) => applyWaitsRecord(resumed, { seq: k + index, record }));
+    expect(JSON.stringify(resumed)).toBe(whole);
+  }
+});
+
+test.each<[string, unknown, string]>([
+  ["not an object", [], "waits JSON must be an object"],
+  ["a missing key", { ...new WaitsState().toJSON(), calls: undefined }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes"],
+  ["an extra key", { ...new WaitsState().toJSON(), starts: [] }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes"],
+  ["a map that isn't entries", { ...new WaitsState().toJSON(), calls: {} }, "waits JSON calls must be an array of [key, value] entries"],
+  ["an entry with a non-text key", { ...new WaitsState().toJSON(), interrupts: [[1, 2]] }, "waits JSON interrupts must be an array of [key, value] entries"],
+  ["a seq that isn't an integer", { ...new WaitsState().toJSON(), lastWoken: [["a", "3"]] }, "waits JSON lastWoken 'a' must be an integer"],
+  ["a call that isn't an object", { ...new WaitsState().toJSON(), calls: [["r/a", 1]] }, "waits JSON calls 'r/a' must be a call"],
+  ["a call with an unknown state", { ...new WaitsState().toJSON(), calls: [["r/a", { ...callJson(), state: "lost" }]] }, "waits JSON calls 'r/a' must be a call"],
+  ["an inbox without its queue", { ...new WaitsState().toJSON(), inboxes: [["msgs", { closed: false, absorbing: [] }]] }, "waits JSON inboxes 'msgs' must be an inbox"],
+  ["a waiting node without call ids", { ...new WaitsState().toJSON(), waiting: [["a", { seq: 3, steerInbox: null }]] }, "waits JSON waiting 'a' must be a waiting node"],
+  ["a pending take without events", { ...new WaitsState().toJSON(), pendingTakes: [["a", { seq: 3, inbox: "msgs", closed: false }]] }, "waits JSON pendingTakes 'a' must be a take commit"],
+  ["a non-text frontier", { ...new WaitsState().toJSON(), lastFrontier: 3 }, "waits JSON lastFrontier must be a string or null"],
+  ["a non-boolean flag", { ...new WaitsState().toJSON(), inputsCommitted: "yes" }, "waits JSON inputsCommitted must be a boolean"],
+])("WaitsState.fromJSON refuses %s", (_name, json, message) => {
+  expect(() => WaitsState.fromJSON(json as never)).toThrow(new RangeError(message));
+});
+
+/** A registered call's JSON form. */
+function callJson(): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(nodeCalls(fold(...START, takeWait("a", "one")), "a")[0]));
+}
+
+test("wakeAt is the earliest of a take's timeout, a sleep and an ask's timeout", () => {
+  const take = "2026-10-24T09:05:00.000Z";
+  const sleep = "2026-10-24T09:03:00.000Z";
+  const ask = "2026-10-24T09:04:00.000Z";
+  const w = fold(
+    ...START,
+    takeWait("heard", "one", "msgs", take),
+    sleepWait("nap", sleep),
+    pending("ask", 1, "r/ask/1", { deadline: ask }),
+    new NodeWaitingRecord("ask", ["r/ask/1"]),
+  );
+  expect(wakeAt(w)).toBe(sleep);
+  applyWaitsRecord(w, { seq: 6, record: new NodeWokenRecord("nap", ["r/nap"]) });
+  expect(wakeAt(w)).toBe(ask);
+  applyWaitsRecord(w, { seq: 7, record: answer("ask", 2, "r/ask/1") });
+  expect(wakeAt(w)).toBe(take);
+  // Across a year and a month boundary, text order is still time order.
+  const early = fold(...START, sleepWait("a", "2026-12-31T23:59:59.999Z"), sleepWait("b", "2027-01-01T00:00:00.000Z"));
+  expect(wakeAt(early)).toBe("2026-12-31T23:59:59.999Z");
+});
+
+test.each<[unknown, typeof RangeError | typeof TypeError]>([
+  ["tomorrow", RangeError],
+  ["2026-10-24T09:00:00Z", RangeError],
+  ["2026-02-30T00:00:00.000Z", RangeError],
+  [5n, TypeError],
+])("a pending step's deadline that isn't a record time is refused: %p", (deadline, cls) => {
+  expect(() => fold(...START, pending("ask", 1, "r/ask/1", { deadline }))).toThrow(cls);
+});
+
+test("a pending step without a deadline, or with a null one, has none", () => {
+  const w = fold(...START, pending("ask", 1, "r/ask/1"), pending("ask", 2, "r/ask/2", { deadline: null }));
+  expect(nodeCalls(w, "ask").map((call) => call.deadline)).toEqual([null, null]);
 });

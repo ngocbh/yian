@@ -15,7 +15,9 @@
  * log stands, and `staticNodes`, which names each node of a flow, and re-exports `staticPathOf`
  * (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
  * `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
- * the host's runs folder and names its log there. For hosts that read run-log values it re-exports
+ * the host's runs folder and names its log there, and `updateRunIndex` and `readRunIndex`
+ * (`runtime/run_index.ts`) keep and read the runs folder's rebuildable `index.sqlite`, one row per
+ * run. For hosts that read run-log values it re-exports
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
  * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
@@ -206,6 +208,13 @@ export {
 } from "./typesys/json.ts";
 export { FileRef, type StorageKind, TypedValue, type Value, type ValueRecord } from "./typesys/values.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
+export {
+  readRunIndex,
+  RunIndexBusyError,
+  type RunIndexRow,
+  type RunIndexStatus,
+  updateRunIndex,
+} from "./runtime/run_index.ts";
 
 /** Sees each durable observer, and each in-loop model and tool event. */
 export type EventHook = (event: RunEvent) => unknown;

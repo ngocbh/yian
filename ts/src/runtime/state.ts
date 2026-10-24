@@ -1737,6 +1737,8 @@ export function prepareRunStopped(state: RunState, reason: RunStopReason, messag
  * @param options.callIds Every call the node waits on: each open call it registered since its
  *   last wake, and the call `waits` registers.
  * @param options.waits The take or sleep call this record registers, at most one; none by default.
+ * @param options.steerInbox The steer inbox the node opened, which an interrupt of that inbox
+ *   reaches while it waits; none by default.
  * @returns The canonical `NodeWaitingRecord`, its plan and its `NodeWaiting` observer.
  * @throws TypeError when an argument has the wrong type.
  * @throws RangeError when the record breaks a wait rule (see `validateNodeWaiting`).
@@ -1744,11 +1746,15 @@ export function prepareRunStopped(state: RunState, reason: RunStopReason, messag
 export function prepareNodeWaiting(
   state: RunState,
   nodeId: string,
-  options: { callIds: readonly string[]; waits?: readonly WaitEntry[] },
+  options: { callIds: readonly string[]; waits?: readonly WaitEntry[]; steerInbox?: string | null },
 ): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWaiting expects a RunState");
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
-  return prepareRecord(state, new NodeWaitingRecord(nodeId, options.callIds, { waits: options.waits ?? [] }));
+  const record = new NodeWaitingRecord(nodeId, options.callIds, {
+    waits: options.waits ?? [],
+    steerInbox: options.steerInbox ?? null,
+  });
+  return prepareRecord(state, record);
 }
 
 /**
@@ -3951,7 +3957,8 @@ function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
  * Require a wait record to move an in-flight node with no pending commit to the waiting set: its
  * `waits` entry (a take or sleep TOOL node's own call, not yet registered; a take's inbox declared,
  * open and with nothing unread a take may read), and `call_ids` naming exactly calls of the node
- * registered since its last wake, not closed, including every open one.
+ * registered since its last wake, not closed, including every open one. A `steer_inbox` names a
+ * declared top-level inbox, on a node that reads a steer inbox.
  */
 function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
   const { nodeId } = record;
@@ -3962,7 +3969,14 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
   }
   if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} is not in-flight`);
   requireNoPendingCommit(state, nodeId, "NodeWaiting");
-  if (record.steerInbox !== null) throw new RangeError("NodeWaiting steer_inbox is only for agents, which don't wait yet");
+  if (record.steerInbox !== null) {
+    if (!node.readsSteerInbox) {
+      throw new RangeError(`NodeWaiting steer_inbox on node ${reprText(nodeId)}, which reads no steer inbox`);
+    }
+    if (inboxElementType(state, record.steerInbox) === null) {
+      throw new RangeError(`NodeWaiting steer_inbox ${reprText(record.steerInbox)} is no inbox the START declares`);
+    }
+  }
   const w = state.waits;
   const toolId = node.hostToolCall()?.toolId ?? null;
   for (const entry of record.waits) {

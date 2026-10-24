@@ -4,13 +4,19 @@
  */
 import { expect, test } from "bun:test";
 
+import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { RunSucceeded } from "../../src/events.ts";
+import { Node, NodeKind, type NodeCaps, type NodeResult, Output, type SteerInbox, type SteerRead } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import type { RunLog } from "../../src/runtime/log.ts";
+import type { FlowEngine } from "../../src/runtime/engine.ts";
+import { NodeStepRecord, NodeWaitingRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  prepareInboxClosed,
   prepareNodeFailed,
   prepareNodeStarted,
   prepareNodeStep,
+  prepareNodeWaiting,
   prepareSend,
   type PreparedTransition,
   type RunState,
@@ -20,7 +26,8 @@ import { availableUnread } from "../../src/runtime/waits.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
 import { expectUnchanged, FINGERPRINT, FuncNode, nodeFailure, snapshot } from "./run_state_fixtures.ts";
-import { MSGS, paramFlow, replayed, started, succeed } from "./waits_fixtures.ts";
+import { FakeHost, inboxEngine, inboxFlow } from "./inbox_fixtures.ts";
+import { call, MSGS, paramFlow, replayed, started, succeed } from "./waits_fixtures.ts";
 
 /** A second inbox param, `other: Inbox(str)`. */
 const OTHER = new Parameter("other", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });
@@ -148,4 +155,125 @@ test("a learnable occurrence's steps carry the steer values", () => {
   succeed(log, state, "chat", "ok");
   const occurrence = state.trace!.occurrences.find((item) => item.nodeId === "chat")!;
   expect(occurrence.steps).toEqual([{ kind: "steer", inbox: "msgs", from: [s1], values: ["a"] }]);
+});
+
+/** What one `SteerProbe` evaluation saw. */
+interface ProbeSeen {
+  queuedBefore: boolean;
+  first: SteerRead | null;
+  second: SteerRead | null;
+  queuedAfter: boolean;
+}
+
+/** A node that opens steer inbox `inbox`, reads it twice and returns; or, with `pend`, waits on a host call after opening it. */
+class SteerProbe extends Node {
+  readonly kind = NodeKind.CODE;
+  override readsSteerInbox = true;
+  override readonly needsSteps = true;
+  readonly inbox: string;
+  seen: ProbeSeen | null = null;
+  opened: SteerInbox | null = null;
+
+  constructor(id: string, inbox = "m") {
+    super(id);
+    this.inbox = inbox;
+  }
+
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    const steer = caps.openSteerInbox!(this.inbox);
+    this.opened = steer;
+    const queuedBefore = steer.queued();
+    const first = steer.read();
+    const second = steer.read();
+    this.seen = { queuedBefore, first, second, queuedAfter: steer.queued() };
+    return new Output("done");
+  }
+}
+
+/** A host call node that reads a steer inbox: it opens `m` and waits on its call. */
+class SteerHost extends FakeHost {
+  override readsSteerInbox = true;
+
+  override forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+    caps.openSteerInbox!("m");
+    return super.forward(inputs, caps);
+  }
+}
+
+/** Commit a send of `event` to `inbox` on `run`'s state before it runs, returning its seq. */
+function sendBefore(run: FlowEngine, event: string, inbox = "m"): number {
+  return commit(run.log, run.state, prepareSend(run.state, inbox, event));
+}
+
+/** The `node_step` bodies of `log`, in order. */
+const stepBodies = (log: RunLog) =>
+  log.records().flatMap((entry) => (entry.record instanceof NodeStepRecord ? [entry.record.step] : []));
+
+test("a read records one steer step for everything queued and returns its values", async () => {
+  const probe = new SteerProbe("chat");
+  const run = inboxEngine(inboxFlow(["m"], [probe], [[START_ID, "chat"], ["chat", END_ID]]));
+  const s1 = sendBefore(run, "a");
+  const s2 = sendBefore(run, "b");
+  await run.run();
+  expect(probe.seen).toEqual({
+    queuedBefore: true,
+    first: { n: 1, from: [s1, s2], values: ["a", "b"] },
+    second: null,
+    queuedAfter: false,
+  });
+  expect(stepBodies(run.log)).toEqual([{ kind: "steer", inbox: "m", from: [s1, s2] }]);
+  expect(run.state.result).toBeInstanceOf(RunSucceeded);
+});
+
+test("nothing queued: no read, no step", async () => {
+  const probe = new SteerProbe("chat");
+  const run = inboxEngine(inboxFlow(["m"], [probe], [[START_ID, "chat"], ["chat", END_ID]]));
+  await run.run();
+  expect(probe.seen!.first).toBeNull();
+  expect(stepBodies(run.log)).toEqual([]);
+});
+
+test("a closed inbox still gives what is queued", async () => {
+  const probe = new SteerProbe("chat");
+  const run = inboxEngine(inboxFlow(["m"], [probe], [[START_ID, "chat"], ["chat", END_ID]]));
+  sendBefore(run, "a");
+  commit(run.log, run.state, prepareInboxClosed(run.state, "m")!);
+  await run.run();
+  expect(probe.seen!.first!.values).toEqual(["a"]);
+});
+
+test("opening an inbox the START doesn't declare is a host fault", async () => {
+  const probe = new SteerProbe("chat", "nope");
+  const run = inboxEngine(inboxFlow(["m"], [probe], [[START_ID, "chat"], ["chat", END_ID]]));
+  const error = await run.run().then(
+    () => null,
+    (caught: unknown) => caught,
+  );
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe("steer inbox 'nope' is no inbox the START declares");
+});
+
+test("a waiting node that opened its steer inbox waits with it", async () => {
+  const host = new SteerHost("h");
+  const run = inboxEngine(inboxFlow(["m"], [host], [[START_ID, "h"], ["h", END_ID]]));
+  await run.run();
+  const waiting = run.log.records().find((entry) => entry.record instanceof NodeWaitingRecord)!.record as NodeWaitingRecord;
+  expect(waiting.steerInbox).toBe("m");
+  expect(run.state.waits.waiting.get("h")!.steerInbox).toBe("m");
+});
+
+test("node_waiting steer_inbox is refused on a node that reads none, and for an undeclared inbox", () => {
+  const flow = paramFlow([MSGS], new FakeHost("h"), new SteerHost("s"));
+  const { log, state } = started(flow, { fingerprint: FINGERPRINT });
+  for (const node of ["h", "s"]) {
+    commitPrepared(log, state, prepareNodeStarted(state, node));
+    const pending = { kind: "pending", call_id: call(node), tool: "lookup", arguments: {} };
+    commitPrepared(log, state, prepareNodeStep(state, node, pending));
+  }
+  expect(refusal(state, () => prepareNodeWaiting(state, "h", { callIds: [call("h")], steerInbox: "msgs" }))).toBe(
+    "NodeWaiting steer_inbox on node 'h', which reads no steer inbox",
+  );
+  expect(refusal(state, () => prepareNodeWaiting(state, "s", { callIds: [call("s")], steerInbox: "nope" }))).toBe(
+    "NodeWaiting steer_inbox 'nope' is no inbox the START declares",
+  );
 });

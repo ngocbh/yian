@@ -45,6 +45,7 @@ import {
   Output,
   Pending,
   Route,
+  type SteerInbox,
   type Steering,
 } from "../nodes/base.ts";
 import {
@@ -157,6 +158,35 @@ function observerSink<T>(
       onFault(fault);
       throw fault;
     }
+  };
+}
+
+/**
+ * Wrap the engine's steer inbox opener for one evaluation: once the evaluation ended, opening and
+ * each `queued` or `read` throw a `CapabilityFault`; a `CapabilityFault` the engine throws reaches
+ * `onFault` before it is rethrown, so a node that catches it can't hide it.
+ */
+function steerInboxCapability(
+  open: (inbox: string) => SteerInbox,
+  onFault: (fault: CapabilityFault) => void,
+  isClosed: () => boolean,
+): (inbox: string) => SteerInbox {
+  const guarded = <T>(run: () => T): T => {
+    if (isClosed()) throw new CapabilityFault(new Error("steer inbox capability is closed"));
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof CapabilityFault) onFault(error);
+      throw error;
+    }
+  };
+  return (inbox) => {
+    const opened = guarded(() => open(inbox));
+    return {
+      inbox: opened.inbox,
+      queued: () => guarded(() => opened.queued()),
+      read: () => guarded(() => opened.read()),
+    };
   };
 }
 
@@ -511,6 +541,12 @@ export interface EvalNodeOptions {
    */
   steps?: NodeSteps | null;
   /**
+   * Opens the node's steer inbox, from the engine, delivered only to a node declaring
+   * `readsSteerInbox` as `caps.openSteerInbox`; a `CapabilityFault` it or a read throws is a
+   * capability fault of this evaluation. It closes when the outcome is decided.
+   */
+  steerInbox?: ((inbox: string) => SteerInbox) | null;
+  /**
    * Sees the original error of the evaluation's first capability fault when it is raised, before
    * the node settles, so a host can end its run even when the node catches the fault.
    */
@@ -564,6 +600,7 @@ export async function evalNode(
     steering = null,
     models = null,
     steps = null,
+    steerInbox = null,
     onFault = null,
     scheduler = null,
     random = null,
@@ -587,6 +624,7 @@ export async function evalNode(
   if (tools !== null && !isExactly(tools, ToolSet)) throw new TypeError("tools must be a ToolSet or null");
   if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
   if (steps !== null && !isExactly(steps, NodeSteps)) throw new TypeError("steps must be a NodeSteps or null");
+  if (steerInbox !== null && typeof steerInbox !== "function") throw new TypeError("steer_inbox must be callable or null");
   if (onFault !== null && typeof onFault !== "function") throw new TypeError("on_fault must be callable or null");
   // Read once, so a node replacing its scope while it runs doesn't change what it recalls.
   const memoryScope = node.needsMemoryContext === true ? node.memoryScope : null;
@@ -632,6 +670,7 @@ export async function evalNode(
     steering,
     models,
     steps,
+    steerInbox,
     onFault,
   });
   return new EvaluatedOutcome(outcome, collector?.freeze() ?? null, backwardCapture);
@@ -663,13 +702,14 @@ async function evaluateNode(
     steering: Steering | null;
     models: ModelAccess | null;
     steps: NodeSteps | null;
+    steerInbox: ((inbox: string) => SteerInbox) | null;
     /** Sees the original of the first capability fault when it is raised. */
     onFault: ((original: unknown) => void) | null;
   },
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
   const { memoryScope, memoryContextOpener } = context;
-  const { emitStream, emitEvent, skills, tools, steering, models, steps, scheduler, random, runDir } = context;
+  const { emitStream, emitEvent, skills, tools, steering, models, steps, steerInbox, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
@@ -829,6 +869,9 @@ async function evaluateNode(
       }
     };
     caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes);
+  }
+  if (steerInbox !== null && node.readsSteerInbox === true) {
+    caps.openSteerInbox = steerInboxCapability(steerInbox, onFault, isClosed);
   }
 
   let result: unknown;

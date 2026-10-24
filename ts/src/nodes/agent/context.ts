@@ -298,6 +298,11 @@ export class AgentSteps {
     return { n: recorded.n, values };
   }
 
+  /** Whether a steer read was recorded before the next logical call, which `takeRecordedSteer` would hand back. */
+  hasRecordedSteer(): boolean {
+    return this.#steers.has(this.#taken);
+  }
+
   /**
    * Whether replay is over and recorded failed attempts continue the next call, so it retries a
    * recorded request and no steer joins it.

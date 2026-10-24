@@ -737,6 +737,16 @@ test("a trailing steer is handed back after the last call", () => {
   expect(steps.takeRecordedSteer()).toEqual({ n: 2, values: ["late"] });
 });
 
+test("hasRecordedSteer tells whether a steer was recorded before the next call, without taking it", () => {
+  const { steps } = recordingSteps([callStep(replyText("first")), steerStep(["late"]), callStep(replyText("second"))]);
+  expect(steps.hasRecordedSteer()).toBe(false);
+  steps.takeRecorded("chat", "d".repeat(64));
+  expect(steps.hasRecordedSteer()).toBe(true);
+  expect(steps.hasRecordedSteer()).toBe(true);
+  expect(steps.takeRecordedSteer()).toEqual({ n: 2, values: ["late"] });
+  expect(steps.hasRecordedSteer()).toBe(false);
+});
+
 test("continuesCall is true while recorded failed attempts continue the next call", () => {
   const failed: ValueRecord = {
     ...callStep(replyText("x")),

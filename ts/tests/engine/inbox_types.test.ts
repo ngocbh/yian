@@ -101,6 +101,7 @@ test("a dict can't hold an inbox, directly or through an alias", () => {
   ] as const) {
     expect(() => typeFor(text, registry)).toThrow("an inbox is a whole input; it can't be a dict key or value");
   }
+  expect(() => typeFor("dict(str, Inbox(str))", NONE)).toThrow("in 'dict(str, Inbox(str))'");
   expect(() => readTypedefs({ R: { m: "dict(str, Inbox(str))" } })).toThrow("can't be a dict key or value");
   expect(typeFor("dict(str, int)", NONE).kind).toBe(ValueKind.OBJECT);
   expect(typeFor("dict(str, Unknown)", NONE).kind).toBe(ValueKind.OBJECT);

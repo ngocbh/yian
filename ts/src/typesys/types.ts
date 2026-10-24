@@ -1015,9 +1015,9 @@ export function resolveType(
       return new Type({ kind: ValueKind.STRING, tags: new Set(t.tags) });
     case "dict":
       if (t.args?.some((arg) => namesInbox(arg, registry, seen))) {
-        throw new TypeCheckError(
-          `an inbox is a whole input; it can't be a dict key or value in ${reprText(formatTypeExpr(t))}`,
-        );
+        // `formatTypeExpr` spells a dict as `dict`, the lenient object it reads as; show its parts.
+        const written = `dict(${t.args.map(formatTypeExpr).join(", ")})`;
+        throw new TypeCheckError(`an inbox is a whole input; it can't be a dict key or value in ${reprText(written)}`);
       }
       return Type.scalar(ValueKind.OBJECT); // lenient (no key/value typing yet)
     case "union":

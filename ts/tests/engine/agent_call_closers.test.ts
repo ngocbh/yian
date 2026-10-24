@@ -23,6 +23,7 @@ import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
+import { gateTool } from "./inbox_fixtures.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { callReply, crashAfter, serving, textReply } from "./run_state_fixtures.ts";
 
@@ -143,4 +144,118 @@ test("a crash after an agent's pending step: the resume closes the call, the clo
   expect(closedEvents(events)).toEqual([[CALL, "crashed"]]);
   expect(sentResults(m, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
   expect(closers(log)).toEqual(["crashed"]);
+});
+
+/** A crashed log whose last record is the agent's `pending` step for `CALL` (replies `replies()`). */
+async function crashedAtPending(replies: () => ScriptedModel, extra: Record<string, ToolEntry> = {}, onAsk = () => {}) {
+  const probe = freshLog();
+  await runFlow(await loadFlow(FLOW_WITH(extra)), {}, options(probe, replies(), () => pending(), START, undefined, extra));
+  const log = freshLog();
+  const cut = records(probe).findLastIndex((entry) => kindOf(entry) === "pending") + 1;
+  await crashAfter(cut, async () =>
+    runFlow(await loadFlow(FLOW_WITH(extra)), {}, options(log, replies(), () => (onAsk(), pending()), START, undefined, extra)),
+  );
+  expect(kinds(log).at(-1)).toBe("pending");
+  return log;
+}
+
+/** `FLOW` granting the extra tools too. */
+const FLOW_WITH = (extra: Record<string, ToolEntry>) =>
+  FLOW.replace("tools: [ask_user, lookup]", `tools: [${["ask_user", "lookup", ...Object.keys(extra)].join(", ")}]`);
+
+test("a complete after run_resumed is refused; the closer follows", async () => {
+  let asked = 0;
+  const replies = () => scripted(callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("checked"));
+  const log = await crashedAtPending(replies, {}, () => asked++);
+  // Cut the resume right after its run_resumed.
+  await crashAfter(records(log).length + 1, () => advance(resumeOf(log, scripted(), () => pending())));
+  expect(kinds(log).at(-1)).toBe("run_resumed");
+
+  const refused = await complete(log, CALL, { output: "yes" }).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(DeliveryRefused);
+  expect((refused as DeliveryRefused).reason).toBe("call_settled");
+  expect(pendingCalls(log)).toEqual([]);
+  const m = scripted(textReply("checked"));
+  const result = await advance(resumeOf(log, m, () => (asked++, pending())));
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(asked).toBe(1);
+  expect(closers(log)).toEqual(["crashed"]);
+  expect(sentResults(m, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
+});
+
+test("a complete appended while the run is crashed, before run_resumed, is kept", async () => {
+  const replies = () => scripted(callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("checked"));
+  const log = await crashedAtPending(replies);
+  expect(await complete(log, CALL, { output: "yes" })).toBeNumber();
+  const m = scripted(textReply("checked"));
+  const result = await advance(resumeOf(log, m, () => pending()));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
+  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([]);
+  expect(sentResults(m, 0)).toEqual([["c1", "yes", false]]);
+  expect(closers(log)).toEqual([]);
+});
+
+test("a crash while the agent waits closes nothing", async () => {
+  const replies = () => scripted(callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("checked"));
+  const probe = freshLog();
+  await runFlow(await loadFlow(FLOW), {}, options(probe, replies(), () => pending()));
+  const log = freshLog();
+  await crashAfter(seqOf(probe, "node_waiting") + 1, async () =>
+    runFlow(await loadFlow(FLOW), {}, options(log, replies(), () => pending())),
+  );
+  expect(kinds(log).at(-1)).toBe("node_waiting");
+
+  expect((await advance(resumeOf(log, scripted(), () => pending()))).status).toBe("waiting");
+  expect(pendingCalls(log).map((call) => call.callId)).toEqual([CALL]);
+  await complete(log, CALL, { output: "yes" });
+  const m = scripted(textReply("checked"));
+  const result = await advance(resumeOf(log, m, () => pending()));
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(sentResults(m, 0)).toEqual([["c1", "yes", false]]);
+  expect(closers(log)).toEqual([]);
+});
+
+test("a stop with an agent call open closes it crashed", async () => {
+  const gate = gateTool();
+  const controller = new AbortController();
+  const replies = () => scripted(callReply(["ask_user", { question: "Ship?" }, "c1"], ["gate", {}, "c2"]), textReply("checked"));
+  const log = freshLog();
+  const running = runFlow(await loadFlow(FLOW_WITH({ gate: gate.tool })), {}, {
+    ...options(log, replies(), () => pending(), START, undefined, { gate: gate.tool }),
+    signal: controller.signal,
+  });
+  await gate.entered;
+  controller.abort(new Error("host stop"));
+  await running.catch(() => undefined);
+
+  const m = scripted(textReply("checked"));
+  const result = await advance(resumeOf(log, m, () => pending(), START, undefined, { gate: gateTool().tool }));
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
+  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([CALL]);
+  // The ask closed by record and the gate a stop cut: both read as outcome unknown.
+  expect(closers(log)).toEqual(["crashed", "crashed"]);
+  expect(sentResults(m, 0)).toEqual([
+    ["c1", TOOL_OUTCOME_UNKNOWN, true],
+    ["c2", TOOL_OUTCOME_UNKNOWN, true],
+  ]);
+});
+
+test("two pended calls and a crash before node_waiting: both close, in call order", async () => {
+  const hold = { hold: hostTool("hold", () => pending()) };
+  const replies = () => scripted(callReply(["ask_user", { question: "Ship?" }, "c1"], ["hold", {}, "c2"]), textReply("checked"));
+  const log = await crashedAtPending(replies, hold);
+  const m = scripted(textReply("checked"));
+  const result = await advance(resumeOf(log, m, () => pending(), START, undefined, hold));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
+  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([CALL, "r/agent/1/1"]);
+  expect(closers(log)).toEqual(["crashed", "crashed"]);
+  expect(sentResults(m, 0)).toEqual([
+    ["c1", TOOL_OUTCOME_UNKNOWN, true],
+    ["c2", TOOL_OUTCOME_UNKNOWN, true],
+  ]);
 });

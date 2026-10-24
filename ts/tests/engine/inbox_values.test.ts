@@ -3,11 +3,16 @@ import { describe, expect, test } from "bun:test";
 
 import { canonicalSeed, canonicalTyped } from "../../src/runtime/log.ts";
 import {
+  buildValue,
+  buildValueAs,
   fromHost,
   InboxRef,
   inboxName,
+  inboxType,
   rejectDeepNesting,
   toHost,
+  Type,
+  TypeCheckError,
   TypedValue,
   ValueKind,
   valueRepr,
@@ -84,5 +89,31 @@ describe("inbox at the host boundary", () => {
   test("a handle renders as its mapping", () => {
     expect(valueRepr(ref)).toBe(valueRepr({ inbox: "m" }));
     expect(writeAsJson({ a: ref })).toBe(writeAsJson({ a: { inbox: "m" } }));
+  });
+});
+
+describe("inbox at the write boundary", () => {
+  const ref = new InboxRef("m");
+  const STR = Type.scalar(ValueKind.STRING);
+
+  test("a bare handle infers kind inbox", () => {
+    expect(buildValue(ref).kind).toBe(ValueKind.INBOX);
+  });
+
+  test.each([[ref], [{ inbox: "m" }]])("an Inbox(T) slot stores a handle for %p", (value) => {
+    const stored = buildValueAs(inboxType(STR), value);
+    expect(stored.kind).toBe(ValueKind.INBOX);
+    expect(InboxRef.isInboxRef(stored.value) && stored.value.inbox).toBe("m");
+  });
+
+  test.each([["m"], [{ inbox: "m", x: 1n }], [{ inbox: "" }], [null], [[ref]]])(
+    "an Inbox(T) slot refuses %p",
+    (value) => {
+      expect(() => buildValueAs(inboxType(STR), value)).toThrow(TypeCheckError);
+    },
+  );
+
+  test.each([[ValueKind.ANY], [ValueKind.OBJECT]])("%p refuses a handle", (kind) => {
+    expect(() => buildValueAs(kind, ref)).toThrow(TypeCheckError);
   });
 });

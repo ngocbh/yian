@@ -2004,7 +2004,10 @@ export function typesOverlap(a: Type, b: Type): boolean {
 // Scalar type checks / coercion
 // --------------------------------------------------------------------------------------- //
 
-/** Return the storage kind a scalar, file or record infers as, or `null` for anything else. */
+/**
+ * Return the storage kind a scalar, file, inbox handle or record infers as, or `null` for
+ * anything else.
+ */
 function inferScalarKind(value: unknown): StorageKind | null {
   if (value === null) return ValueKind.NONE;
   if (typeof value === "boolean") return ValueKind.BOOLEAN;
@@ -2012,6 +2015,7 @@ function inferScalarKind(value: unknown): StorageKind | null {
   if (typeof value === "number") return ValueKind.NUMBER;
   if (typeof value === "string") return ValueKind.STRING;
   if (FileRef.isFileRef(value)) return ValueKind.FILE;
+  if (InboxRef.isInboxRef(value)) return ValueKind.INBOX;
   if (isRecord(value)) return ValueKind.OBJECT;
   return null;
 }
@@ -2033,7 +2037,8 @@ function temporalError(declared: ValueKind, value: string): string | null {
 
 /**
  * Whether `value` fits the scalar kind `declared`. A `float` slot takes an int (which stays
- * an int); a `file` slot takes a `FileRef` or a file's JSON form.
+ * an int); a `file` slot takes a `FileRef` or a file's JSON form, and an `inbox` slot an
+ * `InboxRef` or its JSON form.
  */
 function scalarMatches(declared: ValueKind, value: unknown): boolean {
   switch (declared) {
@@ -2054,6 +2059,8 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
       return isRecord(value);
     case ValueKind.FILE:
       return FileRef.isFileRef(value) || isFileForm(value);
+    case ValueKind.INBOX:
+      return InboxRef.isInboxRef(value) || isInboxForm(value);
     default:
       return false;
   }
@@ -2061,8 +2068,8 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
 
 /**
  * Return `value` as a `declared` slot stores it: `-0` in a `float` slot becomes `0`; a file's
- * JSON form in a `file` slot becomes a `FileRef`. Any other value (an int in a `float` slot
- * too) is returned unchanged.
+ * JSON form in a `file` slot becomes a `FileRef`, and an inbox handle's in an `inbox` slot an
+ * `InboxRef`. Any other value (an int in a `float` slot too) is returned unchanged.
  *
  * @throws TypeCheckError at `path` when a file form's text holds a lone surrogate.
  */
@@ -2072,6 +2079,7 @@ function coerceScalar(declared: ValueKind, value: unknown, path: ValuePath): unk
     for (const field of FILE_FIELDS) rejectNonValue(value[field], [...path, field]);
     return new FileRef(value);
   }
+  if (declared === ValueKind.INBOX && isInboxForm(value)) return new InboxRef(value.inbox);
   return value;
 }
 
@@ -2242,9 +2250,9 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
  * A `TypedValue` is returned as is, so the call is idempotent. Any other value is first walked
  * as a JSON value with files kept (see `jsonPart`): `-0` becomes `0` at any depth, and a part
  * that isn't a yian JSON value is refused. `file` is never inferred from a record or text;
- * only a `FileRef` is a file. A list of text, bools, ints or records infers its list kind, a
- * list of ints and floats is `list[float]` (each int stays an int), and an empty or mixed list
- * is `list[Any]`.
+ * only a `FileRef` is a file, and likewise only an `InboxRef` is an `inbox`. A list of text,
+ * bools, ints or records infers its list kind, a list of ints and floats is `list[float]` (each
+ * int stays an int), and an empty or mixed list is `list[Any]`.
  *
  * Example: `buildValue([1n, 2.5])` gives a `list[float]` holding `[1n, 2.5]`.
  *
@@ -2286,14 +2294,16 @@ function inferList(items: Value[]): TypedValue {
  * slot given an int stores kind `int`, a `list(float)` keeps its int items, and a record's
  * `float` field keeps the int. Conversions apply at any depth (a record field, a list item):
  * `-0` in a `float` slot becomes `0`; a file's JSON form `{uri, mime, name}` (exactly those
- * keys) filling a `file` slot becomes a `FileRef`; and a `FileRef` nested in an `object`
- * value or `list(object)` item becomes that mapping, copying only the containers on its
- * path.
+ * keys) filling a `file` slot becomes a `FileRef`; an inbox handle's JSON form `{inbox}`
+ * (exactly that key) filling an `Inbox(T)` slot becomes an `InboxRef`; and a `FileRef` nested
+ * in an `object` value or `list(object)` item becomes that mapping, copying only the
+ * containers on its path.
  *
  * `Any` accepts any non-null JSON value and stores it in its natural kind (a list as
  * `list[Any]`); its one conversion is `-0` to `0` at any depth, as in an `object` value. An
  * `object` value, a `list(object)` item and a `list[Any]` item must be JSON values (see
- * `jsonPart`); a `FileRef` is not one, so it fails anywhere in an `Any` or `list[Any]` value.
+ * `jsonPart`); a `FileRef` or `InboxRef` is not one, so it fails anywhere in an `Any` or
+ * `list[Any]` value, and a bare handle fails an `object` slot.
  * A record keeps the value's key order.
  *
  * `declared` is a `Type`, or a bare `ValueKind` for a scalar or flat list. A `TypedValue`

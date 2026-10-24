@@ -29,3 +29,16 @@ test("a plain number gets the seconds spelling as its hint", () => {
 test("a duration past the safe integer range is refused", () => {
   expect(() => parseDuration(`${Number.MAX_SAFE_INTEGER}d`)).toThrow(RangeError);
 });
+
+test("a plain number too large to spell in seconds gets no hint", () => {
+  const text = "99999999999999999999";
+  expect(() => parseDuration(text)).toThrow(`a duration is a positive integer and a unit (${DURATION_FORMAT})`);
+  expect(() => parseDuration(text)).not.toThrow("write");
+});
+
+test.each([[5], [5n], [null], [["5m"]]])("parseDuration refuses the non-text %p, with no hint", (value) => {
+  expect(() => parseDuration(value as unknown as string)).toThrow(
+    `a duration is text: a positive integer and a unit (${DURATION_FORMAT})`,
+  );
+  expect(() => parseDuration(value as unknown as string)).not.toThrow("write");
+});

@@ -8,10 +8,14 @@ import pytest
 from yian.compose.loader import load_flow
 
 _TEMPLATES = Path(__file__).resolve().parents[2] / ".claude/skills/composing-agents/templates"
+# Templates written with TS yian's ask, sleep and take built-ins, which Python yian doesn't have.
+TS_ONLY = {"chat.yaml", "human-in-loop.yaml", "human-questions.yaml", "loop.yaml", "sleep-until.yaml"}
 
 
 @pytest.mark.parametrize("path", sorted(_TEMPLATES.glob("*.yaml")), ids=lambda p: p.name)
 def test_template_loads(path):
+    if path.name in TS_ONLY:
+        pytest.skip("uses TS-only built-ins (#1025)")
     # search_paths = the templates dir so `uses:` siblings resolve.
     load_flow(path.read_text(), search_paths=[path.parent])
 

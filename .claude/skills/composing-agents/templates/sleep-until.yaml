@@ -1,0 +1,21 @@
+# A `sleep` TOOL node waits until an absolute UTC date/datetime (`until:`) or for a
+# duration (`for: 30m`), then returns None. A waiting sleep holds no worker: the run can
+# end `waiting` and `advance` wakes it once the deadline passes.
+# Use depends_on when the next step needs ordering but not the sleep's value.
+id: sleep-until
+name: sleep_until
+input:
+  deadline: !datetime
+nodes:
+  settle:
+    kind: tool
+    tool_id: sleep
+    input:
+      until: ${input.deadline}     # or `for: 2h`; exactly one of the two
+  continue:
+    kind: code
+    depends_on: [settle]
+    output: str
+    code: |
+      return "deadline reached"
+output: ${continue.output}

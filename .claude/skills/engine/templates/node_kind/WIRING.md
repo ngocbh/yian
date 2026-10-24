@@ -142,7 +142,7 @@ attachment hook, and the sink derivations (`output_contract` / `sink_params` /
 - **`parse` is inherited** — the base template checks key legality, reads the common
   fields, and records each field's `SourceRange`. Override the `_normalize_cursor` /
   `_validate_fields` hooks only if the kind needs pre-normalization or extra checks
-  (see `case.py` / `human_input.py` for examples). Most leaves need neither.
+  (see `case.py` / `tool.py` for examples). Most leaves need neither.
 - **`with_source_origins` is inherited as a no-op** — override
   `with_source_origins(cursor, *, site_path, catalog_builder)` only when the kind
   owns semantic source sites beyond the common node header. Return an immutable

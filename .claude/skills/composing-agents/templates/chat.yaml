@@ -1,38 +1,41 @@
-# Conversational REPL — the same turn-by-turn LOOP shape used by `yian chat`.
-# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-# Exact exit text routes to the `exited` value entry, which keeps the transcript and sets
-# `exited: true`. Anything else calls `respond`, where an AGENT node fills the reply and a
-# CODE node folds it into the transcript. The LLM only fills the reply.
+# Conversational REPL — the turn-by-turn LOOP shape of examples/chat.yaml.
+# The host sends each line the person types to the `messages` inbox (`send`), and each
+# turn's `take` reads everything sent since the last one. A take with nothing to read
+# waits: the run ends `waiting` and holds no worker until the next send. Closing the inbox
+# (`close`) ends the loop once the queued messages are answered: the take returns no events
+# and the CASE routes to the `ended` value entry, which keeps the transcript and sets
+# `closed: true`. Anything else calls `respond`, where an AGENT node fills the reply and the
+# `turn_end` value entry folds it into the transcript. The LLM only fills the reply.
 #
-# Carried record ('a): {transcript: str, exited: bool} — threaded turn to turn ('a -> 'a).
-# A tagged `nodes:` entry such as `exited: !Turn` is a value: its tag checks the fields
-# written out under it. `${route.output}` reads whichever branch ran, so the CASE must be
-# exhaustive (`else:` here). `!Turn` on the body's output is required: it types the
-# branch result as the carried record.
+# Carried record ('a): {transcript: str, closed: bool} — threaded turn to turn ('a -> 'a).
+# The inbox rides along as a carried input but is never returned. A tagged `nodes:` entry
+# such as `ended: !Turn` is a value: its tag checks the fields written out under it.
+# `${route.output}` reads whichever branch ran, so the CASE must be exhaustive (`else:`
+# here). `!Turn` on the body's output types the branch result as the carried record.
 
 id: chat
 name: chat
-description: A turn-by-turn assistant (AGENT node without tools, deterministic transcript).
+description: A turn-by-turn conversational assistant (one model call per turn, no tools).
 
 input:
-  opening: !str            # seed transcript; `yian chat` passes "" (empty)
+  messages: !Inbox(str)     # the lines the person types, sent while the run is live
 
 typedefs:
-  Turn:                   # the carried record, and each turn's result
+  Turn:                     # the carried record, and each turn's result
     transcript: str
-    exited: bool
+    closed: bool
 
 defs:
-  respond:                # a CASE result is the routed node's output, so the reply chain is a def
+  respond:                  # a CASE result is the routed node's output, so the reply chain is a def
     input:
       transcript: !str
-      message: !str
+      said: !str
     nodes:
       reply:
         kind: agent
         input:
           transcript: ${input.transcript}
-          message:    ${input.message}
+          said: ${input.said}
         output: str
         prompt: |-
           You are a helpful conversational assistant.
@@ -40,46 +43,38 @@ defs:
           Conversation so far:
           ${transcript}
 
-          User: ${message}
-      fold:
-        kind: code
-        input:
-          transcript: ${input.transcript}
-          message: ${input.message}
-          reply: ${reply.output}
-        output: Turn
-        code: |
-          return {
-              "transcript": inputs["transcript"]
-              + "\n\nUser: " + inputs["message"]
-              + "\n\nAssistant: " + inputs["reply"],
-              "exited": False,
-          }
-    output: ${fold.output}
+          User: ${said}
+      turn_end: !Turn
+        transcript: |-
+          ${input.transcript}
 
-  turn:                   # body: 'a -> 'a over {transcript, exited}
+          User: ${input.said}
+
+          Assistant: ${reply.output}
+        closed: false
+    output: ${turn_end.output}
+
+  turn:                     # body: 'a -> 'a over {transcript, closed}
     input:
       transcript: !str
-      exited: !bool
+      closed: !bool
+      messages: !Inbox(str)
     nodes:
-      ask:
-        kind: human_input       # blocks a worker until the broker returns the message
-        prompt: "You:"
-        output: str
-      exited: !Turn             # a value entry: the exit record itself
+      heard:
+        kind: tool
+        tool_id: take               # waits until a message arrives or the inbox closes
+        input:
+          from: ${input.messages}
+          take: all                 # every unread message, oldest first
+      ended: !Turn                  # a value entry: the closing record itself
         transcript: ${input.transcript}
-        exited: true
+        closed: true
       route:
         kind: case
-        on: ${ask.output}
         cases:
-          - when: /exit
-            then: exited
-          - when: /quit
-            then: exited
-        else: call(respond, transcript=${input.transcript}, message=${ask.output})
-    # The whole carried record; a body may instead return a mapping of carried fields,
-    # and an omitted field keeps its value.
+          - when: ${heard.output.events == []}   # closed, nothing left to answer
+            then: ended
+        else: call(respond, transcript=${input.transcript}, said=${join(heard.output.events, "\n")})
     output: !Turn ${route.output}
 
 nodes:
@@ -87,7 +82,8 @@ nodes:
     kind: loop
     call: turn
     input:                          # the SEED carried record — defines 'a
-      transcript: ${input.opening}
-      exited: false                 # the `exited` entry sets true for exact /exit or /quit
-    while: not exited               # pre-check over a carried field
+      transcript: ""
+      closed: false
+      messages: ${input.messages}
+    while: not closed               # pre-check over a carried field
 output: ${chat.output.transcript}

@@ -1,4 +1,4 @@
-# A `human_input` gate that asks MULTIPLE questions (not one typed answer).
+# An `ask` TOOL node that asks MULTIPLE questions (not one typed answer).
 # Each question is AskUserQuestion-shaped: {question, header, options, multi_select}.
 # `options` (omit -> free-text) and `multi_select` (default false) are optional;
 # 1-4 questions, headers unique. The host always offers a free-text "Other".
@@ -14,28 +14,34 @@ input:
   proj: !str
 
 nodes:
-  # STATIC — a literal questions list, with ${proj} templated into the text.
+  # STATIC — a literal questions list; its text is a wiring template that reads the pool.
   ask_static:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
-      proj: ${input.proj}          # context the question text may reference
-    questions:
-      - question: "Which framework for ${proj}?"   # ${proj} renders from input
-        header: Framework                          # answer key -> {Framework: <label>}
-        options:
-          - { label: React, description: A component library. }
-          - { label: Vue, description: A progressive framework. }
-        multi_select: false        # optional, default false
-      - question: "Any notes for the build?"       # no options -> free-text
-        header: Notes
+      questions:
+        - question: "Which framework for ${input.proj}?"
+          header: Framework                        # answer key -> {Framework: <label>}
+          options:
+            - label: React
+              description: A component library.
+            - label: Vue
+              description: A progressive framework.
+          multi_select: false      # optional, default false
+        - question: "Any notes for the build?"     # no options -> free-text
+          header: Notes
     # output omitted -> defaults to object: {Framework: ..., Notes: ...}
 
   # ADAPTIVE — an LLM composes the questions from context. This block
   # DESUGARS at load into a synthetic composer AGENT node (ask_adaptive__compose, output
-  # list(Question)) wired into the gate; the runtime gate never calls an LLM. The composer
-  # carries the gate's case routes, depends_on, and runs_after, and waits for its other inputs.
+  # list(Question)) wired into the ask's reserved `__questions` input; the ask itself never
+  # calls an LLM. The composer reads the ask's other inputs (here `ctx`, bare in its brief),
+  # carries the ask's case routes, depends_on, and runs_after, and waits for its inputs.
+  # `ctx` is not part of yian's ask surface, so it is a host extra: the host declares it
+  # (`tools: {ask: {handler, inputs: {ctx: {...}}}}`) or the run fails before it starts.
   ask_adaptive:
-    kind: human_input
+    kind: tool
+    tool_id: ask
     input:
       ctx: ${ask_static.output}    # feed the static answers as composing context
     adaptive_questions:
@@ -43,8 +49,8 @@ nodes:
       retries: 3                   # optional — self-correction attempts
 
   # UPSTREAM QUESTIONS: write your own composer node and wire its output
-  #   input: { qs: ${composer.output} }   # composer.output is a list(Question)
-  #   questions: ${qs}
+  #   input:
+  #     questions: ${composer.output}   # composer.output is a list(Question)
 
-# Both gate answers are object records keyed by header. Coalesce as the result.
+# Both answers are object records keyed by header.
 output: ${ask_adaptive.output}

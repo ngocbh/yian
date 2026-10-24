@@ -213,6 +213,9 @@ it to the run id with `ToolSet.for_run`, and `ToolSet.invoke(tool_id, inputs, *,
 call_id, attempt)` builds the `ToolContext` for a tool that declares one (call id
 `"<run_id>/<node id>"` from TOOL and HUMAN_INPUT, stable across resume; per call and
 not stable from the AGENT loop; a fresh id outside a run).
+Changed (TS yian): TS yian has no HUMAN_INPUT or WAIT: a TOOL node reaches yian's built-ins `ask`, `sleep` and `take` with `tool_id:`. `ask` comes from the run's ask slot
+(`tools: {ask: handler}`), whose handler also serves the AGENT's `ask_user`; `take` and
+`sleep` need nothing in the run's tools.
 A node declaring `needs_steps` gets `caps['steps']`, a `NodeSteps(starts, prior,
 record)`: its accepted start count (`RunState.node_starts`, including the current
 start), copies of the steps its earlier starts recorded (`RunState.node_steps`), and
@@ -258,6 +261,9 @@ Runtime and compile validation read these node members instead of branching on
 | `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |
 | `needs_steering: bool` | read boundary (`eval_node`): pass the run's `Steering` inbox as `caps['steering']` when the host supplied one; faults and wrong return types escape as host faults | `False` → the AGENT's authored `steerable:` |
 
+Changed (TS yian): no kind is `wait` or `human_input`. `sleep`'s `until:` is an ordinary
+TOOL input, so only `map` has reserved wiring.
+
 The table spans execution-semantic traits/hooks and diagnostic-only projections.
 Any node field whose value can affect execution through an execution-semantic
 member must be manifest-backed. `exception_origin` and `failure_trace` only
@@ -287,7 +293,8 @@ assert's display and origin stay together; its failure names the
 The AGENT node is an ordinary non-spawner leaf. Its model/tool loop, including an
 explicitly granted `ask_user`, stays inside one live `forward`; post-asserts fire
 on the final `Output` through the base `Node.run` template. HUMAN_INPUT and WAIT
-are likewise live leaves returning `Output`.
+are likewise live leaves returning `Output`. Changed (TS yian): neither exists; a TOOL
+`ask`, `sleep` or `take` may return `Pending` and wait without a worker.
 
 ## `NodeKind` (closed vocabulary)
 
@@ -304,6 +311,9 @@ Kind-specific diagnostics stay with their kind.
 | Authorable kinds | Internal-only (loader-synthesized) |
 |------------------|------------------------------------|
 | `AGENT`, `CODE`, `TOOL`, `CASE`, `HUMAN_INPUT`, `WAIT`, `CALL`, `MAP`, `LOOP` | `START`, `END` |
+
+Changed (TS yian): `HUMAN_INPUT` and `WAIT` are removed; a flow asks with `kind: tool`,
+`tool_id: ask` and sleeps with `tool_id: sleep`.
 
 ## Durable execution contract
 
@@ -620,6 +630,8 @@ model made enforceable.
   `RunResumedRecord` before continuing.
 - **Blocking authorable effects are live** — an AGENT node's `ask_user`, HUMAN_INPUT, and
   WAIT return `Output` from the same invocation and never create continuation topology.
+  Changed (TS yian): a TOOL `ask`, `sleep` or `take` may wait instead (`Pending`), holding
+  no worker; there is no HUMAN_INPUT or WAIT.
 - **Dependency-light core** — no DB / heavy frameworks; external capabilities enter
   through injected seams (plain callables). *Exception:* the AGENT node imports
   langchain + `llm_clients` and builds its model via `model_from_config`.

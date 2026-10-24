@@ -1,6 +1,6 @@
 ---
 name: composing-agents
-description: Use when authoring a Yian flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / human_input / wait / call / map), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `yian run` flow-authoring request.
+description: Use when authoring a Yian flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / call / map / loop, the ask / sleep / take built-ins), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `yian run` flow-authoring request.
 ---
 
 # Composing an agent flow
@@ -20,8 +20,8 @@ parts that bite.
 **Companions:** [`reference.md`](reference.md) — operators, the three expression
 contexts, type forms, recipes, and gotchas. [`templates/`](templates/) — minimal
 loadable starter flows for each shape (single AGENT node, AGENT node → CODE node pipeline,
-branch+join, tool use, human gate, named and inline `call`/`map`/`loop`
-composition); copy one and edit.
+branch+join, tool use, asking a person, sleeping, a chat on an inbox, named and inline
+`call`/`map`/`loop` composition); copy one and edit.
 
 ## The workflow — author a flow in order
 
@@ -31,8 +31,9 @@ composition); copy one and edit.
 2. **Name reusable types** in `typedefs:` (enums, records, aliases).
 3. **Decompose into leaf nodes.** Each node is one step: an LLM call (`agent`),
    deterministic code (`code`), a registered tool (`tool`), a branch (`case`), a
-   blocking human gate (`human_input`), a blocking UTC deadline (`wait`), a child-flow call
-   (`call`/`map`), or an iterated body (`loop`). A reusable child lives in
+   question to a person (`tool_id: ask`), a UTC deadline (`tool_id: sleep`), reading the
+   messages a host sends (`tool_id: take`), a child-flow call (`call`/`map`), or an
+   iterated body (`loop`). A reusable child lives in
    `defs:`/`uses:`; a one-off child may put `nodes:` + `output:` directly on
    CALL/MAP/LOOP. Prefer many small typed nodes over one mega-prompt.
 4. **Wire by reference, not by edges.** A node consumes another by putting
@@ -140,7 +141,7 @@ kind: agent
 prompt: "Write a warm one-sentence greeting to ${name}."
 ```
 
-Allowed only for the **leaf kinds** (`agent`, `code`, `tool`, `human_input`) —
+Allowed only for the **leaf kinds** (`agent`, `code`, `tool`) —
 `case`/`call`/`map`/`loop` need the full `nodes:` form. See
 [`templates/compact.yaml`](templates/compact.yaml).
 
@@ -151,7 +152,7 @@ Allowed only for the **leaf kinds** (`agent`, `code`, `tool`, `human_input`) —
 | `${input.X}` | field `X` of the flow input |
 | `${node.output}` | node `node`'s whole (typed) value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` (bare) | a local input inside `prompt:` (AGENT or `human_input`), a `human_input` question's text, an AGENT `system_prompt:`, or `case` `when:`; AGENT prompts also see their own `variables:` |
+| `${name}` (bare) | a local input inside an AGENT `prompt:` or `system_prompt:`, an `adaptive_questions.prompt:`, or `case` `when:`; AGENT prompts also see their own `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is **stringified**.
@@ -167,7 +168,7 @@ error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, or a f
 record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
 `${item...}` in bindings, `case` conditions, and flow outputs, the carried fields a
 LOOP `while:`/`until:` predicate reads, a node's local names in its prompts
-(`prompt:`, `system_prompt:`, `human_input` question text, `adaptive_questions.prompt:`)
+(`prompt:`, `system_prompt:`, `adaptive_questions.prompt:`)
 and its own `asserts:`, and `${input.X...}` in flow `asserts:`. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
 values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
@@ -313,7 +314,7 @@ A value nests at most 100 levels (each record and list is one): a binding, MAP
 `over` list, or node output nested deeper fails its node, and wrapping a 100-level
 value (`${[x]}`, a record flow output, a MAP's result list) adds the level that fails.
 An AGENT's tool call whose arguments nest deeper fails the node before any call runs.
-A value written out in the flow file (a node input, MAP `over:`, WAIT `until:`, a value
+A value written out in the flow file (a node input, MAP `over:`, a value
 entry, a default, a flow `output:`, an `env:` value) nested deeper is a located load
 error instead, YAML aliases included; a record output's fields may nest 99.
 A type nests at most 100 levels: in type text each constructor (`Optional(` and `Union(`
@@ -369,7 +370,7 @@ typedefs:
 ```
 
 A type definition is written as a plain type, with no tag: typedefs and the
-`output:` declaration of a node (AGENT, CODE, TOOL, HUMAN_INPUT) or of a compact flow.
+`output:` declaration of a node (AGENT, CODE, TOOL) or of a compact flow.
 
 `Literal` tags and record field names are non-empty text. `Literal("", a)`, an empty
 field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same
@@ -396,7 +397,7 @@ definition is written as a type. `name: !T` with no value is an empty tagged sca
 not null. Full rules: [`docs/syntax.md`](../../../docs/syntax.md#typed-slots-yaml-tags).
 
 **Where.** Flow inputs (root, `defs:`, single-node defs, compact flows); node `input:`
-bindings, including LOOP seeds, HUMAN_INPUT context, and CALL/MAP/inline-body
+bindings, including LOOP seeds, `ask` inputs, and CALL/MAP/inline-body
 arguments; flow `output:` fields and a single `output: !T ${...}`; agent
 `variables:`; value entries in `nodes:`; and records or lists nested in any of these.
 
@@ -491,7 +492,7 @@ and each field keeps its type. `$$` is a literal `$` at any depth. A nested
 `call(...)` is a load error; hoist it to its own node or binding. Each nested
 `${...}` acts like its own input for skips: a node whose nested whole-value read's
 producer was skipped is skipped; a flow output gives null at that nested position. A
-literal list with `${` under MAP `over:` or WAIT `until:` is a load error; write the
+literal list with `${` under MAP `over:` is a load error; write the
 list as an expression `${[a, b]}`.
 
 **Values in `nodes:`.** A tagged `nodes:` entry is a value, read like a typed binding;
@@ -854,13 +855,15 @@ start, unknown or missing inputs and input or output types that can never fit ra
 **Tool groups.** When the tools an AGENT may use change between runs (for example,
 tools a permission system grants), grant a group name and let the host fill it:
 `tools: [toolbox, workspace, ask_user]` in YAML, and
-`run_flow(..., tools={"toolbox": [t1, t2], "workspace": [], "ask_user": ask})` in Python.
+`run_flow(..., tools={"toolbox": [t1, t2], "workspace": [], "ask_user": ask})` in Python
+(TS yian: `runFlow(flow, inputs, {tools: {toolbox: [t1, t2], workspace: [], ask}})`).
 A list value is a group; each item is a `BaseTool` (named by `.name`) or a def-defined
 function (named by `__name__`). The model sees and calls the group's tools by their
 own names. Groups may share the same tool object; the model sees it once. The run
 fails before it starts if a granted group is missing, two different tools share a
 name (or a group tool's name is a top-level key), or a group has a tool named
-`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. Pass groups
+`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry (TS yian:
+`ask`, which also reserves `take`, `sleep` and `ask`). Pass groups
 again to `resume_flow`; restarted nodes use the contents passed there.
 
 **MCP servers.** An MCP server's tools are a group named by its key: grant the key
@@ -975,80 +978,157 @@ A searched `case` whose `when:` reads a node only under such a default doesn't p
 that node's narrowing to its branches. Inline
 child bodies are typed before narrowing; read member fields in a branch node.
 
-### `human_input` — a guaranteed human gate
-**Always** calls the run's `ask_user` handler and blocks its worker until the
-host returns a typed answer (validated against `output:`). It stays inside the
-live node call and returns the answer as an ordinary node output.
+### `ask` — ask a person (a TOOL built-in)
+A `tool` node with `tool_id: ask` **always** asks, through the run's ask handler, and the
+answer is the node's output, checked against `output:`. The host answers at once
+(`yian run` asks in the terminal), or its handler returns `pending()` and the host answers
+later with `complete`. A node waiting for an answer holds no worker; when nothing else can
+run, the run ends `waiting` and `advance` moves it on.
 ```yaml
 approve:
-  kind: human_input
+  kind: tool
+  tool_id: ask
   input:
-    plan: ${draft.output}             # context the prompt may reference (bare ${plan})
-  prompt: |-
-    Here is the plan:
+    prompt: |-                        # a wiring template: it reads the pool
+      Here is the plan:
 
-    ${plan}
+      ${draft.output}
 
-    Approve as-is, or revise? (approve / revise)
-  output: Approval                    # a typed answer, e.g. a Literal enum
+      Approve as-is, or revise? (approve / revise)
+    timeout: 24h                      # optional: a duration
+  output: Optional(Approval)          # the answer type; null means nobody answered in time
 ```
-Instead of a typed `prompt:`+`output:`, a gate can present **questions** (1–4,
-`YIAN_MAX_QUESTIONS`; AskUserQuestion-shaped) — the answer is a record keyed by each
-`header`; `output:` then defaults to `object`. `prompt:` is optional; `questions:`
-and `adaptive_questions:` are mutually exclusive. The gate itself never chooses or
-calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a
-synthetic composer AGENT node + gate; the composer carries the gate's `case` routes,
-`depends_on:`, and `runs_after:`, and waits for the gate's other inputs, so the composer makes
-no LLM call when the gate can't run. The gate only calls the host's installed interaction tool.
+Inputs: `prompt:` (text), `questions:` (a question list, below) and `timeout:` (a
+duration). An `ask` needs one of `prompt:`, `questions:` or `adaptive_questions:`. Its
+`input:` is wiring, so `prompt` and the question text read the pool (`${draft.output}`,
+`${input.proj}`), not local names. Any other input is a **host extra**, passed to the
+handler in the request (`to: lead` names who answers, for a host that routes asks). The
+host declares its extras (`tools: {ask: {handler, inputs: {to: {type: "string"}}}}`), and a
+flow passing one it doesn't declare fails before the run starts. `output:` is the answer's
+type and gives the request its answer schema; a questions ask without one answers an
+`object`, and a prompt-only one is free form. `node_name:` is the request's title.
+`asserts:` apply; `retries:` is a load error, since the host owns retries of a call it
+holds. `tool_id: ask_user` is the old name of `ask`.
+
+**Timeouts.** The deadline is fixed when the node asks and survives a restart. When it
+passes with no answer, the output is null: `output: Optional(T)` succeeds with null, and a
+`case` routes on it (the host's answer schema is `T`, so null always means nobody
+answered); any other declared output fails the node with `tool.timeout`. An `ask` that
+asks a lead, then a manager when the lead doesn't answer in a day:
 ```yaml
-ask:                                  # static questions list
-  kind: human_input
+lead:
+  kind: tool
+  tool_id: ask
   input:
-    proj: ${input.proj}               # ${proj} renders into question text
-  questions:
-    - question: "Which framework for ${proj}?"
-      header: Framework               # answer key -> {Framework: <label>}
-      options: [ {label: React, description: a lib}, {label: Vue, description: a fw} ]
-    - { question: "Any notes?", header: Notes }   # no options -> free-text
-ask2:                                 # LLM-composed questions (desugared at load)
-  kind: human_input
-  input:
-    ctx: ${research.output}
-  adaptive_questions: { prompt: "Design 1-3 questions for: ${ctx}", retries: 3 }
+    to: lead                          # a host extra
+    prompt: "Approve this plan?\n\n${input.plan}"
+    timeout: 24h
+  output: Optional(Approval)
+escalate:
+  kind: case
+  cases:
+    - when: ${lead.output == null}
+      then: manager                   # another ask, to: manager
 ```
-(On an adaptive gate, `__questions` is reserved for the generated composer wire;
-do not declare it in `input:`.)
-Questions may also come from an upstream node: `questions: ${qs}`.
-The prompt, the adaptive brief, and a literal list's question text (`question`, option
-`label`/`description`) read the gate's `input:` names bare and are checked at load; `header`
-is not a template. A bad brief is reported as `node '<gate>' adaptive_questions.prompt`,
-and a bad `llm_config` as `node '<gate>' adaptive_questions.llm_config`. A cycle through
-the gate and a model-config error at run start or at call time (`node '<gate>'
-adaptive_questions.llm_config.provider: ...` for a value) also name the gate, not
-`<gate>__compose`.
-`adaptive_questions:` takes only `prompt`, `llm_config`, and `retries`; any other key is a
-load error.
-`questions:` is a list or exactly one `${name}` naming a declared input;
-anything else (a mapping, a number, text around the ref, `${a.b}`, a call) is a
-load error. Put free text in `prompt:`.
-The prompt, the adaptive brief, and each question's `question`, `header`, `label`, and
-`description` must be text: quote a number, boolean, date, or a value starting with `[` or `{`.
 
-### `wait` — block until an absolute UTC deadline
+**Questions.** Instead of a typed `prompt:` and `output:`, an `ask` can present
+**questions** (1–4, `YIAN_MAX_QUESTIONS`; AskUserQuestion-shaped). The answer is a record
+keyed by each `header`, and `output:` then defaults to `object`. `prompt:` is optional;
+`questions:` and `adaptive_questions:` are mutually exclusive. The `ask` itself never
+calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a synthetic composer
+AGENT node (`<id>__compose`) wired into the ask's reserved `__questions` input (an author
+can't write it). The composer reads the ask's other inputs bare in its brief, carries the
+ask's `case` routes, `depends_on:` and `runs_after:`, and waits for its inputs, so it makes
+no LLM call when the ask can't run.
+```yaml
+ask:                                  # a literal questions list
+  kind: tool
+  tool_id: ask
+  input:
+    questions:
+      - question: "Which framework for ${input.proj}?"
+        header: Framework             # answer key -> {Framework: <label>}
+        options:
+          - label: React
+            description: a lib
+          - label: Vue
+            description: a fw
+      - question: "Any notes?"        # no options -> free text
+        header: Notes
+ask2:                                 # LLM-composed questions (desugared at load)
+  kind: tool
+  tool_id: ask
+  input:
+    ctx: ${research.output}           # the composer's context; a host extra
+  adaptive_questions:
+    prompt: "Design 1-3 questions for: ${ctx}"
+    retries: 3
+```
+The composer's context inputs (`ctx` above) also reach the handler as extras, so the host
+declares them. Questions may also come from an upstream node: `questions:
+${composer.output}`, a reference whose type can be a list of questions. A literal list is
+checked at load (``input 'questions': question[0] is invalid: missing key(s)
+["question"]``), and so is the adaptive brief (`node '<id>' adaptive_questions.prompt`).
+`adaptive_questions:` takes only `prompt`, `llm_config` and `retries`, and only on
+`tool_id: ask`.
+
+### `sleep` — wait until a UTC deadline (a TOOL built-in)
 ```yaml
 settle:
-  kind: wait
-  until: ${input.as_of}
+  kind: tool
+  tool_id: sleep
+  input:
+    until: ${input.as_of}             # or `for: 2h`: exactly one of the two
   # order a downstream node after it with depends_on: [settle]
 ```
-`until:` resolves to a `date` (`2026-05-21`) or `datetime`
-(`2026-05-21T14:30[:00][Z|+07:00]`). Date and naive datetime values
-are UTC; aware values are normalized to UTC. A past/current deadline returns
-immediately. Otherwise WAIT holds one worker until the remaining wall-clock
-duration elapses, then returns `None` as an ordinary node output.
+`until:` is a `date` (`2026-05-21`) or `datetime` (`2026-05-21T14:30[:00][Z|+07:00]`).
+Date and naive datetime values are UTC; aware values are normalized to UTC. `for:` is a
+duration. The deadline is fixed when the node starts and survives a restart; a past
+deadline returns at once. A sleeping node holds no worker: when nothing else can run, the
+run ends `waiting`, and `advance` after the deadline wakes it. The output is `None`.
 An `until:` that can never be a date or datetime fails at load: a literal that is not a
-YAML date/datetime or date text, or a reference typed `int`, `bool`, `list(...)`, etc.
-(a `str` reference loads and is parsed at run).
+date or datetime, or a reference typed `int`, `bool`, `list(...)`, etc. (a `str`
+reference loads and is parsed at run). `output:`, `asserts:` and `retries:` are load
+errors.
+
+**Durations** (`timeout:` on `ask` and `take`, `for:` on `sleep`): a positive integer and
+a unit, `s`, `m`, `h` or `d` (`90s`, `30m`, `24h`, `2d`). A plain number is a load error
+(`timeout: 86400` fails; write `86400s`). A duration from a reference must be typed `str`
+(`timeout: !str ${input.wait}`) and is read when the node runs; a literal takes no tag.
+
+### `take` and inboxes — messages a host sends
+An **inbox** is a flow input typed `Inbox(T)`, required, with no default. The run doesn't
+take it as an input:
+while the run is live, the host sends events to it by name (`send`), and closes it
+(`close`) when no more will come. A `tool` node with `tool_id: take` reads it:
+```yaml
+input:
+  messages: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: ${input.messages}         # the inbox, read whole
+      take: all                       # one (the default) or all
+      timeout: 30m                    # optional: a duration
+```
+The output is inferred, `{events: list(T), closed: bool}`: `take: one` reads the oldest
+unread event, `take: all` every unread one, oldest first. With nothing unread the take
+waits (holding no worker) until an event arrives, the inbox closes, or its `timeout`
+passes. A timeout gives `events: []` and `closed: false`; `closed` is true only when the
+inbox is closed and nothing is left unread after this take. Each event is read once.
+`from:` must be an `Inbox` input of this flow, written `${input.<name>}`; `output:`,
+`asserts:` and `retries:` are load errors.
+
+An inbox is read only as a whole value: by a take's `from:`, or passed to an `Inbox` input
+of a named `call` or `loop` child (a loop carries it into every iteration and leaves it out
+of its output). Any other read (text, a field, a CODE or AGENT input, a condition, a flow
+output) is a load error, and so is an inbox input that nothing reads. A flow a `map` calls
+can't declare one. See [`templates/chat.yaml`](templates/chat.yaml) for a chat that takes
+each turn's messages from an inbox.
+
+Python yian still has `human_input` and `wait`.
 
 ### `call` / `map` — composition over child flows
 A child is itself a flow. `call` runs it once; `map` runs it per list element
@@ -1184,22 +1264,23 @@ field and is rejected. A `while:`/`until:` that reads only fields the body never
 returns cannot change. Without `max:` it is a load error; with `max:` it fails if it
 reaches the cap. The node's value and the LOOP node's own `asserts:` see the merged
 carried record; a body def's own `asserts:` see the body's own output. A body that
-blocks (a `human_input` leaf) makes the loop a live chat REPL: the same run threads
-each answered turn. Pick **exactly one**
+asks (an `ask` node) or takes from an inbox (a `take` node) makes the loop a chat: the
+same run threads each answered turn. Pick **exactly one**
 driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
 optional for `while:`/`until:` but **redundant and rejected** with `times:`. A
 `while:`/`until:` is an expression string; `while: true` or `until: 1` is a load error.
 
-#### Conversational REPL — the `loop` shape used by `yian chat`
-A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a `case`
-picks the turn's record (the carried `{transcript: str, exited: bool}` `Turn`). Exact
-`/exit` and `/quit` route to `exited: !Turn {...}`, a value entry that keeps the
-transcript and sets `exited: true`; `else:` calls a `respond` def whose `reply` AGENT
-node and transcript fold return the same record. The body's output is
-`!Turn ${route.output}`: the tag types whichever branch ran as the carried record.
-Typed exit is flow-owned — a host must not intercept it — while terminal EOF may be
-normalized to `/exit`. See [`templates/chat.yaml`](templates/chat.yaml).
+#### Conversational REPL — the `loop` shape of `examples/chat.yaml`
+A chat is a `loop` that carries an `Inbox(str)` input into every turn. Each turn's
+`take: all` reads every message sent since the last one, then a `case` picks the turn's
+record (the carried `{transcript: str, closed: bool}` `Turn`). A take that returns no
+events means the inbox closed with nothing left, so it routes to `ended: !Turn {...}`, a
+value entry that keeps the transcript and sets `closed: true`; `else:` calls a `respond`
+def whose `reply` AGENT node and `turn_end` value entry return the same record. The body's
+output is `!Turn ${route.output}`: the tag types whichever branch ran as the carried
+record. Ending is the host's `close` (`/exit` in `yian chat`), so no text is special. See
+[`templates/chat.yaml`](templates/chat.yaml).
 
 TS yian only: carry the history as a list of messages and send it as real turns with a list
 `prompt:` (see [A list prompt](../../../docs/syntax.md#a-list-prompt)). The AGENT outputs only
@@ -1234,7 +1315,7 @@ history every turn: that records it each turn and the log grows quadratically.
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:
 [x]` also **co-skips** the dependent if `x` skipped; `runs_after: [x]` orders only
-(the dependent still runs). Use these for `wait`, side-effecting tools, etc.
+(the dependent still runs). Use these for `sleep`, side-effecting tools, etc.
 Each is a list of node ids: a bare `depends_on: x` is a load error.
 Naming a `case` itself in either is not a branch: the dependent runs whichever branch
 the `case` takes, and is skipped only when the `case` is.
@@ -1263,8 +1344,8 @@ One `${...}` grammar; the context decides what happens to the result:
   call only a builtin; a builtin called with arguments it doesn't take is a load error.
 
 `isinstance(x, T)` and constructors `T(...)` work in bindings, `when:`, node/flow
-asserts, LOOP `while:`/`until:`, and flow outputs. They are load errors in prompts and
-`questions:`, WAIT `until:`, MAP `over:`, and a `call`/`loop` node's own asserts.
+asserts, LOOP `while:`/`until:`, and flow outputs. They are load errors in prompts,
+MAP `over:`, and a `call`/`loop` node's own asserts.
 
 > Bindings wire, conditions test, nodes compute.
 
@@ -1272,7 +1353,7 @@ asserts, LOOP `while:`/`until:`, and flow outputs. They are load errors in promp
 `call(f, arg=${ref}, k=lit)` written as a binding's **whole value** (or a `case`
 `then:`/`else:` target) desugars at load into an anonymous `call` node; the host
 becomes `${<synth>.output}`. Every authored node `input:` mapping participates,
-including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only, each at
+including `ask` inputs and LOOP carried-record seeds. Keyword args only, each at
 most once; a bare arg is one plain scalar under the YAML value rules above, and a quoted
 arg is text; nesting is allowed (`call(a, x=call(b, y=1))`). The synth node runs only when
 the node it is written in (its host) can: it carries the host's `case` routes,
@@ -1303,23 +1384,25 @@ one-off child's body on that node.
 Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own `input:`
 block, written bare (`${name}`). An AGENT prompt also sees its own `variables:`. Pool references (`${input.x}`,
 `${other.output}`) go in the `input:` block — bind there, then use the local name
-in the prompt. The same rule covers a `human_input` `prompt:` and its question text
-(`question`, option `label` and `description`); the loader checks all of them, so an
-unknown name, a pool reference, an unknown function, a builtin called with arguments it
-doesn't take, or a span that doesn't parse is a load error at that text.
+in the prompt. The loader checks them, so an unknown name, a pool reference, an unknown
+function, a builtin called with arguments it doesn't take, or a span that doesn't parse is
+a load error at that text. An `ask` node's `prompt` and question text are the exception:
+they sit in its `input:`, so they are wiring templates that read the pool
+(`${draft.output}`), like any binding.
 
 ## Effects from inside an AGENT node — `ask_user`
 An AGENT node granted `tools: [ask_user]` can synchronously ask the human
 **only if the model decides it needs to**. The tool blocks inside the same live
 model/tool loop and its returned answer becomes the ordinary tool result. The model
 may pass 2-4 short `options`, shown as choices; the human can still type an answer. For a
-*guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
-`ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
-WAIT return ordinary node outputs from their live calls. The host passes the handler
-per run: `run_flow(..., tools={"ask_user": handler})`. `yian run` and `yian chat` do
-this for you. Without a handler, a flow whose AGENT grants `ask_user` fails before the run
-starts, and a `human_input` node fails when it asks. There is no authored
-`entry:`/`controls:` field on an AGENT node or event-mode WAIT.
+*guaranteed* question use an `ask` node; for "ask only if needed" use `ask_user`.
+`ask_user` on an AGENT node returns its answer to the same live tool loop, and its handler
+must answer inline: a handler that returns `pending()` to an AGENT's call fails the agent.
+One handler serves both: the host passes it per run as the ask slot, `tools: {ask:
+handler}` in TS yian (`ask_user` is the slot's old name) and `run_flow(...,
+tools={"ask_user": handler})` in Python. `yian run` does this for you. Without a handler, a
+flow whose AGENT grants `ask_user` or that has an `ask` node fails before the run starts.
+There is no authored `entry:`/`controls:` field on an AGENT node.
 
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `yian run <flow>.yaml` will load
@@ -1343,10 +1426,10 @@ starts, and a `human_input` node fails when it asks. There is no authored
   required declarations fail with exit code `2` before provider or run-log setup;
   explicit null and native structures require `--inputs`, while ordinary scalars
   may use the string-valued `--input` or `--inputs`.
-  `human_input` and `ask_user` are separate live-run interactions, unchanged by
-  the initial-input omission policy. The host broker reads their answers from its
-  input stream while the run remains live. WAIT does not prompt and also remains
-  in the live run.
+  `ask` nodes and `ask_user` are separate interactions, unchanged by the
+  initial-input omission policy: `yian run` answers them in the terminal while the
+  run is live. An inbox input is never prompted; its messages come from the host's
+  sends. A `sleep` doesn't prompt.
 - A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
   needs a provider/model configured (see `docs/installation.md`).
 

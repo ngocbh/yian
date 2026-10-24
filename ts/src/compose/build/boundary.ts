@@ -13,9 +13,9 @@
  * coalesce flow output gets one terminal edge per producer; only the taken branch's value survives
  * and is assembled by END).
  *
- * Knows about: the compile model, `expr` co-skip scanning, the START/END nodes, binding input
- * groups, `edges/producers`, `helpers/output_contracts` and `validate/asserts` (`LoweredAsserts`;
- * a forward edge only, since `validate/asserts.ts` never imports this module).
+ * Knows about: the compile model, `expr` co-skip scanning, the START/END nodes, inbox types, binding
+ * input groups, `edges/producers`, `helpers/output_contracts` and `validate/asserts`
+ * (`LoweredAsserts`; a forward edge only, since `validate/asserts.ts` never imports this module).
  * Never imports: `build/pipeline`, the loader, or the runtime.
  */
 
@@ -26,6 +26,7 @@ import type { Node } from "../../nodes/base.ts";
 import { bindingInputGroups, type OutputContract, type Parameter } from "../../nodes/contracts.ts";
 import { EndNode } from "../../nodes/end/node.ts";
 import { StartNode } from "../../nodes/start/node.ts";
+import { isInboxType } from "../../typesys/values.ts";
 import { bindingProducers } from "../edges/producers.ts";
 import { combineOutputContracts } from "../helpers/output_contracts.ts";
 import type { LoweredAsserts } from "../validate/asserts.ts";
@@ -65,7 +66,8 @@ import type { LoweredAsserts } from "../validate/asserts.ts";
  *   a bare `START_ID->END_ID` when END has none, so it runs: a value END with no output commits
  *   `null`, an `output: {}` record END commits `{}`); and the boundary wiring: `START_ID` keyed by
  *   input name (a provisional `${input.X}` source, so wiring parity passes; the engine seeds
- *   START's record directly at runtime), `END_ID` keyed by output name to the output's binding,
+ *   START's record directly at runtime; an inbox input is wired to its handle `{inbox: <name>}`,
+ *   which a child's call seed replaces), `END_ID` keyed by output name to the output's binding,
  *   merged with the lowered synth wiring.
  * @throws RangeError when `record` is false and there is more than one output.
  */
@@ -149,8 +151,17 @@ export function synthesizeBoundaryGraph(
     // START_ID wiring: input names to `${input.X}` sources. At runtime the engine primes START's
     // record with the run arguments and narrows this compiled wiring to the passed keys (an
     // omitted input then binds absent, so START's wrapper fills its declared default). This
-    // compiled entry is what a direct driver or hand-seeded test reads.
-    [START_ID, new Map(inputParameters.map((parameter) => [parameter.name, `\${input.${parameter.name}}`]))],
+    // compiled entry is what a direct driver or hand-seeded test reads. An inbox input takes no
+    // run argument: it is bound to its handle, a constant.
+    [
+      START_ID,
+      new Map(
+        inputParameters.map((parameter) => [
+          parameter.name,
+          isInboxType(parameter.contract?.type) ? { inbox: parameter.name } : `\${input.${parameter.name}}`,
+        ]),
+      ),
+    ],
     [END_ID, endWiring],
   ]);
   return [boundaryNodes, [...endEdges, ...rootEdges], boundaryWiring];

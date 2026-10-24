@@ -490,7 +490,7 @@ reason and appends nothing, every outcome that settles afterwards is discarded, 
 running node is awaited before `run()` settles; `run()` then rejects with the error that started
 the stop (the host's `signal.reason`, the callback's error), never a sibling's, while a node
 failure stays the run's `RunFailed`. A host stop and a host callback that throws or rejects
-(`onEvent`, `onStream`, steering) append one `RunStoppedRecord` (`signal` or `callback`) when
+(`onEvent`, `onStream`) append one `RunStoppedRecord` (`signal` or `callback`) when
 the stop is requested, listing the nodes in flight, before anything winds down; other host
 faults append none, so their attempts count as crashed on resume, and nothing is appended
 after a terminal result or a second time in one segment. Inside an AGENT turn a tool call that
@@ -530,7 +530,7 @@ Changed (TS yian): the evaluator (`evalNode` in `ts/src/runtime/eval_node.ts`) r
 `EvaluatedOutcome` and never touches the run state. When a node rejects after its signal
 aborted, the evaluation rejects with the signal's reason, whatever the node threw, instead of
 classifying it as a failure.
-When a capability fails with a host fault (a stream or event sink, steering, the memory opener,
+When a capability fails with a host fault (a stream or event sink, the steer inbox, the memory opener,
 `steps.record`), the first such fault is what the evaluation rejects with once
 the node settles, even if the node caught it and returned; capability promises the node
 started are awaited first. A node declaring `needsMemoryContext` gets

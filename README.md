@@ -225,8 +225,10 @@ list[str]` and `interrupted(node_id) -> bool`. Queued steers reach the model as
 user messages at the top of the next loop iteration. An interrupt ends the loop
 at the next safe point, including mid-stream, and the node succeeds with its text
 so far. In TS yian an AGENT reads steers from a declared inbox instead
-(`steer_inbox: ${input.notes}`), and the host sends them with `send`. See
-[Steering](docs/api.md#steering).
+(`steer_inbox: ${input.notes}`), the host sends them with `send` and interrupts with
+`interrupt`, and an interrupted node's output is null. See
+[Steering](docs/api.md#steering-python-yian) and
+[Interrupting an agent](docs/api.md#interrupting-an-agent-ts-yian).
 
 The built-in [`EpisodicMemory`](docs/learning.md#episodic-memory) keeps bounded,
 model-free execution history for later runs. A flow declares a named memory,

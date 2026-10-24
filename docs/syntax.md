@@ -2688,7 +2688,8 @@ with `skills:` runs the tool loop. `load_skill` is a reserved name: never list i
 
 `steer_inbox:` lets the host steer a running AGENT, like typing a follow-up in a
 coding-agent chat. The agent reads steers from one of the flow's `Inbox(...)`
-inputs, which the host fills with `send`; the host can also interrupt it:
+inputs, which the host fills with `send`; the host can also interrupt it with
+`interrupt`:
 
 ```yaml
 input:
@@ -2699,7 +2700,7 @@ nodes:
     steer_inbox: ${input.notes}   # the lone ${input.<name>} of an Inbox input
     tools: [search]
     prompt: Research the question and answer it.
-    output: str                   # required: `str`, `Optional(str)`, or no `output:`
+    output: Optional(str)         # null when the host interrupts it
 ```
 
 - **Steer.** Before each model call, after the previous reply's tool calls
@@ -2707,13 +2708,14 @@ nodes:
   and sends it with that request. Steers never land between the results of one
   reply's tool calls. Nothing queued: nothing is read. A closed inbox still gives
   what is queued. The read is recorded as a `steer {inbox, from}` step, so a
-  resumed run replays it (see [API](api.md#steering)).
+  resumed run replays it (see [API](api.md#steering-a-running-agent-ts-yian)).
 - **Late steers.** When the model answers with no tool call while steers are
   queued, the node reads them and calls the model again, so a steer sent during
   the final reply still gets an answer. Every reply counts toward
   `max_tool_iterations` (see `env:`): at the cap the answer stands and the steers
   stay queued, unread. The default, `-1`, has no cap. An interrupt that arrived
-  by the final answer beats a queued steer: the answer stands.
+  by the final answer beats a queued steer: the answer stands, as if no interrupt
+  came, and the steers stay queued.
 - **Rendering.** One read is one user message: a `str` event is a text part, and
   any other event its text form (records as Yian writes them). A `Message` event
   (an `Inbox(Message)`) is its own user message, keeping its `author`; a message
@@ -2738,36 +2740,35 @@ nodes:
   at run time (a field that is null) goes in its default rendering instead, with
   a warning; the read never fails the node. `render:` is part of the flow's
   identity.
-- **Interrupt.** The node checks for an interrupt at the top of each iteration,
-  as each streamed chunk after the first arrives, and before each tool call. It
-  then stops and **succeeds** with the text so far, so the flow or loop
-  continues. A reply that already arrived is kept whole, including a streamed
-  reply whose last chunk had arrived. Otherwise a streamed reply is cut at the
-  last chunk shown. Tool calls it did not run get an error result ("Not run:
-  interrupted by the user."). An interrupt during a model call is read before
-  each later text chunk. In place of before each tool call, the node checks
-  before each call's check (its grant and arguments) and before each group of
-  calls that run together, and before failing at a call whose check failed (see
-  [API](api.md#tool-context)); a group of concurrency-safe calls that started
-  finishes. An interrupt during the wait before retrying a failed model call ends
-  the wait at once, and the node succeeds with `""`. An interrupt for a node that
-  has already finished is ignored. Steers the node never read stay in the inbox.
+- **Interrupt.** `interrupt(log, "notes")` interrupts every AGENT whose
+  `steer_inbox:` is `notes`, running or waiting. A running node stops at its next
+  safe point: before a model call, as each streamed text chunk after the first
+  arrives (the reply is cut at the last chunk shown), and before each tool call.
+  A reply that already arrived is kept whole. Tool calls it did not run get an
+  error result ("Not run: interrupted by the user."), a tool that is already
+  running finishes, and a call waiting for the host's answer is closed. The node's
+  output is then **null**, and its `new_messages` end with a user message
+  `[interrupted by the user]`. With `output: Optional(...)` the node succeeds with
+  null, so the flow can route on it (`${worker.output :- "(interrupted)"}`); any
+  other output fails the node with `agent.interrupted`. An interrupt when no node
+  reads the inbox changes nothing. Steers the node never read stay in the inbox.
+  See [API](api.md#interrupting-an-agent-ts-yian).
 - An AGENT without `tools:` or `skills:` makes one model call. Steers queued
   before it go with that request, and an interrupt cuts its streaming text reply
   at the last chunk shown.
 
 `steer_inbox:` (or its `from:`) is a load error unless it is the lone
 `${input.<name>}` of an Inbox input. So is a mapping with no `from:` or with a key
-other than `from:` and `render:`, a `render:` that isn't non-empty text, and
-`steer_inbox:` on an AGENT whose output is anything but `str` or `Optional(str)`,
-because a structured value cannot be partial. An inbox read only by `steer_inbox:`
-counts as read. A model question from `ask_user` is still answered through
-`ask_user`, not by a steer. Hosts interrupt through the `steering` run option (see
-[API](api.md#steering)); a node without `steer_inbox:` never reads it.
+other than `from:` and `render:`, and a `render:` that isn't non-empty text. Any
+output type is allowed, since an interrupted node's output is null and its
+declared output decides. An inbox read only by `steer_inbox:` counts as read. A
+model question from `ask_user` is still answered through `ask_user`, not by a
+steer. A node without `steer_inbox:` never reads steers or interrupts.
 
 Changed (TS yian): `steerable: true` was replaced by `steer_inbox:`; `steerable:` is
-a load error that says how to move. Python yian keeps `steerable:` and its host
-inbox.
+a load error that says how to move, and the `steering` run option is gone: hosts
+interrupt with `interrupt(log, inbox)`. Python yian keeps `steerable:` and its host
+inbox, whose interrupted node succeeds with its text so far.
 
 ### `code` / `tool` — the other leaves
 

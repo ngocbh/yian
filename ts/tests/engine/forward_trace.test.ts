@@ -4797,3 +4797,21 @@ test("a MAP's forward failing otherwise when bound again is a fault, not kept (T
     spy.mockRestore();
   }
 });
+
+test("a binding that failed but finishes when bound again is a rebuild mismatch (TS-only)", async () => {
+  const log = await greetLog("greet-mismatch", null);
+  // The run's START inputs now hold a nick, so `shout` binds where its record failed.
+  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);
+  for (const line of lines) {
+    const payload = line["payload"] as Wire;
+    if (line["kind"] !== "pool_commit" || payload["key"] !== "__start__" || payload["value"] === undefined) continue;
+    (payload["value"] as Wire)["nick"] = "A";
+  }
+  writeFileSync(log, `${lines.map((line) => logJson(line)).join("\n")}\n`);
+  const of = await replayedOccurrences(log);
+  expectError(
+    () => of("shout").capture,
+    RangeError,
+    "the binding of 'shout' finishes when bound again, but its record failed at a binding stage",
+  );
+});

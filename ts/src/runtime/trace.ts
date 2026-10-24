@@ -394,7 +394,8 @@ export class TraceOccurrence {
    *
    * @throws RangeError when the occurrence was made without a rebinder, a route source has no
    *   accepted producer, or a finished binding no longer finishes (the `BindingError` as
-   *   `cause`): the log and the flow disagree.
+   *   `cause`): the log and the flow disagree. `capture` and `inputRoute` also throw when a
+   *   failed binding holding an interpolation route finishes when bound again.
    */
   get boundInputs(): JsonObject | null {
     if (this.#rebind === null) throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its bound inputs`);
@@ -1353,6 +1354,11 @@ export function prepareTrace(
   const rebind = (): ReboundOccurrence => {
     const rebound = bound || fillsText ? reboundCapture(trace, capture.route, rebinder!) : null;
     const inputs = bound ? finishedInputs(node.id, rebound!) : null;
+    if (!bound && rebound !== null && rebound.failure === null) {
+      throw new RangeError(
+        `the binding of ${reprText(node.id)} finishes when bound again, but its record failed at a binding stage`,
+      );
+    }
     if (!fillsText) return { inputs, capture, inputRoute };
     const filled = withInterpolationText(capture, rebound!.capture);
     return { inputs, capture: filled, inputRoute: joinSeedRoutes(filled, candidates) };

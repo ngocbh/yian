@@ -187,11 +187,18 @@ test("only the final log-only runtime and run API remain", () => {
   expect(getters).toEqual(["learning", "backwardOutcome"]);
 });
 
-test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, pending, the message names and InboxRef", () => {
+test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, pending, the message names, InboxRef and the host calls", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
     advance: run.advance,
+    send: run.send,
+    complete: run.complete,
+    close: run.close,
+    cancel: run.cancel,
+    pendingCalls: run.pendingCalls,
+    RunBusyError: run.RunBusyError,
+    DeliveryRefused: run.DeliveryRefused,
     buildMemories,
     MemoryRegistry,
     SQLiteStorage,

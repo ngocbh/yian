@@ -98,8 +98,8 @@ notice.
 
 | Import | Names |
 |---|---|
-| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `advance`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `pending`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`, `WaitInfo`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
+| `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `advance`; `send`, `complete`, `close`, `cancel`, `pendingCalls`, `RunBusyError`, `DeliveryRefused`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `pending`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `send`, `complete`, `close`, `cancel`, `pendingCalls`, `DeliveryOptions`, `PendingCall`, `CompleteResult`, `DeliveryOp`, `RunBusyError`, `DeliveryRefused`, `DeliveryRefusal`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`, `WaitInfo`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskHandler`, `AskRequest`, `AskTool`, `AskUserHandler`, `AskUserRequest`, `pending`, `isPending`, `PendingMarker`, `TAKE`, `SLEEP`, `ASK`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
@@ -373,9 +373,35 @@ A run whose nodes wait on calls (a host tool that returned `pending()`, an `ask`
 While the run waits, this process keeps its state in memory, by the log's real path, so the next
 `advance` skips the replay and recompile while the log is the file it left (same last record and
 size) and the call passes the same `codeRoot`, code-built `flow`, `apiKey` and `headers`; any
-other log write makes it rebuild. Each waiting run's state stays until the run moves on, so a host
-holding many waiting runs pays their memory. An `advance` of a run this process is moving rejects
-with the lock's busy message; one of a run another call is setting up waits for that call.
+other log write makes it rebuild. Each waiting run's state stays until a call in this process sees
+the run move on; one another process moves on stays until a call here reads its log again, or the
+process exits. A host holding many waiting runs pays their memory. An `advance` of a run another writer holds rejects
+with `RunBusyError` (its `cause` is the busy `FileLockError` when another process holds the lock);
+one of a run another call in this process is setting up, or closing after its loop ended, waits for
+that call.
+
+### Host calls
+
+```ts
+send(log: string, inbox: string, event: unknown, options?: DeliveryOptions): Promise<number>
+complete(log: string, callId: string, result: CompleteResult, options?: DeliveryOptions): Promise<number | null>
+close(log: string, inbox: string, options?: DeliveryOptions): Promise<number | null>
+cancel(log: string, options?: DeliveryOptions): Promise<readonly PendingCall[]>
+pendingCalls(log: string): readonly PendingCall[]
+```
+
+A host reaches a run by its log path: `send` an event to a top-level `Inbox(T)` input, `complete`
+an open host call (`{output}` or `{error}`; an identical repeat returns `null`), `close` an inbox
+(again: `null`), or `cancel` the run (returning the open host calls it closed). `pendingCalls`
+reads the log's records without the lock and lists the open host calls (`callId`, `node`, `tool`,
+`arguments`, `pendingSeq`, `deadline`). While this process's engine is moving the run, a call goes
+to the engine (once its loop has ended, the call waits for the run call to close the run); otherwise it takes the lock without blocking, appends one record and releases it, reusing a
+waiting run's kept state or compiling the recorded flow as `advance` does (`DeliveryOptions` are
+`advance`'s `env`, `codeRoot` and `flow`). None moves the run; `advance` does, and a waiting
+result whose `waits` show a call `settled: true` needs another `advance`. A refusal appends
+nothing: `DeliveryRefused` with a `reason` (`ended`, `unknown_inbox`, `inbox_closed`,
+`invalid_value`, `too_large`, `unknown_call`, `not_host_call`, `call_settled`, `not_started`), or
+`RunBusyError` when another writer holds the log. See [Host calls][docs/api.md#host-calls-send-complete-close-cancel-and-pendingcalls].
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
 `"failed"`, `"cancelled"`, `"waiting"`, `"stopped"` or `"crashed"`), `inFlight`, `crashedAttempts`,
@@ -760,6 +786,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/api.md#explicit-backward-feedback]: https://github.com/ngocbh/yian/blob/main/docs/api.md#explicit-backward-feedback
 [docs/api.md#failure-codes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#failure-codes
 [docs/api.md#following-a-run-log-with-iterrunrecords]: https://github.com/ngocbh/yian/blob/main/docs/api.md#following-a-run-log-with-iterrunrecords
+[docs/api.md#host-calls-send-complete-close-cancel-and-pendingcalls]: https://github.com/ngocbh/yian/blob/main/docs/api.md#host-calls-send-complete-close-cancel-and-pendingcalls
 [docs/api.md#load_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#load_flow
 [docs/api.md#mcp-servers]: https://github.com/ngocbh/yian/blob/main/docs/api.md#mcp-servers
 [docs/api.md#naming-a-runs-nodes-with-staticnodes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#naming-a-runs-nodes-with-staticnodes

@@ -311,6 +311,17 @@ test("wakeAt is the earliest open deadline of a waiting node", () => {
   expect(wakeAt(fold(...START, sleepWait("nap", T9), new NodeWokenRecord("nap", ["r/nap"])))).toBeNull();
 });
 
+test("wakeAt of a waiting run's WaitInfos is the state's", () => {
+  const cases = [
+    fold(...START),
+    fold(...START, sleepWait("later", T10), sleepWait("nap", T9)),
+    fold(...START, takeWait("heard", "one", "msgs", T9), send("msgs", "x"), sleepWait("later", T10)),
+    fold(...START, new NodeStartedRecord("ask"), pending("ask", 1, "r/ask/1", { deadline: T9 })),
+  ];
+  expect(cases.map((w) => wakeAt(waitInfos(w)))).toEqual([null, T9, T10, null]);
+  expect(cases.map((w) => wakeAt(waitInfos(w)))).toEqual(cases.map((w) => wakeAt(w)));
+});
+
 test("waitInfos lists each waiting node's calls, settled or not", () => {
   const w = fold(...START, takeWait("heard", "one"), sleepWait("nap", T9), send("msgs", "x"), pending("ask", 1, "r/ask/1"), new NodeWaitingRecord("ask", ["r/ask/1"]));
   expect(waitInfos(w)).toEqual([

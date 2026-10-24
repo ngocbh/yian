@@ -19,7 +19,9 @@
  * - `tools.errors`: `PermanentToolError`, `TransientToolError`, `ReportedToolError` (`tools/errors`).
  *
  * Added beside them: `Diagnostic` (`diagnostics`) and `registerTemplateFn` (`expr/builtins`);
- * `pending` (`tools/context`), the marker a host tool returns when its answer comes later;
+ * `pending` (`tools/context`), the marker a host tool returns when its answer comes later, and the
+ * host calls on a run log, `send`, `complete`, `close`, `cancel` and `pendingCalls`, with their
+ * errors `RunBusyError` and `DeliveryRefused` (`run`);
  * `ToolAttemptsFailed` (`nodes/tool/node`, Python's `yian.nodes.tool`), beside the tool errors; and
  * Python's `yian.memory.storage` names `SQLiteStorage`, `checkStoragePath` (`memory/storage/sqlite`),
  * `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownStore`, `MarkdownVersionMismatch` and
@@ -62,7 +64,7 @@ export {
   type MessagePart,
 } from "./nodes/agent/messages.ts";
 export { ToolAttemptsFailed } from "./nodes/tool/node.ts";
-export { advance, runFlow } from "./run.ts";
+export { advance, cancel, close, complete, DeliveryRefused, pendingCalls, RunBusyError, runFlow, send } from "./run.ts";
 export { pending, ToolContext } from "./tools/context.ts";
 export { PermanentToolError, ReportedToolError, TransientToolError } from "./tools/errors.ts";
 export { FunctionTool, tool } from "./tools/function_tools.ts";

@@ -2,18 +2,45 @@
  * `advance` and the run boundary's waiting runs: the waiting result, when `advance` appends, the
  * lock released while a run waits, and the in-process registry of waiting runs.
  */
-import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { afterAll, expect, spyOn, test } from "bun:test";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { NodeStarted, type RunEvent, RunStarted } from "../../src/events.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
+import { EpisodicMemory } from "../../src/memory/episodic.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { runFlow } from "../../src/run.ts";
-import { isRunLogLocked } from "../../src/runtime/log.ts";
+import { lockFile } from "../../src/platform.ts";
+import { advance, replayRunLog, runFlow } from "../../src/run.ts";
+import {
+  isRunLogLocked,
+  JsonlRunLog,
+  NodeWokenRecord,
+  readRunLog,
+  RunResumedRecord,
+  RunStoppedRecord,
+} from "../../src/runtime/log.ts";
+import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
+import { commitPrepared, prepareRunCancelled } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { graph, NO_ENV, rejected } from "./run_state_fixtures.ts";
+import { completeByHand, gateTool, handClock } from "./inbox_fixtures.ts";
+import { crashAfter, graph, NO_ENV, rejected, reply, runWith, serving } from "./run_state_fixtures.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "advance-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -53,15 +80,6 @@ test("backward needs a run that succeeded or failed", async () => {
   const error = await rejected(result.backward("more"));
   expect(error).toEqual(new RangeError("backward needs a run that succeeded or failed; this one is waiting"));
 });
-
-import { readFileSync } from "node:fs";
-
-import { Parameter } from "../../src/nodes/contracts.ts";
-import { advance, replayRunLog } from "../../src/run.ts";
-import { JsonlRunLog, NodeWokenRecord, readRunLog, RunResumedRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
-import { commitPrepared, prepareRunCancelled } from "../../src/runtime/state.ts";
-import { completeByHand, gateTool, handClock } from "./inbox_fixtures.ts";
-import { crashAfter } from "./run_state_fixtures.ts";
 
 const T0 = Date.UTC(2026, 9, 24, 9, 0, 0);
 
@@ -174,19 +192,6 @@ test("advance on a missing log rejects with ENOENT", async () => {
   const error = await rejected(advance({ log: join(ROOT, "missing.jsonl"), env: NO_ENV }));
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 });
-
-import { realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdirSync } from "node:fs";
-import { spyOn } from "bun:test";
-
-import { loadFlow } from "../../src/compose/loader.ts";
-import { LoadError } from "../../src/compose/helpers/errors.ts";
-import { NodeStarted, type RunEvent, RunStarted } from "../../src/events.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import { EpisodicMemory } from "../../src/memory/episodic.ts";
-import { lockFile } from "../../src/platform.ts";
-import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
-import { reply, runWith, serving } from "./run_state_fixtures.ts";
 
 const BUSY = (log: string) => `run log ${log} is locked by another writer (is the run still active?)`;
 
@@ -416,4 +421,51 @@ test("advance with codeRoot refuses a CODE file outside it; runFlow's entry has 
   unlinkSync(join(dir, "fn.ts"));
   writeFileSync(join(dir, "fn.ts"), code);
   expect((await advance({ log, tools, env: NO_ENV, codeRoot: root })).status).toBe("waiting");
+});
+
+test("an advance passing an API key the flow doesn't use still hits the registry with that key", async () => {
+  const root = mkdtempSync(join(ROOT, "key-"));
+  const { dir, flow } = await codeHostFlow(root);
+  const log = freshLog();
+  const tools = { lookup: lookupQ() };
+  expect((await runFlow(flow, {}, { log, env: NO_ENV, tools })).status).toBe("waiting");
+  // runFlow's entry holds no key, so this one recompiles and leaves an entry holding the key.
+  expect((await advance({ log, tools, env: NO_ENV, apiKey: "sk-test" })).status).toBe("waiting");
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, tools, env: NO_ENV, apiKey: "sk-test" })).status).toBe("waiting");
+});
+
+test("repeated advances of a waiting run that can't move each append nothing", async () => {
+  const { log, flow, tools } = await waitingRun();
+  const before = readFileSync(log);
+  for (let i = 0; i < 3; i++) {
+    const result = await advance({ log, flow, tools, env: NO_ENV });
+    expect([result.status, result.events]).toEqual(["waiting", []]);
+    expect(readFileSync(log).equals(before)).toBe(true);
+  }
+});
+
+test("advancing a waiting host call never calls its handler again", async () => {
+  const log = freshLog();
+  const flow = hostFlow();
+  let calls = 0;
+  const lookup = new FunctionTool({
+    name: "lookup",
+    description: "looks something up later",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: () => {
+      calls += 1;
+      return pending();
+    },
+  });
+  const tools = { lookup };
+  const first = await runFlow(flow, {}, { log, env: NO_ENV, tools });
+  expect([first.status, calls]).toEqual(["waiting", 1]);
+  expect((await advance({ log, flow, tools, env: NO_ENV })).status).toBe("waiting");
+  // A rebuilt state (another worker count resumes the run) doesn't call it either.
+  expect((await advance({ log, flow, tools, env: NO_ENV, numWorkers: 2 })).status).toBe("waiting");
+  completeByHand(log, flow, `${first.runId}/ask`, { output: "yes" });
+  const done = await advance({ log, flow, tools, env: NO_ENV });
+  expect([done.status, calls]).toEqual(["succeeded", 1]);
 });

@@ -83,6 +83,7 @@ import {
   staticNodes,
   updateRunIndex,
 } from "../run.ts";
+import { wakeAt } from "../runtime/waits.ts";
 import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
 import { McpConnectError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
@@ -1600,11 +1601,6 @@ async function startRun(
  * `wake_at`, the earliest deadline of a call not yet settled (`null` when none has one).
  */
 export function waitingDocument(result: RunResult): Record<string, JsonValue> {
-  let wakeAt: string | null = null;
-  for (const wait of result.waits) {
-    // Record times have one fixed-width form, so text order is time order.
-    if (!wait.settled && wait.deadline !== null && (wakeAt === null || wait.deadline < wakeAt)) wakeAt = wait.deadline;
-  }
   const waits = result.waits.map((wait) => ({
     node: wait.node,
     call_id: wait.callId,
@@ -1613,7 +1609,7 @@ export function waitingDocument(result: RunResult): Record<string, JsonValue> {
     deadline: wait.deadline,
     settled: wait.settled,
   }));
-  return { status: "waiting", waits, wake_at: wakeAt };
+  return { status: "waiting", waits, wake_at: wakeAt(result.waits) };
 }
 
 /** @internal Return the text a waiting result prints on stderr: what it waits on and how to go on. */

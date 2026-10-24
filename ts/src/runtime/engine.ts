@@ -407,6 +407,14 @@ export class FlowEngine {
           };
   }
 
+  /**
+   * @internal Whether the loop is driving the run, so a delivery now is read by it: from `run()`
+   * until the loop decides to end (at a terminal result or quiescence) or rejects.
+   */
+  get looping(): boolean {
+    return this.#looping;
+  }
+
   /** @internal The run signal: aborted when the run fails, stops, or a host fault ends it. */
   get signal(): AbortSignal {
     return this.#controller.signal;
@@ -509,7 +517,11 @@ export class FlowEngine {
         } else {
           this.#quiesce(events);
           // A delivery made from the run_waiting observer can leave work; then go on.
-          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) break;
+          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) {
+            // Decided with no await, so no delivery can land after this check and before the flag.
+            this.#looping = false;
+            break;
+          }
           continue;
         }
         signal.throwIfAborted();
@@ -580,7 +592,11 @@ export class FlowEngine {
         if (active.size === 0) {
           this.#quiesce(events);
           // A delivery made from the run_waiting observer can leave work; then go on.
-          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) break;
+          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) {
+            // Decided with no await, so no delivery can land after this check and before the flag.
+            this.#looping = false;
+            break;
+          }
           continue;
         }
         this.#armTimer();

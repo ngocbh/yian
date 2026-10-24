@@ -58,7 +58,7 @@ Other ISO 8601 forms, such as `20260521` or `2026-W21-4`, are rejected with an e
 that shows the format. The value keeps the text as written.
 
 In a flow file, yian's loader reads an unquoted timestamp as a date or datetime first
-(see [YAML values](syntax.md#yaml-values)). A WAIT `until:` or a `case`
+(see [YAML values](syntax.md#yaml-values)). A WAIT `until:` (TS yian: no WAIT) or a `case`
 value gets its ISO text, so YAML forms such as `2026-05-21 14:30:00 -5` work there; a
 typed default must be quoted (see [syntax](syntax.md#types)), and so must a timestamp
 anywhere else.
@@ -209,6 +209,8 @@ text, at the field (`node 'g' field 'cases[1].when': ...`), a LOOP's `while:` an
 text, at the field (`node 'lp' field 'while': ...`), a node's `asserts:` text, at the assert,
 among the node's other assert errors (`node 'x' field 'asserts[0]': ...`), and a flow's
 `asserts:` text, at the assert (`flow field 'asserts[0]': ...`). Python yian loads such a value.
+With HUMAN_INPUT removed, an `ask`'s `prompt:` and `questions:` text are node inputs, checked as
+one.
 
 A type nests at most 100 levels by default (`YIAN_MAX_TYPE_NESTING`). In type text
 every constructor is a level, `Optional(` and `Union(` included, so `list(Optional(int))`

@@ -420,7 +420,8 @@ hints.
 
 `compose/helpers/tags.py` is the one tag reader. Every slot reads through it: flow inputs,
 agent variables, node `input:` bindings (LOOP seeds, HUMAN_INPUT context, CALL/MAP and
-inline-body arguments), and flow outputs.
+inline-body arguments), and flow outputs. (TS yian has no HUMAN_INPUT; an `ask` node's
+context inputs are ordinary bindings.)
 
 - `read_tag_type` turns tag text into a `Type`. It explains each way a tag goes wrong: a
   bracket or brace (strict YAML 1.2 forbids them), a tag cut short at a space, a comma
@@ -496,6 +497,10 @@ the pipeline only ever sees a small set of kinds:
 | `case` branch `then: call(child, ...)` | a synthetic `call` node as the branch target |
 | a tagged `nodes:` entry (`total: !int ${a.output + b.output}`) | a `code` node with the entry's id that returns the value |
 | `${some_case.output}` | a coalesce over the case's branch targets |
+
+Changed (TS yian): `human_input` is removed; `adaptive_questions:` sits on a TOOL `ask` node, and
+the composer AGENT writes the ask's reserved `__questions` input. There is no WAIT, so MAP's
+`over:` is the only reserved wiring key.
 
 Because desugaring is a descriptor-level rewrite, the synthetic nodes flow through `build`,
 edge inference, validation, and the DAG check like hand-written ones. The one difference is

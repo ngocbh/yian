@@ -907,8 +907,8 @@ Node 22, and so does every unit test; a change keeps both green.
   `baseDir`, the directory its reference resolves against, comes from `BuildContext.baseDir`:
   `loadFlow`'s `baseDir`, else its first search path, else the current directory, for the root,
   its defs and its inline bodies alike; a file read through the search path uses its own
-  directory. WAIT keeps an `until:` date or datetime as the text written, after checking it
-  parses.
+  directory. A `sleep`'s literal `until:` stays the text written, after checking it parses as a
+  date or datetime.
 - `src/compose/loader.ts` is the front door: `loadFlow` reads every `uses:` file (through a
   `ChildResolver`, sync or async) before the flow assembles, and returns a Promise.
 - `src/compose/index.ts` re-exports Python's `__all__` only, with the loader's `ChildResolver`.
@@ -1075,7 +1075,7 @@ Node 22, and so does every unit test; a change keeps both green.
   `Route` or `Grow`; a kind's `forward(inputs, caps)` may return the result or a promise. The
   capabilities are one `NodeCaps` object (`signal`, `scheduler`, `random`, `runDir`, `bindItem`,
   `steps`, `tools`, and AGENT's fields below). `tools` is the run's `ToolSet`, for a node that declares
-  `needsTools` (TOOL, HUMAN_INPUT and AGENT). `signal` is
+  `needsTools` (TOOL and AGENT). `signal` is
   optional in the type; the runtime's evaluator (`src/runtime/eval_node.ts`) gives every node its
   own. `scheduler` (the clock and cancellable sleep a node's waits run on; `realScheduler` when
   absent), `random` (a draw in [0, 1) for backoff jitter; `Math.random` when absent) and `runDir`
@@ -1089,10 +1089,13 @@ Node 22, and so does every unit test; a change keeps both green.
   use no ES `#` members (a copy never ran the constructor, so it has no private brand) and no
   instance field that captures `this` (an arrow-function field or a bound callback would stay
   bound to the original); use TS `private` and prototype methods.
-- Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop, code, tool,
-  human_input, wait) as a `Node` subclass; import it from that file. There is no per-kind index,
-  and, as Python's `yian.nodes`, `src/nodes/index.ts` exports no kind. START's, END's, CASE's,
-  CALL's, MAP's, LOOP's, CODE's, TOOL's, HUMAN_INPUT's and WAIT's bodies run.
+- Each kind lives in `src/nodes/<kind>/node.ts` (start, end, case, call, map, loop, code, tool)
+  as a `Node` subclass; import it from that file. There is no per-kind index, and, as Python's
+  `yian.nodes`, `src/nodes/index.ts` exports no kind. START's, END's, CASE's, CALL's, MAP's,
+  LOOP's, CODE's and TOOL's bodies run. Python's `human_input` and `wait` kinds don't exist:
+  loading one is a `LoadError` that names the TOOL built-in to use (`ask`, `sleep`), and a TOOL
+  node runs the built-ins `take`, `sleep` and `ask` (`src/nodes/tool/`, with the question
+  parsing in `src/nodes/tool/questions.ts`).
 - AGENT lives in `src/nodes/agent/node.ts`, and its `llm_config` values in
   `src/nodes/agent/llm_values.ts`. The node holds its data, checks and load-time hooks; `forward`
   runs an AGENT with its tools and skills (below), and `backward` (`backward.ts`, Python's
@@ -1172,7 +1175,7 @@ Node 22, and so does every unit test; a change keeps both green.
   relative to the bundle file; see [Bundling yian](#bundling-yian).
 - `code` may also be `{builtin: "identity", field}` (`mode: "builtin"`), the form a tagged value
   entry lowers to.
-- WAIT's `until` takes a date or datetime string only: dates are text in TS yian.
+- A `sleep`'s `until` takes a date or datetime string only: dates are text in TS yian.
 - Counts on nodes (LOOP `times`, `maxIters` and `iteration`, END `n`, TOOL `retries`) are
   safe-integer `number`s, not `bigint`. END keeps its mode in public `mode`, `names` and `n`
   fields, and `EndNode.list` replaces Python's `list_`. A CASE branch is a frozen `Case`: an

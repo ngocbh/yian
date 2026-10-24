@@ -59,7 +59,8 @@ inputs, source ranges, and streaming-generator cleanup.
 `Node.run` is a fixed recipe applied to *every* node. The read boundary is kind-blind
 but **node-configured** — a node declares *how* to bind rather than the engine branching
 on kind (e.g. `binds_per_item` on `map`, `bind_reserved` for a `wait`'s `until` or a
-`map`'s `over`). The only kind-specific step is `forward`.
+`map`'s `over`). The only kind-specific step is `forward`. (TS yian has no `wait` kind; a
+`sleep` TOOL node reads `until` as an ordinary input.)
 
 A flow's own top-level `asserts:` are not a separate engine phase: at build they are
 lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary assert
@@ -373,7 +374,7 @@ change forward scheduling or the forward result.
 execution independently of memory recall, then the public run boundary returns
 the forward result. `RunResult.backward(feedback)` later calls the explicit
 `runtime.backward` driver against the same record/reducer authority. Ordinary
-CODE/TOOL/HUMAN_INPUT/WAIT nodes stop feedback; START, END, and a stopping
+CODE/TOOL/HUMAN_INPUT/WAIT (TS yian: CODE/TOOL) nodes stop feedback; START, END, and a stopping
 LOOP project it mechanically. A reached AGENT uses at most one tool-free model
 call from its accepted prompt, locals, evidence, and effective configuration.
 No default, render, recall, expression function, or forward node is rerun.

@@ -172,7 +172,9 @@ log, and invariant faults propagate as exceptions.
 
 A library host can inject per-run tools (including its `ask_user` handler and
 named tool groups that an AGENT grants by name) with `tools=`, provider
-configuration, and named memory implementations. Before a run starts, each TOOL
+configuration, and named memory implementations. In TS yian the handler's slot is
+`tools.ask` (`ask_user` is its old name), and it also answers a TOOL node's `ask`
+built-in, which replaces `human_input`. Before a run starts, each TOOL
 node's `tool_id:` must name one of the run's tools, and its inputs and `output:` are
 checked against the argument and return types that tool declares; see
 [Typed tools](docs/api.md#typed-tools). A tool whose first parameter is a

@@ -69,18 +69,37 @@ yian run examples/classify.yaml --input text="I love this!"
 
 ## `human-approval.yaml` — a deterministic human gate
 
-Exercises the **`human_input`** node. An AGENT node drafts a plan, a `human_input`
-node always blocks for an `approve` / `revise` answer (a `Literal` typedef),
-`case ... on` routes on the typed answer, and a coalesce joins whichever branch
-ran. The gate returns the answer as an ordinary node output from the same live
-invocation.
+Exercises the **`ask`** built-in. An AGENT node drafts a plan, a TOOL node with
+`tool_id: ask` always asks for an `approve` / `revise` answer (a `Literal` typedef),
+`case ... on` routes on the typed answer, and a coalesce joins whichever branch ran. The
+host answers at once, or its handler returns `pending()` and the host answers later with
+`complete()`; either way the answer is the node's ordinary output.
+
+```yaml
+approve:
+  kind: tool
+  tool_id: ask
+  input:
+    prompt: |-
+      Here is the proposed plan:
+
+      ${draft.output}
+
+      Approve it as-is, or send it back to be revised? (approve / revise)
+  output: Approval
+```
+
+The `prompt:` is an input, so it reads `${draft.output}` directly.
 
 ```console
 yian run examples/human-approval.yaml --input task="Plan a team offsite"
-#   → prompts you to approve or revise while the flow remains live
+#   → prompts you to approve or revise
 ```
 
-Run it from the CLI to see the guaranteed blocking gate.
+`yian run` asks at the terminal and answers inline.
+
+Changed (TS yian): the gate was a `human_input` node; TS yian removed that kind, so this
+file needs TS yian.
 
 ## `ask-user.yaml` — a model-chosen clarifying question
 
@@ -92,9 +111,96 @@ outright. Whether the call happens depends on the prompt and the model.
 yian run examples/ask-user.yaml --input request="Book me a table for dinner"
 ```
 
-Contrast with `human-approval.yaml`: `human_input` always asks; `ask_user` asks
-only if the model decides to. When it does, the answer returns to the same live
-model/tool loop.
+Contrast with `human-approval.yaml`: an `ask` node always asks; `ask_user` asks
+only if the model decides to. When it does, the run's ask handler answers, and the
+answer returns to the same live model/tool loop.
+
+## `approve-plan.yaml` (escalation)
+
+Asks the lead to approve a plan, and the manager when the lead doesn't answer in a day.
+`to:` is a host extension of `ask`: yian's `ask` has no recipient, so the host's ask slot
+declares the extra input (`AskTool.inputs`), and yian checks it and passes it through in
+the request.
+
+```yaml
+id: approve_plan
+name: approve_plan
+typedefs:
+  Approval:
+    decision: Literal(approve, reject)
+    note: Optional(str)
+input:
+  plan: !str
+nodes:
+  lead:
+    kind: tool
+    tool_id: ask
+    input:
+      to: lead                           # host extension: who answers
+      prompt: |-
+        Approve this plan?
+
+        ${input.plan}
+      timeout: 24h
+    output: Optional(Approval)           # null: the lead didn't answer in time
+  escalate:
+    kind: case
+    cases:
+      - when: ${lead.output == null}
+        then: manager
+  manager:
+    kind: tool
+    tool_id: ask
+    input:
+      to: manager
+      prompt: |-
+        No answer from the lead in 24h. Approve this plan?
+
+        ${input.plan}
+      timeout: 48h
+    output: Optional(Approval)
+output: !Optional(Approval) ${lead.output | manager.output}
+```
+
+- A node's `output:` is a type, not a tag (`output: Optional(Approval)`; a tag there is a
+  load error, see [Where](syntax.md#where)). The flow's single output takes a tag
+  (`output: !T ${...}`).
+- `escalate` is a routing-only searched `case` with no `else:`: when the lead answered, no
+  branch runs and `manager` is skipped (see [`case`](syntax.md#case-branching) and
+  [Exhaustiveness](syntax.md#exhaustiveness)).
+- `${lead.output | manager.output}` is the first non-null operand (a coalesce). A skipped
+  `manager` reads as null in a flow output (see
+  [Skipped branches and flow outputs](syntax.md#skipped-branches-and-flow-outputs)). So the
+  output is the lead's answer, else the manager's, else null when neither answered.
+- With strict outputs (`output: Approval`), a timeout fails the node with `tool.timeout`
+  instead (see [Failure codes](api.md#failure-codes)).
+
+The host's handler returns `pending()` and answers later with `complete()`; the run ends
+`waiting` in between, and each `ask`'s `timeout` is a deadline on its call.
+
+## `chat.yaml` — a turn-by-turn chat
+
+A conversational assistant on an inbox. The flow takes `messages: !Inbox(str)`: the host
+sends each line the user types to it, and closes it to end the chat. A LOOP runs one turn
+per batch of messages. Each turn starts with a TOOL `take`:
+
+```yaml
+heard:
+  kind: tool
+  tool_id: take                 # waits until a message arrives or the inbox closes
+  input:
+    from: ${input.messages}
+    take: all
+```
+
+`take: all` returns everything sent since the last turn as `{events, closed}`. A `case`
+routes an empty `events` (the inbox closed with nothing left to answer) to the turn that
+ends the loop, and anything else to the `respond` def, whose AGENT replies. While no
+message is waiting, the run ends `waiting`; the host sends the next message and calls
+`advance`.
+
+Changed (TS yian): the chat asked through a `human_input` node each turn and ended on
+`/exit`; TS yian removed that kind, so this file needs TS yian.
 
 ## `decision-brief.yaml` — a realistic multi-stage flow
 

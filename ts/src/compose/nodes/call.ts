@@ -145,8 +145,8 @@ export class CallDescriptor extends NodeDescriptor {
    * child's parameters; every problem found is reported together, at the node.
    *
    * @throws LoadError when a MAP's `input:` names `over`, the callable can't be resolved or
-   *   nests too deep, a MAP's child declares no output or an inbox input, or a binding names no child input or a
-   *   required child input is unbound.
+   *   nests too deep, a MAP's child declares no output or an inbox input, or a binding names no
+   *   child input or a required child input is unbound.
    */
   override build(ctx: BuildContext): BuildResult {
     // `MapDescriptor` alone sets `kind` to "map"; checking it spares `call.ts` importing `map.ts`,

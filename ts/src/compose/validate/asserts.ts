@@ -833,9 +833,9 @@ export const POOL_HEADS: ReadonlySet<string> = new Set(["input", "system", "item
  * `localInputContracts`) rejects it (a field only some union members have is readable on a node in
  * `partialUnionNodes`; a name with no entry is not field-checked), a declared input named
  * `output`, `isinstance` or a constructor on a CALL/MAP/LOOP node (its asserts run in the child
- * flow), a read of a local bound to an inbox, and any node assert on a mapped call (a `MapNode`, `kind: map`: the per-node hook has no
- * `${item}` scope). A call inside `${...}` to a name in `typeNames` (the flow's `typedefs:` names)
- * is a constructor, not an inline call.
+ * flow), a read of a local bound to an inbox, and any node assert on a mapped call (a `MapNode`,
+ * `kind: map`: the per-node hook has no `${item}` scope). A call inside `${...}` to a name in
+ * `typeNames` (the flow's `typedefs:` names) is a constructor, not an inline call.
  *
  * Classifies each PRE (no `${output}`) or POST (reads `${output}`) and stamps `node.preAsserts` /
  * `node.postAsserts`. An assert's own checks narrow its reads: `and`, `or` and `not`
@@ -1012,7 +1012,8 @@ export function validateNodeAsserts(
           }
         } else if (declared.has(head)) {
           const local = nodeLocals.get(head);
-          if (local?.alternatives.some((contract) => isExactly(contract, ValueContract) && isInboxType(contract.type))) {
+          const inbox = local?.alternatives.some((alt) => isExactly(alt, ValueContract) && isInboxType(alt.type));
+          if (inbox) {
             errors.push([`node ${reprText(nid)} assert: \${${head}} is an inbox; an assert can't read it`, errorRange]);
           } else if (local !== undefined && local.alternatives.length > 0) {
             roots.set(head, local.alternatives);

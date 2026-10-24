@@ -742,7 +742,8 @@ export function validateReferences(
     const problems = unread.map((name): [string, SourceRange | null] => {
       const origin = inputContracts.get(name)!.origins.default;
       const frame = origin !== null && resolveOrigin !== null ? resolveOrigin(origin) : null;
-      return [`inbox input \`${name}\` is never read; take from it, or pass it to a call`, frame?.range ?? outputsRange];
+      const message = `inbox input \`${name}\` is never read; take from it, or pass it to a call`;
+      return [message, frame?.range ?? outputsRange];
     });
     throw diagnostics.error(`flow has unread inbox inputs:\n  ${problems.map(([message]) => message).join("\n  ")}`, {
       range: problems.find(([, range]) => range !== null)?.[1] ?? null,

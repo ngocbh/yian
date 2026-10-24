@@ -405,10 +405,10 @@ export class LoopNode extends Node {
    *   while: stop when the predicate is false on the carried record.
    *   until: do-while; stop when `k >= 1` and the predicate is true (`k` 0 always continues).
    *   times: stop when `k >= this.maxIters` (`times N` is baked as `maxIters`).
-   * On stop: `Output(carried, commitAs = origin)`, without the fields the body takes as inboxes. On continue: the runaway guard, only when
-   * `max:` is set, then `Grow([carried, k], prune)`, pruning body_{k-1} and this driver unless it
-   * is the origin. The reducer retires each body_{k-1} node with its whole grown subtree once
-   * every node in it is settled.
+   * On stop: `Output(carried, commitAs = origin)`, without the fields the body takes as inboxes.
+   * On continue: the runaway guard, only when `max:` is set, then `Grow([carried, k], prune)`,
+   * pruning body_{k-1} and this driver unless it is the origin. The reducer retires each
+   * body_{k-1} node with its whole grown subtree once every node in it is settled.
    *
    * @param inputs The carried record, keyed by the loop's input field names.
    * @returns The stopping `Output` or the continuing `Grow`; the seed's iteration is a `bigint`.

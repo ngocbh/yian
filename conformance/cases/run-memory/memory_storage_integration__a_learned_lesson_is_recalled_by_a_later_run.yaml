@@ -137,7 +137,7 @@ expect:
           - {text: a2, type: text}
           role: assistant
         purpose: chat
-        request_sha256: e7ffd48ec6ab8faa6fd88d82ca1c1a29c358863358820dc776ecee29f3cd55b1
+        request_sha256: b70cce637ae0e260b72ea1c34d090aaab408b4f08667c4a2837bc8b96950c27f
         response_id: null
         usage: null
   - - pool_commit

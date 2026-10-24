@@ -114,7 +114,7 @@ expect:
           - {text: Use a queue again., type: text}
           role: assistant
         purpose: chat
-        request_sha256: 46a61034be695fc2890fb0fdbe4e00279d7fe30af53278b94a229aa3c231aa42
+        request_sha256: fb7257c27516794f93645c700096ed1978271a08183668569b58371f48736a70
         response_id: null
         usage: null
   - - pool_commit

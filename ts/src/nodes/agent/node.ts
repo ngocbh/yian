@@ -1148,6 +1148,7 @@ export class AgentNode extends Node {
       messages: [system, ...rendered.modelMessages()],
       tools,
       structured,
+      baseSystemPrompt: rendered.baseSystemPrompt,
     });
     return {
       interactions,

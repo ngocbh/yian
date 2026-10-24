@@ -213,7 +213,12 @@ function agent(
       .resolve(toolset.expand(tools))
       .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
     if (ctx.skills.length > 0) specs.push(loadSkillTool());
-    return stepsMaterial(steps, { messages: [system, ...ctx.messages], tools: specs, structured: async () => null });
+    return stepsMaterial(steps, {
+      messages: [system, ...ctx.messages],
+      tools: specs,
+      structured: async () => null,
+      baseSystemPrompt: DEFAULT_SYSTEM,
+    });
   };
   return { running, events, material, isSettled: () => settled };
 }

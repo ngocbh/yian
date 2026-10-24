@@ -61,6 +61,7 @@ import {
   type AgentRunContext,
   AgentSteps,
   checkStopped,
+  digestRequest,
   drainSteers,
   interruptRequested,
   type RecordedResult,
@@ -156,6 +157,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
     signal: ctx.signal,
     retry,
     steps,
+    baseSystemPrompt: ctx.baseSystemPrompt,
   };
   const toolset = ctx.toolset ?? new ToolSet();
   // A granted id may name a host-filled group; grants are checked by tool name.
@@ -198,7 +200,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
         signal: ctx.signal,
         interrupt,
         retry,
-        record: { steps, digest: requestSha256(request, steered) },
+        record: { steps, digest: requestSha256(digestRequest(request, ctx.baseSystemPrompt), steered) },
       });
     } catch (error) {
       // The cut reply's text is kept; its calls, partial or not, never run.
@@ -254,14 +256,15 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
  * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
  * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
  * the node) show nothing. Steps of another kind are skipped. A request's digest leaves steers
- * out, as the writer does, so steers never break the check.
+ * and recalled memory out, as the writer does, so neither breaks the check.
  *
  * @param steps The invocation's steps across its starts.
  * @param options `messages` are the system message (memory sections included) and the prompt's
  *   messages; `tools` the specs every chat request carries, `null` when they can't be rebuilt
  *   (no chat request then matches); `structured` builds the model the structured calls read
  *   their plan off and gives the output type, or `null` when it can't (no structured request
- *   then matches).
+ *   then matches); `baseSystemPrompt` is the system prompt without recalled memory, which each
+ *   request's digest reads in place of the system message (`digestRequest`).
  * @returns The interactions, and whether every recorded request matched.
  */
 export async function stepsMaterial(
@@ -270,6 +273,7 @@ export async function stepsMaterial(
     messages: readonly Message[];
     tools: readonly ToolSpec[] | null;
     structured: () => Promise<{ model: ChatModel; typ: Type } | null>;
+    baseSystemPrompt: string | null;
   },
 ): Promise<{ interactions: VisibleInteraction[]; digestOk: boolean }> {
   const messages = [...options.messages];
@@ -304,12 +308,13 @@ export async function stepsMaterial(
       const rest = steps.slice(index).filter((later) => later["kind"] === "model_call");
       const structured = await options.structured();
       if (structured === null) return { interactions, digestOk: false };
-      const material = structuredMaterial(structured.model, messages, structured.typ, rest);
+      const material = structuredMaterial(structured.model, messages, structured.typ, rest, options.baseSystemPrompt);
       interactions.push(...material.interactions);
       return { interactions, digestOk: digestOk && material.digestOk };
     }
     const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
-    if (request === null || step["request_sha256"] !== requestSha256(request, new Set())) digestOk = false;
+    const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt), new Set());
+    if (step["request_sha256"] !== digest) digestOk = false;
     if (Object.hasOwn(step, "error")) continue;
     const reply = recordedResponse(step).message;
     messages.push(reply);

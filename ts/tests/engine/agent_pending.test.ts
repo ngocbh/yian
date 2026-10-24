@@ -16,6 +16,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
+import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Steering } from "../../src/nodes/base.ts";
 import { advance, cancel, complete, pendingCalls, runFlow } from "../../src/run.ts";
@@ -24,8 +25,9 @@ import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { type ToolEntry, ToolSet } from "../../src/tools/registry.ts";
 import { gateTool } from "./inbox_fixtures.ts";
+import { FakeMemory } from "./memory_fakes.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { callReply, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-pending-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -243,4 +245,74 @@ test("a pended call is reported started and never finished", async () => {
     ["ToolCallStarted", "c2"],
     ["ToolCallFinished", "c2"],
   ]);
+});
+
+const MEMORY_FLOW = `
+id: agent_pending_memory
+name: agent_pending_memory
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    long_term_memory: notes
+    prompt: go
+    tools: [ask_user]
+output: \${agent.output}
+`;
+
+/** The system message of `model`'s request `index`. */
+const systemText = (model: ScriptedModel, index: number) => model.requests[index]!.messages[0]!.text();
+
+test("memory that learned while the agent waited can't fail its wake; the new call recalls fresh", async () => {
+  const notes = new FakeMemory({ recallText: "Note A." });
+  const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("done")], CONFIG);
+  const log = freshLog();
+  const options = {
+    env: hostEnv(dir),
+    log,
+    tools: { ask_user: () => pending() },
+    models: serving(model),
+    memory: new Map([["notes", notes]]),
+    runId: "r",
+  };
+  expect((await runFlow(await loadFlow(MEMORY_FLOW), {}, options)).status).toBe("waiting");
+  notes.recallText = "Note B.";
+  await complete(log, "r/agent/1/0", { output: "yes" });
+  const resumed = await advance(options);
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(systemText(model, 0)).toContain("Note A.");
+  expect(systemText(model, 1)).toContain("Note B.");
+  expect(systemText(model, 1)).not.toContain("Note A.");
+});
+
+test("a crash between a pending step and node_waiting resumes: the call is closed and the agent goes on", async () => {
+  const notes = new FakeMemory({ recallText: "Note A." });
+  const replies = () => [callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("done")];
+  const options = (model: ScriptedModel, log: string) => ({
+    env: hostEnv(dir),
+    log,
+    tools: { ask_user: () => pending() },
+    models: serving(model),
+    memory: new Map([["notes", notes]]),
+    runId: "r",
+  });
+  const uncut = freshLog();
+  await runFlow(await loadFlow(MEMORY_FLOW), {}, options(new ScriptedModel(replies(), CONFIG), uncut));
+  const log = freshLog();
+  // Keep every record up to and including the pending step.
+  await crashAfter(kinds(uncut).indexOf("pending") + 1, async () =>
+    runFlow(await loadFlow(MEMORY_FLOW), {}, options(new ScriptedModel(replies(), CONFIG), log)),
+  );
+  expect(kinds(log).at(-1)).toBe("pending");
+  notes.recallText = "Note B.";
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const resumed = await advance(options(model, log));
+
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(kinds(log)).toContain("run_resumed");
+  // The recorded reply replayed; only the live call reached the model, with the fresh recall.
+  expect(model.requests).toHaveLength(1);
+  expect(systemText(model, 0)).toContain("Note B.");
+  expect(sentResults(model, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
 });

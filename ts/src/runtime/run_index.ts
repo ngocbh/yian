@@ -457,8 +457,7 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
   let rows: SqliteRow[];
   try {
     db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
-    if (db.prepare("PRAGMA user_version").get()?.["user_version"] !== INDEX_VERSION) return [];
-    rows = db.prepare("SELECT * FROM runs ORDER BY started_at, run_id").all();
+    rows = indexRows(db);
   } finally {
     db.close();
   }
@@ -488,6 +487,21 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
       },
     ];
   });
+}
+
+/**
+ * @internal Return the index's rows in run order, or `[]` for an index of another layout version.
+ * One read transaction holds the version check and the rows, so a rebuild by another yian version
+ * between the two can't hand back rows of its layout.
+ */
+export function indexRows(db: Sqlite): SqliteRow[] {
+  db.exec("BEGIN");
+  try {
+    if (db.prepare("PRAGMA user_version").get()?.["user_version"] !== INDEX_VERSION) return [];
+    return db.prepare("SELECT * FROM runs ORDER BY started_at, run_id").all();
+  } finally {
+    db.exec("COMMIT");
+  }
 }
 
 /** Return whether a writer holds the lock of `log`; a lock that can't be probed counts as free. */

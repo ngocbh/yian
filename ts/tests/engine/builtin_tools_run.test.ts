@@ -14,6 +14,7 @@ import { FlowEngine } from "../../src/runtime/engine.ts";
 import { MemoryRunLog } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  DeliveryRefused,
   type PreparedTransition,
   prepareComplete,
   prepareInboxClosed,
@@ -89,18 +90,20 @@ test("a loop of takes waits each turn and ends when its inbox closes", async () 
   const flow = await compiled(CHAT);
   const first = inboxEngine(copyGraph(flow), { growBuilder: buildGrow });
   await first.run();
-  expect(recordNames(first.log).at(-1)).toBe("RunWaitingRecord");
+  expect(recordNames(first.log).slice(-2)).toEqual(["NodeWaitingRecord", "RunWaitingRecord"]);
 
   record(first, prepareSend(first.state, "owner_messages", "hi"));
   const second = reopened(flow, first);
   await second.run();
-  expect(recordNames(second.log).at(-1)).toBe("RunWaitingRecord");
+  expect(recordNames(second.log).slice(first.log.records().length)).toContain("NodeWokenRecord");
+  expect(recordNames(second.log).slice(-2)).toEqual(["NodeWaitingRecord", "RunWaitingRecord"]);
 
   record(second, prepareSend(second.state, "owner_messages", "bye"));
   record(second, prepareInboxClosed(second.state, "owner_messages"));
   const third = reopened(flow, second);
   await third.run();
 
+  expect(recordNames(third.log).slice(second.log.records().length)).toContain("NodeWokenRecord");
   expect(outputOf(third)).toEqual(["hi", "bye"]);
 });
 
@@ -181,7 +184,7 @@ test("the escalation asks the lead; a complete answers it and the manager is ski
   const flow = await compiled(ESCALATION);
   const first = inboxEngine(copyGraph(flow), { tools, scheduler: handClock(T0) });
   await first.run();
-  expect(recordNames(first.log).at(-1)).toBe("RunWaitingRecord");
+  expect(recordNames(first.log).slice(-2)).toEqual(["NodeWaitingRecord", "RunWaitingRecord"]);
   expect(seen.map((request) => [request.callId, request.extra, request.deadline])).toEqual([
     [`${RUN_ID}/lead`, { to: "lead" }, "2026-10-24T00:00:00.000Z"],
   ]);
@@ -195,6 +198,7 @@ test("the escalation asks the lead; a complete answers it and the manager is ski
   const next = reopened(flow, first, { tools, scheduler: handClock(T0) });
   await next.run();
 
+  expect(recordNames(next.log).slice(first.log.records().length)).toContain("NodeWokenRecord");
   expect(outputOf(next)).toEqual({ decision: "approve", note: null });
   expect(seen).toHaveLength(1);
 });
@@ -206,16 +210,37 @@ test("the escalation asks the manager once the lead's 24h pass", async () => {
   const clock = handClock(T0);
   const first = inboxEngine(copyGraph(flow), { tools, scheduler: clock });
   await first.run();
+  expect(recordNames(first.log).slice(-2)).toEqual(["NodeWaitingRecord", "RunWaitingRecord"]);
 
   clock.set(T0 + 24 * 3_600_000 + 1);
   const second = reopened(flow, first, { tools, scheduler: clock });
   await second.run();
-  expect(recordNames(second.log).at(-1)).toBe("RunWaitingRecord");
+  // The lead's timeout wakes it to null; the manager is asked and waits.
+  expect(recordNames(second.log).slice(first.log.records().length)).toContain("NodeWokenRecord");
+  expect(recordNames(second.log).slice(-2)).toEqual(["NodeWaitingRecord", "RunWaitingRecord"]);
   expect(seen.map((request) => request.extra)).toEqual([{ to: "lead" }, { to: "manager" }]);
 
   record(second, prepareComplete(second.state, `${RUN_ID}/manager`, { output: { decision: "reject", note: "no" } }));
   const third = reopened(flow, second, { tools, scheduler: clock });
   await third.run();
 
+  expect(recordNames(third.log).slice(second.log.records().length)).toContain("NodeWokenRecord");
   expect(outputOf(third)).toEqual({ decision: "reject", note: "no" });
+});
+
+test("a null answer to an Optional ask is refused: null means nobody answered", async () => {
+  const tools = pendingAsk([]);
+  const flow = await compiled(ESCALATION);
+  const first = inboxEngine(copyGraph(flow), { tools, scheduler: handClock(T0) });
+  await first.run();
+
+  let refused: unknown = null;
+  try {
+    prepareComplete(first.state, `${RUN_ID}/lead`, { output: null });
+  } catch (error) {
+    refused = error;
+  }
+  expect(refused).toBeInstanceOf(DeliveryRefused);
+  expect((refused as DeliveryRefused).reason).toBe("invalid_value");
+  expect((refused as DeliveryRefused).message).toContain("null means nobody answered in time");
 });

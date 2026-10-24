@@ -3,19 +3,27 @@
  * every reply counts toward max_tool_iterations, and at the cap the answer stands and the steers
  * stay queued. TS-only: Python yian has no steer inbox.
  */
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import type { ChatModel, EventStream } from "../../src/llm/events.ts";
+import { afterAll, expect, test } from "bun:test";
+
+import { loadFlow } from "../../src/compose/loader.ts";
+
+import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { type Request, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
-import { type AgentRunContext, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
+import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
+import { send } from "../../src/run.ts";
+import { NodeStepRecord, PoolCommitRecord, readRunLog } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { callReply, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, crashAfter, NO_ENV, resumeWith, runWith, serving, textReply } from "./run_state_fixtures.ts";
 
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 
@@ -39,16 +47,25 @@ function inboxDouble(queue: string[] = []) {
   return { inbox, queue, reads };
 }
 
-/** A scripted model that runs `during(i)` while it answers its `i`th request (from 1), as a steer sent mid-reply. */
-function hooked(model: ScriptedModel, during: (request: number) => void): ChatModel & { requests: Request[] } {
+/**
+ * A scripted model that runs `during(i)` while it answers its `i`th request (from 1), as a steer
+ * sent mid-reply; the reply's events follow once what `during` returns settles.
+ */
+function hooked(model: ScriptedModel, during: (request: number) => unknown): ChatModel & { requests: Request[] } {
   return {
     provider: model.provider,
     model: model.model,
     requests: model.requests,
     stream(request: Request, options?: { signal?: AbortSignal }): EventStream {
-      const stream = model.stream(request, options);
-      during(model.requests.length);
-      return stream;
+      const inner = model.stream(request, options);
+      const settled = during(model.requests.length);
+      return new EventStream(
+        (async function* () {
+          await settled;
+          yield* inner;
+        })(),
+        () => inner.close(),
+      );
     },
   };
 }
@@ -173,4 +190,127 @@ test("an interrupt that lands during the final reply beats a queued steer: the a
   expect(model.requests).toHaveLength(1);
   expect(queue).toEqual(["late"]);
   expect(reads).toEqual([null]);
+});
+
+// --- through the engine, and across a crash --- //
+
+const root = mkdtempSync(join(tmpdir(), "yian-late-steer-"));
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+/** A fresh run folder's log path. */
+const freshLog = () => join(mkdtempSync(join(root, "run-")), "log.jsonl");
+
+/** One tool-free agent `chat` reading steer inbox `notes`. */
+const FLOW = `
+id: late
+name: late
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  notes: !Inbox(str)
+nodes:
+  chat:
+    kind: agent
+    steer_inbox: \${input.notes}
+    system_prompt: Help.
+    prompt: Help the user.
+    output: str
+output: \${chat.output}
+`;
+
+/** `NO_ENV` with `YIAN_AGENT_MAX_TOOL_ITERATIONS` set to `cap`. */
+const capped = (cap: number) => (name: string) => (name === "YIAN_AGENT_MAX_TOOL_ITERATIONS" ? String(cap) : NO_ENV(name));
+
+/** Each node step of the log at `log`: a steer as its body, any other as its kind. */
+const steps = (log: string) =>
+  readRunLog(log).flatMap(({ record }) =>
+    record instanceof NodeStepRecord ? [record.step["kind"] === "steer" ? record.step : String(record.step["kind"])] : [],
+  );
+
+/** The seqs of the sends to `notes` in the log at `log`. */
+const sendSeqs = (log: string) =>
+  readRunLog(log).flatMap(({ seq, record }) => (record instanceof PoolCommitRecord && record.key === "__start__.notes" ? [seq] : []));
+
+/** A model answering "draft" then "final", sending "and cite" to `log`'s `notes` during the first reply. */
+const sendingModel = (log: string) =>
+  hooked(new ScriptedModel([textReply("draft"), textReply("final")], CONFIG), (i) =>
+    i === 1 ? send(log, "notes", "and cite") : undefined,
+  );
+
+test("through the engine: a send during the final reply writes a steer step and a second model_call", async () => {
+  const log = freshLog();
+  const model = sendingModel(log);
+  const result = await runWith(await loadFlow(FLOW), {}, null, model, { log });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("final");
+  const [seq] = sendSeqs(log);
+  expect(steps(log)).toEqual(["model_call", { kind: "steer", inbox: "notes", from: [BigInt(seq!)] }, "model_call"]);
+  expect(shown(model.requests[1]!).slice(-2)).toEqual([
+    ["assistant", "draft"],
+    ["user", "and cite"],
+  ]);
+  expect(result.unread).toEqual(new Map());
+});
+
+test("at the cap through the engine the event stays unread and no steer step is written", async () => {
+  const log = freshLog();
+  const result = await runWith(await loadFlow(FLOW), {}, null, sendingModel(log), { log, env: capped(1) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("draft");
+  expect(steps(log)).toEqual(["model_call"]);
+  expect(result.unread).toEqual(new Map([["notes", sendSeqs(log)]]));
+});
+
+/** The seq of the `i`th (from 0) node step of `kind` in the log at `log`. */
+const stepSeq = (log: string, kind: string, i = 0) =>
+  readRunLog(log).filter(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === kind)[i]!.seq;
+
+test("a crash between the late steer and its model call replays to the same point", async () => {
+  const uncut = freshLog();
+  const uncutModel = sendingModel(uncut);
+  await runWith(await loadFlow(FLOW), {}, null, uncutModel, { log: uncut });
+  const log = freshLog();
+  await crashAfter(stepSeq(uncut, "steer") + 1, async () => runWith(await loadFlow(FLOW), {}, null, sendingModel(log), { log }));
+  expect(steps(log).at(-1)).toMatchObject({ kind: "steer" });
+  const model = new ScriptedModel([textReply("final")], CONFIG);
+  const resumed = await resumeWith(await loadFlow(FLOW), log, null, model);
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("final");
+  expect(steps(log).filter((step) => typeof step !== "string")).toHaveLength(1);
+  expect(model.requests.map(shown)).toEqual([shown(uncutModel.requests[1]!)]);
+  const digests = readRunLog(log).flatMap(({ record }) =>
+    record instanceof NodeStepRecord && record.step["kind"] === "model_call" ? [record.step["request_sha256"]] : [],
+  );
+  expect(digests[1]).toBe(requestSha256(model.requests[0]!));
+});
+
+test("a crash after the final reply, before any steer: a send while down yields a late steer on resume", async () => {
+  const uncut = freshLog();
+  await runWith(await loadFlow(FLOW), {}, null, new ScriptedModel([textReply("draft")], CONFIG), { log: uncut });
+  const log = freshLog();
+  await crashAfter(stepSeq(uncut, "model_call") + 1, async () =>
+    runWith(await loadFlow(FLOW), {}, null, new ScriptedModel([textReply("draft")], CONFIG), { log }),
+  );
+  const seq = await send(log, "notes", "one more thing", { env: NO_ENV });
+  const model = new ScriptedModel([textReply("final")], CONFIG);
+  const resumed = await resumeWith(await loadFlow(FLOW), log, null, model);
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("final");
+  expect(steps(log)).toEqual(["model_call", { kind: "steer", inbox: "notes", from: [BigInt(seq)] }, "model_call"]);
+  expect(shown(model.requests[0]!).slice(-2)).toEqual([
+    ["assistant", "draft"],
+    ["user", "one more thing"],
+  ]);
+});
+
+test("a crash after the late model_call: replay takes it with a matching digest", async () => {
+  const uncut = freshLog();
+  await runWith(await loadFlow(FLOW), {}, null, sendingModel(uncut), { log: uncut });
+  const log = freshLog();
+  await crashAfter(stepSeq(uncut, "model_call", 1) + 1, async () => runWith(await loadFlow(FLOW), {}, null, sendingModel(log), { log }));
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resumeWith(await loadFlow(FLOW), log, null, model);
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("final");
+  expect(model.requests).toEqual([]);
+  expect(steps(log).filter((step) => step === "model_call")).toHaveLength(2);
 });

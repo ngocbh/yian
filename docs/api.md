@@ -1414,7 +1414,10 @@ the output's shape, a result not retained with `learnable: true`, and headers th
 one is in progress rejects with an `Error` ("a backward call on this result is already in progress")
 and appends nothing. The `learning` and `backwardOutcome` getters read the last accepted attempt
 this result observed, so they change when a call settles, whether it resolves or rejects after its
-attempt was accepted. `onEvent`, which Python lacks, receives each AGENT backward model call's retry
+attempt was accepted. Feedback that reaches an AGENT's `${x.new_messages}` (a flow output bound
+to it, say) is delivered to that AGENT's backward with the feedback on its output, in order, as
+text: text as it is, and a selection of messages as one line per text leaf
+(`new_messages[0].parts[0].text: too curt`), lists by index and records by key. `onEvent`, which Python lacks, receives each AGENT backward model call's retry
 as a `ModelCallRetried` (consumer `"backward"`) and one `ReplayDegraded` per reason per call; a
 throw from it fails that AGENT's backward, and the attempt finishes `failed`. Without it (the
 default) nothing is published.

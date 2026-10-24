@@ -35,6 +35,7 @@ import { hostOnlyFieldError, LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS } from "..
 import { blockFieldAnnotation, type BlockFieldType, PROVIDER_BLOCKS } from "../../llm_clients/provider_blocks.ts";
 import { valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
+import { NEW_MESSAGES } from "../../typesys/pool.ts";
 import {
   Binding,
   iterSourceStrings,
@@ -194,9 +195,11 @@ class Checker {
           "CODE node and read its output",
       );
     }
-    if (!checkRefs) return;
     const inputNames = new Set(this.flowInputs.keys());
     for (const ref of refs) {
+      // The reference pass accepts an AGENT's new messages for the node's other reads, so a
+      // node layer refuses them here too: its node-id targets have no `<id>.new_messages`.
+      if (!checkRefs && ref.split(".")[1] !== NEW_MESSAGES) continue;
       const problem = classifyPath(ref, this.nodeIds, inputNames);
       if (problem !== null) throw fail(problem);
     }

@@ -813,6 +813,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/defaults.md]: https://github.com/ngocbh/yian/blob/main/docs/defaults.md
 [docs/syntax.md]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md
 [docs/syntax.md#a-list-prompt]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md#a-list-prompt
+[docs/syntax.md#an-agents-new-messages]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md#an-agents-new-messages
 [docs/syntax.md#code--tool--the-other-leaves]: https://github.com/ngocbh/yian/blob/main/docs/syntax.md#code--tool--the-other-leaves
 [docs/typing.md#two-constructors-infer-vs-check]: https://github.com/ngocbh/yian/blob/main/docs/typing.md#two-constructors-infer-vs-check
 [docs/typing.md#variablepool--the-runs-typed-value-store]: https://github.com/ngocbh/yian/blob/main/docs/typing.md#variablepool--the-runs-typed-value-store
@@ -1143,6 +1144,14 @@ Node 22, and so does every unit test; a change keeps both green.
     - ${history}          # a !list(Message) input, or !list(Msg) with Msg = {role: Literal(user, assistant), text: str}
     - user: ${message}
   ```
+  A loop body adds the turn to it with `${input.history + reply.new_messages}`: an AGENT's
+  `${x.new_messages}` is its second readable value, `list(Message)` (see [An AGENT's new
+  messages][docs/syntax.md#an-agents-new-messages]). Compose keeps it under the pool name
+  `messagesKey(id)`: `producers` maps it to `ValueContract(newMessagesType())` for each
+  `producesMessages` node, the reference targets hold it (not for a CASE's wiring), and
+  `refProducer` gives the agent, so edges, skips and child renames follow it like `.output`.
+  Learning takes an occurrence's messages through `takeOccurrenceMessages`, which adds the
+  feedback sent to its `messagesSource` as text (`workFeedback`).
 - `src/nodes/agent/messages.ts` holds the built-in `Message` value (`Message`, `MessagePart`,
   `checkMessage`), its conversion to and from the model message (`toModelMessage`,
   `fromModelMessage`, through `llm/messages.ts`' strict `yian.message.v1` reader), and

@@ -1,0 +1,55 @@
+# TS-only: a flow output reads an AGENT's new messages, `list(Message)`, here its one reply,
+# rebuilt from its messages commit. Tool-less: a crash between a tool call and its result
+# resumes with an unknown-outcome result, so a crash sweep can't expect one history; the tool
+# turn is covered in ts/tests/engine/agent_new_messages.test.ts.
+kind: run
+rules: [run-log]
+python_skip: "new_messages is TS-only (#1081)"
+flow: |
+  id: messages
+  name: messages
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    writer:
+      kind: agent
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output:
+    answer: ${writer.output}
+    history: ${writer.new_messages}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    writer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: done}
+expect:
+  output:
+    status: succeeded
+    output:
+      answer: done
+      history:
+      - role: assistant
+        parts: [{type: text, text: done}]
+  trace:
+    - [run_started, null, {effective_llm_by_static_path: {writer: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, writer]
+    - [node_step, writer, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 0c2d612474786e4d309464090eba530c35a97e3b3432cf6da0b668dd13355633, response_id: null, usage: null}}]
+    - [pool_commit, writer, {value: done}]
+    - [pool_commit, writer, {key: writer.new_messages, steps: [9]}]
+    - [node_succeeded, writer, {commit: 10, messages: 11}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: {answer: done, history: [{parts: [{text: done, type: text}], role: assistant}]}}]
+    - [node_succeeded, __end__, {commit: 14}]

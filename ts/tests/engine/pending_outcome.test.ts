@@ -46,3 +46,29 @@ test("the base node registers no host calls, so it shapes no result step", () =>
   expect(shape).toThrow(TypeError);
   expect(shape).toThrow(/registers no host calls/);
 });
+
+import { type NodeCaps } from "../../src/nodes/base.ts";
+import { evalNode, EvaluatedOutcome } from "../../src/runtime/eval_node.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
+import { engine, graph, rejected } from "./run_state_fixtures.ts";
+
+class Waits extends Node {
+  readonly kind = NodeKind.CODE;
+  override readonly needsSteps = true;
+  seen: NodeSteps | undefined = undefined;
+  override forward(_inputs: Record<string, unknown>, caps: NodeCaps) {
+    this.seen = caps.steps;
+    return new Pending(["r/w"]);
+  }
+}
+test("evalNode resolves a Pending, and the steps it sees carry calls and the limit", async () => {
+  const node = new Waits("w");
+  const evaluated = await evalNode(node, null, new VariablePool("__start__"), { steps: new NodeSteps(1, [], record, [view], 64) });
+  expect(evaluated.outcome).toBeInstanceOf(Pending);
+  expect([node.seen!.calls, node.seen!.maxEventBytes]).toEqual([[view], 64]);
+  expect(new EvaluatedOutcome(new Pending(["x"]), null).outcome).toBeInstanceOf(Pending);
+});
+test("until the engine waits, a Pending outcome is an unsupported outcome", async () => {
+  const run = engine(graph([new Waits("w")], [["__start__", "w"], ["w", "__end__"]]));
+  expect(String(await rejected(run.run()))).toContain("unsupported outcome");
+});

@@ -4483,27 +4483,46 @@ loop node 'pages': binding 'cursor' — child expects 'str', but the value null 
 
 A carried value that grows each iteration, such as a chat's history, stays linear in the run log
 when each node outputs only what is new and a binding does the append. The body's output binding
-(its `__end__`), the expansion's child START, and the LOOP driver are derived values: TS yian
-records them as `from` pointers to the commits they read and rebuilds them on replay, so the
-history itself is never written again. `examples/chat.yaml` records each turn's message and
-reply; `respond`'s output binding appends them:
+(its `__end__`), a CALL's and the expansion's child START, and the LOOP driver are derived
+values: TS yian records them as `from` pointers to the commits they read and rebuilds them on
+replay, so the history itself is never written again. `examples/chat.yaml` records each turn's
+reply; `respond` returns the new turn, and the turn's output binding appends it to the history
+`compacted` (a CALL of `compact_history.yaml`) returned:
 
 ```yaml
-reply:
-  kind: agent
-  input: {history: "${input.history}", message: "${input.message}"}
-  output: str                                    # only this turn's reply is recorded
-  prompt:
-    - ${history}
-    - user: ${message}
-output: !Turn
-  history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-  closed: false
+respond:
+  input: {summary: !str, history: !list(Msg), message: !str}
+  nodes:
+    reply:
+      kind: agent
+      input: {summary: "${input.summary}", history: "${input.history}", message: "${input.message}"}
+      output: str                                # only this turn's reply is recorded
+      system_prompt: |-
+        You are a helpful conversational assistant.
+
+        Conversation so far: ${summary}
+      prompt:
+        - ${history}
+        - user: ${message}
+  output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
+
+# in the loop body `turn`:
+output: !State
+  summary: ${compacted.output.summary}
+  history: ${compacted.output.history + (answered.output :- [])}
+  closed: ${heard.output.closed}
 ```
+
+`answered` (the CALL of `respond`) flattens the turns in its own input binding,
+`history: ${[m for t in compacted.output.history for m in t]}`, so the reply AGENT binds a plain
+reference: a CALL's binding is rebuilt, never recorded, while an AGENT's learnable capture would
+hold one route per message.
 
 A node that returns the whole history every turn makes the log grow quadratically again. So does
 a value entry that carries it: a value entry lowers to a CODE node (see "How a value entry runs"),
-which records its value. `chat.yaml`'s `ended` entry runs once, on the last turn.
+which records its value. `chat.yaml` has no value entry: the closing turn skips `answered`, and
+`answered.output :- []` appends nothing. Only the flow's own output, written once per run,
+holds the history.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

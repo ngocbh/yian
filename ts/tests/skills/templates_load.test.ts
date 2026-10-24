@@ -2,8 +2,9 @@
  * Every `composing-agents` skill template loads: a port of `tests/engine/test_templates_load.py`.
  * The templates are part of the authoring contract, so one that no longer loads is a bug.
  *
- * Changed: Python skips the templates written with TS yian's `ask`, `sleep` and `take`; TS loads
- * them, and skips the two whose CODE bodies are Python (`PYTHON_ONLY`).
+ * Changed: Python skips the templates written with TS yian's `ask`, `sleep` and `take`, list
+ * comprehensions, `len()` and slices; TS loads them, and skips the two whose CODE bodies are
+ * Python (`PYTHON_ONLY`).
  */
 
 import { expect, test } from "bun:test";
@@ -26,7 +27,14 @@ test.each(NAMES)("template %s loads", async (name) => {
 });
 
 test("the migrated templates are among those loaded", () => {
-  for (const name of ["chat.yaml", "human-in-loop.yaml", "human-questions.yaml", "loop.yaml", "sleep-until.yaml"]) {
+  for (const name of [
+    "chat.yaml",
+    "compact_history.yaml",
+    "human-in-loop.yaml",
+    "human-questions.yaml",
+    "loop.yaml",
+    "sleep-until.yaml",
+  ]) {
     expect(NAMES).toContain(name);
   }
   for (const name of PYTHON_ONLY) expect(existsSync(join(TEMPLATES, name))).toBe(true);

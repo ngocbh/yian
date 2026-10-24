@@ -26,7 +26,7 @@ import {
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { NO_ENV } from "../engine/run_state_fixtures.ts";
+import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../engine/run_state_fixtures.ts";
 import { CTRL_C, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
@@ -594,6 +594,47 @@ test(
       expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
       expect(stdout()).toBe("7\n7\n");
       expect(calls).toBe(2);
+      expect(inspectRun(log).status).toBe("succeeded");
+    } finally {
+      globalThis.fetch = original;
+    }
+  },
+  TIMEOUT,
+);
+
+/** A chat-completions stream of `text`, built like `SEVEN`. */
+const stream = (text: string) =>
+  [
+    { choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+  ]
+    .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+    .join("") + "data: [DONE]\n\n";
+
+test(
+  "the summary a fold writes is never printed",
+  async () => {
+    const path = writeSmallBudgetChat(tmp);
+    const env = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+    const { io, stdin, stdout, stderr } = chatIo({ env });
+    // Five turns of 51 characters (a 50-character line and the reply "7") pass 200 and keep 4,
+    // so the closing turn folds once.
+    stdin.write(`${["a", "b", "c", "d", "e"].map((c) => c.repeat(50)).join("\n")}\n/exit\n`);
+    let calls = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: Request | string | URL, init?: RequestInit) => {
+      calls += 1;
+      const body = input instanceof Request ? await input.text() : String(init?.body);
+      const text = body.includes(SUMMARIZER_FIRST_LINE) ? "SUMMARY-TEXT" : "7";
+      return new Response(stream(text), { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    try {
+      const { code, log } = await runChat(path, io);
+      expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stdout()).toBe("7\n".repeat(5));
+      expect(stdout()).not.toContain("SUMMARY-TEXT");
+      expect(stderr()).not.toContain("SUMMARY-TEXT");
+      expect(calls).toBe(6);
       expect(inspectRun(log).status).toBe("succeeded");
     } finally {
       globalThis.fetch = original;

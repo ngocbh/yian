@@ -1279,45 +1279,58 @@ optional for `while:`/`until:` but **redundant and rejected** with `times:`. A
 `while:`/`until:` is an expression string; `while: true` or `until: 1` is a load error.
 
 #### Conversational REPL — the `loop` shape of `examples/chat.yaml`
-A chat is a `loop` that carries an `Inbox(str)` input into every turn. Each turn's
-`take: all` reads every message sent since the last one, then a `case` picks the turn's
-record (the carried `{transcript: str, closed: bool}` `Turn`). A take that returns no
-events means the inbox closed with nothing left, so it routes to `ended: !Turn {...}`, a
-value entry that keeps the transcript and sets `closed: true`; `else:` calls a `respond`
-def whose `reply` AGENT node and `turn_end` value entry return the same record. The body's
-output is `!Turn ${route.output}`: the tag types whichever branch ran as the carried
-record. Ending is the host's `close` (`/exit` in `yian chat`), so no text is special. See
+A chat is a `loop` that carries an `Inbox(str)` input into every turn, with the record
+`{summary: str, history: list(list(Msg)), closed: bool}` (one inner list per turn). Each turn
+runs two nodes side by side: `take: all` reads every message sent since the last one, and
+`compacted` CALLs [`templates/compact_history.yaml`](templates/compact_history.yaml) (a `uses:`
+sibling), which passes the history through under its character budget or folds the older turns
+into the summary with one model call. It runs after the reply, so the run ends `waiting` once
+any fold is done; in `yian chat` a fold delays the next prompt.
+A routing-only `case` sends a non-empty `events` to `answered`, a CALL of `respond`; a take
+that returns no events (the inbox closed with nothing left) skips it. `closed` comes from the
+take. Ending is the host's `close` (`/exit` in `yian chat`), so no text is special. See
 [`templates/chat.yaml`](templates/chat.yaml).
 
-TS yian only: carry the history as a list of messages and send it as real turns with a list
-`prompt:` (see [A list prompt](../../../docs/syntax.md#a-list-prompt)). The AGENT outputs only
-the new reply; the def's output binding appends both turns, so a user can't forge an
-`Assistant:` turn and the provider can cache the prefix:
+TS yian only: send the history as real turns with a list `prompt:` (see
+[A list prompt](../../../docs/syntax.md#a-list-prompt)), so a user can't forge an `Assistant:`
+turn and the provider can cache the prefix. The AGENT outputs only the new reply; `respond`
+returns the one new turn, and the body's output binding appends it:
 ```yaml
 typedefs:
   Msg: {role: "Literal(user, assistant)", text: str}   # any record with role and text: str
 defs:
   respond:
-    input: {history: !list(Msg), message: !str}
+    input: {summary: !str, history: !list(Msg), message: !str}
     nodes:
       reply:
         kind: agent
-        input: {history: "${input.history}", message: "${input.message}"}
+        input: {summary: "${input.summary}", history: "${input.history}", message: "${input.message}"}
         output: str
-        system_prompt: You are a helpful conversational assistant.
+        system_prompt: |-
+          You are a helpful conversational assistant.
+
+          Conversation so far: ${summary}
         prompt:
           - ${history}          # a message or a list of messages, spliced in order
           - user: ${message}    # one message; text is a template (`assistant:` too, not last)
-    output:
-      history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
+    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
+  turn:                         # in its nodes: compacted, heard, route, and
+    # answered: {kind: call, call: respond, input: {summary: "${compacted.output.summary}",
+    #   history: "${[m for t in compacted.output.history for m in t]}", message: "${join(heard.output.events)}"}}
+    output: !State
+      summary: ${compacted.output.summary}
+      history: ${compacted.output.history + (answered.output :- [])}
+      closed: ${heard.output.closed}
 ```
 A `system:` item, a last `assistant:` item, an empty list, or a spliced input whose type
 can't hold messages (`str`) fails at load; a spliced value that isn't messages, or a rendered
 list not ending with `user`, fails the node.
 This shape keeps the run log linear (see [`examples/chat.yaml`](../../../examples/chat.yaml)):
 the reply is recorded, and the appended history is a derived value the log holds as `from`
-pointers. Don't have a node (or a value entry, which lowers to a CODE node) return the whole
-history every turn: that records it each turn and the log grows quadratically.
+pointers. Flatten the turns in the CALL's binding (`answered`), not the AGENT's, so a learnable
+capture holds one route, not one per message. Don't have a node (or a value entry, which lowers
+to a CODE node) return the whole history every turn: that records it each turn and the log
+grows quadratically.
 
 To keep the agent's tool calls and results in the history, carry `!list(Message)` and append
 `${reply.new_messages}`, everything the agent's call added (its prompt isn't in it):

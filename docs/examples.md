@@ -180,11 +180,18 @@ The host's handler returns `pending()` and answers later with `complete()`; the 
 
 ## `chat.yaml` — a turn-by-turn chat
 
-A conversational assistant on an inbox. The flow takes `messages: !Inbox(str)`: the host
-sends each line the user types to it, and closes it to end the chat. A LOOP runs one turn
-per batch of messages. Each turn starts with a TOOL `take`:
+A conversational assistant on an inbox that folds older turns into a rolling summary. The
+flow takes `messages: !Inbox(str)`: the host sends each line the user types to it, and closes
+it to end the chat. A LOOP runs one turn per batch of messages and carries
+`{summary, history, closed}`, where `history` is a list of turns, each a list of messages.
+Each turn starts two nodes side by side, a TOOL `take` and a CALL of
+[`compact_history.yaml`](#compact_historyyaml-a-rolling-summary):
 
 ```yaml
+compacted:                      # beside `heard`: compacts the history so far
+  kind: call
+  call: compact_history
+  input: {summary: "${input.summary}", history: "${input.history}"}
 heard:
   kind: tool
   tool_id: take                 # waits until a message arrives or the inbox closes
@@ -193,11 +200,23 @@ heard:
     take: all
 ```
 
-`take: all` returns everything sent since the last turn as `{events, closed}`. A `case`
-routes an empty `events` (the inbox closed with nothing left to answer) to the turn that
-ends the loop, and anything else to the `respond` def, whose AGENT replies. While no
-message is waiting, the run ends `waiting`; the host sends the next message and calls
-`advance`.
+`take: all` returns everything sent since the last turn as `{events, closed}`. `compacted`
+runs right after the reply, beside the take; while no message is waiting the run ends
+`waiting`, once any fold is done. A routing-only `case` sends a non-empty
+`events` to `answered`, a CALL of the `respond` def whose AGENT replies. `answered` gets the
+summary and the kept turns flattened into one list of messages
+(`${[m for t in compacted.output.history for m in t]}`), and the reply's system prompt ends
+with `Conversation so far: ${summary}` (empty before the first fold). The turn's output
+appends the new turn: `${compacted.output.history + (answered.output :- [])}`. `closed` comes
+from the take, so a take that returns events with `closed: true` is answered and then ends the
+loop, and a closed take with no events skips `answered`. The flow's output is
+`{summary, history}`: the final summary and the kept recent turns, flattened into one list of
+messages (the folded turns live only in the summary).
+
+The AGENT records only its reply, and the history is built in derived bindings (CALL and END
+commits are pointers), so the run log grows linearly: per turn a constant, plus one summary
+per fold, plus the flow's output once. Every reply request holds at most the budget, the new
+message, the summary and the system text.
 
 Chat with it at the terminal (TS yian; see [Chatting with a flow](cli.md#chatting-with-a-flow-yian-chat)):
 
@@ -207,8 +226,50 @@ yian chat examples/chat.yaml
 #   → /exit (or Ctrl-D) closes the inbox and ends the chat
 ```
 
+On a turn that folds, the reply prints, and the next prompt appears only once the summary is
+written. The summary itself is never printed.
+
 Changed (TS yian): the chat asked through a `human_input` node each turn and ended on
-`/exit`; TS yian removed that kind, so this file needs TS yian.
+`/exit`; TS yian removed that kind, so this file needs TS yian. It also uses list
+comprehensions, `len()` and slices, which are TS-only.
+
+## `compact_history.yaml` — a rolling summary
+
+Keeps a chat history's text under a budget by folding older turns into a rolling summary;
+`chat.yaml` calls it each turn, and any flow that carries a history can. Its inputs:
+
+| Input | Default | Meaning |
+|---|---|---|
+| `summary` | (required) | the summary so far (`""` before the first fold) |
+| `history` | (required) | `list(list(Msg))`: one list of messages per turn |
+| `budget` | `32000` | characters of message text before compacting |
+| `keep` | `4` | whole turns kept verbatim |
+
+It returns `{summary, history}`. A routing-only `case` checks
+`len(input.history) > input.keep` and the history's text length
+(`len(join([m.text for t in input.history for m in t], ""))`) against `budget`:
+
+- **Under budget, or at most `keep` turns:** the case takes no branch, `folded` is skipped
+  and the output's `:-` defaults pass both inputs through, with no model call.
+- **Over budget:** `folded` calls the `fold` def, whose AGENT `summarize` writes a new summary
+  from the old one and the older turns, and the last `keep` turns stay verbatim.
+
+`keep` counts whole turns, so the cut always falls between turns:
+`history[:len(history) - keep]` is folded and `history[len(history) - keep:]` is kept. The
+slices sit in the `folded` CALL's input binding, not the AGENT's: a CALL's binding is rebuilt,
+never recorded, and the AGENT binds plain references, so a learnable run records constant-size
+routes. `keep: 0` (or less) folds every turn.
+
+The summarizer is an ordinary AGENT: after the normal model retries a failed summary fails the
+run, and a failed run is terminal, so a failed summary ends the chat. The AGENT is never named `reply`, because
+`yian chat` prints any node named `reply`.
+
+`Msg` is text-only (`{role, text}`) for now. When chats carry tools, `Msg` becomes the
+built-in `Message`, and the budget and the prompt read text parts, so this flow's interface
+changes then.
+
+Changed (TS yian): list comprehensions, `len()` and slices are TS-only, so this file needs TS
+yian.
 
 ## `decision-brief.yaml` — a realistic multi-stage flow
 

@@ -11,7 +11,8 @@
  * helpers of the run-level AGENT and memory tests (`PLAIN_FLOW`, `runWith`, `resumeWith`,
  * `CrashAt`, `crashes`, `sentTexts`, `reply`, `backwardReply`,
  * `memorySections`, `memorySnapshot`) and the in-process `yian run` over a fake chat endpoint
- * (`runCli`, `ChatText`).
+ * (`runCli`, `ChatText`), and the chat examples' model that answers by system prompt
+ * (`PromptModel`) and small-budget copy (`writeSmallBudgetChat`).
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -489,6 +490,57 @@ export async function drive(
 /** Return an assistant reply holding only `text`, finished with `stop`. */
 export function textReply(text: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" });
+}
+
+/** The first line of `examples/compact_history.yaml`'s summarizer system prompt. */
+export const SUMMARIZER_FIRST_LINE =
+  "You keep a running summary of a conversation between a user and an assistant, so the";
+/** The first line of `examples/chat.yaml`'s reply system prompt. */
+export const REPLY_FIRST_LINE = "You are a helpful conversational assistant.";
+
+/** A request's system message text, or "". */
+export const systemText = (request: Request): string =>
+  request.messages.find((message) => message.role === "system")?.text() ?? "";
+
+/**
+ * A `ChatModel` that answers by system prompt: the summarizer gets `summary`, a reply request
+ * `reply`, and any other request (a backward request) the next of `backward`, then empty
+ * feedback. Every request is kept in `requests`.
+ */
+export class PromptModel implements ChatModel {
+  readonly provider = "anthropic";
+  readonly model = "claude-test";
+  readonly requests: Request[] = [];
+  readonly answers: { reply: string; summary: string; backward?: Response[] };
+  constructor(answers: { reply: string; summary: string; backward?: Response[] }) {
+    this.answers = answers;
+  }
+  stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    this.requests.push(request);
+    const system = systemText(request);
+    const answer = system.startsWith(SUMMARIZER_FIRST_LINE)
+      ? textReply(this.answers.summary)
+      : system.startsWith(REPLY_FIRST_LINE)
+        ? textReply(this.answers.reply)
+        : (this.answers.backward?.shift() ?? textReply(NO_FEEDBACK));
+    return new ScriptedModel([answer], this).stream(request, options);
+  }
+}
+
+/**
+ * Write `examples/chat.yaml` with a 200-character compaction budget (passed to its `compacted`
+ * call) and an unchanged `examples/compact_history.yaml` beside it into `dir`; return the chat's
+ * path. Five 60-character turns pass that budget, so small tests fold.
+ */
+export function writeSmallBudgetChat(dir: string): string {
+  const examples = join(import.meta.dirname, "../../../examples");
+  const chatText = readFileSync(join(examples, "chat.yaml"), "utf8");
+  const compactedInput = `input: {summary: "\${input.summary}", history: "\${input.history}"}`;
+  expect(chatText).toContain(compactedInput);
+  const path = join(dir, "chat.yaml");
+  writeFileSync(path, chatText.replace(compactedInput, `${compactedInput.slice(0, -1)}, budget: 200}`));
+  writeFileSync(join(dir, "compact_history.yaml"), readFileSync(join(examples, "compact_history.yaml"), "utf8"));
+  return path;
 }
 
 /** One assistant reply calling `calls` (`[name, args, id]`), finished with `tool_calls`. */

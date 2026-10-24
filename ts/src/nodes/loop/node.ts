@@ -252,13 +252,16 @@ export class LoopNode extends Node {
   }
 
   /**
-   * Capture every carried input, including fields the body doesn't consume.
+   * Capture every carried input, including fields the body doesn't consume, except the inboxes a
+   * stopped driver's output leaves out.
    *
    * @returns The `input_output_paths` record from each carried input name to its same-named field
    *   in a stopped driver's record output.
    */
   override captureBackwardContext(): Record<string, unknown> {
-    return { input_output_paths: Object.fromEntries(this.backwardInputNames().map((name) => [name, [name]])) };
+    const inboxes = this.inboxNames();
+    const names = this.backwardInputNames().filter((name) => !inboxes.includes(name));
+    return { input_output_paths: Object.fromEntries(names.map((name) => [name, [name]])) };
   }
 
   /**
@@ -463,9 +466,14 @@ export class LoopNode extends Node {
     return carried;
   }
 
+  /** The names of the fields the body takes as inboxes. */
+  private inboxNames(): string[] {
+    return this.childInputs.filter((param) => isInboxType(param.contract?.type)).map((param) => param.name);
+  }
+
   /** Return `carried` without the fields the body takes as inboxes: a loop carries them, never returns them. */
   private withoutInboxes(carried: ValueRecord): ValueRecord {
-    const inboxes = this.childInputs.filter((param) => isInboxType(param.contract?.type)).map((param) => param.name);
+    const inboxes = this.inboxNames();
     if (inboxes.length === 0) return carried;
     const kept: ValueRecord = {};
     for (const [name, value] of Object.entries(carried)) if (!inboxes.includes(name)) setField(kept, name, value);

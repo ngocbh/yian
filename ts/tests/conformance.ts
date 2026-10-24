@@ -2834,7 +2834,7 @@ function goldenLog(log: string, ctx: CaseContext): void {
 /**
  * Throw a `CaseFailure` naming the first invariant the run log at `log` breaks (`at` says where in
  * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
- * 0); after the run's terminal outcome only backward and memory records follow; after a
+ * 0; a waiting node isn't, nor a woken TOOL node); after the run's terminal outcome only backward and memory records follow; after a
  * `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a replay's
  * status, in-flight nodes, crashed counts and failure, and the log's run id, schema, flow
  * fingerprint, learnable flag and last seq (and no waits), and without it the same except in its one blind
@@ -2854,6 +2854,11 @@ async function checkInvariants(
   };
   const envelopes = readRunLog(log);
   if (envelopes.length === 0) return;
+  const replay = (count: number) =>
+    withEnv(options.env, () => replayRunLog(flow, MemoryRunLog.fromRecords(envelopes.slice(0, count))));
+  // A woken AGENT calls a model and takes a worker; a woken TOOL node decides inline and takes
+  // none (`wakesWithoutWorker`). The node is live in the graph the log replays to before its wake.
+  const wakeTakesWorker = (seq: number, nodeId: string) => !replay(seq).flow.nodes.get(nodeId)!.wakesWithoutWorker;
   const inFlight = new Set<string>();
   let workers = 1;
   let stopped = false;
@@ -2869,7 +2874,13 @@ async function checkInvariants(
     }
     if (kind === "run_stopped") stopped = true;
     if (kind === "node_started") inFlight.add(payload["node_id"] as string);
-    if (kind === "node_succeeded" || kind === "node_routed") inFlight.delete(payload["node_id"] as string);
+    if (kind === "node_woken" && wakeTakesWorker(seq, payload["node_id"] as string)) {
+      inFlight.add(payload["node_id"] as string);
+    }
+    // A waiting node holds no worker, so other ready work runs beside it.
+    if (kind === "node_succeeded" || kind === "node_routed" || kind === "node_waiting") {
+      inFlight.delete(payload["node_id"] as string);
+    }
     if (kind === "node_expanded") inFlight.delete(payload["spawner_id"] as string);
     if (kind === "node_failed") inFlight.delete((payload["failure"] as Readonly<Case>)["node_id"] as string);
     if (inFlight.size > workers) {
@@ -2877,8 +2888,6 @@ async function checkInvariants(
     }
     if (!kind.startsWith("backward_") && !kind.startsWith("memory_")) lastRun = seq;
   });
-  const replay = (count: number) =>
-    withEnv(options.env, () => replayRunLog(flow, MemoryRunLog.fromRecords(envelopes.slice(0, count))));
   // A terminal result is never undone, so checking the prefix before the last run record covers
   // every record after it. A prefix inside the run start (through the START inputs' commit, the
   // first whose key is its node) can't be replayed, and holds no outcome.

@@ -8,8 +8,16 @@ import pytest
 from yian.compose.loader import load_flow
 
 _TEMPLATES = Path(__file__).resolve().parents[2] / ".claude/skills/composing-agents/templates"
-# Templates written with TS yian's ask, sleep and take built-ins, which Python yian doesn't have.
-TS_ONLY = {"chat.yaml", "human-in-loop.yaml", "human-questions.yaml", "loop.yaml", "sleep-until.yaml"}
+# Templates written with TS yian's ask, sleep and take built-ins, or its list comprehensions,
+# len() and slices, which Python yian doesn't have.
+TS_ONLY = {
+    "chat.yaml",
+    "compact_history.yaml",
+    "human-in-loop.yaml",
+    "human-questions.yaml",
+    "loop.yaml",
+    "sleep-until.yaml",
+}
 
 
 @pytest.mark.parametrize("path", sorted(_TEMPLATES.glob("*.yaml")), ids=lambda p: p.name)

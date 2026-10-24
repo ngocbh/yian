@@ -31,7 +31,8 @@ Copy, rename, and edit.
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — an `ask` each turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL on an `Inbox(str)` — `take: all` → CASE (a closed inbox routes to a `!Turn` value entry, else a reply call), the shape of `examples/chat.yaml` |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL on an `Inbox(str)` — `take: all` beside a `compact_history` CALL → routing-only CASE → reply call; carries `{summary, history, closed}`, the shape of `examples/chat.yaml` |
+| [`compact_history.yaml`](templates/compact_history.yaml) | keep a list of turns under a character budget by folding older turns into a rolling summary — routing-only CASE, a skipped CALL plus `:-` pass-through, slices in a CALL binding |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -484,16 +485,21 @@ iteration's size, not the iteration count. See
 `loop.yaml`.
 
 **Conversational REPL (LOOP + take).** A chat flow takes `messages: !Inbox(str)` and a
-`loop` carries it into every turn. The body's `take: all` reads every message sent since
-the last turn, then a CASE picks the carried 2-field record
-`{transcript: str, closed: bool}` (`'a -> 'a`). A take with no events means the inbox
-closed with nothing left: it routes to `ended: !Turn {...}`, a value entry that keeps the
-transcript and sets `closed: true`; `else:` calls a `respond` def whose `reply` (`agent`)
-and `turn_end` value entry append the messages and reply. The body's output is
-`!Turn ${route.output}`; the tag is required, as it types whichever branch ran as the
-carried record. Ending is the host's `close` of the inbox. The loop body's `output:` may
-return only the fields that change; a field it omits keeps its value. See `chat.yaml`
-(and `examples/chat.yaml` for a runnable copy).
+`loop` carries it into every turn, with the record `{summary: str, history:
+list(list(Msg)), closed: bool}` (`'a -> 'a`; one inner list per turn). Each turn runs two
+nodes side by side: a `take: all` that reads every message sent since the last turn, and
+`compacted`, a CALL of `compact_history` (a `uses:` sibling) that passes the history through
+under its budget or folds the older turns into the summary with one model call. It runs after
+the reply, so the run ends `waiting` once any fold is done; in `yian chat` a fold delays the
+next prompt. A routing-only CASE sends a non-empty `events` to
+`answered`, a CALL of a `respond` def whose `reply` (`agent`) gets the summary in its system
+prompt and the kept turns flattened in the CALL's binding
+(`${[m for t in compacted.output.history for m in t]}`); `respond` returns the one new turn.
+The body's output appends it, `${compacted.output.history + (answered.output :- [])}`, and
+takes `closed` from the take, so a closed take with no events skips `answered` and ends the
+loop. Ending is the host's `close` of the inbox. The loop body's `output:` may return only the
+fields that change; a field it omits keeps its value. See `chat.yaml` and
+`compact_history.yaml` (and `examples/` for runnable copies).
 
 ## Gotchas
 

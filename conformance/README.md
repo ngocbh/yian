@@ -582,7 +582,7 @@ For example:
 - Values are plain values: a `pool_commit`'s `value` is recorded typed (`kind` and `value`), and
   is written without the kind tag (a file as `{uri, mime, name}`); every other value
   (captures, feedback) is recorded plain already.
-- A take commit (TS schema 17) holds no `value` but `inbox`, `events` (the seqs of the send
+- A take commit (TS schema 18) holds no `value` but `inbox`, `events` (the seqs of the send
   commits it consumed, in order) and `closed` (whether it saw the inbox closed); its node's
   success rebuilds the value from those sends.
 - `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `waits` and `timed_out`

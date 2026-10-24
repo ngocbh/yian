@@ -70,10 +70,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -486,21 +486,27 @@ function validatedDefaults(recorded: unknown): Readonly<Record<string, bigint>> 
   return Object.freeze(Object.fromEntries(entries) as Record<string, bigint>);
 }
 
-/** Start a recovery segment with ordered unfinished work and a worker count. Frozen. */
+/**
+ * Start a recovery segment with ordered unfinished work and a worker count, closing the open calls
+ * of the nodes it retries. Frozen.
+ */
 export class RunResumedRecord {
   /** Unfinished node ids to retry, in order; unique and non-empty. */
   readonly retryNodeIds: readonly string[];
   /** The worker count of the recovery segment. */
   readonly numWorkers: number;
+  /** The open calls of retried nodes this resume closes, in order; unique and non-empty, possibly none. */
+  readonly closedCalls: readonly string[];
 
   /**
-   * @throws RangeError when `retryNodeIds` isn't an array of unique non-empty strings, or
-   *   `numWorkers` is negative.
+   * @throws RangeError when `retryNodeIds` or `closedCalls` isn't an array of unique non-empty
+   *   strings, or `numWorkers` is negative.
    * @throws TypeError when `numWorkers` isn't a safe integer.
    */
-  constructor(retryNodeIds: readonly string[], numWorkers: number) {
+  constructor(retryNodeIds: readonly string[], numWorkers: number, closedCalls: readonly string[] = []) {
     this.retryNodeIds = validatedIdArray(retryNodeIds, "retry_node_ids");
     this.numWorkers = validatedCount(numWorkers, "num_workers");
+    this.closedCalls = validatedIdArray(closedCalls, "closed_calls");
     Object.freeze(this);
   }
 }
@@ -3049,7 +3055,11 @@ function payloadForRecord(record: RunRecord): JsonObject {
     };
   }
   if (record instanceof RunResumedRecord) {
-    return { retry_node_ids: [...record.retryNodeIds], num_workers: BigInt(record.numWorkers) };
+    return {
+      retry_node_ids: [...record.retryNodeIds],
+      num_workers: BigInt(record.numWorkers),
+      closed_calls: [...record.closedCalls],
+    };
   }
   if (record instanceof RunStoppedRecord) {
     return { reason: record.reason, message: record.message, node_ids: [...record.nodeIds] };
@@ -3186,10 +3196,11 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });
     case "run_resumed":
-      requireFields(payload, ["retry_node_ids", "num_workers"], label);
+      requireFields(payload, ["retry_node_ids", "num_workers", "closed_calls"], label);
       return new RunResumedRecord(
         wireTextArray(payload["retry_node_ids"], `${label} retry_node_ids`),
         wireInt(payload["num_workers"], `${label} num_workers`),
+        wireTextArray(payload["closed_calls"], `${label} closed_calls`),
       );
     case "run_stopped":
       requireFields(payload, ["reason", "message", "node_ids"], label);

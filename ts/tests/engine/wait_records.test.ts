@@ -26,6 +26,7 @@ import {
   RunCancelledRecord,
   RunFailedRecord,
   type RunRecord,
+  RunResumedRecord,
   RunWaitingRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -33,6 +34,7 @@ import { prepareRecord, RunState } from "../../src/runtime/state.ts";
 import { WaitsState } from "../../src/runtime/waits.ts";
 import { eventBytes, logJson } from "../../src/typesys/json.ts";
 import { commitStartSuccess, flow, initializedAndStarted } from "./run_state_fixtures.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 
 const DEADLINE = "2026-10-24T09:00:00.000Z";
 const take = { callId: "r/heard", tool: "take", inbox: "msgs", mode: "one", deadline: null } as const;
@@ -379,4 +381,29 @@ test.each<[string, unknown, number]>([
 
 test("eventBytes is the same whatever the key order", () => {
   expect(eventBytes({ a: "é", b: 1n })).toBe(eventBytes({ b: 1n, a: "é" }));
+});
+
+test("run_resumed names the calls it closes, none by default", () => {
+  expect(new RunResumedRecord(["a"], 2).closedCalls).toEqual([]);
+  expect(new RunResumedRecord(["a"], 2, ["r/a/1/0"]).closedCalls).toEqual(["r/a/1/0"]);
+  expectError(() => new RunResumedRecord(["a"], 2, ["c", "c"]), RangeError, "closed_calls must contain unique IDs");
+  const record = new RunResumedRecord(["a"], 2, ["r/a/1/0"]);
+  const encoded = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r", 4, record));
+  expect(encoded).toContain('"payload":{"closed_calls":["r/a/1/0"],"num_workers":2,"retry_node_ids":["a"]}');
+  expect(decodeRecord(encoded).record).toEqual(record);
+  expectError(
+    () => decodeRecord(line("run_resumed", { retry_node_ids: ["a"], num_workers: 2n })),
+    RangeError,
+    'invalid run_resumed payload fields; missing=["closed_calls"], extra=[]',
+  );
+});
+
+test("the reducer refuses a resume closing a call no record opened", () => {
+  const { state } = initializedAndStarted(flow());
+  expectError(
+    () => prepareRecord(state, new RunResumedRecord([StartNode.ID], 2, ["r/x/1"])),
+    RangeError,
+    `RunResumedRecord closed_calls must exactly equal the retried nodes' open calls: expected [], found ["r/x/1"]`,
+  );
+  expect(prepareRecord(state, new RunResumedRecord([StartNode.ID], 2)).record).toEqual(new RunResumedRecord([StartNode.ID], 2));
 });

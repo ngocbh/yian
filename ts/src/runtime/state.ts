@@ -3013,6 +3013,13 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
       throw new RangeError(`RunResumed retry node ${reprText(nodeId)} must have UNKNOWN disposition`);
     }
   }
+  // No record registers a call yet, so a resume has no open call to close.
+  if (record.closedCalls.length > 0) {
+    throw new RangeError(
+      "RunResumedRecord closed_calls must exactly equal the retried nodes' open calls: " +
+        `expected [], found ${writeAsText([...record.closedCalls])}`,
+    );
+  }
 }
 
 /** Require a stop record to name the exact ordered in-flight nodes. */

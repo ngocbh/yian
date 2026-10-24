@@ -1962,7 +1962,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
     "run_started",
     [null, ["learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent"]],
   ],
-  ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
+  ["run_resumed", [null, ["retry_node_ids", "num_workers", "closed_calls"]]],
   ["run_stopped", [null, ["reason", "node_ids"]]],
   ["node_waiting", ["node_id", ["call_ids", "waits", "steer_inbox"]]],
   ["node_woken", ["node_id", ["timed_out"]]],
@@ -1992,7 +1992,7 @@ const TIMED_KEYS: ReadonlySet<string> = new Set(["system.now", "system.today"]);
 /** The fields of a node step that are times (an AGENT's model calls and tool results). */
 const STEP_TIMES: readonly string[] = ["started_at", "first_token_at"];
 const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "defaults", "effective_llm_by_static_path", "call_time_llm", "parent", "waits", "timed_out",
+  "defaults", "effective_llm_by_static_path", "call_time_llm", "parent", "waits", "timed_out", "closed_calls",
 ]);
 const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "evaluated_keys", "items", "node_data", "input_names", "variable_names",

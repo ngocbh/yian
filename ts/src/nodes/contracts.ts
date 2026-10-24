@@ -1147,7 +1147,7 @@ export class HostToolCall {
 export class NodeSteps {
   /**
    * Accepted starts of this node, including the current one; at least 1. A resume of an
-   * interrupted start counts as a new start.
+   * unfinished start counts as a new start.
    */
   readonly starts: number;
   /**

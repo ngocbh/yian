@@ -26,7 +26,7 @@
  * credentials and then caps.
  */
 
-import { encodeBody, mergeRequestBody } from "../body.ts";
+import { encodeBody, escapeAuthorTagsInJson, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import { kindForStatus, ProviderError } from "../errors.ts";
 import { type Event, Finish, PartDone, ReasoningDelta, TextDelta, ToolCallDelta, UsageReport } from "../events.ts";
@@ -161,6 +161,9 @@ export class Gemini implements SseProtocol {
    * refusal parts are not sent, and a message rendering no part is skipped. A trailing assistant
    * message goes as written.
    *
+   * A user message's author is sent as the author wrapper, one text part per tag. The author tag
+   * is escaped in user text and tool results, and again in a result's decoded JSON.
+   *
    * A text or call part's replay record puts its `thoughtSignature` on its part (an empty text
    * part is sent only with one). When any of a message's records can't be used, none of its
    * signatures is sent and `onReplayDegraded` is called once with the first reason in part order;
@@ -180,7 +183,7 @@ export class Gemini implements SseProtocol {
    *   cannot carry.
    */
   buildBody(request: Request): JsonObject {
-    const [system, contents] = this.#contents(request.messages);
+    const [system, contents] = this.#contents(request.messages.map((message) => withAuthorWrapper(message)));
     const body: JsonObject = { contents };
     if (system.length > 0) body["systemInstruction"] = { parts: system };
     if (request.tools.length > 0) {
@@ -515,7 +518,7 @@ function functionResponse(part: Part): JsonObject {
 /**
  * Return a tool result's `response`: its text read as plain JSON when that is an object, else
  * `{output: <the value>}`, or `{output: <the text>}` when the text is not plain JSON (Gemini
- * takes only an object here).
+ * takes only an object here). The author tag is escaped in the decoded strings and keys.
  */
 function toolResponse(content: string): JsonObject {
   let value: JsonValue;
@@ -525,6 +528,8 @@ function toolResponse(content: string): JsonObject {
     if (error instanceof JSONDecodeError) return { output: content };
     throw error;
   }
+  // The text was escaped as text, but a JSON escape such as `\u003c` decodes to a literal `<`.
+  value = escapeAuthorTagsInJson(value);
   return isPlainObject(value) ? value : { output: value };
 }
 

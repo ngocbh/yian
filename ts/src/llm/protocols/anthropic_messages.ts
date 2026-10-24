@@ -21,7 +21,7 @@
 import { createHash } from "node:crypto";
 
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
-import { encodeBody, mergeRequestBody } from "../body.ts";
+import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
 import {
   type Event,
@@ -204,7 +204,9 @@ export class AnthropicMessages implements SseProtocol {
    * `disable_parallel_tool_use` on it (an `auto` choice when none is set), but never on `none`.
    *
    * Runs of user and tool messages merge into one `user` turn, in which whitespace-only text
-   * blocks are dropped. Leading system messages are lifted to `system`. A later one stays in
+   * blocks are dropped. A user message's author is sent as the author wrapper, one text block
+   * per tag, closed before the turn's next message; the author tag is escaped in user text and
+   * tool results. Leading system messages are lifted to `system`. A later one stays in
    * place when the model accepts that, it follows a user turn and an assistant turn or the end
    * comes next; otherwise it is hoisted to `system`, with LangChain's warning through
    * `warn` (once per instance). An assistant message is sent as its blocks in
@@ -221,7 +223,7 @@ export class AnthropicMessages implements SseProtocol {
    *   a top-level `oneOf` or `anyOf`.
    */
   buildBody(request: Request): JsonObject {
-    const [system, messages] = this.#messages(request.messages);
+    const [system, messages] = this.#messages(request.messages.map((message) => withAuthorWrapper(message)));
     const body: JsonObject = {
       model: this.model,
       max_tokens: MAX_TOKENS.get(this.model) ?? DEFAULT_MAX_TOKENS,

@@ -98,19 +98,23 @@ test("an ask with no handler is refused before the log exists", async () => {
   expect(existsSync(path)).toBe(false);
 });
 
+// Until the engine commits a Pending outcome its evaluator refuses one; once it does, the run waits.
+const PENDING_REFUSED = "TypeError: raw evaluator returned an unsupported outcome Pending";
+
 for (const [tool, input] of [
   ["sleep", '      for: "1s"'],
-  ["take", '      take: "all"'],
+  ["take", "      from: {inbox: m}\n      take: all"],
 ] as const) {
-  test(`a YAML TOOL ${tool} passes the run-start checks with no tools`, async () => {
+  test(`a YAML TOOL ${tool} passes the run-start checks with no tools and returns its wait`, async () => {
     const path = freshLog();
 
-    // The run gets past its checks and writes its log; how the wait ends is the engine's.
-    await run(gateFlow(tool, input), { log: path, tools: {} }).catch((error: unknown) => {
-      expect(String(error)).not.toContain("isn't in this run's tools");
-      expect(String(error)).not.toContain("names");
-    });
+    const outcome = await run(gateFlow(tool, input), { log: path, tools: {} }).then(
+      (result) => result.status,
+      (error: unknown) => String(error),
+    );
 
+    // The node bound its inputs and returned Pending: no run-start refusal, no input failure.
+    expect(["waiting", PENDING_REFUSED]).toContain(outcome);
     expect(existsSync(path)).toBe(true);
   });
 }

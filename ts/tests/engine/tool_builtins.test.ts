@@ -16,6 +16,7 @@ import { pending } from "../../src/tools/context.ts";
 import { ToolCheckError } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type AskRequest, ToolSet } from "../../src/tools/registry.ts";
+import { eventBytes } from "../../src/typesys/json.ts";
 import { deadlineUtc, formatRecordTime } from "../../src/typesys/temporal.ts";
 import { InboxRef, Type, TypeCheckError, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 
@@ -233,16 +234,22 @@ describe("host calls", () => {
     expect(recorded).toEqual([]);
   });
 
-  test("oversized arguments fail the node before anything is written", async () => {
-    const ids: string[] = [];
-    const tools = new ToolSet({ codex_send: sendTool(ids) }).forRun("r1");
-    const { recorded, caps } = capsWith([], tools, 8);
-    const error = await rejection(new ToolNode("send", { toolId: "codex_send" }).forward({ text: "hi" }, caps));
+  test("a pending step over the event size limit fails the node before anything is written", async () => {
+    const step = { kind: "pending", call_id: "r1/send", tool: "codex_send", arguments: { text: "hi" } };
+    const size = eventBytes(step);
+    const tools = new ToolSet({ codex_send: sendTool([]) }).forRun("r1");
+    const node = new ToolNode("send", { toolId: "codex_send" });
+    const over = capsWith([], tools, size - 1);
+    const error = await rejection(node.forward({ text: "hi" }, over.caps));
     expect(error).toBeInstanceOf(ToolCheckError);
     expect((error as Error).message).toBe(
-      "tool 'codex_send' pending call arguments are 13 bytes, over the run's limit of 8 (YIAN_MAX_EVENT_BYTES)",
+      `tool 'codex_send' pending call step is ${size} bytes, over the run's limit of ${size - 1} (YIAN_MAX_EVENT_BYTES)`,
     );
-    expect(recorded).toEqual([]);
+    expect(over.recorded).toEqual([]);
+    // The whole step is measured, not only its arguments: exactly at the limit it is recorded.
+    const at = capsWith([], tools, size);
+    expect(await node.forward({ text: "hi" }, at.caps)).toEqual(new Pending(["r1/send"]));
+    expect(at.recorded).toEqual([step]);
   });
 
   test("pending() outside a durable run is an error naming the tool", async () => {
@@ -345,6 +352,17 @@ describe("ask", () => {
     expect(recorded).toEqual([]);
   });
 
+  test("a timeout whose deadline is past the year 9999 is contract.input naming the timeout", async () => {
+    const seen: AskRequest[] = [];
+    const { recorded, caps } = capsWith([], askTools(seen));
+    await expectContractInput(
+      new ToolNode("lead", { toolId: "ask" }).forward({ prompt: "?", timeout: "999999999d" }, caps),
+      'ask `timeout` "999999999d": the deadline falls after the year 9999',
+    );
+    expect(seen).toEqual([]);
+    expect(recorded).toEqual([]);
+  });
+
   test("an ask with an open held call waits again without asking", async () => {
     const seen: AskRequest[] = [];
     const held = heldCall({ callId: "r1/lead", tool: "ask", deadline: "2026-10-24T00:00:00.000Z" });
@@ -387,6 +405,11 @@ describe("ask", () => {
     node.outputContract = new ValueContract(APPROVAL.replace({ nullable: true }));
     const view = heldCall({ callId: "r1/lead", tool: "ask" });
     expect(() => node.waitResultStep(view, { output: null })).toThrow(TypeCheckError);
+    // With no declared output null is still refused: it means nobody answered in time.
+    const free = new ToolNode("lead", { toolId: "ask" });
+    expect(() => free.waitResultStep(view, { output: null })).toThrow(
+      new TypeCheckError("complete('r1/lead') output: an ask's answer can't be null; null means nobody answered in time"),
+    );
     expect(node.waitResultStep(view, { output: { decision: "approve" } })).toEqual({
       kind: "tool_result",
       call_id: "r1/lead",

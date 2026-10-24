@@ -391,14 +391,16 @@ export class ToolNode extends Node {
       throw new Error(`tool ${reprText(tool)} returned pending() outside a durable run; give the run a log`);
     }
     const args = jsonPart(fromHost(inputs, `tool ${reprText(tool)} arguments`), [], "mapping") as ValueRecord;
-    const size = eventBytes(args);
+    const step = { kind: "pending", call_id: callId, tool, arguments: args, ...(deadline === null ? {} : { deadline }) };
+    // The cap is on the whole step, measured as the run log measures an event.
+    const size = eventBytes(step);
     if (size > steps.maxEventBytes) {
       throw new ToolCheckError(
-        `tool ${reprText(tool)} pending call arguments are ${size} bytes, over the run's limit of ` +
+        `tool ${reprText(tool)} pending call step is ${size} bytes, over the run's limit of ` +
           `${steps.maxEventBytes} (YIAN_MAX_EVENT_BYTES)`,
       );
     }
-    steps.record({ kind: "pending", call_id: callId, tool, arguments: args, ...(deadline === null ? {} : { deadline }) });
+    steps.record(step);
     return new Pending([callId]);
   }
 
@@ -408,7 +410,8 @@ export class ToolNode extends Node {
    * is the output; `pending()` records the call with its deadline and waits.
    *
    * @throws QuestionSpecError when the question list is invalid, before the handler runs.
-   * @throws BindingError classified `contract.input` when `timeout` isn't a duration.
+   * @throws BindingError classified `contract.input` when `timeout` isn't a duration or its
+   *   deadline falls after the year 9999.
    */
   private async ask(
     inputs: Record<string, unknown>,
@@ -421,8 +424,15 @@ export class ToolNode extends Node {
     const parsed = raw === null ? null : parseQuestions(raw);
     const seconds = durationSeconds(timeout, ASK, "timeout");
     // Computed before the handler runs so the request carries it; recorded only on pending().
-    const deadline =
-      seconds === null ? null : formatRecordTime((caps.scheduler ?? realScheduler).now() + seconds * 1000);
+    let deadline: string | null = null;
+    if (seconds !== null) {
+      try {
+        deadline = formatRecordTime((caps.scheduler ?? realScheduler).now() + seconds * 1000);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw inputError(`ask \`timeout\` ${valueRepr(timeout)}: the deadline falls after the year 9999`, error);
+      }
+    }
     const answer = await tools.invokeTrusted(
       ASK,
       {
@@ -444,7 +454,8 @@ export class ToolNode extends Node {
    * Shape the `tool_result` step for a host's `complete` on this node's call: the value checked
    * against the declared output (for `ask`, the answer type without null), or the error.
    *
-   * @throws TypeCheckError when the output isn't a yian value or fails that type.
+   * @throws TypeCheckError when the output isn't a yian value or fails that type, or is null for
+   *   an `ask` (null means nobody answered in time).
    */
   override waitResultStep(call: CallView, result: CompleteResult): JsonObject {
     if (Object.hasOwn(result, "error")) {
@@ -454,7 +465,11 @@ export class ToolNode extends Node {
     const declared = outputContractType(this.outputContract);
     // The host's answer schema is the declared type without null: null means nobody answered.
     const typ = declared !== null && this.builtin === ASK ? declared.replace({ nullable: false }) : declared;
-    const output = fromHost((result as { output: unknown }).output, `complete(${reprText(call.callId)}) output`);
+    const where = `complete(${reprText(call.callId)}) output`;
+    const output = fromHost((result as { output: unknown }).output, where);
+    if (this.builtin === ASK && output === null) {
+      throw new TypeCheckError(`${where}: an ask's answer can't be null; null means nobody answered in time`);
+    }
     const value = typ === null ? buildValue(output) : buildValueAs(typ, output);
     return { kind: "tool_result", call_id: call.callId, output: value.toWire() as JsonObject };
   }

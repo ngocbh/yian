@@ -473,8 +473,8 @@ the node records a `pending` step (call id, tool, arguments, and an `ask`'s dead
 until the host answers with `complete`. The call id is `<run id>/<node path>` on every attempt and
 start, and a handler that hadn't returned before a crash is called again with it, so a handler must
 be idempotent by `callId`; a recorded call isn't called again, and an answer completed as an error
-fails the node without a retry. Arguments over `YIAN_MAX_EVENT_BYTES` fail the node before anything
-is recorded. A tool an AGENT calls that returns `pending()` fails the agent in this version.
+fails the node without a retry. A `pending` step over `YIAN_MAX_EVENT_BYTES` fails the node before
+anything is recorded. A tool an AGENT calls that returns `pending()` fails the agent in this version.
 
 An `ask` `timeout` sets `AskRequest.deadline`. If nobody answers in time the output is null: an
 `output: Optional(T)` succeeds with null, any other declared output fails with `tool.timeout`. A

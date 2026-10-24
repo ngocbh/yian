@@ -64,7 +64,7 @@ import {
   ValueContract,
 } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { jsTypeName, Type, unionTagFields, ValueKind } from "../../typesys/values.ts";
+import { isInboxType, jsTypeName, Type, unionTagFields, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
 import {
   type Check,
@@ -190,7 +190,7 @@ export class LoweredAsserts {
  * @param options.diagnostics Factory for located load errors (default an unlocated one).
  * @returns The lowered START/END asserts with the synth END params and their wiring.
  * @throws LoadError on the first assert holding a lone surrogate, malformed assert, bad ref,
- *   impossible check, bad field read, or `${system}` ref.
+ *   impossible check, bad field read, `${system}` ref, or read of an inbox input.
  * @throws TypeError when a producer contract is neither an exact `ValueContract` nor a
  *   `PartialRecordContract`.
  */
@@ -303,6 +303,13 @@ export function lowerFlowAsserts(
           `assert ${reprText(assertion.display)}: the \`system\` namespace is not allowed in asserts ` +
             "(it is ambient — there is no producer to draw an edge from; move the " +
             "check into a body node)",
+          { range: rng },
+        );
+      }
+      const input = head === "input" ? path.split(".")[1] : undefined;
+      if (input !== undefined && isInboxType(inputContracts.get(input)?.type)) {
+        throw diagnostics.error(
+          `assert ${reprText(assertion.display)}: \${input.${input}} is an inbox; an assert can't read it`,
           { range: rng },
         );
       }
@@ -826,7 +833,7 @@ export const POOL_HEADS: ReadonlySet<string> = new Set(["input", "system", "item
  * `localInputContracts`) rejects it (a field only some union members have is readable on a node in
  * `partialUnionNodes`; a name with no entry is not field-checked), a declared input named
  * `output`, `isinstance` or a constructor on a CALL/MAP/LOOP node (its asserts run in the child
- * flow), and any node assert on a mapped call (a `MapNode`, `kind: map`: the per-node hook has no
+ * flow), a read of a local bound to an inbox, and any node assert on a mapped call (a `MapNode`, `kind: map`: the per-node hook has no
  * `${item}` scope). A call inside `${...}` to a name in `typeNames` (the flow's `typedefs:` names)
  * is a constructor, not an inline call.
  *
@@ -1005,7 +1012,9 @@ export function validateNodeAsserts(
           }
         } else if (declared.has(head)) {
           const local = nodeLocals.get(head);
-          if (local !== undefined && local.alternatives.length > 0) {
+          if (local?.alternatives.some((contract) => isExactly(contract, ValueContract) && isInboxType(contract.type))) {
+            errors.push([`node ${reprText(nid)} assert: \${${head}} is an inbox; an assert can't read it`, errorRange]);
+          } else if (local !== undefined && local.alternatives.length > 0) {
             roots.set(head, local.alternatives);
             if (local.source !== null) unionRoots.set(head, local.source);
           }

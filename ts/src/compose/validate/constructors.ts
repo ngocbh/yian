@@ -8,6 +8,7 @@
  * - the call mixes keyword and positional arguments, or has several positional ones;
  * - the keyword form names a union (construct a member instead) or a type that is no record, a
  *   field `T` doesn't have, or leaves out a required field;
+ * - `T` is an inbox type, which has no constructor;
  * - a field read on the result (`T(x).f`) names a field `T` can't have.
  *
  * `builtinFieldErrors` rejects a field read on a builtin whose result type is known
@@ -30,7 +31,7 @@ import { constructorShapeError, inferExprType, ISINSTANCE } from "../../expr/exp
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { outputContractFieldError, ValueContract } from "../../nodes/contracts.ts";
 import type { RefExpr, TypeRegistry } from "../../typesys/types.ts";
-import { canonicalTypeLabel, type Type } from "../../typesys/values.ts";
+import { canonicalTypeLabel, isInboxType, type Type } from "../../typesys/values.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { literalType, type TypeFn } from "../helpers/output_contracts.ts";
 
@@ -58,6 +59,11 @@ export function constructorErrors(tree: ExprNode, registry: TypeRegistry, refTyp
     if (callSuffix === undefined || name === ISINSTANCE || TEMPLATE_FNS.has(name)) continue;
     const typ = typeFn(name);
     if (typ === null) continue;
+    if (isInboxType(typ)) {
+      // A handle names a top-level inbox; building one from a value would forge it.
+      errors.push(`\`${name}\` is an inbox type; it has no constructor`);
+      continue;
+    }
     const args = callSuffix.children as Tree[];
     const shapeError = constructorShapeError(name, callSuffix);
     if (shapeError !== null) {

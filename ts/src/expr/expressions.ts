@@ -765,8 +765,8 @@ class EvalExpr {
   readonly #frames: TraceFrame[] = [];
   #lastRoute: ValueRoute | null = null;
   #missPath: string | null = null;
-  // Comprehension variables in scope: name -> its item.
-  readonly #vars = new Map<string, { value: Value }>();
+  // Comprehension variables in scope: name -> its item and, when tracing, the item's route.
+  readonly #vars = new Map<string, { value: Value; route: ValueRoute | null }>();
 
   constructor(
     resolve: (path: string) => Value | ResolvedValue,
@@ -1037,22 +1037,27 @@ class EvalExpr {
    * A list comprehension, as Python's nested loops: the first iterable in the enclosing scope,
    * each later clause once per binding of the clauses before it, an `if` keeping a binding when
    * its condition is truthy, and the elem appended after the last clause. The clauses run depth
-   * first without recursion, so a long comprehension can't overflow the stack.
+   * first without recursion, so a long comprehension can't overflow the stack. When tracing, the
+   * route is a `list` of the elems' routes, and a variable carries its item's route, the
+   * iterable's route projected to the item, so feedback on an elem reaches that item. Conditions
+   * aren't part of the route, as a CASE condition isn't.
    *
    * @throws {ExpressionError} If an iterable is null, misses, or is not a list.
    */
   listComp(node: Tree): Value[] {
     const [elem, ...clauses] = node.children as [ExprNode, ...Tree[]];
     const out: Value[] = [];
-    // One entry per active `for`: its clause index, its items, and the next index.
-    const loops: { at: number; items: Value[]; k: number }[] = [];
+    const routes: ValueRoute[] = [];
+    // One entry per active `for`: its clause index, its items, the next index, and its iterable's route.
+    const loops: { at: number; items: Value[]; k: number; route: ValueRoute | null }[] = [];
     // Move to the next binding of the innermost loop that has one; return the next clause index, or -1.
     const next = (): number => {
       while (loops.length > 0) {
         const loop = loops.at(-1)!;
         const name = String(clauses[loop.at]!.children[0]);
         if (loop.k < loop.items.length) {
-          this.#vars.set(name, { value: loop.items[loop.k++]! });
+          const route = loop.route?.project([loop.k]) ?? null;
+          this.#vars.set(name, { value: loop.items[loop.k++]!, route });
           return loop.at + 1;
         }
         this.#vars.delete(name);
@@ -1064,6 +1069,7 @@ class EvalExpr {
     while (i >= 0) {
       if (i === clauses.length) {
         out.push(this.asValue(this.walk(elem)));
+        if (this.#trace) routes.push(this.#lastRoute!);
         i = next();
       } else if (clauses[i]!.data === "comp_for") {
         const [target, iterable, source] = clauses[i]!.children as [Token, ExprNode, Token];
@@ -1076,16 +1082,25 @@ class EvalExpr {
         if (!Array.isArray(items)) {
           throw new ExpressionError(`comprehension \`for ${target} in ${source}\` takes a list, got ${kindName(items)}`);
         }
-        loops.push({ at: i, items, k: 0 });
+        loops.push({ at: i, items, k: 0, route: this.#trace ? this.#lastRoute : null });
         i = next();
       } else {
         i = truthy(this.asValue(this.walk(clauses[i]!.children[0]!))) ? i + 1 : next();
       }
     }
+    if (this.#trace) {
+      this.#frames.at(-1)!.route = new ValueRoute("list", {
+        children: routes,
+        expression: "[" + routes.map((route) => route.expression).join(", ") + "]",
+      });
+    }
     return out;
   }
 
-  /** A comprehension variable read, then any `.field` trailers as `dottedStep` walks them. */
+  /**
+   * A comprehension variable read, then any `.field` trailers as `dottedStep` walks them. When
+   * tracing, its route is its item's route projected through the trailers.
+   */
   compVar(node: Tree): Walked {
     const name = String(node.children[0]);
     const binding = this.#vars.get(name);
@@ -1096,6 +1111,7 @@ class EvalExpr {
     let value: Walked = binding.value;
     for (const step of steps) value = this.dottedStep(value, step);
     if (value === MISSING) this.#missPath = [name, ...steps].join(".");
+    else if (this.#trace && binding.route !== null) this.#frames.at(-1)!.route = binding.route.project(steps);
     return value;
   }
 

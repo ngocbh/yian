@@ -9,7 +9,8 @@
  * doesn't return `ResolvedValue`, interpolation spans counting code points (also in
  * `validateRoute`), frozen routed feedback, `sourceKey`, `sameSource` (separately built sources with
  * the same key), and `sameFeedback` (true for separately built equal values, false for each kind of
- * difference), a slice's `list` route of projected base items, and `len`'s `opaque` route. Python's
+ * difference), a slice's `list` route of projected base items, `len`'s `opaque` route, and a
+ * comprehension's `list` route of each item's own route. Python's
  * `test_routes_are_immutable_serializable_and_keep_opaque_snapshots` is split in two: `routes are
  * immutable and serializable` (hand-built) and `routes keep opaque snapshots` (through a traced
  * binding).
@@ -1231,4 +1232,39 @@ test("a slice route projects each kept item of its base", () => {
 test("len records an opaque route", () => {
   const sources = new Sources({ producer: { tags: ["a"] } });
   expect(sources.evaluate("len(producer.tags)").route.kind).toBe("opaque");
+});
+
+test("a comprehension route carries each item's own route", () => {
+  const sources = new Sources({ producer: { history: [[{ text: "a" }], [{ text: "b" }, { text: "c" }]] } });
+  const producer = sources.identities.producer!;
+  const result = sources.evaluate("[m.text for t in producer.history for m in t]");
+  expect(result.value).toEqual(["a", "b", "c"]);
+  expect(result.route.kind).toBe("list");
+  expect(result.route.children.map((child) => [child.kind, child.source?.path])).toEqual([
+    ["source", ["history", 0, 0, "text"]],
+    ["source", ["history", 1, 0, "text"]],
+    ["source", ["history", 1, 1, "text"]],
+  ]);
+  // A turn with no feedback lifts to a whole null, as a hand-built route of the same items does.
+  const routed = messages(sources.feedback(result, [null, null, "Bad."]));
+  expect(routed).toEqual([[producer, { history: [null, [null, { text: "Bad." }]] }]]);
+  const base = sources.evaluate("producer.history");
+  const items = [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+  ].map(([i, j]) => base.route.project([i!, j!, "text"]));
+  const handBuilt = new ValueRoute("list", { children: items });
+  expect(messages(routeFeedback(handBuilt, [null, null, "Bad."], sources.lookup))).toEqual(routed);
+});
+
+test("a comprehension's conditions are not part of its route", () => {
+  const sources = new Sources({ producer: { tags: ["a", "b", "c"] } });
+  const result = sources.evaluate('[x for x in producer.tags if x != "b"]');
+  expect(result.value).toEqual(["a", "c"]);
+  expect(result.route.kind).toBe("list");
+  expect(result.route.children.map((child) => [child.kind, child.source?.path])).toEqual([
+    ["source", ["tags", 0]],
+    ["source", ["tags", 2]],
+  ]);
 });

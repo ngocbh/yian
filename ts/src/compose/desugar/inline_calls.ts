@@ -77,7 +77,7 @@ import { INLINE_FLOW_PREFIX } from "./inline_bodies.ts";
 
 // The reserved id prefix for synthesized inline-call nodes. A monotonic counter per flow/def keeps
 // them unique; the collision guard reserves the namespace from users.
-const SYNTH_PREFIX = "__call_";
+export const SYNTH_PREFIX = "__call_";
 // Text before a lone `=` that ends in a separate word: `1 b` in `a=1 b=2`, a missing comma.
 const WORD_BEFORE_EQUALS = /\s([A-Za-z_][A-Za-z0-9_-]*)\s*$/;
 

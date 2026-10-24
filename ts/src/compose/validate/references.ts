@@ -49,13 +49,17 @@ import {
   scanTemplate,
 } from "../../expr/index.ts";
 import { Span } from "../../expr/template.ts";
+import type { Node } from "../../nodes/base.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
+import { CallNode } from "../../nodes/call/node.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
 import {
+  Binding,
   bindingSource,
   isExactly,
   iterSourceStrings,
   type OutputContract,
+  type Parameter,
   outputContractType,
   PartialRecordContract,
   ValueContract,
@@ -65,6 +69,7 @@ import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_inpu
 import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
+  isInboxType,
   isListKind,
   isRecord,
   jsTypeName,
@@ -77,6 +82,7 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { type Env, envReadType, narrowedReadError } from "../helpers/narrowing_facts.ts";
 import {
+  directReferenceParts,
   localFieldError,
   outputContractPathError,
   projectOutputContract,
@@ -84,6 +90,7 @@ import {
   resolveOutputBindingContract,
   type TypeFn,
 } from "../helpers/output_contracts.ts";
+import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
 import type { Narrowing } from "./narrowing.ts";
@@ -151,6 +158,45 @@ interface ScanOptions {
   readFacts?: Env | null;
   /** The bases whose narrowing a read owes to the routing. */
   routedBases?: ReadonlySet<string>;
+  /**
+   * Why this site refuses a whole inbox read, the error's closing words; `null` where one is
+   * allowed. Defaults to telling the author to take from the inbox.
+   */
+  inboxTail?: string | null;
+}
+
+/** Why most sites refuse a whole inbox read: only `take` reads its events. */
+const TAKE_TAIL = "(take from it with `tool_id: take`)";
+/** Why a MAP's sources refuse an inbox read. */
+const MAP_TAIL = "(a map body can't read an inbox)";
+/** Why text, an expression, or a case's `when:` or `on:` refuses an inbox read. */
+const EXPRESSION_TAIL = "(not inside text or an expression)";
+
+/**
+ * Return why node `node`'s input `param` can't take an inbox whole, or `null` when it can: an
+ * input a named call's or a loop's child declares as an Inbox, so a loop never carries an inbox it
+ * can't drop.
+ */
+function inboxSiteTail(nodeId: string, node: Node, param: string): string | null {
+  if (node instanceof CaseNode) return EXPRESSION_TAIL;
+  if (!(node instanceof CallNode || node.isLoop)) return TAKE_TAIL;
+  if (nodeId.startsWith(SYNTH_PREFIX)) return "(pass it through a named `kind: call` node)";
+  const childInputs = (node as { childInputs?: readonly Parameter[] }).childInputs ?? [];
+  if (childInputs.some((input) => input.name === param && isInboxType(input.contract?.type))) return null;
+  return `(the child's \`${param}\` isn't an Inbox input)`;
+}
+
+/** Return the reference parts of `text` when it is one whole `${...}` direct reference, else `null`. */
+function loneReferenceParts(text: string): string[] | null {
+  let segments;
+  try {
+    segments = scanTemplate(text);
+  } catch (error) {
+    if (error instanceof ExpressionError) return null;
+    throw error;
+  }
+  const only = segments.length === 1 ? segments[0] : undefined;
+  return only instanceof Span ? directReferenceParts(only.tree) : null;
 }
 
 /**
@@ -237,6 +283,11 @@ function itemContract(
  *
  * Every builtin call in a binding or prompt must pass arguments the builtin takes.
  *
+ * An inbox input (`Inbox(T)` in `inputContracts`) is read only whole, as the lone
+ * `${input.<name>}` bound to an input a named call's or a loop's child declares as an Inbox. Any
+ * other read of it (a field, text or an expression, a typed binding or value, another node kind,
+ * a MAP, an inline `call(...)`, a flow output) is an error at its site.
+ *
  * @param buildResults Built nodes with their transient ranges, keyed by node id.
  * @param flowInputs The flow's input names.
  * @param producers Exact or partial node output contracts keyed by producer id.
@@ -291,6 +342,9 @@ export function validateReferences(
   const unordered = narrowing !== null ? narrowing.unordered : new Set<string>();
   const localContracts = options.localContracts ?? new Map<string, ReadonlyMap<string, LocalInput>>();
   const typeFn = registry !== null ? constructorTypeFn(registry) : null;
+  // The inbox inputs, and those read whole at a site that may take them.
+  const inboxInputs = new Set([...inputContracts].filter(([, contract]) => isInboxType(contract.type)).map(([n]) => n));
+  const inboxesRead = new Set<string>();
 
   /**
    * Name-check every reference a BINDING `from:` reads (coalesce and nested-default split by
@@ -326,6 +380,7 @@ export function validateReferences(
       constructors = true,
       readFacts = null,
       routedBases = new Set<string>(),
+      inboxTail = TAKE_TAIL,
     } = site;
     let paths: string[];
     try {
@@ -356,8 +411,12 @@ export function validateReferences(
       }
     }
     for (const path of paths) {
-      let err = classifyPath(path, validTargets, flowInputs, extraHeads);
       const parts = path.split(".");
+      if (parts[0] === "input" && inboxInputs.has(parts[1]!)) {
+        checkInboxRead(text, parts, where, rng, inboxTail);
+        continue;
+      }
+      let err = classifyPath(path, validTargets, flowInputs, extraHeads);
       const producer = siteProducers.get(parts[0]!);
       const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
@@ -383,6 +442,31 @@ export function validateReferences(
       if (!(error instanceof ExpressionError)) throw error;
       errors.push([`${where}: ${error.message}`, rng]);
     }
+  }
+
+  /**
+   * Count one inbox read in `text` as allowed, or add its error at `where`: an inbox is read only
+   * whole, as the lone `${input.<name>}`, at a site whose `inboxTail` is `null`.
+   */
+  function checkInboxRead(
+    text: string,
+    parts: readonly string[],
+    where: string,
+    rng: SourceRange | null,
+    inboxTail: string | null,
+  ): void {
+    const lone = loneReferenceParts(text);
+    let tail = inboxTail;
+    if (parts.length > 2) tail = "(an inbox has no fields)";
+    else if (lone === null || lone.length !== 2) tail = EXPRESSION_TAIL;
+    if (tail === null) {
+      inboxesRead.add(parts[1]!);
+      return;
+    }
+    errors.push([
+      `${where}: \${input.${parts[1]}} is an inbox; it is read only whole, bound to a child's Inbox input ${tail}`,
+      rng,
+    ]);
   }
 
   /** Add one error at `where` per field read on a builtin's result in `trees`. */
@@ -536,6 +620,7 @@ export function validateReferences(
         siteInputs: nodeInputs,
         partialUnionFields,
         constructors: false,
+        inboxTail: node.bindsPerItem ? MAP_TAIL : TAKE_TAIL,
       });
     }
 
@@ -555,6 +640,7 @@ export function validateReferences(
             itemContract: item,
             extraHeads: ["item"],
             partialUnionFields,
+            inboxTail: MAP_TAIL,
           },
         );
       }
@@ -617,12 +703,15 @@ export function validateReferences(
         if (scanned.has(key)) continue;
         scanned.add(key);
       }
+      // A typed binding or a value holding the inbox doesn't pass it whole.
+      const whole = !(src instanceof Binding && src.contract !== null) && !(source instanceof ValueTemplate);
       scan(src, where, paramRng, {
         siteProducers: paramProducers,
         siteInputs: paramInputs,
         partialUnionFields,
         readFacts,
         routedBases,
+        inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
       });
     }
   }

@@ -51,7 +51,7 @@ test.each([
   [
     "an llm_config value",
     flow("", "  a:\n    kind: agent\n    prompt: hi\n    llm_config:\n      model: ${input.m}\n"),
-    "Inbox(str)",
+    "node 'a' llm_config: ${input.m} is an inbox",
   ],
 ])("refuses %s", (_label, text, message) => {
   expect(refused(text)).toContain(message);

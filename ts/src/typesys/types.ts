@@ -107,6 +107,9 @@ const TYPING_CONSTRUCTORS: ReadonlySet<string> = new Set([
   "Optional", "Literal", "Union", "List", "Dict", "list", "dict", "Any",
 ]);
 
+/** The built-in record type names every flow may use and no typedef may take. */
+const BUILTIN_RECORD_NAMES: ReadonlySet<string> = new Set(["Message"]);
+
 /**
  * Names a type expression may start with besides typedefs, derived from the keyword sets
  * so they cannot drift. `topics` is a retired alias, so it is not listed.
@@ -114,6 +117,7 @@ const TYPING_CONSTRUCTORS: ReadonlySet<string> = new Set([
 export const BUILTIN_TYPE_NAMES: ReadonlySet<string> = new Set([
   ...SCALAR_KEYWORDS,
   ...TYPING_CONSTRUCTORS,
+  ...BUILTIN_RECORD_NAMES,
   "any",
 ]);
 
@@ -891,6 +895,54 @@ export type TypeDef = RecordDef | VariantDef | AliasDef;
 /** A flow's typedefs by name, which a `RefExpr` resolves against. */
 export type TypeRegistry = ReadonlyMap<string, TypeDef>;
 
+/** A record typedef from its field type texts. */
+function record(fields: Readonly<Record<string, string>>): RecordDef {
+  return { kind: "record", fields: new Map(Object.entries(fields)) };
+}
+
+// The built-in records, in Yian's own type syntax. Only `Message` is public: the parts are reached
+// through it, so their names stay free for typedefs.
+const BUILTIN_RECORDS: TypeRegistry = new Map<string, TypeDef>([
+  ["Message", record({
+    role: "Literal(user, assistant, tool)",
+    parts: "list(Union(Text, Reasoning, Refusal, ToolCall, ToolResult, Media))",
+    author: "Optional(str)",
+    protocol: "Optional(str)",
+    provider_payload: "Optional(object)",
+  })],
+  ["Text", record({ type: "Literal(text)", text: "str", provider_payload: "Optional(object)" })],
+  ["Reasoning", record({ type: "Literal(reasoning)", text: "str", provider_payload: "Optional(object)" })],
+  ["Refusal", record({ type: "Literal(refusal)", text: "str", provider_payload: "Optional(object)" })],
+  ["ToolCall", record({
+    type: "Literal(tool_call)", id: "str", name: "str", arguments: "Optional(object)",
+    raw_arguments: "Optional(str)", provider_payload: "Optional(object)",
+  })],
+  ["ToolResult", record({
+    type: "Literal(tool_result)", call_id: "str", name: "str", content: "str",
+    is_error: "Optional(bool)", provider_payload: "Optional(object)",
+  })],
+  ["Media", record({
+    type: "Literal(media)", mime: "str", file: "file", name: "Optional(str)", provider_payload: "Optional(object)",
+  })],
+]);
+
+const builtinTypes = new Map<string, Type>();
+
+/**
+ * Return the resolved built-in record type `name` (`Message`), or `null` for any other name. A
+ * flow's registry never holds these names (`readTypedefs` refuses them), so `resolveType` asks
+ * here only after the registry.
+ */
+export function builtinType(name: string): Type | null {
+  if (!BUILTIN_RECORD_NAMES.has(name)) return null;
+  let typ = builtinTypes.get(name);
+  if (typ === undefined) {
+    typ = resolveType({ kind: "ref", name }, BUILTIN_RECORDS);
+    builtinTypes.set(name, typ);
+  }
+  return typ;
+}
+
 /**
  * Resolve a `TypeExpr` against the registry into a runtime `Type`.
  *
@@ -946,7 +998,11 @@ export function resolveType(
   const name = t.name;
   if (seen.has(name)) throw new TypeCheckError(`recursive type reference: ${reprText(name)}`);
   const defn = registry.get(name);
-  if (defn === undefined) throw new TypeCheckError(`unknown type ${reprText(name)}`);
+  if (defn === undefined) {
+    const builtin = builtinType(name);
+    if (builtin !== null) return builtin;
+    throw new TypeCheckError(`unknown type ${reprText(name)}`);
+  }
   const inner = new Set([...seen, name]);
   if (defn.kind === "alias") return resolveType(defn.target, registry, inner);
   if (defn.kind === "variant") {

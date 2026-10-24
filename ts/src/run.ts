@@ -138,7 +138,7 @@ import {
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
-import { type WaitInfo, type WaitsState, wakeableNodes, wakeAt, waitInfos } from "./runtime/waits.ts";
+import { unreadEvents, type WaitInfo, type WaitsState, wakeableNodes, wakeAt, waitInfos } from "./runtime/waits.ts";
 import {
   acceptedCommit,
   addCrashedAttempts,
@@ -234,16 +234,22 @@ export type EventHook = (event: RunEvent) => unknown;
 /** Sees each transient stream chunk. */
 export type StreamHook = (chunk: StreamChunk) => unknown;
 
+/** Where a run stands when a run call returns: a terminal result, or waiting on calls. */
+export type RunResultStatus = "succeeded" | "failed" | "waiting" | "cancelled";
+
 /**
- * The terminal, surface-independent result of a run.
+ * The surface-independent result of a run call: a terminal result, or a run waiting on calls.
  *
  * `events` holds only the observers committed during this call.
  */
 export class RunResult {
   /** The canonical caller-supplied inputs `RunStarted` retained. */
   readonly input: Record<string, unknown>;
-  /** Either `"succeeded"` or `"failed"`. */
-  readonly status: "succeeded" | "failed";
+  /**
+   * `"succeeded"`, `"failed"` or `"cancelled"` at a terminal result; `"waiting"` when the run
+   * stopped at quiescence with nodes waiting on calls, which a delivery or `advance` moves on.
+   */
+  readonly status: RunResultStatus;
   /** The durable identity shared by the state and its run log. */
   readonly runId: string;
   /** The JSONL log path as given to `runFlow` or `advance`, or `null` for a process-local run. */
@@ -259,18 +265,30 @@ export class RunResult {
    * (crashed attempts), by node id; empty for a run never resumed.
    */
   readonly crashedAttempts: ReadonlyMap<string, number>;
+  /** The calls a waiting run waits on, by waiting node in `node_waiting` order; empty otherwise. */
+  readonly waits: readonly WaitInfo[];
+  /**
+   * The send seqs no take read, by inbox, at a terminal status; empty while the run waits (they
+   * may still be read) and for an inbox with none.
+   */
+  readonly unread: ReadonlyMap<string, readonly number[]>;
   #backwardOutcome: BackwardOutcome | null;
 
-  /** Hold the given fields; `output`, `failure` and `backwardOutcome` default to `null`. */
+  /**
+   * Hold the given fields; `output`, `failure` and `backwardOutcome` default to `null`, `waits` to
+   * none and `unread` to an empty map.
+   */
   constructor(fields: {
     input: Record<string, unknown>;
-    status: "succeeded" | "failed";
+    status: RunResultStatus;
     runId: string;
     log: string | null;
     output?: unknown;
     failure?: Failure | null;
     events?: readonly RunEvent[];
     crashedAttempts?: ReadonlyMap<string, number>;
+    waits?: readonly WaitInfo[];
+    unread?: ReadonlyMap<string, readonly number[]>;
     backwardOutcome?: BackwardOutcome | null;
   }) {
     this.input = fields.input;
@@ -281,6 +299,8 @@ export class RunResult {
     this.failure = fields.failure ?? null;
     this.events = fields.events ?? [];
     this.crashedAttempts = fields.crashedAttempts ?? new Map();
+    this.waits = fields.waits ?? [];
+    this.unread = fields.unread ?? new Map();
     this.#backwardOutcome = fields.backwardOutcome ?? null;
   }
 
@@ -319,7 +339,8 @@ export class RunResult {
    * @throws TypeError when the feedback has an invalid message carrier.
    * @throws TypeCheckError when the feedback isn't a yian value or nests deeper than
    *   `YIAN_MAX_VALUE_NESTING` levels.
-   * @throws RangeError when the run wasn't retained (`learnable: true`), the feedback doesn't match
+   * @throws RangeError when the run didn't succeed or fail (it waits or was cancelled), wasn't
+   *   retained (`learnable: true`), the feedback doesn't match
    *   the output's shape, or `headers` has a name or value that can't be sent or names other than
    *   the recorded ones (the message never echoes a value).
    * @throws MemorySetupError when the run's memories can't restore their recorded snapshots.
@@ -335,6 +356,9 @@ export class RunResult {
       onEvent?: BackwardOptions["onEvent"] | null;
     } = {},
   ): Promise<BackwardOutcome> {
+    if (this.status !== "succeeded" && this.status !== "failed") {
+      throw new RangeError(`backward needs a run that succeeded or failed; this one is ${this.status}`);
+    }
     const handle = BACKWARD_HANDLES.get(this);
     if (handle === undefined) throw new RangeError("backward requires a run retained with learnable: true");
     // Taken and bounded before anything walks the feedback recursively, under the run's limits.
@@ -2489,9 +2513,10 @@ function publishBoundaryObservers(
 }
 
 /**
- * Project one terminal reducer state into the public result.
+ * Project one terminal or waiting reducer state into the public result. Only a succeeded or
+ * failed result keeps `handle` for a later backward call.
  *
- * @throws Error when the state has no terminal result.
+ * @throws Error when the state has no terminal result and no node waits.
  */
 function resultFromState(
   state: RunState,
@@ -2508,16 +2533,22 @@ function resultFromState(
     crashedAttempts: new Map(state.crashedAttempts),
     backwardOutcome: handle === null ? state.backwardState.outcome : handle.outcome,
   };
-  let result: RunResult;
+  const unread = new Map(unreadEvents(state.waits));
   if (terminal instanceof RunSucceeded) {
-    result = new RunResult({ ...common, status: "succeeded", output: copyValue(terminal.output as Value) });
-  } else if (terminal instanceof RunFailed) {
-    result = new RunResult({ ...common, status: "failed", failure: terminal.failure });
-  } else {
-    throw new Error("engine returned without deriving a terminal run result");
+    const result = new RunResult({ ...common, status: "succeeded", output: copyValue(terminal.output as Value), unread });
+    if (handle !== null) BACKWARD_HANDLES.set(result, handle);
+    return result;
   }
-  if (handle !== null) BACKWARD_HANDLES.set(result, handle);
-  return result;
+  if (terminal instanceof RunFailed) {
+    const result = new RunResult({ ...common, status: "failed", failure: terminal.failure, unread });
+    if (handle !== null) BACKWARD_HANDLES.set(result, handle);
+    return result;
+  }
+  if (terminal instanceof RunCancelled) return new RunResult({ ...common, status: "cancelled", unread });
+  if (terminal === null && state.waits.waiting.size > 0) {
+    return new RunResult({ ...common, status: "waiting", waits: waitInfos(state.waits) });
+  }
+  throw new Error("engine returned without deriving a terminal run result");
 }
 
 /**

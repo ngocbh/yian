@@ -178,6 +178,8 @@ test("only the final log-only runtime and run API remain", () => {
     "failure",
     "events",
     "crashedAttempts",
+    "waits",
+    "unread",
   ]);
   const getters = Object.entries(Object.getOwnPropertyDescriptors(run.RunResult.prototype))
     .filter(([, descriptor]) => descriptor.get !== undefined)

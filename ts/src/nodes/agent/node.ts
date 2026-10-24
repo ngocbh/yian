@@ -34,7 +34,7 @@ import {
 } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../skills/tool.ts";
-import { canonicalJson, logJson } from "../../typesys/json.ts";
+import { logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
@@ -836,7 +836,7 @@ export class AgentNode extends Node {
   private recordConfig(config: Readonly<Record<string, unknown>>, steps: NodeSteps): void {
     const recorded = this.recordedLlmConfig(steps.prior);
     // By value: a recorded config comes back from the run log as a new record.
-    if (recorded !== null && canonicalJson(recorded) !== canonicalJson(config)) {
+    if (recorded !== null && logJson(recorded) !== logJson(config)) {
       throw new CapabilityFault(
         new RangeError(
           `node ${reprText(this.callTime!.path)} llm_config: recorded config differs from the ` +

@@ -188,6 +188,16 @@ test("resume recomputes the recorded config", async () => {
   expect(models.configs.map((config) => config["model"])).toEqual(["gpt-picked"]);
 });
 
+test("resume compares a recorded config holding a float", async () => {
+  const text = PICKED.replace("llm_config: {model: '\${pick.output}'}", "llm_config: {model: '\${pick.output}', openai: {temperature: 0.5}}");
+  expect(text).toContain("temperature: 0.5");
+  const log = fresh("float.jsonl");
+  const cut = await throughStep(text, "chat", ["ok"]);
+  await crashAfter(cut, () => run(text, { log }));
+  const result = await resume(text, log, { models: fakeModel().models });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+});
+
 test("resume refuses a recorded config that differs", async () => {
   const log = await crashedInChat();
   const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");

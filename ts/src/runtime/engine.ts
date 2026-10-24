@@ -625,7 +625,8 @@ export class FlowEngine {
   #stream(chunk: StreamChunk): void {
     const { live, onStream } = this;
     if (live !== null && chunk.n !== null && chunk.index !== null && !chunk.final) {
-      this.#emit((item: StreamChunk) => live.chunk(item.nodeId, item.n!, item.index!, item.chunk), chunk);
+      const { nodeId, n, index, chunk: text } = chunk;
+      this.#emit(() => live.chunk(nodeId, n, index, text), chunk);
     }
     if (onStream !== null) this.#emit(onStream, chunk);
   }
@@ -634,10 +635,11 @@ export class FlowEngine {
   #event(event: RunEvent): void {
     const { live, onEvent } = this;
     if (live !== null && event instanceof ModelCallStarted) {
-      const startedAt = new Date(event.startedAt).toISOString();
-      this.#emit((item: ModelCallStarted) => live.start(item.nodeId, item.n, item.model, item.purpose, startedAt), event);
+      const { node_id, n, model, purpose, started_at } = event.toJSON();
+      this.#emit(() => live.start(node_id, n, model, purpose, started_at), event);
     } else if (live !== null && event instanceof ModelCallFinished) {
-      this.#emit((item: ModelCallFinished) => live.end(item.nodeId, item.n, item.error), event);
+      const { nodeId, n, error } = event;
+      this.#emit(() => live.end(nodeId, n, error), event);
     }
     if (onEvent !== null) this.#emit(onEvent, event);
   }

@@ -157,8 +157,9 @@ export function errorName(error: unknown): string {
  * time), then, for purpose `chat` with a stream sink, one chunk per non-empty text delta, each with
  * the attempt's `n` and an `index` counting from 0; a retried attempt ends with
  * `ModelCallFinished` naming its error and no final chunk. The successful attempt ends with an
- * empty `final` chunk (the next `index`) when streaming, then `ModelCallFinished` with its usage. A failure is marked with `markModelFailure` and reported
- * by name on the last attempt's `ModelCallFinished`, with or without sinks; a `CapabilityFault`,
+ * empty `final` chunk (the next `index`) when streaming, then `ModelCallFinished` with its usage.
+ * A failure is marked with `markModelFailure` and reported by name on the last attempt's
+ * `ModelCallFinished`, with or without sinks; a `CapabilityFault`,
  * or any error once `signal` aborted, passes through untouched with nothing more emitted. Sinks
  * throw `CapabilityFault` (the evaluator wraps them); any other sink error counts as a model failure.
  *

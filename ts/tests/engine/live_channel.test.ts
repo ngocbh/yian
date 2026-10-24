@@ -309,7 +309,8 @@ test("every appended record reaches subscribers as a record frame, in seq order,
 test("onEvent gets the same events with or without a live channel", async () => {
   const runEvents = async (live: LiveChannel | null) => {
     const events: RunEvent[] = [];
-    const result = await runFlow(await loadFlow(CODE_ONLY), {}, { log: runLog(), live, onEvent: (event) => void events.push(event) });
+    const onEvent = (event: RunEvent) => void events.push(event);
+    const result = await runFlow(await loadFlow(CODE_ONLY), {}, { log: runLog(), live, onEvent });
     expect(result.status).toBe("succeeded");
     return events.map((event) => logJson([event.type, event.toJSON()]));
   };

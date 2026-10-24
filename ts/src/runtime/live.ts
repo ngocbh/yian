@@ -52,7 +52,8 @@ export class LiveChannel {
   readonly #subscribers = new Set<(frame: LiveFrame) => void>();
   /** The calls in flight by node, then by `n`, in start order. */
   readonly #calls = new Map<string, Map<number, LiveCall>>();
-  #lastSeq = -1;
+  /** The seq after the last record seen. */
+  #nextSeq = 0;
 
   /** Call `fn` with every later frame; returns the function that stops it. */
   subscribe(fn: (frame: LiveFrame) => void): () => void {
@@ -68,7 +69,7 @@ export class LiveChannel {
     for (const byN of this.#calls.values()) {
       for (const call of byN.values()) calls.push({ ...call, chunks: [...call.chunks] });
     }
-    return { last_seq: this.#lastSeq, calls };
+    return { last_seq: this.#nextSeq - 1, calls };
   }
 
   /**
@@ -116,7 +117,7 @@ export class LiveChannel {
    * already holds (a resumed run's) count as seen: the snapshot's `last_seq` starts at the last.
    */
   wrap(log: RunLog): RunLog {
-    this.#lastSeq = Math.max(this.#lastSeq, log.nextSequence - 1);
+    this.#nextSeq = Math.max(this.#nextSeq, log.nextSequence);
     const forward = (envelope: RecordEnvelope) => this.#recorded(envelope.seq, encodeRecord(envelope), envelope.record);
     return {
       get runId() {
@@ -142,7 +143,7 @@ export class LiveChannel {
 
   /** Note record `seq`, drop the call a step record closes, then send the record. */
   #recorded(seq: number, line: string, record: RunRecord | null): void {
-    this.#lastSeq = seq;
+    this.#nextSeq = seq + 1;
     if (record instanceof NodeStepRecord) this.#drop(record.nodeId, record.n);
     this.#send({ type: "record", seq, line });
   }

@@ -190,15 +190,16 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
  * `run()` resolves to the observers returned after each record was appended and its reducer plan
  * applied; `onEvent` sees each first. Stream chunks reach only `onStream`. A `live` channel gets each
  * AGENT model call's start (from `ModelCallStarted`), text chunks and end (from `ModelCallFinished`),
- * dropped like the callbacks' once the run stops, and a node's calls are dropped from it when the
- * node settles; the appended records reach it through the log the run boundary wraps. Evidence and binding
- * capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
- * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
- * before `record` returns, with no observer, and the capability closes once the evaluation's
- * outcome is decided, as do the node's event sinks. Once the run stops, `record` throws the node
- * signal's reason and appends nothing, and the sinks drop what they get, except a settled step
- * (`{ settled: true }`) and a `ToolCallFinished` while the run has no terminal result: the node
- * vouches that the call settled while its signal was live (see `NodeSteps.record`).
+ * dropped like the callbacks' once the run stops (the channel never throws), and a node's calls are
+ * dropped from it when the node settles; the appended records reach it through the log the run
+ * boundary wraps. Evidence and binding capture follow the recorded `RunState.learnable`. A node
+ * declaring `needsSteps` gets a `NodeSteps` snapshot taken right after its start; each step it
+ * records is appended and applied before `record` returns, with no observer, and the capability
+ * closes once the evaluation's outcome is decided, as do the node's event sinks. Once the run
+ * stops, `record` throws the node signal's reason and appends nothing, and the sinks drop what
+ * they get, except a settled step (`{ settled: true }`) and a `ToolCallFinished` while the run has
+ * no terminal result: the node vouches that the call settled while its signal was live (see
+ * `NodeSteps.record`).
  *
  * Each node runs under its own signal (its `caps.signal`, also the memory opener's), aborted with
  * the run signal's reason and unlinked from it when the node settles. A host stop (the `signal`

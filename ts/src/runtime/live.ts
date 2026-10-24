@@ -13,11 +13,15 @@
  * takes `snapshot()`, then follows the frames, skipping records at or below the snapshot's
  * `last_seq` and chunks below a call's `next_index`.
  *
- * Knows about:   runtime/log.
+ * The stream is ephemeral: a subscriber's failure never reaches the run. A subscriber that throws is
+ * dropped and reported to the host.
+ *
+ * Knows about:   platform (warnings), runtime/log.
  * Never imports: nodes, the run boundary, or the CLI.
  */
 
-import { decodeRecord, encodeRecord, NodeStepRecord, type RecordEnvelope, type RunLog, type RunRecord } from "./log.ts";
+import { warn } from "../platform.ts";
+import { encodeRecord, NodeStepRecord, type RecordEnvelope, type RunLog } from "./log.ts";
 
 /** One live frame: a record the log appended, or the start, a chunk or the end of a model call. */
 export type LiveFrame =
@@ -40,20 +44,41 @@ export interface LiveSnapshot {
   calls: LiveCall[];
 }
 
+/** How a `LiveChannel` reports a subscriber that threw, which it then dropped. */
+export interface LiveChannelOptions {
+  /**
+   * Gets the error and the frame being sent; a yian warning (`warn`) when omitted. Anything it
+   * throws is ignored.
+   */
+  onSubscriberError?: ((error: unknown, frame: LiveFrame) => void) | null;
+}
+
 /**
  * Forwards a run's records and model call frames to subscribers, and keeps the calls in flight for
  * `snapshot()`.
  *
- * The producer methods (`record`, `start`, `chunk`, `end`, `settle`) update the calls, then call
- * each subscriber synchronously, in subscription order. A subscriber that throws ends the run as a
- * host fault, as a failing `onStream` does.
+ * A host creates one, subscribes, and passes it as `runFlow`'s or `resumeFlow`'s `live`; the
+ * producer methods (`wrap`, `start`, `chunk`, `end`, `settle`) are for the engine and the run
+ * boundary. Each updates the calls, then calls each subscriber synchronously, in subscription order.
+ * A subscriber that throws is dropped and reported through `onSubscriberError`; the frame still
+ * reaches the others, and nothing is thrown to the run.
  */
 export class LiveChannel {
   readonly #subscribers = new Set<(frame: LiveFrame) => void>();
   /** The calls in flight by node, then by `n`, in start order. */
   readonly #calls = new Map<string, Map<number, LiveCall>>();
+  readonly #onSubscriberError: (error: unknown, frame: LiveFrame) => void;
   /** The seq after the last record seen. */
   #nextSeq = 0;
+
+  /** @throws TypeError when `onSubscriberError` isn't a function. */
+  constructor(options: LiveChannelOptions = {}) {
+    const { onSubscriberError = null } = options;
+    if (onSubscriberError !== null && typeof onSubscriberError !== "function") {
+      throw new TypeError("onSubscriberError must be a function or null");
+    }
+    this.#onSubscriberError = onSubscriberError ?? reportAsWarning;
+  }
 
   /** Call `fn` with every later frame; returns the function that stops it. */
   subscribe(fn: (frame: LiveFrame) => void): () => void {
@@ -72,17 +97,7 @@ export class LiveChannel {
     return { last_seq: this.#nextSeq - 1, calls };
   }
 
-  /**
-   * Forward the record `line` the log appended under `seq`; a `node_step` drops its call.
-   *
-   * @throws RangeError when `line` isn't a record line, read only while a call is in flight.
-   */
-  record(seq: number, line: string): void {
-    // A line is decoded only to find the call it closes.
-    this.#recorded(seq, line, this.#calls.size === 0 ? null : decodeRecord(line).record);
-  }
-
-  /** Forward the start of the model call of `node`'s step `n`. */
+  /** Engine only: send the start of the model call of `node`'s step `n`. */
   start(node: string, n: number, model: string | null, purpose: string, startedAt: string): void {
     let byN = this.#calls.get(node);
     if (byN === undefined) this.#calls.set(node, (byN = new Map()));
@@ -90,7 +105,7 @@ export class LiveChannel {
     this.#send({ type: "start", node, n, model, purpose, started_at: startedAt });
   }
 
-  /** Forward chunk `index` of the call of `node`'s step `n`. */
+  /** Engine only: send chunk `index` of the call of `node`'s step `n`. */
   chunk(node: string, n: number, index: number, text: string): void {
     const call = this.#calls.get(node)?.get(n);
     if (call !== undefined) {
@@ -100,25 +115,31 @@ export class LiveChannel {
     this.#send({ type: "chunk", node, n, index, text });
   }
 
-  /** Forward the end of the call of `node`'s step `n`; one that ended with `error` is dropped. */
+  /** Engine only: send the end of the call of `node`'s step `n`; one that ended with `error` is dropped. */
   end(node: string, n: number, error: string | null): void {
     if (error !== null) this.#drop(node, n);
     this.#send({ type: "end", node, n, error });
   }
 
-  /** Drop the calls of `node`, which settled; no frame is sent. */
+  /** Engine only: drop the calls of `node`, which settled; no frame is sent. */
   settle(node: string): void {
     this.#calls.delete(node);
   }
 
   /**
-   * Return a log that appends to `log` and forwards each appended record to this channel once the
-   * append returns. The other members read `log`; closing it closes `log`. The records `log`
-   * already holds (a resumed run's) count as seen: the snapshot's `last_seq` starts at the last.
+   * Run boundary only: return a log that appends to `log` and sends each appended record to this
+   * channel once the append returns; a `node_step` drops its call. The other members read `log`;
+   * closing it closes `log`. The records `log` already holds (a resumed run's) count as seen: the
+   * snapshot's `last_seq` starts at the last.
    */
   wrap(log: RunLog): RunLog {
     this.#nextSeq = Math.max(this.#nextSeq, log.nextSequence);
-    const forward = (envelope: RecordEnvelope) => this.#recorded(envelope.seq, encodeRecord(envelope), envelope.record);
+    const recorded = (envelope: RecordEnvelope) => {
+      const { seq, record } = envelope;
+      this.#nextSeq = seq + 1;
+      if (record instanceof NodeStepRecord) this.#drop(record.nodeId, record.n);
+      this.#send({ type: "record", seq, line: encodeRecord(envelope) });
+    };
     return {
       get runId() {
         return log.runId;
@@ -133,19 +154,12 @@ export class LiveChannel {
       records: () => log.records(),
       append(record) {
         const envelope = log.append(record);
-        forward(envelope);
+        recorded(envelope);
         return envelope;
       },
       close: () => log.close(),
       [Symbol.dispose]: () => log.close(),
     };
-  }
-
-  /** Note record `seq`, drop the call a step record closes, then send the record. */
-  #recorded(seq: number, line: string, record: RunRecord | null): void {
-    this.#nextSeq = seq + 1;
-    if (record instanceof NodeStepRecord) this.#drop(record.nodeId, record.n);
-    this.#send({ type: "record", seq, line });
   }
 
   #drop(node: string, n: number): void {
@@ -155,7 +169,25 @@ export class LiveChannel {
     if (byN.size === 0) this.#calls.delete(node);
   }
 
+  /** Call each subscriber with `frame`; drop and report one that throws. */
   #send(frame: LiveFrame): void {
-    for (const subscriber of [...this.#subscribers]) subscriber(frame);
+    for (const subscriber of [...this.#subscribers]) {
+      try {
+        subscriber(frame);
+      } catch (error) {
+        this.#subscribers.delete(subscriber);
+        try {
+          this.#onSubscriberError(error, frame);
+        } catch {
+          // The stream is ephemeral: nothing a viewer's side does may reach the run.
+        }
+      }
+    }
   }
+}
+
+/** Report a dropped subscriber's error as a yian warning. */
+function reportAsWarning(error: unknown): void {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  warn(`live channel subscriber failed and was dropped: ${text}`);
 }

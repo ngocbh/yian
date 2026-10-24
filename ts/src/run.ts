@@ -180,7 +180,13 @@ export {
 } from "./nodes/agent/messages.ts";
 export type { Steering } from "./nodes/base.ts";
 export { staticPathOf } from "./nodes/ids.ts";
-export { LiveChannel, type LiveCall, type LiveFrame, type LiveSnapshot } from "./runtime/live.ts";
+export {
+  LiveChannel,
+  type LiveCall,
+  type LiveChannelOptions,
+  type LiveFrame,
+  type LiveSnapshot,
+} from "./runtime/live.ts";
 export {
   type IterRunRecordsOptions,
   iterRunRecords,
@@ -508,7 +514,7 @@ export interface RunFlowOptions {
   /**
    * The run's live channel: gets each record once it is appended, and each AGENT model call's
    * start, chunks and end, for a viewer to follow the run (`LiveChannel`). A subscriber that throws
-   * ends the run as a host fault.
+   * is dropped and reported by the channel; it never affects the run.
    */
   live?: LiveChannel | null;
   /**

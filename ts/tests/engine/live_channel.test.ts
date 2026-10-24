@@ -23,39 +23,38 @@ import {
   decodeRecord,
   encodeRecord,
   iterRunRecords,
+  MemoryRunLog,
   NodeStartedRecord,
   NodeStepRecord,
-  RecordEnvelope,
-  SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { withWarnings } from "../../src/platform.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { crashAfter, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
-
-/** The text of record `seq` holding `record`, as a log appends it. */
-function line(seq: number, record: NodeStepRecord | NodeStartedRecord): string {
-  return encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run-1", seq, record, "2026-10-23T10:00:00.000Z"));
-}
 
 /** A `model_call` step record of `node`'s step `n`. */
 function step(node: string, n: number): NodeStepRecord {
   return new NodeStepRecord(node, n, { kind: "model_call" });
 }
 
-/** A channel and the frames its subscriber got. */
-function subscribed(): { channel: LiveChannel; frames: LiveFrame[]; stop: () => void } {
-  const channel = new LiveChannel();
-  const frames: LiveFrame[] = [];
-  const stop = channel.subscribe((frame) => void frames.push(frame));
-  return { channel, frames, stop };
-}
-
 const T0 = "2026-10-23T10:00:00.000Z";
 
+/**
+ * A channel, the frames its subscriber got, and `append`, which appends a record to a process-local
+ * log the channel wraps and returns the appended line.
+ */
+function subscribed(options?: ConstructorParameters<typeof LiveChannel>[0]) {
+  const channel = new LiveChannel(options);
+  const frames: LiveFrame[] = [];
+  const stop = channel.subscribe((frame) => void frames.push(frame));
+  const log = channel.wrap(new MemoryRunLog("run-1", { clock: () => Date.parse(T0) }));
+  const append = (record: NodeStepRecord | NodeStartedRecord) => encodeRecord(log.append(record));
+  return { channel, frames, stop, log, append };
+}
+
 test("frames reach subscribers in call order and survive a JSON round trip", () => {
-  const { channel, frames } = subscribed();
-  const started = line(0, new NodeStartedRecord("a"));
-  channel.record(0, started);
+  const { channel, frames, append } = subscribed();
+  const started = append(new NodeStartedRecord("a"));
   channel.start("a", 1, "gpt-test", "chat", T0);
   channel.chunk("a", 1, 0, "hel");
   channel.chunk("a", 1, 1, "lo");
@@ -71,9 +70,9 @@ test("frames reach subscribers in call order and survive a JSON round trip", () 
 });
 
 test("the snapshot lists interleaved calls with their own chunks", () => {
-  const { channel } = subscribed();
+  const { channel, append } = subscribed();
   expect(channel.snapshot()).toEqual({ last_seq: -1, calls: [] });
-  channel.record(0, line(0, new NodeStartedRecord("a")));
+  append(new NodeStartedRecord("a"));
   channel.start("a", 1, null, "chat", T0);
   channel.start("b", 1, null, "chat", T0);
   channel.chunk("a", 1, 0, "a0");
@@ -94,17 +93,17 @@ test("the snapshot lists interleaved calls with their own chunks", () => {
 });
 
 test("a call's step record drops only that call; an end with an error drops it too", () => {
-  const { channel } = subscribed();
+  const { channel, append } = subscribed();
   channel.start("a", 1, null, "chat", T0);
   channel.start("b", 1, null, "chat", T0);
   channel.chunk("a", 1, 0, "a0");
   channel.chunk("b", 1, 0, "b0");
   // Another node's step with the same n, and a record that isn't a step, drop nothing.
-  channel.record(3, line(3, step("c", 1)));
-  channel.record(4, line(4, new NodeStartedRecord("a")));
+  append(step("c", 1));
+  append(new NodeStartedRecord("a"));
   expect(channel.snapshot().calls.map((call) => call.node)).toEqual(["a", "b"]);
-  channel.record(5, line(5, step("a", 1)));
-  expect(channel.snapshot()).toEqual({ last_seq: 5, calls: [{ node: "b", n: 1, chunks: ["b0"], next_index: 1 }] });
+  append(step("a", 1));
+  expect(channel.snapshot()).toEqual({ last_seq: 2, calls: [{ node: "b", n: 1, chunks: ["b0"], next_index: 1 }] });
   channel.start("b", 2, null, "chat", T0);
   channel.end("b", 1, "ProviderError");
   expect(channel.snapshot().calls).toEqual([{ node: "b", n: 2, chunks: [], next_index: 0 }]);
@@ -130,6 +129,38 @@ test("an unsubscribed function gets nothing more", () => {
   expect(frames.map((frame) => frame.type)).toEqual(["start"]);
   // The channel still keeps the call for a later viewer.
   expect(channel.snapshot().calls).toEqual([{ node: "a", n: 1, chunks: ["late"], next_index: 1 }]);
+});
+
+test("a subscriber that throws is dropped and reported; the others and the log go on", () => {
+  const reported: [unknown, LiveFrame][] = [];
+  const { channel, frames, log, append } = subscribed({
+    onSubscriberError: (error, frame) => void reported.push([error, frame]),
+  });
+  const boom = new Error("viewer gone");
+  let calls = 0;
+  channel.subscribe(() => {
+    calls++;
+    throw boom;
+  });
+  const after: LiveFrame[] = [];
+  channel.subscribe((frame) => void after.push(frame));
+  append(new NodeStartedRecord("a"));
+  channel.start("a", 1, null, "chat", T0);
+  expect(calls).toBe(1);
+  expect(reported).toEqual([[boom, frames[0]!]]);
+  expect(log.nextSequence).toBe(1);
+  expect(frames).toEqual(after);
+  expect(frames.map((frame) => frame.type)).toEqual(["record", "start"]);
+});
+
+test("without onSubscriberError, a subscriber's error is a yian warning, never thrown", () => {
+  const { channel } = subscribed();
+  channel.subscribe(() => {
+    throw new TypeError("bad viewer");
+  });
+  const warnings: string[] = [];
+  withWarnings((message) => void warnings.push(message), () => channel.start("a", 1, null, "chat", T0));
+  expect(warnings).toEqual(["live channel subscriber failed and was dropped: TypeError: bad viewer"]);
 });
 
 // ---------- through a run ----------
@@ -304,6 +335,34 @@ test("every appended record reaches subscribers as a record frame, in seq order,
   expect(lines.map((line) => decodeRecord(line).kind)).toContain("run_started");
   expect(lines.map((line) => decodeRecord(line).kind)).toContain("node_step");
   expect(live.snapshot()).toEqual({ last_seq: lines.length - 1, calls: [] });
+});
+
+test("subscribers throwing on run_started, a node_step and a chunk leave the run and its log whole", async () => {
+  const reported: string[] = [];
+  const live = new LiveChannel({
+    onSubscriberError: (error, frame) => void reported.push(`${(error as Error).message} ${frame.type}`),
+  });
+  const kindOf = (frame: LiveFrame) => (frame.type === "record" ? decodeRecord(frame.line).kind : frame.type);
+  const thrower = (kind: string) => (frame: LiveFrame) => {
+    if (kindOf(frame) === kind) throw new Error(`on ${kind}`);
+  };
+  for (const kind of ["run_started", "node_step", "chunk"]) live.subscribe(thrower(kind));
+  const frames: LiveFrame[] = [];
+  live.subscribe((frame) => void frames.push(frame));
+  const model = new GatedModel({ t: ["x", "y"] });
+  const log = runLog();
+  const run = runFlow(await loadFlow(ONE_AGENT), { topic: "t" }, { log, env: NO_ENV, models: serving(model), live });
+  await until(() => live.snapshot().calls.length === 1);
+  for (let gate = 0; gate < 3; gate++) model.release("t");
+  const result = await run;
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("xy");
+  expect(reported).toEqual(["on run_started record", "on chunk chunk", "on node_step record"]);
+  // The log is complete, and the healthy subscriber got every record and chunk.
+  const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
+  expect(lines.map((line) => decodeRecord(line).kind).at(-1)).toBe("node_succeeded");
+  expect(frames.filter((frame) => frame.type === "record").map((frame) => frame.line)).toEqual(lines);
+  expect(frames.filter((frame) => frame.type === "chunk").map((frame) => frame.text)).toEqual(["x", "y"]);
 });
 
 test("onEvent gets the same events with or without a live channel", async () => {

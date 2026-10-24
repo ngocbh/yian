@@ -267,7 +267,8 @@ const stop = live.subscribe((frame: LiveFrame) => send(logJson(frame)));
 await runFlow(flow, inputs, { log, live });
 ```
 
-A `LiveChannel` (exported by `@ngocbh/yian/run`, with `LiveFrame`, `LiveSnapshot` and `LiveCall`)
+A `LiveChannel` (exported by `@ngocbh/yian/run`, with `LiveChannelOptions`, `LiveFrame`,
+`LiveSnapshot` and `LiveCall`)
 is a run's live channel, passed as `runFlow`'s or `resumeFlow`'s `live`. Its frames are plain JSON
 with the log's snake_case keys, so a host can send them anywhere with `logJson`:
 
@@ -281,7 +282,9 @@ with the log's snake_case keys, so a host can send them anywhere with `logJson`:
   its scrubbed message, comes first.
 
 Records never reach `onEvent`, and frames never enter the log. `subscribe(fn)` returns the function
-that stops it; a subscriber that throws ends the run as a host fault. `snapshot()` returns
+that stops it. The stream is ephemeral, so a subscriber never affects the run: one that throws is
+dropped and reported to `new LiveChannel({ onSubscriberError: (error, frame) => ... })`, a yian
+warning by default, and the frame still reaches the others. `snapshot()` returns
 `{last_seq, calls: [{node, n, chunks, next_index}]}`: the seq of the last record (`-1` before any)
 and each call in flight with its chunks so far. The channel keeps one buffer per call, so calls of
 parallel nodes (a MAP's items) stay apart; a call leaves it when its step record is appended, when
@@ -1282,10 +1285,10 @@ START is ready after the START inputs' commit; a success walks its
   after `RunResumed`. With `live`, each model call's `ModelCallStarted`, text chunks and
   `ModelCallFinished` also go to the channel, and a node's calls leave it when the node settles.
 - `src/runtime/live.ts` holds `LiveChannel` (see [Following a run live](#following-a-run-live)):
-  `record`, `start`, `chunk`, `end` and `settle` update the calls in flight, one per `(node, n)`,
-  then send the frame to each subscriber; `record` decodes a line only while a call is in flight,
-  to drop the call a `node_step` closes. `wrap(log)` gives the run boundary a log whose appends also
-  reach the channel, its `last_seq` starting at the records the log already holds.
+  the engine-only `start`, `chunk`, `end` and `settle` update the calls in flight, one per
+  `(node, n)`, then send the frame to each subscriber, dropping and reporting one that throws.
+  `wrap(log)` gives the run boundary a log whose appends also reach the channel (a `node_step`
+  drops its call), its `last_seq` starting at the records the log already holds.
 - `src/runtime/memory_runtime.ts` holds `MemoryRuntime`: `open` validates the table, origins,
   registry and snapshots, opens one session per key in key order and captures the snapshots;
   `openContext(scope, recall, { signal })` recalls each scope key outer to local, keeps non-empty

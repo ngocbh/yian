@@ -2576,8 +2576,9 @@ chunks, next_index}]}`: the last record's seq and each call in flight, one per `
 parallel calls stay apart; a call leaves it when its step record is appended, when it ends with an
 error, or when its node settles. A late viewer subscribes, reads the log to its end, takes the
 snapshot, then follows, skipping records at or below `last_seq` and chunks below a call's
-`next_index`. A host forwards frames to other processes over its own channel; yian ships no
-transport.
+`next_index`. The stream is ephemeral: a subscriber that throws is dropped and reported
+(`onSubscriberError`, a warning by default) and never affects the run. A host forwards frames to
+other processes over its own channel; yian ships no transport.
 
 ## Durable recovery with `resume_flow`
 

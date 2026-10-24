@@ -197,6 +197,8 @@ test("the package root exports exactly its documented root list plus the memory 
     close: run.close,
     cancel: run.cancel,
     pendingCalls: run.pendingCalls,
+    RunBusyError: run.RunBusyError,
+    DeliveryRefused: run.DeliveryRefused,
     buildMemories,
     MemoryRegistry,
     SQLiteStorage,

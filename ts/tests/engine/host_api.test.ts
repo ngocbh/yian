@@ -690,3 +690,8 @@ for (const numWorkers of [0, 2]) {
     expect([done.status, done.output]).toEqual(["succeeded", { events: ["hi"], closed: false }]);
   });
 }
+
+test("complete refuses {output: undefined}", async () => {
+  const { log, flow, callId } = await waitingAsk();
+  expect(await rejected(complete(log, callId, { output: undefined }, { env, flow }))).toBeInstanceOf(TypeError);
+});

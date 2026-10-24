@@ -2845,8 +2845,7 @@ New (TS yian): a host reaches a run through its log path, whether this process i
 or nobody is:
 
 ```ts
-import { advance, cancel, close, complete, pendingCalls, send } from "@ngocbh/yian";
-import { DeliveryRefused, RunBusyError } from "@ngocbh/yian/run";
+import { advance, cancel, close, complete, DeliveryRefused, pendingCalls, RunBusyError, send } from "@ngocbh/yian";
 
 await send("run.jsonl", "messages", "hello");          // the send's seq
 await advance({ log: "run.jsonl" });                     // a take reads it
@@ -2871,7 +2870,9 @@ await close("run.jsonl", "messages");                    // a waiting take gets 
   takes no lock, so it reads a log another writer holds. Hosts rebuild their open asks from it, not
   from a store of their own; a call leaves it once it is answered, timed out or closed.
 
-None of them moves the run: the live engine does, or a later `advance`.
+None of them moves the run: the live engine does, or a later `advance`. A waiting `RunResult` whose
+`waits` show a call `settled: true` was answered, closed or timed out as the run stopped: call
+`advance` again to move it on.
 
 **Live or offline.** When this process's engine is moving the run and its loop is running, a call
 goes to the engine, which appends and applies the record between two of its awaits; the options

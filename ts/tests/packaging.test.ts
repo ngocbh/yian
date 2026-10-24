@@ -99,6 +99,8 @@ const NAMES: Record<string, string[]> = {
     "close",
     "cancel",
     "pendingCalls",
+    "RunBusyError",
+    "DeliveryRefused",
     "buildMemories",
     "MemoryRegistry",
     "Failure",

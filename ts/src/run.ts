@@ -285,7 +285,10 @@ export class RunResult {
    * (crashed attempts), by node id; empty for a run never resumed.
    */
   readonly crashedAttempts: ReadonlyMap<string, number>;
-  /** The calls a waiting run waits on, by waiting node in `node_waiting` order; empty otherwise. */
+  /**
+   * The calls a waiting run waits on, by waiting node in `node_waiting` order; empty otherwise. A
+   * call `settled` as the run stopped wakes its node at the next `advance`.
+   */
   readonly waits: readonly WaitInfo[];
   /**
    * The send seqs no take read, by inbox, at a terminal status; empty while the run waits (they
@@ -2060,7 +2063,8 @@ export async function send(log: string, inbox: string, event: unknown, options: 
  *   null), or `{error}`, final for the call.
  * @param options See `DeliveryOptions`.
  * @returns The answer's seq, or `null` when the call is already answered with exactly this result.
- * @throws TypeError when `callId` isn't a string, `result` isn't `{output}` or `{error: string}`,
+ * @throws TypeError when `callId` isn't a string, `result` isn't `{output}` (output not
+ *   `undefined`) or `{error: string}`,
  *   or `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `unknown_call` (no such call, its node settled, or its handler hasn't returned
@@ -2076,10 +2080,12 @@ export async function complete(
   options: DeliveryOptions = {},
 ): Promise<number | null> {
   if (typeof callId !== "string") throw new TypeError("callId must be a string");
+  const fields: Record<string, unknown> | null = isRecord(result) ? result : null;
   const shaped =
-    isRecord(result) &&
-    Object.keys(result).length === 1 &&
-    (Object.hasOwn(result, "output") || (Object.hasOwn(result, "error") && typeof result.error === "string"));
+    fields !== null &&
+    Object.keys(fields).length === 1 &&
+    ((Object.hasOwn(fields, "output") && fields.output !== undefined) ||
+      (Object.hasOwn(fields, "error") && typeof fields.error === "string"));
   if (!shaped) throw new TypeError("a complete's result must be {output} or {error: string}");
   return deliverTo(log, { kind: "complete", callId, result }, options);
 }

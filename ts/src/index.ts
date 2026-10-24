@@ -20,15 +20,15 @@
  *
  * Added beside them: `Diagnostic` (`diagnostics`) and `registerTemplateFn` (`expr/builtins`);
  * `pending` (`tools/context`), the marker a host tool returns when its answer comes later, and the
- * host calls on a run log, `send`, `complete`, `close`, `cancel` and `pendingCalls` (`run`);
+ * host calls on a run log, `send`, `complete`, `close`, `cancel` and `pendingCalls`, with their
+ * errors `RunBusyError` and `DeliveryRefused` (`run`);
  * `ToolAttemptsFailed` (`nodes/tool/node`, Python's `yian.nodes.tool`), beside the tool errors; and
  * Python's `yian.memory.storage` names `SQLiteStorage`, `checkStoragePath` (`memory/storage/sqlite`),
  * `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownStore`, `MarkdownVersionMismatch` and
  * `markdownVersion` (`memory/storage/markdown`). `ProfileMemory` (`memory/profile`, Python's
  * `yian.memory.profile`, which Python's `yian` doesn't export) is here for hosts that keep the
  * profile document in their own `MarkdownStore`. `RunResult`, `BackwardOutcome` and `Steering` are
- * on `yian/run` (`run.ts`), as Python's `yian.run`, and so are the host calls' errors,
- * `RunBusyError` and `DeliveryRefused`. `Message`, `MessagePart`, `checkMessage`,
+ * on `yian/run` (`run.ts`), as Python's `yian.run`. `Message`, `MessagePart`, `checkMessage`,
  * `checkConversation` and `ConversationError` (`nodes/agent/messages`), the built-in message value
  * and the conversation a model route can send, are also on `yian/run`. `InboxRef`
  * (`typesys/values`), the handle an `Inbox(T)` input holds, is on both.
@@ -64,7 +64,7 @@ export {
   type MessagePart,
 } from "./nodes/agent/messages.ts";
 export { ToolAttemptsFailed } from "./nodes/tool/node.ts";
-export { advance, cancel, close, complete, pendingCalls, runFlow, send } from "./run.ts";
+export { advance, cancel, close, complete, DeliveryRefused, pendingCalls, RunBusyError, runFlow, send } from "./run.ts";
 export { pending, ToolContext } from "./tools/context.ts";
 export { PermanentToolError, ReportedToolError, TransientToolError } from "./tools/errors.ts";
 export { FunctionTool, tool } from "./tools/function_tools.ts";

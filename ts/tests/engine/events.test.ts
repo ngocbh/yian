@@ -103,11 +103,15 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   },
   {
     event: new NodeSucceeded({ nodeId: "n", output: "hi" }),
-    data: { node_id: "n", output: "hi", commit_as: null },
+    data: { node_id: "n", output: "hi", commit_as: null, interrupted: false },
   },
   {
     event: new NodeSucceeded({ nodeId: "n", output: { a: [1, null] }, commitAs: "t" }),
-    data: { node_id: "n", output: { a: [1, null] }, commit_as: "t" },
+    data: { node_id: "n", output: { a: [1, null] }, commit_as: "t", interrupted: false },
+  },
+  {
+    event: new NodeSucceeded({ nodeId: "n", output: null, interrupted: true }),
+    data: { node_id: "n", output: null, commit_as: null, interrupted: true },
   },
   {
     event: new NodeRouted({ nodeId: "c", handle: "#else" }),

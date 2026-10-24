@@ -1733,7 +1733,12 @@ host calls it closed, as `pendingCalls` listed them.
   reader; an interrupt wins over a steer read in the same turn.
 - **Events.** A cut stream ends with its `final: true` chunk, and its `ModelCallFinished` has no
   `error` and the usage of the chunks already received. Each skipped tool call gets a
-  `ToolCallStarted`, then a `ToolCallFinished` with `error: "interrupted"`.
+  `ToolCallStarted`, then a `ToolCallFinished` with `error: "interrupted"`. The agent's
+  `NodeSucceeded` says `interrupted: true` only when it honored the interrupt and succeeded with
+  null; when the interrupt landed after the reply was whole (a race the host can't see), the
+  agent answers as usual and `interrupted` is false. Every other `NodeSucceeded` has
+  `interrupted: false`. It is read from the recorded `interrupted` step, so a resumed run says
+  the same. A failed agent's `NodeFailed` says it with code `agent.interrupted`.
 
 `DeliveryRefused` reasons: `ended`, `not_started` and `unknown_inbox`, as for `send`; a
 `TypeError` when `inbox` isn't a string.

@@ -201,6 +201,7 @@ expect:
       n: 1
   - - NodeSucceeded
     - node_id: chat
+      interrupted: true
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded

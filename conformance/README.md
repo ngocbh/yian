@@ -546,7 +546,8 @@ snake_case names, at every depth of yian's own structures (never inside a value 
 produced, such as an output or an answer); fields that are null are left out at the top level
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
-The `started_at` of `ModelCallStarted` is left out (a time). A model call event and an AGENT's
+The `started_at` of `ModelCallStarted` is left out (a time), and so is a `NodeSucceeded`'s
+`interrupted` when it is false (TS-only; Python's events have no such field). A model call event and an AGENT's
 stream chunk name the step their record becomes by `n` (with `node_id`), and a chunk's `index`
 counts that step's chunks from 0.
 

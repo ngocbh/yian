@@ -126,6 +126,8 @@ export class WaitsState {
   readonly _pendingTakes = new Map<string, { readonly seq: number } & TakeCommit>();
   /** @internal Each unsettled node's latest `model_call` step seq: the calls registered after it are its latest reply's. */
   readonly _replies = new Map<string, number>();
+  /** @internal The unsettled nodes that wrote an `interrupted` step, honoring an interrupt; their success says `interrupted`. */
+  readonly _honored = new Set<string>();
 
   /** Return the plain JSON form, each map as its `[key, value]` entries in order (`fromJSON` reads it back). */
   toJSON(): WaitsJson {
@@ -139,6 +141,7 @@ export class WaitsState {
       lastWoken: [...this._lastWoken],
       pendingTakes: [...this._pendingTakes],
       replies: [...this._replies],
+      honored: [...this._honored],
     };
   }
 
@@ -153,7 +156,7 @@ export class WaitsState {
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {
       throw new RangeError(
-        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes and replies",
+        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies and honored",
       );
     }
     const w = new WaitsState();
@@ -170,6 +173,11 @@ export class WaitsState {
     for (const [node, seq] of entries(json, "lastWoken")) w._lastWoken.set(node, int(seq, `lastWoken ${reprText(node)}`));
     for (const [node, take] of entries(json, "pendingTakes")) w._pendingTakes.set(node, takeFromJson(take, `pendingTakes ${reprText(node)}`));
     for (const [node, seq] of entries(json, "replies")) w._replies.set(node, int(seq, `replies ${reprText(node)}`));
+    const honored = json.honored;
+    if (!Array.isArray(honored) || !honored.every((node) => typeof node === "string")) {
+      throw new RangeError("waits JSON honored must be an array of node ids");
+    }
+    for (const node of honored) w._honored.add(node);
     return w;
   }
 }
@@ -185,6 +193,7 @@ const WAITS_JSON_KEYS = [
   "lastWoken",
   "pendingTakes",
   "replies",
+  "honored",
 ] as const;
 
 /** The call states, for checking a stored call. */
@@ -309,6 +318,7 @@ export interface WaitsJson {
   readonly lastWoken: readonly (readonly [string, number])[];
   readonly pendingTakes: readonly (readonly [string, { readonly seq: number } & TakeCommit])[];
   readonly replies: readonly (readonly [string, number])[];
+  readonly honored: readonly string[];
 }
 
 /** The prefix of a send's pool key: the START's id and a dot, then the inbox's name. */
@@ -488,6 +498,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
     if (inbox !== undefined) for (const seq of seqList(step["from"]) ?? []) remove(inbox.unread, seq);
   } else if (step["kind"] === "interrupted") {
     w.interrupts.delete(record.nodeId);
+    w._honored.add(record.nodeId);
   }
 }
 
@@ -589,6 +600,7 @@ function settle(w: WaitsState, nodeId: string): void {
   if (take !== undefined) reoffer(w, take.inbox);
   w.interrupts.delete(nodeId);
   w._replies.delete(nodeId);
+  w._honored.delete(nodeId);
 }
 
 /** Return `nodeId`'s registered calls, in registration order. */

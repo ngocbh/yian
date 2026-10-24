@@ -1977,14 +1977,16 @@ function failureForm(failure: Failure, flow: ComposedFlow): Case {
 }
 
 /**
- * Return the data form of an event or stream chunk, without its null fields and without a model
- * call's `started_at` (a time): its `toJSON()`, with a failure in failure form and every file as
+ * Return the data form of an event or stream chunk, without its null fields, without a model
+ * call's `started_at` (a time) and without a `NodeSucceeded`'s `interrupted` when false (TS-only;
+ * Python has no such field): its `toJSON()`, with a failure in failure form and every file as
  * `{uri, mime, name}`.
  */
 function fields(event: RunEvent, flow: ComposedFlow): Case {
   const data: Case = {};
   for (const [key, item] of Object.entries(event.toJSON())) {
     if (item === null || key === "started_at") continue;
+    if (event.type === "NodeSucceeded" && key === "interrupted" && item === false) continue;
     const failure = key === "failure" ? (event as { failure: Failure }).failure : null;
     data[key] = failure !== null ? failureForm(failure, flow) : dataForm(item as YianValue);
   }

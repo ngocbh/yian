@@ -103,6 +103,11 @@ export class StreamChunk {
  * the reducer wrote the value under that target and fired its out-edges instead of those
  * of `nodeId`. The dispatcher resolves an explicit `Output.commitAs` before the node's
  * baked target; `null` means the value was committed under `nodeId`.
+ *
+ * `interrupted` is true only for an AGENT that honored a host interrupt (its `interrupted` step)
+ * and succeeded with null because its output is `Optional(...)`; an interrupt that landed after
+ * the reply was whole leaves it false. It comes from the recorded step, so a resumed run says the
+ * same.
  */
 export class NodeSucceeded {
   readonly type = "NodeSucceeded" as const;
@@ -110,16 +115,18 @@ export class NodeSucceeded {
   /** The node's single produced value. */
   readonly output: unknown;
   readonly commitAs: string | null;
+  readonly interrupted: boolean;
 
-  constructor(options: { nodeId: string; output?: unknown; commitAs?: string | null }) {
+  constructor(options: { nodeId: string; output?: unknown; commitAs?: string | null; interrupted?: boolean }) {
     this.nodeId = options.nodeId;
     this.output = options.output ?? null;
     this.commitAs = options.commitAs ?? null;
+    this.interrupted = options.interrupted ?? false;
   }
 
   /** Return the data form. */
   toJSON() {
-    return { node_id: this.nodeId, output: this.output, commit_as: this.commitAs };
+    return { node_id: this.nodeId, output: this.output, commit_as: this.commitAs, interrupted: this.interrupted };
   }
 }
 

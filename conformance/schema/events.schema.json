@@ -137,11 +137,12 @@
     "NodeSucceeded": {
       "description": "A node finished and produced its single output value.",
       "type": "object",
-      "required": ["node_id", "output", "commit_as"],
+      "required": ["node_id", "output", "commit_as", "interrupted"],
       "properties": {
         "node_id": {"type": "string"},
         "output": {"$ref": "#/$defs/value"},
-        "commit_as": {"type": ["string", "null"], "description": "The target the value was committed under instead of node_id; null when it was committed under node_id."}
+        "commit_as": {"type": ["string", "null"], "description": "The target the value was committed under instead of node_id; null when it was committed under node_id."},
+        "interrupted": {"type": "boolean", "description": "True only for an AGENT that honored a host interrupt and succeeded with null because its output is Optional(...); false when an interrupt landed after the reply was whole. Read from the recorded interrupted step, so a resumed run says the same."}
       }
     },
     "NodeRouted": {

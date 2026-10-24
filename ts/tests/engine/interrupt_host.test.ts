@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { StreamChunk } from "../../src/events.ts";
+import { ModelCallFinished, NodeSucceeded, type RunEvent, type StreamChunk } from "../../src/events.ts";
 import { Finish, TextDelta } from "../../src/llm/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { FileLockError, lockFile } from "../../src/platform.ts";
@@ -189,4 +189,50 @@ test("a live interrupt from onStream cuts the reply at the next chunk", async ()
     ["model_call", "interrupted"],
     ["interrupted", null],
   ]);
+});
+
+/** The `interrupted` flag of each `NodeSucceeded` the events hold, by node. */
+const succeeded = (events: readonly RunEvent[]) =>
+  Object.fromEntries(events.flatMap((event) => (event instanceof NodeSucceeded ? [[event.nodeId, event.interrupted]] : [])));
+
+test("NodeSucceeded says interrupted: true for an interrupted Optional agent, live and on a resume past its honor step", async () => {
+  const flow = await loadFlow(replyFlow());
+  const script = () =>
+    new ScriptedModel([[new TextDelta(0, "hello"), new TextDelta(0, " big"), new TextDelta(0, " world"), new Finish({ reason: "stop" })]], CONFIG);
+  const whole = freshLog();
+  const events: RunEvent[] = [];
+  const cutAt = (log: string) => (chunk: StreamChunk) => void (chunk.chunk === " big" && interrupt(log, "m", { env }));
+  const result = await runFlow(flow, {}, {
+    env, log: whole, tools: tools(), models: serving(script()), runId: "r", numWorkers: 0, onStream: cutAt(whole), onEvent: (event) => void events.push(event),
+  });
+  expect(result.output).toBeNull();
+  expect(succeeded(events)).toEqual({ __start__: false, reply: true, __end__: false });
+  expect(events.find((event) => event instanceof NodeSucceeded && event.nodeId === "reply")!.toJSON()).toMatchObject({ interrupted: true });
+
+  // Cut right after the honor step: the resumed agent replays to it and says the same.
+  const log = freshLog();
+  const honor = kinds(whole).indexOf("interrupted", kinds(whole).indexOf("model_call"));
+  await crashAfter(honor, () =>
+    runFlow(flow, {}, { env, log, tools: tools(), models: serving(script()), runId: "r", numWorkers: 0, onStream: cutAt(log) }),
+  );
+  const resumed: RunEvent[] = [];
+  const done = await advance({ env, log, tools: tools(), models: serving(script()), onEvent: (event) => void resumed.push(event) });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(succeeded(resumed)).toEqual({ reply: true, __end__: false });
+});
+
+test("an interrupt that lands after the final reply: the agent answers and NodeSucceeded says interrupted: false", async () => {
+  const log = freshLog();
+  const flow = await loadFlow(replyFlow());
+  const model = new ScriptedModel([[new TextDelta(0, "hello"), new TextDelta(0, " world"), new Finish({ reason: "stop" })]], CONFIG);
+  const events: RunEvent[] = [];
+  const onEvent = (event: RunEvent) => {
+    events.push(event);
+    if (event instanceof ModelCallFinished) void interrupt(log, "m", { env });
+  };
+  const result = await runFlow(flow, {}, { env, log, tools: tools(), models: serving(model), runId: "r", numWorkers: 0, onEvent });
+  expect(result.output).toBe("hello world");
+  // The interrupt landed and named the agent, but the reply was whole: nothing was cut.
+  expect(readRunLog(log).some(({ record }) => record instanceof InterruptedRecord)).toBe(true);
+  expect(succeeded(events)["reply"]).toBe(false);
 });

@@ -290,6 +290,7 @@ expect:
       n: 1
   - - NodeSucceeded
     - node_id: loop#0/reply
+      interrupted: true
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded

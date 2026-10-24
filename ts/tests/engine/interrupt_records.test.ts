@@ -81,9 +81,14 @@ test("a pending step on a node with a pending interrupt registers its call close
   expect(w.calls.get("r/reply/1/0")).toMatchObject({ state: "closed", closedReason: "interrupted" });
 });
 
-test("the honor step drops the pending interrupt", () => {
+test("the honor step drops the pending interrupt and marks the node honored until it settles", () => {
   const w = fold(...START, modelCall("reply", 1), new InterruptedRecord("owner", ["reply"]), honor("reply", 2, 3));
   expect(w.interrupts.has("reply")).toBe(false);
+  expect([...w._honored]).toEqual(["reply"]);
+  const back = WaitsState.fromJSON(JSON.parse(JSON.stringify(w.toJSON())));
+  expect([...back._honored]).toEqual(["reply"]);
+  const settled = fold(...START, modelCall("reply", 1), new InterruptedRecord("owner", ["reply"]), honor("reply", 2, 3), new NodeSucceededRecord("reply", 1));
+  expect(settled._honored.size).toBe(0);
 });
 
 test("the node's outcome drops a pending interrupt it never honored", () => {

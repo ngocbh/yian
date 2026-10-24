@@ -908,6 +908,8 @@ interface SuccessDelta {
   readonly edgeHeads: readonly string[];
   readonly newlyReadyIds: readonly string[];
   readonly observerCommitAs: string | null;
+  /** Whether the node honored an interrupt (its `interrupted` step) before this success. */
+  readonly interrupted: boolean;
   /** The sends a take commit consumed, whose values leave the inbox store. */
   readonly consumedEvents: readonly number[];
   /** The node's messages commit this success also accepts, or `null`. */
@@ -2150,6 +2152,7 @@ function prepareSuccessTransition(
       nodeId: delta.nodeId,
       output: normalizeTypedFiles(files, decodeTyped(delta.valueJson)).toObject(),
       commitAs: delta.observerCommitAs,
+      interrupted: delta.interrupted,
     }),
   ];
   if (terminal !== null) observers.push(terminalObserver(terminal));
@@ -5795,6 +5798,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
     edgeHeads: Object.freeze(edgeHeads),
     newlyReadyIds: Object.freeze(newlyReadyIds),
     observerCommitAs: target === record.nodeId ? null : target,
+    interrupted: state.waits._honored.has(record.nodeId),
     consumedEvents: pending.take?.events ?? [],
     messages: state.pendingMessages.get(record.nodeId) ?? null,
   });
@@ -6685,7 +6689,12 @@ function materializeSuccess(plan: SuccessPlan): SuccessApply {
   const observerValue = normalizeTypedFiles(plan.files, decodeTyped(plan.delta.valueJson)).toObject();
   const terminal = plan.terminal !== null ? materializeTerminal(plan.terminal) : null;
   const observers: RunEvent[] = [
-    new NodeSucceeded({ nodeId: plan.delta.nodeId, output: observerValue, commitAs: plan.delta.observerCommitAs }),
+    new NodeSucceeded({
+      nodeId: plan.delta.nodeId,
+      output: observerValue,
+      commitAs: plan.delta.observerCommitAs,
+      interrupted: plan.delta.interrupted,
+    }),
   ];
   if (terminal !== null) observers.push(terminal.observer);
   return { value, messagesValue, terminal, observers };

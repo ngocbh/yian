@@ -447,11 +447,12 @@ test.each(Object.entries(WAIT_LOGS))("the fold resumes from its JSON form at eve
 
 test.each<[string, unknown, string]>([
   ["not an object", [], "waits JSON must be an object"],
-  ["a missing key", { ...new WaitsState().toJSON(), calls: undefined }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes and replies"],
-  ["an extra key", { ...new WaitsState().toJSON(), starts: [] }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes and replies"],
+  ["a missing key", { ...new WaitsState().toJSON(), calls: undefined }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies and honored"],
+  ["an extra key", { ...new WaitsState().toJSON(), starts: [] }, "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies and honored"],
   ["a map that isn't entries", { ...new WaitsState().toJSON(), calls: {} }, "waits JSON calls must be an array of [key, value] entries"],
   ["an entry with a non-text key", { ...new WaitsState().toJSON(), interrupts: [[1, 2]] }, "waits JSON interrupts must be an array of [key, value] entries"],
   ["a seq that isn't an integer", { ...new WaitsState().toJSON(), lastWoken: [["a", "3"]] }, "waits JSON lastWoken 'a' must be an integer"],
+  ["honored that isn't node ids", { ...new WaitsState().toJSON(), honored: [1] }, "waits JSON honored must be an array of node ids"],
   ["a call that isn't an object", { ...new WaitsState().toJSON(), calls: [["r/a", 1]] }, "waits JSON calls 'r/a' must be a call"],
   ["a call with an unknown state", { ...new WaitsState().toJSON(), calls: [["r/a", { ...callJson(), state: "lost" }]] }, "waits JSON calls 'r/a' must be a call"],
   ["an inbox without its queue", { ...new WaitsState().toJSON(), inboxes: [["msgs", { closed: false, absorbing: [] }]] }, "waits JSON inboxes 'msgs' must be an inbox"],

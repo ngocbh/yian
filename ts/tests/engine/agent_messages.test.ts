@@ -11,7 +11,7 @@ import {
   MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
 } from "../../src/llm/messages.ts";
 import {
-  checkConversation, checkMessage, ConversationError, fromModelMessage, type Message, toModelMessage,
+  checkConversation, checkMessage, checkModelConversation, ConversationError, fromModelMessage, type Message, toModelMessage,
 } from "../../src/nodes/agent/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { typeFor } from "../../src/typesys/types.ts";
@@ -138,7 +138,7 @@ const calls = (...ids: string[]) =>
   new ModelMessage({ role: "assistant", parts: [new TextPart("On it."), ...ids.map((id) => new ToolCallPart({ id, name: "read_file", arguments: {} }))] });
 const result = (id: string) => new ModelMessage({ role: "tool", parts: [new ToolResultPart({ callId: id, name: "read_file", content: "ok" })] });
 
-describe("checkConversation", () => {
+describe("checkModelConversation", () => {
   test.each([
     ["text turns", [user(), said("Hello"), user()]],
     ["a call answered by its result", [user(), calls("c1"), result("c1"), said("Done"), user()]],
@@ -156,7 +156,7 @@ describe("checkConversation", () => {
     ["two user messages in a row", [user(), user()]],
     ["media in a user message", [new ModelMessage({ role: "user", parts: [new MediaPart({ mime: "image/png", file: FILE })] })]],
   ])("%s passes", (_, messages) => {
-    expect(() => checkConversation(messages)).not.toThrow();
+    expect(() => checkModelConversation(messages)).not.toThrow();
   });
 
   test.each([
@@ -191,12 +191,61 @@ describe("checkConversation", () => {
   ])("%s is refused", (_, messages, index, reason) => {
     let error: unknown;
     try {
-      checkConversation(messages);
+      checkModelConversation(messages);
     } catch (caught) {
       error = caught;
     }
     expect(error).toBeInstanceOf(ConversationError);
     expect([(error as ConversationError).index, (error as ConversationError).reason]).toEqual([index, reason]);
     expect((error as Error).message).toBe(`message ${index}: ${reason}`);
+  });
+});
+
+describe("checkConversation over public Message values", () => {
+  const read = (): Message => checkMessage({ role: "user", parts: [{ type: "text", text: "Read" }] });
+  const call = (): Message =>
+    checkMessage({ role: "assistant", parts: [{ type: "tool_call", id: "c1", name: "read_file", arguments: {} }] });
+  const answer = (): Message =>
+    checkMessage({ role: "tool", parts: [{ type: "tool_result", call_id: "c1", name: "read_file", content: "hi" }] });
+  const again = (): Message => checkMessage({ role: "user", parts: [{ type: "text", text: "again" }] });
+
+  /** Return the error `checkConversation(messages)` throws. */
+  function refusal(messages: readonly Message[]): unknown {
+    try {
+      checkConversation(messages);
+    } catch (caught) {
+      return caught;
+    }
+    throw new Error("checkConversation did not throw");
+  }
+
+  test("a call answered by its result, read by call_id, passes", () => {
+    expect(() => checkConversation([read(), call(), answer(), again()])).not.toThrow();
+  });
+
+  test("an orphan result is a ConversationError", () => {
+    const error = refusal([read(), answer(), again()]);
+    expect(error).toBeInstanceOf(ConversationError);
+    expect((error as Error).message).toBe("message 1: tool result 'c1' answers no open tool call");
+  });
+
+  test("an unanswered call is a ConversationError", () => {
+    const error = refusal([read(), call(), again()]);
+    expect(error).toBeInstanceOf(ConversationError);
+    expect((error as Error).message).toBe("message 1: tool call 'c1' (read_file) has no result before the next user message");
+  });
+
+  test("a message the model message refuses is a ConversationError naming it", () => {
+    const error = refusal([read(), checkMessage({ role: "user", author: "", parts: [{ type: "text", text: "Hi" }] })]);
+    expect(error).toBeInstanceOf(ConversationError);
+    expect((error as Error).message).toBe("message 1: author: expected a non-empty string");
+  });
+
+  test("a model message isn't a Message, at compile time", () => {
+    const models = [new ModelMessage({ role: "user", parts: [new TextPart("x")] })];
+    // `tsc` checks the directive: the public check takes Message values, not model messages.
+    // @ts-expect-error
+    const check = () => checkConversation(models);
+    expect(check).toBeFunction();
   });
 });

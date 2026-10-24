@@ -88,8 +88,8 @@ import {
 } from "./llm_values.ts";
 import { runAgent } from "./loop.ts";
 import {
-  checkConversation,
   checkMessage,
+  checkModelConversation,
   ConversationError,
   type ConversationMessage,
   type Message,
@@ -181,7 +181,7 @@ function textMessage(role: "user" | "assistant", text: string, item: number): Pr
   return { role, text, model: null, captured: { role, text }, item };
 }
 
-/** Return what `checkConversation` reads of a rendered message; a text message is one text part. */
+/** Return what `checkModelConversation` reads of a rendered message; a text message is one text part. */
 function conversationForm(rendered: PromptMessage): ConversationMessage {
   return rendered.model ?? { role: rendered.role, parts: [{ type: "text" }] };
 }
@@ -245,7 +245,7 @@ function notAMessage(nodeId: string, index: number, ref: string, reason: string 
  * @throws ExpressionError when a template or splice names a missing value or reads a null, a
  *   spliced value isn't a message or a list of messages or holds a media part, or the list
  *   renders no message, ends in one that isn't the user's, or isn't a conversation a model route
- *   can send (`checkConversation`); that error names the prompt item holding the offending
+ *   can send (`checkModelConversation`); that error names the prompt item holding the offending
  *   message, for an unanswered call the assistant message that made it.
  */
 function renderPromptList(nodeId: string, items: readonly PromptItem[], record: ValueRecord): PromptMessage[] {
@@ -272,7 +272,7 @@ function renderPromptList(nodeId: string, items: readonly PromptItem[], record: 
     );
   }
   try {
-    checkConversation(messages.map(conversationForm));
+    checkModelConversation(messages.map(conversationForm));
   } catch (error) {
     if (!(error instanceof ConversationError)) throw error;
     throw new ExpressionError(

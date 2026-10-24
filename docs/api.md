@@ -2961,9 +2961,10 @@ const history = (typed.value as unknown[]).map(checkMessage); // Message[], file
 ```
 
 `checkMessage` throws a `RangeError` (a `TypeCheckError`) naming the path of the first part that
-doesn't fit. A host that builds a history itself can check it with `checkConversation(messages)`,
-which throws a `ConversationError` whose `index` names the offending message and `reason` says
-why.
+doesn't fit. A host that builds a history itself can check its `Message` values with
+`checkConversation(messages)`, which throws a `ConversationError` whose `index` names the
+offending message and `reason` says why: a broken conversation rule, or a field the model
+message refuses (such as an empty `author`).
 
 No Python counterpart: Python yian's run log refuses infinity and writes no tags, so Python hosts
 read values with `json` and `yian.typesys.TypedValue`.

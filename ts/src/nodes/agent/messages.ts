@@ -11,7 +11,7 @@
  */
 
 import { reprText } from "../../diagnostics.ts";
-import { MediaPart, MESSAGE_FORMAT, Message as ModelMessage } from "../../llm/messages.ts";
+import { MediaPart, MESSAGE_FORMAT, MessageFormatError, Message as ModelMessage } from "../../llm/messages.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { builtinType } from "../../typesys/types.ts";
 import { buildValueAs, FileRef } from "../../typesys/values.ts";
@@ -103,7 +103,7 @@ export class ConversationError extends RangeError {
   }
 }
 
-/** What `checkConversation` reads of a message; a model message (`llm/messages.ts`) fits it. */
+/** What `checkModelConversation` reads of a message; a model message (`llm/messages.ts`) fits it. */
 export interface ConversationMessage {
   readonly role: string;
   readonly parts: readonly {
@@ -125,7 +125,29 @@ const ROLE_PARTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
 ]);
 
 /**
- * Check that `messages`, a conversation after the system message, is one a model route can send.
+ * Check that `messages`, `Message` values (as `checkMessage` returns them) in conversation order,
+ * are a conversation a model route can send: each converts to a model message, and the list
+ * passes `checkModelConversation`.
+ *
+ * @throws ConversationError naming the first offending message: one the model message refuses
+ *   (its reason is the `MessageFormatError` text, e.g. an empty `author`), or one that breaks a
+ *   conversation rule.
+ */
+export function checkConversation(messages: readonly Message[]): void {
+  const models = messages.map((message, index) => {
+    try {
+      return toModelMessage(message);
+    } catch (error) {
+      if (error instanceof MessageFormatError) throw new ConversationError(index, error.message);
+      throw error;
+    }
+  });
+  checkModelConversation(models);
+}
+
+/**
+ * Check that `messages`, a conversation after the system message in its model-message form, is one
+ * a model route can send.
  *
  * Each message has a part, and each part is one its role can carry: a user message holds text and
  * media; an assistant message text, reasoning, refusals and tool calls; a tool message tool results.
@@ -138,7 +160,7 @@ const ROLE_PARTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * @throws ConversationError naming the first offending message: for an unanswered call, the
  *   assistant message that made it.
  */
-export function checkConversation(messages: readonly ConversationMessage[]): void {
+export function checkModelConversation(messages: readonly ConversationMessage[]): void {
   const open = new Map<string, { name: string; index: number }>();
   const unanswered = (before: string): ConversationError => {
     const [id, call] = open.entries().next().value!;

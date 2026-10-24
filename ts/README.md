@@ -917,7 +917,7 @@ Node 22, and so does every unit test; a change keeps both green.
   `Message` (sent with all its parts) or a `{role, text}` record, or a list of them. `forward`
   renders it into `AgentRunContext.messages` (a text prompt is one user message) and
   `promptText`, the last message's text, which recall and evidence read; the rendered list must
-  pass `checkConversation` before any model is built, and the loop sends
+  pass `checkModelConversation` before any model is built, and the loop sends
   `[system, ...ctx.messages]`. A chat carries its history as a LOOP field and splices it before
   the new user message:
 
@@ -929,7 +929,9 @@ Node 22, and so does every unit test; a change keeps both green.
 - `src/nodes/agent/messages.ts` holds the built-in `Message` value (`Message`, `MessagePart`,
   `checkMessage`), its conversion to and from the model message (`toModelMessage`,
   `fromModelMessage`, through `llm/messages.ts`' strict `yian.message.v1` reader), and
-  `checkConversation`, the conversation shape every model route can send. The type itself is
+  the conversation shape every model route can send: `checkModelConversation` over model
+  messages (the render's check) and the public `checkConversation` over `Message` values, which
+  converts them first. The type itself is
   written in yian's type syntax in `typesys/types.ts` (`builtinType`), which `resolveType` falls
   back to when a flow's registry lacks the name.
 - An AGENT writes its steps through `AgentSteps` (`src/nodes/agent/context.ts`), before acting

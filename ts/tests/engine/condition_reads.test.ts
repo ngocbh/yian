@@ -5,6 +5,8 @@
  * `:-` / `:?` / `|` sub-expression around it and whether that sub-expression co-skips as a
  * binding would. `rewriteConditionReads` renames reference leaves by occurrence, so the same path
  * read plainly and inside an escape can get different names.
+ *
+ * TS-only: a comprehension's variables are neither reads nor renamed; its iterables are.
  */
 
 import { expect, test } from "bun:test";
@@ -145,4 +147,14 @@ test.each([
   };
   const rename = (path: string) => paths[path] ?? null;
   expect(rewriteConditionReads(when, (_i, read) => rename(read.path))).toBe(rewriteConditionRefs(when, rename));
+});
+
+const BUDGET = 'len(join([m.text for t in input.history for m in t], "")) > input.budget';
+
+test("comprehension variables are not condition reads", () => {
+  expect(conditionReads(parseCondition(BUDGET)).map((r) => r.path)).toEqual(["input.history", "input.budget"]);
+});
+
+test("rewrite renames a comprehension's iterable, not its variables", () => {
+  expect(rewriteConditionReads(BUDGET, (i) => `__r${i}`)).toBe('len(join([m.text for t in __r0 for m in t], "")) > __r1');
 });

@@ -6,11 +6,13 @@
  * dotted path is collected); one with a `call_suffix` is a call: the callee name contributes
  * nothing, but each argument value's references are collected. Literals contribute nothing.
  * `item`-headed references are collected here; the caller skips `item` when minting edges.
+ *
+ * TS-only: comprehension variables are not reads, and `rewriteExprRefs` leaves them alone.
  */
 
 import { expect, test } from "bun:test";
 
-import { exprRefs } from "../../src/expr/expressions.ts";
+import { exprRefs, rewriteExprRefs } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 
 /** Return the reference paths `parseExpr(text)` reads. */
@@ -63,4 +65,14 @@ test("ref inside parens", () => {
 
 test("nested call collects the inner ref", () => {
   expect(refs("join(upper(x))")).toEqual(["x"]);
+});
+
+test("comprehension variables are not reads; the iterable and outer names are", () => {
+  expect(refs("[m.text for t in input.history for m in t if m.role == r]")).toEqual(["input.history", "r"]);
+});
+
+test("rewriteExprRefs leaves comprehension variables alone", () => {
+  expect(rewriteExprRefs("[x + y for x in xs]", (p) => (p === "x" || p === "xs" ? "z" : null))).toBe(
+    "[x + y for x in z]",
+  );
 });

@@ -23,7 +23,16 @@
  */
 
 import { warn } from "../platform.ts";
-import { encodeRecord, NodeStepRecord, type RecordEnvelope, type RunLog } from "./log.ts";
+import {
+  decodeRecord,
+  encodeRecord,
+  NodeFailedRecord,
+  NodeStepRecord,
+  NodeSucceededRecord,
+  type RecordEnvelope,
+  type RunLog,
+  RunStoppedRecord,
+} from "./log.ts";
 
 /** One live frame: a record the log appended, or the start, a chunk or the end of a model call. */
 export type LiveFrame =
@@ -127,9 +136,7 @@ export class LiveChannel {
 
   /** @internal Engine only: send the start of the model call of `node`'s step `n`. */
   start(node: string, n: number, model: string | null, purpose: string, startedAt: string): void {
-    let byN = this.#calls.get(node);
-    if (byN === undefined) this.#calls.set(node, (byN = new Map()));
-    byN.set(n, []);
+    setCall(this.#calls, node, n, []);
     this.#send({ type: "start", node, n, model, purpose, started_at: startedAt });
   }
 
@@ -163,7 +170,7 @@ export class LiveChannel {
     const recorded = (envelope: RecordEnvelope) => {
       const { seq, record } = envelope;
       this.#nextSeq = seq + 1;
-      if (record instanceof NodeStepRecord) this.#drop(record.nodeId, record.n);
+      if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
       this.#send({ type: "record", seq, line: encodeRecord(envelope) });
     };
     return {
@@ -186,13 +193,6 @@ export class LiveChannel {
       close: () => log.close(),
       [Symbol.dispose]: () => log.close(),
     };
-  }
-
-  #drop(node: string, n: number): void {
-    const byN = this.#calls.get(node);
-    if (byN === undefined) return;
-    byN.delete(n);
-    if (byN.size === 0) this.#calls.delete(node);
   }
 
   /** Call each subscriber with `frame`; drop and report one that throws. */
@@ -221,4 +221,128 @@ export class LiveChannel {
 function reportAsWarning(error: unknown): void {
   const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   warn(`live channel subscriber failed and was dropped: ${text}`);
+}
+
+/** A call in flight as a `LiveView` holds it: its step, its text so far and its next chunk's `index`. */
+export interface LiveViewCall {
+  readonly node: string;
+  readonly n: number;
+  readonly text: string;
+  readonly nextIndex: number;
+}
+
+/**
+ * A reader's fold of a live run: the seq of the last record it has, and each model call in flight
+ * with its text so far, one buffer per `(node, n)`.
+ *
+ * A host that serves viewers in another process keeps one per run, built from the log up to a
+ * `follow` snapshot's `last_seq` plus that snapshot, then fed every later frame. It never reads
+ * files: the host gives it records. A record or chunk it already has is a duplicate and changes
+ * nothing; a record past the next seq, a chunk past its call's next index, or a chunk of a call it
+ * never saw start is a gap: `apply` returns false and changes nothing, and the host asks `follow`
+ * again. A call goes when its step record arrives, when it ends with an error, or when its node's
+ * success arrives; a node failure or a run stop ends the run and drops every call.
+ */
+export class LiveView {
+  /** The text and next chunk index of each call in flight by node, then by `n`, in start order. */
+  readonly #calls = new Map<string, Map<number, { text: string; nextIndex: number }>>();
+  #lastSeq: number;
+
+  private constructor(lastSeq: number) {
+    this.#lastSeq = lastSeq;
+  }
+
+  /**
+   * Start from the records read from the log, at least up to `snapshot.last_seq`, and the snapshot
+   * a `follow` sent; records past `last_seq` are ignored, as the frames after the snapshot bring
+   * them again. Only each record's `seq` is read, so `iterRunRecords` entries, with or without
+   * payloads, and log envelopes both work.
+   *
+   * @throws RangeError when the records up to `last_seq` aren't seqs 0, 1, ... `last_seq`.
+   */
+  static from(records: Iterable<{ readonly seq: number }>, snapshot: LiveSnapshot): LiveView {
+    const { last_seq: lastSeq, calls } = snapshot;
+    let next = 0;
+    for (const { seq } of records) {
+      if (seq > lastSeq) break;
+      if (seq !== next) throw new RangeError(`records must run from seq 0 to ${lastSeq}; got seq ${seq} for ${next}`);
+      next++;
+    }
+    if (next !== lastSeq + 1) {
+      throw new RangeError(`records must run from seq 0 to ${lastSeq}; they stop before seq ${next}`);
+    }
+    const view = new LiveView(lastSeq);
+    for (const { node, n, chunks, next_index } of calls) setCall(view.#calls, node, n, { text: chunks.join(""), nextIndex: next_index });
+    return view;
+  }
+
+  /** The seq of the last record applied (`-1` before any record). */
+  get lastSeq(): number {
+    return this.#lastSeq;
+  }
+
+  /** The calls in flight, in start order: node, n, text so far and next chunk index. */
+  calls(): readonly LiveViewCall[] {
+    const calls: LiveViewCall[] = [];
+    for (const [node, byN] of this.#calls) {
+      for (const [n, { text, nextIndex }] of byN) calls.push({ node, n, text, nextIndex });
+    }
+    return calls;
+  }
+
+  /**
+   * Apply one frame; returns false on a gap, meaning "follow again", and true otherwise, for a
+   * duplicate and a frame of a type it doesn't know too.
+   *
+   * @throws RangeError when a new record frame's `line` isn't a valid record.
+   */
+  apply(frame: LiveFrame): boolean {
+    switch (frame.type) {
+      case "record": {
+        if (frame.seq <= this.#lastSeq) return true;
+        if (frame.seq !== this.#lastSeq + 1) return false;
+        const { record } = decodeRecord(frame.line);
+        this.#lastSeq = frame.seq;
+        if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
+        else if (record instanceof NodeSucceededRecord) this.#calls.delete(record.nodeId);
+        else if (record instanceof NodeFailedRecord || record instanceof RunStoppedRecord) this.#calls.clear();
+        return true;
+      }
+      case "start":
+        if (this.#calls.get(frame.node)?.has(frame.n) !== true) {
+          setCall(this.#calls, frame.node, frame.n, { text: "", nextIndex: 0 });
+        }
+        return true;
+      case "chunk": {
+        const call = this.#calls.get(frame.node)?.get(frame.n);
+        if (call === undefined || frame.index > call.nextIndex) return false;
+        if (frame.index === call.nextIndex) {
+          call.text += frame.text;
+          call.nextIndex++;
+        }
+        return true;
+      }
+      case "end":
+        // A call's step record comes before its end; an error end drops the call even without one.
+        if (frame.error !== null) deleteCall(this.#calls, frame.node, frame.n);
+        return true;
+      default:
+        return true;
+    }
+  }
+}
+
+/** Set the call of `node`'s step `n` in `calls`, a map by node, then by `n`. */
+function setCall<V>(calls: Map<string, Map<number, V>>, node: string, n: number, value: V): void {
+  let byN = calls.get(node);
+  if (byN === undefined) calls.set(node, (byN = new Map()));
+  byN.set(n, value);
+}
+
+/** Delete the call of `node`'s step `n` from `calls`, and its node's map once empty. */
+function deleteCall<V>(calls: Map<string, Map<number, V>>, node: string, n: number): void {
+  const byN = calls.get(node);
+  if (byN === undefined) return;
+  byN.delete(n);
+  if (byN.size === 0) calls.delete(node);
 }

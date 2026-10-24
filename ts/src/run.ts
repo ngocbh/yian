@@ -186,6 +186,8 @@ export {
   type LiveFollowFrame,
   type LiveFrame,
   type LiveSnapshot,
+  LiveView,
+  type LiveViewCall,
 } from "./runtime/live.ts";
 export {
   type IterRunRecordsOptions,

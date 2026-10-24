@@ -10,7 +10,9 @@
  * Changed:
  * - `test_concat_repeat_and_opaque_routes_cross_public_call_without_reevaluation`: list repetition
  *   is a type error (decision 7), so `input.values * 2` becomes two more concatenated copies. The
- *   opaque builtin is registered with `registerTemplateFn` and put back after the test.
+ *   opaque builtin is registered with `registerTemplateFn` and put back after the test. The run
+ *   log records no expansion seed, so each replay (the backward's, the read-only resume's)
+ *   rebuilds the CALL's seed from its binding and calls the builtin again.
  * - `test_owned_memories_learn_complete_history_and_reject_invalid_proposals`: the invalid learn
  *   result is `null` (Python's is a tuple where a list is required); learn-context feedback holds
  *   its ints as `bigint`s.
@@ -620,13 +622,15 @@ output: \${outer.output}
         ),
       ),
     ).toBe(true);
-    expect(calls).toEqual([["same"]]);
+    // The feedback reads the captured route, not a reevaluation; the backward's replay rebuilds
+    // the CALL's seed from its binding, which calls the function once more.
+    expect(calls).toEqual([["same"], ["same"]]);
     const before = readFileSync(path);
     const inspected = await resume(flow, { log: path, memory });
     expect(inspected.backwardOutcome).toEqual(outcome);
     expect(inspected.events).toEqual([]);
     expect(readFileSync(path)).toEqual(before);
-    expect(calls).toEqual([["same"]]);
+    expect(calls).toEqual([["same"], ["same"], ["same"]]);
   } finally {
     if (saved === undefined) TEMPLATE_FNS.delete("composition_opaque");
     else TEMPLATE_FNS.set("composition_opaque", saved);

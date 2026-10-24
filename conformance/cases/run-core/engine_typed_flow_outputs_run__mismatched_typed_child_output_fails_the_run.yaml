@@ -60,11 +60,9 @@ expect:
     - use
     - from: {}
       key: use/__start__
-      value: {}
   - - node_expanded
     - use
     - prune_ids: []
-      seed: {}
   - [node_started, use/__start__]
   - - node_succeeded
     - use/__start__

@@ -74,29 +74,21 @@ expect:
     - m
     - from: {__start__: 6}
       key: m/__start__
-      value: {}
   - - pool_commit
     - m
     - from: {__start__: 6}
       key: m#0/__start__
-      value: {item: a}
   - - pool_commit
     - m
     - from: {__start__: 6}
       key: m#1/__start__
-      value: {item: b}
   - - pool_commit
     - m
     - from: {__start__: 6}
       key: m#2/__start__
-      value: {item: c}
   - - node_expanded
     - m
     - prune_ids: []
-      seed:
-      - item: a
-      - item: b
-      - item: c
   - [node_started, m/__start__]
   - - node_succeeded
     - m/__start__
@@ -137,32 +129,28 @@ expect:
   - [node_started, m#0/__end__]
   - - pool_commit
     - m#0/__end__
-    - value: p0
-      from: {m#0/place: 23}
+    - from: {m#0/place: 23}
   - - node_succeeded
     - m#0/__end__
     - {commit: 32}
   - [node_started, m#1/__end__]
   - - pool_commit
     - m#1/__end__
-    - value: p1
-      from: {m#1/place: 26}
+    - from: {m#1/place: 26}
   - - node_succeeded
     - m#1/__end__
     - {commit: 35}
   - [node_started, m#2/__end__]
   - - pool_commit
     - m#2/__end__
-    - value: p2
-      from: {m#2/place: 29}
+    - from: {m#2/place: 29}
   - - node_succeeded
     - m#2/__end__
     - {commit: 38}
   - [node_started, m/__end__]
   - - pool_commit
     - m/__end__
-    - value: [p0, p1, p2]
-      key: m
+    - key: m
       from: {m#0/__end__: 32, m#1/__end__: 35, m#2/__end__: 38}
   - - node_succeeded
     - m/__end__

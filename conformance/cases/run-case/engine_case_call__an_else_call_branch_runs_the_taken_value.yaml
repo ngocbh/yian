@@ -98,12 +98,9 @@ expect:
     - __call_1
     - from: {}
       key: __call_1/__start__
-      value: {stance: con}
   - - node_expanded
     - __call_1
     - prune_ids: []
-      seed:
-        stance: con
   - [node_started, __call_1/__start__]
   - - node_succeeded
     - __call_1/__start__
@@ -118,8 +115,7 @@ expect:
   - [node_started, __call_1/__end__]
   - - pool_commit
     - __call_1/__end__
-    - value: took:con
-      key: __call_1
+    - key: __call_1
       from: {__call_1/x: 16}
   - - node_succeeded
     - __call_1/__end__

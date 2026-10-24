@@ -2306,13 +2306,13 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 14, and readers accept only schema 14. The schema
+Changed (TS yian): records use schema 15, and readers accept only schema 15. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 13 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 14 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
-writes were `pool_commit` records, or before node steps were numbered) with "run log schema N
-predates schema 14 and is not supported", and any other schema with "unsupported run-record
-schema: N" (a float token shows as `14.0`); the "predates" message for schemas 7
+writes were `pool_commit` records, before node steps were numbered, or before derived commits
+held `from` pointers) with "run log schema N predates schema 15 and is not supported", and any
+other schema with "unsupported run-record schema: N" (a float token shows as `15.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2386,6 +2386,36 @@ at once, and START is ready only after the last.
   starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
   Read the record at seq `k`, such as the commit a success names, with
   `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
+
+Changed (TS yian, schema 15): a derived commit holds no value, only `from`, `{node_id, key,
+from}`: `from` maps each pool name its binding read to the seq of the `pool_commit` that wrote it
+(a run input or `system.<name>` to its run-start commit), and every seq names a `pool_commit`.
+Derived commits are a `derived` node's (START, END, LOOP, CALL, MAP), except the top-level START's
+and END's, which keep their values: a non-top `__end__`'s and the stopping LOOP driver's. A
+derived node's binding reads only earlier values, so a replay rebuilds its value from the pool when
+its success accepts the commit, and refuses (`RangeError`) a `from` seq that isn't the seq of the
+commit that last wrote that name. The names come from the binding's lookups in both learnable and
+non-learnable runs, so both write the same `from`.
+
+- A spawner's expansion writes its child STARTs' commits: before `node_expanded`, one derived
+  `pool_commit` per START of the fragment (its own, then each child flow's; for MAP, the fan-out
+  `<map>/__start__` and one per item), keyed by the child START with the spawner's `from`.
+  `node_expanded` holds no `seed`: a replay rebuilds the seed from that `from`, before the
+  expansion's prune applies, checks `topology_digest`, and gives each commit the value its child
+  START binds. A child START whose seed doesn't bind gets no commit and fails when it runs; an
+  expansion with no commit rebuilds its seed from the whole pool.
+- The child START still runs. Its `node_succeeded` names its expansion commit, and it writes none
+  of its own; its evaluated value must equal the committed one (`RangeError` naming the node and
+  the seq otherwise). A cut between the expansion commits and `node_expanded` leaves orphans; the
+  spawner reruns.
+- A flow outputs a growing value linearly when its nodes output only what is new and a binding
+  does the append (`examples/chat.yaml`): a turn's AGENT records its reply, and the turn's history
+  is a derived value, recorded as `from`.
+- `foldRunLog(log, { env, flow })` (from `yian/run`) replays a log through the run reducer and
+  returns `{flow, records}`, each record with the `TypedValue` an accepted `pool_commit` writes
+  (held, or rebuilt from `from`), `null` for an orphan commit and any other record. It is how a
+  host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`. A log whose flow was
+  built in code needs `flow`.
 
 Temporal stamps every history event with an `eventTime`, LangGraph every checkpoint with a
 `ts`, and Codex and Claude Code each session record with a `timestamp` of the same form; yian's
@@ -2722,7 +2752,9 @@ for unknown effects. SessionMemory owns whatever conversation history was saved;
 the run log is not a durable replacement for that memory backend.
 
 Changed (TS yian): there is no session memory, so nothing keeps a conversation beside the
-run log; a chat's history is the value a LOOP carries, recorded as node outputs. Steers aren't
+run log; a chat's history is the value a LOOP carries, rebuilt on replay from the node outputs
+that made it (the turns' derived commits hold `from` pointers; see [Authoritative run
+logs](#authoritative-run-logs)). Steers aren't
 recorded: a steer an AGENT read before a crash is lost (the replayed requests don't hold it, and
 `request_sha256` leaves steers out so they still match), and one queued while the run was down
 joins the first live model call.
@@ -2875,7 +2907,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `resumeFlow` reads (schema 14); a line of another schema raises
+- It reads every schema `resumeFlow` reads (schema 15); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 
@@ -2885,7 +2917,7 @@ Changed (TS yian): for hosts that read run-log values, `yian/run` exports the co
 them with: `TypedValue` and `FileRef`, `logJson`, `parseJson` and `JSONDecodeError`, and the types
 `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject` and `JsonMode`. A `pool_commit`
 payload is flat, `{node_id, key, kind, value}`, and its `kind` and `value` are the typed value's
-wire form. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
+wire form. A derived commit holds `from` in their place; read its value with `foldRunLog`. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
 `kind` and `value`, `kind` must be a storage kind (not `Any`) and `value` of that kind, or it throws
 a `RangeError`. It checks the value's top level and a typed list's items, not nested contents, which
 it trusts `parseJson` to have read. Kind `file` gives a `FileRef`, and a `list[float]` keeps its int

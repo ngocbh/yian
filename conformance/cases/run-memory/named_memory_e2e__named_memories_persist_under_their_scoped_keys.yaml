@@ -191,12 +191,9 @@ expect:
     - lib_step
     - from: {__start__: 6}
       key: lib_step/__start__
-      value: {topic: q2}
   - - node_expanded
     - lib_step
     - prune_ids: []
-      seed:
-        topic: q2
   - [node_started, lib_step/__start__]
   - - node_succeeded
     - lib_step/__start__
@@ -227,8 +224,7 @@ expect:
   - [node_started, lib_step/__end__]
   - - pool_commit
     - lib_step/__end__
-    - value: users=1 memories=notes,lib.notes
-      key: lib_step
+    - key: lib_step
       from: {lib_step/summarize: 19}
   - - node_succeeded
     - lib_step/__end__

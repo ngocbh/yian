@@ -96,12 +96,9 @@ expect:
     - c1
     - from: {__start__: 6}
       key: c1/__start__
-      value: {approve: false}
   - - node_expanded
     - c1
     - prune_ids: []
-      seed:
-        approve: false
   - [node_started, c1/__start__]
   - - node_succeeded
     - c1/__start__
@@ -113,9 +110,7 @@ expect:
   - [node_started, c1/__end__]
   - - pool_commit
     - c1/__end__
-    - value:
-        order: null
-      key: c1
+    - key: c1
       from: {}
   - - node_succeeded
     - c1/__end__

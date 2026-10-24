@@ -59,12 +59,9 @@ expect:
     - b
     - from: {__start__: 6}
       key: b/__start__
-      value: {s: f}
   - - node_expanded
     - b
     - prune_ids: []
-      seed:
-        s: f
   - [node_started, b/__start__]
   - - node_succeeded
     - b/__start__
@@ -79,8 +76,7 @@ expect:
   - [node_started, b/__end__]
   - - pool_commit
     - b/__end__
-    - value: f
-      key: b
+    - key: b
       from: {b/k: 14}
   - - node_succeeded
     - b/__end__

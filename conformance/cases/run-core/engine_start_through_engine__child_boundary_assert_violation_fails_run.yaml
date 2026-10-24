@@ -100,12 +100,9 @@ expect:
     - call_it
     - from: {__start__: 6}
       key: call_it/__start__
-      value: {n: -1}
   - - node_expanded
     - call_it
     - prune_ids: []
-      seed:
-        n: -1
   - [node_started, call_it/__start__]
   - - node_failed
     - call_it/__start__

@@ -83,8 +83,6 @@ expect:
   - - node_expanded
     - g
     - prune_ids: []
-      seed:
-        ok: yes
   - [node_started, g/__start__]
   - - node_failed
     - g/__start__

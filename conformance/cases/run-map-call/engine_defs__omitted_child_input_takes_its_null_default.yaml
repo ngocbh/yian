@@ -51,11 +51,9 @@ expect:
     - go
     - from: {}
       key: go/__start__
-      value: {maybe: null}
   - - node_expanded
     - go
     - prune_ids: []
-      seed: {}
   - [node_started, go/__start__]
   - - node_succeeded
     - go/__start__

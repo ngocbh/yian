@@ -188,17 +188,14 @@ expect:
     - many
     - from: {__start__: 6}
       key: many/__start__
-      value: {}
   - - pool_commit
     - many
     - from: {__start__: 6}
       key: many#0/__start__
-      value: {n: ten}
   - - pool_commit
     - many
     - from: {__start__: 6}
       key: many#1/__start__
-      value: {n: twenty}
   - - node_expanded
     - many
     - forward_capture:
@@ -256,9 +253,6 @@ expect:
           occurrence_path: []
           static_path: [many]
       prune_ids: []
-      seed:
-      - n: ten
-      - n: twenty
   - [node_started, many/__start__]
   - - node_succeeded
     - many/__start__
@@ -324,7 +318,6 @@ expect:
     - many#0/loop
     - from: {many#0/__start__: 10}
       key: many#0/loop#0/__start__
-      value: {n: ten}
   - - node_expanded
     - many#0/loop
     - forward_capture:
@@ -355,15 +348,11 @@ expect:
             static_path: [many, loop]
           static_path: [many, loop]
       prune_ids: []
-      seed:
-      - {n: ten}
-      - 0
   - [node_started, many#1/loop]
   - - pool_commit
     - many#1/loop
     - from: {many#1/__start__: 11}
       key: many#1/loop#0/__start__
-      value: {n: twenty}
   - - node_expanded
     - many#1/loop
     - forward_capture:
@@ -394,9 +383,6 @@ expect:
             static_path: [many, loop]
           static_path: [many, loop]
       prune_ids: []
-      seed:
-      - {n: twenty}
-      - 0
   - [node_started, many#0/loop#0/__start__]
   - - node_succeeded
     - many#0/loop#0/__start__
@@ -454,7 +440,6 @@ expect:
     - many#0/loop#0/invoke
     - from: {many#0/loop#0/__start__: 20}
       key: many#0/loop#0/invoke/__start__
-      value: {n: ten}
   - - node_expanded
     - many#0/loop#0/invoke
     - forward_capture:
@@ -482,13 +467,11 @@ expect:
             static_path: [many, loop]
           static_path: [many, loop, invoke]
       prune_ids: []
-      seed: {n: ten}
   - [node_started, many#1/loop#0/invoke]
   - - pool_commit
     - many#1/loop#0/invoke
     - from: {many#1/loop#0/__start__: 23}
       key: many#1/loop#0/invoke/__start__
-      value: {n: twenty}
   - - node_expanded
     - many#1/loop#0/invoke
     - forward_capture:
@@ -516,7 +499,6 @@ expect:
             static_path: [many, loop]
           static_path: [many, loop, invoke]
       prune_ids: []
-      seed: {n: twenty}
   - [node_started, many#0/loop#0/invoke/__start__]
   - - node_succeeded
     - many#0/loop#0/invoke/__start__
@@ -696,8 +678,7 @@ expect:
   - [node_started, many#0/loop#0/invoke/__end__]
   - - pool_commit
     - many#0/loop#0/invoke/__end__
-    - value: one
-      key: many#0/loop#0/invoke
+    - key: many#0/loop#0/invoke
       from: {many#0/loop#0/invoke/author: 41}
   - - node_succeeded
     - many#0/loop#0/invoke/__end__
@@ -735,8 +716,7 @@ expect:
   - [node_started, many#1/loop#0/invoke/__end__]
   - - pool_commit
     - many#1/loop#0/invoke/__end__
-    - value: one
-      key: many#1/loop#0/invoke
+    - key: many#1/loop#0/invoke
       from: {many#1/loop#0/invoke/author: 45}
   - - node_succeeded
     - many#1/loop#0/invoke/__end__
@@ -774,9 +754,7 @@ expect:
   - [node_started, many#0/loop#0/__end__]
   - - pool_commit
     - many#0/loop#0/__end__
-    - value:
-        n: one
-      from: {many#0/loop#0/invoke: 48}
+    - from: {many#0/loop#0/invoke: 48}
   - - node_succeeded
     - many#0/loop#0/__end__
     - commit: 54
@@ -810,9 +788,7 @@ expect:
   - [node_started, many#1/loop#0/__end__]
   - - pool_commit
     - many#1/loop#0/__end__
-    - value:
-        n: one
-      from: {many#1/loop#0/invoke: 51}
+    - from: {many#1/loop#0/invoke: 51}
   - - node_succeeded
     - many#1/loop#0/__end__
     - commit: 57
@@ -848,7 +824,6 @@ expect:
     - many#0/loop~1
     - from: {many#0/loop#0/__end__: 54}
       key: many#0/loop#1/__start__
-      value: {n: one}
   - - node_expanded
     - many#0/loop~1
     - forward_capture:
@@ -884,15 +859,11 @@ expect:
       - many#0/loop#0/__start__
       - many#0/loop#0/invoke
       - many#0/loop~1
-      seed:
-      - n: one
-      - 1
   - [node_started, many#1/loop~1]
   - - pool_commit
     - many#1/loop~1
     - from: {many#1/loop#0/__end__: 57}
       key: many#1/loop#1/__start__
-      value: {n: one}
   - - node_expanded
     - many#1/loop~1
     - forward_capture:
@@ -928,9 +899,6 @@ expect:
       - many#1/loop#0/__start__
       - many#1/loop#0/invoke
       - many#1/loop~1
-      seed:
-      - n: one
-      - 1
   - [node_started, many#0/loop#1/__start__]
   - - node_succeeded
     - many#0/loop#1/__start__
@@ -988,7 +956,6 @@ expect:
     - many#0/loop#1/invoke
     - from: {many#0/loop#1/__start__: 60}
       key: many#0/loop#1/invoke/__start__
-      value: {n: one}
   - - node_expanded
     - many#0/loop#1/invoke
     - forward_capture:
@@ -1016,13 +983,11 @@ expect:
             static_path: [many, loop]
           static_path: [many, loop, invoke]
       prune_ids: []
-      seed: {n: one}
   - [node_started, many#1/loop#1/invoke]
   - - pool_commit
     - many#1/loop#1/invoke
     - from: {many#1/loop#1/__start__: 63}
       key: many#1/loop#1/invoke/__start__
-      value: {n: one}
   - - node_expanded
     - many#1/loop#1/invoke
     - forward_capture:
@@ -1050,7 +1015,6 @@ expect:
             static_path: [many, loop]
           static_path: [many, loop, invoke]
       prune_ids: []
-      seed: {n: one}
   - [node_started, many#0/loop#1/invoke/__start__]
   - - node_succeeded
     - many#0/loop#1/invoke/__start__
@@ -1230,8 +1194,7 @@ expect:
   - [node_started, many#0/loop#1/invoke/__end__]
   - - pool_commit
     - many#0/loop#1/invoke/__end__
-    - value: one
-      key: many#0/loop#1/invoke
+    - key: many#0/loop#1/invoke
       from: {many#0/loop#1/invoke/author: 81}
   - - node_succeeded
     - many#0/loop#1/invoke/__end__
@@ -1269,8 +1232,7 @@ expect:
   - [node_started, many#1/loop#1/invoke/__end__]
   - - pool_commit
     - many#1/loop#1/invoke/__end__
-    - value: one
-      key: many#1/loop#1/invoke
+    - key: many#1/loop#1/invoke
       from: {many#1/loop#1/invoke/author: 85}
   - - node_succeeded
     - many#1/loop#1/invoke/__end__
@@ -1308,9 +1270,7 @@ expect:
   - [node_started, many#0/loop#1/__end__]
   - - pool_commit
     - many#0/loop#1/__end__
-    - value:
-        n: one
-      from: {many#0/loop#1/invoke: 88}
+    - from: {many#0/loop#1/invoke: 88}
   - - node_succeeded
     - many#0/loop#1/__end__
     - commit: 94
@@ -1344,9 +1304,7 @@ expect:
   - [node_started, many#1/loop#1/__end__]
   - - pool_commit
     - many#1/loop#1/__end__
-    - value:
-        n: one
-      from: {many#1/loop#1/invoke: 91}
+    - from: {many#1/loop#1/invoke: 91}
   - - node_succeeded
     - many#1/loop#1/__end__
     - commit: 97
@@ -1380,9 +1338,7 @@ expect:
   - [node_started, many#0/loop~2]
   - - pool_commit
     - many#0/loop~2
-    - value:
-        n: one
-      key: many#0/loop
+    - key: many#0/loop
       from: {many#0/loop#1/__end__: 94}
   - - node_succeeded
     - many#0/loop~2
@@ -1417,9 +1373,7 @@ expect:
   - [node_started, many#1/loop~2]
   - - pool_commit
     - many#1/loop~2
-    - value:
-        n: one
-      key: many#1/loop
+    - key: many#1/loop
       from: {many#1/loop#1/__end__: 97}
   - - node_succeeded
     - many#1/loop~2
@@ -1454,8 +1408,7 @@ expect:
   - [node_started, many#0/__end__]
   - - pool_commit
     - many#0/__end__
-    - value: one
-      from: {many#0/loop: 100}
+    - from: {many#0/loop: 100}
   - - node_succeeded
     - many#0/__end__
     - commit: 106
@@ -1486,8 +1439,7 @@ expect:
   - [node_started, many#1/__end__]
   - - pool_commit
     - many#1/__end__
-    - value: one
-      from: {many#1/loop: 103}
+    - from: {many#1/loop: 103}
   - - node_succeeded
     - many#1/__end__
     - commit: 109
@@ -1518,8 +1470,7 @@ expect:
   - [node_started, many/__end__]
   - - pool_commit
     - many/__end__
-    - value: [one, one]
-      key: many
+    - key: many
       from: {many#0/__end__: 106, many#1/__end__: 109}
   - - node_succeeded
     - many/__end__

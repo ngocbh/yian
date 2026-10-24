@@ -82,13 +82,9 @@ expect:
     - loop
     - from: {}
       key: loop#0/__start__
-      value: {acc: 0}
   - - node_expanded
     - loop
     - prune_ids: []
-      seed:
-      - acc: 0
-      - 0
   - [node_started, loop#0/__start__]
   - - node_succeeded
     - loop#0/__start__
@@ -101,9 +97,7 @@ expect:
   - [node_started, loop#0/__end__]
   - - pool_commit
     - loop#0/__end__
-    - value:
-        acc: null
-      from: {loop#0/step: 14}
+    - from: {loop#0/step: 14}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 17}
@@ -111,9 +105,6 @@ expect:
   - - node_expanded
     - loop~1
     - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
-      seed:
-      - acc: null
-      - 1
   - [node_started, loop#1/__start__]
   - - node_failed
     - loop#1/__start__

@@ -143,23 +143,17 @@ expect:
     - inline_call
     - from: {}
       key: inline_call/__start__
-      value: {x: 5}
   - - node_expanded
     - inline_call
     - prune_ids: []
-      seed:
-        x: 5
   - [node_started, named_call]
   - - pool_commit
     - named_call
     - from: {}
       key: named_call/__start__
-      value: {x: 5}
   - - node_expanded
     - named_call
     - prune_ids: []
-      seed:
-        x: 5
   - [node_started, inline_call/__start__]
   - - node_succeeded
     - inline_call/__start__
@@ -201,9 +195,7 @@ expect:
   - [node_started, inline_call/__end__]
   - - pool_commit
     - inline_call/__end__
-    - value:
-        value: 5
-      key: inline_call
+    - key: inline_call
       from: {inline_call/pack: 25}
   - - node_succeeded
     - inline_call/__end__
@@ -211,9 +203,7 @@ expect:
   - [node_started, named_call/__end__]
   - - pool_commit
     - named_call/__end__
-    - value:
-        value: 5
-      key: named_call
+    - key: named_call
       from: {named_call/pack: 28}
   - - node_succeeded
     - named_call/__end__

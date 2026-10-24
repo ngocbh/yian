@@ -71,13 +71,9 @@ expect:
     - loop
     - from: {}
       key: loop#0/__start__
-      value: {count: 0}
   - - node_expanded
     - loop
     - prune_ids: []
-      seed:
-      - count: 0
-      - 0
   - [node_started, loop#0/__start__]
   - - node_succeeded
     - loop#0/__start__
@@ -85,9 +81,7 @@ expect:
   - [node_started, loop#0/__end__]
   - - pool_commit
     - loop#0/__end__
-    - value:
-        count: 1
-      from: {loop#0/__start__: 9}
+    - from: {loop#0/__start__: 9}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 14}
@@ -103,13 +97,9 @@ expect:
     - loop~1
     - from: {loop#0/__end__: 14}
       key: loop#1/__start__
-      value: {count: 1}
   - - node_expanded
     - loop~1
     - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/place, loop~1]
-      seed:
-      - count: 1
-      - 1
   - [node_started, loop#1/__start__]
   - - node_succeeded
     - loop#1/__start__
@@ -117,9 +107,7 @@ expect:
   - [node_started, loop#1/__end__]
   - - pool_commit
     - loop#1/__end__
-    - value:
-        count: 2
-      from: {loop#1/__start__: 20}
+    - from: {loop#1/__start__: 20}
   - - node_succeeded
     - loop#1/__end__
     - {commit: 25}
@@ -135,13 +123,9 @@ expect:
     - loop~2
     - from: {loop#1/__end__: 25}
       key: loop#2/__start__
-      value: {count: 2}
   - - node_expanded
     - loop~2
     - prune_ids: [loop#1/__end__, loop#1/__start__, loop#1/place, loop~2]
-      seed:
-      - count: 2
-      - 2
   - [node_started, loop#2/__start__]
   - - node_succeeded
     - loop#2/__start__
@@ -149,9 +133,7 @@ expect:
   - [node_started, loop#2/__end__]
   - - pool_commit
     - loop#2/__end__
-    - value:
-        count: 3
-      from: {loop#2/__start__: 31}
+    - from: {loop#2/__start__: 31}
   - - node_succeeded
     - loop#2/__end__
     - {commit: 36}
@@ -165,9 +147,7 @@ expect:
   - [node_started, loop~3]
   - - pool_commit
     - loop~3
-    - value:
-        count: 3
-      key: loop
+    - key: loop
       from: {loop#2/__end__: 36}
   - - node_succeeded
     - loop~3

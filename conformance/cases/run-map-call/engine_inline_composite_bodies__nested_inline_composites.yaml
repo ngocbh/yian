@@ -147,26 +147,17 @@ expect:
     - outer_call
     - from: {__start__: 6}
       key: outer_call/__start__
-      value:
-        items: [3, 1, 2]
   - - node_expanded
     - outer_call
     - prune_ids: []
-      seed:
-        items: [3, 1, 2]
   - [node_started, outer_loop]
   - - pool_commit
     - outer_loop
     - from: {}
       key: outer_loop#0/__start__
-      value: {exited: false, n: 0}
   - - node_expanded
     - outer_loop
     - prune_ids: []
-      seed:
-      - exited: false
-        n: 0
-      - 0
   - [node_started, outer_call/__start__]
   - - node_succeeded
     - outer_call/__start__
@@ -180,41 +171,29 @@ expect:
     - outer_call/inner
     - from: {outer_call/__start__: 9}
       key: outer_call/inner/__start__
-      value: {}
   - - pool_commit
     - outer_call/inner
     - from: {outer_call/__start__: 9}
       key: outer_call/inner#0/__start__
-      value: {value: 3}
   - - pool_commit
     - outer_call/inner
     - from: {outer_call/__start__: 9}
       key: outer_call/inner#1/__start__
-      value: {value: 1}
   - - pool_commit
     - outer_call/inner
     - from: {outer_call/__start__: 9}
       key: outer_call/inner#2/__start__
-      value: {value: 2}
   - - node_expanded
     - outer_call/inner
     - prune_ids: []
-      seed:
-      - value: 3
-      - value: 1
-      - value: 2
   - [node_started, outer_loop#0/inner]
   - - pool_commit
     - outer_loop#0/inner
     - from: {outer_loop#0/__start__: 12}
       key: outer_loop#0/inner/__start__
-      value: {exited: false, n: 0}
   - - node_expanded
     - outer_loop#0/inner
     - prune_ids: []
-      seed:
-        exited: false
-        n: 0
   - [node_started, outer_call/inner/__start__]
   - - node_succeeded
     - outer_call/inner/__start__
@@ -268,10 +247,7 @@ expect:
   - [node_started, outer_loop#0/inner/__end__]
   - - pool_commit
     - outer_loop#0/inner/__end__
-    - value:
-        exited: false
-        n: 1
-      key: outer_loop#0/inner
+    - key: outer_loop#0/inner
       from: {outer_loop#0/inner/bump: 38}
   - - node_succeeded
     - outer_loop#0/inner/__end__
@@ -279,42 +255,35 @@ expect:
   - [node_started, outer_call/inner#0/__end__]
   - - pool_commit
     - outer_call/inner#0/__end__
-    - value: 3
-      from: {outer_call/inner#0/echo: 41}
+    - from: {outer_call/inner#0/echo: 41}
   - - node_succeeded
     - outer_call/inner#0/__end__
     - {commit: 53}
   - [node_started, outer_call/inner#1/__end__]
   - - pool_commit
     - outer_call/inner#1/__end__
-    - value: 1
-      from: {outer_call/inner#1/echo: 44}
+    - from: {outer_call/inner#1/echo: 44}
   - - node_succeeded
     - outer_call/inner#1/__end__
     - {commit: 56}
   - [node_started, outer_call/inner#2/__end__]
   - - pool_commit
     - outer_call/inner#2/__end__
-    - value: 2
-      from: {outer_call/inner#2/echo: 47}
+    - from: {outer_call/inner#2/echo: 47}
   - - node_succeeded
     - outer_call/inner#2/__end__
     - {commit: 59}
   - [node_started, outer_loop#0/__end__]
   - - pool_commit
     - outer_loop#0/__end__
-    - value:
-        exited: false
-        n: 1
-      from: {outer_loop#0/inner: 50}
+    - from: {outer_loop#0/inner: 50}
   - - node_succeeded
     - outer_loop#0/__end__
     - {commit: 62}
   - [node_started, outer_call/inner/__end__]
   - - pool_commit
     - outer_call/inner/__end__
-    - value: [3, 1, 2]
-      key: outer_call/inner
+    - key: outer_call/inner
       from: {outer_call/inner#0/__end__: 53, outer_call/inner#1/__end__: 56, outer_call/inner#2/__end__: 59}
   - - node_succeeded
     - outer_call/inner/__end__
@@ -324,7 +293,6 @@ expect:
     - outer_loop~1
     - from: {outer_loop#0/__end__: 62}
       key: outer_loop#1/__start__
-      value: {exited: false, n: 1}
   - - node_expanded
     - outer_loop~1
     - prune_ids:
@@ -332,15 +300,10 @@ expect:
       - outer_loop#0/__start__
       - outer_loop#0/inner
       - outer_loop~1
-      seed:
-      - exited: false
-        n: 1
-      - 1
   - [node_started, outer_call/__end__]
   - - pool_commit
     - outer_call/__end__
-    - value: [3, 1, 2]
-      key: outer_call
+    - key: outer_call
       from: {outer_call/inner: 65}
   - - node_succeeded
     - outer_call/__end__
@@ -354,13 +317,9 @@ expect:
     - outer_loop#1/inner
     - from: {outer_loop#1/__start__: 68}
       key: outer_loop#1/inner/__start__
-      value: {exited: false, n: 1}
   - - node_expanded
     - outer_loop#1/inner
     - prune_ids: []
-      seed:
-        exited: false
-        n: 1
   - [node_started, outer_loop#1/inner/__start__]
   - - node_succeeded
     - outer_loop#1/inner/__start__
@@ -377,10 +336,7 @@ expect:
   - [node_started, outer_loop#1/inner/__end__]
   - - pool_commit
     - outer_loop#1/inner/__end__
-    - value:
-        exited: false
-        n: 2
-      key: outer_loop#1/inner
+    - key: outer_loop#1/inner
       from: {outer_loop#1/inner/bump: 81}
   - - node_succeeded
     - outer_loop#1/inner/__end__
@@ -388,20 +344,14 @@ expect:
   - [node_started, outer_loop#1/__end__]
   - - pool_commit
     - outer_loop#1/__end__
-    - value:
-        exited: false
-        n: 2
-      from: {outer_loop#1/inner: 84}
+    - from: {outer_loop#1/inner: 84}
   - - node_succeeded
     - outer_loop#1/__end__
     - {commit: 87}
   - [node_started, outer_loop~2]
   - - pool_commit
     - outer_loop~2
-    - value:
-        exited: false
-        n: 2
-      key: outer_loop
+    - key: outer_loop
       from: {outer_loop#1/__end__: 87}
   - - node_succeeded
     - outer_loop~2

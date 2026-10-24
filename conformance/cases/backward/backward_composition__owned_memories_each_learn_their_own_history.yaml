@@ -150,7 +150,6 @@ expect:
     - invoke
     - from: {__start__: 6}
       key: invoke/__start__
-      value: {topic: reefs}
   - - node_expanded
     - invoke
     - forward_capture:
@@ -173,8 +172,6 @@ expect:
           occurrence_path: []
           static_path: [invoke]
       prune_ids: []
-      seed:
-        topic: reefs
   - [node_started, invoke/__start__]
   - - node_succeeded
     - invoke/__start__
@@ -270,8 +267,7 @@ expect:
   - [node_started, invoke/__end__]
   - - pool_commit
     - invoke/__end__
-    - value: answer
-      key: invoke
+    - key: invoke
       from: {invoke/author: 17}
   - - node_succeeded
     - invoke/__end__

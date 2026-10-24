@@ -517,7 +517,7 @@ test("prepareRecord requires a builder for expansion replay", () => {
   const { state } = initialized();
 
   expectError(
-    () => prepareRecord(state, new NodeExpandedRecord("first", {}, [], "0".repeat(64))),
+    () => prepareRecord(state, new NodeExpandedRecord("first", [], "0".repeat(64))),
     TypeError,
     /^NodeExpandedRecord replay requires a callable grow_builder$/,
   );
@@ -546,7 +546,7 @@ test("prepareRecord hands a backward record to the backward reducer, which requi
 
 test("prepareRecord hands an expansion with a builder to the growth reducer", () => {
   const { state } = initialized();
-  const record = new NodeExpandedRecord("first", {}, [], "0".repeat(64));
+  const record = new NodeExpandedRecord("first", [], "0".repeat(64));
 
   expectError(
     () => prepareRecord(state, record, { growBuilder: () => state.flow }),

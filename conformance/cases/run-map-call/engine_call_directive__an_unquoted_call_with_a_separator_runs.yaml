@@ -81,12 +81,9 @@ expect:
     - __call_0
     - from: {}
       key: __call_0/__start__
-      value: {topic: a = b}
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        topic: a = b
   - [node_started, __call_0/__start__]
   - - node_succeeded
     - __call_0/__start__
@@ -101,8 +98,7 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: a = b
-      key: __call_0
+    - key: __call_0
       from: {__call_0/e: 14}
   - - node_succeeded
     - __call_0/__end__

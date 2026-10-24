@@ -95,13 +95,9 @@ expect:
     - pages
     - from: {__start__: 6}
       key: pages#0/__start__
-      value: {cursor: p1}
   - - node_expanded
     - pages
     - prune_ids: []
-      seed:
-      - cursor: p1
-      - 0
   - [node_started, pages#0/__start__]
   - - node_succeeded
     - pages#0/__start__
@@ -116,9 +112,7 @@ expect:
   - [node_started, pages#0/__end__]
   - - pool_commit
     - pages#0/__end__
-    - value:
-        cursor: p2
-      from: {pages#0/get: 14}
+    - from: {pages#0/get: 14}
   - - node_succeeded
     - pages#0/__end__
     - {commit: 17}
@@ -127,13 +121,9 @@ expect:
     - pages~1
     - from: {pages#0/__end__: 17}
       key: pages#1/__start__
-      value: {cursor: p2}
   - - node_expanded
     - pages~1
     - prune_ids: [pages#0/__end__, pages#0/__start__, pages#0/get, pages~1]
-      seed:
-      - cursor: p2
-      - 1
   - [node_started, pages#1/__start__]
   - - node_succeeded
     - pages#1/__start__
@@ -146,18 +136,14 @@ expect:
   - [node_started, pages#1/__end__]
   - - pool_commit
     - pages#1/__end__
-    - value:
-        cursor: null
-      from: {pages#1/get: 25}
+    - from: {pages#1/get: 25}
   - - node_succeeded
     - pages#1/__end__
     - {commit: 28}
   - [node_started, pages~2]
   - - pool_commit
     - pages~2
-    - value:
-        cursor: null
-      key: pages
+    - key: pages
       from: {pages#1/__end__: 28}
   - - node_succeeded
     - pages~2

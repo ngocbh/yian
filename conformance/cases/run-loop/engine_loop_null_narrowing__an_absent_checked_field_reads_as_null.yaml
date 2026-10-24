@@ -97,10 +97,7 @@ expect:
   - [node_started, pages]
   - - pool_commit
     - pages
-    - value:
-        page:
-          n: 0
-      from: {}
+    - from: {}
   - - node_succeeded
     - pages
     - {commit: 9}

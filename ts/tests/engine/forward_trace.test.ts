@@ -2123,7 +2123,7 @@ test("an expansion prunes current names only, and other outcomes ignore retired 
   });
   expect(trace.currentWriters.has("a")).toBe(true);
 
-  const expanded = new NodeExpandedRecord("g", { v: 1n }, ["a", "b"], "b".repeat(64), { forwardCapture: captureV() });
+  const expanded = new NodeExpandedRecord("g", ["a", "b"], "b".repeat(64), { forwardCapture: captureV() });
   runNode(trace, 3, new TraceNode("g"), expanded, { retiredIds: ["a", "b", "s1"] });
 
   expect(trace.currentWriters.has("a")).toBe(false);
@@ -2358,6 +2358,12 @@ type OutcomeKind = (typeof OUTCOME_KINDS)[number];
 /** A CODE node that may grow the graph, Python's `FuncNode` subclass `Spawner`. */
 class FuncSpawner extends FuncNode {
   override readonly isSpawner = true;
+  // A spawner's seed is rebuilt from its binding on replay, so the double is derived and grows `{}`.
+  override readonly derived = true;
+
+  override forward(): Grow {
+    return new Grow({});
+  }
 }
 
 /**
@@ -3854,7 +3860,7 @@ test.each(["selector-digest", "missing-field", "missing-item", "boundary-role"] 
     });
     if (change === "missing-field" || change === "missing-item") {
       const changed = changedBuilder(replay.flow.nodes.get("spawn")!, { x: 7n });
-      record = new NodeExpandedRecord(record.spawnerId, record.seed, record.pruneIds, expansionDigest(changed), {
+      record = new NodeExpandedRecord(record.spawnerId, record.pruneIds, expansionDigest(changed), {
         evidence: record.evidence,
         forwardCapture: record.forwardCapture,
       });

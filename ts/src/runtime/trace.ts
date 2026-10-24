@@ -241,6 +241,8 @@ export class TraceOccurrence {
   readonly memoryScope: MemoryScope | null;
   /** The bound inputs the node keeps from models; a private copy, read-only by contract. */
   readonly hiddenInputs: ReadonlySet<string>;
+  /** An expansion's canonical seed, which its record leaves out; `null` for another outcome. */
+  readonly seed: JsonValue | null;
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
@@ -256,6 +258,7 @@ export class TraceOccurrence {
     inputRoute: ValueRoute,
     memoryScope: MemoryScope | null = null,
     hiddenInputs: ReadonlySet<string> = new Set(),
+    seed: JsonValue | null = null,
   ) {
     this.source = source;
     this.nodeId = nodeId;
@@ -265,6 +268,7 @@ export class TraceOccurrence {
     this.inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
+    this.seed = seed === null ? null : canonicalSeed(seed)[0];
     Object.freeze(this);
   }
 
@@ -817,6 +821,8 @@ export interface PrepareTraceOptions {
   committed?: { readonly key: string; readonly valueJson: string } | null;
   /** Whether a `PoolCommitRecord` is one of the run start's commits, which apply at once. */
   initialCommit?: boolean;
+  /** An accepted expansion's canonical seed, which its record leaves out. */
+  seed?: JsonValue | null;
 }
 
 /**
@@ -856,6 +862,7 @@ export function prepareTrace(
     writerFiles = null,
     committed = null,
     initialCommit = false,
+    seed = null,
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -937,6 +944,7 @@ export function prepareTrace(
     inputRoute,
     node.memoryScope,
     node.modelHiddenInputs(),
+    seed,
   );
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);

@@ -78,12 +78,9 @@ expect:
     - echo
     - from: {mk: 9}
       key: echo/__start__
-      value: {text: 'echo ${probe.output}'}
   - - node_expanded
     - echo
     - prune_ids: []
-      seed:
-        text: echo ${probe.output}
   - [node_started, echo/__start__]
   - - node_succeeded
     - echo/__start__
@@ -98,8 +95,7 @@ expect:
   - [node_started, echo/__end__]
   - - pool_commit
     - echo/__end__
-    - value: echo ${probe.output}
-      key: echo
+    - key: echo
       from: {echo/inner: 20}
   - - node_succeeded
     - echo/__end__

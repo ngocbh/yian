@@ -85,23 +85,17 @@ expect:
     - x
     - from: {items: 15}
       key: x/__start__
-      value: {}
   - - pool_commit
     - x
     - from: {items: 15}
       key: x#0/__start__
-      value: {v: a}
   - - pool_commit
     - x
     - from: {items: 15}
       key: x#1/__start__
-      value: {v: b}
   - - node_expanded
     - x
     - prune_ids: []
-      seed:
-      - v: a
-      - v: b
   - [node_started, x/__start__]
   - - node_succeeded
     - x/__start__
@@ -131,24 +125,21 @@ expect:
   - [node_started, x#0/__end__]
   - - pool_commit
     - x#0/__end__
-    - value: got a
-      from: {x#0/wrap: 29}
+    - from: {x#0/wrap: 29}
   - - node_succeeded
     - x#0/__end__
     - {commit: 35}
   - [node_started, x#1/__end__]
   - - pool_commit
     - x#1/__end__
-    - value: got b
-      from: {x#1/wrap: 32}
+    - from: {x#1/wrap: 32}
   - - node_succeeded
     - x#1/__end__
     - {commit: 38}
   - [node_started, x/__end__]
   - - pool_commit
     - x/__end__
-    - value: [got a, got b]
-      key: x
+    - key: x
       from: {x#0/__end__: 35, x#1/__end__: 38}
   - - node_succeeded
     - x/__end__

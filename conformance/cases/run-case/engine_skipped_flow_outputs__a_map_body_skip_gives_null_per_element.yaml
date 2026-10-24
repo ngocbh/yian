@@ -62,23 +62,17 @@ expect:
     - each
     - from: {}
       key: each/__start__
-      value: {}
   - - pool_commit
     - each
     - from: {}
       key: each#0/__start__
-      value: {flag: true}
   - - pool_commit
     - each
     - from: {}
       key: each#1/__start__
-      value: {flag: false}
   - - node_expanded
     - each
     - prune_ids: []
-      seed:
-      - flag: true
-      - flag: false
   - [node_started, each/__start__]
   - - node_succeeded
     - each/__start__
@@ -114,16 +108,14 @@ expect:
   - [node_started, each#0/__end__]
   - - pool_commit
     - each#0/__end__
-    - value: made
-      from: {each#0/mk: 24}
+    - from: {each#0/mk: 24}
   - - node_succeeded
     - each#0/__end__
     - {commit: 30}
   - [node_started, each/__end__]
   - - pool_commit
     - each/__end__
-    - value: [made, null]
-      key: each
+    - key: each
       from: {each#0/__end__: 30, each#1/__end__: 27}
   - - node_succeeded
     - each/__end__

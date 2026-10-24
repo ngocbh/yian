@@ -135,20 +135,9 @@ expect:
     - loop
     - from: {__start__: 6}
       key: loop#0/__start__
-      value:
-        n: 0
-        person: {name: Ada}
-        talking_to: Bob
   - - node_expanded
     - loop
     - prune_ids: []
-      seed:
-      - done: false
-        n: 0
-        person:
-          name: Ada
-        talking_to: Bob
-      - 0
   - [node_started, loop#0/__start__]
   - - node_succeeded
     - loop#0/__start__
@@ -165,10 +154,7 @@ expect:
   - [node_started, loop#0/__end__]
   - - pool_commit
     - loop#0/__end__
-    - value:
-        done: false
-        n: 1
-      from: {loop#0/step: 14}
+    - from: {loop#0/step: 14}
   - - node_succeeded
     - loop#0/__end__
     - {commit: 17}
@@ -177,20 +163,9 @@ expect:
     - loop~1
     - from: {loop#0/__end__: 17}
       key: loop#1/__start__
-      value:
-        n: 1
-        person: {name: Ada}
-        talking_to: Bob
   - - node_expanded
     - loop~1
     - prune_ids: [loop#0/__end__, loop#0/__start__, loop#0/step, loop~1]
-      seed:
-      - done: false
-        n: 1
-        person:
-          name: Ada
-        talking_to: Bob
-      - 1
   - [node_started, loop#1/__start__]
   - - node_succeeded
     - loop#1/__start__
@@ -207,10 +182,7 @@ expect:
   - [node_started, loop#1/__end__]
   - - pool_commit
     - loop#1/__end__
-    - value:
-        done: false
-        n: 2
-      from: {loop#1/step: 25}
+    - from: {loop#1/step: 25}
   - - node_succeeded
     - loop#1/__end__
     - {commit: 28}
@@ -219,20 +191,9 @@ expect:
     - loop~2
     - from: {loop#1/__end__: 28}
       key: loop#2/__start__
-      value:
-        n: 2
-        person: {name: Ada}
-        talking_to: Bob
   - - node_expanded
     - loop~2
     - prune_ids: [loop#1/__end__, loop#1/__start__, loop#1/step, loop~2]
-      seed:
-      - done: false
-        n: 2
-        person:
-          name: Ada
-        talking_to: Bob
-      - 2
   - [node_started, loop#2/__start__]
   - - node_succeeded
     - loop#2/__start__
@@ -249,23 +210,14 @@ expect:
   - [node_started, loop#2/__end__]
   - - pool_commit
     - loop#2/__end__
-    - value:
-        done: true
-        n: 3
-      from: {loop#2/step: 36}
+    - from: {loop#2/step: 36}
   - - node_succeeded
     - loop#2/__end__
     - {commit: 39}
   - [node_started, loop~3]
   - - pool_commit
     - loop~3
-    - value:
-        done: true
-        n: 3
-        person:
-          name: Ada
-        talking_to: Bob
-      key: loop
+    - key: loop
       from: {loop#2/__end__: 39}
   - - node_succeeded
     - loop~3

@@ -70,12 +70,9 @@ expect:
     - sub
     - from: {pick: 9}
       key: sub/__start__
-      value: {p: nope}
   - - node_expanded
     - sub
     - prune_ids: []
-      seed:
-        p: nope
   - [node_started, sub/__start__]
   - - node_succeeded
     - sub/__start__

@@ -540,7 +540,7 @@ they are, except as the rules below say), and an empty payload is left out.
 | `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources) |
 | `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `forward_capture` |
 | `node_routed` | `node_id` | `handle`, `terminal_failure`, `forward_capture` |
-| `node_expanded` | `spawner_id` | `seed`, `prune_ids`, `forward_capture` |
+| `node_expanded` | `spawner_id` | `prune_ids`, `forward_capture` |
 | `node_failed` | the failure's node | `failure`, `forward_capture` |
 | `memory_commit_requested`, `_succeeded`, `_failed` | null | `memory`, `commit_id`, `attempt_id`, `mutations`, `failure` |
 | `backward_started` | null | `attempt_id`, `feedback` |
@@ -568,14 +568,14 @@ For example:
   `node_succeeded` that names its seq. A commit no success names (a crash between the two) stays
   in the log and its node reran. The run start's times (`system.now`, `system.today`) leave out
   their `value`.
-- A derived commit (TS only) shows `from`: each pool name its binding read, to the seq of
-  the `pool_commit` that wrote it. Derived commits are a non-top `__end__`'s, the stopping LOOP
+- A derived commit (TS schema 15) holds no `value` but `from`: each pool name its binding read,
+  to the seq of the `pool_commit` that wrote it; replay rebuilds the value. Derived commits are a non-top `__end__`'s, the stopping LOOP
   driver's, and the expansion's: before `node_expanded`, the spawner writes one per START of the
   fragment (its own, then each child flow's), keyed by the child START, with the spawner's
   `from`. A child START's `node_succeeded` names its expansion commit; it writes none of its own.
 - Values are plain values: a `pool_commit`'s `value` is recorded typed (`kind` and `value`), and
-  is written without the kind tag (a file as `{uri, mime, name}`); every other value (seeds,
-  captures, feedback) is recorded plain already.
+  is written without the kind tag (a file as `{uri, mime, name}`); every other value
+  (captures, feedback) is recorded plain already.
 - `defaults`, `effective_llm_by_static_path`, `call_time_llm` and `parent` are left out when
   empty or absent.
 - Dropped: the envelope (`schema`, `run_id`, `seq`); a `pool_commit`'s `kind`; from
@@ -724,8 +724,7 @@ The TS runner's flags, each repeatable, are `--group`, `--kind`, `--case <group>
 counts a failing `pending` case as expected, fails a case whose kind it doesn't run yet, and exits
 1 when any case fails. On every `run` and `resume` case with a log it also checks the log's invariants
 (in-flight nodes within `num_workers`, nothing but backward and memory records after the terminal
-outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only, and each derived
-value rebuilt from its `from` equal to the one the log holds). `--crash-sweep`
+outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only). `--crash-sweep`
 also cuts each serial `run` case that expects `output`, isn't `pending`, and has no
 `host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it (passing
 the run's `context`, `llm_config.api_key` and `llm_config.headers` again), and checks the

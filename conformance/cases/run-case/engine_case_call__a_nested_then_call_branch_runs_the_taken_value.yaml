@@ -98,12 +98,9 @@ expect:
     - __call_0
     - from: {}
       key: __call_0/__start__
-      value: {stance: pro}
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        stance: pro
   - [node_started, __call_0/__start__]
   - - node_succeeded
     - __call_0/__start__
@@ -118,8 +115,7 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: took:pro
-      key: __call_0
+    - key: __call_0
       from: {__call_0/x: 16}
   - - node_succeeded
     - __call_0/__end__
@@ -129,12 +125,9 @@ expect:
     - __call_1
     - from: {__call_0: 19}
       key: __call_1/__start__
-      value: {stance: took:pro}
   - - node_expanded
     - __call_1
     - prune_ids: []
-      seed:
-        stance: took:pro
   - [node_started, __call_1/__start__]
   - - node_succeeded
     - __call_1/__start__
@@ -149,8 +142,7 @@ expect:
   - [node_started, __call_1/__end__]
   - - pool_commit
     - __call_1/__end__
-    - value: took:took:pro
-      key: __call_1
+    - key: __call_1
       from: {__call_1/x: 27}
   - - node_succeeded
     - __call_1/__end__

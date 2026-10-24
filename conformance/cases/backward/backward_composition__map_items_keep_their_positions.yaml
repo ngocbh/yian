@@ -139,17 +139,14 @@ expect:
     - each
     - from: {__start__: 6}
       key: each/__start__
-      value: {}
   - - pool_commit
     - each
     - from: {__start__: 6}
       key: each#0/__start__
-      value: {value: same}
   - - pool_commit
     - each
     - from: {__start__: 6}
       key: each#1/__start__
-      value: {value: same}
   - - node_expanded
     - each
     - forward_capture:
@@ -207,9 +204,6 @@ expect:
           occurrence_path: []
           static_path: [each]
       prune_ids: []
-      seed:
-      - value: same
-      - value: same
   - [node_started, each/__start__]
   - - node_succeeded
     - each/__start__
@@ -373,8 +367,7 @@ expect:
   - [node_started, each#0/__end__]
   - - pool_commit
     - each#0/__end__
-    - value: same
-      from: {each#0/answer: 21}
+    - from: {each#0/answer: 21}
   - - node_succeeded
     - each#0/__end__
     - commit: 28
@@ -405,8 +398,7 @@ expect:
   - [node_started, each#1/__end__]
   - - pool_commit
     - each#1/__end__
-    - value: same
-      from: {each#1/answer: 25}
+    - from: {each#1/answer: 25}
   - - node_succeeded
     - each#1/__end__
     - commit: 31
@@ -437,8 +429,7 @@ expect:
   - [node_started, each/__end__]
   - - pool_commit
     - each/__end__
-    - value: [same, same]
-      key: each
+    - key: each
       from: {each#0/__end__: 28, each#1/__end__: 31}
   - - node_succeeded
     - each/__end__

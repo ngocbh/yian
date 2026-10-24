@@ -80,10 +80,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -597,20 +597,21 @@ export class NodeStepRecord {
 }
 
 /**
- * Write one canonical typed value to the variable pool under `key`. Frozen.
+ * Write one value to the variable pool under `key`. Frozen.
  *
  * The run start writes the system values (`system.<name>`) and the START inputs this way; a node's
  * output waits on its node until the node's `NodeSucceededRecord` names this record's seq. A
- * derived commit (one a derived node writes, or an expansion writes for a child START) also holds
- * `from`: the seq of the `pool_commit` that wrote each pool name its binding read.
+ * derived commit (one a derived node writes, or an expansion writes for a child START) holds no
+ * value but `from`: the seq of the `pool_commit` that wrote each pool name its binding read, from
+ * which a replay rebuilds the value.
  */
 export class PoolCommitRecord {
   /** The writing node's non-empty id: the node whose output this is, or the START for the run start. */
   readonly nodeId: string;
   /** The non-empty pool key the value is written under: a node id, or `system.<name>`. */
   readonly key: string;
-  /** The value's deep-frozen canonical typed wire `{kind, value}`. */
-  readonly value: Readonly<TypedWire>;
+  /** The value's deep-frozen canonical typed wire `{kind, value}`, or `null` for a derived commit. */
+  readonly value: Readonly<TypedWire> | null;
   /**
    * A derived commit's sources, sorted by name: each pool name its binding read, to the seq of the
    * `pool_commit` that wrote it; `null` for any other commit. Frozen.
@@ -618,18 +619,28 @@ export class PoolCommitRecord {
   readonly from: ReadonlyMap<string, number> | null;
 
   /**
-   * @param value A typed value's wire form (see `TypedValue.fromWire`).
+   * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from`.
    * @param options.from A derived commit's sources; copied in name order.
    * @throws TypeError when an id isn't a string, or `from` isn't a `Map` or `null`.
-   * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, or a `from`
-   *   name is empty or its seq isn't a positive safe integer.
+   * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, a `from` name is
+   *   empty or its seq isn't a positive safe integer, or the commit holds both or neither of
+   *   `value` and `from`.
    * @throws TypeCheckError when the value holds NaN or another non-JSON value.
    */
-  constructor(nodeId: string, key: string, value: TypedWire, options: { from?: ReadonlyMap<string, number> | null } = {}) {
+  constructor(
+    nodeId: string,
+    key: string,
+    value: TypedWire | null,
+    options: { from?: ReadonlyMap<string, number> | null } = {},
+  ) {
     this.nodeId = requireNonemptyString(nodeId, "node_id");
     this.key = requireNonemptyString(key, "key");
-    this.value = freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire;
+    this.value =
+      value === null ? null : (freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire);
     this.from = validatedFrom(options.from ?? null);
+    if ((this.value === null) === (this.from === null)) {
+      throw new RangeError("a pool_commit holds either a value or from, not both or neither");
+    }
     Object.freeze(this);
   }
 }
@@ -716,12 +727,14 @@ export class NodeRoutedRecord {
   }
 }
 
-/** Splice one deterministic expansion from its canonical seed and digest. Frozen. */
+/**
+ * Splice one deterministic expansion, checked by its digest. Frozen.
+ *
+ * The seed isn't recorded: a replay rebuilds it from the spawner's expansion commits' `from`.
+ */
 export class NodeExpandedRecord {
   /** The spawner's non-empty id. */
   readonly spawnerId: string;
-  /** The deep-frozen canonical seed; a `FileRef` is held as its mapping. */
-  readonly seed: JsonValue;
   /** Node ids the expansion prunes: sorted, unique and non-empty. */
   readonly pruneIds: readonly string[];
   /** The expanded topology's SHA-256 digest, 64 lowercase hex digits. */
@@ -735,18 +748,10 @@ export class NodeExpandedRecord {
    * @throws TypeError when an id or the digest isn't a string, or a carrier is of another class.
    * @throws RangeError when the spawner id is empty, the prune ids aren't a sorted array of
    *   unique non-empty strings, or the digest isn't 64 lowercase hex digits.
-   * @throws TypeCheckError when the seed isn't a JSON value (see `jsonPart`).
    */
-  constructor(
-    spawnerId: string,
-    seed: unknown,
-    pruneIds: readonly string[],
-    topologyDigest: string,
-    options: OutcomeCarriers = {},
-  ) {
+  constructor(spawnerId: string, pruneIds: readonly string[], topologyDigest: string, options: OutcomeCarriers = {}) {
     const { evidence = null, forwardCapture = null } = options;
     this.spawnerId = requireNonemptyString(spawnerId, "spawner_id");
-    this.seed = freezeParsed(canonicalCopy(jsonPart(seed, [], "mapping")));
     this.pruneIds = validatedIdArray(pruneIds, "prune_ids", true);
     this.topologyDigest = requireSha256(topologyDigest, "topology_digest");
     this.evidence = validatedEvidence(evidence);
@@ -3041,16 +3046,11 @@ function payloadForRecord(record: RunRecord): JsonObject {
     return { node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject };
   }
   if (record instanceof PoolCommitRecord) {
-    const payload: JsonObject = {
-      node_id: record.nodeId,
-      key: record.key,
-      kind: record.value.kind,
-      value: record.value.value as JsonValue,
-    };
-    if (record.from !== null) {
-      payload["from"] = Object.fromEntries([...record.from].map(([name, seq]) => [name, BigInt(seq)]));
+    if (record.value !== null) {
+      return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
     }
-    return payload;
+    const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
+    return { node_id: record.nodeId, key: record.key, from };
   }
   if (record instanceof NodeSucceededRecord) {
     return { node_id: record.nodeId, commit: BigInt(record.commit), ...outcomePayload(record) };
@@ -3066,7 +3066,6 @@ function payloadForRecord(record: RunRecord): JsonObject {
   if (record instanceof NodeExpandedRecord) {
     return {
       spawner_id: record.spawnerId,
-      seed: record.seed,
       prune_ids: [...record.pruneIds],
       topology_digest: record.topologyDigest,
       ...outcomePayload(record),
@@ -3175,11 +3174,11 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       );
     case "pool_commit": {
       const derived = Object.hasOwn(payload, "from");
-      requireFields(payload, derived ? ["node_id", "key", "kind", "value", "from"] : ["node_id", "key", "kind", "value"], label);
+      requireFields(payload, derived ? ["node_id", "key", "from"] : ["node_id", "key", "kind", "value"], label);
       return new PoolCommitRecord(
         wireName(payload["node_id"], `${label} node_id`),
         wireName(payload["key"], `${label} key`),
-        { kind: payload["kind"], value: payload["value"] } as unknown as TypedWire,
+        derived ? null : ({ kind: payload["kind"], value: payload["value"] } as unknown as TypedWire),
         { from: derived ? fromFromPayload(payload["from"], `${label} from`) : null },
       );
     }
@@ -3203,14 +3202,9 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       );
     }
     case "node_expanded":
-      requireFields(
-        payload,
-        ["spawner_id", "seed", "prune_ids", "topology_digest", "evidence", "forward_capture"],
-        label,
-      );
+      requireFields(payload, ["spawner_id", "prune_ids", "topology_digest", "evidence", "forward_capture"], label);
       return new NodeExpandedRecord(
         wireName(payload["spawner_id"], `${label} spawner_id`),
-        payload["seed"],
         wireTextArray(payload["prune_ids"], `${label} prune_ids`),
         wireText(payload["topology_digest"], `${label} topology_digest`),
         outcomeFromPayload(payload, label),

@@ -76,23 +76,17 @@ expect:
     - each
     - from: {}
       key: each/__start__
-      value: {}
   - - pool_commit
     - each
     - from: {}
       key: each#0/__start__
-      value: {x: 1}
   - - pool_commit
     - each
     - from: {}
       key: each#1/__start__
-      value: {x: 2}
   - - node_expanded
     - each
     - prune_ids: []
-      seed:
-      - x: 1
-      - x: 2
   - [node_started, each/__start__]
   - - node_succeeded
     - each/__start__

@@ -81,12 +81,9 @@ expect:
     - __call_0
     - from: {a: 9}
       key: __call_0/__start__
-      value: {n: 2}
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        n: 2
   - [node_started, __call_0/__start__]
   - - node_succeeded
     - __call_0/__start__
@@ -103,10 +100,7 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value:
-        n: 2
-        where: def
-      key: __call_0
+    - key: __call_0
       from: {__call_0/v: 20}
   - - node_succeeded
     - __call_0/__end__

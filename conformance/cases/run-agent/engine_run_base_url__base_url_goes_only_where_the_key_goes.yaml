@@ -202,11 +202,9 @@ expect:
     - child
     - from: {}
       key: child/__start__
-      value: {}
   - - node_expanded
     - child
     - prune_ids: []
-      seed: {}
   - [node_started, other]
   - - node_step
     - other
@@ -290,8 +288,7 @@ expect:
   - [node_started, child/__end__]
   - - pool_commit
     - child/__end__
-    - value: ok
-      key: child
+    - key: child
       from: {child/nested: 27}
   - - node_succeeded
     - child/__end__

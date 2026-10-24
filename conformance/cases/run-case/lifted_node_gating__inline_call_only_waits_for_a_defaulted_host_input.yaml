@@ -118,12 +118,9 @@ expect:
     - __call_0
     - from: {}
       key: __call_0/__start__
-      value: {tag: draft}
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        tag: draft
   - [node_started, __call_0/__start__]
   - - node_succeeded
     - __call_0/__start__
@@ -138,8 +135,7 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: draft
-      key: __call_0
+    - key: __call_0
       from: {__call_0/fx: 16}
   - - node_succeeded
     - __call_0/__end__

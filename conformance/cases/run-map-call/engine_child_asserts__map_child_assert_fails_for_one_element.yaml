@@ -109,29 +109,21 @@ expect:
     - map_it
     - from: {__start__: 6}
       key: map_it/__start__
-      value: {}
   - - pool_commit
     - map_it
     - from: {__start__: 6}
       key: map_it#0/__start__
-      value: {n: 1}
   - - pool_commit
     - map_it
     - from: {__start__: 6}
       key: map_it#1/__start__
-      value: {n: -1}
   - - pool_commit
     - map_it
     - from: {__start__: 6}
       key: map_it#2/__start__
-      value: {n: 3}
   - - node_expanded
     - map_it
     - prune_ids: []
-      seed:
-      - n: 1
-      - n: -1
-      - n: 3
   - [node_started, map_it/__start__]
   - - node_succeeded
     - map_it/__start__

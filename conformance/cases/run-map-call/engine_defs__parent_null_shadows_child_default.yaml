@@ -78,12 +78,9 @@ expect:
     - go
     - from: {__start__: 6}
       key: go/__start__
-      value: {topic: null}
   - - node_expanded
     - go
     - prune_ids: []
-      seed:
-        topic: null
   - [node_started, go/__start__]
   - - node_succeeded
     - go/__start__

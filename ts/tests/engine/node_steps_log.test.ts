@@ -6,7 +6,7 @@
  * `test_node_step_record_rejects_invalid_values` (list, text, null, NaN, a class instance, a
  * `Set`, an empty and a non-text node id; each with its exact error).
  *
- * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 14),
+ * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 15),
  * `test_node_step_wire_payload_rejects_invalid_shapes` (list, text, empty node id, missing step,
  * extra field; each with its exact class and message),
  * `test_node_step_wire_payload_rejects_non_finite_numbers` (`invalid run-record JSON`, caused by
@@ -145,14 +145,14 @@ test("a node step round trips under its wire kind", () => {
   expect(encodeRecord(decoded)).toBe(encoded);
   const wire = parseJson(encoded, "codec") as Record<string, unknown>;
   expect(wire["kind"]).toBe("node_step");
-  expect(wire["schema"]).toBe(14n);
+  expect(wire["schema"]).toBe(15n);
   expect(wire["payload"]).toEqual({ node_id: "a", n: 1n, step: FAILED });
 });
 
 test("a wire step keeps yian's infinity tag", () => {
   const text =
     '{"kind":"node_step","payload":{"n":1,"node_id":"a","step":{"high":{"$float":"inf"},"kind":"x"}},' +
-    '"run_id":"run-1","schema":14,"seq":0}';
+    '"run_id":"run-1","schema":15,"seq":0}';
   const record = decodeRecord(text).record as NodeStepRecord;
   expect(record.step).toEqual({ high: Infinity, kind: "x" });
   expect(record.n).toBe(1);
@@ -181,7 +181,7 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
 
 test("a node step wire payload rejects non-finite numbers", () => {
   const text =
-    '{"schema":14,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","n":1,"step":{"retry_in":NaN}}}';
+    '{"schema":15,"run_id":"run-1","seq":0,"kind":"node_step","payload":{"node_id":"a","n":1,"step":{"retry_in":NaN}}}';
   const caught = expectError(() => decodeRecord(text), RangeError, "invalid run-record JSON") as Error;
   expect((caught.cause as Error).constructor).toBe(JSONDecodeError);
   expect((caught.cause as Error).message).toStartWith("NaN is not JSON");

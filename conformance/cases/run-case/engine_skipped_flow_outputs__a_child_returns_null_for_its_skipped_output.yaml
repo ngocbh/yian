@@ -66,12 +66,9 @@ expect:
     - c
     - from: {__start__: 6}
       key: c/__start__
-      value: {approve: false}
   - - node_expanded
     - c
     - prune_ids: []
-      seed:
-        approve: false
   - [node_started, c/__start__]
   - - node_succeeded
     - c/__start__

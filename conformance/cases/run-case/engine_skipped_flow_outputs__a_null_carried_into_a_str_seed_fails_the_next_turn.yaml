@@ -114,15 +114,9 @@ expect:
     - repeat
     - from: {__start__: 6}
       key: repeat#0/__start__
-      value: {flip: false, n: 0, note: start}
   - - node_expanded
     - repeat
     - prune_ids: []
-      seed:
-      - flip: false
-        n: 0
-        note: start
-      - 0
   - [node_started, repeat#0/__start__]
   - - node_succeeded
     - repeat#0/__start__
@@ -141,10 +135,7 @@ expect:
   - [node_started, repeat#0/__end__]
   - - pool_commit
     - repeat#0/__end__
-    - value:
-        n: 1
-        note: null
-      from: {repeat#0/bump: 14}
+    - from: {repeat#0/bump: 14}
   - - node_succeeded
     - repeat#0/__end__
     - {commit: 19}
@@ -158,11 +149,6 @@ expect:
       - repeat#0/gate
       - repeat#0/mk
       - repeat~1
-      seed:
-      - flip: false
-        n: 1
-        note: null
-      - 1
   - [node_started, repeat#1/__start__]
   - - node_failed
     - repeat#1/__start__

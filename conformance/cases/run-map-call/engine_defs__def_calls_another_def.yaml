@@ -112,12 +112,9 @@ expect:
     - go
     - from: {__start__: 6}
       key: go/__start__
-      value: {topic: ACME}
   - - node_expanded
     - go
     - prune_ids: []
-      seed:
-        topic: ACME
   - [node_started, go/__start__]
   - - node_succeeded
     - go/__start__
@@ -127,12 +124,9 @@ expect:
     - go/inner_call
     - from: {go/__start__: 9}
       key: go/inner_call/__start__
-      value: {topic: ACME}
   - - node_expanded
     - go/inner_call
     - prune_ids: []
-      seed:
-        topic: ACME
   - [node_started, go/inner_call/__start__]
   - - node_succeeded
     - go/inner_call/__start__
@@ -149,8 +143,7 @@ expect:
   - [node_started, go/inner_call/__end__]
   - - pool_commit
     - go/inner_call/__end__
-    - value: report for ACME
-      key: go/inner_call
+    - key: go/inner_call
       from: {go/inner_call/x: 19}
   - - node_succeeded
     - go/inner_call/__end__
@@ -158,8 +151,7 @@ expect:
   - [node_started, go/__end__]
   - - pool_commit
     - go/__end__
-    - value: report for ACME
-      key: go
+    - key: go
       from: {go/inner_call: 22}
   - - node_succeeded
     - go/__end__

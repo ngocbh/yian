@@ -97,22 +97,8 @@ import {
   type RunResult,
   runFlow,
 } from "../src/run.ts";
-import { buildGrow } from "../src/compile/expand.ts";
-import { BackwardCapture, type ForwardCapture } from "../src/runtime/contracts.ts";
-import {
-  JsonlRunLog,
-  MemoryRunLog,
-  NodeExpandedRecord,
-  NodeSucceededRecord,
-  PoolCommitRecord,
-  readRunLog,
-  type RecordEnvelope,
-  routePayload,
-  type RunStartedRecord,
-} from "../src/runtime/log.ts";
-import { addInterruptedAttempts, rebuildCommitValue, rebuildExpansion } from "../src/runtime/state.ts";
-import { captureBindings } from "../src/runtime/trace.ts";
-import type { BindingCapture } from "../src/nodes/binding.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
+import { addInterruptedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -2003,7 +1989,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["pool_commit", ["node_id", ["key", "value", "from"]]],
   ["node_succeeded", ["node_id", ["commit", "forward_capture"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
-  ["node_expanded", ["spawner_id", ["seed", "prune_ids", "forward_capture"]]],
+  ["node_expanded", ["spawner_id", ["prune_ids", "forward_capture"]]],
   ["node_failed", ["failure", ["failure", "forward_capture"]]],
   ...["memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"].map(
     (kind): [string, TraceRow] => [
@@ -2788,7 +2774,6 @@ async function checkInvariants(
   // first whose key is its node) can't be replayed, and holds no outcome.
   const inputsCommit = envelopes.findIndex(({ kind, payload }) => kind === "pool_commit" && payload["key"] === payload["node_id"]);
   if (inputsCommit === -1) return;
-  checkDerivedRebuild(flow, envelopes, options.env, at);
   if (lastRun > inputsCommit && replay(lastRun).result !== null) fail(`record ${lastRun} follows the terminal outcome`);
   // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
   // agrees with a replay, not a second statement of its rules.
@@ -2844,121 +2829,6 @@ async function checkInvariants(
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
   }
   if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
-}
-
-/**
- * Throw a `CaseFailure` unless every derived value of the log `envelopes` rebuilds exactly from its
- * `from` during a replay, read from the pool through the producer index: each derived commit's
- * value, and each expansion's seed, prune ids and child START commits. In a learnable run, the
- * names in each `from` are also the source names of the recorded capture's route, and the rebuilt
- * bound inputs and route equal the recorded capture's.
- */
-function checkDerivedRebuild(flow: ComposedFlow, envelopes: readonly RecordEnvelope[], env: Env, at: string): void {
-  const fail = (problem: string): never => {
-    throw new CaseFailure(`invariant${at}: ${problem}`);
-  };
-  // A commit's producer as the retained trace names it (its accepting node's start; 0 for the run
-  // inputs; none for a system value), and the pool name each trace source wrote.
-  const traceSeq = new Map<number, number | null>();
-  const traceName = new Map<number, string>();
-  for (const { record, seq } of envelopes.slice(1)) {
-    if (!(record instanceof PoolCommitRecord)) break;
-    const inputs = record.key === record.nodeId;
-    traceSeq.set(seq, inputs ? 0 : null);
-    if (inputs) {
-      traceName.set(0, record.key);
-      break;
-    }
-  }
-  /** The route and bound inputs of a capture, its sources renamed by `rename`, items included. */
-  const form = (capture: ForwardCapture, rename: (seq: number) => number | null): unknown => {
-    const route = (payload: unknown): unknown => {
-      if (Array.isArray(payload)) return payload.map(route);
-      if (!isMapping(payload)) return payload;
-      const copy: Case = {};
-      for (const [key, item] of Object.entries(payload)) {
-        if (key === "source" && isMapping(item)) {
-          const renamed = rename(Number(item["execution_seq"]));
-          copy[key] = renamed === null ? null : { ...item, execution_seq: BigInt(renamed) };
-        } else {
-          copy[key] = route(item) as Value;
-        }
-      }
-      return copy;
-    };
-    return {
-      bound_inputs: capture.boundInputs === null ? null : logJson(capture.boundInputs as JsonObject),
-      route: route(routePayload(capture.route)),
-      evaluated_keys: [...capture.evaluatedKeys].sort(),
-      items: capture.items.map(([index, item]) => [index, form(item, rename)]),
-    };
-  };
-  /** The pool names a recorded capture's route reads. */
-  const names = (capture: ForwardCapture, found = new Set<string>()): Set<string> => {
-    const walk = (payload: unknown): void => {
-      if (Array.isArray(payload)) payload.forEach(walk);
-      if (!isMapping(payload)) return;
-      for (const [key, item] of Object.entries(payload)) {
-        if (key === "source" && isMapping(item)) found.add(traceName.get(Number(item["execution_seq"])) ?? "?");
-        else walk(item);
-      }
-    };
-    walk(routePayload(capture.route));
-    for (const [, item] of capture.items) names(item, found);
-    return found;
-  };
-  const checkCapture = (what: string, recorded: ForwardCapture | null, rebuilt: BindingCapture | null, from: ReadonlyMap<string, number>) => {
-    if (recorded === null || rebuilt === null) fail(`${what} has no capture to compare`);
-    const read = [...from.keys()].filter((name) => !name.startsWith("system.")).sort();
-    const routed = [...names(recorded!)].sort();
-    if (logJson(read) !== logJson(routed)) fail(`${what}'s from names ${logJson(read)}, its capture route ${logJson(routed)}`);
-    const rename = (seq: number) => {
-      if (!traceSeq.has(seq)) fail(`${what}'s rebuilt route names seq ${seq}, which no accepted commit holds`);
-      return traceSeq.get(seq)!;
-    };
-    const actual = logJson(form(captureBindings(rebuilt!, new BackwardCapture()), rename) as JsonObject);
-    const expected = logJson(form(recorded!, (seq) => seq) as JsonObject);
-    if (actual !== expected) fail(`${what}'s rebuilt capture differs from its recorded one\n${actual}\n${expected}`);
-  };
-  withEnv(env, () =>
-    replayRunLog(flow, MemoryRunLog.fromRecords(envelopes), {
-      onPrepared: (prepared, state) => {
-        const record = prepared.record;
-        if (record instanceof NodeSucceededRecord) {
-          const commit = envelopes[record.commit]!.record as PoolCommitRecord;
-          if (commit.from !== null && commit.nodeId === record.nodeId) {
-            const what = `${record.nodeId}'s commit at seq ${record.commit}`;
-            const rebuilt = rebuildCommitValue(state, record.nodeId, commit.key, commit.from, { capture: state.learnable });
-            if (rebuilt.valueJson !== logJson(commit.value)) {
-              fail(`${what} holds ${logJson(commit.value)}, but rebuilds to ${rebuilt.valueJson}`);
-            }
-            if (state.learnable) checkCapture(what, record.forwardCapture, rebuilt.capture, commit.from);
-          }
-          if (state.trace !== null) {
-            const started = state.trace.started.get(record.nodeId)!;
-            traceSeq.set(record.commit, started);
-            traceName.set(started, commit.key);
-          }
-        } else if (record instanceof NodeExpandedRecord) {
-          const what = `${record.spawnerId}'s expansion at seq ${prepared.expectedSequence}`;
-          const pending = [...state.pendingCommits.values()]
-            .filter((commit) => commit.spawner === record.spawnerId && !commit.admitted)
-            .sort((a, b) => a.seq - b.seq);
-          const from = pending[0]?.from ?? null;
-          const rebuilt = rebuildExpansion(state, record.spawnerId, from, buildGrow, { capture: state.learnable });
-          if (logJson(rebuilt.seed) !== logJson(record.seed)) {
-            fail(`${what} holds seed ${logJson(record.seed)}, but rebuilds to ${logJson(rebuilt.seed)}`);
-          }
-          if (logJson(rebuilt.pruneIds) !== logJson(record.pruneIds)) fail(`${what}'s prune ids don't rebuild`);
-          const held = pending.map((commit) => [commit.key, commit.valueJson]);
-          if (logJson(rebuilt.commits) !== logJson(held)) {
-            fail(`${what}'s commits hold ${logJson(held)}, but rebuild to ${logJson(rebuilt.commits)}`);
-          }
-          if (state.learnable && from !== null) checkCapture(what, record.forwardCapture, rebuilt.capture, from);
-        }
-      },
-    }),
-  );
 }
 
 /** The trace entries of node outcomes, which a crash sweep's strong oracle compares. */

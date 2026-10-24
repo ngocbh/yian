@@ -91,17 +91,13 @@ expect:
     - invoke
     - from: {}
       key: invoke/__start__
-      value: {}
   - - pool_commit
     - invoke
     - from: {}
       key: invoke#0/__start__
-      value: {maybe: null}
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed:
-      - maybe: null
   - [node_started, invoke/__start__]
   - - node_succeeded
     - invoke/__start__

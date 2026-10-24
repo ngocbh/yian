@@ -572,7 +572,7 @@ test("test_replay_rejects_changed_but_valid_growth_digest", async () => {
   const envelopes = [...log.records()];
   const last = envelopes.pop()!;
   const grown = last.record as NodeExpandedRecord;
-  const changed = new NodeExpandedRecord(grown.spawnerId, grown.seed, grown.pruneIds, "0".repeat(64));
+  const changed = new NodeExpandedRecord(grown.spawnerId, grown.pruneIds, "0".repeat(64));
   expect(grown.topologyDigest).not.toBe(changed.topologyDigest);
   envelopes.push(new RecordEnvelope(SCHEMA_VERSION, last.runId, last.seq, changed));
 

@@ -67,23 +67,17 @@ expect:
     - invoke
     - from: {}
       key: invoke/__start__
-      value: {}
   - - pool_commit
     - invoke
     - from: {}
       key: invoke#0/__start__
-      value: {token: a}
   - - pool_commit
     - invoke
     - from: {}
       key: invoke#1/__start__
-      value: {token: b}
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed:
-      - token: a
-      - token: b
   - [node_started, invoke/__start__]
   - - node_succeeded
     - invoke/__start__
@@ -118,24 +112,21 @@ expect:
   - [node_started, invoke#0/__end__]
   - - pool_commit
     - invoke#0/__end__
-    - value: A
-      from: {invoke#0/ask: 22}
+    - from: {invoke#0/ask: 22}
   - - node_succeeded
     - invoke#0/__end__
     - {commit: 28}
   - [node_started, invoke#1/__end__]
   - - pool_commit
     - invoke#1/__end__
-    - value: B
-      from: {invoke#1/ask: 25}
+    - from: {invoke#1/ask: 25}
   - - node_succeeded
     - invoke#1/__end__
     - {commit: 31}
   - [node_started, invoke/__end__]
   - - pool_commit
     - invoke/__end__
-    - value: [A, B]
-      key: invoke
+    - key: invoke
       from: {invoke#0/__end__: 28, invoke#1/__end__: 31}
   - - node_succeeded
     - invoke/__end__

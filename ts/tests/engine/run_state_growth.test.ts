@@ -150,6 +150,7 @@ import {
   prepareRecord,
   RunState,
 } from "../../src/runtime/state.ts";
+import type { JsonValue } from "../../src/typesys/json.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import {
   canonicalChild,
@@ -288,15 +289,16 @@ test("growth canonicalizes the seed and isolates the builder, record and observe
   expect(prepared.record).toEqual(
     new NodeExpandedRecord(
       "spawn",
-      { items: [{ label: "stable" }], nested: { values: [1, 2] } },
       [],
       expansionDigest(fragment("spawn")),
     ),
   );
-  // The record seed is deep-frozen; the observer's seed and the caller's seed are not.
+  // The record holds no seed (a replay rebuilds it); the plan keeps a copy apart from the
+  // observer's and the caller's.
+  expect(Object.hasOwn(prepared.record, "seed")).toBe(false);
   ((prepared.observers[0] as NodeExpanded).grow.seed as { nested: { values: number[] } }).nested.values.push(88);
   originalSeed.nested.values.push(77);
-  expect((prepared.record as NodeExpandedRecord).seed).toEqual({
+  expect((prepared._plan as { seed: unknown }).seed).toEqual({
     items: [{ label: "stable" }],
     nested: { values: [1, 2] },
   });
@@ -587,6 +589,8 @@ test("live growth and its record replay produce equal state", () => {
   const { state: live, log: liveLog } = initializedSpawner();
   const { state: replay, log: replayLog } = initializedSpawner();
 
+  // The replay rebuilds the seed from the spawner's forward.
+  (replay.flow.nodes.get("spawn") as Spawner).grow = new Grow({ labels: ["a", "b"] });
   const livePrepared = prepareGrowth(liveLog, live, "spawn", new Grow({ labels: ["a", "b"] }), fragmentBuilder);
   const liveObservers = commitPrepared(liveLog, live, livePrepared);
   for (const record of liveLog.records().slice(replayLog.nextSequence, -1)) {
@@ -603,7 +607,7 @@ test("live growth and its record replay produce equal state", () => {
 
 test("growth record replay requires the injected builder", () => {
   const { state } = initializedSpawner();
-  const record = new NodeExpandedRecord("spawn", {}, [], "a".repeat(64));
+  const record = new NodeExpandedRecord("spawn", [], "a".repeat(64));
 
   expectError(() => prepareRecord(state, record), TypeError, /grow_builder/);
 });
@@ -644,7 +648,7 @@ test.each(["call", "map", "loop"])("actual buildGrow splices %s with FIFO order 
 
   const record = prepared.record as NodeExpandedRecord;
   expect(record.spawnerId).toBe("spawn");
-  expect(record.topologyDigest).toBe(expansionDigest(buildGrow(spawner, record.seed)));
+  expect(record.topologyDigest).toBe(expansionDigest(buildGrow(spawner, (prepared._plan as { seed: JsonValue }).seed)));
   expect(observers).toEqual(prepared.observers);
   expect(state.nodeState.get("spawn")).toBe(NodeState.EXPANDED);
   expect(state.inFlight.has("spawn")).toBe(false);
@@ -1597,7 +1601,10 @@ function assertReplaysEqual(
 ): void {
   const { state: replay, log: replayLog } = setup();
   const record = prepared.record as NodeExpandedRecord;
-  commitExpansion(replayLog, replay, record.spawnerId, new Grow(record.seed, record.pruneIds), fragmentBuilder);
+  const seed = (prepared._plan as { seed: JsonValue }).seed;
+  // The replay rebuilds the seed from the spawner's forward.
+  (replay.flow.nodes.get(record.spawnerId) as Spawner).grow = new Grow(seed, record.pruneIds);
+  commitExpansion(replayLog, replay, record.spawnerId, new Grow(seed, record.pruneIds), fragmentBuilder);
   const replayObservers = commitPrepared(
     replayLog,
     replay,

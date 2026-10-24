@@ -59,12 +59,9 @@ expect:
     - invoke
     - from: {__start__: 6}
       key: invoke/__start__
-      value: {payload: null}
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed:
-        payload: null
   - [node_started, invoke/__start__]
   - - node_succeeded
     - invoke/__start__

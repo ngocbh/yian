@@ -419,8 +419,11 @@ export interface PendingCommit {
   readonly seq: number;
   /** The pool key the value is written under. */
   readonly key: string;
-  /** The value's canonical typed wire text. */
-  readonly valueJson: string;
+  /**
+   * The value's canonical typed wire text; `null` for a derived commit until the success that
+   * accepts it (for an expansion commit, its spawner's `NodeExpanded`) rebuilds the value.
+   */
+  readonly valueJson: string | null;
   /** A derived commit's sources (`PoolCommitRecord.from`), else `null`. */
   readonly from: ReadonlyMap<string, number> | null;
   /** The spawner whose expansion wrote this commit for a child START, else `null`. */
@@ -514,8 +517,8 @@ export function rebuildCommitValue(
 
 /**
  * Rebuild spawner `spawnerId`'s expansion from its expansion commits' `from` (see
- * `rebuildCommitValue`): its canonical seed and prune ids, and each child START's commit (its key
- * and canonical typed wire text) from the fragment the seed builds. With `from` `null` (an
+ * `rebuildCommitValue`): its canonical seed and prune ids, the fragment the seed builds, and each
+ * child START's commit (its key and canonical typed wire text). With `from` `null` (an
  * expansion whose child STARTs all fail to bind writes no commit), the spawner binds from the
  * whole pool, which holds what it read; the topology digest still pins the fragment.
  *
@@ -529,7 +532,13 @@ export function rebuildExpansion(
   from: ReadonlyMap<string, number> | null,
   growBuilder: GrowBuilder,
   options: { capture?: boolean } = {},
-): { seed: JsonValue; pruneIds: readonly string[]; commits: readonly (readonly [string, string])[]; capture: BindingCapture | null } {
+): {
+  seed: JsonValue;
+  pruneIds: readonly string[];
+  fragment: Flow;
+  commits: readonly (readonly [string, string])[];
+  capture: BindingCapture | null;
+} {
   const spawner = state.flow.nodes.get(spawnerId)!;
   const wiring = state.wiringOverrides.get(spawnerId) ?? null;
   const sources = from ?? state.producers;
@@ -538,7 +547,7 @@ export function rebuildExpansion(
   const [seed, builderSeed] = canonicalSeed(outcome.seed);
   const fragment = buildGrowthFragment(spawner, builderSeed, growBuilder);
   const commits = expansionValues(fragment).map(([key, wire]) => [key, logJson(wire)] as const);
-  return { seed, pruneIds: [...outcome.prune].sort(compareCodeUnits), commits, capture };
+  return { seed, pruneIds: [...outcome.prune].sort(compareCodeUnits), fragment, commits, capture };
 }
 
 /**
@@ -665,7 +674,8 @@ interface CommitPlan extends PlanAnchors {
   readonly kind: "commit";
   readonly nodeId: string;
   readonly key: string;
-  readonly valueJson: string;
+  /** The value's canonical typed wire text, or `null` for a derived commit. */
+  readonly valueJson: string | null;
   readonly from: ReadonlyMap<string, number> | null;
   readonly initial: boolean;
   /** Whether this is an expansion's commit for a child START, which waits under its key. */
@@ -769,6 +779,8 @@ interface GrowthTopology {
 /** One fully materialized expansion. */
 interface GrowthPlan extends PlanAnchors {
   readonly kind: "growth";
+  /** The canonical seed, live or rebuilt; the record holds none. */
+  readonly seed: JsonValue;
   readonly delta: GrowthDelta;
   readonly topology: GrowthTopology;
 }
@@ -1086,7 +1098,10 @@ export function preparePoolCommit(
     const path = error instanceof TypeCheckError ? error.path : [];
     throw new NodeDataError(error, outputContractOrigin(outputContract, path));
   }
-  return prepareCommitTransition(state, new PoolCommitRecord(nodeId, target, valueWire, { from: options.from ?? null }), false);
+  const from = options.from ?? null;
+  // A derived commit records only its sources; its success rebuilds the value, live as on replay.
+  const record = from === null ? new PoolCommitRecord(nodeId, target, valueWire) : new PoolCommitRecord(nodeId, target, null, { from });
+  return prepareCommitTransition(state, record, false);
 }
 
 /**
@@ -1379,7 +1394,7 @@ function prepareCommitTransition(
     traceDelta: prepareRecordTrace(state, envelope, { initialCommit: initial }),
     nodeId: canonical.nodeId,
     key: canonical.key,
-    valueJson: logJson(canonical.value),
+    valueJson: canonical.value === null ? null : logJson(canonical.value),
     from: canonical.from,
     initial,
     expansion,
@@ -1391,7 +1406,13 @@ function prepareCommitTransition(
 function prepareSuccessTransition(state: RunState, record: NodeSucceededRecord): PreparedTransition {
   validateNodeEvidence(state, record.nodeId, record.evidence);
   // The caller checked that the record names the node's pending commit.
-  const delta = prepareSuccessDelta(state, record, state.pendingCommits.get(record.nodeId)!);
+  let pending = state.pendingCommits.get(record.nodeId)!;
+  if (pending.valueJson === null) {
+    // A derived commit: the pool now holds what its binding read.
+    const { valueJson } = rebuildCommitValue(state, record.nodeId, pending.key, pending.from!);
+    pending = { ...pending, valueJson };
+  }
+  const delta = prepareSuccessDelta(state, record, pending);
   const terminal = prepareTerminalDelta(state, {
     completingNodeId: delta.nodeId,
     newlyReadyIds: delta.newlyReadyIds,
@@ -1582,19 +1603,19 @@ export function prepareExpanded(
   const digest = expansionDigest(fragment);
   return prepareGrowthTransition(
     state,
-    new NodeExpandedRecord(nodeId, seedWire, [...grow.prune].sort(compareCodeUnits), digest, {
+    new NodeExpandedRecord(nodeId, [...grow.prune].sort(compareCodeUnits), digest, {
       evidence: options.evidence ?? null,
       forwardCapture: options.forwardCapture ?? null,
     }),
     fragment,
-    { actualDigest: digest, validatedFragment },
+    { actualDigest: digest, validatedFragment, seed: seedWire },
   );
 }
 
 /**
- * Return the commits a spawner's expansion writes before its `NodeExpanded`: for each START of the
- * fragment (its own, then each child boundary's), the child START id and the value it binds from
- * its constant wiring. A START whose wiring doesn't bind gets none; it fails when it runs.
+ * Return the keys of the commits a spawner's expansion writes before its `NodeExpanded`: each
+ * START of the fragment (its own, then each child boundary's) whose constant wiring binds. A START
+ * whose wiring doesn't bind gets none; it fails when it runs.
  *
  * @param state An initialized nonterminal state with `nodeId` in flight.
  * @param options.forwardCapture The capture the expansion will carry, checked for its seed routes.
@@ -1606,19 +1627,20 @@ export function expansionCommits(
   grow: Grow,
   growBuilder: GrowBuilder,
   options: OutcomeCarriers = {},
-): readonly (readonly [string, TypedWire])[] {
-  const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
+): readonly string[] {
+  const { fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
   // Every check the expansion makes runs before its commits are written, so a growth rejected
   // after them can't leave the spawner with commits only its expansion admits.
-  const record = new NodeExpandedRecord(nodeId, seedWire, [...grow.prune].sort(compareCodeUnits), expansionDigest(fragment));
+  const record = new NodeExpandedRecord(nodeId, [...grow.prune].sort(compareCodeUnits), expansionDigest(fragment));
   prepareGrowthTopology(state, record, fragment, validatedFragment);
   requireSeedRoutes(state, options.forwardCapture ?? null, fragment);
-  return expansionValues(fragment);
+  return expansionValues(fragment).map(([key]) => key);
 }
 
 /**
- * Prepare one of a spawner's expansion commits (see `expansionCommits`): it waits under the child
- * START `key` until the spawner's `NodeExpanded` admits it and the child START's success names it.
+ * Prepare one of a spawner's expansion commits (see `expansionCommits`): it holds the spawner's
+ * `from` and waits under the child START `key` until the spawner's `NodeExpanded` admits it with
+ * the START's value, and the child START's success names it.
  *
  * @param from The spawner's sources, as a derived commit holds them.
  * @throws RangeError when the spawner isn't in flight, `key` is already in the flow or has a
@@ -1628,10 +1650,10 @@ export function prepareExpansionCommit(
   state: RunState,
   spawnerId: string,
   key: string,
-  value: TypedWire,
   from: ReadonlyMap<string, number>,
 ): PreparedTransition {
-  return prepareRecord(state, new PoolCommitRecord(spawnerId, key, value, { from }));
+  // The record leaves the value out; the spawner's NodeExpanded rebuilds it, live as on replay.
+  return prepareRecord(state, new PoolCommitRecord(spawnerId, key, null, { from }));
 }
 
 /** Validate a live spawner's growth and build its fragment, before any record is written. */
@@ -1719,9 +1741,9 @@ function expansionValues(fragment: Flow): (readonly [string, TypedWire])[] {
 }
 
 /**
- * Admit the spawner's pending expansion commits for `fragment`: they must be exactly its
- * `expansionValues`, in order, with the same values and one shared `from`. Each then waits on its
- * child START's success.
+ * Admit the spawner's pending expansion commits for `fragment`: their keys must be exactly its
+ * `expansionValues`' STARTs, in order, with one shared `from`. Each gets the value its START binds
+ * and then waits on that START's success.
  *
  * @throws RangeError when the commits and the fragment's STARTs disagree.
  */
@@ -1741,13 +1763,7 @@ function admitExpansion(state: RunState, spawnerId: string, fragment: Flow): rea
       if (fromText(commit.from) !== from) {
         throw new RangeError(`the expansion commits of ${reprText(spawnerId)} must hold the same from`);
       }
-      const valueJson = logJson(expected[index]![1]);
-      if (commit.valueJson !== valueJson) {
-        throw new RangeError(
-          `the expansion commit at seq ${commit.seq} holds another value than child START ${reprText(commit.key)} binds`,
-        );
-      }
-      return Object.freeze({ ...commit, valueJson, admitted: true });
+      return Object.freeze({ ...commit, valueJson: logJson(expected[index]![1]), admitted: true });
     }),
   );
 }
@@ -1768,11 +1784,15 @@ function prepareGrowthRecord(
 ): PreparedTransition {
   validateGrowthRecord(state, record);
   try {
-    const [seedWire, builderSeed] = canonicalSeed(record.seed);
-    if (logJson(seedWire) !== logJson(record.seed)) {
-      throw new RangeError("NodeExpandedRecord seed is not in canonical wire form");
+    // The seed is rebuilt from the expansion commits' shared `from` (checked when they're
+    // admitted) before the prune applies, so the names it read are still in the pool.
+    const from = pendingExpansion(state, record.spawnerId)[0]?.from ?? null;
+    const { seed: seedWire, pruneIds, fragment } = rebuildExpansion(state, record.spawnerId, from, growBuilder);
+    if (!sameItems(pruneIds, record.pruneIds)) {
+      throw new RangeError(
+        `NodeExpandedRecord prune ids ${writeAsText([...record.pruneIds])} differ from the rebuilt ${writeAsText([...pruneIds])}`,
+      );
     }
-    const fragment = buildGrowthFragment(state.flow.nodes.get(record.spawnerId)!, builderSeed, growBuilder);
     const validatedFragment = validateGrowthFragment(state, fragment);
     const actualDigest = expansionDigest(fragment);
     if (actualDigest !== record.topologyDigest) {
@@ -1781,7 +1801,7 @@ function prepareGrowthRecord(
           `recorded ${reprText(record.topologyDigest)}, rebuilt ${reprText(actualDigest)}`,
       );
     }
-    return prepareGrowthTransition(state, record, fragment, { actualDigest, validatedFragment });
+    return prepareGrowthTransition(state, record, fragment, { actualDigest, validatedFragment, seed: seedWire });
   } catch (error) {
     // A historical record is not a live node outcome: its rejection is a plain corrupt-log error.
     if (error instanceof GrowthRejected) throw error.original;
@@ -1794,10 +1814,10 @@ function prepareGrowthTransition(
   state: RunState,
   record: NodeExpandedRecord,
   fragment: Flow,
-  options: { actualDigest: string; validatedFragment: ValidatedFragment },
+  options: { actualDigest: string; validatedFragment: ValidatedFragment; seed: JsonValue },
 ): PreparedTransition {
   validateGrowthRecord(state, record);
-  const { actualDigest: digest, validatedFragment: validated } = options;
+  const { actualDigest: digest, validatedFragment: validated, seed } = options;
   if (digest !== record.topologyDigest) {
     throw new RangeError("NodeExpandedRecord topology digest disagrees with its fragment");
   }
@@ -1830,11 +1850,13 @@ function prepareGrowthTransition(
       inputConnections: fragment.inputConnections,
       childBoundaries: fragment.childBoundaries,
       retiredIds: delta.retiredIds,
+      seed,
     }),
+    seed,
     delta,
     topology,
   });
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [growthObserver(canonical)]);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [growthObserver(canonical, seed)]);
 }
 
 /** Validate all backward data and prepare its detached state before append. */
@@ -2234,9 +2256,10 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   if ((state.trace === null) !== (plan.traceDelta === null)) {
     throw new RangeError("pool-commit trace delta disagrees with recorded learning");
   }
-  const value = decodeTyped(plan.valueJson);
+  // A run-start commit always holds its value.
+  const value = plan.initial ? decodeTyped(plan.valueJson!) : null;
   const startInputs = plan.initial && plan.key === plan.startId;
-  const input = startInputs ? (canonicalSeed(value.toObject())[1] as JsonObject) : null;
+  const input = startInputs ? (canonicalSeed(value!.toObject())[1] as JsonObject) : null;
 
   appendAndVerify(log, prepared);
   if (!plan.initial) {
@@ -2251,10 +2274,10 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
     // An expansion commit waits under the child START it fills, whose success accepts it.
     state.pendingCommits.set(plan.expansion ? plan.key : plan.nodeId, Object.freeze(pending));
   } else if (input === null) {
-    state.pool.system.set(plan.key.slice(SYSTEM_PREFIX.length), value);
+    state.pool.system.set(plan.key.slice(SYSTEM_PREFIX.length), value!);
     state.producers.set(plan.key, prepared.expectedSequence);
   } else {
-    state.pool.store.set(plan.key, value);
+    state.pool.store.set(plan.key, value!);
     state.producers.set(plan.key, prepared.expectedSequence);
     state.input = input;
     state.ready = [plan.startId];
@@ -3860,6 +3883,7 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
   if (record.nodeId !== startId) {
     throw new RangeError(`a run-start pool_commit must name the START ${reprText(startId)}, not ${reprText(record.nodeId)}`);
   }
+  if (record.value === null) throw new RangeError("a run-start pool_commit holds its value, not from");
   const value = TypedValue.fromWire(record.value).toObject();
   if (key === startId) {
     if (state.pool.resolve("system", ["run_id"]) !== state.runId) {
@@ -3882,7 +3906,8 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
  * Validate one replayed node commit against its target exactly once.
  *
  * @throws RangeError when the node isn't in flight or already has a pending commit, the target
- *   doesn't exist, or the value isn't canonical for it.
+ *   doesn't exist, the commit holds `from` exactly when its node isn't derived (`isDerivedCommit`),
+ *   or the value isn't canonical for it.
  */
 function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   requireCommittingNode(state, record.nodeId);
@@ -3890,6 +3915,15 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   if (targetNode === undefined) {
     throw new RangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
   }
+  const derived = isDerivedCommit(state, record.nodeId);
+  if (derived && record.from === null) {
+    throw new RangeError(`pool_commit of ${reprText(record.nodeId)} must hold from: its node is derived`);
+  }
+  if (!derived && record.from !== null) {
+    throw new RangeError(`pool_commit of ${reprText(record.nodeId)} holds from, but its node isn't derived`);
+  }
+  // A derived commit's value is rebuilt, and checked, when its success accepts it.
+  if (record.value === null) return;
   const typed = TypedValue.fromWire(record.value);
   const [wire] = canonicalOutputValue(typed, targetNode.outputContract, nodeOutputType(targetNode));
   if (logJson(wire) !== logJson(record.value)) {
@@ -3999,7 +4033,8 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
   return Object.freeze({
     nodeId: record.nodeId,
     commitTarget: target,
-    valueJson: pending.valueJson,
+    // The caller rebuilt a replayed derived value.
+    valueJson: pending.valueJson!,
     outgoingEdgeIds: Object.freeze(outgoingEdgeIds),
     edgeHeads: Object.freeze(edgeHeads),
     newlyReadyIds: Object.freeze(newlyReadyIds),
@@ -4934,8 +4969,8 @@ function materializeFailure(failure: Failure): FailureApply {
 }
 
 /** Build one independent canonical expansion observer. */
-function growthObserver(record: NodeExpandedRecord): NodeExpanded {
-  const [, seed] = canonicalSeed(record.seed);
+function growthObserver(record: NodeExpandedRecord, seedWire: JsonValue): NodeExpanded {
+  const [, seed] = canonicalSeed(seedWire);
   return new NodeExpanded({ nodeId: record.spawnerId, grow: new Grow(seed, record.pruneIds) });
 }
 
@@ -4962,7 +4997,7 @@ function materializeGrowth(plan: GrowthPlan): GrowthApply {
   }
   return {
     wiring: new Map(plan.topology.wiring.map(([nodeId, wiring]) => [nodeId, new Map(wiring)])),
-    observers: [growthObserver(record)],
+    observers: [growthObserver(record, plan.seed)],
   };
 }
 

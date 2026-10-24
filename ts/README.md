@@ -147,7 +147,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 14) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 15) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -261,6 +261,7 @@ replacer for them. Meanings: the `on_event` and `on_stream` items of
 ```ts
 resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
 loadRecordedFlow(log: string, options?: { env?: (name: string) => string | undefined; codeRoot?: string | null }): Promise<ComposedFlow | null>
+foldRunLog(log: string, options?: { env?: (name: string) => string | undefined; flow?: ComposedFlow | null }): Promise<FoldedRun>
 inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: string) => string | undefined }): RunInspection
 ```
 
@@ -301,7 +302,22 @@ A crash between a commit and its success leaves an orphan the resume ignores (th
 log that ends inside its run start can't be resumed. See [Authoritative run
 logs][docs/api.md#authoritative-run-logs].
 
-A `pool_commit` payload is flat, `{node_id, key, kind, value}`. A host decodes its value with
+A derived commit holds no value, only `from`: a non-top `__end__`'s, the stopping LOOP driver's,
+and the commits an expansion writes for its child STARTs before its `node_expanded` (which holds no
+seed). Each pool name the binding read maps to the seq of the `pool_commit` that wrote it, and a
+replay rebuilds the value. `foldRunLog(log)` replays a log through the run reducer, as resume does,
+and returns `{flow, records}`: each record (`entry`, as `iterRunRecords` reads it) with `value`, the
+`TypedValue` an accepted `pool_commit` writes (held, or rebuilt from its `from`), or `null` for an
+orphan commit and any other record. A host reads a LOOP iteration's value, `<loop>#k/__end__`, this
+way:
+
+```ts
+const { records } = await foldRunLog(log);
+const turn = records.find(({ entry }) => entry.kind === "pool_commit" && entry.envelope.payload.key === "chat#3/__end__");
+const history = turn?.value?.toObject();
+```
+
+A non-derived `pool_commit` payload is flat, `{node_id, key, kind, value}`. A host decodes its value with
 `TypedValue.fromWire({ kind, value })` (an int is a `bigint`, a file a `FileRef`), writes it back as
 the log does with `logJson(typed.toWire())`, and reads that text with `parseJson(text, "codec")`,
 which throws `JSONDecodeError` on text yian doesn't read:
@@ -1143,7 +1159,16 @@ Node 22, and so does every unit test; a change keeps both green.
   returned, then applies the plan, with no `await` in between, so nothing interleaves between the
   append and the apply. `commitInitialPool` commits the run start's commits (the system values in
 key order, then the START inputs) after `RunStarted`; a node's `pool_commit` waits in
-`pendingCommits` until its `node_succeeded` names it, and a resume drops it. `producers` maps each
+`pendingCommits` until its `node_succeeded` names it, and a resume drops it. A derived commit
+(`isDerivedCommit`: a `derived` node other than the top-level START and END) holds `from` and no
+value; its success rebuilds the value (`rebuildCommitValue`: `rebind` and the node's pure
+`forward`, from `runtime/eval_node.ts`'s `rebuildDerived`), reading each named value from the pool
+through `poolResolver`, which refuses a seq that isn't its name's producer. A spawner's expansion
+first writes one commit per START of its fragment (`expansionCommits`, `prepareExpansionCommit`),
+each under the child START's id with the spawner's `from`; `node_expanded` admits them (each gets
+the value its START binds over its constant wiring) and the child START's success names its commit
+instead of writing one. Replay rebuilds the seed from that `from` before the prune applies
+(`rebuildExpansion`). `producers` maps each
 pool name (a store key, or `system.<name>`) to the seq of the accepted `pool_commit` that last wrote
 it: set when a commit is applied, deleted with its pool entry, rebuilt by replay, so it never grows
 past the pool. A `derived` node (START, END, LOOP, CALL, MAP) evaluates with binding capture in
@@ -1172,7 +1197,8 @@ START is ready after the START inputs' commit; a success walks its
   seed, fragment or prune from the node throws `GrowthRejected` (`original` holds the underlying
   error), which fails the node; a builder or host fault stays raw. Replaying a `NodeExpandedRecord`
   rebuilds the fragment and requires the recorded digest, and throws the underlying error, never
-  `GrowthRejected`. `replayRecords(state, envelopes, {growBuilder})` is the recovery fold: it folds
+  `GrowthRejected`. `replayRecords(state, envelopes, {growBuilder, onPrepared})` is the recovery fold
+(`onPrepared` sees each record prepared, before it applies): it folds
   a complete historical prefix through the same `prepare*` and `commitPrepared` path against a
   read-only `HistoricalLogCursor` that matches each record byte for byte instead of writing it, so
   the replayed state, interrupted counts included, is exactly the live one; a corrupt record throws

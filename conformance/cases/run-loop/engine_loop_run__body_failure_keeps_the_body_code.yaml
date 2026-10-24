@@ -107,14 +107,9 @@ expect:
     - loop
     - from: {}
       key: loop#0/__start__
-      value: {exited: false, n: 0}
   - - node_expanded
     - loop
     - prune_ids: []
-      seed:
-      - exited: false
-        n: 0
-      - 0
   - [node_started, loop#0/__start__]
   - - node_succeeded
     - loop#0/__start__

@@ -485,8 +485,8 @@ export class FlowEngine {
       try {
         // The child STARTs' values are written before the expansion that admits them: a crash
         // between them leaves orphan commits, and the spawner reruns.
-        for (const [key, value] of expansionCommits(state, nodeId, outcome, this.growBuilder, carriers)) {
-          commitPrepared(this.log, state, prepareExpansionCommit(state, nodeId, key, value, reads));
+        for (const key of expansionCommits(state, nodeId, outcome, this.growBuilder, carriers)) {
+          commitPrepared(this.log, state, prepareExpansionCommit(state, nodeId, key, reads));
         }
         prepared = prepareExpanded(state, nodeId, outcome, this.growBuilder, carriers);
       } catch (error) {

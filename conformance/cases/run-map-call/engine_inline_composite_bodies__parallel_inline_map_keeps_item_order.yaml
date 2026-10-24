@@ -120,53 +120,25 @@ expect:
     - each
     - from: {prepare: 9}
       key: each/__start__
-      value: {}
   - - pool_commit
     - each
     - from: {prepare: 9}
       key: each#0/__start__
-      value:
-        name: third
-        row: {name: third, position: 3}
   - - pool_commit
     - each
     - from: {prepare: 9}
       key: each#1/__start__
-      value:
-        name: first
-        row: {name: first, position: 1}
   - - pool_commit
     - each
     - from: {prepare: 9}
       key: each#2/__start__
-      value:
-        name: second
-        row: {name: second, position: 2}
   - - node_expanded
     - each
     - prune_ids: []
-      seed:
-      - name: third
-        row:
-          name: third
-          position: 3
-      - name: first
-        row:
-          name: first
-          position: 1
-      - name: second
-        row:
-          name: second
-          position: 2
   - [node_started, each#0/__end__]
   - - pool_commit
     - each#0/__end__
-    - value:
-        name: third
-        row:
-          name: third
-          position: 3
-      from: {each#0/render: 28}
+    - from: {each#0/render: 28}
   - - node_succeeded
     - each#0/__end__
   - [node_started, each#0/__start__]
@@ -185,12 +157,7 @@ expect:
   - [node_started, each#1/__end__]
   - - pool_commit
     - each#1/__end__
-    - value:
-        name: first
-        row:
-          name: first
-          position: 1
-      from: {each#1/render: 38}
+    - from: {each#1/render: 38}
   - - node_succeeded
     - each#1/__end__
   - [node_started, each#1/__start__]
@@ -209,12 +176,7 @@ expect:
   - [node_started, each#2/__end__]
   - - pool_commit
     - each#2/__end__
-    - value:
-        name: second
-        row:
-          name: second
-          position: 2
-      from: {each#2/render: 33}
+    - from: {each#2/render: 33}
   - - node_succeeded
     - each#2/__end__
   - [node_started, each#2/__start__]
@@ -233,20 +195,7 @@ expect:
   - [node_started, each/__end__]
   - - pool_commit
     - each/__end__
-    - value:
-      - name: third
-        row:
-          name: third
-          position: 3
-      - name: first
-        row:
-          name: first
-          position: 1
-      - name: second
-        row:
-          name: second
-          position: 2
-      key: each
+    - key: each
       from: {each#0/__end__: 31, each#1/__end__: 41, each#2/__end__: 36}
   - - node_succeeded
     - each/__end__

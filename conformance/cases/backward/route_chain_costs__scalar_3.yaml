@@ -85,7 +85,6 @@ expect:
     - outer
     - from: {__start__: 6}
       key: outer/__start__
-      value: {v: 3}
   - - node_expanded
     - outer
     - forward_capture:
@@ -121,8 +120,6 @@ expect:
           occurrence_path: []
           static_path: [outer]
       prune_ids: []
-      seed:
-        v: 3
   - [node_started, outer/__start__]
   - - node_succeeded
     - outer/__start__
@@ -149,8 +146,7 @@ expect:
   - [node_started, outer/__end__]
   - - pool_commit
     - outer/__end__
-    - value: 3
-      key: outer
+    - key: outer
       from: {outer/__start__: 9}
   - - node_succeeded
     - outer/__end__

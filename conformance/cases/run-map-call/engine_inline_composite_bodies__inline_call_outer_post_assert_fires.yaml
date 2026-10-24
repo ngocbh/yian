@@ -59,11 +59,9 @@ expect:
     - composite
     - from: {}
       key: composite/__start__
-      value: {}
   - - node_expanded
     - composite
     - prune_ids: []
-      seed: {}
   - [node_started, composite/__start__]
   - - node_succeeded
     - composite/__start__

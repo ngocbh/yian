@@ -151,13 +151,6 @@ expect:
     - outer
     - from: {__start__: 6}
       key: outer/__start__
-      value:
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
-        selected: true
   - - node_expanded
     - outer
     - forward_capture:
@@ -190,13 +183,6 @@ expect:
           occurrence_path: []
           static_path: [outer]
       prune_ids: []
-      seed:
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
-        selected: true
   - [node_started, outer/__start__]
   - - node_succeeded
     - outer/__start__
@@ -263,13 +249,6 @@ expect:
     - outer/chosen
     - from: {outer/__start__: 9}
       key: outer/chosen/__start__
-      value:
-        local: child default
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
   - - node_expanded
     - outer/chosen
     - forward_capture:
@@ -299,12 +278,6 @@ expect:
             static_path: [outer]
           static_path: [outer, chosen]
       prune_ids: []
-      seed:
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
   - [node_started, outer/chosen/__start__]
   - - node_succeeded
     - outer/chosen/__start__
@@ -347,14 +320,7 @@ expect:
   - [node_started, outer/chosen/__end__]
   - - pool_commit
     - outer/chosen/__end__
-    - value:
-        local: child default
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
-      key: outer/chosen
+    - key: outer/chosen
       from: {outer/chosen/__start__: 16}
   - - node_succeeded
     - outer/chosen/__end__
@@ -401,14 +367,7 @@ expect:
   - [node_started, outer/__end__]
   - - pool_commit
     - outer/__end__
-    - value:
-        local: child default
-        payload:
-          rows:
-          - [a]
-          - [b, c]
-          title: unchanged
-      key: outer
+    - key: outer
       from: {outer/chosen: 21}
   - - node_succeeded
     - outer/__end__

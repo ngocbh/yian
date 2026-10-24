@@ -1128,7 +1128,8 @@ export function failureJson(failure: Failure): JsonObject {
  * Project the actual accepted outcome without assuming model evidence.
  *
  * `committed` is a success's committed value, as `RetainedTrace.lookupSource` reads it from the
- * commit the success names; other outcomes ignore it. Returns the episode status, the success
+ * commit the success names, or an expansion's seed (`TraceOccurrence.seed`); other outcomes ignore
+ * it. Returns the episode status, the success
  * output (`null` on failure) and the failure JSON (`null` on success).
  *
  * @throws TypeError when `record` isn't exactly one of the outcome record classes.
@@ -1145,7 +1146,7 @@ export function episodeOutcome(
     return [MemoryEpisodeStatus.FAILED, null, failureJson(record.terminalFailure)];
   }
   if (isExactly(record, NodeExpandedRecord)) {
-    const output = { kind: "grow", seed: canonicalSeed(record.seed)[1], prune_ids: [...record.pruneIds] };
+    const output = { kind: "grow", seed: canonicalSeed(committed)[1], prune_ids: [...record.pruneIds] };
     return [MemoryEpisodeStatus.SUCCEEDED, output, null];
   }
   if (isExactly(record, NodeFailedRecord)) return [MemoryEpisodeStatus.FAILED, null, failureJson(record.failure)];
@@ -1408,7 +1409,12 @@ export function projectOwnerContexts(
       // An accepted outcome holds its forward capture while learning.
       const capture = record.forwardCapture!;
       const evidence = record.evidence;
-      const committed = isExactly(record, NodeSucceededRecord) ? trace.lookupSource(occurrence.source) : null;
+      // A success's committed value, or an expansion's seed, which neither record holds.
+      const committed = isExactly(record, NodeSucceededRecord)
+        ? trace.lookupSource(occurrence.source)
+        : isExactly(record, NodeExpandedRecord)
+          ? occurrence.seed
+          : null;
       const [status, output, failure] = episodeOutcome(record, committed);
       const executionScope = executionScopePayload(capture.scope);
       const coordinates = {

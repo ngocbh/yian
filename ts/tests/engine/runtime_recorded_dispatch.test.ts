@@ -819,7 +819,8 @@ describe("growth", () => {
       .filter((record) => record instanceof NodeExpandedRecord) as NodeExpandedRecord[];
     expect(expanded.length).toBe(1);
     expect(expanded[0]!.spawnerId).toBe("spawn");
-    expect(expanded[0]!.seed).toEqual({ canonical: [1n, 2n] });
+    // The record holds no seed; the observer carries it.
+    expect((events.find((event) => event instanceof NodeExpanded) as NodeExpanded).grow.seed).toEqual({ canonical: [1n, 2n] });
     expect(state.result).toBeInstanceOf(RunSucceeded);
   });
 

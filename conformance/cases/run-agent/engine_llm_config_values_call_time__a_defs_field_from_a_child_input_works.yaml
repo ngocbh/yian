@@ -73,12 +73,9 @@ expect:
     - a
     - from: {}
       key: a/__start__
-      value: {m: def-model}
   - - node_expanded
     - a
     - prune_ids: []
-      seed:
-        m: def-model
   - [node_started, a/__start__]
   - - node_succeeded
     - a/__start__
@@ -121,8 +118,7 @@ expect:
   - [node_started, a/__end__]
   - - pool_commit
     - a/__end__
-    - value: ok
-      key: a
+    - key: a
       from: {a/chat: 16}
   - - node_succeeded
     - a/__end__

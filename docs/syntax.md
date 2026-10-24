@@ -4137,6 +4137,32 @@ loop node 'pages': carried field 'cursor' — body output is 'str', carried sour
 loop node 'pages': binding 'cursor' — child expects 'str', but the value null does not fit
 ```
 
+#### Growing a carried value: output what is new, append in a binding
+
+A carried value that grows each iteration, such as a chat's history, stays linear in the run log
+when each node outputs only what is new and a binding does the append. The body's output binding
+(its `__end__`), the expansion's child START, and the LOOP driver are derived values: TS yian
+records them as `from` pointers to the commits they read and rebuilds them on replay, so the
+history itself is never written again. `examples/chat.yaml` records each turn's message and
+reply; `respond`'s output binding appends them:
+
+```yaml
+reply:
+  kind: agent
+  input: {history: "${input.history}", message: "${input.message}"}
+  output: str                                    # only this turn's reply is recorded
+  prompt:
+    - ${history}
+    - user: ${message}
+output: !Turn
+  history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
+  exited: false
+```
+
+A node that returns the whole history every turn makes the log grow quadratically again. So does
+a value entry that carries it: a value entry lowers to a CODE node (see "How a value entry runs"),
+which records its value. `chat.yaml`'s `exited` entry runs once, on the last turn.
+
 ## Effects from inside an AGENT node — the `ask_user` tool
 
 An AGENT node can be granted the ordinary `ask_user` tool. Unlike

@@ -400,15 +400,15 @@ test("every pool_commit line of the conformance golden logs round-trips byte for
     if (!name.endsWith(".log.jsonl")) continue;
     for (const line of lines(join(cases, name))) {
       const { kind, payload } = parseJson(line, "codec") as { kind: string; payload: JsonObject };
-      // The conformance masks `system.now` and `system.today`.
-      if (kind !== "pool_commit" || payload["value"] === "<masked>") continue;
+      // The conformance masks `system.now` and `system.today`; a derived commit holds no value.
+      if (kind !== "pool_commit" || payload["value"] === "<masked>" || Object.hasOwn(payload, "from")) continue;
       expect(roundTrip(line)).toBe(line);
       kinds.add(payload["kind"] as string);
       checked++;
     }
   }
   // So a moved fixture folder can't pass empty.
-  expect(checked).toBeGreaterThanOrEqual(100);
+  expect(checked).toBeGreaterThanOrEqual(80);
   expect([...kinds]).toEqual(expect.arrayContaining(["object", "str", "int", "float", "list[int]"]));
 });
 
@@ -471,7 +471,7 @@ test.if(process.versions.bun !== undefined)("on Bun the run entry is the source 
 const WRITTEN_LINE =
   '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
   '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
-  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":14,"seq":9}';
+  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":15,"seq":9}';
 
 test("a fixed pool_commit line with a big int, infinities and an escaped record round-trips through the public JSON form", () => {
   expect(roundTrip(WRITTEN_LINE)).toBe(WRITTEN_LINE);

@@ -18,7 +18,9 @@
  * the host's runs folder and names its log there. For hosts that read run-log values it re-exports
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
  * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
- * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with.
+ * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
+ * `foldRunLog`, which replays a log and gives each accepted `pool_commit`'s value, a derived one
+ * rebuilt from its `from` pointers.
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -125,6 +127,7 @@ import {
   type RecordedTool,
   type RecordEnvelope,
   type RunLog,
+  type RunLogEntry,
   RunResumedRecord,
   RunStartedRecord,
   RunStoppedRecord,
@@ -140,6 +143,7 @@ import {
   RunState,
   replayRecords,
 } from "./runtime/state.ts";
+import { decodeTyped } from "./runtime/trace.ts";
 import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { type ToolEntry, ToolSet } from "./tools/registry.ts";
@@ -152,10 +156,12 @@ import {
   fromHost,
   isRecord,
   jsTypeName,
+  normalizeTypedFiles,
   rejectDeepNesting,
   setField,
   type Type,
   TypeCheckError,
+  type TypedValue,
   type Value,
   ValueKind,
   type ValueRecord,
@@ -1570,6 +1576,65 @@ export function inspectRun(
     endedAt: status === "succeeded" || status === "failed" ? scan.lastAt : null,
     failure: status === "failed" ? source.failure : null,
   };
+}
+
+/** A run log replayed through the run reducer (see `foldRunLog`). */
+export interface FoldedRun {
+  /** The flow the replay ran: the recorded one, or the host's for a flow built in code. */
+  readonly flow: ComposedFlow;
+  /** Every record, in log order, with its accepted value. */
+  readonly records: readonly FoldedRecord[];
+}
+
+/** One record of a folded run log. */
+export interface FoldedRecord {
+  /** The record as `iterRunRecords` reads it. */
+  readonly entry: RunLogEntry;
+  /**
+   * For a `pool_commit` the run accepted, the value it writes: the one it holds, or for a derived
+   * commit the one rebuilt from its `from`. `null` for an orphan commit and any other record.
+   */
+  readonly value: TypedValue | null;
+}
+
+/**
+ * Replay the run log at `log` through the run reducer, as resume does, and return each record with
+ * the value of each accepted `pool_commit`: hosts read derived values this way, such as a LOOP
+ * iteration's `<loop>#k/__end__`, which the log records only as `from` pointers. The recorded flow
+ * is compiled first, under `env`'s `YIAN_*` values, which must be the run's. No seq-to-value map
+ * is kept beside the reducer: a derived value is rebuilt from the pool when its commit is accepted.
+ *
+ * @param options.env The environment the load reads the `YIAN_*` values from (default
+ *   `processEnv`).
+ * @param options.flow The flow, required when the run's flow was built in code (`flow: null`),
+ *   refused otherwise.
+ * @throws RangeError when the log is empty, ends inside its run start, or the replay refuses it;
+ *   when the run's flow was built in code and `options.flow` is missing, or the log holds its
+ *   flow files and `options.flow` is given.
+ * @throws LoadError, DefaultsMismatchError as `loadRecordedFlow`, and `iterRunRecords`' errors.
+ */
+export async function foldRunLog(log: string, options: { env?: Env | null; flow?: ComposedFlow | null } = {}): Promise<FoldedRun> {
+  const env = options.env ?? processEnv;
+  const entries = [...iterRunRecords(log)];
+  const start = startRecord(entries[0]?.envelope);
+  const flow = await withEnv(env, () => {
+    checkRecorded(start.defaults);
+    return resumedFlow(log, start, options.flow ?? null, null);
+  });
+  const values: (TypedValue | null)[] = entries.map(() => null);
+  const accept = (seq: number, valueJson: string, files: Type | null): void => {
+    values[seq] = normalizeTypedFiles(files, decodeTyped(valueJson));
+  };
+  withEnv(env, () =>
+    replayRunLog(flow, MemoryRunLog.fromRecords(entries.map((entry) => entry.envelope)), {
+      onPrepared: (prepared) => {
+        const plan = prepared._plan;
+        if (plan.kind === "commit" && plan.initial) accept(prepared.expectedSequence, plan.valueJson!, null);
+        if (plan.kind === "success") accept((prepared.record as NodeSucceededRecord).commit, plan.delta.valueJson, plan.files);
+      },
+    }),
+  );
+  return { flow, records: entries.map((entry, seq) => ({ entry, value: values[seq]! })) };
 }
 
 /** Yield the envelope of each record of the log at `log`, read by `iterRunRecords`. */

@@ -126,12 +126,9 @@ expect:
     - __call_0
     - from: {}
       key: __call_0/__start__
-      value: {tag: publish}
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        tag: publish
   - [node_started, __call_0/__start__]
   - - node_succeeded
     - __call_0/__start__
@@ -146,8 +143,7 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: publish
-      key: __call_0
+    - key: __call_0
       from: {__call_0/fx: 18}
   - - node_succeeded
     - __call_0/__end__

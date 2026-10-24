@@ -160,12 +160,9 @@ expect:
     - __call_0
     - from: {pro: 14}
       key: __call_0/__start__
-      value: {v: pro case for ACME}
   - - node_expanded
     - __call_0
     - prune_ids: []
-      seed:
-        v: pro case for ACME
   - [node_started, __call_0/__start__]
   - - node_succeeded
     - __call_0/__start__
@@ -180,8 +177,7 @@ expect:
   - [node_started, __call_0/__end__]
   - - pool_commit
     - __call_0/__end__
-    - value: pro case for ACME
-      key: __call_0
+    - key: __call_0
       from: {__call_0/x: 22}
   - - node_succeeded
     - __call_0/__end__

@@ -826,7 +826,7 @@ test("a success's canonical copies isolate the input, the record, the pool and t
   const observers = commitPrepared(log, state, prepared);
   const commitRecord = log.records().at(-2)!.record;
   expect(commitRecord).toBeInstanceOf(PoolCommitRecord);
-  const recorded = (commitRecord as PoolCommitRecord).value;
+  const recorded = (commitRecord as PoolCommitRecord).value!;
   expect(recorded.value).toEqual(expected);
   expect(state.pool.get(START_ID)).toEqual(expected);
   expect(observers).toStrictEqual([new NodeSucceeded({ nodeId: START_ID, output: expected, commitAs: null })]);

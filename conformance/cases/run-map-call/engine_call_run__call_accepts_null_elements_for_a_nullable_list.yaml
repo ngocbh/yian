@@ -84,13 +84,9 @@ expect:
     - invoke
     - from: {source: 9}
       key: invoke/__start__
-      value:
-        values: [null]
   - - node_expanded
     - invoke
     - prune_ids: []
-      seed:
-        values: [null]
   - [node_started, invoke/__start__]
   - - node_succeeded
     - invoke/__start__
@@ -98,8 +94,7 @@ expect:
   - [node_started, invoke/__end__]
   - - pool_commit
     - invoke/__end__
-    - value: [null]
-      key: invoke
+    - key: invoke
       from: {invoke/__start__: 12}
   - - node_succeeded
     - invoke/__end__

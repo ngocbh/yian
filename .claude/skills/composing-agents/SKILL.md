@@ -1226,6 +1226,10 @@ defs:
 A `system:` item, a last `assistant:` item, an empty list, or a spliced input whose type
 can't hold messages (`str`) fails at load; a spliced value that isn't messages, or a rendered
 list not ending with `user`, fails the node.
+This shape keeps the run log linear (see [`examples/chat.yaml`](../../../examples/chat.yaml)):
+the reply is recorded, and the appended history is a derived value the log holds as `from`
+pointers. Don't have a node (or a value entry, which lowers to a CODE node) return the whole
+history every turn: that records it each turn and the log grows quadratically.
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:

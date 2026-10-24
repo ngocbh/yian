@@ -344,7 +344,9 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     settle(w, record.failure.nodeId!);
   } else if (record instanceof RunResumedRecord) {
     // A resume drops every orphan commit, an inline take's among them, so its events are free again.
+    const freed = [...w._pendingTakes.values()];
     w._pendingTakes.clear();
+    for (const take of freed) reoffer(w, take.inbox);
     for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed");
   } else if (record instanceof InboxClosedRecord) applyClose(w, record.inbox);
   else if (record instanceof RunCancelledRecord) closeOpenCalls(w, "cancelled");
@@ -385,15 +387,35 @@ function applyCommit(w: WaitsState, seq: number, record: PoolCommitRecord): void
   }
   if (!record.key.startsWith(SEND_PREFIX)) return;
   const inbox = inboxOf(w, record.key.slice(SEND_PREFIX.length));
+  if (!assign(w, inbox, seq)) inbox.unread.push(seq);
+}
+
+/**
+ * Assign the event `seq` to `inbox`'s oldest absorbing take, which stops absorbing after one
+ * event for `take: one`; return whether a take was absorbing.
+ */
+function assign(w: WaitsState, inbox: InboxState, seq: number): boolean {
   const takeId = inbox.absorbing[0];
   const take = takeId === undefined ? undefined : w.calls.get(takeId);
-  if (take === undefined) {
-    inbox.unread.push(seq);
-    return;
-  }
+  if (take === undefined) return false;
   take.assigned.push(seq);
   take.state = "answered";
   if (take.mode === "one") inbox.absorbing.shift();
+  return true;
+}
+
+/**
+ * Offer the unread events of inbox `name` no pending take commit holds, oldest first, to its
+ * absorbing takes, as each would have gone had it been sent now: events a dropped take commit
+ * held are free again, and a take that waited meanwhile is first in line.
+ */
+function reoffer(w: WaitsState, name: string): void {
+  const inbox = w.inboxes.get(name);
+  if (inbox === undefined) return;
+  for (const seq of availableUnread(w, name)) {
+    if (!assign(w, inbox, seq)) return;
+    remove(inbox.unread, seq);
+  }
 }
 
 /** Apply a node step: a `pending` step registers a host call, a `tool_result` answers one. */
@@ -512,7 +534,7 @@ function closeOpenCalls(w: WaitsState, reason: CloseReason): void {
   for (const call of w.calls.values()) close(call, reason);
 }
 
-/** Forget a settled node's calls and bookkeeping. */
+/** Forget a settled node's calls and bookkeeping; a take commit no success accepted frees its events. */
 function settle(w: WaitsState, nodeId: string): void {
   for (const call of nodeCalls(w, nodeId)) {
     if (call.inbox !== null) remove(inboxOf(w, call.inbox).absorbing, call.callId);
@@ -520,7 +542,9 @@ function settle(w: WaitsState, nodeId: string): void {
   }
   w.waiting.delete(nodeId);
   w._lastWoken.delete(nodeId);
+  const take = w._pendingTakes.get(nodeId);
   w._pendingTakes.delete(nodeId);
+  if (take !== undefined) reoffer(w, take.inbox);
   w.interrupts.delete(nodeId);
 }
 

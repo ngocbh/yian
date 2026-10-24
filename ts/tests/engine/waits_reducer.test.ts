@@ -731,3 +731,20 @@ describe("resumes and the terminal", () => {
     expect(state.result).toBeInstanceOf(RunSucceeded);
   });
 });
+
+test("a resume's freed events go to a take that waited meanwhile, which then commits them", () => {
+  const { log, state } = started(waitFlow(tool("a", "take"), tool("b", "take")));
+  const s = send(log, state, "hi");
+  start(log, state, "a");
+  start(log, state, "b");
+  commitPrepared(log, state, prepareTakeCommit(state, "a", takeOf([s])));
+  wait(log, state, "b", takeEntry("b"));
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  expect(wakeableNodes(state.waits)).toEqual(["b"]);
+  expect(availableUnread(state.waits, "msgs")).toEqual([]);
+  commitPrepared(log, state, prepareNodeWoken(state, "b"));
+  takeAndSucceed(log, state, "b", takeOf([s]));
+  expect(state.pool.store.get("b")!.toObject()).toEqual({ events: ["hi"], closed: false });
+  start(log, state, "a");
+  wait(log, state, "a", takeEntry("a"));
+});

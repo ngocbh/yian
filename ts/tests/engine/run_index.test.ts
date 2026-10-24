@@ -387,6 +387,31 @@ describe("updateRunIndex and readRunIndex", () => {
     expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["good", "linked"]);
   });
 
+  test("a usage count that isn't an int counts as 0, so one odd step can't break the index", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", (log) => {
+      start(log);
+      log.append(new NodeStartedRecord("agent"));
+      const odd = { input_tokens: "12", output_tokens: 1.5, cache_read_tokens: Infinity, reasoning_tokens: 2n ** 60n };
+      log.append(new NodeStepRecord("agent", 1, { kind: "model_call", usage: odd }));
+      log.append(new NodeStepRecord("agent", 2, modelCall([5, 6, 7, 8])));
+    });
+    updateRunIndex(runs);
+    expect(readRunIndex(runs)[0]).toMatchObject({ inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, reasoningTokens: 8 });
+  });
+
+  test("a log that turns unreadable keeps the row it had", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", stoppedRun);
+    updateRunIndex(runs);
+    const before = readRunIndex(runs);
+    fs.appendFileSync(join(runs, "run-1", "log.jsonl"), "not a run record\n");
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toHaveLength(1);
+    expect(readRunIndex(runs)).toEqual(before);
+  });
+
   test("an index of another version is rebuilt", () => {
     const runs = freshRuns();
     writeRun(runs, "run-1", failedRun);

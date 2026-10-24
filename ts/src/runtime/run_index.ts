@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { END_ID } from "../compile/model.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "../platform.ts";
-import { logJson, parseJson } from "../typesys/json.ts";
+import { logJson } from "../typesys/json.ts";
 import { isRecord, valueRepr } from "../typesys/values.ts";
 import {
   isRunLogLocked,
@@ -48,7 +48,7 @@ const INDEX_VERSION = 1;
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
 
-// `scan` holds the record scan (`RunScan`, as `scanJson` writes it), so an update goes on where the
+// `scan` holds the record scan (`RunScan`, as JSON), so an update goes on where the
 // last one stopped. The status is read from it (`scanStatus`), the rules `inspectRun` uses, so no
 // column holds a status that could drift from them.
 const SCHEMA = `CREATE TABLE runs (
@@ -113,10 +113,13 @@ export interface RunIndexRow {
    * END's success names; `null` until the END succeeded.
    */
   readonly result: string | null;
-  /** The sums of every `model_call` step's token counts, failed attempts included. */
+  /** The sum of every `model_call` step's `input_tokens`, failed attempts included. */
   readonly inputTokens: number;
+  /** The sum of every `model_call` step's `output_tokens`, failed attempts included. */
   readonly outputTokens: number;
+  /** The sum of every `model_call` step's `cache_read_tokens`, failed attempts included. */
   readonly cacheReadTokens: number;
+  /** The sum of every `model_call` step's `reasoning_tokens`, failed attempts included. */
   readonly reasoningTokens: number;
   /** The byte offset the row was built up to: the end of the record at `lastSeq`. */
   readonly offset: number;
@@ -208,45 +211,8 @@ export function scanStatus(scan: RunScan): "succeeded" | "failed" | "stopped" | 
   return scan.lastStop === null ? "crashed" : "stopped";
 }
 
-/** Return a deep copy of `scan`. */
-function copyScan(scan: RunScan): RunScan {
-  return {
-    ...scan,
-    inFlight: scan.inFlight.map(([id, seq]) => [id, seq]),
-    crashed: scan.crashed.map(([id, count]) => [id, count]),
-  };
-}
-
-/** Return `scan` as a run-log line (`logJson`, its numbers as ints). */
-function scanJson(scan: RunScan): string {
-  const int = (n: number | null) => (n === null ? null : BigInt(n));
-  return logJson({
-    inFlight: scan.inFlight.map(([id, seq]) => [id, BigInt(seq)]),
-    lastStop: int(scan.lastStop),
-    endSucceeded: scan.endSucceeded,
-    crashed: scan.crashed.map(([id, count]) => [id, BigInt(count)]),
-    nodeFailureSeq: int(scan.nodeFailureSeq),
-    unreachableSeq: int(scan.unreachableSeq),
-  });
-}
-
-/** Return the scan `scanJson` wrote. */
-function scanFromJson(text: string): RunScan {
-  const data = parseJson(text, "codec") as Record<string, unknown>;
-  const num = (value: unknown) => (value === null ? null : Number(value));
-  const pairs = (value: unknown) => (value as [string, bigint][]).map(([id, n]): [string, number] => [id, Number(n)]);
-  return {
-    inFlight: pairs(data["inFlight"]),
-    lastStop: num(data["lastStop"]),
-    endSucceeded: data["endSucceeded"] === true,
-    crashed: pairs(data["crashed"]),
-    nodeFailureSeq: num(data["nodeFailureSeq"]),
-    unreachableSeq: num(data["unreachableSeq"]),
-  };
-}
-
-/** A row while it is built. */
-interface Building {
+/** A row as the index stores it, and while an update builds it. */
+interface StoredRow {
   runId: string;
   flow: string | null;
   startedAt: string;
@@ -280,8 +246,7 @@ function checkedTimeout(timeoutMs: unknown): number {
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
  * or a file error such as no permission) raises a warning through `warn` and keeps its row as it
- * was. An index of another layout version
- * is dropped and built again.
+ * was. An index of another layout version is dropped and built again.
  *
  * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
  * It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it blocks its
@@ -318,7 +283,7 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
         const log = join(runsDir, runId, "log.jsonl");
         const stored = select.get(runId);
         const saved = stored === undefined ? null : fromColumns(stored);
-        let built: Building | null;
+        let built: StoredRow | null;
         try {
           const size = fs.statSync(log).size;
           if (saved !== null && saved.offset === size) {
@@ -437,15 +402,16 @@ function busyOr(error: unknown, path: string, timeoutMs: number): unknown {
 }
 
 /**
- * Fold the records of `log` after `saved` (from the start without it) into a copy of the row;
- * return `saved` when nothing new was read, and `null` for a log with no complete record.
+ * Fold the records of `log` after `saved` (from the start without it) into `saved` itself, a row
+ * fresh from the index that a failed read leaves to be discarded, or into a new row; return the
+ * row (`saved` unchanged when nothing new was read), or `null` for a log with no complete record.
  *
  * @throws RunLogChangedError when the log no longer continues `saved`.
  * @throws RangeError when the log can't be read or isn't the run `runId`.
  */
-function readRun(log: string, runId: string, saved: Building | null): Building | null {
+function readRun(log: string, runId: string, saved: StoredRow | null): StoredRow | null {
   const continuing = saved === null ? {} : { afterOffset: saved.offset, runId, afterSeq: saved.lastSeq };
-  let row: Building | null = saved === null ? null : { ...saved, scan: copyScan(saved.scan) };
+  let row = saved;
   let lastAt: string | null = null;
   // The values of the top-level END's commits read in this pass, by seq; one read earlier is
   // found again through the offsets.
@@ -492,11 +458,18 @@ function readRun(log: string, runId: string, saved: Building | null): Building |
   return row;
 }
 
-/** Add a `model_call` step's token counts to the row's sums. */
-function addUsage(row: Building, step: Readonly<Record<string, unknown>>): void {
+/**
+ * Add a `model_call` step's token counts to the row's sums. Only a safe integer counts: the step
+ * isn't validated, and a count of another form (text, a fraction, a huge int) adds 0.
+ */
+function addUsage(row: StoredRow, step: Readonly<Record<string, unknown>>): void {
   if (step["kind"] !== "model_call" || !isRecord(step["usage"])) return;
   const usage = step["usage"];
-  const count = (name: string) => (usage[name] == null ? 0 : Number(usage[name]));
+  const count = (name: string) => {
+    const value = usage[name];
+    const n = typeof value === "bigint" ? Number(value) : value;
+    return typeof n === "number" && Number.isSafeInteger(n) ? n : 0;
+  };
   row.inputTokens += count("input_tokens");
   row.outputTokens += count("output_tokens");
   row.cacheReadTokens += count("cache_read_tokens");
@@ -516,7 +489,7 @@ function committedValue(log: string, seq: number): string | null {
 }
 
 /** Return a row's column values, in `COLUMNS` order. */
-function toColumns(row: Building): (string | number | null)[] {
+function toColumns(row: StoredRow): (string | number | null)[] {
   return [
     row.runId,
     row.flow,
@@ -530,12 +503,13 @@ function toColumns(row: Building): (string | number | null)[] {
     row.cacheReadTokens,
     row.reasoningTokens,
     row.offset,
-    scanJson(row.scan),
+    // Plain JSON data: ids, seqs, counts and a flag.
+    JSON.stringify(row.scan),
   ];
 }
 
 /** Return the row a `SELECT *` gave. */
-function fromColumns(columns: SqliteRow): Building {
+function fromColumns(columns: SqliteRow): StoredRow {
   return {
     runId: columns["run_id"] as string,
     flow: columns["flow"] as string | null,
@@ -549,6 +523,6 @@ function fromColumns(columns: SqliteRow): Building {
     cacheReadTokens: columns["cache_read_tokens"] as number,
     reasoningTokens: columns["reasoning_tokens"] as number,
     offset: columns["offset"] as number,
-    scan: scanFromJson(columns["scan"] as string),
+    scan: JSON.parse(columns["scan"] as string) as RunScan,
   };
 }

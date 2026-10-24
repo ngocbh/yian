@@ -76,10 +76,10 @@ import {
   type RunResult,
   runFlow,
   runLogPath,
-  updateRunIndex,
   runStartLlm,
   skillGrants,
   staticNodes,
+  updateRunIndex,
 } from "../run.ts";
 import { McpConnectError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";

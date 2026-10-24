@@ -135,6 +135,7 @@ import {
   RunStartedRecord,
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
+import { emptyRunScan, foldRunScan, scanStatus } from "./runtime/run_index.ts";
 import {
   acceptedCommit,
   addCrashedAttempts,
@@ -152,7 +153,6 @@ import { type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
-import { emptyRunScan, foldRunScan, scanStatus } from "./runtime/run_index.ts";
 import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
 import {
   canonicalTypeLabel,
@@ -2209,8 +2209,9 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
     }
     lastSeq = seq;
     foldRunScan(scan, envelope);
-    if (seq === scan.nodeFailureSeq && record instanceof NodeFailedRecord) nodeFailure = record.failure;
-    if (seq === scan.unreachableSeq && record instanceof NodeRoutedRecord) unreachable = record.terminalFailure;
+    // The first of each, as the scan keeps their seqs.
+    if (record instanceof NodeFailedRecord) nodeFailure ??= record.failure;
+    else if (record instanceof NodeRoutedRecord) unreachable ??= record.terminalFailure;
   }
   const status = scanStatus(scan);
   const finished = status === "succeeded" || status === "failed" ? status : null;

@@ -2998,7 +2998,10 @@ index or the log.
   synchronous and blocks its thread while it waits and reads, so a server calls it off its main
   thread. A missing `runsDir` throws `ENOENT`.
 - A read probes each `stopped` or `crashed` run's lock (`isRunLogLocked`) every time, so a resumed
-  run reads `running` before any update, and a run whose process died reads `crashed` at once. A
+  run reads `running` before any update, and a run whose process died reads `crashed` at once.
+  Only those two are overlaid: a `succeeded` or `failed` row stays as it is while a writer still
+  holds the lock (closing up, or a backward attempt), where `inspectRun` reads any locked log as
+  `running`. A
   missing index reads as `[]`.
 - The index has its own layout version (`PRAGMA user_version`); an update drops an index of
   another version and builds it again, and a read gives `[]` until then.

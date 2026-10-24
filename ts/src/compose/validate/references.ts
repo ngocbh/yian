@@ -65,6 +65,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { TAKE } from "../../tools/context.ts";
+import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
@@ -326,7 +327,11 @@ export function validateReferences(
   const { outputsRange = null, narrowing = null, registry = null, resolveOrigin = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
-  const validTargets = new Set(buildResults.keys());
+  // An AGENT's new messages are read under their own pool name, `<id>.new_messages`.
+  const validTargets = new Set([
+    ...buildResults.keys(),
+    ...[...buildResults].filter(([, result]) => result.node.producesMessages).map(([nodeId]) => messagesKey(nodeId)),
+  ]);
   // Keep exact and partial carriers intact; the Compose projection below checks closed record
   // paths without inventing a Type for opaque fields.
   for (const [nodeId, contract] of producers) {
@@ -423,6 +428,9 @@ export function validateReferences(
       const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
         err = outputContractPathError(producer, parts.slice(2), path, { partialUnionFields });
+      } else if (err === null && parts.length >= 2 && parts[1] === NEW_MESSAGES) {
+        const messages = siteProducers.get(messagesKey(parts[0]!));
+        if (messages !== undefined) err = outputContractPathError(messages, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && input !== undefined) {
         err = outputContractPathError(input, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[0] === "item" && elementContract !== null) {

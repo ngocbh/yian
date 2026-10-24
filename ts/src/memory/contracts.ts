@@ -12,15 +12,15 @@
  * `PolicyCommitOutcome`, `LearningResult`), frozen and holding their carriers by reference; and
  * what a learner sees of an AGENT invocation (its recalled `MemorySection` values and the visible
  * model and tool interactions), the accepted episodes (`MemoryEpisode`) and one memory's learning
- * batch (`LearnContext`, with its feedback snapshot `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
- * the scope, snapshot, spec, operation failure and learning carriers (`sameMemoryScope`,
- * `sameMemorySnapshotEnvelope`, `sameMemorySpec`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
+ * batch (`LearnContext`, with its feedback snapshot `freezeFeedback`), whose JSON follows the yian
+ * value number rule; and the value comparisons of the scope, snapshot, spec, operation failure and
+ * learning carriers (`sameMemoryScope`, `sameMemorySnapshotEnvelope`, `sameMemorySpec`,
+ * `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
  * `samePolicyCommitOutcome`, `sameLearningResult`). It also holds the recall carriers
  * (`RecallContext`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`), and the host
  * interfaces: `Memory` and its run `MemorySession` (`recall`, `learn`, `commit`). A host interface
  * method may return a value or a promise, and yian always awaits it; the `snapshot` read stays
- * synchronous. It imports only
- * `diagnostics` and `defaults`.
+ * synchronous. It imports only `diagnostics` and `defaults`.
  */
 
 import { current } from "../defaults.ts";

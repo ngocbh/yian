@@ -63,7 +63,7 @@ import {
 } from "./log.ts";
 import { LearningProposalError, MemoryRuntime } from "./memory_runtime.ts";
 import { commitPrepared, prepareRecord, RunState } from "./state.ts";
-import { occurrenceMaterial, type RetainedTrace, visibleInputs } from "./trace.ts";
+import { occurrenceMaterial, type RetainedTrace, type TraceOccurrence, visibleInputs } from "./trace.ts";
 
 /** @internal A callback or result-contract failure attributed to one occurrence; forward state is unchanged. */
 export class BackwardComputeError extends Error {
@@ -264,19 +264,22 @@ export async function learningMaterials(
     }
     return specs;
   };
-  const materials = new Map<string, LearningMaterial>();
-  for (const occurrence of trace.occurrences) {
-    const scope = occurrence.memoryScope;
-    const openMemoryContext = async (baseSystemPrompt: string, prompt: string): Promise<MemoryContext> => {
+  // Recalls for `occurrence` against the recorded snapshots, as its run did.
+  const recallFor =
+    (occurrence: TraceOccurrence) =>
+    async (baseSystemPrompt: string, prompt: string): Promise<MemoryContext> => {
+      const scope = occurrence.memoryScope;
       if (scope === null || scope.memories.length === 0 || memory === null) return new MemoryContext();
       const recall = new RecallContext(baseSystemPrompt, prompt, visibleInputs(occurrence) ?? {}, scope.staticPath);
       return await memory.openContext(scope, recall, { signal: new AbortController().signal });
     };
+  const materials = new Map<string, LearningMaterial>();
+  for (const occurrence of trace.occurrences) {
     const material = await occurrenceMaterial(trace, occurrence.source, {
       skills,
       toolSpecs,
       models: models ?? null,
-      openMemoryContext,
+      openMemoryContext: recallFor(occurrence),
     });
     if (material === null) continue;
     if (!material.digestOk) {

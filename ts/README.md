@@ -1377,15 +1377,15 @@ START is ready after the START inputs' commit; a success walks its
   before routing input feedback, and returns the root projection with every occurrence's attributed
   result (unreached ones uninvoked); a handler's throw is a `backward.execute`
   `BackwardComputeError` and a refused result `backward.result`, while trace faults escape
-  unattributed. `driveBackward(state, log, feedback, { openMemory, expandTools, models, onEvent })` runs one new
-  explicit attempt when a host calls it: it prepares its first record (an unfinished
+  unattributed. `driveBackward(state, log, feedback, { openMemory, expandTools, models, onEvent })`
+  runs one new explicit attempt when a host calls it: it prepares its first record (an unfinished
   `BackwardFinished` for an unfinished earlier attempt, else `BackwardStarted`) as a gate, opens the
   memory runtime (only when memories are enabled; the opener may be async) and checks it against the
   recorded table and snapshots, then commits that record (and `BackwardStarted` after an unfinished
-  one), rebuilds the learning material, computes, projects owner contexts, stages every key's proposal, commits `BackwardReady`,
-  requests and observes each key's commit in table order, and commits `BackwardFinished`; each
-  record is prepared and committed with no await in between, and the runtime is always closed,
-  keeping the initiating error.
+  one), rebuilds the learning material, computes, projects owner contexts, stages every key's
+  proposal, commits `BackwardReady`, requests and observes each key's commit in table order, and
+  commits `BackwardFinished`; each record is prepared and committed with no await in between, and
+  the runtime is always closed, keeping the initiating error.
 - Changed: a handler's throw is `backward.execute` whatever it is (a `CapabilityFault` included; no
   host-control unwrapping).
 - Changed: a drive finishes only its own attempt: the attempt id is captured once, so a drive

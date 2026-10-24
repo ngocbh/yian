@@ -58,6 +58,7 @@ import {
   drainSteers,
   interruptRequested,
   type RecordedResult,
+  recordedResponse,
   interruptSignal,
   requestSha256,
   sentCredentials,
@@ -276,7 +277,8 @@ export async function stepsMaterial(
       if (result["closed"] !== "skipped") {
         pushVisible(interactions, () => new ToolResultInteraction(call.name, content));
       }
-      const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError: result["is_error"] === true });
+      const isError = result["is_error"] === true;
+      const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError });
       messages.push(new Message({ role: "tool", parts: [part] }));
     }
     calls = [];
@@ -300,7 +302,7 @@ export async function stepsMaterial(
     const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
     if (request === null || step["request_sha256"] !== requestSha256(request, new Set())) digestOk = false;
     if (Object.hasOwn(step, "error")) continue;
-    const reply = Message.fromJSON(step["output"]);
+    const reply = recordedResponse(step).message;
     messages.push(reply);
     if (step["finish"] === "interrupted") continue;
     try {

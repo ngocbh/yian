@@ -641,7 +641,9 @@ function memorySectionPayload(section: MemorySection): JsonObject {
 function interactionPayload(interaction: VisibleInteraction): JsonObject {
   // Memory's JSON types are the read-only form of the same frozen values.
   if (interaction instanceof ModelTextInteraction) return { kind: "model_text", text: interaction.text };
-  if (interaction instanceof ModelValueInteraction) return { kind: "model_value", value: interaction.value as JsonValue };
+  if (interaction instanceof ModelValueInteraction) {
+    return { kind: "model_value", value: interaction.value as JsonValue };
+  }
   if (interaction instanceof ToolCallInteraction) {
     return { kind: "tool_call", name: interaction.name, arguments: interaction.arguments as JsonObject };
   }

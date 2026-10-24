@@ -97,13 +97,13 @@ const UNIT_SECONDS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3600, d
 /**
  * Return the seconds in a duration: a positive integer then `s`, `m`, `h` or `d` (`24h` is 86400).
  *
- * @throws RangeError for anything else: a value that isn't text, plain number text (its hint
- *   spells it in seconds when that parses), a zero duration, or one past
- *   `Number.MAX_SAFE_INTEGER` seconds.
+ * @throws TypeError for a value that isn't text.
+ * @throws RangeError for any other text: plain number text (its hint spells it in seconds when
+ *   that parses), a zero duration, or one past `Number.MAX_SAFE_INTEGER` seconds.
  */
 export function parseDuration(text: string): number {
   if (typeof text !== "string") {
-    throw new RangeError(`a duration is text: a positive integer and a unit (${DURATION_FORMAT})`);
+    throw new TypeError(`a duration is text: a positive integer and a unit (${DURATION_FORMAT})`);
   }
   const match = DURATION_RE.exec(text);
   const seconds = match === null ? 0 : Number(match[1]) * UNIT_SECONDS[match[2]!]!;

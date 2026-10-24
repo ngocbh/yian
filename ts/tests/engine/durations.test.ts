@@ -37,6 +37,7 @@ test("a plain number too large to spell in seconds gets no hint", () => {
 });
 
 test.each([[5], [5n], [null], [["5m"]]])("parseDuration refuses the non-text %p, with no hint", (value) => {
+  expect(() => parseDuration(value as unknown as string)).toThrow(TypeError);
   expect(() => parseDuration(value as unknown as string)).toThrow(
     `a duration is text: a positive integer and a unit (${DURATION_FORMAT})`,
   );

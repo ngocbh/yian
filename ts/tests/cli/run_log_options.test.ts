@@ -38,7 +38,7 @@ import { defaultRunLogPath, reportRunLog, validateRunLogOptions } from "../../sr
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
-import { runFlow } from "../../src/run.ts";
+import { readRunIndex, runFlow } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
 import { NO_ENV } from "../engine/run_state_fixtures.ts";
 
@@ -183,8 +183,10 @@ describe("fresh runs", () => {
     mkdirSync(runsDir, { recursive: true, mode: 0o755 });
     const { code, stdout, stderr } = await runCli(["--input", "topic=clouds", "--quiet"]);
     expect(code).toBe(0);
-    const runs = readdirSync(runsDir);
+    // The run's folder, and the run index the run updated when it ended.
+    const runs = readdirSync(runsDir).filter((name) => name !== "index.sqlite");
     expect(runs).toHaveLength(1);
+    expect(statSync(join(runsDir, "index.sqlite")).isFile()).toBe(true);
     // The writer's lock file stays beside the log, in the run's folder.
     expect(readdirSync(join(runsDir, runs[0]!)).sort()).toEqual(["log.jsonl", "log.jsonl.lock"]);
     const path = join(runsDir, runs[0]!, "log.jsonl");
@@ -342,15 +344,18 @@ describe("resumed runs", () => {
     expect(interrupted.code, err.join("")).toBe(130);
     expect(err.join("")).toContain("cancelled by user");
     const runsDir = join(tmp, "home", ".yian", "runs");
-    const runs = readdirSync(runsDir);
+    const runs = readdirSync(runsDir).filter((name) => name !== "index.sqlite");
     expect(runs).toHaveLength(1);
     const log = join(runsDir, runs[0]!, "log.jsonl");
     expect(err.join("")).toContain(`Run log: ${log}`);
+    // Each run, the stopped one and its resume, updates the run index when it ends.
+    expect(readRunIndex(runsDir).map((row) => [row.runId, row.status])).toEqual([[runs[0]!, "stopped"]]);
 
     const resumed = await runCli(["--resume", log, "--quiet"]);
 
     expect(resumed.code, resumed.stderr).toBe(0);
     expect(resumed.stdout).toContain("continued");
     expect(readRunLog(log).some((envelope) => envelope.record instanceof RunResumedRecord)).toBe(true);
+    expect(readRunIndex(runsDir).map((row) => [row.runId, row.status])).toEqual([[runs[0]!, "succeeded"]]);
   });
 });

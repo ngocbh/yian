@@ -15,7 +15,9 @@
  * log stands, and `staticNodes`, which names each node of a flow, and re-exports `staticPathOf`
  * (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
  * `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
- * the host's runs folder and names its log there. For hosts that read run-log values it re-exports
+ * the host's runs folder and names its log there, and `updateRunIndex` and `readRunIndex`
+ * (`runtime/run_index.ts`) keep and read the runs folder's rebuildable `index.sqlite`, one row per
+ * run. For hosts that read run-log values it re-exports
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
  * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
@@ -57,7 +59,7 @@ import {
   type ResolvedMemoryLayout,
   resolveMemoryLayout,
 } from "./compile/memory_layout.ts";
-import { type CompiledFlow, copyGraph, END_ID, type Flow } from "./compile/model.ts";
+import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
@@ -121,11 +123,8 @@ import {
   JsonlRunLog,
   RunLogChangedError,
   MemoryRunLog,
-  NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
-  NodeStartedRecord,
-  NodeSucceededRecord,
   readRunLog,
   type RecordedSkill,
   type RecordedTool,
@@ -134,9 +133,9 @@ import {
   type RunLogEntry,
   RunResumedRecord,
   RunStartedRecord,
-  RunStoppedRecord,
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
+import { emptyRunScan, foldRunScan, scanStatus } from "./runtime/run_index.ts";
 import {
   acceptedCommit,
   addCrashedAttempts,
@@ -206,6 +205,13 @@ export {
 } from "./typesys/json.ts";
 export { FileRef, type StorageKind, TypedValue, type Value, type ValueRecord } from "./typesys/values.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
+export {
+  readRunIndex,
+  RunIndexBusyError,
+  type RunIndexRow,
+  type RunIndexStatus,
+  updateRunIndex,
+} from "./runtime/run_index.ts";
 
 /** Sees each durable observer, and each in-loop model and tool event. */
 export type EventHook = (event: RunEvent) => unknown;
@@ -2184,18 +2190,12 @@ type RecordScan = {
 };
 
 /**
- * Read the in-flight nodes, crashed counts and terminal status from a log's records, as the
- * reducer derives them from starts, outcomes, stops and resumes.
- *
- * Finished means a node failed, or, with nothing in flight, the top-level END succeeded or a route
- * proved it unreachable; the records don't hold the ready nodes, so a node still ready is missed.
+ * Read the in-flight nodes, crashed counts and terminal status from a log's records with the run
+ * scan the run index shares (`foldRunScan`, `scanStatus`), keeping the deciding failure itself.
  */
 function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
-  const starts = new Map<string, number>();
-  const crashed = new Map<string, number>();
-  let lastStop: number | null = null;
+  const scan = emptyRunScan();
   let nodeFailure: Failure | null = null;
-  let endSucceeded = false;
   let unreachable: Failure | null = null;
   let started: RecordEnvelope | null = null;
   let lastSeq: number | null = null;
@@ -2208,34 +2208,16 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
       started = envelope;
     }
     lastSeq = seq;
-    if (record instanceof NodeStartedRecord) {
-      starts.set(record.nodeId, seq);
-    } else if (record instanceof NodeSucceededRecord) {
-      starts.delete(record.nodeId);
-      if (record.nodeId === END_ID) endSucceeded = true;
-    } else if (record instanceof NodeRoutedRecord) {
-      starts.delete(record.nodeId);
-      unreachable ??= record.terminalFailure;
-    } else if (record instanceof NodeExpandedRecord) {
-      starts.delete(record.spawnerId);
-    } else if (record instanceof NodeFailedRecord) {
-      starts.delete(record.failure.nodeId!);
-      nodeFailure ??= record.failure;
-    } else if (record instanceof RunStoppedRecord) {
-      lastStop = seq;
-    } else if (record instanceof RunResumedRecord) {
-      // The resume retries exactly the nodes in flight.
-      addCrashedAttempts(crashed, starts, lastStop);
-      starts.clear();
-      lastStop = null;
-    }
+    foldRunScan(scan, envelope);
+    // The first of each, as the scan keeps their seqs.
+    if (record instanceof NodeFailedRecord) nodeFailure ??= record.failure;
+    else if (record instanceof NodeRoutedRecord) unreachable ??= record.terminalFailure;
   }
-  let finished: RecordScan["finished"] = null;
-  // A node failure ends the run at once, ahead of a pending unreachable END.
-  const failure = nodeFailure ?? (starts.size === 0 ? unreachable : null);
-  if (failure !== null) finished = "failed";
-  else if (starts.size === 0 && endSucceeded) finished = "succeeded";
-  return { starts, crashed, lastStop, finished, failure, started, lastSeq, lastAt };
+  const status = scanStatus(scan);
+  const finished = status === "succeeded" || status === "failed" ? status : null;
+  const failure = finished === "failed" ? (nodeFailure ?? unreachable) : null;
+  const starts = new Map(scan.inFlight);
+  return { starts, crashed: new Map(scan.crashed), lastStop: scan.lastStop, finished, failure, started, lastSeq, lastAt };
 }
 
 /**

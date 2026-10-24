@@ -13,7 +13,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunEvent, RunStarted } from "../../src/events.ts";
 
 import type { ChatModel } from "../../src/llm/events.ts";
-import { Message as ModelMessage, Request, TextPart } from "../../src/llm/messages.ts";
+import { Message as ModelMessage, Request, type Response, TextPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
@@ -500,21 +500,43 @@ test("a steer read, more sends, then a crash and advance: the read values surviv
   ]);
 });
 
-test("a crash after every record, then advance: the same output, and each send read by one steer step", async () => {
-  const replies = [callReply(["lookup", { topic: "t" }, "c1"]), textReply("done")];
-  const sending = (log: string) => lookup(() => void send(log, "notes", "a").catch(() => {}));
+/** A request's messages as `[role, text]` pairs, a tool result as its content. */
+const requestShape = (request: Request) =>
+  request.messages.map((message) => [
+    message.role,
+    message.parts.map((part) => (part instanceof ToolResultPart ? part.content : ((part as TextPart).text ?? ""))).join("|"),
+  ]);
+
+/**
+ * Cut a steered run after every record from the agent's start on, then advance it: the same
+ * output, each send read by exactly one steer step, and, when no call was closed and no send was
+ * lost with the crash, the resumed model sees the requests the uncut run sent from that call on.
+ * `replies` is the model's script; the `i`th lookup call sends `sends[i]`, when there is one.
+ */
+async function crashEverywhere(replies: Response[], sends: readonly string[]): Promise<void> {
+  const sending = (log: string) => {
+    let calls = 0;
+    return lookup(() => {
+      const event = sends[calls++];
+      if (event !== undefined) void send(log, "notes", event).catch(() => {});
+    });
+  };
   const uncut = freshLog();
-  await runSteer(steerFlow(), uncut, new ScriptedModel([...replies], CONFIG), sending(uncut));
+  const uncutModel = new ScriptedModel([...replies], CONFIG);
+  await runSteer(steerFlow(), uncut, uncutModel, sending(uncut));
+  expect(sendSeqs(uncut)).toHaveLength(sends.length);
   const total = readRunLog(uncut).length;
   const chatStarted = readRunLog(uncut).findIndex(
     ({ kind, record }) => kind === "node_started" && (record as { nodeId?: string }).nodeId === "chat",
   );
   expect(chatStarted).toBeGreaterThan(0);
+  let compared = 0;
   for (let k = chatStarted + 1; k < total; k++) {
     const log = freshLog();
     await crashAfter(k, () => runSteer(steerFlow(), log, new ScriptedModel([...replies], CONFIG), sending(log)));
-    // The send is lost with the crash when its record was refused; the host sends it again while down.
-    if (sendSeqs(log).length === 0) await send(log, "notes", "a", { env: NO_ENV });
+    // A send whose record the crash refused is lost; the host sends it again while down.
+    const lost = sends.slice(sendSeqs(log).length);
+    for (const event of lost) await send(log, "notes", event, { env: NO_ENV });
     const made = stepsOf(log).filter(({ kind, step }) => kind === "model_call" && !Object.hasOwn(step, "error")).length;
     const model = new ScriptedModel(replies.slice(made), CONFIG);
     const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
@@ -522,5 +544,20 @@ test("a crash after every record, then advance: the same output, and each send r
     const read = stepsOf(log).flatMap(({ kind, step }) => (kind === "steer" ? (step["from"] as bigint[]).map(Number) : []));
     expect([k, read]).toEqual([k, sendSeqs(log)]);
     expect([k, resumed.unread]).toEqual([k, new Map()]);
+    const closed = stepsOf(log).some(({ kind, step }) => kind === "tool_result" && Object.hasOwn(step, "closed"));
+    if (!closed && lost.length === 0) {
+      expect([k, model.requests.map(requestShape)]).toEqual([k, uncutModel.requests.slice(made).map(requestShape)]);
+      compared += 1;
+    }
   }
+  expect(compared).toBeGreaterThan(0);
+}
+
+test("a crash after every record, then advance: the same output, and each send read by one steer step", async () => {
+  await crashEverywhere([callReply(["lookup", { topic: "t" }, "c1"]), textReply("done")], ["a"]);
+});
+
+test("two sends across two replies, cut after every record: each read once, the live requests unchanged", async () => {
+  const replies = [callReply(["lookup", { topic: "t" }, "c1"]), callReply(["lookup", { topic: "u" }, "c2"]), textReply("done")];
+  await crashEverywhere(replies, ["a", "b"]);
 });

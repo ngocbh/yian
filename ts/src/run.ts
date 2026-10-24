@@ -444,7 +444,9 @@ interface IdleRun {
 
 /**
  * What this process holds of each durable run, by its log's real path. Only waiting runs stay idle
- * here; each keeps its whole `RunState` for the host's life, and dropping one costs a rebuild.
+ * here, each with its whole `RunState`: an entry goes when a call here sees the run move on, but a
+ * run another process moved on keeps its stale entry until a call here reads the log again.
+ * Dropping one costs a rebuild.
  */
 const RUNS = new Map<string, HeldRun | LiveRun | IdleRun>();
 

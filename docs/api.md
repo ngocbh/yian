@@ -2821,8 +2821,10 @@ While a run waits, the process that left it keeps its `RunState` in an in-proces
 by the log's real path. A later `advance` in that process reuses it, skipping the replay and the
 recompile, while the log still ends at the record it left, has the same size, device and inode,
 and the call passes the same `codeRoot`, code-built `flow`, `apiKey` and `headers`; anything else
-rebuilds from the log. The entry is kept until the run moves on, so a host holding many waiting
-runs pays for each one's state. `advance` of a run another writer holds rejects with
+rebuilds from the log. An entry is dropped when a call in this process sees the run move on (it
+ends, or no longer waits); a run another process moves on keeps its stale entry until a call here
+reads the log again, or the process exits. A host holding many waiting runs pays for each one's
+state. `advance` of a run another writer holds rejects with
 `RunBusyError`, whose message is the lock's (`run log PATH is locked by another writer (is the run
 still active?)`): its `cause` is the busy `FileLockError` when another process (or any outside
 holder) has the lock, and it has none when this process is moving the run. An `advance` started

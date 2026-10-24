@@ -373,8 +373,9 @@ A run whose nodes wait on calls (a host tool that returned `pending()`, an `ask`
 While the run waits, this process keeps its state in memory, by the log's real path, so the next
 `advance` skips the replay and recompile while the log is the file it left (same last record and
 size) and the call passes the same `codeRoot`, code-built `flow`, `apiKey` and `headers`; any
-other log write makes it rebuild. Each waiting run's state stays until the run moves on, so a host
-holding many waiting runs pays their memory. An `advance` of a run another writer holds rejects
+other log write makes it rebuild. Each waiting run's state stays until a call in this process sees
+the run move on; one another process moves on stays until a call here reads its log again, or the
+process exits. A host holding many waiting runs pays their memory. An `advance` of a run another writer holds rejects
 with `RunBusyError` (its `cause` is the busy `FileLockError` when another process holds the lock);
 one of a run another call in this process is setting up waits for that call.
 

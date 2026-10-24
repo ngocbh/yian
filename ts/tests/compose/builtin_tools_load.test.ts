@@ -1,7 +1,9 @@
 /** `kind: tool` with `tool_id: take | sleep | ask` loads as a yian built-in. */
 import { expect, test } from "bun:test";
 
+import { outputContractType } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { canonicalTypeLabel } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "./declarations.ts";
 
 /** Return a flow with one TOOL node `t` of tool id `toolId` and `extra` body lines. */
@@ -76,4 +78,63 @@ test("a built-in builds with no retries", () => {
   const node = assembleText(text).flow.compiled.nodes.get("t") as ToolNode;
   expect(node.builtin).toBe("ask");
   expect(node.retries).toBe(0);
+});
+
+const CHAT = `id: chat
+name: chat
+input:
+  m: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.m}
+      take: all
+output: \${heard.output.events}
+`;
+
+test("take loads with its inferred output and reads its inbox", () => {
+  const { flow } = assembleText(CHAT);
+  const node = flow.compiled.nodes.get("heard") as ToolNode;
+  expect(node.builtin).toBe("take");
+  expect(canonicalTypeLabel(outputContractType(node.outputContract)!)).toBe('{"closed":bool,"events":list(str)}');
+});
+
+test("take's mode may be left out or read from a reference", () => {
+  assembleText(CHAT.replace("      take: all\n", ""));
+  const typed = CHAT.replace("input:\n", "typedefs:\n  Mode: Literal(one, all)\ninput:\n  mode: !Mode\n").replace(
+    "take: all",
+    "take: ${input.mode}",
+  );
+  assembleText(typed);
+});
+
+/** Return a flow with inbox `m`, text input `t` and take node `t1` with `inputs` lines. */
+const takeWith = (inputs: string) => `id: f
+name: f
+input:
+  m: !Inbox(str)
+  t: !str
+nodes:
+  t1:
+    kind: tool
+    tool_id: take
+    input:
+${inputs}  keep:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.m}
+output: \${input.t}
+`;
+
+test.each([
+  ["an unknown input", "      from: ${input.m}\n      x: 1\n", "take takes from, take and timeout; got 'x'"],
+  ["a missing from", "      take: one\n", "take needs from: ${input.<inbox>}"],
+  ["a text input in from", "      from: ${input.t}\n", "take's from must be an Inbox input of this flow, as ${input.<name>}"],
+  ["take: some", "      from: ${input.m}\n      take: some\n", "input 'take': must be one or all"],
+  ["an inbox in take", "      from: ${input.m}\n      take: ${input.m}\n", "input 'take': must be one or all"],
+])("take refuses %s", (_label, inputs, message) => {
+  expect(refused(takeWith(inputs))).toContain(message);
 });

@@ -12,13 +12,25 @@
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
-import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
+import { typeRelation } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
+import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
+import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
-import { isList, isRecord, type Type, ValueKind } from "../../typesys/values.ts";
+import {
+  canonicalTypeLabel,
+  isInboxType,
+  isList,
+  isRecord,
+  listKindForElement,
+  Type,
+  ValueKind,
+  valueRepr,
+} from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
+import { literalValue, NOT_LITERAL } from "../helpers/output_contracts.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { retriesError } from "./agent.ts";
 import {
@@ -127,20 +139,115 @@ export class ToolDescriptor extends NodeDescriptor {
    * Build the runtime `ToolNode` and its flow-owned wiring.
    *
    * Sets the node's `params` from the authored `input:` and its output contract from the
-   * optional `output:` (`null` when absent); `_finish` stamps the descriptor origin.
+   * optional `output:` (`null` when absent); `_finish` stamps the descriptor origin. A built-in
+   * checks its inputs first and infers its output: `take` gives `{events: list(T), closed: bool}`
+   * for its `Inbox(T)`.
    *
-   * @throws LoadError when `output:` isn't a valid type expression.
+   * @throws LoadError when `output:` isn't a valid type expression, or a built-in's input is
+   *   unknown, missing or of the wrong type (at the input).
    */
   override build(ctx: BuildContext): BuildResult {
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
     const node = new ToolNode(this.id, { toolId: this.toolId, title: this.nodeName, retries });
-    node.outputContract = this.outputContract(ctx);
+    const wiring = this.sinkWiring();
+    if (this.toolId === TAKE) node.outputContract = this.buildTake(ctx);
+    else node.outputContract = this.outputContract(ctx);
     node.params = this.sinkParams();
-    return this._finish(node, this.sinkWiring());
+    return this._finish(node, wiring);
+  }
+
+  /**
+   * Check a take's inputs and return its output contract, `{events: list(T), closed: bool}` for
+   * the `Inbox(T)` its `from` reads.
+   *
+   * @throws LoadError for an input other than `from`, `take` and `timeout`, a missing `from`, a
+   *   `from` that isn't an inbox, or a `take` other than `one` or `all`.
+   */
+  private buildTake(ctx: BuildContext): ValueContract {
+    const id = reprText(this.id);
+    for (const name of Object.keys(this.inputs)) {
+      if (TAKE_INPUTS.has(name)) continue;
+      throw ctx.diagnostics.error(`node ${id} (tool_id: take): take takes from, take and timeout; got ${reprText(name)}`, {
+        range: this.inputRange(name),
+      });
+    }
+    if (!Object.hasOwn(this.inputs, "from")) {
+      throw ctx.diagnostics.error(`node ${id} (tool_id: take): take needs from: \${input.<inbox>}`, {
+        range: this.fieldRanges.get(siteKey("field", "inputs")) ?? this.range,
+      });
+    }
+    const fromType = this.inputType(ctx, "from");
+    if (fromType === null || !isInboxType(fromType)) {
+      throw ctx.diagnostics.error(
+        `node ${id} (tool_id: take): take's from must be an Inbox input of this flow, as \${input.<name>}`,
+        { range: this.inputRange("from") },
+      );
+    }
+    if (Object.hasOwn(this.inputs, "take")) this.checkTakeMode(ctx);
+    const element = fromType.element!;
+    return new ValueContract(
+      new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([
+          ["events", new Type({ kind: listKindForElement(element), element })],
+          ["closed", Type.scalar(ValueKind.BOOLEAN)],
+        ]),
+        required: new Set(["events", "closed"]),
+      }),
+    );
+  }
+
+  /**
+   * Check a take's `take:`: a literal `one` or `all`, or a reference whose type may be one.
+   *
+   * @throws LoadError at the input otherwise.
+   */
+  private checkTakeMode(ctx: BuildContext): void {
+    const subject = this.inputSubject("take");
+    const literal = literalValue(bindingSource(this.inputs["take"]));
+    if (literal !== NOT_LITERAL) {
+      if (literal === "one" || literal === "all") return;
+      throw ctx.diagnostics.error(`${subject}: must be one or all, got ${valueRepr(literal)}`, {
+        range: this.inputRange("take"),
+      });
+    }
+    const typ = this.inputType(ctx, "take");
+    if (typ === null || typeRelation(typ, TAKE_MODE) !== "disjoint") return;
+    throw ctx.diagnostics.error(
+      `${subject}: must be one or all, but the value is ${canonicalTypeLabel(typ)}`,
+      { range: this.inputRange("take") },
+    );
+  }
+
+  /** Return the message prefix naming this node's input `name`. */
+  private inputSubject(name: string): string {
+    return `node ${reprText(this.id)} (tool_id: ${this.toolId}) input ${reprText(name)}`;
+  }
+
+  /** Return the range of input `name`, else of `input:`, else of the node. */
+  private inputRange(name: string): SourceRange | null {
+    return this.fieldRanges.get(siteKey("input", name)) ?? this.fieldRanges.get(siteKey("field", "inputs")) ?? this.range;
+  }
+
+  /**
+   * Return the type input `name`'s binding is proven to have: a tagged binding's declared type,
+   * else the one `ctx.bindingContractReader` reads; `null` when unproven or not one exact type.
+   */
+  private inputType(ctx: BuildContext, name: string): Type | null {
+    const contract =
+      this.inputTypes.get(name) ??
+      ctx.bindingContractReader?.(this.inputSubject(name), this.inputs[name], this.inputRange(name)) ??
+      null;
+    return isExactly(contract, ValueContract) ? contract.type : null;
   }
 }
+
+/** The inputs a `take` reads. */
+const TAKE_INPUTS: ReadonlySet<string> = new Set(["from", "take", "timeout"]);
+/** The values of a take's `take:`. */
+const TAKE_MODE = new Type({ kind: ValueKind.STRING, tags: new Set(["one", "all"]) });
 
 /** The keys the adaptive desugar reads from an `adaptive_questions:` block. */
 export const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config", "retries"]);

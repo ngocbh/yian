@@ -665,7 +665,7 @@ Schema `conformance/schema/cli.schema.json` in the repository.
 | `yian auth --remove --auth-file F --json` | `{"format", "ok"}` | the removal failed |
 | `yian auth openai --method subscription --login device --json` | JSON lines: `{"format", "event", ...}` | sign-in failed |
 | `yian run FLOW ... --json` (fresh or `--resume`) | `{"format", "status", ...}` | the run failed |
-| `yian status LOG --json` (TS yian only) | `{"format", "status", "in_flight", "interrupted_attempts"}` | the log can't be read |
+| `yian status LOG --json` (TS yian only) | `{"format", "status", "in_flight", "crashed_attempts"}` | the log can't be read |
 
 Every document follows these rules:
 
@@ -966,17 +966,17 @@ second stop still kills the child.
 lock, so it works while the run is going.
 
 ```json
-{"format": "yian.cli.v1", "status": "interrupted", "in_flight": ["draft"], "interrupted_attempts": {"draft": 1}}
+{"format": "yian.cli.v1", "status": "crashed", "in_flight": ["draft"], "crashed_attempts": {"draft": 1}}
 ```
 
 - `status` is `running` while a writer holds the log's lock; `succeeded` or `failed` once the run
   finished; `stopped` when the host stopped its last segment (Ctrl-C or a signal); otherwise
-  `interrupted`, when the process ended mid-run. A `stopped` or `interrupted` run can be resumed
-  with `--resume`.
+  `crashed`, when the process ended mid-run. A `stopped` or `crashed` run can be resumed with
+  `--resume`.
 - `in_flight` lists the nodes started and not settled, in start order; it is empty for a finished
   run.
-- `interrupted_attempts` maps a node id to the attempts a resume retried, or would retry, as
-  interrupted.
+- `crashed_attempts` maps a node id to the attempts a resume retried, or would retry, after a
+  crash.
 
 It reads the records alone, not the flow, so a run whose process ended after its END succeeded,
 but before a node that was already ready started, reads as finished, though `--resume` would still
@@ -985,7 +985,7 @@ run that node.
 It exits 0 whatever the status. A log it can't read (empty, damaged, not a run log, or unreadable)
 exits 1 with a `run.setup` error document; a missing LOG is a usage error (exit 2). Without
 `--json`, it prints `status: STATUS`, then `in flight: ID, ...` and
-`interrupted attempts: ID=N, ...` when there are any.
+`crashed attempts: ID=N, ...` when there are any.
 
 ## Exit codes
 

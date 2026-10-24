@@ -26,6 +26,7 @@ import {
   NodeSkipped,
   NodeStarted,
   NodeSucceeded,
+  type RunCancelled,
   RunFailed,
   RunResumed,
   RunStarted,
@@ -129,6 +130,7 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
+import { WaitsState } from "./waits.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
 export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
@@ -301,7 +303,11 @@ export class RunState {
   /** The sequence of the last `RunStopped` since the last `RunResumed`, or `null` when none. */
   lastStopSequence: number | null = null;
   /** The derived terminal result, or `null` while the run is live. */
-  result: RunSucceeded | RunFailed | null = null;
+  result: RunSucceeded | RunFailed | RunCancelled | null = null;
+  /** The inbox and call fold: the waiting set, registered calls, inboxes and records-only status facts. */
+  readonly waits = new WaitsState();
+  /** Each send's value by its seq, kept until its consumer settles. */
+  readonly inboxEvents = new Map<number, TypedValue>();
   /**
    * The first route-derived proof that the terminal output is unreachable, kept independently of
    * later frontier and topology changes.
@@ -1300,6 +1306,7 @@ export function prepareRecord(
   requireInitializedNonterminal(state);
 
   if (isExactly(record, PoolCommitRecord)) {
+    if (record.take !== null) throw new TypeError("unsupported pool_commit form for state preparation: take");
     if (!state.inputsCommitted) {
       validateInitialCommit(state, record);
       return prepareCommitTransition(state, record, true);
@@ -2846,6 +2853,8 @@ function requireInitialized(state: RunState): void {
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
     isExactly(state.wiringOverrides, Map) &&
+    isExactly(state.waits, WaitsState) &&
+    isExactly(state.inboxEvents, Map) &&
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.backwardState, RuntimeBackwardState) &&
@@ -3003,6 +3012,13 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
     if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
       throw new RangeError(`RunResumed retry node ${reprText(nodeId)} must have UNKNOWN disposition`);
     }
+  }
+  // No record registers a call yet, so a resume has no open call to close.
+  if (record.closedCalls.length > 0) {
+    throw new RangeError(
+      "RunResumedRecord closed_calls must exactly equal the retried nodes' open calls: " +
+        `expected [], found ${writeAsText([...record.closedCalls])}`,
+    );
   }
 }
 
@@ -4778,6 +4794,8 @@ function requirePristine(state: RunState): void {
     isExactly(state.growthOwner, Map) &&
     isExactly(state.deferredPrune, Set) &&
     isExactly(state.wiringOverrides, Map) &&
+    isExactly(state.waits, WaitsState) &&
+    isExactly(state.inboxEvents, Map) &&
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.backwardState, RuntimeBackwardState) &&
@@ -4810,6 +4828,15 @@ function requirePristine(state: RunState): void {
     state.growthOwner.size === 0 &&
     state.deferredPrune.size === 0 &&
     state.wiringOverrides.size === 0 &&
+    state.inboxEvents.size === 0 &&
+    state.waits.waiting.size === 0 &&
+    state.waits.calls.size === 0 &&
+    state.waits.inboxes.size === 0 &&
+    state.waits.interrupts.size === 0 &&
+    state.waits.lastFrontier === null &&
+    !state.waits._inputsCommitted &&
+    state.waits._lastWoken.size === 0 &&
+    state.waits._pendingTakes.size === 0 &&
     state.runId === null &&
     state.flowFingerprint === null &&
     state.nextSequence === 0 &&

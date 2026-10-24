@@ -550,7 +550,7 @@ Most are just the functional model (above) made enforceable:
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
   no conversation records; session history lives only in the backend. TS yian
-  (schema 17) writes every pool write as a `pool_commit`: the run start's system
+  (schema 18) writes every pool write as a `pool_commit`: the run start's system
   values and START inputs right after `run_started` (applied at once; a log cut
   before the START inputs isn't resumable), and a node's output before the
   `node_succeeded` that names its seq; the success applies it, and a resume drops

@@ -533,11 +533,17 @@ they are, except as the rules below say), and an empty payload is left out.
 | Record | Node | Payload fields |
 |---|---|---|
 | `run_started` | null | `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
-| `run_resumed` | null | `retry_node_ids`, `num_workers` |
+| `run_resumed` | null | `retry_node_ids`, `num_workers`, `closed_calls` (TS only) |
 | `run_stopped` (TS only) | null | `reason` (the reason's kind), `node_ids` |
+| `node_waiting` (TS only) | `node_id` | `call_ids`, `waits`, `steer_inbox` |
+| `node_woken` (TS only) | `node_id` | `timed_out` |
+| `run_waiting` (TS only) | null | `node_ids` |
+| `inbox_closed` (TS only) | null | `inbox` |
+| `run_cancelled` (TS only) | null | none |
+| `run_failed` (TS only) | null | `failure` |
 | `node_started` | `node_id` | none |
 | `node_step` | `node_id` | `n` (TS only: the step's number within the node), `step` |
-| `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources) |
+| `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's) |
 | `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `forward_capture` |
 | `node_routed` | `node_id` | `handle`, `terminal_failure`, `forward_capture` |
 | `node_expanded` | `spawner_id` | `prune_ids`, `forward_capture` |
@@ -576,16 +582,21 @@ For example:
 - Values are plain values: a `pool_commit`'s `value` is recorded typed (`kind` and `value`), and
   is written without the kind tag (a file as `{uri, mime, name}`); every other value
   (captures, feedback) is recorded plain already.
-- `defaults`, `effective_llm_by_static_path`, `call_time_llm` and `parent` are left out when
-  empty or absent.
+- A take commit (TS schema 18) holds no `value` but `inbox`, `events` (the seqs of the send
+  commits it consumed, in order) and `closed` (whether it saw the inbox closed); its node's
+  success rebuilds the value from those sends.
+- `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `waits`, `timed_out` and
+  `closed_calls` are left out when empty or absent.
+- Deadlines are times: a `node_waiting` wait entry's `deadline` and a `pending` step's
+  `deadline` are left out.
 - Dropped: the envelope (`schema`, `run_id`, `seq`); a `pool_commit`'s `kind`; from
   `run_started`, `flow_fingerprint`, `start_wiring_override`, `memory_snapshots`, `memories`,
   `memory_stacks`, and the bulky `flow` (the flow files), `skills`, `tools` and `yian_version`;
   `topology_digest`; and every `evidence` field (the model and tool evaluation
   evidence, whose shape is implementation-specific; TS schema 17 writes none, since learning
   reads the steps).
-- Failures: `node_failed.failure`, `node_routed.terminal_failure` and a backward failure's
-  `cause` (when it is a node failure, with `trace`) are in failure form. A backward failure
+- Failures: `node_failed.failure`, `node_routed.terminal_failure`, `run_failed.failure` and a
+  backward failure's `cause` (when it is a node failure, with `trace`) are in failure form. A backward failure
   (`backward_finished.outcome.failure`) leaves out `cause_type` and `traceback`. Nothing else
   is removed, and values the flow produced or received are never rewritten, except by
   placeholders. A memory record's `failure` is a memory operation failure, `{stage, code,
@@ -746,7 +757,8 @@ TS run log the case writes (for a `resume` case, the whole log after the resume;
 case, with its backward records), pinned byte for byte. Before
 the comparison, every `traceback` value, each record's time (`at`), the seeded clock values
 (the `value` of the `system.now` and `system.today` commits), a step's times (`started_at` and
-`first_token_at`, when set), the recorded flow's folder (`run_started`'s
+`first_token_at`, when set), a set `deadline` of a `node_waiting` wait entry or a `pending` step,
+the recorded flow's folder (`run_started`'s
 `flow.dir`) and the yian version (`yian_version`) are replaced by `"<masked>"`, since the times
 come from the virtual clock, which starts at the real time, the folder is the case's temporary one,
 and the version changes with each release; each line is then written again with the log's own

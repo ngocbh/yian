@@ -70,10 +70,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -486,21 +486,27 @@ function validatedDefaults(recorded: unknown): Readonly<Record<string, bigint>> 
   return Object.freeze(Object.fromEntries(entries) as Record<string, bigint>);
 }
 
-/** Start a recovery segment with ordered unfinished work and a worker count. Frozen. */
+/**
+ * Start a recovery segment with ordered unfinished work and a worker count, closing the open calls
+ * of the nodes it retries. Frozen.
+ */
 export class RunResumedRecord {
   /** Unfinished node ids to retry, in order; unique and non-empty. */
   readonly retryNodeIds: readonly string[];
   /** The worker count of the recovery segment. */
   readonly numWorkers: number;
+  /** The open calls of retried nodes this resume closes, in order; unique and non-empty, possibly none. */
+  readonly closedCalls: readonly string[];
 
   /**
-   * @throws RangeError when `retryNodeIds` isn't an array of unique non-empty strings, or
-   *   `numWorkers` is negative.
+   * @throws RangeError when `retryNodeIds` or `closedCalls` isn't an array of unique non-empty
+   *   strings, or `numWorkers` is negative.
    * @throws TypeError when `numWorkers` isn't a safe integer.
    */
-  constructor(retryNodeIds: readonly string[], numWorkers: number) {
+  constructor(retryNodeIds: readonly string[], numWorkers: number, closedCalls: readonly string[] = []) {
     this.retryNodeIds = validatedIdArray(retryNodeIds, "retry_node_ids");
     this.numWorkers = validatedCount(numWorkers, "num_workers");
+    this.closedCalls = validatedIdArray(closedCalls, "closed_calls");
     Object.freeze(this);
   }
 }
@@ -528,6 +534,169 @@ export class RunStoppedRecord {
     this.reason = reason;
     this.message = message;
     this.nodeIds = validatedIdArray(nodeIds, "node_ids");
+    Object.freeze(this);
+  }
+}
+
+/** The tools a wait entry can register. */
+const WAIT_TOOLS: readonly string[] = Object.freeze(["take", "sleep"]);
+
+/** The take modes a wait entry can hold. */
+const TAKE_MODES: readonly string[] = Object.freeze(["one", "all"]);
+
+/** One take or sleep call a `node_waiting` registers. Frozen. */
+export interface WaitEntry {
+  /** The node's TOOL call id; one of the record's `callIds`. */
+  readonly callId: string;
+  /** The waiting tool. */
+  readonly tool: "take" | "sleep";
+  /** The inbox a take reads; `null` for a sleep. */
+  readonly inbox: string | null;
+  /** A take's mode; `null` for a sleep. */
+  readonly mode: "one" | "all" | null;
+  /** When the call times out, as a record time; required for a sleep, optional for a take. */
+  readonly deadline: string | null;
+}
+
+/**
+ * Return a frozen copy of a wait entry holding exactly its five fields.
+ *
+ * @throws TypeError when `entry` isn't an object, or a field has the wrong type.
+ * @throws RangeError when the call id or inbox is empty, the tool or mode is unknown, the fields
+ *   don't fit the tool, or the deadline isn't a record time.
+ */
+function validatedWaitEntry(entry: unknown): WaitEntry {
+  if (!isRecord(entry)) throw new TypeError("wait entry must be an object");
+  const callId = requireNonemptyString(entry["callId"], "wait entry call_id");
+  const { tool, inbox, mode, deadline } = entry;
+  if (typeof tool !== "string" || !WAIT_TOOLS.includes(tool)) throw new RangeError("wait entry tool must be take or sleep");
+  if (tool === "take") {
+    if (inbox == null || mode == null) throw new RangeError("a take wait entry needs inbox and mode");
+    requireNonemptyString(inbox, "wait entry inbox");
+    if (typeof mode !== "string" || !TAKE_MODES.includes(mode)) throw new RangeError("wait entry mode must be one or all");
+  } else {
+    if (inbox != null || mode != null) throw new RangeError("a sleep wait entry takes no inbox or mode");
+    if (deadline == null) throw new RangeError("a sleep wait entry needs a deadline");
+  }
+  return Object.freeze({
+    callId,
+    tool: tool as WaitEntry["tool"],
+    inbox: (inbox ?? null) as string | null,
+    mode: (mode ?? null) as WaitEntry["mode"],
+    deadline: deadline == null ? null : requireRecordTime(deadline, "wait entry deadline"),
+  });
+}
+
+/**
+ * Move an in-flight node to the waiting set, registering the calls it waits on. Frozen.
+ *
+ * `callIds` names every call the node waits on: host calls registered by their `pending` steps,
+ * and the take or sleep call `waits` registers.
+ */
+export class NodeWaitingRecord {
+  /** The waiting node's non-empty id. */
+  readonly nodeId: string;
+  /** The call ids the node waits on; unique, non-empty, at least one. */
+  readonly callIds: readonly string[];
+  /** The take or sleep call this record registers, if any: at most one entry. */
+  readonly waits: readonly WaitEntry[];
+  /** The agent's steer inbox; always null until agents wait on one. */
+  readonly steerInbox: string | null;
+
+  /**
+   * @throws TypeError when an id isn't a string, or a wait entry isn't an object.
+   * @throws RangeError when `callIds` is empty or isn't an array of unique non-empty strings,
+   *   `waits` holds more than one entry, an entry's call isn't in `callIds`, an entry breaks the
+   *   wait entry rules, or the node id or steer inbox is empty.
+   */
+  constructor(
+    nodeId: string,
+    callIds: readonly string[],
+    options: { waits?: readonly WaitEntry[]; steerInbox?: string | null } = {},
+  ) {
+    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.callIds = validatedIdArray(callIds, "call_ids");
+    if (this.callIds.length === 0) throw new RangeError("call_ids must be non-empty");
+    const waits = (options.waits ?? []).map(validatedWaitEntry);
+    if (waits.length > 1) throw new RangeError("waits holds at most one entry");
+    for (const entry of waits) {
+      if (!this.callIds.includes(entry.callId)) {
+        throw new RangeError(`wait entry call_id ${reprText(entry.callId)} is not in call_ids`);
+      }
+    }
+    this.waits = Object.freeze(waits);
+    this.steerInbox = options.steerInbox == null ? null : requireNonemptyString(options.steerInbox, "steer_inbox");
+    Object.freeze(this);
+  }
+}
+
+/** Move a waiting node back in flight, naming the calls that timed out. Frozen. */
+export class NodeWokenRecord {
+  /** The woken node's non-empty id. */
+  readonly nodeId: string;
+  /** The ids of the node's calls that timed out; unique and non-empty, possibly none. */
+  readonly timedOut: readonly string[];
+
+  /**
+   * @throws TypeError when `nodeId` isn't a string.
+   * @throws RangeError when it is empty, or `timedOut` isn't an array of unique non-empty strings.
+   */
+  constructor(nodeId: string, timedOut: readonly string[] = []) {
+    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.timedOut = validatedIdArray(timedOut, "timed_out");
+    Object.freeze(this);
+  }
+}
+
+/** Record that the run holds no worker: every unsettled node waits. Not terminal. Frozen. */
+export class RunWaitingRecord {
+  /** The waiting node ids, in `node_waiting` order; unique, non-empty, at least one. */
+  readonly nodeIds: readonly string[];
+
+  /** @throws RangeError when `nodeIds` is empty or isn't an array of unique non-empty strings. */
+  constructor(nodeIds: readonly string[]) {
+    this.nodeIds = validatedIdArray(nodeIds, "node_ids");
+    if (this.nodeIds.length === 0) throw new RangeError("node_ids must be non-empty");
+    Object.freeze(this);
+  }
+}
+
+/** Close an inbox: no later send is accepted, and takes on it see the close. Frozen. */
+export class InboxClosedRecord {
+  /** The closed inbox's non-empty name. */
+  readonly inbox: string;
+
+  /**
+   * @throws TypeError when `inbox` isn't a string.
+   * @throws RangeError when it is empty.
+   */
+  constructor(inbox: string) {
+    this.inbox = requireNonemptyString(inbox, "inbox");
+    Object.freeze(this);
+  }
+}
+
+/** End the run because its host cancelled it. Terminal. Frozen. */
+export class RunCancelledRecord {
+  constructor() {
+    Object.freeze(this);
+  }
+}
+
+/**
+ * End the run failed when its terminal output became unreachable while nodes wait, so no
+ * completing node carries the failure. Terminal. Frozen.
+ */
+export class RunFailedRecord {
+  /** The run's failure, kept through `retainFailure`. */
+  readonly failure: Failure;
+
+  /**
+   * @throws TypeError when `failure` isn't exactly a `Failure`, or its fields have wrong types.
+   * @throws RangeError when its fields break the failure contract, or it has no node id.
+   */
+  constructor(failure: Failure) {
+    this.failure = retainedFailure(failure, "RunFailedRecord");
     Object.freeze(this);
   }
 }
@@ -591,7 +760,8 @@ export class NodeStepRecord {
  * output waits on its node until the node's `NodeSucceededRecord` names this record's seq. A
  * derived commit (one a derived node writes, or an expansion writes for a child START) holds no
  * value but `from`: the seq of the `pool_commit` that wrote each pool name its binding read, from
- * which a replay rebuilds the value.
+ * which a replay rebuilds the value. A take commit holds neither but `take`: the inbox, the seqs
+ * of the send commits it consumed, and whether it saw the inbox closed.
  */
 export class PoolCommitRecord {
   /** The writing node's non-empty id: the node whose output this is, or the START for the run start. */
@@ -605,32 +775,71 @@ export class PoolCommitRecord {
    * `pool_commit` that wrote it; `null` for any other commit. Frozen.
    */
   readonly from: ReadonlyMap<string, number> | null;
+  /** A take commit's inbox, consumed send seqs and close flag; `null` for any other commit. Frozen. */
+  readonly take: TakeCommit | null;
 
   /**
-   * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from`.
+   * @param value A typed value's wire form (see `TypedValue.fromWire`), or `null` with `from` or
+   *   `take`.
    * @param options.from A derived commit's sources; copied in name order.
-   * @throws TypeError when an id isn't a string, or `from` isn't a `Map` or `null`.
+   * @param options.take A take commit's pointer form.
+   * @throws TypeError when an id isn't a string, `from` isn't a `Map` or `null`, or `take` isn't
+   *   an object or has a field of the wrong type.
    * @throws RangeError when an id is empty, `value` isn't a typed-value wire form, a `from` name is
-   *   empty or its seq isn't a positive safe integer, or the commit holds both or neither of
-   *   `value` and `from`.
+   *   empty or its seq isn't a positive safe integer, `take` breaks the take commit rules, or the
+   *   commit doesn't hold exactly one of `value`, `from` and `take`.
    * @throws TypeCheckError when the value holds NaN or another non-JSON value.
    */
   constructor(
     nodeId: string,
     key: string,
     value: TypedWire | null,
-    options: { from?: ReadonlyMap<string, number> | null } = {},
+    options: { from?: ReadonlyMap<string, number> | null; take?: TakeCommit | null } = {},
   ) {
     this.nodeId = requireNonemptyString(nodeId, "node_id");
     this.key = requireNonemptyString(key, "key");
     this.value =
       value === null ? null : (freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire);
     this.from = validatedFrom(options.from ?? null);
-    if ((this.value === null) === (this.from === null)) {
-      throw new RangeError("a pool_commit holds either a value or from, not both or neither");
+    this.take = options.take == null ? null : validatedTake(options.take);
+    if ([this.value, this.from, this.take].filter((form) => form !== null).length !== 1) {
+      throw new RangeError("a pool_commit holds exactly one of value, from and take");
     }
     Object.freeze(this);
   }
+}
+
+/** A take commit's pointer form: the events it consumed from its inbox. Frozen. */
+export interface TakeCommit {
+  /** The inbox the take read. */
+  readonly inbox: string;
+  /** The seqs of the send `pool_commit`s consumed, in order; possibly none. */
+  readonly events: readonly number[];
+  /** Whether the take saw its inbox closed. */
+  readonly closed: boolean;
+}
+
+/**
+ * Return a frozen copy of a take commit holding exactly its three fields.
+ *
+ * @throws TypeError when `take` isn't an object, the inbox isn't a string or `closed` isn't a
+ *   boolean.
+ * @throws RangeError when the inbox is empty, or the events aren't strictly increasing
+ *   positive safe integers.
+ */
+function validatedTake(take: unknown): TakeCommit {
+  if (!isRecord(take)) throw new TypeError("take must be an object");
+  const inbox = requireNonemptyString(take["inbox"], "take inbox");
+  const events = take["events"];
+  if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
+    throw new RangeError("take events must be positive integers");
+  }
+  const seqs = [...events] as number[];
+  if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {
+    throw new RangeError("take events must be strictly increasing");
+  }
+  if (typeof take["closed"] !== "boolean") throw new TypeError("take closed must be a boolean");
+  return Object.freeze({ inbox, events: Object.freeze(seqs), closed: take["closed"] });
 }
 
 /**
@@ -956,6 +1165,12 @@ export type RunRecord =
   | RunStartedRecord
   | RunResumedRecord
   | RunStoppedRecord
+  | NodeWaitingRecord
+  | NodeWokenRecord
+  | RunWaitingRecord
+  | InboxClosedRecord
+  | RunCancelledRecord
+  | RunFailedRecord
   | NodeStartedRecord
   | NodeStepRecord
   | PoolCommitRecord
@@ -978,6 +1193,12 @@ const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass
   [RunStartedRecord, "run_started"],
   [RunResumedRecord, "run_resumed"],
   [RunStoppedRecord, "run_stopped"],
+  [NodeWaitingRecord, "node_waiting"],
+  [NodeWokenRecord, "node_woken"],
+  [RunWaitingRecord, "run_waiting"],
+  [InboxClosedRecord, "inbox_closed"],
+  [RunCancelledRecord, "run_cancelled"],
+  [RunFailedRecord, "run_failed"],
   [NodeStartedRecord, "node_started"],
   [NodeStepRecord, "node_step"],
   [PoolCommitRecord, "pool_commit"],
@@ -1194,7 +1415,7 @@ const RECORD_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$
  *
  * @throws RangeError when `ms` isn't a finite number or falls outside the years 0000 to 9999.
  */
-function formatRecordTime(ms: unknown): string {
+export function formatRecordTime(ms: unknown): string {
   if (typeof ms !== "number" || !Number.isFinite(ms)) {
     throw new RangeError(`run-log clock must return finite epoch milliseconds, got ${valueRepr(ms)}`);
   }
@@ -1206,13 +1427,13 @@ function formatRecordTime(ms: unknown): string {
 
 /**
  * Check a record time: a UTC RFC 3339 time with milliseconds, written as `formatRecordTime` writes
- * it, so the line stays canonical.
+ * it, so the line stays canonical. `label` names the time in errors.
  *
  * @throws TypeError when `at` isn't a string.
  * @throws RangeError when it isn't such a time.
  */
-function requireRecordTime(at: unknown): string {
-  if (typeof at !== "string") throw new TypeError("run-record envelope at must be a string");
+export function requireRecordTime(at: unknown, label = "run-record envelope at"): string {
+  if (typeof at !== "string") throw new TypeError(`${label} must be a string`);
   const parts = RECORD_TIME.exec(at)?.slice(1).map(Number);
   // Built field by field (`Date.parse` differs between engines); an out-of-range field rolls
   // over, so the time doesn't write back as `at`.
@@ -1223,7 +1444,7 @@ function requireRecordTime(at: unknown): string {
     date.setUTCHours(hours, minutes, seconds, ms);
   }
   if (parts === undefined || date.toISOString() !== at) {
-    throw new RangeError(`run-record envelope at must be a UTC time such as 2026-10-20T14:02:11.123Z, found ${reprText(at)}`);
+    throw new RangeError(`${label} must be a UTC time such as 2026-10-20T14:02:11.123Z, found ${reprText(at)}`);
   }
   return at;
 }
@@ -1454,6 +1675,8 @@ function wireNodeId(kind: string, payload: JsonObject): string | null {
     case "pool_commit":
     case "node_succeeded":
     case "node_routed":
+    case "node_waiting":
+    case "node_woken":
       return wireName(payload["node_id"], `${label} node_id`);
     case "node_expanded":
       return wireName(payload["spawner_id"], `${label} spawner_id`);
@@ -2832,11 +3055,34 @@ function payloadForRecord(record: RunRecord): JsonObject {
     };
   }
   if (record instanceof RunResumedRecord) {
-    return { retry_node_ids: [...record.retryNodeIds], num_workers: BigInt(record.numWorkers) };
+    return {
+      retry_node_ids: [...record.retryNodeIds],
+      num_workers: BigInt(record.numWorkers),
+      closed_calls: [...record.closedCalls],
+    };
   }
   if (record instanceof RunStoppedRecord) {
     return { reason: record.reason, message: record.message, node_ids: [...record.nodeIds] };
   }
+  if (record instanceof NodeWaitingRecord) {
+    return {
+      node_id: record.nodeId,
+      call_ids: [...record.callIds],
+      waits: record.waits.map((entry) => ({
+        call_id: entry.callId,
+        tool: entry.tool,
+        inbox: entry.inbox,
+        mode: entry.mode,
+        deadline: entry.deadline,
+      })),
+      steer_inbox: record.steerInbox,
+    };
+  }
+  if (record instanceof NodeWokenRecord) return { node_id: record.nodeId, timed_out: [...record.timedOut] };
+  if (record instanceof RunWaitingRecord) return { node_ids: [...record.nodeIds] };
+  if (record instanceof InboxClosedRecord) return { inbox: record.inbox };
+  if (record instanceof RunCancelledRecord) return {};
+  if (record instanceof RunFailedRecord) return { failure: failurePayload(record.failure) };
   if (record instanceof NodeStartedRecord) return { node_id: record.nodeId };
   if (record instanceof NodeStepRecord) {
     return { node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject };
@@ -2844,6 +3090,10 @@ function payloadForRecord(record: RunRecord): JsonObject {
   if (record instanceof PoolCommitRecord) {
     if (record.value !== null) {
       return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
+    }
+    if (record.take !== null) {
+      const { inbox, events, closed } = record.take;
+      return { node_id: record.nodeId, key: record.key, inbox, events: events.map(BigInt), closed };
     }
     const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
     return { node_id: record.nodeId, key: record.key, from };
@@ -2946,10 +3196,11 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });
     case "run_resumed":
-      requireFields(payload, ["retry_node_ids", "num_workers"], label);
+      requireFields(payload, ["retry_node_ids", "num_workers", "closed_calls"], label);
       return new RunResumedRecord(
         wireTextArray(payload["retry_node_ids"], `${label} retry_node_ids`),
         wireInt(payload["num_workers"], `${label} num_workers`),
+        wireTextArray(payload["closed_calls"], `${label} closed_calls`),
       );
     case "run_stopped":
       requireFields(payload, ["reason", "message", "node_ids"], label);
@@ -2958,6 +3209,34 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireText(payload["message"], `${label} message`),
         wireTextArray(payload["node_ids"], `${label} node_ids`),
       );
+    case "node_waiting":
+      requireFields(payload, ["node_id", "call_ids", "waits", "steer_inbox"], label);
+      return new NodeWaitingRecord(
+        wireName(payload["node_id"], `${label} node_id`),
+        wireTextArray(payload["call_ids"], `${label} call_ids`),
+        {
+          waits: wireItems(payload["waits"], `${label} waits`, waitEntryFromPayload),
+          steerInbox: wireNullableText(payload["steer_inbox"], `${label} steer_inbox`),
+        },
+      );
+    case "node_woken":
+      requireFields(payload, ["node_id", "timed_out"], label);
+      return new NodeWokenRecord(
+        wireName(payload["node_id"], `${label} node_id`),
+        wireTextArray(payload["timed_out"], `${label} timed_out`),
+      );
+    case "run_waiting":
+      requireFields(payload, ["node_ids"], label);
+      return new RunWaitingRecord(wireTextArray(payload["node_ids"], `${label} node_ids`));
+    case "inbox_closed":
+      requireFields(payload, ["inbox"], label);
+      return new InboxClosedRecord(wireName(payload["inbox"], `${label} inbox`));
+    case "run_cancelled":
+      requireFields(payload, [], label);
+      return new RunCancelledRecord();
+    case "run_failed":
+      requireFields(payload, ["failure"], label);
+      return new RunFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
     case "node_started":
       requireFields(payload, ["node_id"], label);
       return new NodeStartedRecord(wireName(payload["node_id"], `${label} node_id`));
@@ -2969,13 +3248,17 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireObject(payload["step"], `${label} step`),
       );
     case "pool_commit": {
-      const derived = Object.hasOwn(payload, "from");
-      requireFields(payload, derived ? ["node_id", "key", "from"] : ["node_id", "key", "kind", "value"], label);
+      // The form is chosen by its marker key, so a payload mixing forms is refused as extra fields.
+      const form = Object.hasOwn(payload, "from") ? "from" : Object.hasOwn(payload, "inbox") ? "take" : "value";
+      requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form]], label);
       return new PoolCommitRecord(
         wireName(payload["node_id"], `${label} node_id`),
         wireName(payload["key"], `${label} key`),
-        derived ? null : ({ kind: payload["kind"], value: payload["value"] } as unknown as TypedWire),
-        { from: derived ? fromFromPayload(payload["from"], `${label} from`) : null },
+        form === "value" ? ({ kind: payload["kind"], value: payload["value"] } as unknown as TypedWire) : null,
+        {
+          from: form === "from" ? fromFromPayload(payload["from"], `${label} from`) : null,
+          take: form === "take" ? takeFromPayload(payload, label) : null,
+        },
       );
     }
     case "node_succeeded":
@@ -3189,6 +3472,44 @@ function wireInt(value: unknown, label: string): number {
 function fromFromPayload(value: unknown, label: string): Map<string, number> {
   const object = wireObject(value, label);
   return new Map(Object.entries(object).map(([name, seq]) => [name, wireInt(seq, `${label} ${reprText(name)}`)]));
+}
+
+/** The fields of each `pool_commit` form besides `node_id` and `key`. */
+const POOL_COMMIT_FORM_FIELDS = {
+  value: ["kind", "value"],
+  from: ["from"],
+  take: ["inbox", "events", "closed"],
+} as const;
+
+/**
+ * Decode a take commit's fields from its `pool_commit` payload.
+ *
+ * @throws TypeError when a field has the wrong JSON type or an event isn't an int token.
+ * @throws RangeError when an event is beyond ±(2^53 - 1).
+ */
+function takeFromPayload(payload: JsonObject, label: string): TakeCommit {
+  return {
+    inbox: wireText(payload["inbox"], `${label} inbox`),
+    events: wireItems(payload["events"], `${label} events`, wireInt),
+    closed: wireBool(payload["closed"], `${label} closed`),
+  };
+}
+
+/**
+ * Decode one `node_waiting` wait entry: an object of exactly its five fields.
+ *
+ * @throws TypeError when it isn't an object or a field has the wrong JSON type.
+ * @throws RangeError for missing or extra fields.
+ */
+function waitEntryFromPayload(value: unknown, label: string): WaitEntry {
+  const wire = wireObject(value, label, ["call_id", "tool", "inbox", "mode", "deadline"]);
+  return {
+    callId: wireText(wire["call_id"], `${label} call_id`),
+    tool: wireText(wire["tool"], `${label} tool`) as WaitEntry["tool"],
+    inbox: wireNullableText(wire["inbox"], `${label} inbox`),
+    mode: wireNullableText(wire["mode"], `${label} mode`) as WaitEntry["mode"],
+    deadline: wireNullableText(wire["deadline"], `${label} deadline`),
+  };
 }
 
 /**

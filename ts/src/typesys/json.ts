@@ -420,3 +420,8 @@ export function canonicalJson(value: unknown): string {
 export function logJson(value: unknown): string {
   return write(value, logNumber);
 }
+
+/** The size of `value` as an event: the UTF-8 bytes of its run-log JSON text (`logJson`). */
+export function eventBytes(value: unknown): number {
+  return new TextEncoder().encode(logJson(value)).length;
+}

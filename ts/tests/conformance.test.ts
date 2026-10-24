@@ -4,8 +4,8 @@
  * `tests/test_conformance.py`, which `conformance.ts` is, except for
  * `test_steering_unreached_action_fails`, which no case can cover (a passing case reaches every
  * action). Not ported: `test_memory_expect_refuses_a_session_key` (TS yian has no session memory).
- * TS-only: an undeclared `expect.memory` key fails the case, and a `host.memory.before` entry whose
- * backward call raises fails it.
+ * TS-only: an undeclared `expect.memory` key fails the case, a `host.memory.before` entry whose
+ * backward call raises fails it, and the inbox and wait records' trace rows and masked deadlines.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -39,11 +39,29 @@ import {
   results,
   runCli,
   same,
+  masked,
   setUp,
   sweepable,
+  trace,
 } from "./conformance.ts";
 import type { Case, CaseContext, Kind, KindRunner } from "./conformance.ts";
 import { lintSchema, loadSchema, validate } from "./schema.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import { Failure } from "../src/diagnostics.ts";
+import {
+  encodeRecord,
+  InboxClosedRecord,
+  NodeStepRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
+  PoolCommitRecord,
+  RecordEnvelope,
+  type RunRecord,
+  RunCancelledRecord,
+  RunFailedRecord,
+  RunWaitingRecord,
+  SCHEMA_VERSION,
+} from "../src/runtime/log.ts";
 
 const CASES = fileURLToPath(new URL("../../conformance/cases/", import.meta.url));
 
@@ -2048,5 +2066,71 @@ describe("schema.ts", () => {
   test("lintSchema of cli.schema.json is clean", () => {
     const schema = loadSchema("cli.schema.json");
     expect(lintSchema(schema, schema)).toEqual([]);
+  });
+});
+
+describe("the trace and golden form of the wait records", () => {
+  const DEADLINE = "2026-10-24T09:00:00.000Z";
+  const AT = "2026-10-24T08:00:00.000Z";
+  const records: RunRecord[] = [
+    new NodeStepRecord("ask", 1, { kind: "pending", call_id: "r/ask/1", tool: "ask", arguments: { q: "ok?" }, deadline: DEADLINE }),
+    new NodeWaitingRecord("ask", ["r/ask/1"]),
+    new NodeWaitingRecord("nap", ["r/nap/1"], {
+      waits: [{ callId: "r/nap/1", tool: "sleep", inbox: null, mode: null, deadline: DEADLINE }],
+    }),
+    new NodeWaitingRecord("heard", ["r/heard/1"], {
+      waits: [{ callId: "r/heard/1", tool: "take", inbox: "msgs", mode: "one", deadline: null }],
+    }),
+    new RunWaitingRecord(["ask", "nap", "heard"]),
+    new NodeWokenRecord("nap", ["r/nap/1"]),
+    new NodeWokenRecord("heard"),
+    new PoolCommitRecord("heard", "heard", null, { take: { inbox: "msgs", events: [3], closed: false } }),
+    new InboxClosedRecord("msgs"),
+    new RunCancelledRecord(),
+    new RunFailedRecord(new Failure({ code: "graph.terminal_unreachable", message: "END is unreachable", nodeId: "ask" })),
+  ];
+  const lines = records.map((record, seq) => encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r", seq + 1, record, AT)));
+
+  test("each kind has a trace row; deadlines are left out", async () => {
+    const flow = await loadFlow(`\
+id: f
+name: f
+input:
+  name: !str
+nodes:
+  greet:
+    kind: code
+    input:
+      name: \${input.name}
+    output: str
+    code: |
+      return "hi " + inputs.name
+output: \${greet.output}
+`);
+    const entries = trace(lines, flow);
+    expect(entries.slice(0, -1)).toEqual([
+      ["node_step", "ask", { n: 1n, step: { arguments: { q: "ok?" }, call_id: "r/ask/1", kind: "pending", tool: "ask" } }],
+      ["node_waiting", "ask", { call_ids: ["r/ask/1"] }],
+      ["node_waiting", "nap", { call_ids: ["r/nap/1"], waits: [{ call_id: "r/nap/1", inbox: null, mode: null, tool: "sleep" }] }],
+      ["node_waiting", "heard", { call_ids: ["r/heard/1"], waits: [{ call_id: "r/heard/1", inbox: "msgs", mode: "one", tool: "take" }] }],
+      ["run_waiting", null, { node_ids: ["ask", "nap", "heard"] }],
+      ["node_woken", "nap", { timed_out: ["r/nap/1"] }],
+      ["node_woken", "heard"],
+      ["pool_commit", "heard", { inbox: "msgs", events: [3n], closed: false }],
+      ["inbox_closed", null, { inbox: "msgs" }],
+      ["run_cancelled", null],
+    ]);
+    const [kind, node, payload] = entries.at(-1)!;
+    expect([kind, node]).toEqual(["run_failed", null]);
+    expect((payload as Case)["failure"]).toMatchObject({ node: "ask" });
+  });
+
+  test("a golden log masks each set deadline", () => {
+    const golden = masked(lines.join("\n")).split("\n");
+    expect(golden[0]).toContain('"deadline":"<masked>"');
+    expect(golden[1]).not.toContain("deadline");
+    expect(golden[2]).toContain('"deadline":"<masked>"');
+    expect(golden[3]).toContain('"deadline":null');
+    expect(golden.join("\n")).not.toContain(DEADLINE);
   });
 });

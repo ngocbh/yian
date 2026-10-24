@@ -2361,15 +2361,15 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 17, and readers accept only schema 17. The schema
+Changed (TS yian): records use schema 18, and readers accept only schema 18. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 16 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 17 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
-backward attempt was `backward.unfinished`, before derived commits held `from` pointers, or
-before outcome records dropped `evidence`)
-with "run log schema N predates schema 17 and is not supported", and any other schema with
-"unsupported run-record schema: N" (a float token shows as `17.0`); the "predates" message for schemas 7
+backward attempt was `backward.unfinished`, before derived commits held `from` pointers,
+before outcome records dropped `evidence`, or before the inbox and wait records)
+with "run log schema N predates schema 18 and is not supported", and any other schema with
+"unsupported run-record schema: N" (a float token shows as `18.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2443,6 +2443,21 @@ at once, and START is ready only after the last.
   starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
   Read the record at seq `k`, such as the commit a success names, with
   `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
+
+Changed (TS yian, schema 18): the inbox and wait records. Six record kinds, each with every
+field always present: `node_waiting {node_id, call_ids, waits, steer_inbox}` moves an in-flight
+node to the waiting set (`waits` holds at most one take or sleep call, `{call_id, tool, inbox,
+mode, deadline}`, with nulls where unused; `steer_inbox` is always null for now), `node_woken
+{node_id, timed_out}` moves it back in flight, `run_waiting {node_ids}` marks a quiescence with
+nodes waiting, `inbox_closed {inbox}`, and the terminal `run_cancelled {}` and `run_failed
+{failure}`. `run_resumed` gains `closed_calls`, the open calls of the retried nodes it closes
+(`[]` until a node registers calls). A take commit is a third `pool_commit` form, `{node_id, key,
+inbox, events, closed}`: the seqs of the send commits it consumed, in order, and whether it saw
+the inbox closed; its success rebuilds the value from those sends. The reducer reads two step
+bodies, a TOOL's `pending` step `{kind: "pending", call_id, tool, arguments, deadline?}` and its
+answering `tool_result` step `{kind: "tool_result", call_id, output}` or `{..., error: {type,
+message}}`; any other step stays opaque. Deadlines are record times. The reducer doesn't apply
+the new kinds yet: it refuses them, and a `run_resumed` that closes a call.
 
 Changed (TS yian, schema 16): a derived commit holds no value, only `from`, `{node_id, key,
 from}`: `from` maps each pool name its binding read to the seq of the `pool_commit` that wrote it
@@ -3001,7 +3016,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `advance` reads (schema 17); a line of another schema raises
+- It reads every schema `advance` reads (schema 18); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

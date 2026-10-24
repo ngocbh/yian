@@ -1224,13 +1224,19 @@ export function routeInFlight(flow: CompiledFlow = routeFlow()): { state: RunSta
 
 /**
  * Return a binding capture of `inputs` for `node`: each input a literal route, under the node's
- * execution scope (Python's `_graph_builder._forward_capture`).
+ * execution scope and with its input and variable names (Python's
+ * `_graph_builder._forward_capture`).
  */
 export function forwardCapture(node: Node, inputs: Readonly<Record<string, unknown>> | null): ForwardCapture {
   const route = ValueRoute.record(
     Object.entries(inputs ?? {}).map(([name, value]) => [name, ValueRoute.literal(value)] as const),
   );
-  return new ForwardCapture(route, { scope: node.executionScope });
+  // The node's inventory, as an evaluation captures it, so the node data learning rebuilds fits it.
+  return new ForwardCapture(route, {
+    scope: node.executionScope,
+    inputNames: node.backwardInputNames(),
+    variableNames: node.declaredVariables().map((parameter) => parameter.name),
+  });
 }
 
 /**

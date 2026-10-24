@@ -2708,13 +2708,15 @@ test("a backward context is trace-owned, detached and survives replay", async ()
   const recapture = spyOn(Node.prototype, "captureBackwardContext").mockImplementation(() => {
     throw new Error("replay recaptured");
   });
+  let replay: RunState;
   try {
-    const replay = replayRecords(new RunState(copyGraph(original)), built.log.records(), { growBuilder: noGrowth });
-    expect(replay.trace!.backwardContext(occurrence.source)).toEqual(context);
-    expect(await computeBackward(replay.trace!, ["one", null])).toEqual(live);
+    replay = replayRecords(new RunState(copyGraph(original)), built.log.records(), { growBuilder: noGrowth });
   } finally {
     recapture.mockRestore();
   }
+  // Learning rebuilds the node data from the node when it reads it, not while replaying.
+  expect(replay.trace!.backwardContext(occurrence.source)).toEqual(context);
+  expect(await computeBackward(replay.trace!, ["one", null])).toEqual(live);
   expect(built.log.records()).toEqual(before);
 });
 
@@ -3042,11 +3044,11 @@ test("an AGENT's inventory is recorded and empty feedback does no backward work"
     const built = engine(graph([node], [[START_ID, "agent"]], {
       outputs: [new FlowOutput("result", "${agent.output}")],
       wiring: { agent: { topic: "${input.topic}" } },
-    }), { inputs: { topic: "reefs" }, learnable: true });
+    }), { inputs: { topic: "reefs" }, learnable: true, effectiveLlmByStaticPath: { agent: {} } });
     await built.run();
     const trace = built.state.trace!;
-    // The bound inputs are rebuilt from the node's binding, so they are read before it changes.
-    for (const occurrence of trace.occurrences) void occurrence.boundInputs;
+    // The bound inputs and node data are rebuilt from the node, so they are read before it changes.
+    for (const occurrence of trace.occurrences) void [occurrence.boundInputs, occurrence.nodeData];
     node.params = [];
     node.variables = [];
     node.captureBackwardContext = () => {

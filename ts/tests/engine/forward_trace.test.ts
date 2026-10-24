@@ -241,9 +241,9 @@
  *   ESM can't patch `run_agent`, so each occurrence holds that one model call's step where
  *   Python's evidence holds none; the evidence a backward pass rebuilds from it isn't on the trace. The forbidden replay methods are `spyOn` replacements of `AgentNode`'s `forward` and
  *   `resolveVariables` and `Node`'s `captureBackwardContext` (`render_template_record` runs only
- *   inside `forward`), active through the backward-context reads; the agents changed after the
- *   replay are the ones its graph still holds, for Python's `handler.__self__`, and each gets a
- *   new `llmConfig` record where Python edits its config in place.
+ *   inside `forward`), active through the replay only: the backward-context reads render each
+ *   occurrence again with the node that ran (TS rebuilds the node data Python records), so the
+ *   agents aren't changed after the replay.
  *
  * Not ported (TS types): the `mutable-path` row of
  * `test_growth_recipe_tampering_fails_replay_before_apply` (a `SeedConnection` holds a frozen copy
@@ -4519,25 +4519,21 @@ output: {left: '\${left.output}', right: '\${right.output}'}
       return capture.call(this);
     }),
   ];
+  let replay: RunState;
   try {
-    const replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
+    replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
     expect(replay.trace!.occurrences).toEqual(trace.occurrences);
-    // The agents the replayed graph still holds change afterward; no captured context follows them.
-    for (const node of replay.flow.nodes.values()) {
-      if (!(node instanceof AgentNode)) continue;
-      node.prompt = "later prompt";
-      node.llmConfig = { ...node.llmConfig, model: "later model" };
-    }
-    for (const occurrence of agents) {
-      const { _evaluation_evidence: evidence, ...data } = replay.trace!.backwardContext(occurrence.source).nodeData;
-      // The evidence is rebuilt from the steps by a backward pass; the replayed occurrence keeps
-      // its one model call, where Python's patched `run_agent` recorded none.
-      expect(evidence).toBeNull();
-      expect(replay.trace!.occurrence(occurrence.source).steps.map((step) => step["kind"])).toEqual(["model_call"]);
-      expect(data).toEqual(captureOf(occurrence).nodeData!);
-    }
   } finally {
     for (const spy of spies) spy.mockRestore();
+  }
+  // Learning renders each occurrence again with the node that ran, which the replay keeps.
+  for (const occurrence of agents) {
+    const { _evaluation_evidence: evidence, ...data } = replay.trace!.backwardContext(occurrence.source).nodeData;
+    // The evidence is rebuilt from the steps by a backward pass; the replayed occurrence keeps
+    // its one model call, where Python's patched `run_agent` recorded none.
+    expect(evidence).toBeNull();
+    expect(replay.trace!.occurrence(occurrence.source).steps.map((step) => step["kind"])).toEqual(["model_call"]);
+    expect(data).toEqual(captureOf(occurrence).nodeData!);
   }
 });
 
@@ -4893,4 +4889,111 @@ test("an interpolation route's text rebuilds from the same binding; another shap
   const withItem = new ForwardCapture(ValueRoute.record([["v", sourceRoute(0, ["x"])]]), { inputNames: ["v"], items: [[0, item]] });
   const noItem = failedBindingOccurrence(withItem, partialRebinder(ValueRoute.record([["v", sourceRoute(0, ["x"])]])).rebinder);
   expectError(() => noItem.inputRoute, RangeError, "binding again collects no item 0");
+});
+
+/**
+ * A learnable flow whose AGENT renders a list prompt with typed variables and reads its model from
+ * `pick` when it runs; its pre-assert holds only for a non-negative `n`.
+ */
+const PICKS = `
+id: picks
+name: picks
+llm_config: {provider: openai}
+typedefs: {Tone: 'Literal(concise, detailed)'}
+input: {topic: !str, n: !int}
+nodes:
+  pick: {kind: code, output: str, code: "return 'gpt-picked'"}
+  writer:
+    kind: agent
+    input: {topic: '\${input.topic}', n: '\${input.n}'}
+    variables: {tone: !Tone concise, count: !int 3}
+    llm_config: {model: '\${pick.output}'}
+    asserts: ['n >= 0']
+    system_prompt: 'Be \${tone}.'
+    prompt:
+      - user: '\${topic}, \${count} lines'
+      - assistant: Which tone?
+      - user: '\${tone}'
+    output: str
+output: \${writer.output}
+`;
+
+/** Run `PICKS` learnable with `n` into a fresh log; return the log's path and the run's status. */
+async function picksLog(name: string, n: number): Promise<[string, string]> {
+  const log = join(boundDir, `${name}.jsonl`);
+  const flow = await loadFlow(PICKS, { sourceLabel: "flow.yaml" });
+  const result = await runFlow(flow, { topic: "reefs", n }, {
+    env: NO_ENV,
+    log,
+    numWorkers: 0,
+    learnable: true,
+    models: serving(new ScriptedModel([textReply("ok")], { provider: "openai", model: "gpt-picked" })),
+  });
+  return [log, result.status];
+}
+
+/** Replace the `node_data` of every capture `nodeId`'s outcome records in the log at `log` with `data`. */
+function rewriteNodeData(log: string, nodeId: string, data: Wire): void {
+  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);
+  for (const line of lines) {
+    const payload = line["payload"] as Wire;
+    const owner = payload["node_id"] ?? (payload["failure"] as Wire | undefined)?.["node_id"];
+    const capture = payload["forward_capture"] as Wire | null | undefined;
+    if (owner === nodeId && capture != null) capture["node_data"] = data;
+  }
+  writeFileSync(log, `${lines.map((line) => logJson(line)).join("\n")}\n`);
+}
+
+/** Replay `PICKS`'s run log at `log` and return its trace's occurrences by node id. */
+async function replayedPicks(log: string): Promise<(nodeId: string) => TraceOccurrence> {
+  const flow = await loadFlow(PICKS, { sourceLabel: "flow.yaml" });
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(flow, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
+  }
+  return (nodeId) => trace.occurrences.find((occurrence) => occurrence.nodeId === nodeId)!;
+}
+
+test("an AGENT's node data is rebuilt from its node and bound inputs, not read from the record (TS-only)", async () => {
+  const [log, status] = await picksLog("picks", 2);
+  expect(status).toBe("succeeded");
+  for (const nodeId of ["__start__", "pick", "writer"]) rewriteNodeData(log, nodeId, { forged: true });
+  const of = await replayedPicks(log);
+  expect(of("__start__").nodeData).toEqual({ input_output_paths: { n: ["n"], topic: ["topic"] } });
+  expect(of("pick").nodeData).toEqual({});
+  expect(of("writer").nodeData).toEqual({
+    effective_llm_config: {
+      _connection: {
+        credential_id: null,
+        endpoint: "https://api.openai.com/v1",
+        method: "api_key",
+        source: "missing",
+        store_path: null,
+      },
+      model: "gpt-picked",
+      provider: "openai",
+    },
+    prompt_template: '[{"user":"${topic}, ${count} lines"},{"assistant":"Which tone?"},{"user":"${tone}"}]',
+    rendered_prompt:
+      '[{"role":"user","text":"reefs, 3 lines"},{"role":"assistant","text":"Which tone?"},{"role":"user","text":"concise"}]',
+    variable_domains: { count: "int", tone: "Literal(concise, detailed)" },
+    variables: { count: 3n, tone: "concise" },
+  });
+});
+
+test("an AGENT whose pre-assert failed rebuilds no render, and one whose binding failed no node data (TS-only)", async () => {
+  const [log, status] = await picksLog("picks-negative", -1);
+  expect(status).toBe("failed");
+  rewriteNodeData(log, "writer", { rendered_prompt: "forged" });
+  const of = await replayedPicks(log);
+  expect((of("writer").record as NodeFailedRecord).failure.code).toBe("assertion.failed");
+  expect(of("writer").nodeData).toEqual({});
+  const greet = await greetLog("greet-node-data", null);
+  rewriteNodeData(greet, "shout", { forged: true });
+  const shout = (await replayedOccurrences(greet))("shout");
+  expect(shout.boundInputs).toBeNull();
+  expect(shout.nodeData).toEqual({});
 });

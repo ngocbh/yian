@@ -1004,6 +1004,24 @@ export class AgentNode extends Node {
     };
   }
 
+  /**
+   * Render `inputs` again as `forward` renders them (`renderPrompt`) and return its capture: the
+   * actual template, the resolved variable values and domains, and the rendered prompt, with the
+   * parts established before a render that fails, as the run's render failed the same way.
+   *
+   * @throws CapabilityFault when the capture fails.
+   */
+  override renderCapture(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    let captured: Record<string, unknown> = {};
+    try {
+      // No skills: the grants are read after the capture, which is all this needs.
+      this.renderPrompt(inputs, null, { capture: (data) => void (captured = { ...data }) });
+    } catch (error) {
+      if (error instanceof CapabilityFault) throw error;
+    }
+    return captured;
+  }
+
   /** Resolve the validated literal defaults into one detached invocation record. */
   private resolveVariables(): ValueRecord {
     return copyValue(applyDefaults(this.variables, {}) as ValueRecord) as ValueRecord;

@@ -61,7 +61,7 @@ import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
-import type { JsonValue } from "../typesys/json.ts";
+import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import { isList, isRecord, jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
@@ -1019,6 +1019,55 @@ export function nodeBackwardCapture(node: Node, nodeData: Readonly<Record<string
     scope: node.executionScope,
     nodeData,
   });
+}
+
+/**
+ * Rebuild the node data backward reads about one evaluation of `node`, as the evaluator captured
+ * it: none for a binding that didn't finish (`inputs` `null`); else the node's static material
+ * (`captureBackwardContext`), and, when the node renders (`renderCapture`) and its pre-asserts
+ * hold for `inputs`, so its `forward` ran, that render with the model config the invocation used
+ * as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`), else the run's
+ * entry for its static path.
+ *
+ * @param inputs The bound inputs, as binding the node again gives them.
+ * @param effectiveLlmByStaticPath The run's recorded model config by static path.
+ * @returns Canonical JSON.
+ * @throws RangeError when the node renders and the run's map has no entry for its static path.
+ */
+export function rebuildNodeData(
+  node: Node,
+  inputs: Readonly<Record<string, unknown>> | null,
+  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
+): WireObject {
+  if (inputs === null) return {};
+  const data: Record<string, unknown> = { ...node.captureBackwardContext() };
+  const render = node.renderCapture(inputs);
+  if (render !== null && node.preAssertsHold(inputs)) {
+    Object.assign(data, render, { effective_llm_config: invocationLlmConfig(node, inputs, effectiveLlmByStaticPath) });
+  }
+  return canonicalSeed(data)[1] as WireObject;
+}
+
+/**
+ * The model config one invocation of `node` used: the config bound with `inputs`, else the run's
+ * entry for the node's static path; `null` for a node with no scope.
+ *
+ * @throws RangeError when the run's map has no entry for the static path.
+ */
+function invocationLlmConfig(
+  node: Node,
+  inputs: Readonly<Record<string, unknown>>,
+  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
+): JsonValue | null {
+  const scope = node.executionScope;
+  if (scope === null) return null;
+  const bound = node.boundLlmConfig(inputs);
+  if (bound !== null) return canonicalSeed(bound)[1];
+  const key = scope.staticPath.join("/");
+  if (!Object.hasOwn(effectiveLlmByStaticPath, key)) {
+    throw new RangeError(`recorded effective model configuration is missing static path ${reprText(key)}`);
+  }
+  return canonicalSeed(effectiveLlmByStaticPath[key])[1];
 }
 
 /** The bound inputs and capabilities `rebind` and `rebuildDerived` share. */

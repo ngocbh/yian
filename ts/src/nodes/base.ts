@@ -1524,6 +1524,25 @@ export abstract class Node {
   }
 
   /**
+   * Return what an invocation's `forward` renders for bound `inputs`, rendered again: the JSON
+   * material backward reads beside `captureBackwardContext`'s, with the parts established before
+   * a render that fails. Pure: it renders with the node's authored fields and calls no model.
+   *
+   * @returns The render material, or `null` (the default) for a kind that renders nothing.
+   */
+  renderCapture(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+    return null;
+  }
+
+  /**
+   * Return whether the `run` template's pre-asserts hold for bound `inputs` (defaults applied), so
+   * the template calls `forward`.
+   */
+  preAssertsHold(inputs: Readonly<Record<string, unknown>>): boolean {
+    return this.failingAssertion("pre-assert", this.preAsserts, { ...inputs }) === null;
+  }
+
+  /**
    * Return the bound inputs a model never sees (neither recalled on nor shown to a learner). They
    * stay in the bound record, so backward and resume read what ran. Empty by default.
    */

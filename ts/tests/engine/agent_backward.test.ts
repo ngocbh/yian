@@ -114,7 +114,7 @@ test("the backward context rejects a captured reserved evidence collision", asyn
   );
 });
 
-test("the backward context allows absent node data without changing the record", () => {
+test("the backward context rebuilds node data the record lacks without changing the record", () => {
   const built = engine(graph([], []), { learnable: true });
   const { state, log } = built;
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
@@ -128,7 +128,7 @@ test("the backward context allows absent node data without changing the record",
   expect(trace.occurrences).toHaveLength(1);
   const occurrence = trace.occurrences[0]!;
   expect(occurrence.record.forwardCapture!.nodeData).toBeNull();
-  expect(trace.backwardContext(occurrence.source).nodeData).toEqual({ _evaluation_evidence: null });
+  expect(trace.backwardContext(occurrence.source).nodeData).toEqual({ input_output_paths: {}, _evaluation_evidence: null });
   expect(occurrence.record.forwardCapture!.nodeData).toBeNull();
 });
 
@@ -624,8 +624,8 @@ for (const [label, response, code] of FAILURE_ROWS) {
 
 test("AGENT backward reads no live render, model or variable state", async () => {
   const { node, trace } = await retainedEngine();
-  // The bound inputs are rebuilt from the node's binding, so they are read before it changes.
-  for (const occurrence of trace.occurrences) void occurrence.boundInputs;
+  // The bound inputs and node data are rebuilt from the node, so they are read before it changes.
+  for (const occurrence of trace.occurrences) void [occurrence.boundInputs, occurrence.nodeData];
   node.prompt = "wrong";
   node.llmConfig = { provider: "wrong", model: "wrong" };
   node.variables = [];

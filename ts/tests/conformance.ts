@@ -98,7 +98,7 @@ import {
   runFlow,
 } from "../src/run.ts";
 import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
-import { addCrashedAttempts } from "../src/runtime/state.ts";
+import { addCrashedAttempts, type RunState } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -2780,6 +2780,7 @@ async function checkInvariants(
   // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
   // agrees with a replay, not a second statement of its rules.
   const state = replay(envelopes.length);
+  checkNodeDataRebuild(state, fail);
   const terminal = state.result;
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
   const counts = new Map(state.crashedAttempts);
@@ -2835,6 +2836,22 @@ async function checkInvariants(
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
   }
   if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
+}
+
+/**
+ * Fail unless every occurrence of a learnable replay rebuilds the node data its record holds: its
+ * node data, rebuilt from the node and its bound inputs, equals the recorded one byte for byte (a
+ * derived record's, the one its rebuilt capture holds).
+ */
+function checkNodeDataRebuild(state: RunState, fail: (problem: string) => never): void {
+  for (const occurrence of state.trace?.occurrences ?? []) {
+    const recorded = logJson(occurrence.capture.nodeData ?? {});
+    const rebuilt = logJson(occurrence.nodeData);
+    if (rebuilt !== recorded) {
+      const at = `${occurrence.record.constructor.name} of ${occurrence.nodeId} (seq ${occurrence.outcomeSeq})`;
+      fail(`${at}: node data rebuilds to ${rebuilt}, not ${recorded}`);
+    }
+  }
 }
 
 /** The trace entries of node outcomes, which a crash sweep's strong oracle compares. */

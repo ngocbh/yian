@@ -306,6 +306,10 @@ export class TraceOccurrence {
   readonly #fillsText: boolean;
   /** What binding the node again gave, once read. */
   #rebound: ReboundOccurrence | null = null;
+  /** Rebuilds the node data, or `null` when none was given. */
+  readonly #rebuildNodeData: (() => JsonObject) | null;
+  /** The rebuilt node data, once read. */
+  #nodeData: JsonObject | null = null;
 
   /**
    * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
@@ -321,6 +325,8 @@ export class TraceOccurrence {
    *   default) leaves `boundInputs` unreadable.
    * @param options.fillsText Whether `rebind` also rebuilds the capture's interpolation text,
    *   which `capture` and `inputRoute` then read; defaults to `false` (they give it as held).
+   * @param options.nodeData Rebuilds the node data from the node and its bound inputs; `null`
+   *   (the default) reads the capture's.
    * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
    *   `null` or exactly a `MemoryScope`, or there is no capture.
    * @throws RangeError when `fillsText` is given without `rebind`.
@@ -339,6 +345,7 @@ export class TraceOccurrence {
       capture?: ForwardCapture | null;
       rebind?: (() => ReboundOccurrence) | null;
       fillsText?: boolean;
+      nodeData?: (() => JsonObject) | null;
     } = {},
   ) {
     const {
@@ -349,6 +356,7 @@ export class TraceOccurrence {
       capture = null,
       rebind = null,
       fillsText = false,
+      nodeData = null,
     } = options;
     if (fillsText && rebind === null) throw new RangeError("rebuilding interpolation text requires a rebinder");
     this.source = source;
@@ -361,6 +369,7 @@ export class TraceOccurrence {
     this.#capture = held;
     this.#rebind = rebind;
     this.#fillsText = fillsText;
+    this.#rebuildNodeData = nodeData;
     this.#inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
@@ -409,6 +418,19 @@ export class TraceOccurrence {
   get boundInputs(): JsonObject | null {
     if (this.#rebind === null) throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its bound inputs`);
     return this.#reboundOccurrence().inputs;
+  }
+
+  /**
+   * The node data backward reads (`BackwardContext.nodeData`), canonical JSON rebuilt from the
+   * node and its bound inputs (`rebuildNodeData`): its static material and, for a node whose
+   * `forward` rendered, the render and the model config it used. Built on the first read.
+   *
+   * @throws RangeError as `boundInputs`, or when the run recorded no model config for the node.
+   */
+  get nodeData(): JsonObject {
+    if (this.#rebuildNodeData === null) return (this.#capture.nodeData ?? {}) as JsonObject;
+    this.#nodeData ??= this.#rebuildNodeData();
+    return this.#nodeData;
   }
 
   /** What binding the node again gives, bound on the first read. */
@@ -800,7 +822,7 @@ export class RetainedTrace {
     const occurrence = this.occurrence(source);
     const record = occurrence.record;
     const capture = occurrence.capture;
-    const captured = capture.nodeData ?? {};
+    const captured = occurrence.nodeData;
     if (Object.hasOwn(captured, "_evaluation_evidence")) {
       throw new RangeError("captured node data uses reserved _evaluation_evidence");
     }
@@ -1230,6 +1252,8 @@ export interface PrepareTraceOptions {
   capture?: ForwardCapture | null;
   /** Binds the executing node again, which rebuilds the occurrence's bound inputs. */
   rebinder?: Rebinder | null;
+  /** Rebuilds the executing node's node data from its bound inputs (`null` for none). */
+  nodeData?: ((inputs: Readonly<Record<string, unknown>> | null) => JsonObject) | null;
 }
 
 /**
@@ -1276,6 +1300,7 @@ export function prepareTrace(
     steps = [],
     capture: rebuilt = null,
     rebinder = null,
+    nodeData: rebuildNodeData = null,
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -1362,9 +1387,11 @@ export function prepareTrace(
   // failure at a binding stage bound no inputs, so it is bound again only for that text.
   const fillsText = rebuilt === null && holdsInterpolation(capture);
   const bound = !unbound(record);
+  let again: { capture: BindingCapture; failure: BindingError | null } | null = null;
+  const bindAgain = () => (again ??= reboundCapture(trace, capture.route, rebinder!));
   const rebind = (): ReboundOccurrence => {
     if (!bound && !fillsText) return { inputs: null, capture, inputRoute };
-    const rebound = reboundCapture(trace, capture.route, rebinder!);
+    const rebound = bindAgain();
     const inputs = bound ? finishedInputs(node.id, rebound) : null;
     if (!fillsText) return { inputs, capture, inputRoute };
     const filled = withInterpolationText(capture, rebound.capture);
@@ -1378,6 +1405,15 @@ export function prepareTrace(
     capture,
     rebind: rebinder !== null ? rebind : bound ? null : () => ({ inputs: null, capture, inputRoute }),
     fillsText: fillsText && rebinder !== null,
+    nodeData:
+      rebuildNodeData === null
+        ? null
+        : () => {
+            if (!bound) return rebuildNodeData(null);
+            const rebound = bindAgain();
+            finishedInputs(node.id, rebound);
+            return rebuildNodeData(rebound.capture.boundInputs);
+          },
   });
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);

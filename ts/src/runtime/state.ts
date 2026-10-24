@@ -82,7 +82,7 @@ import {
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
-import { nodeBackwardCapture, rebind, rebuildDerived } from "./eval_node.ts";
+import { nodeBackwardCapture, rebind, rebuildDerived, rebuildNodeData } from "./eval_node.ts";
 import {
   type BackwardRecord,
   reduceBackwardRecord,
@@ -2654,6 +2654,7 @@ function prepareRecordTrace(
   return prepareTrace(state.trace, envelope, node, {
     ...options,
     rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
+    nodeData: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
     steps: nodeId === null ? [] : (state.nodeSteps.get(nodeId) ?? []),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
@@ -2671,6 +2672,16 @@ function nodeRebinder(state: RunState, node: Node): Rebinder {
   const wiring = (state.wiringOverrides.get(node.id) ??
     Object.fromEntries(flow.wiring.get(node.id) ?? new Map())) as JsonObject;
   return (sources, resolve, route) => rebind(node, flow, sources, resolve, wiring, { reserved: recordedReserved(node, route) });
+}
+
+/**
+ * Return what rebuilds `node`'s node data from its bound inputs (`rebuildNodeData`), with the
+ * model configs the run recorded, kept for learning, which runs after an expansion may have pruned
+ * the node from the flow.
+ */
+function nodeDataRebuilder(state: RunState, node: Node): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
+  const llm = state.effectiveLlmByStaticPath;
+  return (inputs) => rebuildNodeData(node, inputs, llm);
 }
 
 /**

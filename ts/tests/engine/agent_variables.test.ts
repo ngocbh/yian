@@ -233,6 +233,8 @@ test("a retained agent captures its actual render locals once", async () => {
   expect(models.prompts).toEqual(["${input.topic}: reefs; 4/4"]);
   expect(occurrence.boundInputs).toEqual({ topic: "reefs" });
   expect(built.state.effectiveLlmByStaticPath["writer"]).toEqual(data["effective_llm_config"] as JsonObject);
+  // Learning renders again what the run rendered.
+  expect(occurrence.nodeData).toEqual(data as JsonObject);
 });
 
 test("retained render locals are detached before the model call", async () => {
@@ -279,6 +281,7 @@ test.each(["resolve", "render", "empty"] as const)(
     expect(data["variables"]).toEqual(stage === "resolve" ? null : stage === "empty" ? {} : { note: null });
     expect(data["rendered_prompt"]).toBe(stage === "empty" ? "" : null);
     expect(occurrence.boundInputs).toEqual({});
+    expect(occurrence.nodeData).toEqual(data as JsonObject);
     expect(models.prompts).toEqual(stage === "empty" ? [""] : []);
     if (stage !== "empty") {
       expect(record).toBeInstanceOf(NodeFailedRecord);

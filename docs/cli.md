@@ -228,6 +228,16 @@ run records the ones that differ from the built-in values, and a log that starte
 with different ones exits 1 naming each variable and how to set it (see
 [Defaults and limits](defaults.md#runs-record-the-values-they-started-with)).
 
+Changed (TS yian): a run can end waiting, on a host call, an `ask`, a `take` or a `sleep`.
+`yian run` then prints `run waiting: <node> (<tool>), ...` and `continue with: yian run --resume
+<log>` on stderr and exits 0; with `--json`, stdout holds `{"status": "waiting", "waits": [...],
+"wake_at": ...}` (each wait's `node`, `call_id`, `tool`, `inbox`, `deadline` and `settled`;
+`wake_at` is the earliest deadline of a call not yet settled, or `null`). `--resume` moves a
+waiting run on: it wakes a node whose calls are settled or past their deadline, and otherwise
+appends nothing and prints the waiting result again. `yian run --resume` doesn't wait for a
+deadline itself. A run a host cancelled prints `run cancelled` and exits 1 (`run.cancelled`). An
+inbox input is never asked for: its events come through the host's `send`.
+
 An eligible unfinished log appends a resume segment and retries nodes with a durable
 start but no durable outcome. Requests and tool actions may repeat; the run log neither reconstructs
 session memory nor provides exactly-once execution. An interrupted TOOL node is re-run

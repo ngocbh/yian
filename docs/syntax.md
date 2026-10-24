@@ -1131,8 +1131,9 @@ send(); it takes no run input``. The top-level START binds the input to its hand
 `InboxRef` whose JSON form is `{inbox: owner_messages}`, and the run's recorded inputs leave it
 out.
 
-An inbox is read only whole, as `${input.owner_messages}`, bound to an input that a named
-`kind: call` or a `kind: loop` child declares as an `Inbox`:
+An inbox is read only whole, as `${input.owner_messages}`, bound to a `take`'s `from:` (see
+[Built-in tools](#built-in-tools-take-sleep-ask)) or to an input that a named `kind: call` or a
+`kind: loop` child declares as an `Inbox`:
 
 ```yaml
 nodes:
@@ -1146,12 +1147,12 @@ nodes:
 ```
 
 Any other read is a load error at its site: text or an expression
-(`"Hi ${input.owner_messages}"`), a field read, a CODE, AGENT or TOOL input, a case `on:` or
-`when:`, a loop predicate, a record or typed binding holding it, an inline `call(...)` argument,
-an assert, a MAP's `over:` or inputs, a flow output, and an `llm_config` value. A node output,
-an agent variable, a typed binding and a flow output can't be typed `Inbox(...)`, and an inbox
-type has no constructor. A child's `Inbox` input takes only an inbox of the calling flow, whose
-event type fits its own.
+(`"Hi ${input.owner_messages}"`), a field read, a CODE, AGENT or TOOL input other than a take's
+`from:`, a case `on:` or `when:`, a loop predicate, a record or typed binding holding it, an
+inline `call(...)` argument, an assert, a MAP's `over:` or inputs, a flow output, and an
+`llm_config` value. A node output, an agent variable, a typed binding and a flow output can't be
+typed `Inbox(...)`, and an inbox type has no constructor. A child's `Inbox` input takes only an
+inbox of the calling flow, whose event type fits its own.
 
 A loop carries an inbox into every iteration and leaves it out of its output. A flow that a
 `kind: map` calls can't declare an inbox input: map instances have no inboxes of their own yet.
@@ -2802,6 +2803,94 @@ used to start and fail inside the tool call; it now fails at run start. An unkno
 `tool_id:` used to fail as a recorded node failure when the node ran; it now raises
 at run start, even for nodes that may never run.
 
+#### Built-in tools: take, sleep, ask
+
+Changed (TS yian): three `tool_id:` values name yian built-ins rather than host tools. They
+load with their own input checks and output types, and `retries:` doesn't apply to them.
+`load_skill` is reserved and fails as a `tool_id:`.
+
+**`take`** reads events from an inbox input of this flow (see [Inbox inputs](#inbox-inputs)):
+
+```yaml
+heard:
+  kind: tool
+  tool_id: take
+  input:
+    from: ${input.owner_messages}   # the inbox, read whole
+    take: all                       # one (the default) or all
+    timeout: 30m                    # optional
+```
+
+`from:` is required and must be an `Inbox(T)` input; `take:` is `one` or `all`, or a
+reference whose type may be one of them. Its output type is inferred, `{events: list(T),
+closed: bool}`. Any other input fails (``take takes from, take and timeout; got 'x'``), and
+so do `output:` (``take's output is inferred ({events: list(T), closed: bool}); remove
+`output:` ``), `asserts:` and `retries:`.
+
+**`sleep`** waits until a time: exactly one of `until:`, a date or datetime as in
+[`wait`](#wait-block-until-an-absolute-utc-deadline), or `for:`, a duration. Its output is
+`None`. Both, neither or any other input fails (`sleep takes until: or for:, exactly
+one`), and so do `output:`, `asserts:` and `retries:`.
+
+**`ask`** asks a person through the run's `ask` handler, with `human_input`'s question
+surface as inputs: `prompt:` (text), `questions:` (a list checked at load as in
+[`human_input`](#human_input-a-deterministic-human-gate), or a reference to one), and
+`timeout:` (a duration). It needs one of `prompt:`, `questions:` or `adaptive_questions:`;
+`questions:` and `adaptive_questions:` are exclusive. `adaptive_questions:` takes the same
+block as on `human_input`: a composer agent `<id>__compose` writes the questions into the
+reserved input `__questions`, which an author can't write. Any other input is a host
+extra, passed through in the request and checked against the host's declaration when the
+run starts. `output:` is the answer's type and gives the request's answer schema; a
+questions ask without one answers an `object`, and a prompt-only one is free form.
+`asserts:` apply; `retries:` fails, since the host owns retries of a call it holds.
+
+`tool_id: ask_user` still calls the agent's `ask_user` surface as a plain tool for now.
+
+**Durations.** `timeout:` and `for:` take a positive integer and a unit, `s`, `m`, `h` or
+`d` (`90s`, `30m`, `24h`, `2d`), expanded to seconds at load, so `24h` and `86400s` give
+one fingerprint. A malformed duration fails at the input (`a duration is a positive integer
+and a unit (90s | 30m | 24h | 2d)`), and so does a plain number:
+`timeout: 86400` fails with ``a duration is text such as 24h, got 86400; write 86400s``. A
+duration from a `${...}` reference must be typed `str` (tag it: `timeout: !str ${...}`) and
+is read when the node runs. A literal duration takes no tag (`timeout: !str 5m` fails).
+
+The escalation example asks the lead, then the manager when the lead doesn't answer in a
+day. `to:` is this host's extra input:
+
+```yaml
+id: approve_plan
+name: approve_plan
+typedefs:
+  Approval:
+    decision: Literal(approve, reject)
+    note: Optional(str)
+input:
+  plan: !str
+nodes:
+  lead:
+    kind: tool
+    tool_id: ask
+    input:
+      to: lead
+      prompt: "Approve this plan?\n\n${input.plan}"
+      timeout: 24h
+    output: Optional(Approval)       # null: the lead didn't answer in time
+  escalate:
+    kind: case
+    cases:
+      - when: ${lead.output == null}
+        then: manager
+  manager:
+    kind: tool
+    tool_id: ask
+    input:
+      to: manager
+      prompt: "No answer from the lead in 24h. Approve this plan?\n\n${input.plan}"
+      timeout: 48h
+    output: Optional(Approval)
+output: !Optional(Approval) ${lead.output | manager.output}
+```
+
 A `code` node's `code:` field is one of two shapes:
 
 **Reference** — a `module:function` token: import and call it in-process.
@@ -3405,6 +3494,9 @@ with no tag, and under `when: input.a.b != null` it may pass `${input.a.b}` to a
 input. The `else:` still sees the value as `Optional`.
 
 ### `human_input` — a deterministic human gate
+
+Changed (TS yian): a TOOL node with `tool_id: ask` takes this node's question surface as
+inputs and waits for the answer durably (see [Built-in tools](#built-in-tools-take-sleep-ask)).
 
 A `human_input` node **always** invokes the run's `ask_user` handler at a
 fixed point and blocks its worker until the human answers. The answer is

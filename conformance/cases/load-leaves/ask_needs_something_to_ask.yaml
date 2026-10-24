@@ -1,0 +1,21 @@
+# TS-only: an ask needs a prompt, questions or adaptive_questions.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    q:
+      kind: tool
+      tool_id: ask
+      input:
+        to: lead
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'q' (tool_id: ask): ask needs input prompt:, input questions:, or adaptive_questions:"
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 9, 1]

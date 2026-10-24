@@ -1,0 +1,24 @@
+# TS-only: a take makes no tool call, so `retries:` is refused.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      retries: 2
+      input:
+        from: ${input.m}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'heard' (tool_id: take): `retries:` doesn't apply to take: there is no tool call to retry"
+      frames:
+      - label: flow.yaml
+        range: [9, 14, 9, 15]

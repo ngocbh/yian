@@ -35,8 +35,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "./compile/execution_layout.ts";
@@ -138,7 +138,7 @@ import {
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
-import { type WaitInfo, type WaitsState, wakeableNodes, wakeAt, waitInfos } from "./runtime/waits.ts";
+import { dueTimeouts, unreadEvents, type WaitInfo, type WaitsState, wakeableNodes, wakeAt, waitInfos } from "./runtime/waits.ts";
 import {
   acceptedCommit,
   addCrashedAttempts,
@@ -234,16 +234,22 @@ export type EventHook = (event: RunEvent) => unknown;
 /** Sees each transient stream chunk. */
 export type StreamHook = (chunk: StreamChunk) => unknown;
 
+/** Where a run stands when a run call returns: a terminal result, or waiting on calls. */
+export type RunResultStatus = "succeeded" | "failed" | "waiting" | "cancelled";
+
 /**
- * The terminal, surface-independent result of a run.
+ * The surface-independent result of a run call: a terminal result, or a run waiting on calls.
  *
  * `events` holds only the observers committed during this call.
  */
 export class RunResult {
   /** The canonical caller-supplied inputs `RunStarted` retained. */
   readonly input: Record<string, unknown>;
-  /** Either `"succeeded"` or `"failed"`. */
-  readonly status: "succeeded" | "failed";
+  /**
+   * `"succeeded"`, `"failed"` or `"cancelled"` at a terminal result; `"waiting"` when the run
+   * stopped at quiescence with nodes waiting on calls, which a delivery or `advance` moves on.
+   */
+  readonly status: RunResultStatus;
   /** The durable identity shared by the state and its run log. */
   readonly runId: string;
   /** The JSONL log path as given to `runFlow` or `advance`, or `null` for a process-local run. */
@@ -259,18 +265,30 @@ export class RunResult {
    * (crashed attempts), by node id; empty for a run never resumed.
    */
   readonly crashedAttempts: ReadonlyMap<string, number>;
+  /** The calls a waiting run waits on, by waiting node in `node_waiting` order; empty otherwise. */
+  readonly waits: readonly WaitInfo[];
+  /**
+   * The send seqs no take read, by inbox, at a terminal status; empty while the run waits (they
+   * may still be read) and for an inbox with none.
+   */
+  readonly unread: ReadonlyMap<string, readonly number[]>;
   #backwardOutcome: BackwardOutcome | null;
 
-  /** Hold the given fields; `output`, `failure` and `backwardOutcome` default to `null`. */
+  /**
+   * Hold the given fields; `output`, `failure` and `backwardOutcome` default to `null`, `waits` to
+   * none and `unread` to an empty map.
+   */
   constructor(fields: {
     input: Record<string, unknown>;
-    status: "succeeded" | "failed";
+    status: RunResultStatus;
     runId: string;
     log: string | null;
     output?: unknown;
     failure?: Failure | null;
     events?: readonly RunEvent[];
     crashedAttempts?: ReadonlyMap<string, number>;
+    waits?: readonly WaitInfo[];
+    unread?: ReadonlyMap<string, readonly number[]>;
     backwardOutcome?: BackwardOutcome | null;
   }) {
     this.input = fields.input;
@@ -281,6 +299,8 @@ export class RunResult {
     this.failure = fields.failure ?? null;
     this.events = fields.events ?? [];
     this.crashedAttempts = fields.crashedAttempts ?? new Map();
+    this.waits = fields.waits ?? [];
+    this.unread = fields.unread ?? new Map();
     this.#backwardOutcome = fields.backwardOutcome ?? null;
   }
 
@@ -319,7 +339,8 @@ export class RunResult {
    * @throws TypeError when the feedback has an invalid message carrier.
    * @throws TypeCheckError when the feedback isn't a yian value or nests deeper than
    *   `YIAN_MAX_VALUE_NESTING` levels.
-   * @throws RangeError when the run wasn't retained (`learnable: true`), the feedback doesn't match
+   * @throws RangeError when the run didn't succeed or fail (it waits or was cancelled), wasn't
+   *   retained (`learnable: true`), the feedback doesn't match
    *   the output's shape, or `headers` has a name or value that can't be sent or names other than
    *   the recorded ones (the message never echoes a value).
    * @throws MemorySetupError when the run's memories can't restore their recorded snapshots.
@@ -335,6 +356,9 @@ export class RunResult {
       onEvent?: BackwardOptions["onEvent"] | null;
     } = {},
   ): Promise<BackwardOutcome> {
+    if (this.status !== "succeeded" && this.status !== "failed") {
+      throw new RangeError(`backward needs a run that succeeded or failed; this one is ${this.status}`);
+    }
     const handle = BACKWARD_HANDLES.get(this);
     if (handle === undefined) throw new RangeError("backward requires a run retained with learnable: true");
     // Taken and bounded before anything walks the feedback recursively, under the run's limits.
@@ -361,6 +385,227 @@ export class RunResult {
 
 /** The retained authority behind each learnable `RunResult`, found by its result. */
 const BACKWARD_HANDLES = new WeakMap<RunResult, BackwardHandle>();
+
+/** A writer in this process holds the run's lock and no engine runs yet. */
+interface HeldRun {
+  readonly kind: "held";
+  /** Resolves when the holder goes live or releases; a delivery then reads `RUNS` again. */
+  readonly settled: Promise<void>;
+  /** Resolves when the holder releases; an advance then reads `RUNS` again. */
+  readonly done: Promise<void>;
+}
+
+/** A run this process is moving: deliveries go to its engine. */
+interface LiveRun {
+  readonly kind: "live";
+  readonly engine: FlowEngine;
+  /** Resolves when the holder releases. */
+  readonly done: Promise<void>;
+}
+
+/** A waiting run with no writer: its state, kept while the log stays the file it left. */
+interface IdleRun {
+  readonly kind: "idle";
+  readonly state: RunState;
+  readonly flow: ComposedFlow;
+  /** The code-built flow the run was given, or `null` for one recompiled from its recorded files. */
+  readonly hostFlow: ComposedFlow | null;
+  /** The resolved code root the flow was compiled under, or `null` for none. */
+  readonly codeRoot: string | null;
+  readonly apiKey: string | null;
+  readonly headers: Readonly<Record<string, string>> | null;
+  /** The seq of the log's last record when the run was left. */
+  readonly lastSeq: number;
+  /** The log file's size, device and inode when the run was left. */
+  readonly size: bigint;
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+/**
+ * What this process holds of each durable run, by its log's real path. Only waiting runs stay idle
+ * here; each keeps its whole `RunState` for the host's life, and dropping one costs a rebuild.
+ */
+const RUNS = new Map<string, HeldRun | LiveRun | IdleRun>();
+
+/** This call's hold on a run: `live` hands it to an engine, `release` (once, always) ends it. */
+interface RunHold {
+  /** The idle entry this hold replaced, or `null`. */
+  readonly idle: IdleRun | null;
+  live(engine: FlowEngine): void;
+  release(next: IdleRun | null): void;
+}
+
+/**
+ * Make this call the holder of `key`, replacing `idle` or nothing. Read `RUNS` and call this in one
+ * tick. `live` and `release` change `RUNS` only while the entry there is still this hold's, so a
+ * stale hold can't remove a newer one.
+ */
+function hold(key: string, idle: IdleRun | null): RunHold {
+  const settled = Promise.withResolvers<void>();
+  const done = Promise.withResolvers<void>();
+  let mine: HeldRun | LiveRun = { kind: "held", settled: settled.promise, done: done.promise };
+  RUNS.set(key, mine);
+  let released = false;
+  return {
+    idle,
+    live(engine) {
+      if (RUNS.get(key) === mine) {
+        mine = { kind: "live", engine, done: done.promise };
+        RUNS.set(key, mine);
+      }
+      settled.resolve();
+    },
+    release(next) {
+      if (released) return;
+      released = true;
+      if (RUNS.get(key) === mine) {
+        if (next === null) RUNS.delete(key);
+        else RUNS.set(key, next);
+      }
+      settled.resolve();
+      done.resolve();
+    },
+  };
+}
+
+/** The error for a run this process is moving: the lock's busy message. */
+function busyInProcess(locator: string): Error {
+  return new Error(`run log ${locator} is locked by another writer (is the run still active?)`);
+}
+
+/**
+ * Wait until no other call in this process holds `key`, then hold it.
+ *
+ * @throws Error (the busy message) when this process is moving the run.
+ */
+async function holdForAdvance(key: string, locator: string): Promise<RunHold> {
+  for (;;) {
+    const entry = RUNS.get(key);
+    if (entry?.kind === "live") throw busyInProcess(locator);
+    if (entry?.kind === "held") {
+      await entry.done;
+      continue;
+    }
+    return hold(key, entry ?? null);
+  }
+}
+
+/**
+ * Return `idle` when the log is the same file, ends where it left it, and this call would rebuild
+ * the same state; else `null`. Credentials matter only to `advance`, since deliveries call no
+ * model.
+ */
+function reusable(
+  idle: IdleRun | null,
+  authority: JsonlRunLog,
+  key: string,
+  want: {
+    codeRoot: string | null;
+    hostFlow: ComposedFlow | null;
+    credentials?: { apiKey: string | null; headers: Readonly<Record<string, string>> | null };
+  },
+): IdleRun | null {
+  if (idle === null) return null;
+  const stat = statSync(key, { bigint: true });
+  if (idle.state.runId !== authority.runId || idle.lastSeq !== authority.nextSequence - 1) return null;
+  if (idle.size !== stat.size || idle.dev !== stat.dev || idle.ino !== stat.ino) return null;
+  if (idle.codeRoot !== want.codeRoot || idle.hostFlow !== want.hostFlow) return null;
+  const credentials = want.credentials;
+  if (
+    credentials !== undefined &&
+    (idle.apiKey !== credentials.apiKey || !sameHeaders(idle.headers, credentials.headers))
+  ) {
+    return null;
+  }
+  return idle;
+}
+
+/** Whether two header maps hold the same names and values. */
+function sameHeaders(a: Readonly<Record<string, string>> | null, b: Readonly<Record<string, string>> | null): boolean {
+  return logJson(a ?? {}) === logJson(b ?? {});
+}
+
+/** The idle entry for a waiting `state`, read while the lock is held; `null` for any other state. */
+function idleRun(
+  state: RunState,
+  flow: ComposedFlow,
+  key: string,
+  authority: JsonlRunLog,
+  keep: Pick<IdleRun, "hostFlow" | "codeRoot" | "apiKey" | "headers">,
+): IdleRun | null {
+  if (state.result !== null || state.waits.waiting.size === 0) return null;
+  const stat = statSync(key, { bigint: true });
+  return {
+    kind: "idle",
+    state,
+    flow,
+    ...keep,
+    lastSeq: authority.nextSequence - 1,
+    size: stat.size,
+    dev: stat.dev,
+    ino: stat.ino,
+  };
+}
+
+/**
+ * Close what a run call opened and hand the run on, whatever fails.
+ *
+ * 1. Servers close, then memory.
+ * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it counts
+ *    late live deliveries), the log closes, and the hold is released.
+ *
+ * The entry is built only with a hold, and only when nothing failed or `keepAfter(primary)` says a
+ * failure changed nothing (a refused delivery). Cleanup errors are noted on `primary`; with no
+ * `primary`, the first one is thrown.
+ */
+async function closeAndRelease(parts: {
+  servers: readonly McpServer[];
+  memoryRuntime: MemoryRuntime | null;
+  authority: RunLog | null;
+  primary: { error: unknown } | null;
+  hold: RunHold | null;
+  keep: () => IdleRun | null;
+  keepAfter?: (primary: { error: unknown }) => boolean;
+}): Promise<void> {
+  const { primary, hold: runHold } = parts;
+  let pending = primary;
+  const note = (operation: string, error: unknown): void => {
+    if (pending === null) pending = { error };
+    else noteCleanupError(pending.error, operation, error);
+  };
+  try {
+    await closeRunServers(parts.servers);
+  } catch (error) {
+    note("server close", error);
+  }
+  try {
+    await parts.memoryRuntime?.close();
+  } catch (error) {
+    note("memory-session close", error);
+  }
+  let next: IdleRun | null = null;
+  try {
+    // A cleanup error noted on a refusal leaves `pending` as `primary`; the log close below drops
+    // the entry itself.
+    const keepable = pending === null || (primary !== null && pending === primary && parts.keepAfter?.(primary) === true);
+    if (runHold !== null && keepable) next = parts.keep();
+    if (parts.authority !== null) {
+      try {
+        parts.authority.close();
+      } catch (error) {
+        next = null;
+        note("run-log close", error);
+      }
+    }
+  } catch (error) {
+    next = null;
+    note("run registry", error);
+  } finally {
+    runHold?.release(next);
+  }
+  if (primary === null && pending !== null) throw pending.error;
+}
 
 /** What a `BackwardHandle` keeps. */
 type BackwardHandleFields = {
@@ -1008,6 +1253,8 @@ async function startRun(
 
   let authority: RunLog | null = null;
   let primary: { error: unknown } | null = null;
+  let runHold: RunHold | null = null;
+  let keep: () => IdleRun | null = () => null;
   try {
     // The result reads its files through the contract a CALL of this flow gets.
     const state = new RunState(privateFlow, { resultContract: childSignature(flow).output });
@@ -1041,6 +1288,17 @@ async function startRun(
       locator === null
         ? new MemoryRunLog(canonicalRunId, { clock })
         : JsonlRunLog.create(locator, canonicalRunId, { clock });
+    if (locator !== null) {
+      // The file's real path, as `advance` resolves it: `create` made a new regular file, so only
+      // its folder can be a link.
+      const key = join(realpathSync(dirname(locator)), basename(locator));
+      // `create` was exclusive, so an entry under this path is stale.
+      runHold = hold(key, null);
+      const opened = authority as JsonlRunLog;
+      const hostFlow = flow.source === null ? flow : null;
+      const credentials = { apiKey, headers };
+      keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: null, ...credentials });
+    }
     // Every append goes through the live channel's wrapper; the authority itself is kept and closed.
     const appender = live === null ? authority : live.wrap(authority);
     const observers = commitPrepared(appender, state, preparedStart);
@@ -1070,7 +1328,10 @@ async function startRun(
     });
     const events: RunEvent[] = [];
     publishBoundaryObservers(observers, events, onEvent, (error) => engine.stopForCallback(error));
-    events.push(...(await engine.run()));
+    const running = engine.run();
+    // Deliveries waiting on the hold reach the engine from here on.
+    runHold?.live(engine);
+    events.push(...(await running));
     const handle = retainedHandle(retainedProgram, state, authority, memory, {
       locator,
       apiKey,
@@ -1084,7 +1345,7 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    await closeRunResources(memoryRuntime, authority, primary);
+    await closeAndRelease({ servers: [], memoryRuntime, authority, primary, hold: runHold, keep });
   }
 }
 
@@ -1229,7 +1490,8 @@ export interface AdvanceOptions {
 }
 
 /**
- * Recover a durable run, or read a finished one, without backward work.
+ * Move a durable run on: recover a crashed or stopped one, wake a waiting one, or read a finished
+ * one, without backward work.
  *
  * The run's flow is the one `RunStarted` recorded: its flow files are compiled again, never read
  * from disk (`loadRecordedFlow`), and a flow built in code is the `flow` option. Its fingerprint
@@ -1238,13 +1500,25 @@ export interface AdvanceOptions {
  * or configuration. A finished log returns its result with no events, opening no server and no
  * memory. Otherwise a log another yian version started is resumed with a warning naming both
  * versions, and the host's specs of the tools and skills the AGENTs grant must be the recorded ones
- * (the skills checked before any server starts, the tools once the servers are open); then the
+ * (the skills checked before any server starts, the tools once the servers are open).
+ *
+ * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a
+ * recorded stop, or no `run_waiting` as its last frontier record) or `numWorkers` changes; then the
  * starts the log left unfinished are retried first, in their recorded order, after one
- * `RunResumed` observer and one `NodeAttemptResumed` per retried node.
+ * `RunResumed` observer and one `NodeAttemptResumed` per retried node. A waiting run with a node
+ * that is wakeable (its calls settled by a delivery) or due (a deadline past by the scheduler's
+ * clock) goes straight to `node_woken`. A waiting run with neither appends nothing and returns
+ * `waiting`.
+ *
+ * When the run ends waiting, the log's lock is released and its state stays in an in-process
+ * registry keyed by the log's real path, so a later `advance` (or delivery) in this process reuses
+ * it while the log is the file it left, with the same code root, code-built flow and credentials.
+ * An `advance` of a run this process is moving rejects with the busy message; one of a run another
+ * call is setting up waits for it.
  *
  * @param options See `AdvanceOptions`.
- * @returns The recorded terminal result, or the terminal result of the resumed segment with its
- *   post-durable observers.
+ * @returns The recorded terminal result, or the terminal or waiting result of the new segment with
+ *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`, a `tools`
  *   entry is malformed, `skills`, `steering`, `scheduler`, `random` or `models` is malformed, a
  *   worker count isn't an integer, or a recorded carrier has the wrong type.
@@ -1271,8 +1545,9 @@ export interface AdvanceOptions {
  * @throws LoadError when the recorded flow files no longer load (a CODE reference's file gone, or
  *   resolving outside `codeRoot`), before anything is appended.
  * @throws The signal's reason when it aborts.
- * @throws Error (code `ENOENT`) when `log` doesn't exist, and the lock, repair, append, sync or
- *   close error of the log.
+ * @throws Error (code `ENOENT`) when `log` doesn't exist (from resolving its real path), the busy
+ *   message when this process is moving the run, and the lock, repair, append, sync or close error
+ *   of the log.
  */
 export async function advance(options: AdvanceOptions): Promise<RunResult> {
   // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
@@ -1309,18 +1584,28 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     checkTestOptions(options);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
+    // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
+    const key = realpathSync(locator);
     const scheduler = options.scheduler ?? realScheduler;
     const clock = () => scheduler.now();
-    const authority = JsonlRunLog.resume(locator, { clock });
+    const root = codeRoot === null ? null : resolve(codeRoot);
+    const runHold = await holdForAdvance(key, locator);
+    let authority: JsonlRunLog | null = null;
     let memoryRuntime: MemoryRuntime | null = null;
     let runServers: McpServer[] = [];
     let primary: { error: unknown } | null = null;
+    let keep: () => IdleRun | null = () => null;
     try {
+      authority = JsonlRunLog.resume(locator, { clock });
+      const opened = authority;
       const start = startRecord(authority[Symbol.iterator]().next().value);
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
       checkRecorded(start.defaults);
-      const flow = await resumedFlow(log, start, hostFlow, codeRoot);
-      const state = replayRunLog(flow, authority, { apiKey, headers });
+      const credentials = { apiKey, headers };
+      const kept = reusable(runHold.idle, authority, key, { codeRoot: root, hostFlow, credentials });
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, codeRoot));
+      const state = kept?.state ?? replayRunLog(flow, authority, credentials);
+      keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: root, apiKey, headers });
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
         apiKey = null;
@@ -1332,7 +1617,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const models = options.models ?? defaultModelAccess(env);
       const retainedProgram = state.learnable ? copyGraph(flow.compiled) : null;
       const retain = (): BackwardHandle | null =>
-        retainedHandle(retainedProgram, state, authority, options.memory ?? null, {
+        retainedHandle(retainedProgram, state, opened, options.memory ?? null, {
           locator,
           apiKey,
           headers,
@@ -1342,6 +1627,20 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         });
       // A finished run opens no tools: learning expands its grants with the recorded tool groups.
       if (state.result !== null) return resultFromState(state, log, [], retain());
+      const numWorkers = options.numWorkers ?? state.numWorkers;
+      // A crash or a stop left work unfinished, or the last segment ended before its run_waiting.
+      const crashed =
+        state.inFlight.size > 0 || state.lastStopSequence !== null || state.waits.lastFrontier !== "run_waiting";
+      const resume = crashed || numWorkers !== state.numWorkers;
+      if (
+        !resume &&
+        state.ready.length === 0 &&
+        wakeableNodes(state.waits).length === 0 &&
+        dueTimeouts(state.waits, scheduler.now()).size === 0
+      ) {
+        // Nothing can move: the run still waits, and nothing is appended.
+        return resultFromState(state, log, [], null);
+      }
       if (start.yianVersion !== VERSION) {
         warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
       }
@@ -1387,12 +1686,11 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         });
       }
 
-      const numWorkers = options.numWorkers ?? state.numWorkers;
-      const prepared = prepareRunResumed(state, { numWorkers });
+      const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
       // This segment's appends go through the live channel's wrapper.
       const live = options.live ?? null;
       const appender = live === null ? authority : live.wrap(authority);
-      const observers = commitPrepared(appender, state, prepared);
+      const observers = prepared === null ? [] : commitPrepared(appender, state, prepared);
       const runtime = memoryRuntime;
       // Built before publishing so a callback's rejected promise can stop it.
       const engine = new FlowEngine(state, appender, {
@@ -1414,16 +1712,19 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         runDir: dirname(locator),
       });
       const events: RunEvent[] = [];
-      const lead = [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
+      const lead =
+        prepared === null ? [] : [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
       publishBoundaryObservers(lead, events, options.onEvent ?? null, (error) => engine.stopForCallback(error));
-      events.push(...(await engine.run()));
+      const running = engine.run();
+      // Deliveries waiting on the hold reach the engine from here on.
+      runHold.live(engine);
+      events.push(...(await running));
       return resultFromState(state, log, events, retain());
     } catch (error) {
       primary = { error };
       throw error;
     } finally {
-      await closeRunServers(runServers);
-      await closeRunResources(memoryRuntime, authority, primary);
+      await closeAndRelease({ servers: runServers, memoryRuntime, authority, primary, hold: runHold, keep });
     }
   });
 }
@@ -2489,9 +2790,10 @@ function publishBoundaryObservers(
 }
 
 /**
- * Project one terminal reducer state into the public result.
+ * Project one terminal or waiting reducer state into the public result. Only a succeeded or
+ * failed result keeps `handle` for a later backward call.
  *
- * @throws Error when the state has no terminal result.
+ * @throws Error when the state has no terminal result and no node waits.
  */
 function resultFromState(
   state: RunState,
@@ -2508,16 +2810,22 @@ function resultFromState(
     crashedAttempts: new Map(state.crashedAttempts),
     backwardOutcome: handle === null ? state.backwardState.outcome : handle.outcome,
   };
-  let result: RunResult;
+  const unread = new Map(unreadEvents(state.waits));
   if (terminal instanceof RunSucceeded) {
-    result = new RunResult({ ...common, status: "succeeded", output: copyValue(terminal.output as Value) });
-  } else if (terminal instanceof RunFailed) {
-    result = new RunResult({ ...common, status: "failed", failure: terminal.failure });
-  } else {
-    throw new Error("engine returned without deriving a terminal run result");
+    const result = new RunResult({ ...common, status: "succeeded", output: copyValue(terminal.output as Value), unread });
+    if (handle !== null) BACKWARD_HANDLES.set(result, handle);
+    return result;
   }
-  if (handle !== null) BACKWARD_HANDLES.set(result, handle);
-  return result;
+  if (terminal instanceof RunFailed) {
+    const result = new RunResult({ ...common, status: "failed", failure: terminal.failure, unread });
+    if (handle !== null) BACKWARD_HANDLES.set(result, handle);
+    return result;
+  }
+  if (terminal instanceof RunCancelled) return new RunResult({ ...common, status: "cancelled", unread });
+  if (terminal === null && state.waits.waiting.size > 0) {
+    return new RunResult({ ...common, status: "waiting", waits: waitInfos(state.waits) });
+  }
+  throw new Error("engine returned without deriving a terminal run result");
 }
 
 /**
@@ -2673,28 +2981,6 @@ async function openRunServers(
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
   for (const server of servers) await server.close();
-}
-
-/**
- * Close memory then the log while preserving one initiating error: with no `primary`, the first
- * close error is thrown, later ones noted on it; with one, each is noted on it.
- */
-async function closeRunResources(
-  memoryRuntime: MemoryRuntime | null,
-  log: RunLog | null,
-  primary: { error: unknown } | null,
-): Promise<void> {
-  let pending = primary;
-  if (memoryRuntime !== null) {
-    try {
-      await memoryRuntime.close();
-    } catch (cleanupError) {
-      if (pending === null) pending = { error: cleanupError };
-      else noteCleanupError(pending.error, "memory-session close", cleanupError);
-    }
-  }
-  if (log !== null) closeOwnedLog(log, pending);
-  if (primary === null && pending !== null) throw pending.error;
 }
 
 /** Note a cleanup error on the initiating error, when it can take a note, without changing control. */

@@ -296,3 +296,145 @@ test("the engine's timer is armed while work runs, and gone at the end", async (
   expect(events.at(-1)).toBeInstanceOf(RunWaiting);
   expect(clock.pending()).toBe(0);
 });
+
+import { copyGraph, CompiledFlow, Edge } from "../../src/compile/model.ts";
+import { CallClosed } from "../../src/events.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
+import { FlowEngine } from "../../src/runtime/engine.ts";
+import { MemoryRunLog, NodeStepRecord, RunFailedRecord, RunResumedRecord } from "../../src/runtime/log.ts";
+import {
+  commitPrepared,
+  prepareNodeStarted,
+  prepareNodeSucceeded,
+  prepareNodeWaiting,
+  preparePoolCommit,
+  prepareRunResumed,
+  prepareSend,
+  prepareTakeCommit,
+  replayRecords,
+  RunState,
+} from "../../src/runtime/state.ts";
+import { InboxRef } from "../../src/typesys/values.ts";
+import { toolCallId } from "../../src/tools/context.ts";
+import { BranchNode, FailNode, FIXED_CLOCK, noGrowth, RUN_ID } from "./run_state_fixtures.ts";
+
+/**
+ * START routes through `router` away from `dead`, END's `zeta` group, while host call `ask` (END's
+ * `alpha` group) waits: END can't be reached whatever `ask` does.
+ */
+function unreachableFlow(ask: FakeHost): CompiledFlow {
+  return CompiledFlow.fromParts(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["ask", ask],
+      ["router", new BranchNode("router", "go")],
+      ["chosen", new FuncNode("chosen", () => 1)],
+      ["dead", new FuncNode("dead", () => 2)],
+      [END_ID, EndNode.record(END_ID, { outputNames: ["zeta", "alpha"] })],
+    ]),
+    [
+      new Edge("start-ask", START_ID, "ask"),
+      new Edge("start-router", START_ID, "router"),
+      new Edge("router-chosen", "router", "chosen", { sourceHandle: "go" }),
+      new Edge("router-dead", "router", "dead", { sourceHandle: "no" }),
+      new Edge("dead-end", "dead", END_ID, { inputGroup: "zeta" }),
+      new Edge("ask-end", "ask", END_ID, { inputGroup: "alpha" }),
+      new Edge("chosen-end", "chosen", END_ID, { inputGroup: "alpha" }),
+    ],
+  );
+}
+
+test.each([0, 2])("terminal unreachable at suspension fails the run (%p workers)", async (numWorkers) => {
+  const ask = new FakeHost("ask");
+  const run = inboxEngine(unreachableFlow(ask), { numWorkers });
+  const events = await run.run();
+  const last = run.log.records().at(-1)!.record;
+  expect(last).toBeInstanceOf(RunFailedRecord);
+  expect((last as RunFailedRecord).failure).toEqual(run.state.terminalUnreachableFailure!);
+  expect(run.state.result).toBeInstanceOf(RunFailed);
+  expect(events).toContainEqual(new CallClosed({ callId: ask.callId, reason: "failed" }));
+});
+
+test("a node failure while another node waits closes its call", async () => {
+  const ask = new FakeHost("ask");
+  const run = inboxEngine(pairFlow(ask, new FailNode("boom")));
+  const events = await run.run();
+  expect(recordNames(run.log)).toContain("NodeFailedRecord");
+  expect(events).toContainEqual(new CallClosed({ callId: ask.callId, reason: "failed" }));
+  expect(run.state.result).toBeInstanceOf(RunFailed);
+});
+
+/** A fresh engine over `records` replayed into a new state of `flow`, with `RunResumed` first when `resume`. */
+function reopened(flow: CompiledFlow, records: ReturnType<MemoryRunLog["records"]>, resume: boolean): FlowEngine {
+  const state = replayRecords(new RunState(copyGraph(flow)), records, { growBuilder: noGrowth });
+  const log = MemoryRunLog.fromRecords(records, { clock: FIXED_CLOCK });
+  if (resume) commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  return new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 });
+}
+
+test("a waiting run moved again records no second run_waiting", async () => {
+  const flow = takeFlow();
+  const first = inboxEngine(flow);
+  await first.run();
+  const again = reopened(flow, first.log.records(), false);
+  const before = again.log.nextSequence;
+  expect(await again.run()).toEqual([]);
+  expect(again.log.nextSequence).toBe(before);
+});
+
+test("a restart reuses the host call its node registered before the crash", async () => {
+  const ask = new FakeHost("ask");
+  const flow = inboxFlow([], [ask], [[START_ID, "ask"], ["ask", END_ID]]);
+  const first = inboxEngine(flow);
+  await first.run();
+  // A crash right after the pending step: node_waiting was never appended.
+  const records = first.log.records();
+  const crashed = records.slice(0, records.findIndex((entry) => entry.record instanceof NodeWaitingRecord));
+  const run = reopened(flow, crashed, true);
+  await run.run();
+  expect(ask.handlerCalls).toBe(1);
+  const pending = run.log.records().filter((entry) => entry.record instanceof NodeStepRecord && entry.record.step["kind"] === "pending");
+  expect(pending).toHaveLength(1);
+  const waiting = run.log.records().findLast((entry) => entry.record instanceof NodeWaitingRecord)!.record as NodeWaitingRecord;
+  expect(waiting.callIds).toEqual([ask.callId]);
+});
+
+test("a waiting take wakes for events a dropped take commit freed", async () => {
+  const first = new FakeTake("first", "m");
+  const second = new FakeTake("second", "m");
+  const flow = pairFlow(first, second, ["m"]);
+  // `first` commits the sent event and crashes before its success; `second` waits meanwhile, since
+  // the pending commit holds the event.
+  const run0 = inboxEngine(flow);
+  const { state, log } = run0;
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  // START's success binds the inbox handle, as its evaluation would.
+  commitPrepared(log, state, preparePoolCommit(state, START_ID, { m: new InboxRef("m") }));
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID));
+  const sent = commitPrepared(log, state, prepareSend(state, "m", "hi")) && log.nextSequence - 1;
+  commitPrepared(log, state, prepareNodeStarted(state, "first"));
+  commitPrepared(log, state, prepareTakeCommit(state, "first", { inbox: "m", events: [sent], closed: false }));
+  commitPrepared(log, state, prepareNodeStarted(state, "second"));
+  commitPrepared(log, state, prepareNodeWaiting(state, "second", { callIds: [toolCallId(RUN_ID, "second")], waits: [{ callId: toolCallId(RUN_ID, "second"), tool: "take", inbox: "m", mode: "one", deadline: null }] }));
+  const run = reopened(flow, log.records(), true);
+  await run.run();
+  const records = run.log.records().map((entry) => entry.record);
+  const resumedAt = records.findIndex((record) => record instanceof RunResumedRecord);
+  expect(records.slice(resumedAt + 1, resumedAt + 2)).toEqual([expect.any(NodeWokenRecord)]);
+  expect((records[resumedAt + 1] as NodeWokenRecord).nodeId).toBe("second");
+  expect(run.state.pool.get("second")).toEqual({ events: ["hi"], closed: false });
+  // The retried take finds nothing left and waits.
+  expect([...run.state.waits.waiting.keys()]).toEqual(["first"]);
+});
+
+test("learnable: the trace ends at run_failed and leaves the waiting node out of its started set", async () => {
+  const run = inboxEngine(unreachableFlow(new FakeHost("ask")), { learnable: true });
+  await run.run();
+  const trace = run.state.trace!;
+  expect(run.state.result).toBeInstanceOf(RunFailed);
+  expect(trace.started.has("ask")).toBe(false);
+  expect([...trace._parked.keys()]).toEqual(["ask"]);
+  expect(trace.terminal?.succeeded).toBe(false);
+  expect(trace.terminal?.failure).toEqual(run.state.terminalUnreachableFailure!);
+});

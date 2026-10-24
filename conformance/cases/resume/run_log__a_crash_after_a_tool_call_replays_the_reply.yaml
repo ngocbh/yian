@@ -1,0 +1,125 @@
+# TS-only: Python reruns an AGENT from its start on resume.
+# The agent's first reply calls lookup, whose result is written (record 10); its second call is
+# made and lost when the crash refuses its model_call. The resumed agent replays the first reply
+# and lookup's recorded result without calling the model or the tool, then makes the second call
+# again under the same step number (3).
+kind: resume
+rules: [run-log]
+flow: |
+  id: replay-after-tool
+  name: replay_after_tool
+  nodes:
+    research:
+      kind: agent
+      tools: [lookup]
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Look up x."
+  output: ${research.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties: {q: {type: string}}
+        required: [q]
+      # Called once, before the cut.
+      results:
+        - return: X1
+  models:
+    research:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+        # The second call before the cut, lost with its model_call.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: lost}]
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: found X1}]
+  crash_after_record: 10
+expect:
+  output: {status: succeeded, output: found X1}
+  tool_calls:
+    lookup: [{args: {q: x}, attempt: 1, call_id: r1/research/1/0, node: research}]
+  trace:
+    - - run_started
+      - null
+      - effective_llm_by_static_path:
+          research:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: environment
+            model: gpt-5.5
+            provider: openai
+        learnable: false
+        num_workers: 0
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, research]
+    - - node_step
+      - research
+      - n: 1
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - arguments: {q: x}
+                id: c1
+                name: lookup
+                type: tool_call
+            role: assistant
+          purpose: chat
+          request_sha256: 2a88ec7e550ecf7decec738ef550bce3f635cab265c5ff8bb506f4183b7e3b8d
+          response_id: null
+          usage: null
+    - - node_step
+      - research
+      - n: 2
+        step:
+          call_id: c1
+          is_error: false
+          kind: tool_result
+          output: X1
+    - [run_resumed, null, {num_workers: 0, retry_node_ids: [research]}]
+    - [node_started, research]
+    - - node_step
+      - research
+      - n: 3
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - {text: found X1, type: text}
+            role: assistant
+          purpose: chat
+          request_sha256: c5c443f570114d6b2143a1e1a41a442c6fded5db5c112949a379461ee5d56fff
+          response_id: null
+          usage: null
+    - [pool_commit, research, {value: found X1}]
+    - [node_succeeded, research, {commit: 14}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: found X1}]
+    - [node_succeeded, __end__, {commit: 17}]
+  stream:
+    - {chunk: found X1, exchange_id: <id:1>, final: false, key: text, node_id: research}
+    - {chunk: '', exchange_id: <id:1>, final: true, key: text, node_id: research}

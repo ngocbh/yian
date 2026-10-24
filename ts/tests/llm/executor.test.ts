@@ -1098,6 +1098,31 @@ describe("callWithRetries budget", () => {
     expect(model.closed).toBe(model.requests.length);
   });
 
+  test("prior attempts: the call waits their last wait first and counts on from them", async () => {
+    install({ ...BUILTIN, modelRetries: 4 });
+    const clock = virtualScheduler(0);
+    const last = statusError(503, {}, "last");
+    const model = new ScriptedModel([[statusError(500)], [statusError(502)], [last], OK]);
+    const starts: [number, number][] = [];
+    const error = await rejection(
+      callWithRetries(model, REQUEST, {
+        scheduler: clock,
+        random: () => 0,
+        prior: { attempts: 2, retryIn: 3 },
+        onAttempt: (attempt) => void starts.push([attempt, clock.now()]),
+      }),
+    );
+    // Two attempts were spent before, so YIAN_MODEL_RETRIES - 2 retries remain: attempts 3 to 5.
+    expect(error).toBe(last);
+    expect(model.requests).toHaveLength(3);
+    // The first wait is the recorded 3 s; then backoff after 2 and 3 retries (2 s, 4 s).
+    expect(starts).toEqual([
+      [3, 3000],
+      [4, 5000],
+      [5, 9000],
+    ]);
+  });
+
   test("success after retries returns the successful attempt's reply", async () => {
     const model = new ScriptedModel([[statusError(500)], [PARTIAL, statusError(502)], OK]);
     expect(await callWithRetries(model, REQUEST, { scheduler: virtualScheduler(0) })).toEqual(OK);

@@ -276,7 +276,9 @@ With `codeRoot`, both refuse a recorded CODE reference whose file's real path is
 it, as `loadFlow` does, with `LoadError`; `resumeFlow` refuses before it appends anything.
 The specs of the tools and skills the AGENTs grant are recorded, and an unfinished run's must
 match the ones passed; tool implementations, memory and context aren't recorded: pass the ones
-the run had. A log another yian version started resumes with a warning. See [Durable recovery
+the run had. A resumed AGENT replays its recorded model calls and tool results instead of making
+them again; a recorded call the resumed host would ask differently rejects the resume and leaves
+the run resumable. A log another yian version started resumes with a warning. See [Durable recovery
 with `resume_flow`][docs/api.md#durable-recovery-with-resume_flow].
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
@@ -928,8 +930,15 @@ Node 22, and so does every unit test; a change keeps both green.
   (`fileToInline`). `request_sha256` (`requestSha256`) hashes the request with the steers left
   out. A tool call's idempotency key is `<run>/<node>/<n>/<index>`, `n` its reply's step.
   Model-retry waits run on `caps.scheduler` and their backoff jitter comes from `caps.random`
-  (before, the real clock and `Math.random`). Nothing reads these steps yet, so a resumed AGENT
-  restarts. Each reason the built model gives
+  (before, the real clock and `Math.random`). A resumed AGENT replays these steps (`AgentSteps`'
+  replay cursor over `NodeSteps.prior`): `callModel` takes each recorded reply back in place of
+  its call once its purpose and `request_sha256` match the rebuilt request (else a
+  `CapabilityFault`, nothing written), `replayToolCalls` gives each recorded tool result back
+  without running the call and closes a call with none as `crashed` (`TOOL_OUTCOME_UNKNOWN`), a
+  recorded failure fails the node again, and failed attempts after the last call make the first
+  live call wait the recorded `retry_in` and continue the attempt count (`callWithRetries`'
+  `prior`). The host inbox (steers, the interrupt) is read only once the replay ends; the steer
+  rules sit together in `context.ts`. Each reason the built model gives
   for leaving out replay state (`onReplayDegraded`, passed to `ModelAccess.createModel`) reaches
   `emitEvent` once per invocation, as the in-loop `ReplayDegraded`.
 - A CODE `code:` value is a reference (`./file.ts:fn`, also `.js` or `.mjs` and `../` paths,

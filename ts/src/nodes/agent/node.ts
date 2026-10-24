@@ -34,7 +34,7 @@ import {
 } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../skills/tool.ts";
-import { canonicalJson, logJson } from "../../typesys/json.ts";
+import { logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
@@ -732,7 +732,7 @@ export class AgentNode extends Node {
    * one an earlier start recorded in its steps, then records it as a step,
    * `{kind: "llm_config", effective_llm_config: <config>}`, which holds no key or header value.
    * Each model call is recorded as a `model_call` step and each tool result as a `tool_result`
-   * step (`runAgent`); a later start restarts the agent and doesn't read them.
+   * step (`runAgent`); a later start replays them before calling the model again.
    *
    * The model is built through `caps.models`, else `defaultModelAccess()`. Every error from the
    * loop has the credentials the call sent scrubbed before it leaves.
@@ -747,9 +747,9 @@ export class AgentNode extends Node {
    *   null, a spliced value isn't a message or a list of them, or a list prompt renders no
    *   message or ends in one that isn't the user's.
    * @throws SkillError when the node grants skills the host did not supply.
-   * @throws CapabilityFault when capture or memory access fails, or the bound config
-   *   differs from the one an earlier start recorded; the evaluator rethrows its original host
-   *   error.
+   * @throws CapabilityFault when capture or memory access fails, the bound config differs from
+   *   the one an earlier start recorded, or a recorded model call doesn't match the rebuilt
+   *   request; the evaluator rethrows its original host error.
    * @throws The signal's reason once the host stopped the node.
    */
   override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
@@ -836,7 +836,7 @@ export class AgentNode extends Node {
   private recordConfig(config: Readonly<Record<string, unknown>>, steps: NodeSteps): void {
     const recorded = this.recordedLlmConfig(steps.prior);
     // By value: a recorded config comes back from the run log as a new record.
-    if (recorded !== null && canonicalJson(recorded) !== canonicalJson(config)) {
+    if (recorded !== null && logJson(recorded) !== logJson(config)) {
       throw new CapabilityFault(
         new RangeError(
           `node ${reprText(this.callTime!.path)} llm_config: recorded config differs from the ` +

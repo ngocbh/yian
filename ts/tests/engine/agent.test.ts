@@ -1299,14 +1299,14 @@ describe("model_call steps through the engine", () => {
     expect(failed!["request_sha256"]).toBe(succeeded!["request_sha256"]);
   });
 
-  test("a resumed call-time agent restarts after its steps and numbers its new steps after them", async () => {
+  test("a resumed call-time agent continues its recorded attempts and numbers its new steps after them", async () => {
     install({ ...BUILTIN, modelRetries: 1 });
     const failure = () => new ProviderError("server", "boom", { status: 500 });
     const agent = new AgentNode("chat", { prompt: "hi" });
     agent.callTime = callTime({}, "openai");
     agent.hostCredentials = new HostConnection({ apiKey: "sk-host" });
     agent.wiresLlmConfig = true;
-    const models = serving(new ScriptedModel([failure(), textReply("lost"), failure(), textReply("done")], NATIVE));
+    const models = serving(new ScriptedModel([failure(), textReply("lost"), textReply("done")], NATIVE));
     // The first start's retried attempt streams, and the host's stream sink crashes the run.
     const first = agentEngine(agent, models, {
       onStream: () => {
@@ -1329,12 +1329,12 @@ describe("model_call steps through the engine", () => {
       random: () => 1,
     });
     expect((await resumed.run()).at(-1)).toEqual(new RunSucceeded({ output: "done" }));
-    // The new start records its config again, then its calls, numbered after the first start's steps.
+    // The new start records its config again, then its call, numbered after the first start's
+    // steps. The recorded failed attempt spent the one retry, so this attempt is the last allowed.
     expect(chatRecords(resumed).slice(3)).toEqual([
       "NodeStartedRecord",
       "llm_config 3",
       "model_call 4",
-      "model_call 5",
       "PoolCommitRecord",
       "NodeSucceededRecord",
     ]);

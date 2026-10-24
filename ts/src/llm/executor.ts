@@ -213,6 +213,11 @@ export interface CallOptions {
   scheduler?: Scheduler;
   /** A value in [0, 1) for backoff jitter; defaults to `Math.random`. */
   random?: () => number;
+  /**
+   * Attempts an earlier process already made and lost to a crash: the call first waits the last
+   * one's `retryIn` seconds, then numbers its attempts after them, and they count toward `budget`.
+   */
+  prior?: { readonly attempts: number; readonly retryIn: number };
   /** Runs, and is awaited, right before each attempt's `model.stream`, after any wait. */
   onAttempt?(attempt: number): void | Promise<void>;
   /** Runs, and is awaited, for each event an attempt streams, with the attempt's number. */
@@ -244,7 +249,8 @@ export function retryDelay(error: ProviderError, retries: number, random: () => 
  * `ProviderError` while the budget lasts, before or after partial output.
  *
  * Per failed attempt the order is `onAttempt(k)`, its events through `onEvent`, `onRetry`,
- * the wait of `retryDelay` seconds through the scheduler, then `onAttempt(k + 1)`. A
+ * the wait of `retryDelay` seconds through the scheduler, then `onAttempt(k + 1)`. With `prior`,
+ * the call starts with the prior wait and its first attempt is `prior.attempts + 1`. A
  * `ProviderError` naming no provider (the assembler's `incomplete`) gets `model.provider`
  * before `onRetry` sees it or it is thrown.
  *
@@ -255,9 +261,13 @@ export function retryDelay(error: ProviderError, retries: number, random: () => 
  * @returns The successful attempt's reply.
  */
 export async function callWithRetries(model: ChatModel, request: Request, options: CallOptions = {}): Promise<Response> {
-  const { signal, scheduler = realScheduler, random = Math.random, onAttempt, onEvent, onRetry } = options;
+  const { signal, scheduler = realScheduler, random = Math.random, prior, onAttempt, onEvent, onRetry } = options;
   const budget = options.budget ?? current().modelRetries;
-  for (let attempt = 1; ; attempt++) {
+  if (prior !== undefined) {
+    signal?.throwIfAborted();
+    await scheduler.sleep(prior.retryIn * 1000, signal);
+  }
+  for (let attempt = (prior?.attempts ?? 0) + 1; ; attempt++) {
     // Before `onAttempt`, so a stopped call never announces an attempt that won't be sent.
     signal?.throwIfAborted();
     await onAttempt?.(attempt);

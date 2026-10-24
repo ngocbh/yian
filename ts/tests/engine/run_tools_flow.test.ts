@@ -49,6 +49,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { Message, type Request, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { resumeFlow, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
@@ -411,7 +412,9 @@ test("resume uses the group contents passed to resume", async () => {
   const resumed = await resumeFlow({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("old")]) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(resumed.output).toBe('old:x via ["old","ws","co"]');
+  // The stop cut the call off before its result, so the resume closes it, outcome unknown, rather
+  // than running it again.
+  expect(resumed.output).toBe(`${TOOL_OUTCOME_UNKNOWN} via ["old","ws","co"]`);
 });
 
 const NESTED_GROUPS_FLOW = `

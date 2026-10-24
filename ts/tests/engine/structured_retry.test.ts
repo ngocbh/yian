@@ -200,7 +200,7 @@ test("each structured call is written as a model_call step, a transport retry as
   const failure = new ProviderError("server", "upstream failed", { status: 500 });
   const model = scripted([text("bad json"), failure, text('{"value": 42}')]);
   const recorded: ValueRecord[] = [];
-  const steps = new AgentSteps(new NodeSteps(1, [], (step) => recorded.push(step)), () => 0, null, (error) => error);
+  const steps = new AgentSteps(new NodeSteps(1, [], (step) => recorded.push(step)), () => 0, null, (error) => error, "n");
   const retry = { scheduler: virtualScheduler() };
   expect(await generateStructured(model, [], INT, { retries: 1, retry, steps })).toBe(42n);
   expect(recorded.map((step) => ("error" in step ? `failed ${(step["error"] as ValueRecord)["kind"]}` : "ok"))).toEqual([

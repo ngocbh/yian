@@ -1,0 +1,110 @@
+# TS-only: Python records no step for a model retry.
+# The agent's first attempt fails with a 503 (YIAN_MODEL_RETRIES=1, a draw of 0: a 0.5 s wait)
+# and is written as a failed model_call (record 9); the crash cuts the run in the wait, losing
+# the second attempt's reply. The resumed agent waits the recorded 0.5 s again and makes the
+# call as attempt 2, the retry the first start had left: its reply is step 2.
+kind: resume
+rules: [run-log]
+flow: |
+  id: replay-mid-retry
+  name: replay_mid_retry
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>", YIAN_MODEL_RETRIES: '1'}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise: {class: InternalServerError, status: 503, message: The server is temporarily unavailable}
+        # The second attempt before the cut, lost with its model_call.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: lost}]
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: A line.}]
+  jitter: [0.0]
+  crash_after_record: 9
+expect:
+  output: {status: succeeded, output: A line.}
+  trace:
+    - - run_started
+      - null
+      - defaults: {MODEL_RETRIES: 1}
+        effective_llm_by_static_path:
+          write:
+            _connection:
+              endpoint: https://api.openai.com/v1
+              method: api_key
+              source: environment
+            model: gpt-5.5
+            provider: openai
+        learnable: false
+        num_workers: 0
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, write]
+    - - node_step
+      - write
+      - n: 1
+        step:
+          error:
+            kind: server
+            message: The server is temporarily unavailable
+          kind: model_call
+          model: gpt-5.5
+          output: null
+          purpose: chat
+          request_sha256: 61d71014ca3090c0a6f8753602c207b5143734596ea410b26a367279a943b9f2
+          retry_in: 0.5
+          usage: null
+    - [run_resumed, null, {num_workers: 0, retry_node_ids: [write]}]
+    - [node_started, write]
+    - - node_step
+      - write
+      - n: 2
+        step:
+          finish: null
+          kind: model_call
+          model: gpt-5.5
+          output:
+            format: yian.message.v1
+            parts:
+              - {text: A line., type: text}
+            role: assistant
+          purpose: chat
+          request_sha256: 61d71014ca3090c0a6f8753602c207b5143734596ea410b26a367279a943b9f2
+          response_id: null
+          usage: null
+    - [pool_commit, write, {value: A line.}]
+    - [node_succeeded, write, {commit: 13}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: A line.}]
+    - [node_succeeded, __end__, {commit: 16}]
+  events:
+    - [RunResumed]
+    - [NodeAttemptResumed, {interrupted: 1, node_id: write}]
+    - [NodeStarted, {node_id: write}]
+    - [ModelCallStarted, {attempt: 2, exchange_id: <id:1>, model: gpt-5.5, node_id: write, provider: openai, purpose: chat}]
+    - [ModelCallFinished, {attempt: 2, exchange_id: <id:1>, model: gpt-5.5, node_id: write, provider: openai, purpose: chat}]
+    - [NodeSucceeded, {node_id: write, output: A line.}]
+    - [NodeStarted, {node_id: __end__}]
+    - [NodeSucceeded, {node_id: __end__, output: A line.}]
+    - [RunSucceeded, {output: A line.}]
+  stream:
+    - {attempt: 2, chunk: A line., exchange_id: <id:1>, final: false, key: text, node_id: write}
+    - {attempt: 2, chunk: '', exchange_id: <id:1>, final: true, key: text, node_id: write}

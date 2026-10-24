@@ -649,6 +649,28 @@ test("a recorded interrupted reply replays as the interrupt: its text is the out
   expect(model.requests.length).toBe(0);
 });
 
+test("an interrupt set before the resume lets the replay finish, then returns the latest reply", async () => {
+  const flow = flowText(["save"], { steerable: true });
+  const checking = new Response({
+    message: new Message({
+      role: "assistant",
+      parts: [new TextPart("Checking."), new ToolCallPart({ id: "call-a", name: "save", arguments: { topic: "a" } })],
+    }),
+    finishReason: "tool_calls",
+  });
+  const replies = () => [checking, textReply("done")];
+  const tools = { save: topicTool("save") };
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  const log = await cutRun(seqOf(uncut.log, "tool_result") + 1, new ScriptedModel(replies(), CONFIG), { flow, tools });
+  const host = interruptible();
+  host.interrupt();
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resume(log, model, { tools, steering: host.steering });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("Checking.");
+  expect(model.requests.length).toBe(0);
+});
+
 test("recorded skipped results replay the host interrupt that skipped them", async () => {
   const flow = flowText(["save"], { steerable: true });
   const reply = () => [calls(["call-a", "save", "a"], ["call-b", "save", "b"])];

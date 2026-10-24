@@ -472,12 +472,20 @@ export function interruptSignal(ctx: Pick<AgentRunContext, "nodeId" | "steering"
 }
 
 // --------------------------------------------------------------------------------------- //
-// Steers. They aren't recorded yet, so two rules keep a resumed AGENT's replay matching its log:
-// a replaying loop reads no steers (they join the first live call), and a request's digest leaves
-// the steer messages out (a steer read before a crash is lost, and the replayed request lacks
-// it). A recorded steer step, which replay feeds back and the digest includes, replaces both;
-// keep them here, together.
+// The host inbox on replay. Steers aren't recorded yet, so these rules keep a resumed AGENT's
+// replay matching its log: a replaying loop reads neither steers nor the interrupt (they reach
+// the first live call), and a request's digest leaves the steer messages out (a steer read before
+// a crash is lost, and the replayed request lacks it). A recorded steer step, which replay feeds
+// back and the digest includes, replaces the steer rules; keep them here, together.
 // --------------------------------------------------------------------------------------- //
+
+/**
+ * Whether the host interrupted this node, as the loop reads it between effects: never while
+ * `steps` is replaying, since the recorded calls already happened.
+ */
+export function interruptRequested(interrupt: AbortSignal | undefined, steps: AgentSteps): boolean {
+  return interrupt?.aborted === true && !steps.replaying();
+}
 
 /**
  * Take the host's queued steer messages for this node, awaiting a promised answer; none without

@@ -50,6 +50,7 @@ import {
   AgentSteps,
   checkStopped,
   drainSteers,
+  interruptRequested,
   type RecordedResult,
   interruptSignal,
   requestSha256,
@@ -80,7 +81,8 @@ import { recordModelText, recordToolCall, recordToolResult, textOf } from "./tex
  * `ReplayDegraded`. With `ctx.steps`, each model call and failed attempt is recorded as a
  * `model_call` step and each tool result as a `tool_result` step, a failed attempt's error
  * scrubbed of every credential the call may have sent; the steps earlier starts recorded are
- * replayed first (`callModel`, `replayToolCalls`), and steers are read only once they end.
+ * replayed first (`callModel`, `replayToolCalls`), and the host's steers and interrupt are read
+ * only once they end.
  *
  * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
  * then each iteration's steers, replies and tool results; a final structured call after tools
@@ -165,13 +167,13 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
 
   while (true) {
     checkStopped(ctx);
-    if (interrupt?.aborted) return interrupted(reply);
+    if (interruptRequested(interrupt, steps)) return interrupted(reply);
     // Steers join only here, never between a reply's tool calls and their results.
     const steers = await drainSteers(ctx, steps);
     // A stop during the drain wins; its steers are never sent.
     checkStopped(ctx);
     // So does an interrupt that lands while an async drain settles: no model call follows it.
-    if (interrupt?.aborted) return interrupted(reply);
+    if (interruptRequested(interrupt, steps)) return interrupted(reply);
     for (const steer of steers) {
       const message = userMessage(steer);
       steered.add(message);

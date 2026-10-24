@@ -305,7 +305,7 @@ the host's job: it sends them over its own channel.
 ```ts
 resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
 loadRecordedFlow(log: string, options?: { env?: (name: string) => string | undefined; codeRoot?: string | null }): Promise<ComposedFlow | null>
-foldRunLog(log: string, options?: { env?: (name: string) => string | undefined; flow?: ComposedFlow | null }): Promise<FoldedRun>
+foldRunLog(log: string, options?: { env?: (name: string) => string | undefined; flow?: ComposedFlow | null; codeRoot?: string | null }): Promise<FoldedRun>
 inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: string) => string | undefined }): RunInspection
 updateRunIndex(runsDir: string, options?: { timeoutMs?: number }): void
 readRunIndex(runsDir: string, options?: { timeoutMs?: number }): RunIndexRow[]
@@ -321,6 +321,7 @@ recorded flow files; `flow` is only for a run whose flow was built in code (`Run
 both follow each recorded file's `refs` to the files it uses, never the disk.
 With `codeRoot`, both refuse a recorded CODE reference whose file's real path is now outside
 it, as `loadFlow` does, with `LoadError`; `resumeFlow` refuses before it appends anything.
+`foldRunLog` takes `codeRoot` too and refuses the same way before its replay.
 The specs of the tools and skills the AGENTs grant are recorded, and an unfinished run's must
 match the ones passed; tool implementations, memory and context aren't recorded: pass the ones
 the run had. A resumed AGENT replays its recorded model calls and tool results instead of making

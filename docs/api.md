@@ -130,7 +130,7 @@ path is outside the real path of `codeRoot` (symlinks are followed on both sides
 `codeRoot`, nothing is. A relative `codeRoot` resolves against the current directory, and one
 that doesn't exist refuses every reference. The check runs at load: the file is imported by
 path when the node runs, so a file replaced after the load isn't checked again; `resumeFlow`
-with `codeRoot` checks the recorded flow's files again (see [Durable recovery with
+and `foldRunLog` with `codeRoot` check the recorded flow's files again (see [Durable recovery with
 `resume_flow`](#durable-recovery-with-resume_flow)). `env` is the environment this load reads
 the `YIAN_*` values from. The default is the process environment, or the calling load's when a
 `childResolver` calls `loadFlow` without `env`.
@@ -2439,11 +2439,13 @@ non-learnable runs, so both write the same `from`.
 - A flow outputs a growing value linearly when its nodes output only what is new and a binding
   does the append (`examples/chat.yaml`): a turn's AGENT records its reply, and the turn's history
   is a derived value, recorded as `from`.
-- `foldRunLog(log, { env, flow })` (from `yian/run`) replays a log through the run reducer and
-  returns `{flow, records}`, each record with the `TypedValue` an accepted `pool_commit` writes
-  (held, or rebuilt from `from`), `null` for an orphan commit and any other record. It is how a
-  host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`. A log whose flow was
-  built in code needs `flow`.
+- `foldRunLog(log, { env, flow, codeRoot })` (from `yian/run`) replays a log through the run
+  reducer and returns `{flow, records}`, each record with the `TypedValue` an accepted
+  `pool_commit` writes (held, or rebuilt from `from`), `null` for an orphan commit and any other
+  record. It is how a host reads a derived value, such as a LOOP iteration's `<loop>#k/__end__`.
+  A log whose flow was built in code needs `flow`. With `codeRoot`, it refuses a recorded CODE
+  reference whose file's real path is now outside it with `LoadError` before the replay, as
+  `resumeFlow` does; a run whose flow was built in code ignores it.
 
 Temporal stamps every history event with an `eventTime`, LangGraph every checkpoint with a
 `ts`, and Codex and Claude Code each session record with a `timestamp` of the same form; yian's
@@ -2676,8 +2678,9 @@ reference-mode CODE node's function is today. `resumeFlow({ log, codeRoot })` ru
 reference whose file's real path is now outside `codeRoot` (say, the file or its folder was
 replaced by a symlink pointing out) raises `LoadError` before anything is appended, even for
 a finished log. A run whose flow was built in code ignores `codeRoot`: the host confines that
-flow when it loads it. `loadRecordedFlow(log, { env, codeRoot })` (from `yian/run`) compiles a
-log's recorded flow
+flow when it loads it. `foldRunLog` takes the same `codeRoot` (see [Authoritative run
+logs](#authoritative-run-logs)). `loadRecordedFlow(log, { env, codeRoot })` (from `yian/run`)
+compiles a log's recorded flow
 the same way without locking it, for a host that needs the flow before it resumes (the CLI
 reads its skills and MCP needs). A run whose flow was built in code records `flow: null` and is
 resumed with `resumeFlow({ log, flow })`, the flow fingerprint-checked as before; passing `flow`

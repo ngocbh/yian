@@ -1657,18 +1657,25 @@ export interface FoldedRecord {
  *   `processEnv`).
  * @param options.flow The flow, required when the run's flow was built in code (`flow: null`),
  *   refused otherwise.
+ * @param options.codeRoot As `resumeFlow`'s: a recorded CODE reference whose file's real path is
+ *   outside it rejects with `LoadError` before the replay; not used for a flow built in code.
  * @throws RangeError when the log is empty, ends inside its run start, or the replay refuses it;
  *   when the run's flow was built in code and `options.flow` is missing, or the log holds its
  *   flow files and `options.flow` is given.
- * @throws LoadError, DefaultsMismatchError as `loadRecordedFlow`, and `iterRunRecords`' errors.
+ * @throws LoadError when the recorded files no longer load (a CODE reference's file gone, or
+ *   outside `codeRoot`).
+ * @throws DefaultsError, DefaultsMismatchError as `loadRecordedFlow`, and `iterRunRecords`' errors.
  */
-export async function foldRunLog(log: string, options: { env?: Env | null; flow?: ComposedFlow | null } = {}): Promise<FoldedRun> {
+export async function foldRunLog(
+  log: string,
+  options: { env?: Env | null; flow?: ComposedFlow | null; codeRoot?: string | null } = {},
+): Promise<FoldedRun> {
   const env = options.env ?? processEnv;
   const entries = [...iterRunRecords(log)];
   const start = startRecord(entries[0]?.envelope);
   const flow = await withEnv(env, () => {
     checkRecorded(start.defaults);
-    return resumedFlow(log, start, options.flow ?? null, null);
+    return resumedFlow(log, start, options.flow ?? null, options.codeRoot ?? null);
   });
   const values = new Map<number, TypedValue>();
   withEnv(env, () =>

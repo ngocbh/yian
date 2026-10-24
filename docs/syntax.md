@@ -4395,12 +4395,12 @@ reply:
     - user: ${message}
 output: !Turn
   history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-  exited: false
+  closed: false
 ```
 
 A node that returns the whole history every turn makes the log grow quadratically again. So does
 a value entry that carries it: a value entry lowers to a CODE node (see "How a value entry runs"),
-which records its value. `chat.yaml`'s `exited` entry runs once, on the last turn.
+which records its value. `chat.yaml`'s `ended` entry runs once, on the last turn.
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

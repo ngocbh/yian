@@ -3,7 +3,7 @@
 # The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
 # them and takes everything sent since the last turn. Closing the inbox (/exit in `yian chat`)
 # ends the loop once the queued messages are answered: a closed inbox with nothing left routes
-# to the `exited` value entry, which keeps the history and sets `exited: true`. Anything else
+# to the `ended` value entry, which keeps the history and sets `closed: true`. Anything else
 # calls `respond`, where the AGENT sends the history as messages and replies; `respond`'s output
 # binding appends the turn's two messages. The AGENT outputs only its reply and a binding does
 # the append, so the run log grows linearly with the conversation.
@@ -19,7 +19,7 @@ typedefs:
   Msg:                    # one message of the history the AGENT sends
     role: Literal(user, assistant)
     text: str
-  Turn: {history: list(Msg), exited: bool}   # the carried record, and each turn's result
+  Turn: {history: list(Msg), closed: bool}   # the carried record, and each turn's result
 
 defs:
   respond:                # a CASE result is the routed node's output, so the reply chain is a def
@@ -37,12 +37,12 @@ defs:
           - user: ${message}
     output: !Turn
       history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-      exited: false
+      closed: false
 
-  turn:                   # body: 'a -> 'a over {history, exited, messages}
+  turn:                   # body: 'a -> 'a over {history, closed, messages}
     input:
       history: !list(Msg)
-      exited: !bool
+      closed: !bool
       messages: !Inbox(str)
     nodes:
       heard:
@@ -51,14 +51,14 @@ defs:
         input:
           from: ${input.messages}
           take: all
-      exited: !Turn                      # a value entry: the exit record
+      ended: !Turn                       # a value entry: the closing record
         history: ${input.history}
-        exited: true
+        closed: true
       route:
         kind: case
         cases:
           - when: ${heard.output.events == []}   # closed, nothing left to answer
-            then: exited
+            then: ended
         else: call(respond, history=${input.history}, message=${join(heard.output.events, "\n")})
     output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
@@ -68,7 +68,7 @@ nodes:
     call: turn
     input:
       history: []
-      exited: false
+      closed: false
       messages: ${input.messages}
-    while: not exited
+    while: not closed
 output: ${chat.output.history}

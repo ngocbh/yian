@@ -1,7 +1,7 @@
 # From examples/chat.yaml.
 # One turn: the host sends "Hi" to the `messages` inbox, the turn's `take` reads it, `respond`'s
 # AGENT replies, and its output binding appends both messages to the history; closing the inbox
-# routes the next turn to the `exited` value entry and ends the loop.
+# routes the next turn to the `ended` value entry and ends the loop.
 kind: run
 rules: [run-log]
 python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
@@ -11,7 +11,7 @@ flow: |
   # The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
   # them and takes everything sent since the last turn. Closing the inbox (/exit in `yian chat`)
   # ends the loop once the queued messages are answered: a closed inbox with nothing left routes
-  # to the `exited` value entry, which keeps the history and sets `exited: true`. Anything else
+  # to the `ended` value entry, which keeps the history and sets `closed: true`. Anything else
   # calls `respond`, where the AGENT sends the history as messages and replies; `respond`'s output
   # binding appends the turn's two messages. The AGENT outputs only its reply and a binding does
   # the append, so the run log grows linearly with the conversation.
@@ -27,7 +27,7 @@ flow: |
     Msg:                    # one message of the history the AGENT sends
       role: Literal(user, assistant)
       text: str
-    Turn: {history: list(Msg), exited: bool}   # the carried record, and each turn's result
+    Turn: {history: list(Msg), closed: bool}   # the carried record, and each turn's result
 
   defs:
     respond:                # a CASE result is the routed node's output, so the reply chain is a def
@@ -45,12 +45,12 @@ flow: |
             - user: ${message}
       output: !Turn
         history: ${input.history + [Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]}
-        exited: false
+        closed: false
 
-    turn:                   # body: 'a -> 'a over {history, exited, messages}
+    turn:                   # body: 'a -> 'a over {history, closed, messages}
       input:
         history: !list(Msg)
-        exited: !bool
+        closed: !bool
         messages: !Inbox(str)
       nodes:
         heard:
@@ -59,14 +59,14 @@ flow: |
           input:
             from: ${input.messages}
             take: all
-        exited: !Turn                      # a value entry: the exit record
+        ended: !Turn                       # a value entry: the closing record
           history: ${input.history}
-          exited: true
+          closed: true
         route:
           kind: case
           cases:
             - when: ${heard.output.events == []}   # closed, nothing left to answer
-              then: exited
+              then: ended
           else: call(respond, history=${input.history}, message=${join(heard.output.events, "\n")})
       output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
@@ -76,9 +76,9 @@ flow: |
       call: turn
       input:
         history: []
-        exited: false
+        closed: false
         messages: ${input.messages}
-      while: not exited
+      while: not closed
   output: ${chat.output.history}
 env: {OPENAI_API_KEY: "<key:1>"}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
@@ -205,7 +205,7 @@ expect:
         key: chat#1/__start__
     - - node_expanded
       - chat~1
-      - prune_ids: [chat#0/__call_0, chat#0/__end__, chat#0/__start__, chat#0/exited, chat#0/heard, chat#0/route, chat~1]
+      - prune_ids: [chat#0/__call_0, chat#0/__end__, chat#0/__start__, chat#0/ended, chat#0/heard, chat#0/route, chat~1]
     - [node_started, chat#1/__start__]
     - - node_succeeded
       - chat#1/__start__
@@ -224,22 +224,22 @@ expect:
     - [node_started, chat#1/route]
     - - node_routed
       - chat#1/route
-      - {handle: exited}
-    - [node_started, chat#1/exited]
+      - {handle: ended}
+    - [node_started, chat#1/ended]
     - - pool_commit
-      - chat#1/exited
+      - chat#1/ended
       - value:
-          exited: true
           history:
             - {role: user, text: Hi}
             - {role: assistant, text: "Hello! How can I help?"}
+          closed: true
     - - node_succeeded
-      - chat#1/exited
+      - chat#1/ended
       - {commit: 52}
     - [node_started, chat#1/__end__]
     - - pool_commit
       - chat#1/__end__
-      - from: {chat#1/exited: 52}
+      - from: {chat#1/ended: 52}
     - - node_succeeded
       - chat#1/__end__
       - {commit: 55}

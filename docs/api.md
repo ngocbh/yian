@@ -2549,7 +2549,8 @@ whose binding finished (every outcome but a failure at a binding stage, whose in
 Changed (TS yian, schema 18): the inbox and wait records. Six record kinds, each with every
 field always present: `node_waiting {node_id, call_ids, waits, steer_inbox}` moves an in-flight
 node to the waiting set (`waits` holds at most one take or sleep call, `{call_id, tool, inbox,
-mode, deadline}`, with nulls where unused; `steer_inbox` is always null for now), `node_woken
+mode, deadline}`, with nulls where unused; `steer_inbox` names the steer inbox of an AGENT that
+waits with one open, else null), `node_woken
 {node_id, timed_out}` moves it back in flight, `run_waiting {node_ids}` marks a quiescence with
 nodes waiting, `inbox_closed {inbox}`, and the terminal `run_cancelled {}` and `run_failed
 {failure}`. `run_resumed` gains `closed_calls`, the open calls of the retried nodes it closes
@@ -2758,8 +2759,8 @@ on replay. Each `step` is a JSON object with a string `kind`:
   may have sent) and `retry_in` (the wait in seconds before the retry, `null` when it isn't
   retried) in place of `response_id` and `finish`. A call a stop or abort cut writes nothing.
   `request_sha256` is the SHA-256 of the request's messages (each message's `author` included),
-  tools, tool choice, parallel tool calls and output format, as `logJson` text, with the steers
-  the AGENT read left out. Media
+  tools, tool choice, parallel tool calls and output format, as `logJson` text; the steers the
+  AGENT read are messages like any other, so the digest covers them. Media
   in a reply is never inline: its bytes are stored as `media/<sha256>.<ext>` beside the run's
   log, `output` holds the file reference, and the request (and its digest) holds that form;
   only the request sent to the provider has the bytes inline.
@@ -3136,10 +3137,9 @@ the run log is not a durable replacement for that memory backend.
 Changed (TS yian): there is no session memory, so nothing keeps a conversation beside the
 run log; a chat's history is the value a LOOP carries, rebuilt on replay from the node outputs
 that made it (the turns' derived commits hold `from` pointers; see [Authoritative run
-logs](#authoritative-run-logs)). Steers aren't
-recorded: a steer an AGENT read before a crash is lost (the replayed requests don't hold it, and
-`request_sha256` leaves steers out so they still match), and one queued while the run was down
-joins the first live model call.
+logs](#authoritative-run-logs)). Each steer read is recorded as a `steer` step, so a steer an
+AGENT read before a crash joins the replayed requests where it joined the live ones, and one
+queued while the run was down joins the first live model call.
 
 Changed (TS yian): an AGENT records each model call and each tool result as a node step (see
 [Authoritative run logs](#authoritative-run-logs)), and a resumed AGENT replays them instead of
@@ -3152,8 +3152,9 @@ checked as live and, when its check passes, closed with a `tool_result` written 
 reply a host interrupt cut, or recorded `skipped` results, end the AGENT as the interrupt did; a
 recorded call that failed for good fails the node again with its recorded error. Failed attempts
 after the last recorded call belong to the first live call: it waits the last one's `retry_in`
-again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. The AGENT reads its
-host inbox (steers and the interrupt) only once the replay ends. New steps are numbered after
+again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. A recorded `steer`
+step gives its events back in place; the AGENT reads its steer inbox live, and the host's
+interrupt, only once the replay ends. New steps are numbered after
 the recorded ones; a call a crash cut before its `model_call` was written ran no tool, so no
 idempotency key names two calls that ran.
 
@@ -3608,7 +3609,7 @@ included) returns `pending()`, the agent records a `pending` step for the call (
 runs the reply's other calls, and waits on every call of the reply that pended. The host answers
 each with `complete`; once all are answered the agent wakes, replays its recorded steps (no
 handler is called again) and calls its model with every result, in call order. An agent given the
-host's interrupt signal (a steerable agent) can't wait yet: its tool returning `pending()` fails
+host's interrupt signal (an agent with a `steer_inbox:` run with host steering) can't wait yet: its tool returning `pending()` fails
 it, so answer inline. A process lost after the `pending` step but before the agent waits closes
 the call as `crashed` on resume, and the model reads that the call's outcome is unknown. With
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as

@@ -340,7 +340,9 @@ where `params` lists `{name, default}` in order and a param with a `default` is 
 call's arguments are checked against the declared `params`, as Python checks a function's
 signature. A builtin gets yian values, ints as `bigint`, and its result is read as a host value
 (see [Types → host intake](typing.md#two-constructors-infer-vs-check)), so an integral `number`
-within ±(2^53−1) comes back as an int.
+within ±(2^53−1) comes back as an int. A builtin must be pure and deterministic: replay and
+learning bind a node again from the run log instead of reading recorded inputs, so yian may call
+it again with the same arguments and expects the same result.
 
 Every call is checked before it runs, wherever it is written (bindings, flow outputs,
 conditions, prompts): an unknown function, or arguments the builtin doesn't take, is a

@@ -382,8 +382,6 @@ type BackwardHandleFields = {
   readonly models: ModelAccess;
   /** The run's clock, which the backward records' times are read from. */
   readonly clock: () => number;
-  /** Expands the run's tool groups, which learning rebuilds requests with; `null` reads grants as tool names. */
-  readonly expandTools: ((ids: readonly string[]) => readonly string[]) | null;
 };
 
 // The fields are declared once, in `BackwardHandleFields`, and merged into the class.
@@ -463,7 +461,6 @@ class BackwardHandle {
           openMemory,
           models: this.models,
           onEvent,
-          expandTools: this.expandTools,
         });
       } catch (error) {
         primary = { error };
@@ -1029,6 +1026,7 @@ async function startRun(
       flow: flow.source,
       skills: recordedSkills(flow.compiled, skills),
       tools: recordedTools(flow.compiled, runTools),
+      toolGroups: recordedToolGroups(flow.compiled, runTools),
       yianVersion: VERSION,
       parent: options.parent == null ? null : { runId: options.parent.runId, node: options.parent.node ?? null },
     });
@@ -1080,7 +1078,6 @@ async function startRun(
       env,
       models,
       clock,
-      expandTools: (ids) => runTools.expand(ids),
     });
     return resultFromState(state, log, events, handle);
   } catch (error) {
@@ -1104,6 +1101,19 @@ function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, Recor
     }
   }
   // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
+  return Object.fromEntries(recorded);
+}
+
+/**
+ * Return each tool group an AGENT of `flow` grants, by name: its tools' names in group order. A
+ * reopened run expands its grants with these, since it has no `ToolSet` of its own.
+ */
+function recordedToolGroups(flow: CompiledFlow, tools: ToolSet): Record<string, readonly string[]> {
+  const groups = new Set(tools.groups);
+  const recorded = new Map<string, readonly string[]>();
+  for (const [, node] of staticNodes(flow)) {
+    for (const id of node.grantedTools()) if (groups.has(id)) recorded.set(id, tools.expand([id]));
+  }
   return Object.fromEntries(recorded);
 }
 
@@ -1321,7 +1331,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       }
       const models = options.models ?? defaultModelAccess(env);
       const retainedProgram = state.learnable ? copyGraph(flow.compiled) : null;
-      const retain = (runTools: ToolSet | null): BackwardHandle | null =>
+      const retain = (): BackwardHandle | null =>
         retainedHandle(retainedProgram, state, authority, options.memory ?? null, {
           locator,
           apiKey,
@@ -1329,10 +1339,9 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
           env,
           models,
           clock,
-          expandTools: runTools === null ? null : (ids) => runTools.expand(ids),
         });
-      // A finished run opens no tools, so its grants are read as tool names.
-      if (state.result !== null) return resultFromState(state, log, [], retain(null));
+      // A finished run opens no tools: learning expands its grants with the recorded tool groups.
+      if (state.result !== null) return resultFromState(state, log, [], retain());
       if (start.yianVersion !== VERSION) {
         warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
       }
@@ -1363,6 +1372,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkToolGrants(flow.compiled, runTools);
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
+      checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
 
       if (state.memories !== null) {
         checkRegistryTypes(memory!, state.memories);
@@ -1407,7 +1417,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const lead = [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
       publishBoundaryObservers(lead, events, options.onEvent ?? null, (error) => engine.stopForCallback(error));
       events.push(...(await engine.run()));
-      return resultFromState(state, log, events, retain(runTools));
+      return resultFromState(state, log, events, retain());
     } catch (error) {
       primary = { error };
       throw error;
@@ -1517,6 +1527,26 @@ function checkRecordedSpecs(
       if (logJson(was[field]) !== logJson(now[field])) {
         throw new RangeError(`${subject} ${field} differs from the recorded one`);
       }
+    }
+  }
+}
+
+/**
+ * Refuse a resume whose granted tool groups hold other tools, or other tools in another order,
+ * than the run recorded: learning expands the run's grants with the recorded membership.
+ *
+ * @throws RangeError naming the first group, by name, that differs.
+ */
+function checkRecordedToolGroups(
+  recorded: Readonly<Record<string, readonly string[]>>,
+  current: Readonly<Record<string, readonly string[]>>,
+): void {
+  const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
+  const members = (groups: Readonly<Record<string, readonly string[]>>, name: string) =>
+    Object.hasOwn(groups, name) ? logJson([...groups[name]!]) : null;
+  for (const name of names) {
+    if (members(recorded, name) !== members(current, name)) {
+      throw new RangeError(`resume refused: tool_groups.${name} differs from the recorded one`);
     }
   }
 }
@@ -2502,7 +2532,7 @@ function retainedHandle(
   state: RunState,
   log: RunLog,
   memory: ReadonlyMap<string, Memory> | null,
-  options: Pick<BackwardHandleFields, "apiKey" | "headers" | "env" | "models" | "clock" | "expandTools"> & {
+  options: Pick<BackwardHandleFields, "apiKey" | "headers" | "env" | "models" | "clock"> & {
     locator: string | null;
   },
 ): BackwardHandle | null {
@@ -2519,7 +2549,6 @@ function retainedHandle(
     env: options.env,
     models: options.models,
     clock: options.clock,
-    expandTools: options.expandTools,
   });
 }
 

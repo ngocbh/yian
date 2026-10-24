@@ -113,8 +113,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs:
-          values: [same, same]
         evaluated_keys: [values]
         input_names: [values]
         node_data:
@@ -149,121 +147,19 @@ expect:
       key: each#1/__start__
   - - node_expanded
     - each
-    - forward_capture:
-        bound_inputs:
-          over: [same, same]
-        evaluated_keys: [over]
-        input_names: [value]
-        items:
-        - capture:
-            bound_inputs:
-              value: same
-            evaluated_keys: [value]
-            route:
-              children:
-              - children:
-                - kind: source
-                  source:
-                    execution_seq: 5
-                    path: [values, 0]
-                    run_id: r1
-                kind: selected
-              kind: record
-              names: [value]
-            scope: null
-          index: 0
-        - capture:
-            bound_inputs:
-              value: same
-            evaluated_keys: [value]
-            route:
-              children:
-              - children:
-                - kind: source
-                  source:
-                    execution_seq: 5
-                    path: [values, 1]
-                    run_id: r1
-                kind: selected
-              kind: record
-              names: [value]
-            scope: null
-          index: 1
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 5
-              path: [values]
-              run_id: r1
-          kind: record
-          names: [over]
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [each]
-      prune_ids: []
+    - prune_ids: []
   - [node_started, each/__start__]
   - - node_succeeded
     - each/__start__
     - commit: 9
-      forward_capture:
-        bound_inputs: {}
-        node_data:
-          input_output_paths: {}
-        route: {kind: record}
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [each]
   - [node_started, each#0/__start__]
   - - node_succeeded
     - each#0/__start__
     - commit: 10
-      forward_capture:
-        bound_inputs: {value: same}
-        input_names: [value]
-        node_data:
-          input_output_paths:
-            value: [value]
-        route:
-          children:
-          - {kind: literal, value_json: same}
-          kind: record
-          names: [value]
-        scope:
-          boundary: start
-          flow_path: [each]
-          occurrence_path:
-          - index: 0
-            kind: map_item
-            static_path: [each]
-          static_path: [each, __start__]
   - [node_started, each#1/__start__]
   - - node_succeeded
     - each#1/__start__
     - commit: 11
-      forward_capture:
-        bound_inputs: {value: same}
-        input_names: [value]
-        node_data:
-          input_output_paths:
-            value: [value]
-        route:
-          children:
-          - {kind: literal, value_json: same}
-          kind: record
-          names: [value]
-        scope:
-          boundary: start
-          flow_path: [each]
-          occurrence_path:
-          - index: 1
-            kind: map_item
-            static_path: [each]
-          static_path: [each, __start__]
   - [node_started, each#0/answer]
   - - node_step
     - each#0/answer
@@ -288,7 +184,6 @@ expect:
     - each#0/answer
     - commit: 21
       forward_capture:
-        bound_inputs: {value: same}
         evaluated_keys: [value]
         input_names: [value]
         node_data:
@@ -338,7 +233,6 @@ expect:
     - each#1/answer
     - commit: 25
       forward_capture:
-        bound_inputs: {value: same}
         evaluated_keys: [value]
         input_names: [value]
         node_data:
@@ -371,30 +265,6 @@ expect:
   - - node_succeeded
     - each#0/__end__
     - commit: 28
-      forward_capture:
-        bound_inputs: {result: same}
-        evaluated_keys: [result]
-        input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 19
-              path: []
-              run_id: r1
-          kind: record
-          names: [result]
-        scope:
-          boundary: end
-          flow_path: [each]
-          occurrence_path:
-          - index: 0
-            kind: map_item
-            static_path: [each]
-          static_path: [each, __end__]
   - [node_started, each#1/__end__]
   - - pool_commit
     - each#1/__end__
@@ -402,30 +272,6 @@ expect:
   - - node_succeeded
     - each#1/__end__
     - commit: 31
-      forward_capture:
-        bound_inputs: {result: same}
-        evaluated_keys: [result]
-        input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 23
-              path: []
-              run_id: r1
-          kind: record
-          names: [result]
-        scope:
-          boundary: end
-          flow_path: [each]
-          occurrence_path:
-          - index: 1
-            kind: map_item
-            static_path: [each]
-          static_path: [each, __end__]
   - [node_started, each/__end__]
   - - pool_commit
     - each/__end__
@@ -434,33 +280,6 @@ expect:
   - - node_succeeded
     - each/__end__
     - commit: 34
-      forward_capture:
-        bound_inputs: {e0: same, e1: same}
-        evaluated_keys: [e0, e1]
-        input_names: [e0, e1]
-        node_data:
-          input_output_paths:
-            e0: [0]
-            e1: [1]
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 27
-              path: []
-              run_id: r1
-          - kind: source
-            source:
-              execution_seq: 30
-              path: []
-              run_id: r1
-          kind: record
-          names: [e0, e1]
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [each]
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -469,8 +288,6 @@ expect:
     - __end__
     - commit: 37
       forward_capture:
-        bound_inputs:
-          result: [same, same]
         evaluated_keys: [result]
         input_names: [result]
         node_data:

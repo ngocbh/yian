@@ -1407,8 +1407,7 @@ export function projectOwnerContexts(
       const scope = scopes.get(key);
       if (scope === undefined || !scope.memories.includes(spec.key)) continue;
       const record = occurrence.record;
-      // An accepted outcome holds its forward capture while learning.
-      const capture = record.forwardCapture!;
+      const capture = occurrence.capture;
       const material = options.materials?.get(key) ?? null;
       // A success's committed value, or an expansion's seed, which neither record holds.
       const committed = isExactly(record, NodeSucceededRecord)

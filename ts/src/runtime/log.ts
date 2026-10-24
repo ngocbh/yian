@@ -70,10 +70,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -235,6 +235,8 @@ export interface RunStartedFields {
   skills?: Readonly<Record<string, RecordedSkill>>;
   /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
   tools?: Readonly<Record<string, RecordedTool>>;
+  /** Each tool group an AGENT grants, by name: its tools' names in group order; defaults to `{}`. */
+  toolGroups?: Readonly<Record<string, readonly string[]>>;
   /** The yian version that started the run; defaults to this one's `VERSION`. */
   yianVersion?: string;
   /** The run that started this one; `null` (the default) for a run the host started on its own. */
@@ -272,6 +274,8 @@ export class RunStartedRecord {
   readonly skills: Readonly<Record<string, RecordedSkill>>;
   /** The deep-frozen tools the AGENTs grant, by name. */
   readonly tools: Readonly<Record<string, RecordedTool>>;
+  /** The frozen tool groups the AGENTs grant, by name: each group's tool names, in group order. */
+  readonly toolGroups: Readonly<Record<string, readonly string[]>>;
   /** The yian version that started the run. */
   readonly yianVersion: string;
   /** The frozen parent run, or `null`. */
@@ -293,8 +297,8 @@ export class RunStartedRecord {
    *   are only partly recorded, aren't sorted and unique, disagree on their keys or a stack names
    *   an unknown key, a defaults name is empty, `callTimeLlm` has missing or extra fields, no
    *   agent, an empty agent path or a non-JSON value, `flow.files` lacks `flow.root` or a file
-   *   its refs name, a name, the flow's root or folder or the version is empty, or a tool's
-   *   parameters aren't JSON.
+   *   its refs name, a name, the flow's root or folder or the version is empty, a tool's
+   *   parameters aren't JSON, or a tool group names a tool `tools` lacks.
    * @throws TypeCheckError at the bad part's path when the wiring override or the agent
    *   configuration holds NaN or another non-JSON value (see `jsonPart`).
    */
@@ -309,6 +313,7 @@ export class RunStartedRecord {
       flow = null,
       skills = {},
       tools = {},
+      toolGroups = {},
       yianVersion = VERSION,
       parent = null,
     } = fields;
@@ -346,6 +351,7 @@ export class RunStartedRecord {
         parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
       };
     });
+    this.toolGroups = validatedToolGroups(toolGroups, this.tools);
     this.yianVersion = requireName(yianVersion, "RunStarted yian_version");
     this.parent = parent === null ? null : validatedParent(parent);
     Object.freeze(this);
@@ -371,6 +377,31 @@ function requireText(value: unknown, label: string): string {
 function requireName(value: unknown, label: string): string {
   if (requireText(value, label) === "") throw new RangeError(`${label} must be a non-empty string`);
   return value as string;
+}
+
+/**
+ * Return a frozen copy of `RunStarted.tool_groups`: each group's tool names as a frozen array.
+ *
+ * @throws TypeError when `groups` isn't a plain object or a group isn't an array of strings.
+ * @throws RangeError when a group or tool name is empty, or a group names a tool `tools` lacks.
+ */
+function validatedToolGroups(
+  groups: unknown,
+  tools: Readonly<Record<string, RecordedTool>>,
+): Readonly<Record<string, readonly string[]>> {
+  if (!isRecord(groups)) throw new TypeError("RunStarted tool_groups must be an object");
+  const entries = Object.entries(groups).map(([name, members]): [string, readonly string[]] => {
+    const label = `RunStarted tool_groups[${reprText(name)}]`;
+    if (!name) throw new RangeError("RunStarted tool_groups names must be non-empty strings");
+    if (!Array.isArray(members)) throw new TypeError(`${label} must be an array of tool names`);
+    const names = members.map((member, index) => requireName(member, `${label}[${index}]`));
+    for (const member of names) {
+      if (!Object.hasOwn(tools, member)) throw new RangeError(`${label} names ${reprText(member)}, which tools doesn't hold`);
+    }
+    return [name, Object.freeze(names)];
+  });
+  // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
+  return Object.freeze(Object.fromEntries(entries));
 }
 
 /**
@@ -2668,7 +2699,6 @@ function capturePayload(capture: ForwardCapture): JsonObject {
     throw new RangeError("evaluated_keys must name captured routes");
   }
   return {
-    bound_inputs: capture.boundInputs as JsonObject | null,
     route,
     evaluated_keys: keys.sort(compareCodeUnits),
     items: capture.items.map(([index, item]) => ({ index: BigInt(index), capture: capturePayload(item) })),
@@ -2689,7 +2719,6 @@ function capturePayload(capture: ForwardCapture): JsonObject {
  */
 function captureFromPayload(value: unknown, label: string): ForwardCapture {
   const wire = wireObject(value, label, [
-    "bound_inputs",
     "route",
     "evaluated_keys",
     "items",
@@ -2705,8 +2734,7 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     const index = wireInt(pair["index"], `${label} item index`);
     return [index, captureFromPayload(pair["capture"], `${label} item capture`)] as const;
   });
-  const boundInputs = wireNullableObject(wire["bound_inputs"], `${label} bound_inputs`);
-  return new ForwardCapture(boundInputs, routeFromPayload(wire["route"]), {
+  return new ForwardCapture(routeFromPayload(wire["route"]), {
     evaluatedKeys: new Set(keys),
     items,
     scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
@@ -3040,6 +3068,7 @@ const RUN_STARTED_FIELDS = [
   "flow",
   "skills",
   "tools",
+  "tool_groups",
   "yian_version",
   "parent",
 ];
@@ -3062,6 +3091,7 @@ function payloadForRecord(record: RunRecord): JsonObject {
       flow: record.flow === null ? null : flowPayload(record.flow),
       skills: record.skills as unknown as JsonObject,
       tools: record.tools as unknown as JsonObject,
+      tool_groups: Object.fromEntries(Object.entries(record.toolGroups).map(([name, members]) => [name, [...members]])),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
     };
@@ -3204,6 +3234,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
         skills: wireEntries(payload["skills"], `${label} skills`, ["description", "instructions"]) as never,
         tools: wireEntries(payload["tools"], `${label} tools`, ["description", "parameters"]) as never,
+        toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as never,
         yianVersion: wireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });

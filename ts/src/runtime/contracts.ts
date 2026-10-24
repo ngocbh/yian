@@ -268,17 +268,16 @@ export class BackwardCapture {
 }
 
 /**
- * Detached canonical inputs and routes from one actual binding operation. Frozen.
+ * Detached canonical routes from one actual binding operation. Frozen.
  *
- * A `null` input record marks unfinished binding; safe partial routes remain inspectable. Item
- * captures retain explicit indices and actual second-template evaluation flags. Outcomes and
- * visible interactions stay on their accepted record. Scope may be absent for synthetic nodes
- * awaiting instantiation. JSON values are deep-frozen copies made by the constructor; copy one
- * before you modify it.
+ * The bound inputs aren't kept: learning rebuilds them by binding the node again from the values
+ * its route read (`TraceOccurrence.boundInputs`). An unfinished binding keeps its safe partial
+ * routes. Item captures retain explicit indices and actual second-template evaluation flags.
+ * Outcomes and visible interactions stay on their accepted record. Scope may be absent for
+ * synthetic nodes awaiting instantiation. JSON values are deep-frozen copies made by the
+ * constructor; copy one before you modify it.
  */
 export class ForwardCapture {
-  /** The actual completed input record, or `null` for unfinished binding. */
-  readonly boundInputs: Readonly<Record<string, unknown>> | null;
   /** Record-shaped routes for the captured fields. */
   readonly route: ValueRoute;
   /** Captured keys whose template expressions were evaluated here; a private copy, read-only by contract. */
@@ -297,8 +296,6 @@ export class ForwardCapture {
   /**
    * Validate the routes and retain frozen copies of the invocation data.
    *
-   * @param boundInputs The actual completed input record; `null` marks unfinished binding and
-   *   forbids usable item inputs.
    * @param route Record-shaped routes for the captured fields.
    * @param options.evaluatedKeys Captured keys whose template expressions were evaluated here;
    *   copied, and defaults to empty.
@@ -309,12 +306,11 @@ export class ForwardCapture {
    * @param options.inputNames Distinct eligible input names; defaults to empty.
    * @param options.variableNames Distinct local variable names; defaults to empty.
    * @throws TypeError when a carrier, container, or JSON value has an invalid type.
-   * @throws RangeError when a route, inventory name, output path, or input/item presence breaks
-   *   the capture contract, or for NaN.
+   * @throws RangeError when a route, inventory name, output path, or item index breaks the capture
+   *   contract, or for NaN.
    * @throws JSONDecodeError when a route's `valueJson` isn't JSON yian reads.
    */
   constructor(
-    boundInputs: Readonly<Record<string, unknown>> | null,
     route: ValueRoute,
     options: {
       evaluatedKeys?: ReadonlySet<string>;
@@ -343,14 +339,6 @@ export class ForwardCapture {
     for (const key of keys) {
       if (!route.names.includes(key)) throw new RangeError("evaluated_keys must name captured routes");
     }
-    if (boundInputs !== null) {
-      if (!isRecord(boundInputs)) throw new TypeError("bound_inputs must be a JSON object or null");
-      // Route names are unique, so equal sizes and inclusion make the key sets equal.
-      const keys = Object.keys(boundInputs);
-      if (keys.length !== route.names.length || keys.some((key) => !route.names.includes(key))) {
-        throw new RangeError("bound_inputs keys must match input routes");
-      }
-    }
     if (!isList(items)) throw new TypeError("items must be an array");
     const pairs = copyList<readonly [number, ForwardCapture]>(items);
     let previousIndex = -1;
@@ -361,9 +349,6 @@ export class ForwardCapture {
         throw new RangeError("item indices must be non-negative and increasing");
       }
       if (!isExactly(capture, ForwardCapture)) throw new TypeError("item capture must be a ForwardCapture");
-      if (boundInputs === null && capture.boundInputs !== null) {
-        throw new RangeError("unfinished binding cannot retain usable item inputs");
-      }
       previousIndex = index;
     }
     if (scope !== null && !isExactly(scope, ExecutionScope)) {
@@ -375,7 +360,6 @@ export class ForwardCapture {
       if (!isRecord(nodeData)) throw new TypeError("node_data must be a record or null");
       validateInputOutputPaths(nodeData, inputNames);
     }
-    this.boundInputs = copyBackwardValue(boundInputs, "bound_inputs") as typeof this.boundInputs;
     this.route = route;
     this.evaluatedKeys = keys;
     this.items = Object.freeze(pairs.map(([index, capture]) => Object.freeze([index, capture] as const)));

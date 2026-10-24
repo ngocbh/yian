@@ -83,7 +83,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs: {}
         node_data:
           input_output_paths: {}
         route: {kind: record}
@@ -103,7 +102,6 @@ expect:
         message: 'RangeError: integer division or modulo by zero'
         node: pick
       forward_capture:
-        bound_inputs: {}
         route:
           kind: record
         scope:

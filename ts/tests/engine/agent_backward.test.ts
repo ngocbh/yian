@@ -177,7 +177,7 @@ test("the backward context exposes only accepted evidence and replays without ag
   expect(Object.hasOwn(accepted, "_evaluation_evidence")).toBe(false);
   /** The context backward reads for the occurrence, its material rebuilt from `state`'s trace. */
   const contextOf = async (state: RunState) => {
-    const options = { memory: null, models: null, expandTools: null, onEvent: null };
+    const options = { memory: null, models: null, onEvent: null };
     const material = (await learningMaterials(state, options)).get(sourceKey(occurrence.source)) ?? null;
     return state.trace!.backwardContext(occurrence.source, { material });
   };
@@ -624,6 +624,8 @@ for (const [label, response, code] of FAILURE_ROWS) {
 
 test("AGENT backward reads no live render, model or variable state", async () => {
   const { node, trace } = await retainedEngine();
+  // The bound inputs are rebuilt from the node's binding, so they are read before it changes.
+  for (const occurrence of trace.occurrences) void occurrence.boundInputs;
   node.prompt = "wrong";
   node.llmConfig = { provider: "wrong", model: "wrong" };
   node.variables = [];

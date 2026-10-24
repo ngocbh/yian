@@ -34,7 +34,7 @@ import {
   RunSucceeded,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { ResolvedValue, SourceRef, sameSource } from "../expr/lineage.ts";
+import { ResolvedValue, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import {
   MemoryScope,
@@ -62,7 +62,7 @@ import {
   sameOptional,
   validateOutputContract,
 } from "../nodes/contracts.ts";
-import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
+import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
   isRecord,
@@ -76,7 +76,7 @@ import {
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
-import { type ReboundSource, rebuildDerived } from "./eval_node.ts";
+import { nodeBackwardCapture, rebindInputs, rebuildDerived } from "./eval_node.ts";
 import {
   type BackwardRecord,
   reduceBackwardRecord,
@@ -117,8 +117,11 @@ import {
 } from "./log.ts";
 import {
   checkMemoryScope,
+  captureBindings,
   decodeTyped,
   type PrepareTraceOptions,
+  type ReboundSource,
+  type Rebinder,
   prepareTrace,
   RetainedTrace,
   selectSeedRoute,
@@ -371,6 +374,8 @@ export class RunState {
   recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
   /** The tool specs `RunStarted` recorded, by name, which learning rebuilds requests with. */
   recordedTools: Readonly<Record<string, RecordedTool>> = {};
+  /** The tool groups `RunStarted` recorded, by name, which learning expands grants with. */
+  recordedToolGroups: Readonly<Record<string, readonly string[]>> = {};
   /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
   learnable = false;
   /**
@@ -470,7 +475,9 @@ export function resolveFromPool(
 
 /**
  * Return the resolver the reducer rebuilds derived values with: the value pool name `name` holds
- * now, named by its producer index seq.
+ * now, named by its producer index seq. The source it gives is the one the run's routes name: in
+ * a learnable run the trace's current writer (none for a system value), as `RetainedTrace.resolve`
+ * gives it, else the commit at `seq`.
  *
  * Sound because records apply in log order: when a derived commit is accepted, the pool holds
  * exactly what its binding read.
@@ -489,27 +496,57 @@ export function poolResolver(state: RunState): (name: string, seq: number) => Re
     const value = name.startsWith(SYSTEM_PREFIX) ? state.pool.system.get(name.slice(SYSTEM_PREFIX.length)) : state.pool.store.get(name);
     // The producer index names exactly the pool's names.
     if (value === undefined) throw new RangeError(`pool name ${reprText(name)} has no value`);
-    return { value, source: new SourceRef(state.runId!, seq) };
+    const trace = state.trace;
+    if (trace === null) return { value, source: new SourceRef(state.runId!, seq) };
+    if (name.startsWith(SYSTEM_PREFIX)) return { value, source: null };
+    // The trace's current writers name exactly the pool's names.
+    return { value, source: trace.currentWriters.get(name)!.source };
   };
 }
 
 /**
- * Rebuild the value of `nodeId`'s derived commit under `key` from its `from`, reading the pool
- * through the producer index (`poolResolver`), as its binding read it when the commit was accepted.
+ * Rebuild `nodeId`'s derived outcome from `from` (`rebuildDerived`), reading the pool through the
+ * producer index as its binding read it, and in a learnable run the forward capture its record
+ * leaves out: the route and bound inputs the binding collects, and the backward material the node
+ * gives, as the evaluator captures them (`null` in a run that doesn't learn).
  *
- * @returns The canonical typed wire text of the value.
+ * With `from` `null` (an expansion that wrote no commits) it binds from the whole pool.
+ *
+ * @throws as `rebuildDerived`.
+ */
+function rebuildDerivedRecord(
+  state: RunState,
+  nodeId: string,
+  from: ReadonlyMap<string, number> | null,
+): { outcome: Output | Grow; capture: ForwardCapture | null } {
+  const node = state.flow.nodes.get(nodeId)!;
+  const wiring = state.wiringOverrides.get(nodeId) ?? null;
+  const learnable = state.trace !== null;
+  const { outcome, capture } = rebuildDerived(node, state.flow, from ?? state.producers, poolResolver(state), wiring, {
+    capture: learnable,
+  });
+  if (!learnable) return { outcome, capture: null };
+  return { outcome, capture: captureBindings(capture!, nodeBackwardCapture(node, node.captureBackwardContext())) };
+}
+
+/**
+ * Rebuild the value of `nodeId`'s derived commit under `key` from its `from`, reading the pool
+ * through the producer index (`poolResolver`), as its binding read it when the commit was accepted,
+ * with the forward capture of the success that accepts the commit (`rebuildDerivedRecord`).
+ *
+ * @returns The canonical typed wire text of the value, and the capture (`null` in a run that
+ *   doesn't learn).
  * @throws RangeError when a `from` seq isn't its name's producer, or the node rebuilds to a growth
  *   or under another key; a `BindingError` when its binding no longer evaluates.
  */
-export function rebuildCommitValue(
+export function rebuildCommit(
   state: RunState,
   nodeId: string,
   key: string,
   from: ReadonlyMap<string, number>,
-): string {
+): { valueJson: string; capture: ForwardCapture | null } {
   const node = state.flow.nodes.get(nodeId)!;
-  const wiring = state.wiringOverrides.get(nodeId) ?? null;
-  const { outcome } = rebuildDerived(node, state.flow, from, poolResolver(state), wiring);
+  const { outcome, capture } = rebuildDerivedRecord(state, nodeId, from);
   if (!(outcome instanceof Output)) {
     throw new RangeError(`the derived commit of ${reprText(nodeId)} rebuilds to a growth, not a value`);
   }
@@ -517,7 +554,7 @@ export function rebuildCommitValue(
   if (target !== key) {
     throw new RangeError(`the derived commit of ${reprText(nodeId)} is under ${reprText(key)}, but rebuilds under ${reprText(target)}`);
   }
-  return committedText(state, key, outcome.value);
+  return { valueJson: committedText(state, key, outcome.value), capture };
 }
 
 /**
@@ -533,7 +570,8 @@ function committedText(state: RunState, key: string, value: unknown): string {
 
 /**
  * Rebuild spawner `spawnerId`'s growth from its expansion commits' `from` (see
- * `rebuildCommitValue`): its canonical seed and sorted prune ids.
+ * `rebuildCommit`): its canonical seed and sorted prune ids, and in a learnable run the
+ * expansion's forward capture (`rebuildDerivedRecord`).
  *
  * With `from` `null` (every child START of the expansion fails to bind, so it wrote no commit),
  * the spawner binds from the whole pool. That is sound for the same reason the commits are: the
@@ -547,12 +585,10 @@ export function rebuildGrowth(
   state: RunState,
   spawnerId: string,
   from: ReadonlyMap<string, number> | null,
-): { seed: JsonValue; pruneIds: readonly string[] } {
-  const spawner = state.flow.nodes.get(spawnerId)!;
-  const wiring = state.wiringOverrides.get(spawnerId) ?? null;
-  const { outcome } = rebuildDerived(spawner, state.flow, from ?? state.producers, poolResolver(state), wiring);
+): { seed: JsonValue; pruneIds: readonly string[]; capture: ForwardCapture | null } {
+  const { outcome, capture } = rebuildDerivedRecord(state, spawnerId, from);
   if (!(outcome instanceof Grow)) throw new RangeError(`spawner ${reprText(spawnerId)} rebuilds to a value, not a growth`);
-  return { seed: canonicalSeed(outcome.seed)[0], pruneIds: [...outcome.prune].sort(compareCodeUnits) };
+  return { seed: canonicalSeed(outcome.seed)[0], pruneIds: [...outcome.prune].sort(compareCodeUnits), capture };
 }
 
 /**
@@ -639,6 +675,8 @@ export interface RunStartData {
   skills?: Readonly<Record<string, RecordedSkill>>;
   /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
   tools?: Readonly<Record<string, RecordedTool>>;
+  /** Each tool group an AGENT grants, by name: its tools' names; defaults to `{}`. */
+  toolGroups?: Readonly<Record<string, readonly string[]>>;
   /** The yian version that starts the run; defaults to this one's. */
   yianVersion?: string;
   /** The run that started this one; `null` (the default) when none did. */
@@ -952,6 +990,7 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     flow: data.flow ?? null,
     skills: data.skills ?? {},
     tools: data.tools ?? {},
+    toolGroups: data.toolGroups ?? {},
     yianVersion: data.yianVersion,
     parent: data.parent ?? null,
   });
@@ -1134,7 +1173,9 @@ export function preparePoolCommit(
  *
  * @param state An initialized nonterminal state with `nodeId` in flight and its commit pending.
  * @param nodeId The exact id of the executing node.
- * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning. A
+ *   success naming a derived or expansion commit doesn't record it: the capture is rebuilt with
+ *   the commit.
  * @param options.output The value the node evaluated to; required for a derived commit, whose
  *   value rebuilt from its `from` must equal it.
  * @returns The canonical `NodeSucceededRecord`, naming the commit's seq, and a detached
@@ -1157,10 +1198,11 @@ export function prepareNodeSucceeded(
   if (pending.valueJson === null && !Object.hasOwn(options, "output")) {
     throw new TypeError(`NodeSucceeded of derived node ${reprText(nodeId)} needs the value it evaluated to (output)`);
   }
+  const derived = pending.valueJson === null || pending.spawner !== null;
   return prepareSuccessTransition(
     state,
     new NodeSucceededRecord(nodeId, pending.seq, {
-      forwardCapture: options.forwardCapture ?? null,
+      forwardCapture: derived ? null : (options.forwardCapture ?? null),
     }),
     Object.hasOwn(options, "output") ? { output: options.output } : null,
   );
@@ -1441,9 +1483,15 @@ function prepareSuccessTransition(
   validateLearnedScope(state, record.nodeId);
   // The caller checked that the record names the node's pending commit.
   let pending = state.pendingCommits.get(record.nodeId)!;
+  // A derived record's capture is rebuilt with its value; a child START's, from its constant wiring,
+  // only for a run that learns, since its value was admitted with the expansion.
+  let capture =
+    pending.spawner !== null && state.trace !== null ? rebuildDerivedRecord(state, record.nodeId, new Map()).capture : null;
   if (pending.valueJson === null) {
     // A derived commit: the pool now holds what its binding read.
-    const valueJson = rebuildCommitValue(state, record.nodeId, pending.key, pending.from!);
+    const rebuilt = rebuildCommit(state, record.nodeId, pending.key, pending.from!);
+    const valueJson = rebuilt.valueJson;
+    capture = rebuilt.capture;
     // Live, a binding that read a name its `from` missed rebuilds to another value.
     if (live !== null) requireEvaluated(state, `derived node ${reprText(record.nodeId)}`, pending, valueJson, live.output);
     pending = { ...pending, valueJson };
@@ -1487,6 +1535,7 @@ function prepareSuccessTransition(
       terminalFailure: terminal?.failure ?? null,
       writerFiles: files,
       committed: { key: delta.commitTarget, valueJson: delta.valueJson },
+      capture,
     }),
     delta,
     terminal,
@@ -1617,7 +1666,8 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
  * @param grow The seed-first expansion description and its dynamic-overlay prune set.
  * @param growBuilder The injected compile-owned interpreter from a copy of the spawner and the
  *   canonical seed to one self-contained `Flow` fragment.
- * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning. The
+ *   record doesn't hold it: an expansion's capture is rebuilt with its seed.
  * @returns The canonical `NodeExpandedRecord` and its detached append-before-apply plan.
  * @throws GrowthRejected when the node-produced prune set or seed, the returned fragment, the
  *   growth budget or the requested prune policy is invalid; `original` holds the exact error.
@@ -1635,23 +1685,24 @@ export function prepareExpanded(
   planned: PlannedExpansion | null = null,
 ): PreparedTransition {
   let expansion: Omit<PlannedExpansion, "commits"> & { commits: PlannedExpansion["commits"] | null };
+  let capture: ForwardCapture | null;
   if (planned === null) {
     const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
     const pruneIds = [...grow.prune].sort(compareCodeUnits);
     expansion = { spawnerId: nodeId, seed: seedWire, pruneIds, fragment, validatedFragment, digest: expansionDigest(fragment), commits: null };
+    // Unplanned, the growth isn't checked against its rebuild, so it keeps the evaluated capture.
+    capture = options.forwardCapture ?? null;
   } else {
     if (planned.spawnerId !== nodeId) throw new RangeError(`the planned expansion is ${reprText(planned.spawnerId)}'s`);
-    requireRebuiltGrowth(state, planned);
+    capture = requireRebuiltGrowth(state, planned);
     expansion = planned;
   }
   const { seed, pruneIds, fragment, validatedFragment, digest, commits } = expansion;
   return prepareGrowthTransition(
     state,
-    new NodeExpandedRecord(nodeId, pruneIds, digest, {
-      forwardCapture: options.forwardCapture ?? null,
-    }),
+    new NodeExpandedRecord(nodeId, pruneIds, digest),
     fragment,
-    { actualDigest: digest, validatedFragment, seed, commits },
+    { actualDigest: digest, validatedFragment, seed, commits, capture },
   );
 }
 
@@ -1710,15 +1761,17 @@ export function planExpansion(
  * Require a live growth to equal the one its expansion commits' shared `from` rebuilds (the
  * spawner's binding and pure `forward`, as a replay runs them): its canonical seed and prune ids.
  * A binding that read a name its `from` missed fails here, before anything replays the log.
+ * Returns the rebuilt forward capture (`rebuildGrowth`).
  *
  * @throws RangeError naming the spawner when they differ.
  */
-function requireRebuiltGrowth(state: RunState, planned: PlannedExpansion): void {
+function requireRebuiltGrowth(state: RunState, planned: PlannedExpansion): ForwardCapture | null {
   const { spawnerId } = planned;
-  const { seed, pruneIds } = rebuildGrowth(state, spawnerId, pendingExpansion(state, spawnerId)[0]?.from ?? null);
+  const { seed, pruneIds, capture } = rebuildGrowth(state, spawnerId, pendingExpansion(state, spawnerId)[0]?.from ?? null);
   if (logJson(seed) !== logJson(planned.seed) || !sameItems(pruneIds, planned.pruneIds)) {
     throw new RangeError(`spawner ${reprText(spawnerId)} grew another seed than its expansion commits' from rebuilds`);
   }
+  return capture;
 }
 
 /**
@@ -1878,7 +1931,7 @@ function prepareGrowthRecord(
     // The seed is rebuilt from the expansion commits' shared `from` (checked when they're
     // admitted) before the prune applies, so the names it read are still in the pool.
     const from = pendingExpansion(state, record.spawnerId)[0]?.from ?? null;
-    const { seed: seedWire, pruneIds } = rebuildGrowth(state, record.spawnerId, from);
+    const { seed: seedWire, pruneIds, capture } = rebuildGrowth(state, record.spawnerId, from);
     const fragment = buildGrowthFragment(state.flow.nodes.get(record.spawnerId)!, canonicalSeed(seedWire)[1], growBuilder);
     if (!sameItems(pruneIds, record.pruneIds)) {
       throw new RangeError(
@@ -1893,7 +1946,13 @@ function prepareGrowthRecord(
           `recorded ${reprText(record.topologyDigest)}, rebuilt ${reprText(actualDigest)}`,
       );
     }
-    return prepareGrowthTransition(state, record, fragment, { actualDigest, validatedFragment, seed: seedWire, commits: null });
+    return prepareGrowthTransition(state, record, fragment, {
+      actualDigest,
+      validatedFragment,
+      seed: seedWire,
+      commits: null,
+      capture,
+    });
   } catch (error) {
     // A historical record is not a live node outcome: its rejection is a plain corrupt-log error.
     if (error instanceof GrowthRejected) throw error.original;
@@ -1912,10 +1971,12 @@ function prepareGrowthTransition(
     seed: JsonValue;
     /** A live plan's child START values, so they aren't bound again; `null` binds them here. */
     commits: PlannedExpansion["commits"] | null;
+    /** The expansion's forward capture, rebuilt with its seed (`rebuildGrowth`). */
+    capture: ForwardCapture | null;
   },
 ): PreparedTransition {
   validateGrowthRecord(state, record);
-  const { actualDigest: digest, validatedFragment: validated, seed, commits } = options;
+  const { actualDigest: digest, validatedFragment: validated, seed, commits, capture } = options;
   if (digest !== record.topologyDigest) {
     throw new RangeError("NodeExpandedRecord topology digest disagrees with its fragment");
   }
@@ -1932,7 +1993,7 @@ function prepareGrowthTransition(
     throw new TypeError("node-expansion envelope decoded to a different record kind");
   }
   if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeExpandedRecord is not in canonical wire form");
-  requireSeedRoutes(state, canonical.forwardCapture, fragment);
+  requireSeedRoutes(state, capture, fragment);
   const startId = state.flow.startId;
   const endId = state.flow.endId;
   const plan: GrowthPlan = Object.freeze({
@@ -1949,6 +2010,7 @@ function prepareGrowthTransition(
       childBoundaries: fragment.childBoundaries,
       retiredIds: delta.retiredIds,
       seed,
+      capture,
     }),
     seed,
     delta,
@@ -2067,13 +2129,42 @@ function prepareRecordTrace(
   const record = envelope.record;
   const nodeId = outcomeNodeId(record);
   const started = isExactly(record, RunStartedRecord);
-  return prepareTrace(state.trace, envelope, nodeId === null ? null : (state.flow.nodes.get(nodeId) ?? null), {
+  const node = nodeId === null ? null : (state.flow.nodes.get(nodeId) ?? null);
+  return prepareTrace(state.trace, envelope, node, {
     ...options,
+    rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
     steps: nodeId === null ? [] : (state.nodeSteps.get(nodeId) ?? []),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
     rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
   });
+}
+
+/**
+ * Return what binds `node` again with the wiring it runs with now (`rebindInputs`), kept for learning,
+ * which runs after an expansion may have pruned the node from the flow.
+ */
+function nodeRebinder(state: RunState, node: Node): Rebinder {
+  const flow = state.flow;
+  // Copied now: the flow drops a pruned node's wiring.
+  const wiring = (state.wiringOverrides.get(node.id) ??
+    Object.fromEntries(flow.wiring.get(node.id) ?? new Map())) as JsonObject;
+  return (sources, resolve, route) =>
+    rebindInputs(node, flow, sources, resolve, wiring, { reserved: recordedReserved(node, route) });
+}
+
+/**
+ * The reserved values a capture route holds whole (a node kind has at most one reserved field,
+ * such as AGENT's `__llm_config` or MAP's `over`): each route field that isn't one of `node`'s
+ * params, when every such field is a literal with its value (a hook that resolved it without the
+ * binder, such as a call-time AGENT's `__llm_config`, which reads names the route doesn't name);
+ * `null` when there are none or one was bound through the binder, so `rebind` binds them again.
+ */
+function recordedReserved(node: Node, route: ValueRoute): Record<string, unknown> | null {
+  const params = new Set((node.params ?? []).map((parameter) => parameter.name));
+  const fields = route.names.map((name, index) => [name, route.children[index]!] as const).filter(([name]) => !params.has(name));
+  if (fields.length === 0 || fields.some(([, child]) => child.kind !== "literal" || child.valueJson === null)) return null;
+  return Object.fromEntries(fields.map(([name, child]) => [name, parseJson(child.valueJson!, "codec")]));
 }
 
 /** The physical executing node of a canonical outcome record, or `null` for another record. */
@@ -2297,6 +2388,7 @@ export function replayRecords(
     flow: start.flow,
     skills: start.skills,
     tools: start.tools,
+    toolGroups: start.toolGroups,
     yianVersion: start.yianVersion,
     parent: start.parent,
   });
@@ -4906,6 +4998,7 @@ interface RunStartedApply {
   memoryStacks: readonly MemoryStack[] | null;
   recordedSkills: Readonly<Record<string, RecordedSkill>>;
   recordedTools: Readonly<Record<string, RecordedTool>>;
+  recordedToolGroups: Readonly<Record<string, readonly string[]>>;
   learnable: boolean;
   runDefaults: Defaults;
   backwardState: RuntimeBackwardState;
@@ -4958,6 +5051,7 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     memoryStacks: record.memoryStacks,
     recordedSkills: record.skills,
     recordedTools: record.tools,
+    recordedToolGroups: record.toolGroups,
     learnable: record.learnable,
     runDefaults: fromRecorded(record.defaults),
     backwardState,
@@ -4996,6 +5090,7 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.memoryStacks = apply.memoryStacks;
   state.recordedSkills = apply.recordedSkills;
   state.recordedTools = apply.recordedTools;
+  state.recordedToolGroups = apply.recordedToolGroups;
   state.learnable = apply.learnable;
   state.runDefaults = apply.runDefaults;
   state.backwardState = apply.backwardState;

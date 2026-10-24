@@ -466,9 +466,17 @@ test.each([
   }
   const learnable = await capturedRun(text, { inputs, learnable: true });
   const learned = learnable.captured.filter(({ derived }) => derived);
-  expect(readNames(plain.captured, (leaf) => commitName(plain.records, leaf))).toEqual(
-    readNames(learned, (leaf) => startName(learnable.records, leaf)),
-  );
+  // A learnable run also rebuilds a derived record's capture when it accepts it, right after the
+  // evaluation's capture of the same node, and the rebuild reads the same names.
+  const learnedNames = readNames(learned, (leaf) => startName(learnable.records, leaf));
+  const evaluated = learnedNames.filter(([nodeId, names], index) => {
+    const previous = learnedNames[index - 1];
+    if (previous === undefined || previous[0] !== nodeId) return true;
+    expect(names).toEqual(previous[1]);
+    return false;
+  });
+  expect(evaluated.length).toBeLessThan(learnedNames.length);
+  expect(readNames(plain.captured, (leaf) => commitName(plain.records, leaf))).toEqual(evaluated);
 }, 60_000);
 
 test("a derived node's route names exactly the pool names its binding reads", async () => {

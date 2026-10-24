@@ -87,7 +87,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs: {}
         node_data:
           input_output_paths: {}
         route: {kind: record}
@@ -107,7 +106,6 @@ expect:
         message: 'Error: forward failed'
         node: work
       forward_capture:
-        bound_inputs: {}
         route:
           kind: record
         scope:

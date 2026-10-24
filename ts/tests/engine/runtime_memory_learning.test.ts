@@ -230,9 +230,15 @@ function scope(
 class TraceNode extends Node {
   readonly kind = NodeKind.AGENT;
   override readonly needsMemoryContext = true;
+  /** What its binding gives, as its hand-made captures record; learning rebinds it to rebuild them. */
+  bound: Record<string, unknown> = { question: "q" };
 
   override forward(inputs: Record<string, unknown>): NodeResult {
     return new Output(inputs);
+  }
+
+  override bindReserved(): Record<string, unknown> {
+    return { ...this.bound };
   }
 }
 
@@ -925,7 +931,8 @@ test.each([false, true])("owner feedback retains literals and opaque local stops
       (detail.sources as { value: unknown }[])[0]!.value === "reef"
     )).toBe(true);
   }
-  expect(calls).toEqual(opaque ? ["reef"] : []);
+  // Once live and once when learning rebinds the node to rebuild its bound inputs.
+  expect(calls).toEqual(opaque ? ["reef", "reef"] : []);
   expect(root.inputFeedback).toEqual({});
 });
 

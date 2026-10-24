@@ -152,7 +152,7 @@ let count = 0;
 
 /** Rebuild the material of `nodeId` of the replayed `state`, with what AGENT backward reads of it. */
 async function materialOf(state: RunState, nodeId: string, memory: MemoryRuntime | null = null) {
-  const materials = await learningMaterials(state, { memory, models: null, expandTools: null, onEvent: null });
+  const materials = await learningMaterials(state, { memory, models: null, onEvent: null });
   const occurrence = state.trace!.occurrences.find((item) => item.nodeId === nodeId)!;
   const material = materials.get(sourceKey(occurrence.source)) ?? null;
   return { occurrence, material, evidence: evaluationEvidence(occurrence, material) };
@@ -181,7 +181,7 @@ async function learned(
     log[Symbol.dispose]();
   }
   // A structured call's plan is read off the model the run built, never called again.
-  const materials = await learningMaterials(state, { memory: null, models, expandTools: null, onEvent: null });
+  const materials = await learningMaterials(state, { memory: null, models, onEvent: null });
   const occurrence = state.trace!.occurrences.find((item) => item.nodeId === "agent")!;
   const material = materials.get(sourceKey(occurrence.source)) ?? null;
   return { result, model, material, evidence: evaluationEvidence(occurrence, material) };
@@ -381,9 +381,10 @@ describe("learning reads the steps", () => {
 
       await built.run();
 
-      const record = built.state.trace!.occurrences.find((item) => item.nodeId === "work")!.record;
+      const occurrence = built.state.trace!.occurrences.find((item) => item.nodeId === "work")!;
+      const record = occurrence.record;
       expect(record).toBeInstanceOf(stage === "success" ? NodeSucceededRecord : NodeFailedRecord);
-      expect(record.forwardCapture!.boundInputs).toEqual({ topic: "reefs" });
+      expect(occurrence.boundInputs).toEqual({ topic: "reefs" });
       expect(record.forwardCapture!.nodeData).toEqual({
         prompt_template: "${instruction}: ${topic}",
         variables: { instruction: "Summarize clearly" },

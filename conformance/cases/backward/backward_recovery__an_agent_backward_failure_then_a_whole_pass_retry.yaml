@@ -112,7 +112,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
@@ -156,7 +155,6 @@ expect:
     - first
     - commit: 10
       forward_capture:
-        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
@@ -203,7 +201,6 @@ expect:
     - second
     - commit: 14
       forward_capture:
-        bound_inputs: {draft: draft}
         evaluated_keys: [draft]
         input_names: [draft]
         node_data:
@@ -234,7 +231,6 @@ expect:
     - __end__
     - commit: 17
       forward_capture:
-        bound_inputs: {result: answer}
         evaluated_keys: [result]
         input_names: [result]
         node_data:

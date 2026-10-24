@@ -155,7 +155,7 @@ async function retainedAgent(node: AgentNode, inputs: Record<string, unknown> = 
   });
   await built.run();
   const occurrence = built.state.trace!.occurrences.find((item) => item.nodeId === node.id)!;
-  return { built, record: occurrence.record, models };
+  return { built, record: occurrence.record, occurrence, models };
 }
 
 /** A minimal concrete node; the base's `declaredVariables` is the subject. */
@@ -218,7 +218,7 @@ test("a retained agent captures its actual render locals once", async () => {
   });
   const resolved = spyResolve(node);
 
-  const { built, record, models } = await retainedAgent(node, { topic: "reefs" });
+  const { built, record, occurrence, models } = await retainedAgent(node, { topic: "reefs" });
 
   const data = record.forwardCapture!.nodeData!;
   expect(data).toEqual({
@@ -231,7 +231,7 @@ test("a retained agent captures its actual render locals once", async () => {
   });
   expect(resolved).toHaveLength(1);
   expect(models.prompts).toEqual(["${input.topic}: reefs; 4/4"]);
-  expect(record.forwardCapture!.boundInputs).toEqual({ topic: "reefs" });
+  expect(occurrence.boundInputs).toEqual({ topic: "reefs" });
   expect(built.state.effectiveLlmByStaticPath["writer"]).toEqual(data["effective_llm_config"] as JsonObject);
 });
 
@@ -271,14 +271,14 @@ test.each(["resolve", "render", "empty"] as const)(
       });
     }
 
-    const { record, models } = await retainedAgent(node);
+    const { record, occurrence, models } = await retainedAgent(node);
 
     const data = record.forwardCapture!.nodeData!;
     expect(data["prompt_template"]).toBe(node.prompt);
     expect(data["variable_domains"]).toEqual(stage === "empty" ? {} : { note: "Optional(str)" });
     expect(data["variables"]).toEqual(stage === "resolve" ? null : stage === "empty" ? {} : { note: null });
     expect(data["rendered_prompt"]).toBe(stage === "empty" ? "" : null);
-    expect(record.forwardCapture!.boundInputs).toEqual({});
+    expect(occurrence.boundInputs).toEqual({});
     expect(models.prompts).toEqual(stage === "empty" ? [""] : []);
     if (stage !== "empty") {
       expect(record).toBeInstanceOf(NodeFailedRecord);

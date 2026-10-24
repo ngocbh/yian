@@ -256,6 +256,7 @@ import {
   commitStartSuccess,
   engine,
   feedbackEntries,
+  fixedRebinder,
   forwardCapture,
   FuncNode,
   graph,
@@ -270,6 +271,7 @@ import {
   terminalSkipRouteFlow,
   traceSnapshot,
 } from "./run_state_fixtures.ts";
+import type { ValueRecord } from "../../src/typesys/values.ts";
 
 /** The error classes the refusals throw; a failing log's append throws an `Error`. */
 type ErrorClass = typeof TypeError | typeof RangeError | typeof Error;
@@ -469,13 +471,11 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
     numWorkers: 0,
     learnable: true,
   });
-  const startCapture = new ForwardCapture({ x: 1n }, ValueRoute.record([["x", sourceRoute(0, ["x"])]]), {
+  const startCapture = new ForwardCapture(ValueRoute.record([["x", sourceRoute(0, ["x"])]]), {
     inputNames: ["x"],
     nodeData: { input_output_paths: startPaths },
   });
-  const pCapture = new ForwardCapture(
-    { v: 1n, w: 1n },
-    ValueRoute.record([
+  const pCapture = new ForwardCapture(ValueRoute.record([
       ["v", sourceRoute(2, ["x"])],
       ["w", sourceRoute(0, ["x"])],
     ]),
@@ -486,7 +486,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
       scope: pScope,
     },
   );
-  const endCapture = new ForwardCapture({ value: pOutput }, ValueRoute.record([["value", sourceRoute(5)]]), {
+  const endCapture = new ForwardCapture(ValueRoute.record([["value", sourceRoute(5)]]), {
     inputNames: ["value"],
   });
   const nodes = { start: new TraceNode(START_ID), p: new TraceNode("p"), end: new TraceNode(END_ID) };
@@ -509,11 +509,18 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
   let trace = step(null, envelopes[0]!, null, { rootStartId: START_ID, rootEndId: END_ID, rootInputNames: ["x"] });
   trace = step(trace, envelopes[1]!, null, { initialCommit: true });
   const owners = [null, null, nodes.start, null, null, nodes.p, null, null, nodes.end];
+  // Each node's bound inputs, which its occurrence rebuilds.
+  const inputs = new Map<string, ValueRecord>([
+    [START_ID, { x: 1n }],
+    ["p", { v: 1n, w: 1n }],
+    [END_ID, { value: pOutput } as ValueRecord],
+  ]);
   for (const [index, owner] of owners.entries()) {
     const envelope = envelopes[index + 2]!;
     const record = envelope.record;
     const options: PrepareTraceOptions = {};
     if (record instanceof NodeSucceededRecord) {
+      options.rebinder = fixedRebinder(inputs.get(record.nodeId)!);
       const commit = envelopes[record.commit]!.record as PoolCommitRecord;
       options.committed = { key: commit.key, valueJson: logJson(commit.value) };
       if (record.nodeId === END_ID) {
@@ -2679,7 +2686,9 @@ test("opaque expression stops are recoverable without rerunning functions", asyn
   expect(recovered.stopped[0]!.feedback).toBe("review opaque");
   expect(recovered.stopped[0]!.context.at(-1)!.result).toBe("reefs");
   expect(root.inputFeedback).toEqual({});
-  expect(calls).toEqual(["reefs"]);
+  // Once live and once when learning rebinds the node to rebuild its bound inputs; the stop itself
+  // reruns nothing.
+  expect(calls).toEqual(["reefs", "reefs"]);
 });
 
 test("a backward context is trace-owned, detached and survives replay", async () => {
@@ -2732,12 +2741,11 @@ test.each([false, true])(
 
     const occurrence = trace.occurrences.find((item) => item.nodeId === "work")!;
     const result = resultAt(results, occurrence.source).result;
-    const capture = occurrence.record.forwardCapture!;
     const recovered = routeFeedback(
       occurrence.inputRoute.children[0]!,
       result.inputFeedback.file![0]!,
       (source) => trace.lookupSource(source),
-      { recordedValue: capture.boundInputs!.file },
+      { recordedValue: occurrence.boundInputs!.file },
     );
     expect(root).toEqual(new BackwardResult());
     expect(recovered.contributions).toEqual([]);
@@ -2748,7 +2756,8 @@ test.each([false, true])(
     expect(returned.map((entry) => entry.value)).toEqual([feedback]);
     const stopped = entries.filter((entry) => entry.channel === "stopped").map((entry) => entry.value);
     expect(stopped).toEqual(opaque ? [feedback] : []);
-    expect(calls).toEqual(opaque ? [null] : []);
+    // Once live and once when learning rebinds the node to rebuild its bound inputs.
+    expect(calls).toEqual(opaque ? [null, null] : []);
   },
 );
 
@@ -3036,6 +3045,8 @@ test("an AGENT's inventory is recorded and empty feedback does no backward work"
     }), { inputs: { topic: "reefs" }, learnable: true });
     await built.run();
     const trace = built.state.trace!;
+    // The bound inputs are rebuilt from the node's binding, so they are read before it changes.
+    for (const occurrence of trace.occurrences) void occurrence.boundInputs;
     node.params = [];
     node.variables = [];
     node.captureBackwardContext = () => {
@@ -3132,7 +3143,7 @@ output: \${loop.output}
     expect(calls).toHaveLength(2);
     expect(new Set(calls).size).toBe(2);
     const drivers = trace.occurrences.filter((item) =>
-      isDeepStrictEqual(item.record.forwardCapture!.scope!.staticPath, ["loop"]),
+      isDeepStrictEqual(item.capture.scope!.staticPath, ["loop"]),
     );
     expect(drivers).toHaveLength(3);
     const reached = new Set(results.filter((result) => result.invoked).map((result) => sourceKey(result.source)));
@@ -3202,7 +3213,7 @@ test.each([false, true])(
       start.inputRoute.children[0]!,
       result.inputFeedback.file![0]!,
       (source) => trace.lookupSource(source),
-      { recordedValue: start.record.forwardCapture!.boundInputs!.file },
+      { recordedValue: start.boundInputs!.file },
     );
     expect(root).toEqual(new BackwardResult());
     expect(routed.contributions).toEqual([]);
@@ -3212,8 +3223,9 @@ test.each([false, true])(
     const stopped = feedbackEntries(context!).filter((entry) => entry.channel === "stopped");
     expect(stopped.map((entry) => entry.value)).toEqual(stops);
     // The expansion checks its growth against the rebuild from its commits' `from`, which runs the
-    // MAP's binding, and so the builtin, once more; backward reevaluates nothing.
-    expect(calls).toEqual(opaque ? [null, null] : []);
+    // MAP's binding, and so the builtin, once more, and learning rebinds the MAP once to rebuild its
+    // bound inputs; backward reevaluates nothing.
+    expect(calls).toEqual(opaque ? [null, null, null] : []);
   },
 );
 
@@ -3256,7 +3268,7 @@ test.each([
       start.inputRoute.children[0]!,
       result.inputFeedback.files![0]!,
       (source) => trace.lookupSource(source),
-      { recordedValue: start.record.forwardCapture!.boundInputs!.files },
+      { recordedValue: start.boundInputs!.files },
     );
     expect(root).toEqual(new BackwardResult());
     expect(routed.contributions).toEqual([]);

@@ -112,7 +112,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
@@ -136,7 +135,6 @@ expect:
   - - node_routed
     - gate
     - forward_capture:
-        bound_inputs: {}
         route:
           kind: record
         scope:
@@ -152,49 +150,11 @@ expect:
       key: invoke/__start__
   - - node_expanded
     - invoke
-    - forward_capture:
-        bound_inputs:
-          topic: reefs
-        evaluated_keys: [topic]
-        input_names: [topic]
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 5
-              path: [topic]
-              run_id: r1
-          kind: record
-          names: [topic]
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [invoke]
-      prune_ids: []
+    - prune_ids: []
   - [node_started, invoke/__start__]
   - - node_succeeded
     - invoke/__start__
     - commit: 11
-      forward_capture:
-        bound_inputs: {topic: reefs}
-        input_names: [topic]
-        node_data:
-          input_output_paths:
-            topic: [topic]
-        route:
-          children:
-          - {kind: literal, value_json: reefs}
-          kind: record
-          names: [topic]
-        scope:
-          boundary: start
-          flow_path: [invoke]
-          occurrence_path:
-          - index: null
-            kind: call
-            static_path: [invoke]
-          static_path: [invoke, __start__]
   - [node_started, invoke/author]
   - - node_step
     - invoke/author
@@ -219,7 +179,6 @@ expect:
     - invoke/author
     - commit: 17
       forward_capture:
-        bound_inputs: {topic: reefs}
         evaluated_keys: [topic]
         input_names: [topic]
         node_data:
@@ -254,7 +213,6 @@ expect:
     - invoke/work
     - commit: 20
       forward_capture:
-        bound_inputs: {}
         route: {kind: record}
         scope:
           boundary: null
@@ -272,30 +230,6 @@ expect:
   - - node_succeeded
     - invoke/__end__
     - commit: 23
-      forward_capture:
-        bound_inputs: {result: answer}
-        evaluated_keys: [result]
-        input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 15
-              path: []
-              run_id: r1
-          kind: record
-          names: [result]
-        scope:
-          boundary: end
-          flow_path: [invoke]
-          occurrence_path:
-          - index: null
-            kind: call
-            static_path: [invoke]
-          static_path: [invoke, __end__]
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -304,7 +238,6 @@ expect:
     - __end__
     - commit: 26
       forward_capture:
-        bound_inputs: {result: answer}
         evaluated_keys: [result]
         input_names: [result]
         node_data:

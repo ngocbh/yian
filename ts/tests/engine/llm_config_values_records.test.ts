@@ -46,7 +46,15 @@ import { Node } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { WaitNode } from "../../src/nodes/wait/node.ts";
-import { checkRecordedLlmFields, type AdvanceOptions, advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import {
+  checkRecordedLlmFields,
+  type AdvanceOptions,
+  advance,
+  replayRunLog,
+  type RunFlowOptions,
+  runFlow,
+} from "../../src/run.ts";
+import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { FakeInput, FakeOutput } from "../cli/terminal_both_runtimes.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
@@ -417,8 +425,17 @@ test("llm config is not model visible", async () => {
     .filter((entry) => entry.kind === "node_succeeded" && entry.payload["node_id"] === "chat")
     .map((entry) => entry.payload);
   expect(succeeded).toHaveLength(1);
-  // The bound record keeps it, so backward and resume read what ran.
-  expect(succeeded[0]!["forward_capture"]["bound_inputs"]["__llm_config"]["model"]).toBe("gpt-picked");
+  // The route holds the resolved config whole, so the bound record learning rebuilds holds what
+  // ran, though the route names no producer for it.
+  expect(succeeded[0]!["forward_capture"]["route"]["names"]).toContain("__llm_config");
+  const reopened = JsonlRunLog.resume(log);
+  try {
+    const trace = replayRunLog(await loadFlow(text, { env }), reopened).trace!;
+    const chat = trace.occurrences.find((occurrence) => occurrence.nodeId === "chat")!;
+    expect((chat.boundInputs!["__llm_config"] as Record<string, unknown>)["model"]).toBe("gpt-picked");
+  } finally {
+    reopened[Symbol.dispose]();
+  }
   const forward = model.requests.length;
   expect((await result.backward("Shorter.")).status).toBe("succeeded");
   const calls = model.requests.slice(forward);

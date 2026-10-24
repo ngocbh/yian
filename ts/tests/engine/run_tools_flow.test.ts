@@ -409,6 +409,17 @@ test("resume uses the group contents passed to resume", async () => {
   );
   expect(other).toBeInstanceOf(RangeError);
   expect((other as Error).message).toBe("resume refused: tools.new isn't recorded; the run started without it");
+  // The same tools in other groups are refused: the recorded membership is what learning expands.
+  const moved = await rejected(
+    advance({
+      log: path,
+      env: hostEnv(dir),
+      models: chats,
+      tools: { toolbox: [textTool("old"), textTool("ws")], workspace: [], company: [textTool("co")] },
+    }),
+  );
+  expect(moved).toBeInstanceOf(RangeError);
+  expect((moved as Error).message).toBe("resume refused: tool_groups.toolbox differs from the recorded one");
   const resumed = await advance({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("old")]) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");

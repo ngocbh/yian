@@ -261,6 +261,14 @@ until the node settles, so a resumed node reads them back. The runtime gives a s
 no meaning and publishes no observer for it. A log holding one can't be read by a
 yian version from before the record existed.
 
+Changed (TS yian): a resumed AGENT replays its steps by `n`, in order (the runtime still gives
+them no meaning; the replay is the node's). Each recorded `model_call` stands for its call, once
+the recorded purpose and request digest match the request the node rebuilds; a mismatch is a
+capability fault, so nothing more is written and the run stays resumable. Each tool call with a
+recorded `tool_result` gets it back without running. A replayed call with no result is closed
+lazily: the resume writes its `tool_result` (`closed: "crashed"`) once the call's check passes,
+rather than the crash or stop writing anything. New steps continue the numbering.
+
 Changed (TS yian): the reducer also accepts `RunStoppedRecord`, whose `node_ids` must be
 the in-flight nodes in dispatch order; it changes no frontier, start count or step, so a
 resume after a stop retries those nodes first. Like every frontier record, it is refused once the

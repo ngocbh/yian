@@ -405,7 +405,9 @@ A case can't hold code, so its host is declared under `host`.
   scripts do. Steering acts in the main run (and its resume), never in a `host.memory` `before`
   run, whose calls aren't counted. Steers are drained once; an interrupt stays set. An action
   whose point is never reached fails the case after the comparisons, like a leftover entry.
-  Steering in a `resume` case is specified but not yet pinned by a case here.
+  In a `resume` case the inbox is the same object across the cut, so a steer queued before the
+  cut and not yet read reaches the resumed run, and a set interrupt stays set. A resumed TS AGENT
+  reads neither while it replays its recorded calls (`resume/run_log__*`).
 
   The AGENT reads its inbox only at fixed places: steers and the interrupt at the top of each
   loop iteration (just before a model call), the interrupt before each later chunk of a
@@ -604,8 +606,10 @@ For example:
 - The backward records' nested structures are kept as recorded, except the backward failure
   above.
 - A step (TS schema 14) shows its `n` and every field as written, its `kind` included: a TOOL's
-  `tool_attempt`, a call-time agent's `llm_config`, an AGENT's `model_call` and `tool_result`.
-  Its times (`started_at`, `first_token_at`) are left out.
+  `tool_attempt`, a call-time agent's `llm_config`, an AGENT's `model_call` and `tool_result`
+  (`closed: skipped` for a call a host interrupt skipped, `closed: crashed` for one a resume
+  closed because its run was cut off before its result). Its times (`started_at`,
+  `first_token_at`) are left out.
 - In TOOL steps, `retry_in` is a float, and a `failed` step's error type goes through the
   error-class table; so does a failed `model_call`'s error `kind` (a provider error's kind, such
   as `rate_limit`, is no class and stays).
@@ -716,10 +720,14 @@ counts a failing `pending` case as expected, fails a case whose kind it doesn't 
 1 when any case fails. On every `run` and `resume` case with a log it also checks the log's invariants
 (in-flight nodes within `num_workers`, nothing but backward and memory records after the terminal
 outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only). `--crash-sweep`
-also cuts each serial `run` case that expects `output`, isn't `pending`, and has no `host.models`,
-`host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it, and
-checks the invariants, plus the output and node outcomes when the case has no `host.human` or
-`host.jitter` and its tool scripts only return. A resume adds records, so in those outcomes a
+also cuts each serial `run` case that expects `output`, isn't `pending`, and has no
+`host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it (passing
+the run's `context`, `llm_config.api_key` and `llm_config.headers` again), and checks the
+invariants, plus the output and node outcomes when the case has no `host.human` or `host.jitter`
+and its tool scripts only return. What a run took from the host scripts after the cut (tool
+results, model replies, backoff draws) goes back; what it took before stays taken, since the
+resume replays the steps that hold it (in TS an AGENT replays its recorded model calls and tool
+results rather than making them again). A resume adds records, so in those outcomes a
 capture source's `execution_seq` is compared by the kind and node of the record it names, and a
 success's `commit` by the trace fields of the `pool_commit` it names. A node cut right after its `pool_commit` runs again, so what it took from the host scripts goes
 back from its last record before the commit (its steps replay). A cut inside the run start

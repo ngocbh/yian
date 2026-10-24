@@ -2497,7 +2497,10 @@ on replay. Each `step` is a JSON object with a string `kind`:
   next model call: `call_id` (the id of the reply's `tool_call` part), `started_at`, `output`
   and `is_error` (exactly the text and flag the model reads), and `closed: "skipped"` for a call
   a host interrupt skipped (`started_at` `null`, `output` `"Not run: interrupted by the user."`,
-  `is_error` true). A call that threw, or whose result has no text, writes no result.
+  `is_error` true). A call that threw, or whose result has no text, writes no result. A resume
+  writes `closed: "crashed"` for a replayed call with no result (`started_at` `null`, `output`
+  `"The tool call was interrupted; its outcome is unknown. Check its effect before retrying."`,
+  `is_error` true); see [Durable recovery](#durable-recovery-with-resume_flow).
 
 A tool call's idempotency key (`ToolContext.callId`) is `<run id>/<node>/<n>/<index>`, `n` the
 reply's `model_call` step.
@@ -2710,7 +2713,7 @@ A retried node may resend requests and repeat tool actions; recovery does not
 provide exactly-once execution or resume an external request midway through. A
 retried TOOL node passes its tool the same `ctx.call_id` as before, so a tool can
 use it as an idempotency key; a retried AGENT's tool calls get new ids (see
-[Tool context](#tool-context)). A TOOL node passes the next `ctx.attempt`; one with
+[Tool context](#tool-context); TS yian replays an AGENT's recorded calls, below). A TOOL node passes the next `ctx.attempt`; one with
 `retries:` keeps the retries it had left (see [TOOL retries](#tool-retries)). The new
 accepted start receives a new sequence, and metadata for its old unfinished start is
 rejected.
@@ -2719,19 +2722,39 @@ for unknown effects. SessionMemory owns whatever conversation history was saved;
 the run log is not a durable replacement for that memory backend.
 
 Changed (TS yian): there is no session memory, so nothing keeps a conversation beside the
-run log; a chat's history is the value a LOOP carries, recorded as node outputs. A steer an
-AGENT read before a crash is lost: the retried AGENT doesn't see it.
+run log; a chat's history is the value a LOOP carries, recorded as node outputs. Steers aren't
+recorded: a steer an AGENT read before a crash is lost (the replayed requests don't hold it, and
+`request_sha256` leaves steers out so they still match), and one queued while the run was down
+joins the first live model call.
 
 Changed (TS yian): an AGENT records each model call and each tool result as a node step (see
-[Authoritative run logs](#authoritative-run-logs)). A resumed AGENT doesn't read these steps
-yet: it restarts, as above, and its new steps are numbered after them.
+[Authoritative run logs](#authoritative-run-logs)), and a resumed AGENT replays them instead of
+repeating them. It rebuilds each request as before and, for each recorded call in order, takes
+the recorded reply back without calling the model or publishing anything, once the recorded
+`purpose` and `request_sha256` match the rebuilt ones. A tool call with a recorded result gets
+that result without running. A replayed call with no result (a crash or a stop cut it off) is
+checked as live and, when its check passes, closed with a `tool_result` written as
+`closed: "crashed"`, which the model reads as "outcome unknown"; it isn't run again. A recorded
+reply a host interrupt cut, or recorded `skipped` results, end the AGENT as the interrupt did; a
+recorded call that failed for good fails the node again with its recorded error. Failed attempts
+after the last recorded call belong to the first live call: it waits the last one's `retry_in`
+again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. The AGENT reads its
+host inbox (steers and the interrupt) only once the replay ends. New steps are numbered after
+the recorded ones, so a call made again after a crash cut its `model_call` gets the same `n`, and
+its tool calls the idempotency keys they would have had.
+
+A recorded call whose `purpose` or `request_sha256` differs from the rebuilt request (another
+host, tool set or yian version builds a different request) is a host fault: the resume rejects
+with a `RangeError` naming the node, the step's `n` and both values, and writes nothing for the
+AGENT beyond its new start, so the run stays resumable with the host that started it.
 
 After incomplete-tail repair, terminal inspection appends no records and invokes
 no graph nodes, backward hooks, or memory learners/commits. It projects the last
 accepted attempt, including an interrupted Started/Ready/request prefix.
 `RunResult.events` contains only forward observers published in the current call;
 backward records emit no observers. A resumed AGENT that re-executes publishes
-fresh in-loop observers to `on_event`, and nothing is replayed.
+fresh in-loop observers to `on_event`, and nothing is replayed. (TS yian: only for the calls it
+makes live; replayed calls publish nothing.)
 
 A retained result keeps private program/data copies and memory references, not
 open forward sessions, workers, or a log lock. An explicit backward call reopens

@@ -115,7 +115,6 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "memories",
     "variables",
     "skills",
-    "steerable",
   ],
   [NodeKind.CODE]: ["code"],
   [NodeKind.TOOL]: ["toolId", "retries", "answerSchema"],
@@ -140,7 +139,8 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // `llmConfig` is always run-resolved; `ownLlmConfig` is the authored identity source.
   // `llmConfigLabel` is render-only. `wiresLlmConfig` and `llmValueTypes` are derived from the
   // layers; the reserved wiring they decide is manifested with the wiring. `callTime` and
-  // `hostCredentials` are run-resolved like `llmConfig`.
+  // `hostCredentials` are run-resolved like `llmConfig`. `steerInbox` mirrors the reserved
+  // `__steer_inbox` wiring, manifested with the wiring.
   [NodeKind.AGENT]: [
     "llmConfig",
     "llmConfigLabel",
@@ -148,6 +148,7 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "llmValueTypes",
     "callTime",
     "hostCredentials",
+    "steerInbox",
   ],
   // `mode` is derived from `code`; CODE origins are diagnostic metadata resolved only by the
   // authoring front end; `baseDir` is where a reference resolves, not what it names; `sourceFile`
@@ -829,8 +830,6 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         });
         if (skills.length > 0) manifest.skills = [...(skills as string[])].sort(compareCodeUnits);
       }
-      // Left out when false so flows that never opt in keep their identity.
-      if (agent.steerable) manifest.steerable = true;
       // Left out when unset so flows on the default system prompt keep their identity.
       if (agent.systemPrompt !== null) manifest.system_prompt = agent.systemPrompt;
       const tools: unknown = agent.tools;

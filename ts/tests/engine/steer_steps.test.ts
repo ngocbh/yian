@@ -70,7 +70,7 @@ function refusal(state: RunState, prepare: () => unknown): string {
   return (caught as Error).message;
 }
 
-const steer = (from: readonly number[], inbox = "msgs"): JsonObject => ({ kind: "steer", inbox, from: [...from] });
+const steer = (from: readonly number[], inbox = "msgs"): JsonObject => ({ kind: "steer", inbox, from: from.map(BigInt) });
 
 test("a steer step consumes the whole unread queue; the values stay in the store", () => {
   const { log, state, s1, s2 } = steering();
@@ -81,6 +81,11 @@ test("a steer step consumes the whole unread queue; the values stay in the store
 
 test.each<[string, (s1: number, s2: number) => [string, JsonObject], string]>([
   ["an empty from", () => ["chat", steer([])], "a steer step consumes at least one event"],
+  [
+    "seqs that aren't ints",
+    (s1, s2) => ["chat", { kind: "steer", inbox: "msgs", from: [s1, s2] }],
+    "a steer step's from must be a list of send seqs (ints)",
+  ],
   [
     "part of the queue",
     (s1, s2) => ["chat", steer([s1])],
@@ -131,7 +136,9 @@ test("a steer read's values go when its node fails", () => {
 test("stepsWithSteerValues attaches each steer step's values to a copy", () => {
   const { log, state, s1, s2 } = steering();
   commit(log, state, prepareNodeStep(state, "chat", steer([s1, s2])));
-  expect(stepsWithSteerValues(state, "chat")).toEqual([{ kind: "steer", inbox: "msgs", from: [s1, s2], values: ["a", "b"] }]);
+  expect(stepsWithSteerValues(state, "chat")).toEqual([
+    { kind: "steer", inbox: "msgs", from: [BigInt(s1), BigInt(s2)], values: ["a", "b"] },
+  ]);
   expect(Object.hasOwn(state.nodeSteps.get("chat")![0]!, "values")).toBe(false);
   expect(stepsWithSteerValues(state, "f")).toEqual([]);
 });
@@ -142,7 +149,7 @@ test("replay rebuilds the same store and the same step copies", () => {
   const back = replayed(state.flow, path);
   expect([...back.inboxEvents.keys()]).toEqual([...state.inboxEvents.keys()]);
   expect(stepsWithSteerValues(back, "chat")).toEqual([
-    { kind: "steer", inbox: "msgs", from: [s1, s2], values: ["a", "b"] },
+    { kind: "steer", inbox: "msgs", from: [BigInt(s1), BigInt(s2)], values: ["a", "b"] },
   ]);
 });
 
@@ -154,7 +161,7 @@ test("a learnable occurrence's steps carry the steer values", () => {
   commit(log, state, prepareNodeStep(state, "chat", steer([s1])));
   succeed(log, state, "chat", "ok");
   const occurrence = state.trace!.occurrences.find((item) => item.nodeId === "chat")!;
-  expect(occurrence.steps).toEqual([{ kind: "steer", inbox: "msgs", from: [s1], values: ["a"] }]);
+  expect(occurrence.steps).toEqual([{ kind: "steer", inbox: "msgs", from: [BigInt(s1)], values: ["a"] }]);
 });
 
 /** What one `SteerProbe` evaluation saw. */
@@ -221,7 +228,7 @@ test("a read records one steer step for everything queued and returns its values
     second: null,
     queuedAfter: false,
   });
-  expect(stepBodies(run.log)).toEqual([{ kind: "steer", inbox: "m", from: [s1, s2] }]);
+  expect(stepBodies(run.log)).toEqual([{ kind: "steer", inbox: "m", from: [BigInt(s1), BigInt(s2)] }]);
   expect(run.state.result).toBeInstanceOf(RunSucceeded);
 });
 

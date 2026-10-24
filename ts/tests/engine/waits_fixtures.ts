@@ -424,7 +424,8 @@ function scenarioE(learnable: boolean): ScenarioLog {
 function scenarioF(learnable: boolean): ScenarioLog {
   const run = new Scenario("f", steerFlow(), learnable, 0, { chat: { provider: "openai", model: "gpt-5.5" } });
   run.send("a", "sa").send("b", "sb").start("chat");
-  run.step("chat", { kind: "steer", inbox: "msgs", from: [seqOf(run, "sa"), seqOf(run, "sb")] }, "steer").send("c", "sc");
+  const from = [BigInt(seqOf(run, "sa")), BigInt(seqOf(run, "sb"))];
+  run.step("chat", { kind: "steer", inbox: "msgs", from }, "steer").send("c", "sc");
   run.reopen().resume("resumed").start("chat", "restarted").succeed("chat", "ok");
   return run.end().done();
 }

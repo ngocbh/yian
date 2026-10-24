@@ -352,7 +352,7 @@ test("a send while the agent runs joins the next request and writes steer {inbox
   expect(stepsOf(log).map(({ kind, step }) => (kind === "steer" ? step : kind))).toEqual([
     "model_call",
     "tool_result",
-    { kind: "steer", inbox: "notes", from: [seq] },
+    { kind: "steer", inbox: "notes", from: [BigInt(seq!)] },
     "model_call",
   ]);
   expect(result.unread).toEqual(new Map());

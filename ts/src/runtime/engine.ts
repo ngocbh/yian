@@ -723,7 +723,8 @@ export class FlowEngine {
           if (from.length === 0) return null;
           let n: number;
           try {
-            const prepared = prepareNodeStep(state, nodeId, { kind: "steer", inbox, from });
+            // Seqs are ints, which the log keeps apart from floats only as bigints.
+            const prepared = prepareNodeStep(state, nodeId, { kind: "steer", inbox, from: from.map(BigInt) });
             commitPrepared(log, state, prepared);
             n = (prepared.record as NodeStepRecord).n;
           } catch (error) {

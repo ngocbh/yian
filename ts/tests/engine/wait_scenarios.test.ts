@@ -177,7 +177,7 @@ test("foldRunLog yields the steer step with inbox and from; each from seq's reco
   const f = plain("f");
   const { records } = await foldRunLog(f.path, { flow: f.composed, env: NO_ENV });
   const step = records[f.marks.steer!]!.entry.envelope.record as NodeStepRecord;
-  expect(step.step).toEqual({ kind: "steer", inbox: "msgs", from: [f.marks.sa!, f.marks.sb!] });
+  expect(step.step).toEqual({ kind: "steer", inbox: "msgs", from: [BigInt(f.marks.sa!), BigInt(f.marks.sb!)] });
   expect(records[f.marks.sa!]!.value!.toObject()).toBe("a");
   expect(records[f.marks.sb!]!.value!.toObject()).toBe("b");
   // A reader that skips step kinds it doesn't know still decodes every record.

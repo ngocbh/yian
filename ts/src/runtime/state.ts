@@ -4155,8 +4155,10 @@ function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonO
       `node ${reprText(nodeId)} reads steer inbox ${reprText(String(earlier["inbox"]))}, not ${reprText(inbox)}`,
     );
   }
-  const from = seqList(step["from"]);
-  if (from === null) throw new RangeError("a steer step's from must be a list of send seqs");
+  // Ints, so the log writes them as ints.
+  const raw = step["from"];
+  const from = Array.isArray(raw) && raw.every((seq) => typeof seq === "bigint") ? seqList(raw) : null;
+  if (from === null) throw new RangeError("a steer step's from must be a list of send seqs (ints)");
   if (from.length === 0) throw new RangeError("a steer step consumes at least one event");
   const queue = availableUnread(state.waits, inbox);
   if (from.length !== queue.length || from.some((seq, index) => seq !== queue[index])) {

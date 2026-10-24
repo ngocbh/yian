@@ -100,6 +100,21 @@ test("a follower that throws on the snapshot is dropped and reported, and gets n
   expect(reported).toEqual([[boom, { type: "snapshot", snapshot: { last_seq: -1, calls: [] } }]]);
 });
 
+test("a record that ends the run drops every call, so a later follow's snapshot lists none", () => {
+  const failed = new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "a" }));
+  for (const ending of [failed, new RunStoppedRecord("signal", "stopped", ["a", "b"])]) {
+    const channel = new LiveChannel();
+    const log = channel.wrap(new MemoryRunLog("run-1", { clock: () => Date.parse(T0) }));
+    channel.start("a", 1, null, "chat", T0);
+    channel.start("b", 1, null, "chat", T0);
+    channel.chunk("b", 1, 0, "b0");
+    log.append(ending);
+    let snapshot: LiveSnapshot | null = null;
+    channel.follow((frame) => void (frame.type === "snapshot" && (snapshot = frame.snapshot)));
+    expect(snapshot!).toEqual({ last_seq: 0, calls: [] });
+  }
+});
+
 // ---------- LiveView on frames ----------
 
 /** A log of `run-1` and `frame`, which appends a record and returns its record frame. */
@@ -371,7 +386,11 @@ test("a view in another process follows two parallel calls through a pipe", asyn
   // Without `--no-install`, Bun may try to install the script's imports from the network.
   const flags = process.versions.bun === undefined ? [] : ["--no-install"];
   const child = spawn(process.execPath, [...flags, CHILD, log], { stdio: ["pipe", "pipe", "inherit"] });
-  const exited = new Promise((resolve) => child.once("exit", resolve));
+  // A spawn that fails emits `error` and no `exit`.
+  const exited = new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.once("error", resolve);
+  });
   try {
     const next = jsonLines(child);
     let done: unknown = null;

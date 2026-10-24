@@ -9,7 +9,7 @@
  * - for each stdin line `release <topic>`, which opens that call's next gate, `{"type":"ack"}` once
  *   the chunk or record it lets out was sent;
  * - for the stdin line `follow`, every frame `LiveChannel.follow` sends (the snapshot first), then
- *   `{"type":"ack"}`;
+ *   `{"type":"ack"}`; a later `follow` replaces it;
  * - `{"type":"done","status":...}` when the run ends.
  *
  * It exits when stdin closes, and after 60 seconds in any case.
@@ -48,9 +48,12 @@ void run.then(
 await until(() => live.snapshot().calls.length === 2);
 write({ type: "ready" });
 
+let stop = (): void => undefined;
 for await (const line of createInterface({ input: process.stdin })) {
   if (line === "follow") {
-    live.follow(write);
+    // Following again replaces the earlier follow, so no frame is written twice.
+    stop();
+    stop = live.follow(write);
   } else if (line.startsWith("release ")) {
     const before = sent;
     model.release(line.slice("release ".length));

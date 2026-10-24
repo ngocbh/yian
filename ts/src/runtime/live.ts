@@ -9,7 +9,7 @@
  *
  * The channel keeps the chunks of each call in flight, one buffer per `(node, n)`, so the calls of
  * parallel nodes stay apart. A call's buffer goes when its step record is appended (a failed
- * attempt's too, before its end frame) or when its node settles. A late viewer calls `follow`, which
+ * attempt's too, before its end frame), when its node settles, or when a record ends the run. A late viewer calls `follow`, which
  * sends the snapshot, then every later frame; it reads the log up to the snapshot's `last_seq` (this
  * may be async), then applies the frames that came meanwhile and follows. Every frame after the
  * snapshot is new to it: records continue after `last_seq` and each call's chunks after its
@@ -162,7 +162,8 @@ export class LiveChannel {
 
   /**
    * @internal Run boundary only: return a log that appends to `log` and sends each appended record to this
-   * channel once the append returns; a `node_step` drops its call. The other members read `log`;
+   * channel once the append returns; a `node_step` drops its call, and a `node_failed` or
+   * `run_stopped`, which end the run, drop every call. The other members read `log`;
    * closing it closes `log`. The records `log` already holds (a resumed run's) count as seen: the
    * snapshot's `last_seq` starts at the last.
    */
@@ -172,6 +173,9 @@ export class LiveChannel {
       const { seq, record } = envelope;
       this.#nextSeq = seq + 1;
       if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
+      // A node failure or a stop ends the run: its calls get no record, and their nodes settle only
+      // later, so a snapshot taken in between would list calls that nothing ever drops.
+      else if (record instanceof NodeFailedRecord || record instanceof RunStoppedRecord) this.#calls.clear();
       this.#send({ type: "record", seq, line: encodeRecord(envelope) });
     };
     return {
@@ -238,11 +242,13 @@ export interface LiveViewCall {
  *
  * A host that serves viewers in another process keeps one per run, built from the log up to a
  * `follow` snapshot's `last_seq` plus that snapshot, then fed every later frame. It never reads
- * files: the host gives it records. A record or chunk it already has is a duplicate and changes
- * nothing; a record past the next seq, a chunk past its call's next index, or a chunk of a call it
- * never saw start is a gap: `apply` returns false and changes nothing, and the host asks `follow`
- * again. A call goes when its step record arrives, when it ends with an error, or when its node's
- * success arrives; a node failure or a run stop ends the run and drops every call.
+ * files: the host gives it records. A record at or below `lastSeq`, the start of a call in flight, or
+ * a chunk below its call's next index is a duplicate and changes nothing; a record past the next
+ * seq, a chunk past its call's next index, or a chunk of a call not in flight is a gap: `apply`
+ * returns false and changes nothing, and the host asks `follow` again. A call goes when its step
+ * record arrives, when it ends with an error, or when its node's success arrives; a node failure or
+ * a run stop ends the run and drops every call. A run that ends without either (a host fault, or its
+ * process gone) sends nothing more, so the host drops the view when the run ends.
  */
 export class LiveView {
   /** The text and next chunk index of each call in flight by node, then by `n`, in start order. */
@@ -273,7 +279,9 @@ export class LiveView {
       throw new RangeError(`records must run from seq 0 to ${lastSeq}; they stop before seq ${next}`);
     }
     const view = new LiveView(lastSeq);
-    for (const { node, n, chunks, next_index } of calls) setCall(view.#calls, node, n, { text: chunks.join(""), nextIndex: next_index });
+    for (const { node, n, chunks, next_index } of calls) {
+      setCall(view.#calls, node, n, { text: chunks.join(""), nextIndex: next_index });
+    }
     return view;
   }
 
@@ -295,7 +303,7 @@ export class LiveView {
    * Apply one frame; returns false on a gap, meaning "follow again", and true otherwise, for a
    * duplicate and a frame of a type it doesn't know too.
    *
-   * @throws RangeError when a new record frame's `line` isn't a valid record.
+   * @throws what `decodeRecord` throws when a new record frame's `line` isn't a valid record.
    */
   apply(frame: LiveFrame): boolean {
     switch (frame.type) {

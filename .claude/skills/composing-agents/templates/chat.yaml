@@ -1,20 +1,25 @@
 # Conversational REPL — the turn-by-turn LOOP shape of examples/chat.yaml, with the
 # older turns folded into a rolling summary by compact_history.yaml.
-# The host sends each line the person types to the `messages` inbox (`send`), and each
-# turn's `take` reads everything sent since the last one. A take with nothing to read
-# waits: the run ends `waiting` and holds no worker until the next send. Beside the take,
-# `compacted` CALLs compact_history on the turns so far (no model call under its budget);
-# it runs after the reply, so the run ends `waiting` once any fold is done (a host that shows
-# the next prompt only then, such as `yian chat`, shows it after the fold). `answered` calls `respond` with
-# the summary and the kept turns flattened by a comprehension in the CALL's binding; the
-# reply's system prompt renders the summary. Closing the inbox (`close`) ends the loop once
-# the queued messages are answered: `closed` comes from the take, and a closed take with no
-# events skips `answered` (the routing-only CASE matches nothing), so `answered.output :- []`
-# appends nothing.
+# The host sends each owner message (a built-in Message) to the `owner_messages` inbox
+# (`send`), and each turn's `take` reads everything sent since the last one. A take with
+# nothing to read waits: the run ends `waiting` and holds no worker until the next send.
+# Beside the take, `compacted` CALLs compact_history on the turns so far (no model call under
+# its budget); it runs after the reply, so the run ends `waiting` once any fold is done (a
+# host that shows the next prompt only then, such as `yian chat`, shows it after the fold).
+# `answered` calls `respond` with the summary, the kept turns flattened by a comprehension in
+# the CALL's binding, what was said and the inbox; the reply's system prompt renders the
+# summary. The reply reads the inbox as its `steer_inbox:`, so messages sent while it runs
+# steer it; a host `interrupt` cuts it, and `output: Optional(str)` lets it succeed with null
+# (a `str` output would fail `agent.interrupted`). Closing the inbox (`close`) ends the loop
+# once the queued messages are answered: `closed` comes from the take, and a closed take with
+# no events skips `answered` (the routing-only CASE matches nothing), so
+# `answered.output :- []` appends nothing.
 #
-# Carried record ('a): {summary: str, history: list(list(Msg)), closed: bool} — one inner
-# list per turn, threaded turn to turn ('a -> 'a). The inbox rides along as a carried input
-# but is never returned. The AGENT records only its reply; CALL, LOOP and child END commits
+# Carried record ('a): {summary: str, history: list(list(Message)), closed: bool} — one inner
+# list per turn (what was said, then the reply's new_messages: its tool calls and results,
+# the steers it read, its replies, and the interrupt marker after an interrupt), threaded turn
+# to turn ('a -> 'a). The inbox rides along as a carried input but is never returned. The
+# AGENT records only its new messages (a messages commit); CALL, LOOP and child END commits
 # are pointers, so the run log grows linearly with the conversation.
 # Run from this directory so the `uses:` sibling resolves.
 
@@ -26,43 +31,45 @@ uses:
   compact_history: compact_history        # compact_history.yaml beside this file
 
 input:
-  messages: !Inbox(str)
+  owner_messages: !Inbox(Message)
 
 typedefs:
-  Msg:                    # one message of the history the AGENT sends
-    role: Literal(user, assistant)
-    text: str
-  State: {summary: str, history: list(list(Msg)), closed: bool}   # the carried record
-  Transcript: {summary: str, history: list(Msg)}                  # the flow's output
+  State: {summary: str, history: list(list(Message)), closed: bool}   # the carried record
+  Transcript: {summary: str, history: list(Message)}                  # the flow's output
 
 defs:
   respond:                # a def, so its CALL flattens the history in a derived binding
-    input: {summary: !str, history: !list(Msg), message: !str}
+    input:
+      summary: !str
+      history: !list(Message)
+      said: !list(Message)
+      owner_messages: !Inbox(Message)
     nodes:
       reply:
         kind: agent
         input:
           summary: ${input.summary}
           history: ${input.history}      # a plain reference: one route in a learnable capture
-          message: ${input.message}
-        output: str                      # only this turn's reply is recorded
+          said: ${input.said}
+        steer_inbox: ${input.owner_messages}
+        output: Optional(str)            # text; null only after an interrupt
         system_prompt: |-
           You are a helpful conversational assistant.
 
           Conversation so far: ${summary}
         prompt:
           - ${history}
-          - user: ${message}
-    # A one-turn list (hence the double brackets), so the body appends it with `+`, or `[]` when
+          - ${said}
+    # A one-turn list (hence the brackets), so the body appends it with `+`, or `[]` when
     # `answered` is skipped.
-    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
+    output: !list(list(Message)) ${[input.said + reply.new_messages]}
 
-  turn:                   # body: 'a -> 'a over {summary, history, closed, messages}
+  turn:                   # body: 'a -> 'a over {summary, history, closed, owner_messages}
     input:
       summary: !str
-      history: !list(list(Msg))
+      history: !list(list(Message))
       closed: !bool
-      messages: !Inbox(str)
+      owner_messages: !Inbox(Message)
     nodes:
       compacted:          # beside `heard`: compacts the history so far
         kind: call
@@ -72,7 +79,7 @@ defs:
         kind: tool
         tool_id: take                    # waits until a message arrives or the inbox closes
         input:
-          from: ${input.messages}
+          from: ${input.owner_messages}
           take: all
       route:
         kind: case
@@ -85,7 +92,8 @@ defs:
         input:
           summary: ${compacted.output.summary}
           history: ${[m for t in compacted.output.history for m in t]}
-          message: ${join(heard.output.events)}  # one line per send
+          said: ${heard.output.events}
+          owner_messages: ${input.owner_messages}
     output: !State
       summary: ${compacted.output.summary}
       history: ${compacted.output.history + (answered.output :- [])}
@@ -95,7 +103,7 @@ nodes:
   chat:
     kind: loop
     call: turn
-    input: {summary: "", history: [], closed: false, messages: "${input.messages}"}
+    input: {summary: "", history: [], closed: false, owner_messages: "${input.owner_messages}"}
     while: not closed
 output: !Transcript
   summary: ${chat.output.summary}

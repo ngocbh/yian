@@ -19,7 +19,7 @@ yian models (--auth-file F | --provider P [--base-url URL]) [--timeout S] [--jso
 ```
 
 `yian chat` (TS yian; see [Chatting with a flow](#chatting-with-a-flow-yian-chat)) sends each
-line you type to a flow's `Inbox(str)` input, `yian check` loads flows without running them,
+line you type to a flow's `Inbox(str)` or `Inbox(Message)` input, `yian check` loads flows without running them,
 `yian skills check` checks skill
 directories, `yian status` (TS yian only) reports where the run in a run log stands, or lists
 the runs in `~/.yian/runs`,
@@ -635,17 +635,19 @@ Changed (TS yian): `yian chat` has no bundled flow and no `run_flow` tool; see
 
 ## Chatting with a flow (`yian chat`)
 
-TS yian only. `yian chat FLOW.yaml` starts a durable run of a flow with an `Inbox(str)` input
-and sends each line you type to it, as the host calls `send` and `advance` do
+TS yian only. `yian chat FLOW.yaml` starts a durable run of a flow with an `Inbox(str)` or
+`Inbox(Message)` input and sends each line you type to it, as the host calls `send` and `advance` do
 ([API](api.md)). For example:
 
 ```console
 yian chat examples/chat.yaml
 ```
 
-- **The inbox.** The flow needs exactly one top-level `Inbox(str)` input, or `--inbox NAME` to
-  pick one when it declares several. A flow with none is a usage error; an `Inbox(int)` or other
-  element type doesn't count. Other inputs come from `--input`/`--inputs` as in `yian run`, and
+- **The inbox.** The flow needs exactly one top-level `Inbox(str)` or `Inbox(Message)` input, or
+  `--inbox NAME` to pick one when it declares several. A flow with none is a usage error; an
+  `Inbox(int)` or other element type doesn't count. An `Inbox(str)` gets each line as it is; an
+  `Inbox(Message)` gets it as a user message holding the line as text,
+  `{role: user, parts: [{type: text, text: <line>}]}`, with no author. Other inputs come from `--input`/`--inputs` as in `yian run`, and
   missing required ones are prompted for on a TTY; the inbox is never prompted for and can't be
   supplied.
 - **Turns.** The chat starts the run, and each time it waits, shows a `> You:` prompt on stderr.

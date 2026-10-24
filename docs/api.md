@@ -2728,8 +2728,8 @@ non-learnable runs, so both write the same `from`.
   the seq otherwise). A cut between the expansion commits and `node_expanded` leaves orphans; the
   spawner reruns.
 - A flow outputs a growing value linearly when its nodes output only what is new and a binding
-  does the append (`examples/chat.yaml`): a turn's AGENT records its reply, and the turn's history
-  is a derived value, recorded as `from`.
+  does the append (`examples/chat.yaml`): a turn's AGENT records its new messages (one messages
+  commit), and the turn's history is a derived value, recorded as `from`.
 - `foldRunLog(log, { env, flow, codeRoot })` (from `yian/run`) replays a log through the run
   reducer and returns `{flow, records}`, each record with the `TypedValue` an accepted
   `pool_commit` writes (held, a send's included; rebuilt from `from`; for a take commit, the

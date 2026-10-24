@@ -256,6 +256,8 @@ TS yian: an AGENT has two values. `${x.output}` is its result, checked against i
 - every tool call has its tool message, in call order, after the reply that made it;
 - a structured agent's list ends with one assistant message holding its final value as JSON
   text; the internal call that returned the value isn't shown;
+- the steers it read ([`steer_inbox:`](syntax.md#steering-a-running-agent-steer_inbox)) are
+  user messages in it, where they joined the conversation;
 - the prompt isn't in it, so a chat loop adds the user's own message itself.
 
 The engine records it as a messages commit naming the agent's steps, and rebuilds the value
@@ -279,6 +281,37 @@ unknown. A run needs a log for a call to wait. Memory recalled at the wake doesn
 replayed calls: a request's recorded digest leaves the recalled sections out, and the new call
 after the wake reads the fresh recall. See
 [Blocking human interaction](api.md#blocking-human-interaction).
+
+### Chat agents
+
+TS yian: a chat's reply is an AGENT that reads the history and what was just said, takes steers
+from the chat's inbox, and gives back what it added
+([`examples/chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat)):
+
+```yaml
+reply:
+  kind: agent
+  input:
+    history: ${input.history}          # list(Message): the turns so far
+    said: ${input.said}                # list(Message): this turn's messages, from a take
+  steer_inbox: ${input.owner_messages} # an Inbox(Message): sends during the reply steer it
+  output: Optional(str)
+  prompt:
+    - ${history}
+    - ${said}
+```
+
+- **History plus what was said.** The list prompt splices both as real turns, so tool calls and
+  their results replay as sent and the request ends with the user's messages.
+- **Steers.** A message the host sends while the reply runs joins its next model call, as its own
+  user message; one sent during the final answer gets one more call.
+- **Interrupts.** A host `interrupt` on the inbox cuts the reply; its output is null. Declare
+  `Optional(...)` on any agent a host may interrupt: with no `output:` (which means `str`) or any
+  other type, the agent fails with `agent.interrupted` instead.
+- **New messages.** `${reply.new_messages}` holds the replies, tool calls and results, the steers
+  read and, after an interrupt, the user message `[interrupted by the user]`; the chat appends
+  what was said and these to its history, so the next turn's model sees what happened, the cut
+  text included.
 
 ### How YAML becomes the request
 

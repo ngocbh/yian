@@ -3,32 +3,30 @@
 # Under budget, the routing-only CASE `over` matches nothing, so `folded` is SKIPPED (no
 # model call) and the output's `:-` defaults pass the inputs through. Over budget, one AGENT
 # folds the old summary and the older turns into a new summary; the last `keep` turns stay.
-# The history is a list of turns (each a list of messages), so `keep` counts whole turns and
-# the cut `history[:len(history) - keep]` / `history[len(history) - keep:]` falls between
-# them. The slices sit in the `folded` CALL's binding: a CALL is derived (its binding is
+# The history is a list of turns (each a list of built-in Messages), so `keep` counts whole
+# turns (a tool call never parts from its result) and the cut `history[:len(history) - keep]`
+# / `history[len(history) - keep:]` falls between them. The slices sit in the `folded` CALL's binding: a CALL is derived (its binding is
 # rebuilt, never recorded), and the AGENT binds plain references. Prompts call only
 # formatting builtins (join, lower, render_as_json, upper), so `len` stays in bindings.
-# Comprehensions, len() and slices are TS-only.
+# The budget and the summarizer read the messages' text parts only.
+# Comprehensions, len(), slices and the built-in Message are TS-only.
 
 id: compact_history
 name: compact_history
 description: Keep a chat history's text under a budget by folding older turns into a rolling summary.
 
 typedefs:
-  Msg:
-    role: Literal(user, assistant)
-    text: str
-  Compacted: {summary: str, history: list(list(Msg))}   # history: one list of messages per turn
+  Compacted: {summary: str, history: list(list(Message))}   # history: one list of messages per turn
 
 input:
   summary: !str
-  history: !list(list(Msg))
+  history: !list(list(Message))
   budget: !int 32000      # characters of message text before compacting
   keep: !int 4            # whole turns kept verbatim; 0 (or less) folds every turn
 
 defs:
   fold:                   # one model call: the old summary and the older turns give a new summary
-    input: {summary: !str, older: !list(list(Msg)), recent: !list(list(Msg))}
+    input: {summary: !str, older: !list(list(Message)), recent: !list(list(Message))}
     nodes:
       summarize:          # never `reply`: `yian chat` prints any node named `reply`
         kind: agent
@@ -48,7 +46,7 @@ defs:
           ${summary}
 
           New messages to fold in (context only), oldest first:
-          ${join([m.role + ": " + m.text for t in older for m in t])}
+          ${join([m.role + ": " + p.text for t in older for m in t for p in m.parts if p.type == "text"])}
     output: !Compacted
       summary: ${summarize.output}
       history: ${input.recent}
@@ -57,7 +55,7 @@ nodes:
   over:
     kind: case
     cases:
-      - when: len(input.history) > input.keep and len(join([m.text for t in input.history for m in t], "")) > input.budget
+      - when: len(input.history) > input.keep and len(join([p.text for t in input.history for m in t for p in m.parts if p.type == "text"], "")) > input.budget
         then: folded
   folded:                 # skipped when under budget: no model call
     kind: call

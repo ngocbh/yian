@@ -992,8 +992,8 @@ class EvalExpr {
   /**
    * `base[lower:upper]` on a list, as Python's `slice.indices` with step 1: an omitted lower is 0
    * and an omitted upper the length, a negative bound counts from the end, and both clamp to
-   * `[0, n]`. A null or missing base is a miss, as a `.field` on null is. When tracing, the
-   * route is a `list` of the base route projected to each kept index.
+   * `[0, n]`. A null or missing base is a miss, as a `.field` on null is, and its bounds aren't
+   * read. When tracing, the route is a `list` of the base route projected to each kept index.
    *
    * @throws {ExpressionError} If a bound is null or not an int (a bool counts as 0 or 1), or the
    *   base is not a list.
@@ -1001,15 +1001,11 @@ class EvalExpr {
   subscript(node: Tree): Walked {
     const [baseNode, slice] = node.children as [ExprNode, Tree];
     const base = this.walk(baseNode);
+    // A miss before the bounds are read, so `xs[n:] :- []` falls back whatever the bounds are.
+    if (base === MISSING || base === null) return MISSING;
     const baseRoute = this.#trace ? this.#lastRoute! : null;
-    // A bound may miss and fall back (`(n :- 0)`); a strict miss still names the base.
-    const missPath = this.#missPath;
     const lower = this.sliceBound(slice.children[0]!);
     const upper = this.sliceBound(slice.children[1]!);
-    if (base === MISSING || base === null) {
-      this.#missPath = missPath;
-      return MISSING;
-    }
     if (!Array.isArray(base)) throw new ExpressionError(`slicing takes a list, got ${kindName(base)}`);
     const n = BigInt(base.length);
     const clamp = (bound: bigint | null, fallback: bigint): number => {

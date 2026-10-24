@@ -137,7 +137,7 @@ bool counts as 0 or 1, as in arithmetic.
 
 | Case | Binding / condition | Strict (prompt) |
 |---|---|---|
-| the base is `null` or misses | a miss, as `.field` on null is, so `${xs[1:] :- []}` falls back | raises `unresolved reference ${xs}` |
+| the base is `null` or misses | a miss, as `.field` on null is, so `${xs[1:] :- []}` falls back; the bounds aren't read | raises `unresolved reference ${xs}` |
 | the base is text, a record or a number | raises `slicing takes a list, got str` | same |
 | a bound is `null` or misses | raises `slice bound is null; omit it to mean the end` | same |
 | a bound is a float or text | raises `slice bounds take int, got float` | same |

@@ -280,7 +280,7 @@ describe("deltas and parts", () => {
       new ReasoningDelta(0, "e think."),
       new TextDelta(1, "Hello"),
       new TextDelta(1, " there."),
-      new PartDone(0, new ReasoningPart("Let me think.")),
+      new PartDone(0, new ReasoningPart("Let me think.", record({}))),
       new PartDone(1, TEXT_PART),
     ]);
   });
@@ -344,7 +344,7 @@ describe("deltas and parts", () => {
     const out = await parse([chunk([TEXT]), chunk([THOUGHT]), tail, finishChunk()]);
     expect(partsDone(out)).toEqual([
       new PartDone(0, TEXT_PART),
-      new PartDone(1, new ReasoningPart("Let me think.")),
+      new PartDone(1, new ReasoningPart("Let me think.", record({}))),
       new PartDone(2, signedText("", SIG)),
     ]);
   });
@@ -367,7 +367,7 @@ describe("deltas and parts", () => {
     expect(partsDone(out)).toEqual([
       new PartDone(0, TEXT_PART),
       new PartDone(1, callPart("yian_call_0")),
-      new PartDone(2, new ReasoningPart("Let me think.")),
+      new PartDone(2, new ReasoningPart("Let me think.", record({}))),
     ]);
     expect(out.filter((event) => event instanceof ReasoningDelta)).toEqual([
       new ReasoningDelta(2, "Let m"),
@@ -603,9 +603,9 @@ describe("replay records", () => {
     }
   });
 
-  test("unsigned parts carry no payload", async () => {
+  test("an unsigned thought carries its route's record; unsigned text and calls carry none", async () => {
     const parts = await partsOf(sseChunks([THOUGHT, TEXT, UNSIGNED_CALL]));
-    expect(parts.map((part) => part.providerPayload)).toEqual([null, null, null]);
+    expect(parts.map((part) => part.providerPayload)).toEqual([replayRecord(KEY, {}), null, null]);
   });
 
   test("the Finish record holds the response id and model, the last of each; its protocol is gemini", async () => {

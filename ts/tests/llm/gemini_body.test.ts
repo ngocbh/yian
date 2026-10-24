@@ -789,7 +789,12 @@ describe("thought signatures sent back", () => {
     expect(modelParts(own(...parts))).toEqual([[{ text: "Hello." }], ["other_model"]]);
   });
 
-  test("a signed reasoning part is not sent", () => {
+  test("a thought with an envelope-only record isn't sent and signals nothing", () => {
+    const parts = [new ReasoningPart("Thinking.", record({})), text("Hello.")];
+    expect(modelParts(own(...parts))).toEqual([[{ text: "Hello." }], []]);
+  });
+
+    test("a signed reasoning part is not sent", () => {
     const parts = [new ReasoningPart("Thinking.", record({ thought_signature: SIG })), text("Hello.")];
     expect(modelParts(own(...parts))).toEqual([[{ text: "Hello." }], []]);
   });

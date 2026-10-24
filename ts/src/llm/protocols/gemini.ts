@@ -18,7 +18,8 @@
  * Each streamed chunk is a whole `GenerateContentResponse`, of which the first candidate is read.
  * Text and thought pieces stream as deltas and join into one text or reasoning part until a call,
  * a switch between thought and text, or a second signature starts another, with dense part
- * indexes; a part whose wire parts carried a thought signature gets a replay record holding it.
+ * indexes; a part whose wire parts carried a thought signature gets a replay record holding it,
+ * and an unsigned thought an envelope-only one.
  * A call arrives whole, as one delta, with `yian_call_<n>` as its id when Gemini sends none or
  * repeats one. Usage counts merge field by field across chunks, and the finish comes at the end of
  * the stream. A reply that failed, was refused, blocked or ended early raises `ProviderError`; an
@@ -329,12 +330,14 @@ export class Gemini implements SseProtocol {
     yield new Finish({ reason, responseId, protocol: PROTOCOL, providerPayload });
   }
 
-  /** Build a streamed part, with a record of its signature when it has one. */
+  /**
+   * Build a streamed part, with a record of its signature when it has one; an unsigned thought
+   * gets an envelope-only record, so every reasoning part names the route that wrote it.
+   */
   #part(part: Streamed): Part {
     const record = part.signature === null ? null : replayRecord(this.#key, { thought_signature: part.signature });
-    if (part.kind !== "call") {
-      return part.kind === "text" ? new TextPart(part.text, record) : new ReasoningPart(part.text, record);
-    }
+    if (part.kind === "reasoning") return new ReasoningPart(part.text, record ?? replayRecord(this.#key, {}));
+    if (part.kind !== "call") return new TextPart(part.text, record);
     const { id, name, args, rawArguments } = part;
     return new ToolCallPart({ id, name, arguments: args, rawArguments, providerPayload: record });
   }

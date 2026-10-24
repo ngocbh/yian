@@ -3063,9 +3063,11 @@ XML-escaped; on Chat Completions the tags are folded into the first and last tex
 message is still a string. Chat Completions `name` is not sent yet. An unauthored user message
 is not wrapped: text outside every wrapper is the flow's own user. An authored message with no
 text goes unchanged. In every user and tool text, each opening of the tag (`<authored_message` or
-`</authored_message`, in any case, and with whitespace, `\`, `/` or invisible format characters
-after `<`, so `<\/authored_message>` too) has its `<` escaped as `&lt;`, and Gemini escapes the
-tool JSON it decodes as well, so a message body or a tool's output can't forge a wrapper. Since
+`</authored_message`, in any case, and with whitespace, `\`, `/` or invisible format or
+default-ignorable characters after `<`, so `<\/authored_message>` too) has its `<` escaped as
+`&lt;`. So does a `<` that ends a text with only such characters and the start of the name after
+it, since the next part or a merged next message could finish the tag. Gemini escapes the tool
+JSON it decodes as well, so a message body or a tool's output can't forge a wrapper. Since
 user text is always escaped, a flow that wants to explain the `<authored_message>` convention to
 the model must do so in its system prompt. Not covered: lookalike tags (a fullwidth `＜`, a
 character inside the name, `authored-message`), a model that reads `&lt;` as `<`, `\u003c`-style

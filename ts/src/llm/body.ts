@@ -155,16 +155,24 @@ function quote(text: string, at: number, what: string): string {
 /** The tag name of the wrapper that carries a user message's author. */
 export const AUTHOR_TAG = "authored_message";
 
-// Any run of whitespace, backslashes, slashes and format characters (zero-width and bidi
-// controls) may sit between `<` and the name, because `<\/authored_message>` (the JSON
-// escaped-slash form a tool may return as text) and an invisible character after `<` read as
-// the tag. Global regexes are stateful under `.test()`, so a change is detected by comparing
-// the replaced string with the original.
-const TAG_OPENING = /<([\s\\\/\p{Cf}]*authored_message)/giu;
+// Any run of whitespace, backslashes, slashes, format characters and other default-ignorable
+// characters (zero-width, bidi controls, variation selectors, Hangul fillers) may sit between
+// `<` and the name, because `<\/authored_message>` (the JSON escaped-slash form a tool may return
+// as text) and an invisible character after `<` read as the tag. A `<` is escaped too when the
+// rest of its text is such a run and the start of the name, because adapters join parts and
+// Anthropic merges consecutive user and tool messages, so the next part or message can finish
+// the tag. Global regexes are stateful under `.test()`, so a change is detected by comparing the
+// replaced string with the original.
+const FILLER = String.raw`[\s\\\/\p{Cf}\p{Default_Ignorable_Code_Point}]`;
+const NAME_STARTS = Array.from({ length: AUTHOR_TAG.length }, (_, i) => AUTHOR_TAG.slice(0, AUTHOR_TAG.length - 1 - i));
+const TAG_OPENING = new RegExp(`<(?=${FILLER}*(?:${AUTHOR_TAG}|(?:${NAME_STARTS.join("|")})$))`, "giu");
 
-/** Return `text` with the `<` of every opening of the author tag, in any case, escaped as `&lt;`. */
+/**
+ * Return `text` with the `<` of every opening of the author tag, in any case, escaped as `&lt;`,
+ * and of a `<` that ends the text with only filler and the start of the name after it.
+ */
 export function escapeAuthorTags(text: string): string {
-  return text.replace(TAG_OPENING, "&lt;$1");
+  return text.replace(TAG_OPENING, "&lt;");
 }
 
 /** Return `value` escaped for an XML attribute: `&`, `<`, `>`, `"` and line breaks. */

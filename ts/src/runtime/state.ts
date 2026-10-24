@@ -48,7 +48,7 @@ import {
 } from "../memory/index.ts";
 import { sameMemoryScope } from "../memory/contracts.ts";
 import { type CompleteResult, ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
-import { BindingError } from "../nodes/binding.ts";
+import { BindingError, copyValue } from "../nodes/binding.ts";
 import {
   type Binding,
   type CallView,
@@ -79,6 +79,7 @@ import {
   type Type,
   TypeCheckError,
   TypedValue,
+  type ValueRecord,
   writeAsText,
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
@@ -2726,7 +2727,7 @@ function prepareRecordTrace(
     ...options,
     rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
     nodeDataRebuilder: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
-    steps: nodeId === null ? [] : (state.nodeSteps.get(nodeId) ?? []),
+    steps: nodeId === null ? [] : stepsWithSteerValues(state, nodeId),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
     rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
@@ -4319,14 +4320,39 @@ function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | unde
 }
 
 /**
- * Drop a settled node's start count and recorded steps.
+ * Drop a settled node's start count and recorded steps, and the values its steer reads consumed.
  *
  * @throws RangeError when the node has no start count, as Python's `del` raises `KeyError`.
  */
 function forgetNodeSteps(state: RunState, nodeId: string): void {
   if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
+  for (const step of state.nodeSteps.get(nodeId) ?? []) {
+    if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) state.inboxEvents.delete(seq);
+  }
   state.nodeSteps.delete(nodeId);
   state.nodeStepSeqs.delete(nodeId);
+}
+
+/**
+ * Return copies of `nodeId`'s recorded steps, each `steer` step's copy given `values`: the
+ * consumed sends' values (copies, `copyValue`), in `from` order. The steps the state holds don't
+ * change.
+ *
+ * @throws RangeError when a consumed send's value is gone (the log and the state disagree).
+ */
+export function stepsWithSteerValues(state: RunState, nodeId: string): ValueRecord[] {
+  return (state.nodeSteps.get(nodeId) ?? []).map((step) => {
+    const copy = structuredClone(step) as ValueRecord;
+    if (step["kind"] !== "steer") return copy;
+    copy["values"] = (seqList(step["from"]) ?? []).map((seq) => {
+      const value = state.inboxEvents.get(seq);
+      if (value === undefined) {
+        throw new RangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
+      }
+      return copyValue(value.toObject());
+    });
+    return copy;
+  });
 }
 
 /** Require an existing unknown node in the in-flight frontier, with no pending commit. */

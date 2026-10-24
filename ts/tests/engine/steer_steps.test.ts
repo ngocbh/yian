@@ -8,17 +8,19 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { RunLog } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
+  prepareNodeFailed,
   prepareNodeStarted,
   prepareNodeStep,
   prepareSend,
   type PreparedTransition,
   type RunState,
+  stepsWithSteerValues,
 } from "../../src/runtime/state.ts";
 import { availableUnread } from "../../src/runtime/waits.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { expectUnchanged, FINGERPRINT, FuncNode, snapshot } from "./run_state_fixtures.ts";
-import { MSGS, paramFlow, started } from "./waits_fixtures.ts";
+import { expectUnchanged, FINGERPRINT, FuncNode, nodeFailure, snapshot } from "./run_state_fixtures.ts";
+import { MSGS, paramFlow, replayed, started, succeed } from "./waits_fixtures.ts";
 
 /** A second inbox param, `other: Inbox(str)`. */
 const OTHER = new Parameter("other", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });
@@ -103,4 +105,47 @@ test("a node reads one steer inbox", () => {
   expect(refusal(state, () => prepareNodeStep(state, "chat", steer([s3], "other")))).toBe(
     "node 'chat' reads steer inbox 'msgs', not 'other'",
   );
+});
+
+test("a steer read's values stay until its node succeeds, then go", () => {
+  const { log, state, s1, s2 } = steering();
+  commit(log, state, prepareNodeStep(state, "chat", steer([s1, s2])));
+  succeed(log, state, "chat", "ok");
+  expect([state.inboxEvents.has(s1), state.inboxEvents.has(s2)]).toEqual([false, false]);
+});
+
+test("a steer read's values go when its node fails", () => {
+  const { log, state, s1, s2 } = steering();
+  commit(log, state, prepareNodeStep(state, "chat", steer([s1, s2])));
+  commitPrepared(log, state, prepareNodeFailed(state, nodeFailure("chat")));
+  expect([state.inboxEvents.has(s1), state.inboxEvents.has(s2)]).toEqual([false, false]);
+});
+
+test("stepsWithSteerValues attaches each steer step's values to a copy", () => {
+  const { log, state, s1, s2 } = steering();
+  commit(log, state, prepareNodeStep(state, "chat", steer([s1, s2])));
+  expect(stepsWithSteerValues(state, "chat")).toEqual([{ kind: "steer", inbox: "msgs", from: [s1, s2], values: ["a", "b"] }]);
+  expect(Object.hasOwn(state.nodeSteps.get("chat")![0]!, "values")).toBe(false);
+  expect(stepsWithSteerValues(state, "f")).toEqual([]);
+});
+
+test("replay rebuilds the same store and the same step copies", () => {
+  const { log, state, path, s1, s2 } = steering();
+  commit(log, state, prepareNodeStep(state, "chat", steer([s1, s2])));
+  const back = replayed(state.flow, path);
+  expect([...back.inboxEvents.keys()]).toEqual([...state.inboxEvents.keys()]);
+  expect(stepsWithSteerValues(back, "chat")).toEqual([
+    { kind: "steer", inbox: "msgs", from: [s1, s2], values: ["a", "b"] },
+  ]);
+});
+
+test("a learnable occurrence's steps carry the steer values", () => {
+  const flow = paramFlow([MSGS], new SteerNode("chat", () => "ok"));
+  const { log, state } = started(flow, { learnable: true, fingerprint: FINGERPRINT });
+  commitPrepared(log, state, prepareNodeStarted(state, "chat"));
+  const s1 = commit(log, state, prepareSend(state, "msgs", "a"));
+  commit(log, state, prepareNodeStep(state, "chat", steer([s1])));
+  succeed(log, state, "chat", "ok");
+  const occurrence = state.trace!.occurrences.find((item) => item.nodeId === "chat")!;
+  expect(occurrence.steps).toEqual([{ kind: "steer", inbox: "msgs", from: [s1], values: ["a"] }]);
 });

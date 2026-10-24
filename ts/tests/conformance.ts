@@ -1964,9 +1964,15 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ],
   ["run_resumed", [null, ["retry_node_ids", "num_workers"]]],
   ["run_stopped", [null, ["reason", "node_ids"]]],
+  ["node_waiting", ["node_id", ["call_ids", "waits", "steer_inbox"]]],
+  ["node_woken", ["node_id", ["timed_out"]]],
+  ["run_waiting", [null, ["node_ids"]]],
+  ["inbox_closed", [null, ["inbox"]]],
+  ["run_cancelled", [null, []]],
+  ["run_failed", [null, ["failure"]]],
   ["node_started", ["node_id", []]],
   ["node_step", ["node_id", ["n", "step"]]],
-  ["pool_commit", ["node_id", ["key", "value", "from"]]],
+  ["pool_commit", ["node_id", ["key", "value", "from", "inbox", "events", "closed"]]],
   ["node_succeeded", ["node_id", ["commit", "forward_capture"]]],
   ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
   ["node_expanded", ["spawner_id", ["prune_ids", "forward_capture"]]],
@@ -1986,7 +1992,7 @@ const TIMED_KEYS: ReadonlySet<string> = new Set(["system.now", "system.today"]);
 /** The fields of a node step that are times (an AGENT's model calls and tool results). */
 const STEP_TIMES: readonly string[] = ["started_at", "first_token_at"];
 const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "defaults", "effective_llm_by_static_path", "call_time_llm", "parent",
+  "defaults", "effective_llm_by_static_path", "call_time_llm", "parent", "waits", "timed_out",
 ]);
 const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "evaluated_keys", "items", "node_data", "input_names", "variable_names",
@@ -1994,7 +2000,18 @@ const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
 const FAILURE_FIELDS: ReadonlyMap<string, string> = new Map([
   ["node_failed", "failure"],
   ["node_routed", "terminal_failure"],
+  ["run_failed", "failure"],
 ]);
+
+/**
+ * Return the objects of a record's payload that may hold a `deadline` (a time): a `node_waiting`'s
+ * wait entries and a `pending` step.
+ */
+function deadlineHolders(kind: string, payload: Case): Case[] {
+  if (kind === "node_waiting") return payload["waits"] as Case[];
+  const step = kind === "node_step" ? (payload["step"] as Case) : null;
+  return step !== null && step["kind"] === "pending" ? [step] : [];
+}
 
 /** Return a connection record with only its `method`, `source` and `endpoint`. */
 function cut(connection: Case): Case {
@@ -2058,7 +2075,7 @@ function capture(captured: Case): Case {
 }
 
 /** Return the run log's `lines` projected to the README's trace. */
-function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
+export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
   const failure = (payload: Case): Case => {
     const origins = (payload["trace"] as Case[]).map(
       (origin) => new OriginRef(origin["key"] as string),
@@ -2114,6 +2131,8 @@ function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
     if ((get(payload, "forward_capture") ?? null) !== null) {
       payload["forward_capture"] = capture(payload["forward_capture"] as Case);
     }
+    // Deadlines are times.
+    for (const holder of deadlineHolders(kind, payload)) delete holder["deadline"];
     if (kind === "node_step") {
       const step = payload["step"] as Case;
       if (Object.hasOwn(step, "retry_in") && step["retry_in"] !== null) step["retry_in"] = Number(step["retry_in"]);
@@ -2635,13 +2654,13 @@ function checkResults(
 /**
  * Return the run log text `text` as a golden log holds it: each line with every `traceback` value,
  * its time (`at`), the seeded clock values (the `value` of the `system.now` and `system.today`
- * commits), a step's times (`started_at` and `first_token_at` when set), the
- * recorded flow's folder (`flow.dir`) and the yian version (`yian_version`) replaced by
- * `<masked>`, written again with the log's own encoder. The times and the seeded values come from
- * the case's virtual clock, which starts at the real time; the folder is the case's temporary one;
- * the version changes with each release.
+ * commits), a step's times (`started_at` and `first_token_at` when set), a set `deadline` of a
+ * `node_waiting` wait entry or a `pending` step, the recorded flow's folder (`flow.dir`) and the
+ * yian version (`yian_version`) replaced by `<masked>`, written again with the log's own encoder.
+ * The times and the seeded values come from the case's virtual clock, which starts at the real
+ * time; the folder is the case's temporary one; the version changes with each release.
  */
-function masked(text: string): string {
+export function masked(text: string): string {
   const lines = text.split("\n").filter((line) => line !== "");
   const mask = (value: unknown): void => {
     if (Array.isArray(value)) value.forEach(mask);
@@ -2665,6 +2684,9 @@ function masked(text: string): string {
       if (record["kind"] === "node_step") {
         const step = payload["step"] as Case;
         for (const time of STEP_TIMES) if ((step[time] ?? null) !== null) step[time] = "<masked>";
+      }
+      for (const holder of deadlineHolders(record["kind"] as string, payload)) {
+        if ((holder["deadline"] ?? null) !== null) holder["deadline"] = "<masked>";
       }
       if (record["kind"] === "run_started") {
         const flow = payload["flow"] as Case | null;

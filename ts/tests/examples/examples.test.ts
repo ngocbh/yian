@@ -6,11 +6,12 @@
  * examples directory as the search path), `test_examples_present` and
  * `test_debate_agents_are_tool_free`. TS-only: the shape of `human-approval.yaml`'s `ask` gate,
  * `chat.yaml` on its `Inbox(str)` input, run end to end on a scripted model, and
- * `compact_history.yaml` alone (pass-through, `keep`, a failed summary).
+ * `compact_history.yaml` alone (pass-through, `keep`, a failed summary), and a learnable chat
+ * whose reply feedback reaches the summarizer.
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { advance, close, runFlow, send } from "../../src/run.ts";
+import { BackwardReadyRecord, JsonlRunLog, NodeStartedRecord } from "../../src/runtime/log.ts";
 import { ASK } from "../../src/tools/context.ts";
 import { isInboxType, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -210,4 +212,58 @@ test("chat folds the older turns into a summary once nine long turns pass the bu
     ["assistant", "r".repeat(2000)],
   ]);
   expect(messages.map((m) => [m.role, m.text()])).toEqual([...kept, ["user", message(10)]]);
+}, 60_000);
+
+test("in a learnable chat, feedback on a reply reaches the summarizer through the summary", async () => {
+  // A copy of the chat with a 200-character budget, beside an unchanged compact_history.yaml.
+  const dir = mkdtempSync(join(tmp, "small-budget-"));
+  const chatText = readFileSync(join(EXAMPLES_DIR, "chat.yaml"), "utf8");
+  const compactedInput = `input: {summary: "\${input.summary}", history: "\${input.history}"}`;
+  expect(chatText).toContain(compactedInput);
+  writeFileSync(join(dir, "chat.yaml"), chatText.replace(compactedInput, `${compactedInput.slice(0, -1)}, budget: 200}`));
+  writeFileSync(join(dir, "compact_history.yaml"), readFileSync(join(EXAMPLES_DIR, "compact_history.yaml"), "utf8"));
+  const loaded = await loadFlow(readFileSync(join(dir, "chat.yaml"), "utf8"), { searchPaths: [dir] });
+  // A backward input_feedback value is a list of messages; a bare string fails the attempt.
+  const KEEP_NAME = JSON.stringify({
+    input_feedback: { summary: ["Keep the user's name."] },
+    self_feedback: [],
+    variable_feedback: {},
+  });
+  const model = new PromptModel({ reply: "x".repeat(30), summary: "S", backward: [textReply(KEEP_NAME)] });
+  const log = join(dir, "chat.jsonl");
+  const options = { env: NO_ENV, numWorkers: 0, models: serving(model) };
+  let result = await runFlow(loaded, {}, { ...options, log, learnable: true, llmConfig: config });
+  // Five 60-character turns pass 200, so the sixth turn's `compacted` folds; the closing turn
+  // folds again.
+  for (let n = 1; n <= 6; n++) {
+    expect(result.status).toBe("waiting");
+    await send(log, "messages", `${n}:`.padEnd(30, "m"), { env: NO_ENV });
+    result = await advance({ ...options, log });
+  }
+  await close(log, "messages", { env: NO_ENV });
+  result = await advance({ ...options, log });
+  expect(result.status).toBe("succeeded");
+  const history = (result.output as { history: unknown[] }).history;
+  expect(history).toHaveLength(8);
+  const feedback = [...Array<null>(history.length - 1).fill(null), "Mention the user's name."];
+  const outcome = await result.backward({ history: feedback });
+  expect(outcome.status).toBe("succeeded");
+  const reader = JsonlRunLog.resume(log);
+  const records = (() => {
+    try {
+      return reader.records();
+    } finally {
+      reader.close();
+    }
+  })();
+  const starts = new Map(
+    records.flatMap((e) => (e.record instanceof NodeStartedRecord ? [[e.seq, e.record.nodeId] as const] : [])),
+  );
+  const ready = records.map((e) => e.record).filter((r) => r instanceof BackwardReadyRecord);
+  expect(ready).toHaveLength(1);
+  const summarized = ready[0]!.attributedResults.filter((item) =>
+    starts.get(item.source.executionSeq)!.endsWith("/summarize"),
+  );
+  const reached = summarized.filter((item) => item.invoked && item.feedback.length > 0);
+  expect(reached.map((item) => starts.get(item.source.executionSeq))).toEqual(["chat#5/compacted/folded/summarize"]);
 }, 60_000);

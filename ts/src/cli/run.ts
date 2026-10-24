@@ -826,12 +826,12 @@ interface RunOptions {
 }
 
 /**
- * Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
+ * @internal Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
  * with its stack: a bad value (a damaged or empty log, a defaults mismatch, a memory setup failure
  * included), an unreadable file, a run log another writer holds, a memory failure, an MCP server
  * that didn't start, the missing MCP SDK.
  */
-function isSetupError(error: unknown): error is Error {
+export function isSetupError(error: unknown): error is Error {
   return (
     error instanceof TypeError ||
     error instanceof RangeError ||

@@ -621,7 +621,12 @@ describe("the steer inbox capability", () => {
     const calls: string[] = [];
     const open = (inbox: string): SteerInbox => {
       calls.push(`open ${inbox}`);
-      return { inbox, queued: () => (calls.push("queued"), false), read: () => (calls.push("read"), read()) };
+      return {
+        inbox,
+        queued: () => (calls.push("queued"), false),
+        read: () => (calls.push("read"), read()),
+        interrupt: new AbortController().signal, interruptedBy: () => null,
+      };
     };
     return { open, calls };
   }

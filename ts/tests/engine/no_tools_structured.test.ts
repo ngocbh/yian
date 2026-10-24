@@ -182,6 +182,7 @@ test("a steer inbox's queued steers join the loop's request after the prompt", a
   let queued: string[] = ["be brief"];
   const steerInbox: SteerInbox = {
     inbox: "notes",
+    interrupt: new AbortController().signal, interruptedBy: () => null,
     queued: () => queued.length > 0,
     read: () => {
       if (queued.length === 0) return null;

@@ -854,6 +854,9 @@ export interface SteerRead {
  * A node's steer inbox for one evaluation, which the engine opens (`NodeCaps.openSteerInbox`).
  * `read` is zero-wait: it consumes every event queued now, records them as one `steer` step, and
  * returns them; with nothing queued it records nothing and returns `null`.
+ *
+ * A host's `interrupt(run, inbox)` of this inbox aborts `interrupt`. The signal is separate from
+ * the node's own `caps.signal`, so an interrupt never aborts a running tool.
  */
 export interface SteerInbox {
   /** The top-level inbox read. */
@@ -862,6 +865,10 @@ export interface SteerInbox {
   queued(): boolean;
   /** @throws CapabilityFault when the run refuses the step; the node signal's reason once it stopped. */
   read(): SteerRead | null;
+  /** Aborted once a host interrupts this inbox's readers; already aborted when the node opens with one pending. */
+  readonly interrupt: AbortSignal;
+  /** The seq of the `interrupted` record naming this node that it hasn't honored yet, else `null`. */
+  interruptedBy(): number | null;
 }
 
 /**

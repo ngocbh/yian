@@ -199,6 +199,14 @@ ends the loop, and anything else to the `respond` def, whose AGENT replies. Whil
 message is waiting, the run ends `waiting`; the host sends the next message and calls
 `advance`.
 
+Chat with it at the terminal (TS yian; see [Chatting with a flow](cli.md#chatting-with-a-flow-yian-chat)):
+
+```console
+yian chat examples/chat.yaml
+#   → type a line; the reply prints
+#   → /exit (or Ctrl-D) closes the inbox and ends the chat
+```
+
 Changed (TS yian): the chat asked through a `human_input` node each turn and ended on
 `/exit`; TS yian removed that kind, so this file needs TS yian.
 

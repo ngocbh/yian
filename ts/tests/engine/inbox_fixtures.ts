@@ -27,6 +27,7 @@ import { type engine, FINGERPRINT, FIXED_CLOCK, noGrowth, RUN_ID } from "./run_s
 export class FakeTake extends Node {
   readonly kind = NodeKind.TOOL;
   override readonly needsSteps = true;
+  override readonly wakesWithoutWorker = true;
   readonly inbox: string;
   readonly mode: "one" | "all";
   readonly timeoutSeconds: number | null;
@@ -51,6 +52,7 @@ export class FakeTake extends Node {
 export class FakeSleep extends Node {
   readonly kind = NodeKind.TOOL;
   override readonly needsSteps = true;
+  override readonly wakesWithoutWorker = true;
   readonly seconds: number;
 
   constructor(id: string, seconds: number) {
@@ -77,6 +79,7 @@ export class FakeSleep extends Node {
 export class FakeHost extends Node {
   readonly kind = NodeKind.TOOL;
   override readonly needsSteps = true;
+  override readonly wakesWithoutWorker = true;
   readonly tool: string;
   readonly runId: string;
   readonly deadlineAt: number | null;

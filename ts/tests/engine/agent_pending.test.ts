@@ -24,7 +24,7 @@ import { decodeRecord, NodeStepRecord } from "../../src/runtime/log.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { type ToolEntry, ToolSet } from "../../src/tools/registry.ts";
-import { gateTool } from "./inbox_fixtures.ts";
+import { gateTool, handClock } from "./inbox_fixtures.ts";
 import { FakeMemory } from "./memory_fakes.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { callReply, crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
@@ -316,3 +316,106 @@ test("a crash between a pending step and node_waiting resumes: the call is close
   expect(systemText(model, 0)).toContain("Note B.");
   expect(sentResults(model, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
 });
+
+/** The log's records as `[kind, node]` (a step as its own kind; `null` for a record of no node). */
+const nodeRecords = (log: string) =>
+  readFileSync(log, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => decodeRecord(line))
+    .map(({ kind, record }) => {
+      const nodeId = (record as { nodeId?: unknown }).nodeId;
+      return [record instanceof NodeStepRecord ? String(record.step["kind"]) : kind, typeof nodeId === "string" ? nodeId : null];
+    });
+
+/** The index of the first `[kind, node]` record of `log`, or -1. */
+const indexOf = (records: (string | null)[][], kind: string, node: string) =>
+  records.findIndex(([k, n]) => k === kind && n === node);
+
+const POOLED = `
+id: pooled
+name: pooled
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    prompt: go
+    tools: [ask_user]
+  slow:
+    kind: tool
+    tool_id: gate
+output: \${agent.output}
+`;
+
+test("with one worker, a woken agent waits for the running node's slot", async () => {
+  const gate = gateTool();
+  const model = new ScriptedModel([callReply(["ask_user", { question: "q" }, "c1"]), textReply("done")], CONFIG);
+  const log = freshLog();
+  const running = runFlow(await loadFlow(POOLED), {}, {
+    env: hostEnv(dir),
+    log,
+    numWorkers: 1,
+    tools: { ask_user: () => pending(), gate: gate.tool },
+    models: serving(model),
+    runId: "r",
+  });
+  await gate.entered; // the agent pended and waits; slow holds the one slot
+  await complete(log, "r/agent/1/0", { output: "yes" });
+  await Bun.sleep(5);
+  expect(kinds(log)).not.toContain("node_woken");
+  gate.release();
+  const result = await running;
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const records = nodeRecords(log);
+  expect(indexOf(records, "node_waiting", "agent")).toBeLessThan(indexOf(records, "node_started", "slow"));
+  expect(indexOf(records, "node_succeeded", "slow")).toBeLessThan(indexOf(records, "node_woken", "agent"));
+});
+
+test("a due TOOL ask behind an agent waiting for the one slot doesn't spin the dispatcher", async () => {
+  const START = Date.UTC(2026, 9, 23);
+  const clock = handClock(START);
+  const gate = gateTool();
+  const flow = `
+id: pooled_ask
+name: pooled_ask
+llm_config: {provider: openai, model: test-model}
+nodes:
+  agent:
+    kind: agent
+    prompt: go
+    tools: [ask_user]
+  lead:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Ship?"
+      timeout: "1m"
+  slow:
+    kind: tool
+    tool_id: gate
+output: \${agent.output}
+`;
+  const model = new ScriptedModel([callReply(["ask_user", { question: "q" }, "c1"]), textReply("done")], CONFIG);
+  const log = freshLog();
+  const running = runFlow(await loadFlow(flow), {}, {
+    env: hostEnv(dir),
+    log,
+    numWorkers: 1,
+    scheduler: clock,
+    tools: { ask: () => pending(), gate: gate.tool },
+    models: serving(model),
+    runId: "r",
+  });
+  await gate.entered; // agent and lead wait; slow holds the one slot
+  await complete(log, "r/agent/1/0", { output: "yes" });
+  clock.set(START + 120_000);
+  // A macrotask: a dispatcher spinning on microtasks would starve it, and the run would never end.
+  setTimeout(() => gate.release(), 20);
+  const result = await running;
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const records = nodeRecords(log);
+  expect(indexOf(records, "node_succeeded", "slow")).toBeLessThan(indexOf(records, "node_woken", "agent"));
+  expect(indexOf(records, "node_woken", "lead")).toBeGreaterThan(indexOf(records, "node_woken", "agent"));
+}, 5000);

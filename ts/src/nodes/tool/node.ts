@@ -228,6 +228,11 @@ export class ToolNode extends Node {
   override readonly needsTools: boolean = true;
   /** Records each retried attempt as a durable step, so a resumed run continues the count. */
   override readonly needsSteps: boolean = true;
+  /**
+   * A woken TOOL node returns from its settled call (or decides its take or sleep inline) without
+   * calling its tool, so it takes no worker slot.
+   */
+  override readonly wakesWithoutWorker: boolean = true;
   /** The tool id, looked up in the run's `ToolSet`; an unknown id rejects at run time. */
   toolId: string;
   /** How many times a failed tool call may be retried, at least 0. */

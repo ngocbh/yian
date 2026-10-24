@@ -999,6 +999,11 @@ export abstract class Node {
    */
   readonly needsSteps: boolean = false;
   /**
+   * Whether a woken evaluation of this node does no work a worker slot bounds: it returns from its
+   * settled calls without calling anything, so the engine wakes it without a free slot.
+   */
+  readonly wakesWithoutWorker: boolean = false;
+  /**
    * Declares "I read the host's steering inbox": the evaluator supplies steering only when the
    * run boundary injected it and this is set. Writable: AGENT sets it from its `steerable:` flag.
    */

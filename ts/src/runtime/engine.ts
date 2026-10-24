@@ -571,14 +571,20 @@ export class FlowEngine {
     try {
       while (state.result === null) {
         signal.throwIfAborted();
+        // Whether a wakeable node waits for a worker slot; then waking stops for this turn.
+        let blocked = false;
         for (let woken = this.#nextWake(); woken !== null; woken = this.#nextWake()) {
           const { nodeId } = woken;
+          const free = state.flow.nodes.get(nodeId)!.wakesWithoutWorker;
+          // A woken agent calls a model, so it takes a slot as a start does; waking stays oldest first.
+          if (!free && active.size - wakes.size >= this.numWorkers) {
+            blocked = true;
+            break;
+          }
           this.#publish(commitPrepared(log, state, prepareNodeWoken(state, nodeId, woken.timedOut)), events);
           signal.throwIfAborted();
-          // Only TOOL nodes wait, and a woken one returns from its settled call without calling
-          // anything, so it takes no worker slot.
           startWorker(nodeId);
-          wakes.add(nodeId);
+          if (free) wakes.add(nodeId);
         }
         while (state.ready.length > 0 && active.size - wakes.size < this.numWorkers) {
           // A callback failing during the previous node's synchronous start stops the run.
@@ -600,7 +606,7 @@ export class FlowEngine {
           }
           continue;
         }
-        this.#armTimer();
+        this.#armTimer(blocked);
         const completion = await completions.take();
         if ("nudge" in completion) continue;
         active.delete(completion.nodeId);
@@ -768,8 +774,11 @@ export class FlowEngine {
     return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry] }));
   }
 
-  /** Keep one scheduler sleep for the earliest open deadline of a waiting node; it nudges the dispatcher. */
-  #armTimer(): void {
+  /**
+   * Keep one scheduler sleep for the earliest open deadline of a waiting node; it nudges the
+   * dispatcher. `blocked` says a wakeable node waits for a worker slot.
+   */
+  #armTimer(blocked = false): void {
     const at = wakeAt(this.state.waits);
     if (at === (this.#timer?.at ?? null)) return;
     this.#disarmTimer();
@@ -780,7 +789,9 @@ export class FlowEngine {
     if (ms <= 0) {
       // The deadline passed since the dispatcher last looked: wake it now. A past deadline that
       // isn't due waits on its node's other calls, and a timer for it would only spin.
-      if (dueTimeouts(this.state.waits, now).size > 0) this.#queue?.nudge();
+      // A due node that waits for a worker slot is looked at again once the next completion frees
+      // one, so nudging now would only spin.
+      if (!blocked && dueTimeouts(this.state.waits, now).size > 0) this.#queue?.nudge();
       return;
     }
     const timer = { at, controller: new AbortController() };

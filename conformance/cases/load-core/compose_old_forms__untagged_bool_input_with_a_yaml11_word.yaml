@@ -1,9 +1,10 @@
+# Renamed from tests/compose/test_old_forms.py:171's Message: TS yian reserves Message as a built-in type.
 kind: load
 flow: |
   id: old_inputs
   name: old_inputs
   typedefs:
-    Message: {role: str, content: str}
+    ChatMsg: {role: str, content: str}
   input:
     f: bool = no
   kind: code

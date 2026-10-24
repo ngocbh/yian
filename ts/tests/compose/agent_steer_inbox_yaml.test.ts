@@ -98,6 +98,36 @@ test.each([
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(startLine);
 });
 
+/** A steer flow whose `steer_inbox:` reads `notes` with render `render`, under `input`. */
+const renderFlow = (render: string, input = "  notes: !Inbox(str)") =>
+  steerFlow(`    steer_inbox:\n      from: \${input.notes}\n      render: |-\n        ${render}`, "    output: str", input);
+
+test.each([
+  ["an input", "${input.x}", "node 'chat' steer_inbox render: `${input.x}` names `input`; a steer render reads only `${event}`"],
+  ["a node output", "${reply.output}", "node 'chat' steer_inbox render: `${reply.output}` names `reply`; a steer render reads only `${event}`"],
+  ["a malformed span", "${event.}", "node 'chat' steer_inbox render: "],
+])("a render reading %s is refused at the render", (_label, render, message) => {
+  const error = loadError(() => assembleText(renderFlow(render, "  notes: !Inbox(str)\n  x: !str")));
+  expect(error.message).toContain(message);
+  // The block scalar's text starts on the line after `render: |-`.
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(12);
+});
+
+const NOTE_TYPES = "typedefs:\n  Note:\n    text: str\n";
+
+test("a render's field reads are checked against the inbox's element type", () => {
+  const typed = (render: string) => NOTE_TYPES + renderFlow(render, "  notes: !Inbox(Note)");
+  expect(chatOf(typed("Note: ${event.text}")).steerRender).toBe("Note: ${event.text}");
+  const error = loadError(() => assembleText(typed("Note: ${event.body}")));
+  expect(error.message).toContain("node 'chat' steer_inbox render: ");
+  expect(error.message).toContain("body");
+});
+
+test("a render over an Inbox(Message) reads its fields", () => {
+  const chat = chatOf(renderFlow("${event.author}: ${event.parts}", "  notes: !Inbox(Message)"));
+  expect(chat.steerRender).toBe("${event.author}: ${event.parts}");
+});
+
 test("an input named __steer_inbox is reserved", () => {
   const error = loadError(() =>
     assembleText(steerFlow("    steer_inbox: ${input.notes}\n    input:\n      __steer_inbox: ${input.notes}")),

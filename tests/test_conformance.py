@@ -486,11 +486,16 @@ def _check_host(host: object, kind: str) -> None:
     tools = _mapping("host.tools", host.get("tools", {}))
     for name, tool in tools.items():
         where = f"host.tools.{name}"
-        _keys(where, tool, {"parameters", "description", "concurrency_safe", "results"},
-              required=("parameters", "results"))
+        _keys(where, tool, {"parameters", "description", "concurrency_safe", "results", "pending"},
+              required=("parameters",))
         # The Python runner ignores the key: one call at a time is a valid schedule.
         if "concurrency_safe" in tool and not isinstance(tool["concurrency_safe"], bool):
             raise ValueError(f"`{where}.concurrency_safe` must be a boolean")
+        # `pending: true` is TS-only (its cases have `python_skip`): its calls wait for `complete`.
+        if ("results" in tool) == ("pending" in tool) or tool.get("pending", True) is not True:
+            raise ValueError(f"`{where}` takes `results` or `pending: true`")
+        if "pending" in tool:
+            continue
         results = tool["results"]
         scripts = results.items() if isinstance(results, dict) else [(None, results)]
         for node, script in scripts:

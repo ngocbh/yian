@@ -52,7 +52,7 @@ import {
   reprText,
 } from "../src/diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../src/events.ts";
-import type { Steering } from "../src/nodes/base.ts";
+import type { CompleteResult, Steering } from "../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
 import {
   type ChatModel,
@@ -94,6 +94,7 @@ import {
   type AdvanceOptions,
   advance,
   close,
+  complete,
   type RunInspection,
   type RunFlowOptions,
   type RunResult,
@@ -103,7 +104,7 @@ import {
 } from "../src/run.ts";
 import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addCrashedAttempts, type RunState } from "../src/runtime/state.ts";
-import { ASK, type ToolContext } from "../src/tools/context.ts";
+import { ASK, pending, type ToolContext } from "../src/tools/context.ts";
 import {
   PermanentToolError,
   ReportedToolError,
@@ -621,16 +622,27 @@ function checkStop(stop: Value | undefined): void {
   }
 }
 
-/** Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` and `{close}` items. */
+/**
+ * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}`, `{close}` and
+ * `{complete, output}` or `{complete, error}` items.
+ */
 function checkSends(value: Value | undefined): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
   for (const item of value) {
     const fields = isMapping(item) ? Object.keys(item).sort(compareCodeUnits).join(",") : null;
+    const completes = typeof (item as Case)["complete"] === "string";
     const valid =
       (fields === "event,inbox" && typeof (item as Case)["inbox"] === "string") ||
-      (fields === "close" && typeof (item as Case)["close"] === "string");
-    if (!valid) throw new Error("`host.sends` items are {inbox, event} or {close}");
+      (fields === "close" && typeof (item as Case)["close"] === "string") ||
+      (fields === "complete,output" && completes) ||
+      (fields === "complete,error" && completes && typeof (item as Case)["error"] === "string");
+    if (!valid) throw new Error("`host.sends` items are {inbox, event}, {close} or {complete, output | error}");
   }
+}
+
+/** The answer a `host.sends` `{complete}` item gives: its `output`, or its `error`. */
+function completion(item: Case): CompleteResult {
+  return Object.hasOwn(item, "output") ? { output: item["output"] } : { error: item["error"] as string };
 }
 
 /**
@@ -643,11 +655,16 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   const tools = mapping("host.tools", get(host, "tools", {}));
   for (const [name, entry] of Object.entries(tools)) {
     const where = `host.tools.${name}`;
-    const toolKeys = new Set(["parameters", "description", "concurrency_safe", "results"]);
-    const tool = keys(where, entry, toolKeys, { required: ["parameters", "results"] });
+    const toolKeys = new Set(["parameters", "description", "concurrency_safe", "results", "pending"]);
+    const tool = keys(where, entry, toolKeys, { required: ["parameters"] });
     if (Object.hasOwn(tool, "concurrency_safe") && typeof tool["concurrency_safe"] !== "boolean") {
       throw new Error(`\`${where}.concurrency_safe\` must be a boolean`);
     }
+    const waits = Object.hasOwn(tool, "pending");
+    if (Object.hasOwn(tool, "results") === waits || (waits && tool["pending"] !== true)) {
+      throw new Error(`\`${where}\` takes \`results\` or \`pending: true\``);
+    }
+    if (waits) continue;
     const results = tool["results"];
     const scripts: [string | null, Value | undefined][] = isMapping(results)
       ? Object.entries(results)
@@ -1868,13 +1885,14 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
     return entry;
   };
 
-  const call = (name: string, label: string, ctx: ToolContext, args: Case): Value => {
+  /** Record a call to `name`; take its script's next entry, or `null` with no `label` (a pending tool). */
+  const call = (name: string, label: string | null, ctx: ToolContext, args: Case): Value => {
     const record = { args, call_id: ctx.callId, attempt: BigInt(ctx.attempt), node: ctx.node };
     let list = calls.get(name);
     if (list === undefined) calls.set(name, (list = []));
     list.push(record);
     const number = inbox.count(ctx.node, "tool_call");
-    const entry = take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
+    const entry = label === null ? null : take(label, `a call to \`${name}\` from node ${reprText(ctx.node)}`);
     if (number !== null) inbox.reached(ctx.node, { tool_call: number });
     return entry;
   };
@@ -1882,9 +1900,12 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
   const tools: [string, ToolEntry][] = [];
   for (const [name, entry] of Object.entries(get(spec, "tools", {}) as Case)) {
     const stub = entry as Case;
+    const waits = stub["pending"] === true;
     const results = stub["results"];
     const byNode = isMapping(results);
-    if (byNode) {
+    if (waits) {
+      // A pending tool's calls wait; `host.sends` answers them.
+    } else if (byNode) {
       for (const [node, script] of Object.entries(results)) {
         scripts.set(`host.tools.${name}.results.${node}`, [...(script as Value[])]);
       }
@@ -1892,6 +1913,10 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
       scripts.set(`host.tools.${name}.results`, [...(results as Value[])]);
     }
     const execute = (args: Record<string, unknown>, ctx: ToolContext): unknown => {
+      if (waits) {
+        call(name, null, ctx, args as Case);
+        return pending();
+      }
       const label = `host.tools.${name}.results${byNode ? `.${ctx.node}` : ""}`;
       const step = call(name, label, ctx, args as Case) as Case;
       if (Object.hasOwn(step, "return")) return step["return"];
@@ -2590,6 +2615,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       while (result.status === "waiting" && sends.length > 0) {
         const item = sends.shift()!;
         if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
+        else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
         else await send(log, item["inbox"] as string, item["event"], { env });
         result = await advance({ ...advanceArguments, ...hooks, ...signal, memory });
       }

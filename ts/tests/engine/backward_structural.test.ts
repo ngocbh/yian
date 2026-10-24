@@ -37,6 +37,9 @@
  * and scope only, and that the rebuild reads the node as it is then.
  * `test_static_capture_serialization_faults_are_host_faults_before_the_body` refuses NaN for
  * Python's infinity, which is a value here, and a class instance for Python's `object()`.
+ *
+ * TS-only: a stopping loop captures no output path for an `Inbox(T)` field, which its output
+ * leaves out (Python yian has no inboxes).
  */
 
 import { expect, test } from "bun:test";
@@ -58,13 +61,14 @@ import {
 } from "../../src/nodes/base.ts";
 import { applyDefaults } from "../../src/nodes/binding.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
-import { Assertion, ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
+import { Assertion, ExecutionScope, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { EvaluationFailure, evalNode, rebuildNodeData } from "../../src/runtime/eval_node.ts";
 import { captureBindings } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import { NO_ENV, rejected } from "./run_state_fixtures.ts";
 
@@ -317,6 +321,23 @@ test("stopping loop projects all carried fields without reevaluating predicate",
   validateBackwardResult(result, context);
   const continuing = new BackwardContext(inputs, { inputNames: context.inputNames, nodeData: context.nodeData });
   expect(node.backward(continuing, ["Growth is handled by its connections."])).toEqual(new BackwardResult());
+});
+
+test("stopping loop projects no feedback to an inbox field, which its output leaves out", () => {
+  const messages = new Parameter("messages", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });
+  const node = new LoopNode("loop", {
+    flowId: "body",
+    predicate: "false",
+    maxIters: 2,
+    childInputs: [new Parameter("value"), messages],
+  });
+  node.params = [new Parameter("value"), messages];
+  const inputs = { value: ["kept"], messages: { inbox: "messages" } }; // the handle's recorded form
+  const output = (node.forward(inputs) as Output).value;
+  expect(output).toEqual({ value: ["kept"] });
+  const context = contextFor(node, inputs, output);
+  expect(context.nodeData).toEqual({ input_output_paths: { value: ["value"] } });
+  expect(node.backward(context, [{ value: ["Review."] }]).inputFeedback).toEqual({ value: [["Review."]] });
 });
 
 test.each([

@@ -10,6 +10,7 @@
  * Never imports: compose, compile, runtime, the run boundary or the CLI.
  */
 
+import { reprText } from "../../diagnostics.ts";
 import { MediaPart, MESSAGE_FORMAT, Message as ModelMessage } from "../../llm/messages.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { builtinType } from "../../typesys/types.ts";
@@ -85,4 +86,88 @@ export function fromModelMessage(message: ModelMessage): Message {
     return { ...json, file: new FileRef(part.file) };
   });
   return checkMessage({ ...data, parts });
+}
+
+/** A conversation no model route can send: the message at `index` and why. */
+export class ConversationError extends RangeError {
+  override name = "ConversationError";
+  /** The index of the offending message in the list checked. */
+  readonly index: number;
+  /** What is wrong with it. */
+  readonly reason: string;
+
+  constructor(index: number, reason: string) {
+    super(`message ${index}: ${reason}`);
+    this.index = index;
+    this.reason = reason;
+  }
+}
+
+/** What `checkConversation` reads of a message; a model message (`llm/messages.ts`) fits it. */
+export interface ConversationMessage {
+  readonly role: string;
+  readonly parts: readonly {
+    readonly type: string;
+    /** A tool call's id. */
+    readonly id?: string;
+    /** A tool call's tool name (a media part's file name is `string | null`). */
+    readonly name?: string | null;
+    /** The call a tool result answers. */
+    readonly callId?: string;
+  }[];
+}
+
+// The parts each role's messages may hold, as every route's adapter renders them.
+const ROLE_PARTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["user", new Set(["text", "media"])],
+  ["assistant", new Set(["text", "reasoning", "refusal", "tool_call"])],
+  ["tool", new Set(["tool_result"])],
+]);
+
+/**
+ * Check that `messages`, a conversation after the system message, is one a model route can send.
+ *
+ * Each message has a part, and each part is one its role can carry: a user message holds text and
+ * media; an assistant message text, reasoning, refusals and tool calls; a tool message tool results.
+ * Every tool call an assistant message makes is answered by the tool messages that directly follow
+ * it (its exchange), before the next user or assistant message or the end of the list. A tool result
+ * answers the open call of its id in the current exchange. Ids may repeat across exchanges, as routes
+ * that mint `yian_call_<n>` per reply make them; only one id twice in one reply is refused, since
+ * its results couldn't be told apart. Messages of one role may follow each other.
+ *
+ * @throws ConversationError naming the first offending message: for an unanswered call, the
+ *   assistant message that made it.
+ */
+export function checkConversation(messages: readonly ConversationMessage[]): void {
+  const open = new Map<string, { name: string; index: number }>();
+  const unanswered = (before: string): ConversationError => {
+    const [id, call] = open.entries().next().value!;
+    return new ConversationError(call.index, `tool call ${reprText(id)} (${call.name}) has no result before ${before}`);
+  };
+  messages.forEach((message, index) => {
+    const allowed = ROLE_PARTS.get(message.role);
+    if (allowed === undefined) {
+      throw new ConversationError(index, "a system message can't be in a prompt list; use system_prompt:");
+    }
+    if (message.parts.length === 0) throw new ConversationError(index, "the message has no parts");
+    for (const part of message.parts) {
+      if (!allowed.has(part.type)) throw new ConversationError(index, `${message.role} messages can't hold a ${part.type} part`);
+    }
+    if (message.role === "tool") {
+      for (const part of message.parts) {
+        const id = part.callId!;
+        if (!open.delete(id)) throw new ConversationError(index, `tool result ${reprText(id)} answers no open tool call`);
+      }
+      return;
+    }
+    // A new exchange: the previous one must be fully answered, so `open` holds only this reply's calls.
+    if (open.size > 0) throw unanswered(`the next ${message.role} message`);
+    for (const part of message.parts) {
+      if (part.type !== "tool_call") continue;
+      const id = part.id!;
+      if (open.has(id)) throw new ConversationError(index, `tool call id ${reprText(id)} appears twice in one reply`);
+      open.set(id, { name: part.name ?? "", index });
+    }
+  });
+  if (open.size > 0) throw unanswered("the end of the list");
 }

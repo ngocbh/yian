@@ -10,7 +10,9 @@ import { describe, expect, test } from "bun:test";
 import {
   MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
 } from "../../src/llm/messages.ts";
-import { checkMessage, fromModelMessage, type Message, toModelMessage } from "../../src/nodes/agent/messages.ts";
+import {
+  checkConversation, checkMessage, ConversationError, fromModelMessage, type Message, toModelMessage,
+} from "../../src/nodes/agent/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { FileRef, TypeCheckError, TypedValue, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
@@ -115,5 +117,74 @@ describe("agreement with message.schema.json", () => {
   test.each(["text", "reasoning", "refusal", "tool_call", "tool_result", "media"])("the %s part has the schema's keys", (tag) => {
     const keys = Object.keys(SCHEMA.$defs[tag]!.properties).filter((key) => !(tag === "media" && (key === "data" || key === "url")));
     expect(partFields(tag)).toEqual(keys.sort());
+  });
+});
+
+const user = (text = "Hi") => new ModelMessage({ role: "user", parts: [new TextPart(text)] });
+const said = (text: string) => new ModelMessage({ role: "assistant", parts: [new TextPart(text)] });
+const calls = (...ids: string[]) =>
+  new ModelMessage({ role: "assistant", parts: [new TextPart("On it."), ...ids.map((id) => new ToolCallPart({ id, name: "read_file", arguments: {} }))] });
+const result = (id: string) => new ModelMessage({ role: "tool", parts: [new ToolResultPart({ callId: id, name: "read_file", content: "ok" })] });
+
+describe("checkConversation", () => {
+  test.each([
+    ["text turns", [user(), said("Hello"), user()]],
+    ["a call answered by its result", [user(), calls("c1"), result("c1"), said("Done"), user()]],
+    ["two calls answered in any order, one tool message each", [user(), calls("c1", "c2"), result("c2"), result("c1"), user()]],
+    ["two results in one tool message", [user(), calls("c1", "c2"), new ModelMessage({ role: "tool", parts: [
+      new ToolResultPart({ callId: "c1", name: "read_file", content: "a" }), new ToolResultPart({ callId: "c2", name: "read_file", content: "b" })] }), user()]],
+    ["reasoning and a refusal in an assistant message", [user(), new ModelMessage({ role: "assistant", parts: [new ReasoningPart("r"), new RefusalPart("no")] }), user()]],
+    ["a call id reused once its result is in", [user(), calls("c1"), result("c1"), calls("c1"), result("c1"), user()]],
+    // A Gemini or Ollama history: each reply mints yian_call_<n> again.
+    ["yian_call_0 in two turns", [user(), calls("yian_call_0"), result("yian_call_0"), said("Next."),
+      calls("yian_call_0", "yian_call_1"), result("yian_call_1"), result("yian_call_0"), said("Done"), user()]],
+    ["yian_call_0 in back-to-back exchanges", [user(), calls("yian_call_0"), result("yian_call_0"),
+      calls("yian_call_0"), result("yian_call_0"), user()]],
+    ["a structural text message, as the render passes it", [{ role: "user", parts: [{ type: "text" }] }]],
+    ["two user messages in a row", [user(), user()]],
+    ["media in a user message", [new ModelMessage({ role: "user", parts: [new MediaPart({ mime: "image/png", file: FILE })] })]],
+  ])("%s passes", (_, messages) => {
+    expect(() => checkConversation(messages)).not.toThrow();
+  });
+
+  test.each([
+    ["a tool call in a user message", [new ModelMessage({ role: "user", parts: [new ToolCallPart({ id: "c", name: "t", arguments: {} })] })], 0,
+      "user messages can't hold a tool_call part"],
+    ["text in a tool message", [user(), calls("c1"), new ModelMessage({ role: "tool", parts: [new TextPart("x")] })], 2,
+      "tool messages can't hold a text part"],
+    ["a tool result in an assistant message", [user(), new ModelMessage({ role: "assistant", parts: [new ToolResultPart({ callId: "c", name: "t", content: "x" })] })], 1,
+      "assistant messages can't hold a tool_result part"],
+    ["media in an assistant message", [user(), new ModelMessage({ role: "assistant", parts: [new MediaPart({ mime: "image/png", file: FILE })] })], 1,
+      "assistant messages can't hold a media part"],
+    ["reasoning in a user message", [new ModelMessage({ role: "user", parts: [new ReasoningPart("r")] })], 0,
+      "user messages can't hold a reasoning part"],
+    ["an empty message", [user(), new ModelMessage({ role: "assistant", parts: [] }), user()], 1, "the message has no parts"],
+    ["a system message", [new ModelMessage({ role: "system", parts: [new TextPart("x")] })], 0,
+      "a system message can't be in a prompt list; use system_prompt:"],
+    ["a call followed by a user message", [user(), calls("c1"), user()], 1,
+      "tool call 'c1' (read_file) has no result before the next user message"],
+    ["a call followed by another assistant message", [user(), calls("c1"), said("x"), user()], 1,
+      "tool call 'c1' (read_file) has no result before the next assistant message"],
+    ["one of two calls answered", [user(), calls("c1", "c2"), result("c1"), user()], 1,
+      "tool call 'c2' (read_file) has no result before the next user message"],
+    ["a call at the end", [user(), calls("c1")], 1, "tool call 'c1' (read_file) has no result before the end of the list"],
+    ["a result with no call", [user(), result("c9"), user()], 1, "tool result 'c9' answers no open tool call"],
+    ["a result for a call already answered", [user(), calls("c1"), result("c1"), result("c1"), user()], 3,
+      "tool result 'c1' answers no open tool call"],
+    ["a call id twice in one reply", [user(), calls("c1", "c1")], 1, "tool call id 'c1' appears twice in one reply"],
+    ["a result for an earlier exchange's call", [user(), calls("yian_call_0"), result("yian_call_0"), calls("yian_call_1"),
+      result("yian_call_0"), user()], 4, "tool result 'yian_call_0' answers no open tool call"],
+    ["a repeated id whose second turn goes unanswered", [user(), calls("yian_call_0"), result("yian_call_0"),
+      calls("yian_call_0"), user()], 3, "tool call 'yian_call_0' (read_file) has no result before the next user message"],
+  ])("%s is refused", (_, messages, index, reason) => {
+    let error: unknown;
+    try {
+      checkConversation(messages);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ConversationError);
+    expect([(error as ConversationError).index, (error as ConversationError).reason]).toEqual([index, reason]);
+    expect((error as Error).message).toBe(`message ${index}: ${reason}`);
   });
 });

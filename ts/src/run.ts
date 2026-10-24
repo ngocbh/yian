@@ -183,6 +183,7 @@ export {
   LiveChannel,
   type LiveCall,
   type LiveChannelOptions,
+  type LiveFollowFrame,
   type LiveFrame,
   type LiveSnapshot,
 } from "./runtime/live.ts";

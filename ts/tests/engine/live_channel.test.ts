@@ -18,7 +18,7 @@ import { type ChatModel, Finish, TextDelta } from "../../src/llm/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { Message } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { LiveChannel, type LiveFrame, type LiveSnapshot } from "../../src/runtime/live.ts";
+import { LiveChannel, type LiveFollowFrame, type LiveFrame, type LiveSnapshot } from "../../src/runtime/live.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -133,7 +133,7 @@ test("an unsubscribed function gets nothing more", () => {
 });
 
 test("a subscriber that throws is dropped and reported; the others and the log go on", () => {
-  const reported: [unknown, LiveFrame][] = [];
+  const reported: [unknown, LiveFollowFrame][] = [];
   const { channel, frames, log, append } = subscribed({
     onSubscriberError: (error, frame) => void reported.push([error, frame]),
   });

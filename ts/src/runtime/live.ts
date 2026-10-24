@@ -46,13 +46,16 @@ export interface LiveSnapshot {
   calls: LiveCall[];
 }
 
+/** What `LiveChannel.follow` sends: a snapshot first, then live frames. Plain JSON. */
+export type LiveFollowFrame = LiveFrame | { type: "snapshot"; snapshot: LiveSnapshot };
+
 /** How a `LiveChannel` reports a subscriber that threw, which it then dropped. */
 export interface LiveChannelOptions {
   /**
    * Gets the error and the frame being sent; a yian warning (`warn`) when omitted. Anything it
    * throws is ignored.
    */
-  onSubscriberError?: ((error: unknown, frame: LiveFrame) => void) | null;
+  onSubscriberError?: ((error: unknown, frame: LiveFollowFrame) => void) | null;
 }
 
 /**
@@ -69,7 +72,7 @@ export class LiveChannel {
   readonly #subscribers = new Set<(frame: LiveFrame) => void>();
   /** The chunks of each call in flight by node, then by `n`, in start order. */
   readonly #calls = new Map<string, Map<number, string[]>>();
-  readonly #onSubscriberError: (error: unknown, frame: LiveFrame) => void;
+  readonly #onSubscriberError: (error: unknown, frame: LiveFollowFrame) => void;
   /** The seq after the last record seen. */
   #nextSeq = 0;
 
@@ -88,6 +91,25 @@ export class LiveChannel {
     const subscriber = (frame: LiveFrame) => fn(frame);
     this.#subscribers.add(subscriber);
     return () => void this.#subscribers.delete(subscriber);
+  }
+
+  /**
+   * Call `fn` with a snapshot frame, then with every later frame; returns the function that stops
+   * it. The snapshot and the subscription are taken in one synchronous turn, so every frame after
+   * the snapshot is new to `fn`: records continue after its `last_seq` and each call's chunks after
+   * its `next_index`. A viewer reads the log up to `last_seq`, then applies the frames that came
+   * meanwhile (`LiveView`). A `fn` that throws, on the snapshot too, is dropped and reported.
+   */
+  follow(fn: (frame: LiveFollowFrame) => void): () => void {
+    const frame: LiveFollowFrame = { type: "snapshot", snapshot: this.snapshot() };
+    const stop = this.subscribe(fn);
+    try {
+      fn(frame);
+    } catch (error) {
+      stop();
+      this.#report(error, frame);
+    }
+    return stop;
   }
 
   /**
@@ -180,12 +202,17 @@ export class LiveChannel {
         subscriber(frame);
       } catch (error) {
         this.#subscribers.delete(subscriber);
-        try {
-          this.#onSubscriberError(error, frame);
-        } catch {
-          // The stream is ephemeral: nothing a viewer's side does may reach the run.
-        }
+        this.#report(error, frame);
       }
+    }
+  }
+
+  /** Report a dropped subscriber's error; nothing the report throws gets out. */
+  #report(error: unknown, frame: LiveFollowFrame): void {
+    try {
+      this.#onSubscriberError(error, frame);
+    } catch {
+      // The stream is ephemeral: nothing a viewer's side does may reach the run.
     }
   }
 }

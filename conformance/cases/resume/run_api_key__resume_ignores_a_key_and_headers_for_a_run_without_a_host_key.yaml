@@ -111,15 +111,17 @@ expect:
     - {commit: 15}
   stream:
   - chunk: ok
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: agent
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: agent
+    n: 1
+    index: 1
 resume:
   api_key: <key:1>
   headers:

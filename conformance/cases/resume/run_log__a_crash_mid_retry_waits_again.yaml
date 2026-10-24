@@ -99,12 +99,12 @@ expect:
     - [RunResumed]
     - [NodeAttemptResumed, {crashed: 1, node_id: write}]
     - [NodeStarted, {node_id: write}]
-    - [ModelCallStarted, {attempt: 2, exchange_id: <id:1>, model: gpt-5.5, node_id: write, provider: openai, purpose: chat}]
-    - [ModelCallFinished, {attempt: 2, exchange_id: <id:1>, model: gpt-5.5, node_id: write, provider: openai, purpose: chat}]
+    - [ModelCallStarted, {model: gpt-5.5, node_id: write, provider: openai, purpose: chat, n: 2}]
+    - [ModelCallFinished, {model: gpt-5.5, node_id: write, provider: openai, purpose: chat, n: 2}]
     - [NodeSucceeded, {node_id: write, output: A line.}]
     - [NodeStarted, {node_id: __end__}]
     - [NodeSucceeded, {node_id: __end__, output: A line.}]
     - [RunSucceeded, {output: A line.}]
   stream:
-    - {attempt: 2, chunk: A line., exchange_id: <id:1>, final: false, key: text, node_id: write}
-    - {attempt: 2, chunk: '', exchange_id: <id:1>, final: true, key: text, node_id: write}
+    - {chunk: A line., final: false, key: text, node_id: write, n: 2, index: 0}
+    - {chunk: '', final: true, key: text, node_id: write, n: 2, index: 1}

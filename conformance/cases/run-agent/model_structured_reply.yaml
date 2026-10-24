@@ -1,6 +1,6 @@
 kind: run
 # The `request` and the `structured_native` purpose are Python's lowering of the call.
-rules: [llm]
+rules: [llm, run-log]
 flow: |
   id: model-structured-reply
   name: model_structured_reply
@@ -60,13 +60,12 @@ expect:
     - [NodeStarted, {node_id: score}]
     - - ModelCallStarted
       - node_id: score
-        exchange_id: "<id:1>"
         purpose: structured_native
         provider: openai
         model: gpt-5.5
+        n: 1
     - - ModelCallFinished
       - node_id: score
-        exchange_id: "<id:1>"
         purpose: structured_native
         provider: openai
         model: gpt-5.5
@@ -77,6 +76,7 @@ expect:
           cache_read_tokens: null
           cache_creation_tokens: null
           reasoning_tokens: null
+        n: 1
     - [NodeSucceeded, {node_id: score, output: {name: Ada, score: 3}}]
     - [NodeStarted, {node_id: __end__}]
     - [NodeSucceeded, {node_id: __end__, output: {name: Ada, score: 3}}]

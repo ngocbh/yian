@@ -1,5 +1,5 @@
 # From tests/engine/test_agent_streaming.py::test_plain_agent_streams_text_chunks_then_one_final_chunk.
-# A streamed text reply reaches the host chunk by chunk under one exchange id, then one empty
+# A streamed text reply reaches the host chunk by chunk under its step's n, then one empty
 # final chunk; a usage chunk carries no text, and ModelCallFinished reports its usage (5/3/8).
 kind: run
 rules: [run-log]
@@ -106,14 +106,13 @@ expect:
   - - NodeStarted
     - node_id: writer
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
@@ -124,6 +123,7 @@ expect:
         output_tokens: 3
         reasoning_tokens: null
         total_tokens: 8
+      n: 1
   - - NodeSucceeded
     - node_id: writer
       output: hello big world
@@ -136,22 +136,26 @@ expect:
     - output: hello big world
   stream:
   - chunk: hello
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: writer
+    n: 1
+    index: 0
   - chunk: ' big'
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: writer
+    n: 1
+    index: 1
   - chunk: ' world'
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: writer
+    n: 1
+    index: 2
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: writer
+    n: 1
+    index: 3

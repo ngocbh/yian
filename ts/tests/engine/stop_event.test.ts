@@ -708,7 +708,7 @@ describe("the pooled drain", () => {
 });
 
 /** A tool call's events, as a TOOL node would emit them. */
-const callFields = { nodeId: "work", exchangeId: "x", callIndex: 0, toolCallId: "call-1", name: "lookup" };
+const callFields = { nodeId: "work", n: 1, callIndex: 0, toolCallId: "call-1", name: "lookup" };
 
 describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
   test("a settled step and a ToolCallFinished after a host stop are recorded and published after the RunStopped", async () => {

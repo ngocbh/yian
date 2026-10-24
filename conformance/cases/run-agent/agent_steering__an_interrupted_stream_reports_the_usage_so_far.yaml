@@ -114,14 +114,13 @@ expect:
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: chat
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: chat
       provider: openai
       purpose: chat
@@ -132,6 +131,7 @@ expect:
         output_tokens: 1
         reasoning_tokens: null
         total_tokens: 1001
+      n: 1
   - - NodeSucceeded
     - node_id: chat
       output: hello big
@@ -144,17 +144,20 @@ expect:
     - output: hello big
   stream:
   - chunk: hello
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: chat
+    n: 1
+    index: 0
   - chunk: ' big'
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: chat
+    n: 1
+    index: 1
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: chat
+    n: 1
+    index: 2

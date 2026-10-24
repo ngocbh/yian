@@ -131,17 +131,17 @@ expect:
   - - NodeStarted
     - node_id: a
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: a
       provider: openai
       purpose: structured_native
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: a
       provider: openai
       purpose: structured_native
+      n: 1
   - - NodeSucceeded
     - node_id: a
       output:

@@ -156,7 +156,6 @@ const CONSUMER_LIST = "agent, structured_retry, compose, backward, summary";
 const MEMORY_CONSUMER = "consumers go under `__memory__`, and `__memory__` holds only them";
 /** A `run` case whose `expect` adds `results`. */
 const EXPECT = (results: string) => `kind: run\nflow: x\nexpect: {output: 1, ${results}}\n`;
-const ATTEMPT_ONE = "writes `attempt: 1`, which the data form leaves out";
 
 describe("checkCase", () => {
   test.each([
@@ -457,19 +456,6 @@ describe("checkCase", () => {
     [STEER("[{after: {tool_call: 0}, interrupt: true}]"), COUNTS],
     [STEER("[{after: {model_call: true}, interrupt: true}]"), COUNTS],
     [STEER("[{after: {model_call: 1, chunk: 1.0}, interrupt: true}]"), COUNTS],
-    [
-      EXPECT("events: [[ModelCallStarted, {node_id: a, attempt: 1}]]"),
-      `\`expect.events[0]\` ${ATTEMPT_ONE}`,
-    ],
-    [
-      EXPECT("events: [[RunStarted], [ModelCallFinished, {attempt: 1.0}]]"),
-      `\`expect.events[1]\` ${ATTEMPT_ONE}`,
-    ],
-    [EXPECT("stream: [{node_id: a, attempt: 1}]"), `\`expect.stream[0]\` ${ATTEMPT_ONE}`],
-    [
-      `${EXPECT("stream: []")}rules: [llm]\npython_expect: {output: 1, stream: [{attempt: 1}]}`,
-      `\`python_expect.stream[0]\` ${ATTEMPT_ONE}`,
-    ],
     [`${RUN}host: {jitter: 0.5}`, "`host.jitter` must be a list of numbers in [0, 1)"],
     [`${RUN}host: {jitter: [1]}`, "`host.jitter` must be a list of numbers in [0, 1)"],
     [`${RUN}host: {jitter: [-0.1]}`, "`host.jitter` must be a list of numbers in [0, 1)"],
@@ -568,8 +554,7 @@ describe("checkCase", () => {
       "structured_retry: []}}}",
     STEER("[{steer: [x]}, {after: {model_call: 1, chunk: 2}, interrupt: true}, " +
       "{after: {tool_call: 1}, steer: [y]}]"),
-    EXPECT("events: [[NodeStarted, {attempt: 1}], [ModelCallStarted, {attempt: 2}]], " +
-      "stream: [{attempt: 2}]"),
+    EXPECT("events: [[ModelCallStarted, {node_id: a, n: 1}]], stream: [{node_id: a, n: 1, index: 0}]"),
     TOOL("{n: [{return: 1}, {raise: {class: TransientToolError, message: m, retry_after: 1}}]}"),
     TOOL("[{raise: {class: TransientToolError, message: m, retry_after: 0.5}}]"),
     RESUME,
@@ -1460,6 +1445,16 @@ describe("main", () => {
     const again = await run(argv, { "a/forms.yaml": text }, {}, kinds);
     expect(again.out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
     expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(text);
+  });
+
+  test("--write-expect writes a whole number in an event or chunk without a fraction", async () => {
+    const cut = readFileSync(join(CASES, "run-agent", "model_stream_cut.yaml"), "utf8");
+    const wrong = cut.replace("chunk: lo, final: false, n: 1, index: 1}", "chunk: lo, final: false, n: 7, index: 1}");
+    expect(wrong).not.toBe(cut);
+    const written = await run(["--write-expect"], { "a/cut.yaml": wrong }, {}, { run: RUNNERS.run! });
+    expect(written.out).toEqual(["wrote a/cut: stream", "1 case: 1 passed, 0 failed, 0 pending"]);
+    // Numbers compare by value in a stream, so the int stays an int, not `1.0`.
+    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "cut.yaml"), "utf8")).toBe(cut);
   });
 
   test("--write-expect quotes a `?` in a flow collection, which Python's YAML reader won't take bare", async () => {

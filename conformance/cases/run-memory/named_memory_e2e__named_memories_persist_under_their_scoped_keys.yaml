@@ -249,17 +249,17 @@ expect:
   - - NodeStarted
     - node_id: ask
   - - ModelCallStarted
-    - exchange_id: <id:13>
-      model: fake-model
+    - model: fake-model
       node_id: ask
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:13>
-      model: fake-model
+    - model: fake-model
       node_id: ask
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: ask
       output: users=1 memories=notes
@@ -280,17 +280,17 @@ expect:
   - - NodeStarted
     - node_id: lib_step/summarize
   - - ModelCallStarted
-    - exchange_id: <id:14>
-      model: fake-model
+    - model: fake-model
       node_id: lib_step/summarize
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:14>
-      model: fake-model
+    - model: fake-model
       node_id: lib_step/summarize
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: lib_step/summarize
       output: users=1 memories=notes,lib.notes
@@ -313,25 +313,29 @@ expect:
         summary: users=1 memories=notes,lib.notes
   stream:
   - chunk: users=1 memories=notes
-    exchange_id: <id:13>
     final: false
     key: text
     node_id: ask
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:13>
     final: true
     key: text
     node_id: ask
+    index: 1
+    n: 1
   - chunk: users=1 memories=notes,lib.notes
-    exchange_id: <id:14>
     final: false
     key: text
     node_id: lib_step/summarize
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:14>
     final: true
     key: text
     node_id: lib_step/summarize
+    index: 1
+    n: 1
   memory:
     lib.notes: |-
       {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":15,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"q1"},"owner_static_path":["lib_step","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}

@@ -123,17 +123,17 @@ expect:
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: agent
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: agent
       provider: openai
       purpose: chat
+      n: 1
   - - NodeFailed
     - failure:
         code: node.execute
@@ -152,10 +152,11 @@ expect:
         node: agent
   stream:
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: agent
+    n: 1
+    index: 0
 python_expect:
   output:
     status: failed

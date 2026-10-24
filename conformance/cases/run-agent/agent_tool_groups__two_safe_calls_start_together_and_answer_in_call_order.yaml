@@ -212,59 +212,59 @@ expect:
   - - NodeStarted
     - node_id: writer
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 1
   - - ToolCallStarted
     - arguments:
         topic: a
       call_index: 0
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       tool_call_id: call-a
+      n: 1
   - - ToolCallStarted
     - arguments:
         topic: b
       call_index: 1
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       tool_call_id: call-b
+      n: 1
   - - ToolCallFinished
     - call_index: 0
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       result: found:a
       tool_call_id: call-a
+      n: 1
   - - ToolCallFinished
     - call_index: 1
-      exchange_id: <id:1>
       name: lookup
       node_id: writer
       result: found:b
       tool_call_id: call-b
+      n: 1
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 4
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: claude-test
+    - model: claude-test
       node_id: writer
       provider: anthropic
       purpose: chat
+      n: 4
   - - NodeSucceeded
     - node_id: writer
       output: both found
@@ -277,20 +277,23 @@ expect:
     - output: both found
   stream:
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: writer
+    n: 1
+    index: 0
   - chunk: both found
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: writer
+    n: 4
+    index: 0
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: writer
+    n: 4
+    index: 1
   tool_calls:
     lookup:
     - args:

@@ -1090,17 +1090,17 @@ expect:
   - - NodeStarted
     - node_id: invoke/author
   - - ModelCallStarted
-    - exchange_id: <id:17>
-      model: local-test
+    - model: local-test
       node_id: invoke/author
       provider: ollama
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:17>
-      model: local-test
+    - model: local-test
       node_id: invoke/author
       provider: ollama
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: invoke/author
       output: answer
@@ -1124,15 +1124,17 @@ expect:
     - output: answer
   stream:
   - chunk: answer
-    exchange_id: <id:17>
     final: false
     key: text
     node_id: invoke/author
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:17>
     final: true
     key: text
     node_id: invoke/author
+    index: 1
+    n: 1
   backward:
   - failure: null
     feedback:

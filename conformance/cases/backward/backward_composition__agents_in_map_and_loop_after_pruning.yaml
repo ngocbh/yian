@@ -2343,34 +2343,34 @@ expect:
   - - NodeStarted
     - node_id: many#0/loop#0/invoke/author
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#0/loop#0/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#0/loop#0/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: many#0/loop#0/invoke/author
       output: one
   - - NodeStarted
     - node_id: many#1/loop#0/invoke/author
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#1/loop#0/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#1/loop#0/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: many#1/loop#0/invoke/author
       output: one
@@ -2467,34 +2467,34 @@ expect:
   - - NodeStarted
     - node_id: many#0/loop#1/invoke/author
   - - ModelCallStarted
-    - exchange_id: <id:3>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#0/loop#1/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:3>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#0/loop#1/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: many#0/loop#1/invoke/author
       output: one
   - - NodeStarted
     - node_id: many#1/loop#1/invoke/author
   - - ModelCallStarted
-    - exchange_id: <id:4>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#1/loop#1/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:4>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: many#1/loop#1/invoke/author
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: many#1/loop#1/invoke/author
       output: one
@@ -2561,45 +2561,53 @@ expect:
     - output: [one, one]
   stream:
   - chunk: one
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: many#0/loop#0/invoke/author
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: many#0/loop#0/invoke/author
+    n: 1
+    index: 1
   - chunk: one
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: many#1/loop#0/invoke/author
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: many#1/loop#0/invoke/author
+    n: 1
+    index: 1
   - chunk: one
-    exchange_id: <id:3>
     final: false
     key: text
     node_id: many#0/loop#1/invoke/author
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:3>
     final: true
     key: text
     node_id: many#0/loop#1/invoke/author
+    n: 1
+    index: 1
   - chunk: one
-    exchange_id: <id:4>
     final: false
     key: text
     node_id: many#1/loop#1/invoke/author
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:4>
     final: true
     key: text
     node_id: many#1/loop#1/invoke/author
+    n: 1
+    index: 1
   backward:
   - failure: null
     feedback:

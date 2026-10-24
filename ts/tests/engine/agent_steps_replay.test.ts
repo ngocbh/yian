@@ -526,7 +526,8 @@ test("a crash in a retry wait waits the recorded delay again, and the attempt co
   const resumed = await resume(log, new ScriptedModel([textReply("ok")], CONFIG), { modelRetries: 1, events, at });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   const started = events.filter((event): event is ModelCallStarted => event instanceof ModelCallStarted);
-  expect(started.map((event) => event.attempt)).toEqual([2]);
+  // The live attempt is the step after the recorded failed one.
+  expect(started.map((event) => event.n)).toEqual([2]);
   expect(steps(log)[1]).toMatchObject({ n: 2, finish: "stop", started_at: new Date(at + 2000).toISOString() });
 
   // With the budget spent by the recorded attempt, one more failure fails the node.

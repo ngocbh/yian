@@ -244,31 +244,31 @@ expect:
   - - NodeStarted
     - node_id: loop#0/reply
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: loop#0/reply
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: loop#0/reply
       provider: openai
       purpose: chat
+      n: 1
   - - ToolCallStarted
     - arguments: {}
       call_index: 0
-      exchange_id: <id:1>
       name: ping
       node_id: loop#0/reply
       tool_call_id: p-1
+      n: 1
   - - ToolCallFinished
     - call_index: 0
       error: interrupted
-      exchange_id: <id:1>
       name: ping
       node_id: loop#0/reply
       tool_call_id: p-1
+      n: 1
   - - NodeSucceeded
     - node_id: loop#0/reply
       output: partial
@@ -296,17 +296,17 @@ expect:
   - - NodeStarted
     - node_id: loop#1/reply
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: loop#1/reply
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: loop#1/reply
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: loop#1/reply
       output: turn2
@@ -332,22 +332,26 @@ expect:
     - output: s|partial|turn2
   stream:
   - chunk: partial
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: loop#0/reply
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: loop#0/reply
+    n: 1
+    index: 1
   - chunk: turn2
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: loop#1/reply
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: loop#1/reply
+    n: 1
+    index: 1

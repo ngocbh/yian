@@ -223,6 +223,9 @@ sharing that request's `exchange_id`. A completed request ends with one empty
 is set, and a host should discard that request's partial text. The node value is
 authoritative: streamed text can differ from it in the whitespace between content
 blocks.
+Changed (TS yian): a chunk names the step its call becomes in place of `exchange_id`:
+`node_id` + `n` is the `model_call` step's id, and `index` counts the step's chunks from 0.
+Each attempt is its own step, so a retried attempt streams under the next `n`.
 
 A [steering](api.md#steering) interrupt that cuts a streamed request still ends it
 with the `final=True` chunk; its `ModelCallFinished` has no `error` and carries

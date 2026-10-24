@@ -164,9 +164,10 @@ for (const numWorkers of [0, 2]) {
       ModelCallStarted,
       ModelCallFinished,
     ]);
-    const [first, second] = writer.filter((event) => event instanceof ModelCallStarted).map((event) => event.exchangeId);
-    expect(first).not.toBe(second!);
-    expect(new Set(writer.filter((event) => event instanceof ToolCallStarted).map((event) => event.exchangeId))).toEqual(
+    // The second reply follows the first reply's step and its tool result's.
+    const [first, second] = writer.filter((event) => event instanceof ModelCallStarted).map((event) => event.n);
+    expect([first, second]).toEqual([1, 3]);
+    expect(new Set(writer.filter((event) => event instanceof ToolCallStarted).map((event) => event.n))).toEqual(
       new Set([first!]),
     );
 
@@ -224,7 +225,6 @@ test("parallel agents keep their own events in pooled runs", async () => {
   });
 
   expect(result.output).toEqual({ left: "done", right: "done" });
-  const exchanges = new Map<string, Set<string>>();
   for (const nodeId of ["left", "right"]) {
     const own = [...timeline.keys()].filter((i) => nodeIdOf(timeline[i]) === nodeId);
     const started = own.find((i) => timeline[i] instanceof NodeStarted)!;
@@ -233,9 +233,9 @@ test("parallel agents keep their own events in pooled runs", async () => {
     expect(inLoop).toHaveLength(6);
     expect(started).toBeLessThan(inLoop[0]!);
     expect(inLoop.at(-1)!).toBeLessThan(done);
-    exchanges.set(nodeId, new Set(inLoop.map((i) => (timeline[i] as { exchangeId: string }).exchangeId)));
+    // Each node numbers its own steps; node id + n names the step.
+    expect(inLoop.map((i) => (timeline[i] as { n: number }).n)).toEqual([1, 1, 1, 1, 3, 3]);
   }
-  expect([...exchanges.get("left")!].some((id) => exchanges.get("right")!.has(id))).toBe(false);
   // The barrier holds both tool calls open, so the two nodes' events interleave.
   const toolStarted = [...timeline.keys()].filter((i) => timeline[i] instanceof ToolCallStarted);
   const toolFinished = [...timeline.keys()].filter((i) => timeline[i] instanceof ToolCallFinished);

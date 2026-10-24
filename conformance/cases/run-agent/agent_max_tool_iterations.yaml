@@ -42,8 +42,7 @@ expect:
       message: "agent node 'research' hit the tool-iteration cap (2) without a final answer; the last reply's 1 tool call(s) were not run"
       node: research
       frames: [{label: flow.yaml, range: [4, 3, 4, 11]}]
-  # <id:1> is the first model call's exchange id; an AGENT tool call id is
-  # <run>/<node>/<exchange>/<index>.
+  # An AGENT tool call id is <run>/<node>/<n>/<index>, n the reply's model_call step.
   tool_calls:
     lookup:
       - {args: {q: x}, call_id: r1/research/1/0, attempt: 1, node: research}

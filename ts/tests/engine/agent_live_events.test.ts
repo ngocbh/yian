@@ -4,7 +4,7 @@
  *
  * Ported at the `callModel` level and through the node (`evalNode` with a `ScriptedModel` from
  * `models`): `test_event_sink_alone_reports_usage_without_streaming` (a started/finished pair
- * with usage and `attempt: 1`), `test_provider_without_usage_reports_none`,
+ * with usage and `n: 1`), `test_provider_without_usage_reports_none`,
  * `test_model_error_is_reported_by_type_then_fails_the_node` (reported by its `name`, rethrown and
  * marked), `test_refused_credentials_with_an_event_sink_fail_provider_auth` (the error is reported
  * by its `name` and coded `provider.auth`) and `test_event_sink_failure_escapes_as_a_host_fault`
@@ -34,9 +34,8 @@
  * history summary).
  *
  * TS-only: `liveSinks` (`null` without sinks; provider and model only when strings); `usageOf`
- * with every count; `newExchangeId`; a call without sinks still marks its error; a retryable
- * `ProviderError` then a reply gives one started/finished pair per attempt in one exchange; a stop
- * emits nothing more and rethrows the reason unmarked; `modelFailureCode` for every kind of the
+ * with every count; a call without sinks still marks its error; a retryable `ProviderError` then a
+ * reply gives one started/finished pair per attempt, each under its own `n`; a stop emits nothing more and rethrows the reason unmarked; `modelFailureCode` for every kind of the
  * mapping, an `AuthError`, a 401 status, a marked non-provider error and an unmarked error;
  * `observeToolCall` emits `ToolCallStarted` (its `arguments` a copy) then `ToolCallFinished` with
  * the result's text and the call's identity, reports a rejecting call by its `name` and rethrows,
@@ -91,7 +90,6 @@ import {
   liveSinks,
   markModelFailure,
   modelFailureCode,
-  newExchangeId,
   observeSkippedToolCall,
   observeToolCall,
   SKIPPED_TOOL_ERROR,
@@ -135,7 +133,10 @@ function model(...replies: ScriptedReply[]): ScriptedModel {
   return new ScriptedModel(replies, CONFIG);
 }
 
-const identity = (exchangeId: string) => ({ nodeId: "writer", exchangeId, purpose: "chat" as const, ...CONFIG });
+const identity = (n = 1) => ({ nodeId: "writer", n, purpose: "chat" as const, ...CONFIG });
+
+/** A started event's time, which `callModel` reads from the run's clock. */
+const ANY_TIME = expect.any(Number) as unknown as number;
 
 test("liveSinks is null without sinks and reads provider and model only when strings", () => {
   expect(liveSinks({ nodeId: "n", llmConfig: CONFIG })).toBeNull();
@@ -160,31 +161,22 @@ test("usageOf projects every count and is null without usage", () => {
   expect(usageOf(reply("ok"))).toBeNull();
 });
 
-test("newExchangeId is 32 hex characters, fresh per call", () => {
-  const id = newExchangeId();
-  expect(id).toMatch(/^[0-9a-f]{32}$/);
-  expect(newExchangeId()).not.toBe(id);
-});
-
 test("event sink alone reports usage without streaming", async () => {
   const { live, events, chunks } = sinks({ stream: false });
   const usage = new Usage({ inputTokens: 7, outputTokens: 2, totalTokens: 9, cacheReadTokens: 4, reasoningTokens: 1 });
-  const { response } = await callModel(live, model(reply("ok", usage)), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const { response } = await callModel(live, model(reply("ok", usage)), REQUEST, { purpose: "chat" });
   expect(response.message.text()).toBe("ok");
   expect(chunks).toEqual([]);
   expect(events).toEqual([
-    new ModelCallStarted({ ...identity("x1"), attempt: 1 }),
-    new ModelCallFinished({
-      ...identity("x1"),
-      usage: new TokenUsage({ inputTokens: 7, outputTokens: 2, totalTokens: 9, cacheReadTokens: 4, reasoningTokens: 1 }),
-      attempt: 1,
-    }),
+    new ModelCallStarted({ ...identity(1), startedAt: ANY_TIME }),
+    new ModelCallFinished({ ...identity(1),
+      usage: new TokenUsage({ inputTokens: 7, outputTokens: 2, totalTokens: 9, cacheReadTokens: 4, reasoningTokens: 1 }) }),
   ]);
 });
 
 test("provider without usage reports null", async () => {
   const { live, events } = sinks();
-  await callModel(live, model(reply("ok")), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  await callModel(live, model(reply("ok")), REQUEST, { purpose: "chat" });
   const finished = events.at(-1) as ModelCallFinished;
   expect([finished.usage, finished.error]).toEqual([null, null]);
 });
@@ -192,12 +184,12 @@ test("provider without usage reports null", async () => {
 test("model error is reported by its name, rethrown and marked", async () => {
   const { live, events, chunks } = sinks();
   const error = new RangeError("key=sk-hidden");
-  const call = callModel(live, model(error), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const call = callModel(live, model(error), REQUEST, { purpose: "chat" });
   expect(await call.catch((caught: unknown) => caught)).toBe(error);
   expect(chunks).toEqual([]);
   expect(events).toEqual([
-    new ModelCallStarted({ ...identity("x1"), attempt: 1 }),
-    new ModelCallFinished({ ...identity("x1"), error: "RangeError", attempt: 1 }),
+    new ModelCallStarted({ ...identity(1), startedAt: ANY_TIME }),
+    new ModelCallFinished({ ...identity(1), error: "RangeError" }),
   ]);
   expect(JSON.stringify(events)).not.toContain("sk-hidden");
   expect(modelFailureCode(error)).toBe("node.execute");
@@ -206,28 +198,28 @@ test("model error is reported by its name, rethrown and marked", async () => {
 test("refused credentials are reported by name and coded provider.auth", async () => {
   const { live, events } = sinks({ stream: false });
   const error = new ProviderError("auth", "unauthorized", { status: 401 });
-  await callModel(live, model(error), REQUEST, { purpose: "chat", exchangeId: "x1" }).catch(() => {});
+  await callModel(live, model(error), REQUEST, { purpose: "chat" }).catch(() => {});
   expect((events.at(-1) as ModelCallFinished).error).toBe("ProviderError");
   expect(modelFailureCode(error)).toBe("provider.auth");
 });
 
 test("a call without sinks still marks its error", async () => {
   const error = new ProviderError("quota", "out of credit");
-  await callModel(null, model(error), REQUEST, { purpose: "chat", exchangeId: "x1" }).catch(() => {});
+  await callModel(null, model(error), REQUEST, { purpose: "chat" }).catch(() => {});
   expect(modelFailureCode(error)).toBe("provider.quota");
 });
 
-test("a retryable provider error then a reply publishes one pair per attempt in one exchange", async () => {
+test("a retryable provider error then a reply publishes one pair per attempt, each its own step", async () => {
   install({ ...BUILTIN, modelRetries: 1 });
   const { live, events } = sinks();
   const failure = new ProviderError("server", "boom", { retryAfter: 0.001 });
-  const { response } = await callModel(live, model(failure, reply("ok")), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const { response } = await callModel(live, model(failure, reply("ok")), REQUEST, { purpose: "chat" });
   expect(response.message.text()).toBe("ok");
   expect(events).toEqual([
-    new ModelCallStarted({ ...identity("x1"), attempt: 1 }),
-    new ModelCallFinished({ ...identity("x1"), error: "ProviderError", attempt: 1 }),
-    new ModelCallStarted({ ...identity("x1"), attempt: 2 }),
-    new ModelCallFinished({ ...identity("x1"), attempt: 2 }),
+    new ModelCallStarted({ ...identity(1), startedAt: ANY_TIME }),
+    new ModelCallFinished({ ...identity(1), error: "ProviderError" }),
+    new ModelCallStarted({ ...identity(2), startedAt: ANY_TIME }),
+    new ModelCallFinished({ ...identity(2) }),
   ]);
   expect(modelFailureCode(failure)).toBeNull();
 });
@@ -243,14 +235,14 @@ test("an interrupted call reports the usage received so far and no error", async
   });
   const usage = new Usage({ inputTokens: 9, outputTokens: 1, totalTokens: 10 });
   const replyEvents = [new UsageReport(usage), new TextDelta(0, "a"), new TextDelta(0, "b"), new Finish({ reason: "stop" })];
-  const options = { purpose: "chat" as const, exchangeId: "x1", interrupt: interrupt.signal };
+  const options = { purpose: "chat" as const, interrupt: interrupt.signal };
   const cut = await rejected(callModel(live, model(replyEvents), REQUEST, options));
   expect(cut).toBeInstanceOf(ReplyInterrupted);
   const counted = new TokenUsage({ inputTokens: 9, outputTokens: 1, totalTokens: 10 });
   expect((cut as ReplyInterrupted).usage).toEqual(counted);
   expect(events).toEqual([
-    new ModelCallStarted({ ...identity("x1"), attempt: 1 }),
-    new ModelCallFinished({ ...identity("x1"), usage: counted, attempt: 1 }),
+    new ModelCallStarted({ ...identity(1), startedAt: ANY_TIME }),
+    new ModelCallFinished({ ...identity(1), usage: counted }),
   ]);
   expect(modelFailureCode(cut)).toBeNull();
 });
@@ -268,7 +260,7 @@ test("event sink failure escapes unchanged and unmarked, with no finished event"
     },
     emitStream: null,
   };
-  const call = callModel(live, model(reply("text")), REQUEST, { purpose: "chat", exchangeId: "x1" });
+  const call = callModel(live, model(reply("text")), REQUEST, { purpose: "chat" });
   expect(await call.catch((caught: unknown) => caught)).toBe(fault);
   expect(events.map((event) => (event as { type: string }).type)).toEqual(["ModelCallStarted"]);
   expect(modelFailureCode(fault)).toBeNull();
@@ -289,7 +281,7 @@ test("a stop emits nothing more and rethrows the reason unmarked", async () => {
     },
   });
   const replyEvents = [new TextDelta(0, "a"), new TextDelta(0, "b"), new Finish({ reason: "stop" })];
-  const call = callModel(live, model(replyEvents), REQUEST, { purpose: "chat", exchangeId: "x1", signal: controller.signal });
+  const call = callModel(live, model(replyEvents), REQUEST, { purpose: "chat", signal: controller.signal });
   expect(await call.catch((caught: unknown) => caught)).toBe(reason);
   expect(chunks.map((chunk) => chunk.chunk)).toEqual(["a"]);
   expect(events.map((event) => (event as { type: string }).type)).toEqual(["ModelCallStarted"]);
@@ -339,8 +331,8 @@ test("modelFailureCode is null for an unmarked error and a thrown primitive", ()
 
 // ---------- tool call brackets ----------
 
-const CALL = { exchangeId: "x1", callIndex: 2, toolCallId: "c1", name: "lookup", arguments: { q: { deep: ["x"] } } };
-const toolIdentity = { nodeId: "writer", exchangeId: "x1", callIndex: 2, toolCallId: "c1", name: "lookup" };
+const CALL = { n: 1, callIndex: 2, toolCallId: "c1", name: "lookup", arguments: { q: { deep: ["x"] } } };
+const toolIdentity = { nodeId: "writer", n: 1, callIndex: 2, toolCallId: "c1", name: "lookup" };
 const shown = (result: unknown) => `text:${String(result)}`;
 
 test("observeToolCall brackets a call with started, then finished with the result's text", async () => {
@@ -590,9 +582,9 @@ function callReply(text: string, calls: [string, string][], usage: Usage | null 
   return new Response({ message, usage, finishReason: "tool_calls" });
 }
 
-/** The identity of call `index` of `lookup` as `toolCallId` in exchange `exchangeId`. */
-const callIdentity = (exchangeId: string, callIndex: number, toolCallId: string) =>
-  ({ nodeId: "writer", exchangeId, callIndex, toolCallId, name: "lookup" });
+/** The identity of call `index` of `lookup` as `toolCallId` in the reply of step `n`. */
+const callIdentity = (n: number, callIndex: number, toolCallId: string) =>
+  ({ nodeId: "writer", n, callIndex, toolCallId, name: "lookup" });
 
 test("an AGENT with tools orders its model and tool observers", async () => {
   const seen: unknown[] = [];
@@ -605,18 +597,18 @@ test("an AGENT with tools orders its model and tool observers", async () => {
   expect((outcome as Output).value).toBe("acme is fine");
   expect(chunks).toEqual([]);
   expect(seen).toEqual([{ topic: "acme" }]);
-  const first = (observed[0] as ModelCallStarted).exchangeId;
-  const second = (observed[4] as ModelCallStarted).exchangeId;
+  const first = (observed[0] as ModelCallStarted).n;
+  const second = (observed[4] as ModelCallStarted).n;
   expect(first).not.toBe(second);
   const tokens = (input: number, output: number) =>
     new TokenUsage({ inputTokens: input, outputTokens: output, totalTokens: input + output });
   expect(observed).toEqual([
-    new ModelCallStarted({ ...identity(first), attempt: 1 }),
-    new ModelCallFinished({ ...identity(first), usage: tokens(10, 4), attempt: 1 }),
+    new ModelCallStarted({ ...identity(first), startedAt: ANY_TIME }),
+    new ModelCallFinished({ ...identity(first), usage: tokens(10, 4) }),
     new ToolCallStarted({ ...callIdentity(first, 0, "call-1"), arguments: { topic: "acme" } }),
     new ToolCallFinished({ ...callIdentity(first, 0, "call-1"), result: "found:acme" }),
-    new ModelCallStarted({ ...identity(second), attempt: 1 }),
-    new ModelCallFinished({ ...identity(second), usage: tokens(20, 3), attempt: 1 }),
+    new ModelCallStarted({ ...identity(second), startedAt: ANY_TIME }),
+    new ModelCallFinished({ ...identity(second), usage: tokens(20, 3) }),
   ]);
 });
 
@@ -628,8 +620,8 @@ test("a tool error is reported by its name, then fails the node", async () => {
   const { outcome, observed } = await evaluate(model(callReply("", [["x", "call-1"]])), { tools });
 
   expect(outcome).toBeInstanceOf(EvaluationFailure);
-  const exchangeId = (observed[0] as ModelCallStarted).exchangeId;
-  expect(observed.at(-1)).toEqual(new ToolCallFinished({ ...callIdentity(exchangeId, 0, "call-1"), error: "RangeError" }));
+  const n = (observed[0] as ModelCallStarted).n;
+  expect(observed.at(-1)).toEqual(new ToolCallFinished({ ...callIdentity(n, 0, "call-1"), error: "RangeError" }));
   expect(JSON.stringify(observed)).not.toContain("secret detail");
 });
 
@@ -648,7 +640,7 @@ test("two tool calls in one reply get their own indexed brackets", async () => {
     [ToolCallStarted, 1, "call-b"],
     [ToolCallFinished, 1, "call-b"],
   ]);
-  expect(new Set(brackets.map((event) => event.exchangeId))).toEqual(new Set([(observed[0] as ModelCallStarted).exchangeId]));
+  expect(new Set(brackets.map((event) => event.n))).toEqual(new Set([(observed[0] as ModelCallStarted).n]));
 });
 
 // ---------- model_call steps ----------

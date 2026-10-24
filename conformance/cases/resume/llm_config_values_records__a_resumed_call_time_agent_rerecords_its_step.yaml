@@ -136,13 +136,15 @@ expect:
     - {commit: 20}
   stream:
   - chunk: ok
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: chat
+    n: 3
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: chat
+    n: 3
+    index: 1
 resume: {}

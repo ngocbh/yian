@@ -181,34 +181,34 @@ expect:
   - - NodeStarted
     - node_id: reply
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: claude-test
+    - model: claude-test
       node_id: reply
       provider: anthropic
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: claude-test
+    - model: claude-test
       node_id: reply
       provider: anthropic
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: reply
       output: draft
   - - NodeStarted
     - node_id: after
   - - ModelCallStarted
-    - exchange_id: <id:3>
-      model: claude-test
+    - model: claude-test
       node_id: after
       provider: anthropic
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:3>
-      model: claude-test
+    - model: claude-test
       node_id: after
       provider: anthropic
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: after
       output: final
@@ -221,22 +221,26 @@ expect:
     - output: final
   stream:
   - chunk: draft
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: reply
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: reply
+    index: 1
+    n: 1
   - chunk: final
-    exchange_id: <id:3>
     final: false
     key: text
     node_id: after
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:3>
     final: true
     key: text
     node_id: after
+    index: 1
+    n: 1

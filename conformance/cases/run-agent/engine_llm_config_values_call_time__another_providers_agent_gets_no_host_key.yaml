@@ -135,17 +135,17 @@ expect:
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: c
+    - model: c
       node_id: chat
       provider: anthropic
       purpose: chat
+      n: 2
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: c
+    - model: c
       node_id: chat
       provider: anthropic
       purpose: chat
+      n: 2
   - - NodeSucceeded
     - node_id: chat
       output: ok
@@ -158,12 +158,14 @@ expect:
     - output: ok
   stream:
   - chunk: ok
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: chat
+    index: 0
+    n: 2
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: chat
+    index: 1
+    n: 2

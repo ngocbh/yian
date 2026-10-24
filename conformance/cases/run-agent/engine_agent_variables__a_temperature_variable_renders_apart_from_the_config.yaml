@@ -117,17 +117,17 @@ expect:
   - - NodeStarted
     - node_id: writer
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: test
+    - model: test
       node_id: writer
       provider: ollama
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: test
+    - model: test
       node_id: writer
       provider: ollama
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: writer
       output: answer
@@ -140,12 +140,14 @@ expect:
     - output: answer
   stream:
   - chunk: answer
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: writer
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: writer
+    index: 1
+    n: 1

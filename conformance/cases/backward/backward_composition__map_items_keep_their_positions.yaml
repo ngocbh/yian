@@ -979,34 +979,34 @@ expect:
   - - NodeStarted
     - node_id: each#0/answer
   - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: local-test
+    - model: local-test
       node_id: each#0/answer
       provider: ollama
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: local-test
+    - model: local-test
       node_id: each#0/answer
       provider: ollama
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: each#0/answer
       output: same
   - - NodeStarted
     - node_id: each#1/answer
   - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: local-test
+    - model: local-test
       node_id: each#1/answer
       provider: ollama
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: local-test
+    - model: local-test
       node_id: each#1/answer
       provider: ollama
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: each#1/answer
       output: same
@@ -1035,25 +1035,29 @@ expect:
     - output: [same, same]
   stream:
   - chunk: same
-    exchange_id: <id:1>
     final: false
     key: text
     node_id: each#0/answer
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:1>
     final: true
     key: text
     node_id: each#0/answer
+    n: 1
+    index: 1
   - chunk: same
-    exchange_id: <id:2>
     final: false
     key: text
     node_id: each#1/answer
+    n: 1
+    index: 0
   - chunk: ''
-    exchange_id: <id:2>
     final: true
     key: text
     node_id: each#1/answer
+    n: 1
+    index: 1
   backward:
   - failure: null
     feedback:

@@ -63,7 +63,6 @@ import {
   type LiveSinks,
   liveSinks,
   markModelFailure,
-  newExchangeId,
   observeSkippedToolCall,
   observeToolCall,
   type ToolCallIdentity,
@@ -179,13 +178,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       steered.add(message);
       messages.push(message);
     }
-    const exchangeId = newExchangeId();
     const request = new Request({ messages, tools: bound });
     let called: Awaited<ReturnType<typeof callModel>>;
     try {
       called = await callModel(live, model, request, {
         purpose: "chat",
-        exchangeId,
         signal: ctx.signal,
         interrupt,
         retry,
@@ -230,7 +227,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       );
     }
 
-    const turn = { ctx, toolset, granted, skills, live, exchangeId, n, steps, messages, calls, interrupt };
+    const turn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt };
     if (await (replayed ? replayToolCalls(turn) : runToolCalls(turn))) return interrupted(reply);
   }
 }
@@ -248,8 +245,7 @@ interface ToolTurn {
   readonly granted: string[];
   readonly skills: ReadonlyMap<string, Skill>;
   readonly live: LiveSinks | null;
-  readonly exchangeId: string;
-  /** The `n` of the reply's `model_call` step, which each call's idempotency key holds. */
+  /** The `n` of the reply's `model_call` step, which each call's idempotency key and brackets hold. */
   readonly n: number;
   /** Where each call's `tool_result` step is written. */
   readonly steps: AgentSteps;
@@ -592,7 +588,7 @@ function checkNodeStopped(turn: ToolTurn): void {
 /** One call's identity on its brackets. */
 function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCallIdentity {
   const { id: toolCallId, name } = call;
-  return { exchangeId: turn.exchangeId, callIndex: index, toolCallId, name, arguments: call.arguments! };
+  return { n: turn.n, callIndex: index, toolCallId, name, arguments: call.arguments! };
 }
 
 /**

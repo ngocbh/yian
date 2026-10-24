@@ -164,17 +164,17 @@ expect:
   - - NodeStarted
     - node_id: answer
   - - ModelCallStarted
-    - exchange_id: <id:5>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: answer
       provider: openai
       purpose: chat
+      n: 1
   - - ModelCallFinished
-    - exchange_id: <id:5>
-      model: gpt-5.5
+    - model: gpt-5.5
       node_id: answer
       provider: openai
       purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: answer
       output: a2
@@ -187,15 +187,17 @@ expect:
     - output: a2
   stream:
   - chunk: a2
-    exchange_id: <id:5>
     final: false
     key: text
     node_id: answer
+    index: 0
+    n: 1
   - chunk: ''
-    exchange_id: <id:5>
     final: true
     key: text
     node_id: answer
+    index: 1
+    n: 1
   memory:
     lessons: |-
       [b] red apple

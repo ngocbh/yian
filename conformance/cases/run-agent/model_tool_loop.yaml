@@ -65,7 +65,7 @@ host:
                   required: [q]
 expect:
   output: {status: succeeded, output: found X1}
-  # <id:1> is the first model call's exchange id.
+  # An AGENT tool call id is <run>/<node>/<n>/<index>, n the reply's model_call step.
   tool_calls:
     lookup:
       - {args: {q: x}, call_id: r1/research/1/0, attempt: 1, node: research}

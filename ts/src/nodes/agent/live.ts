@@ -9,9 +9,9 @@
  * only when a stream sink exists.
  *
  * A model call retries under `YIAN_MODEL_RETRIES` and publishes one bracket per attempt: each
- * attempt's `ModelCallStarted`, its chunks, then its `ModelCallFinished`. A finished event with
- * an error and no final chunk tells the host to discard that attempt's text; the next attempt
- * follows in the same exchange.
+ * attempt's `ModelCallStarted`, its chunks, then its `ModelCallFinished`, all naming the step the
+ * attempt becomes (`nodeId` + `n`). A finished event with an error and no final chunk tells the
+ * host to discard that attempt's text; the next attempt streams under the next `n`.
  *
  * Sink errors arrive already wrapped as `CapabilityFault` by the evaluator and propagate
  * unchanged; provider and tool errors are reported by name only, because their text can contain
@@ -143,11 +143,6 @@ export function usageOf(response: Response): TokenUsage | null {
   return usage === null ? null : new TokenUsage(usage);
 }
 
-/** Return a fresh model exchange id: 32 hex characters. */
-export function newExchangeId(): string {
-  return crypto.randomUUID().replaceAll("-", "");
-}
-
 /** The name an error is reported by: its `name` for an `Error`, else its `typeof`. */
 export function errorName(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
@@ -157,10 +152,12 @@ export function errorName(error: unknown): string {
  * Make one model call through `callWithRetries`, publishing each attempt to the sinks and, with
  * `record`, writing it as a `model_call` step.
  *
- * Each attempt emits `ModelCallStarted`, then, for purpose `chat` with a stream sink, one chunk
- * per non-empty text delta; a retried attempt ends with `ModelCallFinished` naming its error and
- * no final chunk. The successful attempt ends with an empty `final` chunk when streaming, then
- * `ModelCallFinished` with its usage. A failure is marked with `markModelFailure` and reported
+ * Each attempt is named by the step it becomes: its `n` is the next step's (`AgentSteps.nextN`),
+ * or the attempt's number without `record`. Each attempt emits `ModelCallStarted` (with its start
+ * time), then, for purpose `chat` with a stream sink, one chunk per non-empty text delta, each with
+ * the attempt's `n` and an `index` counting from 0; a retried attempt ends with
+ * `ModelCallFinished` naming its error and no final chunk. The successful attempt ends with an
+ * empty `final` chunk (the next `index`) when streaming, then `ModelCallFinished` with its usage. A failure is marked with `markModelFailure` and reported
  * by name on the last attempt's `ModelCallFinished`, with or without sinks; a `CapabilityFault`,
  * or any error once `signal` aborted, passes through untouched with nothing more emitted. Sinks
  * throw `CapabilityFault` (the evaluator wraps them); any other sink error counts as a model failure.
@@ -188,7 +185,7 @@ export function errorName(error: unknown): string {
  * nothing more emitted. A stop wins over an interrupt.
  *
  * @param live The sinks, or `null` when there are none.
- * @param options `purpose` and `exchangeId` go on every event; `signal` stops the call;
+ * @param options `purpose` goes on every event; `signal` stops the call;
  *   `interrupt` is the host's interrupt signal; `retry`'s `scheduler` and `random` run the retry
  *   waits; `record` holds the steps to write to and the request's digest (`requestSha256`).
  * @returns The successful attempt's reply, its media in file form with `record`; with `record`
@@ -203,14 +200,13 @@ export async function callModel(
   request: Request,
   options: {
     purpose: ModelCallPurpose;
-    exchangeId: string;
     signal?: AbortSignal;
     interrupt?: AbortSignal;
     retry?: RetrySettings;
     record?: { steps: AgentSteps; digest: string };
   },
 ): Promise<{ response: Response; n: number | null; replayed: boolean }> {
-  const { purpose, exchangeId, signal, interrupt, retry = {}, record } = options;
+  const { purpose, signal, interrupt, retry = {}, record } = options;
   let prior: PriorAttempts | undefined;
   if (record !== undefined) {
     const recorded = record.steps.takeRecorded(purpose, record.digest);
@@ -230,12 +226,14 @@ export async function callModel(
   const { scheduler = realScheduler, random } = retry;
   const emitEvent = live?.emitEvent ?? null;
   const emitStream = purpose === "chat" ? (live?.emitStream ?? null) : null;
-  const identity = { nodeId: live?.nodeId ?? "", exchangeId, purpose, provider: live?.provider, model: live?.model };
-  const chunk = (text: string, attempt: number, final = false) =>
-    new StreamChunk({ nodeId: identity.nodeId, key: STREAM_KEY, chunk: text, final, exchangeId, attempt });
+  const identity = { nodeId: live?.nodeId ?? "", purpose, provider: live?.provider, model: live?.model };
+  // The current attempt's step and its next chunk's number.
+  let n = 0;
+  let index = 0;
+  const chunk = (text: string, final = false) =>
+    new StreamChunk({ nodeId: identity.nodeId, key: STREAM_KEY, chunk: text, final, n, index: index++ });
   const runDir = record?.steps.runDir ?? null;
   const sent = runDir === null ? request : await fileToInline(request, runDir);
-  let attempt = 0;
   // The current attempt so far: whether no event arrived yet, the text shown, the latest usage,
   // when it started and its first event arrived, and what arrived, for its step.
   let first = true;
@@ -260,17 +258,18 @@ export async function callModel(
       prior,
       scheduler: interrupt === undefined ? scheduler : interruptible(scheduler, interrupt, () => (waiting = true)),
       onAttempt: (k) => {
-        attempt = k;
+        n = record === undefined ? k : record.steps.nextN();
+        index = 0;
         waiting = false;
         first = true;
         shownText = "";
         usage = null;
         firstTokenAt = null;
         arrived = new ReplyAssembler();
-        if (record !== undefined) startedAt = record.steps.now();
-        emitEvent?.(new ModelCallStarted({ ...identity, attempt: k }));
+        startedAt = record === undefined ? scheduler.now() : record.steps.now();
+        emitEvent?.(new ModelCallStarted({ ...identity, n, startedAt }));
       },
-      onEvent: (event, k) => {
+      onEvent: (event) => {
         const text = event instanceof TextDelta ? event.text : "";
         if (text !== "" && !first && interrupt?.aborted) {
           const parts = shownText ? [new TextPart(shownText)] : [];
@@ -282,14 +281,14 @@ export async function callModel(
         if (event instanceof UsageReport) usage = new TokenUsage(event.usage);
         if (text === "") return;
         shownText += text;
-        emitStream?.(chunk(text, k));
+        emitStream?.(chunk(text));
       },
       onRetry: (info) => {
         record?.steps.failedModelCall({ ...call(), output: info.partial, usage, retryIn: info.retryIn }, info.error);
-        emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(info.error), attempt: info.attempt }));
+        emitEvent?.(new ModelCallFinished({ ...identity, n, error: errorName(info.error) }));
       },
     });
-    emitStream?.(chunk("", attempt, true));
+    emitStream?.(chunk("", true));
   } catch (error) {
     if (error instanceof CapabilityFault || signal?.aborted) throw error;
     if (error instanceof ReplyInterrupted) {
@@ -302,28 +301,28 @@ export async function callModel(
           finish: "interrupted",
           usage: error.usage,
         });
-        emitStream?.(chunk("", attempt, true));
-        emitEvent?.(new ModelCallFinished({ ...identity, usage: error.usage, attempt }));
+        emitStream?.(chunk("", true));
+        emitEvent?.(new ModelCallFinished({ ...identity, n, usage: error.usage }));
       }
       throw error;
     }
     record?.steps.failedModelCall({ ...call(), output: arrived.partial(), usage, retryIn: null }, error);
     markModelFailure(error);
-    emitEvent?.(new ModelCallFinished({ ...identity, error: errorName(error), attempt }));
+    emitEvent?.(new ModelCallFinished({ ...identity, n, error: errorName(error) }));
     throw error;
   }
-  let n: number | null = null;
+  let step: number | null = null;
   if (record !== undefined) {
     const reply = inlineToFile(response.message, runDir);
     const { usage: used, finishReason, responseId } = response;
-    n = record.steps.modelCall(
+    step = record.steps.modelCall(
       { ...call(), output: reply, responseId, finish: finishReason, usage: used },
       { settled: true },
     );
     response = new Response({ message: reply, usage: used, finishReason, responseId });
   }
-  emitEvent?.(new ModelCallFinished({ ...identity, usage: usageOf(response), attempt }));
-  return { response, n, replayed: false };
+  emitEvent?.(new ModelCallFinished({ ...identity, n, usage: usageOf(response) }));
+  return { response, n: step, replayed: false };
 }
 
 /**
@@ -361,7 +360,8 @@ export const SKIPPED_TOOL_ERROR = "interrupted";
 
 /** One requested tool call, as its brackets name it. */
 export interface ToolCallIdentity {
-  readonly exchangeId: string;
+  /** The `n` of the reply's `model_call` step. */
+  readonly n: number;
   readonly callIndex: number;
   readonly toolCallId: string;
   readonly name: string;
@@ -389,8 +389,8 @@ function shownResult(result: unknown, text: (result: unknown) => string): string
 
 /** Return the events identifying one tool call of `live`'s node. */
 function toolEventIdentity(live: LiveSinks, identity: ToolCallIdentity) {
-  const { exchangeId, callIndex, toolCallId, name } = identity;
-  return { nodeId: live.nodeId, exchangeId, callIndex, toolCallId, name };
+  const { n, callIndex, toolCallId, name } = identity;
+  return { nodeId: live.nodeId, n, callIndex, toolCallId, name };
 }
 
 /**

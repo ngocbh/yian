@@ -248,7 +248,9 @@ fields. The classes aren't exported: narrow on `event.type` (the event type is
   `ToolCallFinished`, `ReplayDegraded`.
 - Outside a run: `ModelCallRetried`, and a learner's `ReplayDegraded`, reach `result.backward`'s and
   `buildMemories`' `onEvent`, never a run's.
-- `StreamChunk`: `nodeId`, `key`, `chunk`, `final`, `exchangeId`, `attempt`.
+- `StreamChunk`: `nodeId`, `key`, `chunk`, `final`, `n`, `index`. An AGENT's model call events and
+  chunks name the step the call becomes: `nodeId` + `n` is its `model_call` step's id (each attempt
+  is its own step), and `index` counts the step's chunks from 0. Tool events carry their reply's `n`.
 
 `event.toJSON()` gives the snake_case form that
 [`conformance/schema/events.schema.json`][conformance/schema/events.schema.json] describes. Flow

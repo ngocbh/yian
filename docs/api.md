@@ -202,11 +202,15 @@ run before appending any record.
   never replayed on resume; filter them with
   `isinstance(event, yian.events.IN_LOOP_EVENTS)`. Observers from
   concurrently running nodes interleave (runs are pooled by default); correlate
-  them by `node_id` and `exchange_id`. `usage` is the provider's own count
+  them by `node_id` and `exchange_id` (TS yian: `n`, below). `usage` is the provider's own count
   (`None` when unreported) and `error` is an exception type name only, or
   `"interrupted"` for a tool call a [steering](#steering) interrupt skipped.
   Changed (TS yian): `conformance/schema/events.schema.json` describes each
-  event's JSON form, with the snake_case keys hosts forward. `ReplayDegraded`
+  event's JSON form, with the snake_case keys hosts forward. The model call and
+  tool events carry `n` in place of `exchange_id` and `attempt`: the AGENT's step
+  number, so `node_id` + `n` names the `model_call` step a call attempt becomes
+  (each attempt is its own step), and a tool call's `n` is its reply's step.
+  `ModelCallStarted` also carries `started_at`, when the attempt started. `ReplayDegraded`
   (`node_id`, `reason`) is in-loop too: the AGENT's model left out replay state
   it couldn't send back (another provider's or account's reasoning, an unknown
   record version), while the replayed turns' text and tool calls were still
@@ -238,12 +242,13 @@ run before appending any record.
   whitespace between content blocks. Without `on_stream`, AGENT calls `invoke`
   exactly as before.
   Changed (TS yian): every AGENT call streams on the wire; structured replies
-  still send no chunks. `ModelCallStarted`, `ModelCallFinished` and `StreamChunk`
-  carry `attempt`, starting at 1. A retried call ends the failed attempt with
-  `ModelCallFinished` holding its `error` and no final chunk, then starts
-  `attempt + 1` in the same exchange. A structured reply that fails the output
-  check finishes its call without `error`; the correction is sent as a new
-  exchange.
+  still send no chunks. A chunk carries `n` and `index` in place of
+  `exchange_id`: `node_id` + `n` names the `model_call` step the attempt becomes,
+  and `index` counts that step's chunks from 0, the final chunk included. A
+  retried call ends the failed attempt with `ModelCallFinished` holding its
+  `error` and no final chunk, then streams the next attempt under the next `n`.
+  A structured reply that fails the output check finishes its call without
+  `error`; the correction is a new call.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults (`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`,
   then the logins saved by `yian auth`) are captured at initialization. There is no

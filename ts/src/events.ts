@@ -46,32 +46,39 @@ export class NodeStarted {
   }
 }
 
-/** A streamed fragment of a node's output (e.g. an LLM token). */
+/**
+ * A streamed fragment of a node's output (e.g. an LLM token).
+ *
+ * An AGENT's reply text names the step its call becomes: `nodeId` + `n` is the `model_call`
+ * step's id (the call in flight owns the node's next `n`; a retried attempt streams under the next
+ * one), and `index` numbers the step's chunks densely from 0, its final chunk included. Both are
+ * `null` for other streams.
+ */
 export class StreamChunk {
   readonly type = "StreamChunk" as const;
   readonly nodeId: string;
   readonly key: string;
   readonly chunk: string;
   readonly final: boolean;
-  /** The model exchange an AGENT text chunk belongs to; `null` for other streams. */
-  readonly exchangeId: string | null;
-  /** The AGENT model attempt the text belongs to, 1-based; `null` for other streams. */
-  readonly attempt: number | null;
+  /** The `n` of the AGENT `model_call` step this text belongs to; `null` for other streams. */
+  readonly n: number | null;
+  /** The chunk's number within its step, from 0; `null` for other streams. */
+  readonly index: number | null;
 
   constructor(options: {
     nodeId: string;
     key: string;
     chunk: string;
     final?: boolean;
-    exchangeId?: string | null;
-    attempt?: number | null;
+    n?: number | null;
+    index?: number | null;
   }) {
     this.nodeId = options.nodeId;
     this.key = options.key;
     this.chunk = options.chunk;
     this.final = options.final ?? false;
-    this.exchangeId = options.exchangeId ?? null;
-    this.attempt = options.attempt ?? null;
+    this.n = options.n ?? null;
+    this.index = options.index ?? null;
   }
 
   /** Return the data form. */
@@ -81,8 +88,8 @@ export class StreamChunk {
       key: this.key,
       chunk: this.chunk,
       final: this.final,
-      exchange_id: this.exchangeId,
-      attempt: this.attempt,
+      n: this.n,
+      index: this.index,
     };
   }
 }
@@ -265,44 +272,45 @@ export type ModelCallPurpose = "chat" | "structured_native" | "structured_fallba
 /**
  * An AGENT node is about to call its model.
  *
+ * `nodeId` + `n` name the `model_call` step the call becomes (each attempt is its own step).
  * `purpose` is `"chat"`, `"structured_native"` or `"structured_fallback"`. `provider` and `model`
- * echo the effective config.
+ * echo the effective config. `startedAt` is when the attempt started, in epoch milliseconds; its
+ * data form is a UTC RFC 3339 time with milliseconds, as a step's `started_at`.
  */
 export class ModelCallStarted {
   readonly type = "ModelCallStarted" as const;
   readonly nodeId: string;
-  readonly exchangeId: string;
+  readonly n: number;
   readonly purpose: ModelCallPurpose;
   readonly provider: string | null;
   readonly model: string | null;
-  /** The node's model attempt this call belongs to, 1-based. */
-  readonly attempt: number;
+  readonly startedAt: number;
 
   constructor(options: {
     nodeId: string;
-    exchangeId: string;
+    n: number;
     purpose: ModelCallPurpose;
     provider?: string | null;
     model?: string | null;
-    attempt: number;
+    startedAt: number;
   }) {
     this.nodeId = options.nodeId;
-    this.exchangeId = options.exchangeId;
+    this.n = options.n;
     this.purpose = options.purpose;
     this.provider = options.provider ?? null;
     this.model = options.model ?? null;
-    this.attempt = options.attempt;
+    this.startedAt = options.startedAt;
   }
 
   /** Return the data form. */
   toJSON() {
     return {
       node_id: this.nodeId,
-      exchange_id: this.exchangeId,
+      n: this.n,
       purpose: this.purpose,
       provider: this.provider,
       model: this.model,
-      attempt: this.attempt,
+      started_at: new Date(this.startedAt).toISOString(),
     };
   }
 }
@@ -310,64 +318,62 @@ export class ModelCallStarted {
 /**
  * One model call returned or raised.
  *
- * `usage` is the provider's own count, or `null` when it reported none. A
- * call that raised has no `usage` unless the provider replied first (a native
- * structured reply that failed to parse). A streamed reply cut by a host
- * interrupt has no `error` and the usage of the chunks already received.
- * `error` is the error's type name only, never provider text.
+ * `nodeId` + `n` name its `model_call` step, as on its `ModelCallStarted`. `usage` is the
+ * provider's own count, or `null` when it reported none. A call that raised has no `usage` unless
+ * the provider replied first (a native structured reply that failed to parse). A streamed reply cut
+ * by a host interrupt has no `error` and the usage of the chunks already received. `error` is the
+ * error's type name only, never provider text.
  */
 export class ModelCallFinished {
   readonly type = "ModelCallFinished" as const;
   readonly nodeId: string;
-  readonly exchangeId: string;
+  readonly n: number;
   readonly purpose: ModelCallPurpose;
   readonly provider: string | null;
   readonly model: string | null;
   readonly usage: TokenUsage | null;
   readonly error: string | null;
-  /** The node's model attempt this call belongs to, 1-based. */
-  readonly attempt: number;
 
   constructor(options: {
     nodeId: string;
-    exchangeId: string;
+    n: number;
     purpose: ModelCallPurpose;
     provider?: string | null;
     model?: string | null;
     usage?: TokenUsage | null;
     error?: string | null;
-    attempt: number;
   }) {
     this.nodeId = options.nodeId;
-    this.exchangeId = options.exchangeId;
+    this.n = options.n;
     this.purpose = options.purpose;
     this.provider = options.provider ?? null;
     this.model = options.model ?? null;
     this.usage = options.usage ?? null;
     this.error = options.error ?? null;
-    this.attempt = options.attempt;
   }
 
   /** Return the data form, the usage in its data form. */
   toJSON() {
     return {
       node_id: this.nodeId,
-      exchange_id: this.exchangeId,
+      n: this.n,
       purpose: this.purpose,
       provider: this.provider,
       model: this.model,
       usage: this.usage === null ? null : this.usage.toJSON(),
       error: this.error,
-      attempt: this.attempt,
     };
   }
 }
 
-/** An AGENT node is about to run one granted tool call from a model reply. */
+/**
+ * An AGENT node is about to run one granted tool call from a model reply; `n` is the reply's
+ * `model_call` step.
+ */
 export class ToolCallStarted {
   readonly type = "ToolCallStarted" as const;
   readonly nodeId: string;
-  readonly exchangeId: string;
+  readonly n: number;
   readonly callIndex: number;
   readonly toolCallId: string;
   readonly name: string;
@@ -375,14 +381,14 @@ export class ToolCallStarted {
 
   constructor(options: {
     nodeId: string;
-    exchangeId: string;
+    n: number;
     callIndex: number;
     toolCallId: string;
     name: string;
     arguments?: unknown;
   }) {
     this.nodeId = options.nodeId;
-    this.exchangeId = options.exchangeId;
+    this.n = options.n;
     this.callIndex = options.callIndex;
     this.toolCallId = options.toolCallId;
     this.name = options.name;
@@ -393,7 +399,7 @@ export class ToolCallStarted {
   toJSON() {
     return {
       node_id: this.nodeId,
-      exchange_id: this.exchangeId,
+      n: this.n,
       call_index: this.callIndex,
       tool_call_id: this.toolCallId,
       name: this.name,
@@ -403,7 +409,8 @@ export class ToolCallStarted {
 }
 
 /**
- * One tool call returned (`result` text) or raised (`error` type name).
+ * One tool call returned (`result` text) or raised (`error` type name); `n` is the reply's
+ * `model_call` step.
  *
  * A call that a host interrupt skipped is reported as started and then finished
  * with `error: "interrupted"`; the tool did not run.
@@ -411,7 +418,7 @@ export class ToolCallStarted {
 export class ToolCallFinished {
   readonly type = "ToolCallFinished" as const;
   readonly nodeId: string;
-  readonly exchangeId: string;
+  readonly n: number;
   readonly callIndex: number;
   readonly toolCallId: string;
   readonly name: string;
@@ -420,7 +427,7 @@ export class ToolCallFinished {
 
   constructor(options: {
     nodeId: string;
-    exchangeId: string;
+    n: number;
     callIndex: number;
     toolCallId: string;
     name: string;
@@ -428,7 +435,7 @@ export class ToolCallFinished {
     error?: string | null;
   }) {
     this.nodeId = options.nodeId;
-    this.exchangeId = options.exchangeId;
+    this.n = options.n;
     this.callIndex = options.callIndex;
     this.toolCallId = options.toolCallId;
     this.name = options.name;
@@ -440,7 +447,7 @@ export class ToolCallFinished {
   toJSON() {
     return {
       node_id: this.nodeId,
-      exchange_id: this.exchangeId,
+      n: this.n,
       call_index: this.callIndex,
       tool_call_id: this.toolCallId,
       name: this.name,

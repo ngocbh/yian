@@ -245,6 +245,20 @@ reported error; a failure that ends the node shows as the node's failure. The
 session transcript records the call as completed with that error text, and the
 evaluation trace records the text as the call's tool result, like any other.
 
+### A tool call that waits
+
+Changed (TS yian): a tool an AGENT calls may answer later. Its handler (the run's `ask_user`
+handler or any host tool) returns `pending()`; the agent records the call and runs the reply's
+other calls, then the node waits on every call of the reply that pended, holding no worker. The
+host answers each call with `complete(log, callId, {output} | {error})`, or lists the open ones
+with `pendingCalls`; the call id is `<run id>/<node>/<n>/<index>`. Once every call is answered
+the agent wakes, replays its recorded model calls and tool results without making them again,
+and its next request reads every result of the reply in call order. A pended call is observed as
+a `ToolCallStarted` with no `ToolCallFinished`. Memory recalled at the wake doesn't change the
+replayed calls: a request's recorded digest leaves the recalled sections out, and the new call
+after the wake reads the fresh recall. See
+[Blocking human interaction](api.md#blocking-human-interaction).
+
 ### How YAML becomes the request
 
 | YAML or host value | Role in execution |

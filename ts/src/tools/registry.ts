@@ -161,7 +161,7 @@ export interface AskRequest extends AskUserRequest {
   extra: Record<string, unknown>;
 }
 
-/** A run's ask handler. It may return `pending()` from a TOOL `ask`; an agent's call can't wait. */
+/** A run's ask handler. It may return `pending()`; the TOOL `ask` or the agent then waits for `complete`. */
 export type AskHandler = (request: AskRequest, ctx: ToolContext<any>) => unknown;
 
 /** An ask handler with the extra inputs it accepts on a TOOL `ask`, as JSON Schema properties. */

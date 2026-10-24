@@ -56,8 +56,9 @@ export class ToolContext<T = unknown> {
    * An opaque id for this call. For a TOOL node it is `toolCallId(runId, node)`, the run id plus the
    * expanded node path, for example `run-7f3a/loop#3/place`, and stays the same on every attempt
    * and when a resumed run re-runs the same call.
-   * For a call from an AGENT's tool loop it is unique per call but not stable across resume until
-   * AGENT steps are recorded. Outside a run (an unbound tool set) each call gets a fresh id.
+   * For a call from an AGENT's tool loop it is `<run>/<node>/<n>/<index>` (the reply's `model_call`
+   * step and the call's place in the reply), stable across resume. Outside a run (an unbound tool
+   * set) each call gets a fresh id.
    */
   readonly callId: string;
   /**

@@ -102,8 +102,8 @@ export function loadMcpConfig(
   for (const name of Object.keys(servers)) {
     if (taken.has(name)) {
       throw new McpConfigError(
-        `${sources[name]}: server ${reprText(name)}: the name is reserved (a registered tool,` +
-          " ask_user or load_skill); rename the server",
+        `${sources[name]}: server ${reprText(name)}: the name is reserved (a registered tool or a yian` +
+          " built-in: take, sleep, ask, ask_user, load_skill); rename the server",
       );
     }
   }

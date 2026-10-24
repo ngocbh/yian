@@ -645,7 +645,8 @@ test("test_a_server_named_like_a_registered_tool_exits", async () => {
 
   expect(result.code).toBe(1);
   expect(result.output).toContain(
-    `${cfg}: server 'shadowed': the name is reserved (a registered tool, ask_user or load_skill)`,
+    `${cfg}: server 'shadowed': the name is reserved (a registered tool or a yian built-in: take, sleep, ask, ` +
+      "ask_user, load_skill)",
   );
   expect(existsSync(pid)).toBe(false);
 });
@@ -657,6 +658,15 @@ test("test_a_server_named_ask_user_exits", async () => {
 
   expect(result.code).toBe(1);
   expect(result.output).toContain("'ask_user'");
+});
+
+test("a server named after a built-in exits", async () => {
+  const cfg = config(join(tmp, "cfg.json"), { take: stdio() });
+
+  const result = await run([toolFlow(), "--mcp-config", cfg]);
+
+  expect(result.code).toBe(1);
+  expect(result.output).toContain(`${cfg}: server 'take': the name is reserved`);
 });
 
 test("test_a_later_file_disables_a_user_server", async () => {

@@ -46,6 +46,7 @@ import {
 import { realScheduler } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
+import { isPending } from "../../tools/context.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
@@ -530,7 +531,17 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // run (no run id) the tool set gives each call a fresh id.
   const runId = toolset.runId;
   const callId = runId ? `${runId}/${ctx.nodeId}/${turn.n}/${index}` : undefined;
-  const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
+  const invoke = async (signal: AbortSignal) => {
+    const value = await toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
+    // An agent's pending call needs replay from its steps; until then a call answers in the call.
+    if (isPending(value)) {
+      throw new AgentLoopError(
+        `agent node ${reprText(ctx.nodeId)}: tool ${reprText(call.name)} returned pending(); an AGENT's tool call ` +
+          "can't wait for a later answer in this version, so answer it inline or ask from a TOOL node",
+      );
+    }
+    return value;
+  };
   return { planned: { call, index, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 

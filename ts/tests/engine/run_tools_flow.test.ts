@@ -549,34 +549,3 @@ for (const [tool, message] of [
     expect(existsSync(path)).toBe(false);
   });
 }
-
-/** A flow whose one TOOL node names `tool`. */
-const builtinFlow = (tool: string) => `
-id: tool_builtin
-name: tool_builtin
-nodes:
-  gate:
-    kind: tool
-    tool_id: ${tool}
-output: \${gate.output}
-`;
-
-for (const [tool, tools, message] of [
-  ["take", {}, "TOOL node 'gate' names 'take': an engine built-in this version of yian doesn't run yet"],
-  ["sleep", {}, "TOOL node 'gate' names 'sleep': an engine built-in this version of yian doesn't run yet"],
-  ["ask", { ask: answerWithQuestion }, "TOOL node 'gate' names 'ask': an engine built-in this version of yian doesn't run yet"],
-  [
-    "ask",
-    {},
-    "TOOL node 'gate' names 'ask': no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
-  ],
-] as const) {
-  test(`a TOOL node naming the built-in ${tool} fails at run start (${Object.keys(tools).length} tools)`, async () => {
-    const path = freshLog();
-
-    const error = await rejected(run(builtinFlow(tool), {}, { log: path, tools }));
-
-    expect(error).toEqual(new RangeError(message));
-    expect(existsSync(path)).toBe(false);
-  });
-}

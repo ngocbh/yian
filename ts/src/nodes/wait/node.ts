@@ -14,7 +14,7 @@
 import { reprText } from "../../diagnostics.ts";
 import { realScheduler, SLEEP_CHUNK_MS } from "../../platform.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
-import { parseDateOrDatetime } from "../../typesys/temporal.ts";
+import { deadlineUtc } from "../../typesys/temporal.ts";
 import { valueRepr } from "../../typesys/values.ts";
 import { Node, type NodeCaps, NodeKind, Output } from "../base.ts";
 import { BindingError, type ReservedBinder, resolveSource, sourceOrigin } from "../binding.ts";
@@ -65,29 +65,6 @@ function normalizeUntil(untilSrc: unknown, value: unknown): string {
     });
   }
   return value;
-}
-
-/**
- * Parse one date/datetime string and return its UTC instant in epoch milliseconds.
- *
- * Microseconds are truncated to milliseconds.
- *
- * @throws RangeError when `text` is outside the grammar or impossible, or the instant's UTC year
- *   is outside 1 to 9999.
- */
-function deadlineUtc(text: string): number {
-  const parsed = parseDateOrDatetime(text);
-  // `Date.UTC` maps years 0-99 to 1900-1999; the setters take the year as given.
-  const instant = new Date(0);
-  instant.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
-  if (parsed.kind === "datetime") {
-    const offset = parsed.offsetMinutes ?? 0;
-    instant.setUTCHours(parsed.hour, parsed.minute - offset, parsed.second, Math.floor(parsed.microsecond / 1000));
-  }
-  // A JS Date holds years 0 and 10000; Python's datetime doesn't, and refuses with this text.
-  const year = instant.getUTCFullYear();
-  if (year < 1 || year > 9999) throw new RangeError("date value out of range");
-  return instant.getTime();
 }
 
 /**

@@ -56,6 +56,7 @@ import {
   TypedValue,
   type ValueKind,
 } from "../typesys/index.ts";
+import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temporal.ts";
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 import {
   AttributedBackwardResult,
@@ -1437,9 +1438,6 @@ function retiredSchema(schema: number): RunLogSchemaError {
   return new RunLogSchemaError(`run log schema ${schema} predates schema ${SCHEMA_VERSION} and is not supported`, schema);
 }
 
-/** A record time's form: `Date.prototype.toISOString`'s, UTC with milliseconds and a four-digit year. */
-const RECORD_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
-
 /**
  * Return epoch milliseconds `ms`, a log clock's reading, as a record time such as
  * `2026-10-20T14:02:11.123Z`; a fraction of a millisecond is dropped.
@@ -1450,10 +1448,7 @@ export function formatRecordTime(ms: unknown): string {
   if (typeof ms !== "number" || !Number.isFinite(ms)) {
     throw new RangeError(`run-log clock must return finite epoch milliseconds, got ${valueRepr(ms)}`);
   }
-  const date = new Date(ms);
-  const text = Number.isNaN(date.getTime()) ? "" : date.toISOString();
-  if (!RECORD_TIME.test(text)) throw new RangeError(`run-log clock time ${ms} is outside the years 0000 to 9999`);
-  return text;
+  return recordTimeText(ms);
 }
 
 /**

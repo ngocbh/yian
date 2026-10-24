@@ -117,6 +117,44 @@ export function parseDuration(text: string): number {
   return seconds;
 }
 
+/**
+ * Parse one date/datetime string and return its UTC instant in epoch milliseconds. A date and a
+ * datetime without an offset are read in UTC; microseconds are truncated to milliseconds.
+ *
+ * @throws RangeError when `text` is outside the grammar or impossible, or the instant's UTC year
+ *   is outside 1 to 9999.
+ */
+export function deadlineUtc(text: string): number {
+  const parsed = parseDateOrDatetime(text);
+  // `Date.UTC` maps years 0-99 to 1900-1999; the setters take the year as given.
+  const instant = new Date(0);
+  instant.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
+  if (parsed.kind === "datetime") {
+    const offset = parsed.offsetMinutes ?? 0;
+    instant.setUTCHours(parsed.hour, parsed.minute - offset, parsed.second, Math.floor(parsed.microsecond / 1000));
+  }
+  // A JS Date holds years 0 and 10000; Python's datetime doesn't, and refuses with this text.
+  const year = instant.getUTCFullYear();
+  if (year < 1 || year > 9999) throw new RangeError("date value out of range");
+  return instant.getTime();
+}
+
+/** A record time's form: `Date.prototype.toISOString`'s, UTC with milliseconds and a four-digit year. */
+export const RECORD_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/;
+
+/**
+ * Return epoch milliseconds `ms` as a record time such as `2026-10-20T14:02:11.123Z`; a fraction
+ * of a millisecond is dropped.
+ *
+ * @throws RangeError when `ms` isn't finite or falls outside the years 0000 to 9999.
+ */
+export function formatRecordTime(ms: number): string {
+  const date = new Date(ms);
+  const text = Number.isNaN(date.getTime()) ? "" : date.toISOString();
+  if (!RECORD_TIME.test(text)) throw new RangeError(`run-log clock time ${ms} is outside the years 0000 to 9999`);
+  return text;
+}
+
 function dateFrom(match: RegExpExecArray): ParsedDate {
   const [, year, month, day] = match;
   const parsed: ParsedDate = {

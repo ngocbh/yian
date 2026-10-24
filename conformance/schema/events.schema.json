@@ -65,7 +65,8 @@
             "provider.unavailable",
             "provider.context_length",
             "provider.refused",
-            "condition.evaluate"
+            "condition.evaluate",
+            "tool.timeout"
           ]
         },
         "message": {"type": "string", "description": "Human-readable detail; it may be empty."},

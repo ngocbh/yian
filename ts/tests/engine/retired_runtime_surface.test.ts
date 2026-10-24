@@ -58,7 +58,7 @@ import { ToolAttemptsFailed } from "../../src/nodes/tool/node.ts";
 import * as run from "../../src/run.ts";
 import { BackwardOutcome } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
-import { ToolContext } from "../../src/tools/context.ts";
+import { pending, ToolContext } from "../../src/tools/context.ts";
 import { PermanentToolError, ReportedToolError, TransientToolError } from "../../src/tools/errors.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
@@ -185,7 +185,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(getters).toEqual(["learning", "backwardOutcome"]);
 });
 
-test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, the message names and InboxRef", () => {
+test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, pending, the message names and InboxRef", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -209,6 +209,7 @@ test("the package root exports exactly its documented root list plus the memory 
     FlowValidationError,
     ExpressionError,
     ToolContext,
+    pending,
     FunctionTool,
     tool,
     PermanentToolError,

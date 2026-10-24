@@ -150,7 +150,8 @@ import {
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
-import { type ToolEntry, ToolSet } from "./tools/registry.ts";
+import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId } from "./tools/context.ts";
+import { RESERVED_TOOL_NAMES, type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
@@ -1715,6 +1716,8 @@ function* streamedEnvelopes(log: string): Generator<RecordEnvelope, void, undefi
   for (const entry of iterRunRecords(log)) yield entry.envelope;
 }
 
+const BUILTIN_NOT_YET = "an engine built-in this version of yian doesn't run yet";
+
 /**
  * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
  *
@@ -1722,19 +1725,26 @@ function* streamedEnvelopes(log: string): Generator<RecordEnvelope, void, undefi
  * checked, including nodes that may never run, so an unresolvable id rejects the run before any
  * record is written instead of failing its node when the node starts.
  *
- * @throws RangeError when an AGENT grants a tool or group this run lacks, or `ask_user` with no
- *   handler; or a TOOL node names a tool this run lacks, a tool group, or `ask_user` with no
- *   handler.
+ * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
+ *   this run lacks, or `ask_user` with no handler; or a TOOL node names a tool this run lacks, a
+ *   tool group, `ask` or `ask_user` with no handler, or a built-in, which no TOOL node runs yet.
  */
 function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
   for (const [nodeId, node] of staticNodes(flow)) {
     for (const toolId of tools.expand(node.grantedTools())) {
+      if (BUILTIN_TOOL_IDS.has(toolId as BuiltinToolId)) {
+        const reason =
+          toolId === ASK
+            ? "grant ask_user; ask is a TOOL-node built-in in this version"
+            : `an engine built-in a TOOL node reaches with tool_id: ${toolId}`;
+        throw new RangeError(`AGENT node ${reprText(nodeId)} grants ${reprText(toolId)}: ${reason}`);
+      }
       try {
         tools.resolve([toolId]);
       } catch (error) {
         if (!(error instanceof RangeError)) throw error;
         const reason =
-          toolId === "ask_user"
+          toolId === ASK_USER
             ? `'ask_user': ${error.message}`
             : `unknown tool or group ${reprText(toolId)}; tool groups in this run: ${writeAsText([...tools.groups])}`;
         throw new RangeError(`AGENT node ${reprText(nodeId)} grants ${reason}`);
@@ -1742,12 +1752,17 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
     }
     const call = node.hostToolCall();
     if (call === null) continue;
+    const builtin = BUILTIN_TOOL_IDS.has(call.toolId as BuiltinToolId);
     try {
+      // `take` and `sleep` are no tools a set resolves; `ask` is, through the run's handler.
+      if (builtin && call.toolId !== ASK) throw new RangeError(BUILTIN_NOT_YET);
       tools.resolve([call.toolId]);
+      // Until the TOOL node runs the built-ins, refuse them rather than call `ask` as a plain tool.
+      if (builtin) throw new RangeError(BUILTIN_NOT_YET);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       let reason: string;
-      if (call.toolId === "ask_user" || tools.groups.includes(call.toolId)) {
+      if (builtin || call.toolId === ASK_USER || tools.groups.includes(call.toolId)) {
         reason = `${reprText(call.toolId)}: ${error.message}`;
       } else {
         const known = tools.toolIds;
@@ -2478,8 +2493,9 @@ function otherRunError(key: string, options?: ErrorOptions): RangeError {
 /**
  * Split the run's tools into the entries that need no opening and the unopened servers.
  *
- * An unopened server under a key `ToolSet` rejects (empty, or `ask_user`) stays with the other
- * entries, so `ToolSet` throws its usual error before any server starts.
+ * An unopened server under a key `ToolSet` rejects (empty, or a reserved name: `take`, `sleep`,
+ * `ask`, `ask_user`, `load_skill`) stays with the other entries, so `ToolSet` throws its usual error
+ * before any server starts.
  *
  * @param tools The `tools` option of `runFlow`. Anything other than a record is returned as is,
  *   for `ToolSet` to reject.
@@ -2496,7 +2512,7 @@ function splitRunServers(
   const unopened: [string, McpServer][] = [];
   for (const key of Object.keys(tools)) {
     const entry = tools[key]!;
-    if (!isMcpServer(entry) || key === "" || key === "ask_user") {
+    if (!isMcpServer(entry) || key === "" || RESERVED_TOOL_NAMES.has(key)) {
       others[key] = entry;
     } else if (entry.isOpen) {
       if (entry.openedByRun) throw otherRunError(key);

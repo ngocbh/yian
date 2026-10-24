@@ -8,8 +8,10 @@
  * This is the package's tool seam: the core ships no domain tools, and a host registers its own.
  * Tool ids must be unique across everything registered into the process. `ToolSet` holds one
  * run's tools: this registry, or a host mapping that replaces it and may hold named tool groups.
- * The reserved `ask_user` id never lives here: each run gets its handler through
- * `new ToolSet({ ask_user: handler, ... })`.
+ * The reserved names never live here. `take` and `sleep` are engine built-ins a TOOL node reaches
+ * with `tool_id:`; `load_skill` is bound by granting skills; each run gets its ask handler, which
+ * serves both the agent's `ask_user` tool and the TOOL built-in `ask`, through
+ * `new ToolSet({ ask: handler, ... })`.
  *
  * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/mcp`, `tools/types`,
  * `skills/tool` (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
@@ -32,20 +34,27 @@ import {
   type ValueRecord,
   writeAsText,
 } from "../typesys/values.ts";
-import { ASK_USER, ToolContext } from "./context.ts";
+import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
-export { ASK_USER };
+export { ASK, ASK_USER };
 
 /** Maps tool id to the `FunctionTool` registered under it. */
 export const TOOL_REGISTRY = new Map<string, FunctionTool>();
 
-// Names a group tool may not take: the run's ask_user handler and the skills tool.
-const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([ASK_USER, LOAD_SKILL]);
-const ASK_USER_HINT = "pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance";
+/** Names no host tool may take: the engine built-ins, the run's ask slot and the skills tool. */
+export const RESERVED_TOOL_NAMES: ReadonlySet<string> = new Set([TAKE, SLEEP, ASK, ASK_USER, LOAD_SKILL]);
+const ASK_HINT = "pass tools: {...registeredTools(), ask: handler} to runFlow or advance";
+
+/** Return why a reserved name is reserved, for a refusal message. */
+function reservedReason(name: string): string {
+  if (name === TAKE || name === SLEEP) return `an engine built-in a TOOL node reaches with tool_id: ${name}`;
+  if (name === ASK || name === ASK_USER) return ASK_HINT;
+  return "granting skills binds it";
+}
 
 const ASK_USER_DESCRIPTION =
   "Ask the user one short question and wait for the answer. Use only when you need a decision " +
@@ -78,6 +87,25 @@ const ASK_USER_TRUSTED_PARAMETERS: JsonObject = {
     title: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
     nodeId: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
   },
+};
+
+const ASK_DESCRIPTION = "Ask a person and wait for the answer.";
+
+// yian's own `ask` surface: what a TOOL `ask` node may pass, before the host's extras.
+const ASK_BASE_PROPERTIES: JsonObject = {
+  prompt: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+  questions: { anyOf: [{ items: { type: "object" }, type: "array" }, { type: "null" }], default: null },
+  // A literal duration arrives as integer seconds, a `${...}` as text.
+  timeout: { anyOf: [{ type: "integer" }, { type: "string" }, { type: "null" }], default: null },
+  __questions: { anyOf: [{ items: { type: "object" }, type: "array" }, { type: "null" }], default: null },
+};
+
+// Set by the TOOL node, never by an author: checked on the trusted path only.
+const ASK_TRUSTED_PROPERTIES: JsonObject = {
+  answerSchema: { anyOf: [{ items: { type: "object" }, type: "array" }, { type: "null" }], default: null },
+  title: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+  nodeId: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+  deadline: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
 };
 
 /** Options for one tool call. */
@@ -136,8 +164,28 @@ export interface AskUserRequest {
 /** A run's `ask_user` handler: takes the request and the call's context, returns the answer. */
 export type AskUserHandler = (request: AskUserRequest, ctx: ToolContext<any>) => unknown;
 
+/** What a run's ask handler receives: the `ask_user` request plus the call's identity. */
+export interface AskRequest extends AskUserRequest {
+  /** The call's id, the same on every re-run of a TOOL `ask`; a host dedupes by it. */
+  callId: string;
+  /** When the call times out (a record time), for a TOOL `ask` with a `timeout`; else null. */
+  deadline: string | null;
+  /** The host-declared extra inputs the TOOL `ask` passed, by name; `{}` when none. */
+  extra: Record<string, unknown>;
+}
+
+/** A run's ask handler. It may return `pending()` from a TOOL `ask`; an agent's call can't wait. */
+export type AskHandler = (request: AskRequest, ctx: ToolContext<any>) => unknown;
+
+/** An ask handler with the extra inputs it accepts on a TOOL `ask`, as JSON Schema properties. */
+export interface AskTool {
+  handler: AskHandler;
+  inputs: JsonObject;
+  required?: readonly string[];
+}
+
 /** One entry of a host `tools` mapping. */
-export type ToolEntry = FunctionTool | McpServer | readonly FunctionTool[] | AskUserHandler;
+export type ToolEntry = FunctionTool | McpServer | readonly FunctionTool[] | AskHandler | AskTool;
 
 /**
  * Register a `FunctionTool` under `toolId`.
@@ -150,8 +198,8 @@ export type ToolEntry = FunctionTool | McpServer | readonly FunctionTool[] | Ask
  * @param options `descriptionOverride` is the description the model sees; `""`, `null` and
  *   `undefined` keep the tool's own.
  * @returns `tool`, unchanged.
- * @throws {RangeError} `toolId` is the reserved `ask_user` id, is already registered, or differs
- *   from the tool's name.
+ * @throws {RangeError} `toolId` is a reserved name (`take`, `sleep`, `ask`, `ask_user`,
+ *   `load_skill`), is already registered, or differs from the tool's name.
  * @throws {TypeError} `tool` is not a `FunctionTool`, or `descriptionOverride` is not a string.
  *
  * @example
@@ -171,7 +219,9 @@ export function registerTool(
   tool: FunctionTool,
   options?: { descriptionOverride?: string },
 ): FunctionTool {
-  if (toolId === ASK_USER) throw new RangeError(`tool id ${reprText(ASK_USER)} is reserved; ${ASK_USER_HINT}`);
+  if (RESERVED_TOOL_NAMES.has(toolId)) {
+    throw new RangeError(`tool name ${reprText(toolId)} is reserved by yian: ${reservedReason(toolId)}`);
+  }
   if (TOOL_REGISTRY.has(toolId)) throw new RangeError(`Duplicate tool id '${toolId}'`);
   if (!isFunctionTool(tool)) {
     throw new TypeError(
@@ -212,7 +262,7 @@ export function registerTool(
  * Return a copy of the tools registered with `registerTool`.
  *
  * A run given `tools` sees only those tools. A host that wants the registered tools as well builds
- * the mapping itself, for example `{...registeredTools(), ask_user: handler}`. Changing the copy
+ * the mapping itself, for example `{...registeredTools(), ask: handler}`. Changing the copy
  * does not change the registry. The copy is taken when you call this, so register every tool the
  * run needs before the run starts.
  *
@@ -289,10 +339,10 @@ function sortedIds(tools: ReadonlyMap<string, unknown>): string[] {
 /**
  * Wrap a host handler in the fixed `ask_user` tool.
  *
- * The model sees `question` and optional `options`. The handler receives all six request fields,
- * absent ones `null`, and the call's context.
+ * The model sees `question` and optional `options`. The handler receives the request fields, absent
+ * ones `null`, the call's id with no deadline and no extras, and the call's context.
  */
-function askUserTool(handler: AskUserHandler): FunctionTool {
+function askUserTool(handler: AskHandler): FunctionTool {
   return new FunctionTool({
     name: ASK_USER,
     description: ASK_USER_DESCRIPTION,
@@ -306,10 +356,90 @@ function askUserTool(handler: AskUserHandler): FunctionTool {
           answerSchema: (args.answerSchema ?? null) as unknown[] | null,
           title: (args.title ?? null) as string | null,
           nodeId: (args.nodeId ?? null) as string | null,
+          callId: ctx.callId,
+          deadline: null,
+          extra: {},
         },
         ctx,
       ),
   });
+}
+
+/**
+ * Wrap a host ask handler in the TOOL built-in `ask`.
+ *
+ * Its schema is yian's base surface plus the host's extras. The TOOL node has already parsed
+ * `questions` and turned `timeout` into `deadline`, so the handler gets the request fields, the
+ * extras the call passed in `extra`, and the call's context.
+ */
+function askTool(spec: AskTool): FunctionTool {
+  const extras = Object.keys(spec.inputs);
+  return new FunctionTool({
+    name: ASK,
+    description: ASK_DESCRIPTION,
+    parametersJsonSchema: {
+      properties: { ...ASK_BASE_PROPERTIES, ...spec.inputs },
+      required: [...(spec.required ?? [])],
+      type: "object",
+    },
+    execute: (args, ctx) => {
+      const extra: Record<string, unknown> = {};
+      for (const key of extras) if (Object.hasOwn(args, key)) extra[key] = args[key];
+      return spec.handler(
+        {
+          question: (args.prompt ?? "") as string,
+          options: null,
+          questions: (args.questions ?? null) as unknown[] | null,
+          answerSchema: (args.answerSchema ?? null) as unknown[] | null,
+          title: (args.title ?? null) as string | null,
+          nodeId: (args.nodeId ?? null) as string | null,
+          callId: ctx.callId,
+          deadline: (args.deadline ?? null) as string | null,
+          extra,
+        },
+        ctx,
+      );
+    },
+  });
+}
+
+/**
+ * Return the run's ask slot entry, passed as `tools[key]`, as an `AskTool`: a function is a handler
+ * with no extras.
+ *
+ * @throws {TypeError} The entry is neither a function nor `{handler, inputs, required?}`.
+ * @throws {RangeError} An input shadows yian's ask surface, or a required name isn't an input.
+ */
+function askToolOf(key: string, entry: unknown): AskTool {
+  const where = `tools[${JSON.stringify(key)}]`;
+  if (typeof entry === "function") return { handler: entry as AskHandler, inputs: {}, required: [] };
+  // A FunctionTool has no `handler`, so this also refuses one.
+  const record = isRecord(entry) ? (entry as Record<string, unknown>) : null;
+  const required = record?.required;
+  if (
+    record === null ||
+    typeof record.handler !== "function" ||
+    !isRecord(record.inputs) ||
+    !(required === undefined || (Array.isArray(required) && required.every((name) => typeof name === "string")))
+  ) {
+    throw new TypeError(
+      `${where} must be a handler function or {handler, inputs, required?}; yian supplies the base schema`,
+    );
+  }
+  const inputs = record.inputs as JsonObject;
+  for (const name of Object.keys(inputs)) {
+    if (Object.hasOwn(ASK_BASE_PROPERTIES, name) || Object.hasOwn(ASK_TRUSTED_PROPERTIES, name)) {
+      throw new RangeError(
+        `${where} input ${reprText(name)} is part of yian's ask surface; name the extra input differently`,
+      );
+    }
+  }
+  for (const name of (required ?? []) as string[]) {
+    if (!Object.hasOwn(inputs, name)) {
+      throw new RangeError(`${where} requires ${reprText(name)}, which isn't one of its inputs`);
+    }
+  }
+  return { handler: record.handler as AskHandler, inputs, required: (required ?? []) as string[] };
 }
 
 /** Return the items of the array passed as `tools[group]`, each checked to be a `FunctionTool`. */
@@ -355,7 +485,7 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  * AGENT node grants a group by its key, and `expand` replaces that key with the group's tool
  * names. Every tool name in the run names one tool: the same tool object may sit in several
  * groups, but a group tool may not share its name with a different tool or with a top-level key,
- * or take a reserved name (`ask_user`, `load_skill`).
+ * or take a reserved name (`take`, `sleep`, `ask`, `ask_user`, `load_skill`).
  *
  * A tool's `execute(args, ctx)` receives a `ToolContext` on each call: the call id, attempt, tool
  * name, run id, calling node, this set's `context` and the call's abort signal.
@@ -367,20 +497,23 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  *
  * @param tools The run's tools keyed by tool id. A `FunctionTool` must use its key as its name.
  *   An array is a group keyed by its group name; each item is a `FunctionTool` named by its
- *   `name`. An open `McpServer` is a group of the tools it listed when it opened. The `ask_user`
- *   entry must be a plain function `(request, ctx)`; it is wrapped so the model sees `question` and
- *   `options`, and it receives the six-field `AskUserRequest` and the call's context. `null` or
- *   `undefined` means the global registry. To keep the registered tools and add more, pass
- *   `{...registeredTools(), ...}`.
+ *   `name`. An open `McpServer` is a group of the tools it listed when it opened. The `ask` entry
+ *   (or `ask_user`, its old name) is the run's ask slot: an `AskHandler` `(request, ctx)`, or an
+ *   `AskTool` `{handler, inputs, required?}` declaring extra inputs a TOOL `ask` may pass. The one
+ *   handler serves the agent's `ask_user` tool, whose model surface is `question` and `options`,
+ *   and the TOOL built-in `ask`; it receives an `AskRequest` and the call's context. `take`,
+ *   `sleep` and `load_skill` are not keys a host may pass. `null` or `undefined` means the global
+ *   registry. To keep the registered tools and add more, pass `{...registeredTools(), ...}`.
  * @param options `context` is the host's app object, passed to tools as `ToolContext.context`. It
  *   is never recorded.
  * @throws {TypeError} `tools` is not a plain object, `null` or `undefined`; a key is empty; an
  *   entry is not a `FunctionTool`, an `McpServer` or an array of `FunctionTool`s; a group item is
- *   an `McpServer` or not a `FunctionTool`; an `McpServer` entry isn't open; or the `ask_user`
- *   entry is not a function.
- * @throws {RangeError} A `FunctionTool` entry's name differs from its key, an `McpServer` entry was
- *   open but has gone away, or a group tool's name is `ask_user` or `load_skill`, is a top-level
- *   key, or names a different tool elsewhere in the groups.
+ *   an `McpServer` or not a `FunctionTool`; an `McpServer` entry isn't open; the ask entry is
+ *   neither a function nor an `AskTool`; or both `ask` and `ask_user` are given.
+ * @throws {RangeError} A key is `take`, `sleep` or `load_skill`; a `FunctionTool` entry's name
+ *   differs from its key; an `McpServer` entry was open but has gone away; an `AskTool` input
+ *   shadows yian's ask surface or a required name isn't an input; or a group tool's name is
+ *   reserved, is a top-level key, or names a different tool elsewhere in the groups.
  *
  * @example
  * const tools = new ToolSet({ toolbox: [weather, forecast] }); // two FunctionTools
@@ -397,6 +530,8 @@ export class ToolSet {
   private boundRunId: string;
   private boundSignal: AbortSignal | undefined;
   private hostContext: unknown;
+  // The full schemas the trusted path checks the ask tools against; any other tool uses its own.
+  private trustedSchemas: ReadonlyMap<string, JsonObject>;
 
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
@@ -404,20 +539,29 @@ export class ToolSet {
     this.boundRunId = "";
     this.boundSignal = undefined;
     this.hostContext = options?.context;
+    this.trustedSchemas = new Map();
     if (tools === undefined || tools === null) return;
     if (!isRecord(tools)) throw new TypeError("tools must be a record of tool id to tool, or null");
     const keys = Object.keys(tools);
+    if (Object.hasOwn(tools, ASK) && Object.hasOwn(tools, ASK_USER)) {
+      throw new TypeError('pass the ask handler once, as tools["ask"] (tools["ask_user"] is its old name)');
+    }
     const built = new Map<string, FunctionTool>();
     const groupItems = new Map<string, readonly FunctionTool[]>();
+    const trusted = new Map<string, JsonObject>();
     for (const key of keys) {
       if (key === "") throw new TypeError("tool ids in tools must be non-empty strings");
       const entry: unknown = tools[key];
-      if (key === ASK_USER) {
-        // A FunctionTool is an object, so this also rejects one.
-        if (typeof entry !== "function") {
-          throw new TypeError(`tools["ask_user"] must be a plain function handler; the engine supplies its schema`);
-        }
-        built.set(key, askUserTool(entry as AskUserHandler));
+      if (key === ASK || key === ASK_USER) {
+        const spec = askToolOf(key, entry);
+        const ask = askTool(spec);
+        built.set(ASK_USER, askUserTool(spec.handler));
+        built.set(ASK, ask);
+        trusted.set(ASK_USER, ASK_USER_TRUSTED_PARAMETERS);
+        const properties = { ...(ask.parametersJsonSchema.properties as JsonObject), ...ASK_TRUSTED_PROPERTIES };
+        trusted.set(ASK, { ...ask.parametersJsonSchema, properties });
+      } else if (RESERVED_TOOL_NAMES.has(key)) {
+        throw new RangeError(`tools[${JSON.stringify(key)}]: the name is reserved by yian: ${reservedReason(key)}`);
       } else if (isFunctionTool(entry)) {
         if (entry.name !== key) {
           throw new RangeError(
@@ -444,11 +588,9 @@ export class ToolSet {
       for (const item of items) {
         const name = item.name;
         if (RESERVED_TOOL_NAMES.has(name)) {
-          const hint =
-            name === ASK_USER
-              ? `pass the handler as the top-level tools["ask_user"] entry`
-              : "granting skills binds it";
-          throw new RangeError(`group ${reprText(group)} has a tool named ${reprText(name)}, a reserved name; ${hint}`);
+          throw new RangeError(
+            `group ${reprText(group)} has a tool named ${reprText(name)}, a reserved name; ${reservedReason(name)}`,
+          );
         }
         if (topLevel.has(name)) {
           throw new RangeError(
@@ -476,16 +618,23 @@ export class ToolSet {
     }
     this.toolMap = built;
     this.groupMap = groups;
+    this.trustedSchemas = trusted;
   }
 
   /**
    * Return this run's tool, or the registry's when the run has no mapping.
    *
-   * `ask_user` never comes from the registry: a run without its own handler cannot ask.
+   * `ask` and `ask_user` never come from the registry: a run without its own handler cannot ask.
+   * `take` and `sleep` are engine built-ins, never tools.
    */
   private lookup(toolId: string): FunctionTool {
-    if (toolId === ASK_USER && !this.toolMap?.has(toolId)) {
-      throw new RangeError(`no ask_user handler for this run; ${ASK_USER_HINT}`);
+    if ((toolId === ASK || toolId === ASK_USER) && !this.toolMap?.has(toolId)) {
+      throw new RangeError(`no ask handler for this run; ${ASK_HINT}`);
+    }
+    if (toolId === TAKE || toolId === SLEEP) {
+      throw new RangeError(
+        `${reprText(toolId)} is an engine built-in, not a tool; reach it with a TOOL node's tool_id: ${toolId}`,
+      );
     }
     if (this.groupMap.has(toolId)) {
       throw new RangeError(`${reprText(toolId)} is a tool group, not a tool; grant it in an AGENT node's tools: list`);
@@ -514,6 +663,7 @@ export class ToolSet {
     bound.boundRunId = runId;
     bound.boundSignal = options?.signal;
     bound.hostContext = this.hostContext;
+    bound.trustedSchemas = this.trustedSchemas;
     return bound;
   }
 
@@ -625,7 +775,7 @@ export class ToolSet {
    * @param inputs Public arguments keyed by parameter name.
    * @param options The calling node, call id, attempt and abort signal the tool's context carries.
    * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
-   *   output, the checked value in host form.
+   *   output, the checked value in host form. A `pending()` marker comes back unchanged, unchecked.
    * @throws {TypeError} The first argument is neither a tool id nor a `CheckedCall`; and as
    *   `validate` throws.
    * @throws {ToolCheckError} A declared result is not a yian value or doesn't fit the output
@@ -653,8 +803,9 @@ export class ToolSet {
   /**
    * Check and call one tool through its full schema, including host-injected fields.
    *
-   * Only `ask_user` has injected fields (`questions`, `answerSchema`, `title`, `nodeId`); every
-   * other tool is checked as `invoke` checks it, its validator included.
+   * Only the ask tools have injected fields: `ask_user` takes `questions`, `answerSchema`, `title`
+   * and `nodeId`, and `ask` takes `answerSchema`, `title`, `nodeId` and `deadline`. Every other tool
+   * is checked as `invoke` checks it, its validator included.
    *
    * @param toolId The id of the tool to call.
    * @param inputs Public and injected arguments keyed by parameter name.
@@ -745,10 +896,10 @@ export class ToolSet {
     const where = `tool ${reprText(toolId)} arguments`;
     const payload = fromHost(inputs, where);
     if (!isRecord(payload)) throw new TypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);
-    const askUser = toolId === ASK_USER;
-    if (askUser && Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
-    const schema = askUser && trusted ? ASK_USER_TRUSTED_PARAMETERS : tool.parametersJsonSchema;
-    checkArguments(toolId, schema, payload, askUser ? (trusted ? "trusted" : "public") : null);
+    if (toolId === ASK_USER && Object.hasOwn(payload, "options")) payload.options = normalizeOptions(payload.options);
+    const schema = trusted ? (this.trustedSchemas.get(toolId) ?? tool.parametersJsonSchema) : tool.parametersJsonSchema;
+    const scope = toolId === ASK || toolId === ASK_USER ? (trusted ? "trusted" : "public") : null;
+    checkArguments(toolId, schema, payload, scope);
     return [tool, payload];
   }
 
@@ -765,7 +916,7 @@ export class ToolSet {
     const node = options.node ?? "";
     const ctx = new ToolContext({
       // Without a run and a node nothing makes two calls the same call, so each gets its own id.
-      callId: options.callId ?? (this.boundRunId && node ? `${this.boundRunId}/${node}` : defaultRunId()),
+      callId: options.callId ?? (this.boundRunId && node ? toolCallId(this.boundRunId, node) : defaultRunId()),
       attempt: options.attempt ?? 1,
       toolName: toolId,
       runId: this.boundRunId,
@@ -780,6 +931,8 @@ export class ToolSet {
       throw asError(error);
     }
     if (result === undefined) result = null;
+    // A pending call has no result yet, so there is nothing to check.
+    if (isPending(result)) return result;
     // `??`: a tool built by an older copy of yian has no output fields.
     const schema = tool.outputJsonSchema ?? null;
     const validator = tool.outputValidator ?? null;
@@ -906,7 +1059,7 @@ function validatorFailure(head: string, issues: ReadonlyArray<StandardIssue>): s
  * extra values are checked against that schema. Missing required keys are rejected, in the
  * schema's `required` order. Each value is checked against the yian type its JSON Schema
  * translates to; a schema with no translation is not checked. `scope` names the invocation path
- * in the unknown-key message (`ask_user` has two).
+ * in the unknown-key message (`ask` and `ask_user` have two).
  *
  * @throws {RangeError} An unknown or missing key.
  * @throws {TypeCheckError} A value doesn't fit its property's translated type.

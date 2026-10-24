@@ -200,8 +200,8 @@ test("test_a_reserved_server_name_is_an_error_naming_the_file", () => {
   const error = loadError([first, second], {}, { reserved: new Set(["ask_user", "load_skill"]) });
 
   expect(error.message).toBe(
-    `${second}: server 'ask_user': the name is reserved (a registered tool, ask_user` +
-      " or load_skill); rename the server",
+    `${second}: server 'ask_user': the name is reserved (a registered tool or a yian built-in: take,` +
+      " sleep, ask, ask_user, load_skill); rename the server",
   );
 });
 

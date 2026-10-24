@@ -35,7 +35,7 @@ import { Parameter } from "../../src/nodes/contracts.ts";
 import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { QuestionSpecError } from "../../src/nodes/human_input/questions.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
-import { type AskUserHandler, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
+import { type AskHandler, type AskRequest, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
 import { engine, graph, rejected } from "./run_state_fixtures.ts";
 
 /** Distinct host failure used to prove exception identity is preserved. */
@@ -49,7 +49,7 @@ class PromptFailed extends Error {
  */
 async function runEngine(
   node: HumanInputNode,
-  handler: AskUserHandler,
+  handler: AskHandler,
   options: { wiring?: Readonly<Record<string, Readonly<Record<string, unknown>>>>; signal?: AbortSignal } = {},
 ) {
   const { wiring, signal } = options;
@@ -82,7 +82,7 @@ function runFailure(events: readonly RunEvent[]): Failure {
 }
 
 test("prompt only returns host answer with trusted metadata", async () => {
-  const requests: AskUserRequest[] = [];
+  const requests: AskRequest[] = [];
   const contexts: ToolContext[] = [];
   const node = new HumanInputNode("ask", {
     prompt: "Approve ${plan}?",
@@ -111,6 +111,9 @@ test("prompt only returns host answer with trusted metadata", async () => {
       answerSchema: [{ name: "answer", type: "str", required: true, enum: ["approve", "revise"] }],
       title: "Plan approval",
       nodeId: "ask",
+      callId: "run-123/ask",
+      deadline: null,
+      extra: {},
     },
   ]);
   expect(contexts.map((ctx) => [ctx.node, ctx.attempt, ctx.callId])).toEqual([["ask", 1, "run-123/ask"]]);
@@ -126,7 +129,7 @@ test("a null answer is an ordinary output", async () => {
 });
 
 test("literal questions are rendered, validated and injected", async () => {
-  const requests: AskUserRequest[] = [];
+  const requests: AskRequest[] = [];
   const node = new HumanInputNode("choose", {
     prompt: "Choose for ${project}",
     questions: [
@@ -166,6 +169,10 @@ test("literal questions are rendered, validated and injected", async () => {
       answerSchema: null,
       title: null,
       nodeId: "choose",
+      // Outside a run each call gets a fresh id.
+      callId: expect.any(String),
+      deadline: null,
+      extra: {},
     },
   ]);
 });

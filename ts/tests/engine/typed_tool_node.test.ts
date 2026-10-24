@@ -540,7 +540,7 @@ test("a tool node naming ask user without a handler fails at run start", async (
 
   const message = await refused(run(ASK_FLOW, {}, { log: path, tools: {} }));
 
-  expect(message).toContain("TOOL node 'ask' names 'ask_user': no ask_user handler for this run");
+  expect(message).toContain("TOOL node 'ask' names 'ask_user': no ask handler for this run");
   expect(existsSync(path)).toBe(false);
 });
 

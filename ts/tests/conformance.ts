@@ -107,7 +107,7 @@ import {
   TransientToolError,
 } from "../src/tools/errors.ts";
 import { tool } from "../src/tools/function_tools.ts";
-import type { AskUserHandler, AskUserRequest, ToolEntry } from "../src/tools/registry.ts";
+import type { AskHandler, AskRequest, ToolEntry } from "../src/tools/registry.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
@@ -1749,13 +1749,18 @@ function snakeCase(name: string): string {
 }
 
 /**
- * Return an `ask_user` request as a case writes its `args`: snake_case keys, each question's
- * too, null fields left out.
+ * Return an ask request as a case writes its `args`: snake_case keys, each question's too, null
+ * fields left out, and the host's extras flattened in. The call id is left out: the call record
+ * already keeps it.
  */
-function askUserArgs(request: AskUserRequest): Case {
+function askUserArgs(request: AskRequest): Case {
   const args: Case = {};
   for (const [key, value] of Object.entries(request)) {
-    if (value === null) continue;
+    if (value === null || key === "callId") continue;
+    if (key === "extra") {
+      for (const [name, item] of Object.entries(value as Case)) args[name] = item;
+      continue;
+    }
     args[snakeCase(key)] =
       key === "questions"
         ? (value as Value[]).map((question) =>
@@ -1876,7 +1881,7 @@ function host(case_: Case, log: string, env: Env): Host {
     tools.push([name, tool({ name, description, parameters, execute, isConcurrencySafe })]);
   }
   if (Object.hasOwn(spec, "human")) {
-    const askUser: AskUserHandler = (request, ctx) =>
+    const askUser: AskHandler = (request, ctx) =>
       call("ask_user", `host.human.${ctx.node}`, ctx, askUserArgs(request));
     tools.push(["ask_user", askUser]);
   }

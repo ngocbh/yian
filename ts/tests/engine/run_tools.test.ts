@@ -54,7 +54,7 @@ import { HumanInputNode } from "../../src/nodes/human_input/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { type AskUserHandler, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
+import { type AskHandler, type AskRequest, ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { engine, graph, rejected, serving, textReply } from "./run_state_fixtures.ts";
@@ -68,7 +68,7 @@ const PING = new FunctionTool({
 });
 
 /** An `ask_user` handler that records each request in `seen` and returns `answer`. */
-function recordingHandler(seen: AskUserRequest[], answer: unknown = null): AskUserHandler {
+function recordingHandler(seen: AskRequest[], answer: unknown = null): AskHandler {
   return (request) => {
     seen.push(request);
     return answer;
@@ -149,18 +149,29 @@ test("flow engine passes its toolset to every tool node", async () => {
 });
 
 test("human input asks the run ask_user handler", async () => {
-  const seen: AskUserRequest[] = [];
+  const seen: AskRequest[] = [];
   const tools = new ToolSet({ ask_user: recordingHandler(seen, "yes") });
   const node = new HumanInputNode("approval", { prompt: "Ship ${plan}?", title: "Gate" });
 
   expect(await node.run({ plan: "v2" }, { tools })).toEqual(new Output("yes"));
   expect(seen).toEqual([
-    { question: "Ship v2?", options: null, questions: null, answerSchema: null, title: "Gate", nodeId: "approval" },
+    {
+      question: "Ship v2?",
+      options: null,
+      questions: null,
+      answerSchema: null,
+      title: "Gate",
+      nodeId: "approval",
+      // Outside a run each call gets a fresh id.
+      callId: expect.any(String),
+      deadline: null,
+      extra: {},
+    },
   ]);
 });
 
 test("eval node gives human input the run toolset", async () => {
-  const seen: AskUserRequest[] = [];
+  const seen: AskRequest[] = [];
   const tools = new ToolSet({ ask_user: recordingHandler(seen, "yes") });
 
   const node = new HumanInputNode("ask", { prompt: "Ready?" });
@@ -220,7 +231,7 @@ function resultContents(model: ScriptedModel): string[] {
 
 test("agent binds and calls granted per-run tools", async () => {
   const model = new ScriptedModel(replies(["shout", { text: "hi" }]), CONFIG);
-  const seen: AskUserRequest[] = [];
+  const seen: AskRequest[] = [];
   const tools = new ToolSet({ shout: upper(), ask_user: recordingHandler(seen) });
 
   const outcome = await runAgentNode(model, ["shout", "ask_user"], tools);
@@ -285,7 +296,7 @@ test("agent binds a tool shared by overlapping groups once", async () => {
 
 test("agent with groups and ask_user asks the top-level handler", async () => {
   const model = new ScriptedModel(replies(["ask_user", { question: "Which?" }], ["a", { text: "go" }]), CONFIG);
-  const seen: AskUserRequest[] = [];
+  const seen: AskRequest[] = [];
   const tools = new ToolSet({ toolbox: [named("a")], ask_user: recordingHandler(seen, "B") });
   const node = new AgentNode("agent", { prompt: "go", llmConfig: CONFIG, tools: ["toolbox", "ask_user"] });
   const flow = graph([node], [

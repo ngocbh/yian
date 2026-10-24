@@ -88,7 +88,7 @@ function loose(tools: unknown): ToolSet {
 describe("registerTool", () => {
   test("test_generic_registration_rejects_reserved_ask_user_id", () => {
     expect(thrown(() => registerTool("ask_user", tool("ask_user")), RangeError)).toBe(
-      "tool id 'ask_user' is reserved; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
+      "tool name 'ask_user' is reserved by yian: pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
     );
     expect(TOOL_REGISTRY.has("ask_user")).toBe(false);
   });
@@ -120,7 +120,7 @@ describe("registerTool", () => {
   test("checks the reserved id before a duplicate, and a duplicate before the target", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user"));
     expect(thrown(() => registerTool("ask_user", tool("ask_user")), RangeError)).toBe(
-      "tool id 'ask_user' is reserved; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
+      "tool name 'ask_user' is reserved by yian: pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
     );
     registerTool("echo", tool("echo"));
     expect(thrown(() => registerTool("echo", null as unknown as FunctionTool), RangeError)).toBe(
@@ -188,13 +188,13 @@ describe("ToolSet construction", () => {
       "a FunctionTool as ask_user",
       { ask_user: tool("ask_user") },
       TypeError,
-      'tools["ask_user"] must be a plain function handler; the engine supplies its schema',
+      'tools["ask_user"] must be a handler function or {handler, inputs, required?}; yian supplies the base schema',
     ],
     [
       "a string as ask_user",
       { ask_user: "ask" },
       TypeError,
-      'tools["ask_user"] must be a plain function handler; the engine supplies its schema',
+      'tools["ask_user"] must be a handler function or {handler, inputs, required?}; yian supplies the base schema',
     ],
     [
       "a FunctionTool under another key",
@@ -224,7 +224,7 @@ describe("ToolSet construction", () => {
       "an ask_user group tool",
       { g: [tool("ask_user")] },
       RangeError,
-      `group 'g' has a tool named 'ask_user', a reserved name; pass the handler as the top-level tools["ask_user"] entry`,
+      "group 'g' has a tool named 'ask_user', a reserved name; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
     ],
     [
       "a load_skill group tool",
@@ -310,6 +310,9 @@ describe("ToolSet construction", () => {
       answerSchema: null,
       title: null,
       nodeId: null,
+      callId: "c",
+      deadline: null,
+      extra: {},
     });
     expect(ctx).toBeInstanceOf(ToolContext);
     expect((ctx as ToolContext).callId).toBe("c");
@@ -323,7 +326,7 @@ describe("ToolSet lookup", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
     for (const tools of [new ToolSet(), new ToolSet({})]) {
       expect(thrown(() => tools.resolve(["ask_user"]), RangeError)).toBe(
-        "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
+        "no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
       );
     }
   });
@@ -406,7 +409,7 @@ describe("ToolSet lookup", () => {
 
   test("toolIds is sorted, from the mapping and its groups", () => {
     const tools = new ToolSet({ b: tool("b"), g: [tool("a"), tool("C")], ask_user: () => null });
-    expect(tools.toolIds).toEqual(["C", "a", "ask_user", "b"]);
+    expect(tools.toolIds).toEqual(["C", "a", "ask", "ask_user", "b"]);
     expect(tools.groups).toEqual(["g"]);
   });
 
@@ -456,7 +459,9 @@ describe("ToolSet.forRun", () => {
 });
 
 describe("ask_user invocation", () => {
-  const NO_FIELDS = { options: null, questions: null, answerSchema: null, title: null, nodeId: null };
+  // An unbound set gives each call a fresh random id.
+  const CALL_FIELDS = { callId: expect.any(String), deadline: null, extra: {} };
+  const NO_FIELDS = { options: null, questions: null, answerSchema: null, title: null, nodeId: null, ...CALL_FIELDS };
 
   test("test_ask_user_public_schema_contains_question_and_options", async () => {
     const seen: AskUserRequest[] = [];
@@ -521,7 +526,7 @@ describe("ask_user invocation", () => {
 
     expect(await tools.invokeTrusted("ask_user", metadata)).toEqual({ decision: true });
 
-    expect(seen).toEqual([{ ...metadata, options: null }]);
+    expect(seen).toEqual([{ ...metadata, options: null, ...CALL_FIELDS }]);
   });
 
   test("test_trusted_invocation_rejects_unknown_metadata", async () => {
@@ -546,7 +551,7 @@ describe("ask_user invocation", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
     for (const tools of [new ToolSet(), new ToolSet({})]) {
       expect(await rejected(tools.invoke("ask_user", { question: "Approve?" }), RangeError)).toBe(
-        "no ask_user handler for this run; pass tools: {...registeredTools(), ask_user: handler} to runFlow or advance",
+        "no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
       );
     }
   });

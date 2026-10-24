@@ -19,6 +19,7 @@
 import { current } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
 import { realScheduler } from "../../platform.ts";
+import { BUILTIN_TOOL_IDS, type BuiltinToolId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError } from "../../tools/errors.ts";
 import { ToolSet } from "../../tools/registry.ts";
 import { jsonSafeText, jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
@@ -141,6 +142,8 @@ export class ToolNode extends Node {
   retries: number;
   /** The proven type of each input's binding; an input whose type is not proven is absent. */
   inputTypes: ReadonlyMap<string, Type>;
+  /** `ask`: the answer schema derived from `output:`, one entry per field; `[]` otherwise. */
+  answerSchema: readonly Readonly<Record<string, unknown>>[];
 
   /**
    * Build a TOOL node.
@@ -150,11 +153,20 @@ export class ToolNode extends Node {
    * @param options.title A display title.
    * @param options.retries How many times a failed call may be retried, at least 0; `null` or
    *   omitted means `current().toolRetries`.
+   * @param options.answerSchema For `ask`, the answer schema; `null` or omitted means `[]`.
    * @throws TypeError when `retries` isn't a safe-integer number or `null`.
    * @throws RangeError when `retries` is negative.
    */
-  constructor(nodeId: string, options: { toolId: string; title?: string | null; retries?: number | null }) {
-    const { toolId, title = null, retries = null } = options;
+  constructor(
+    nodeId: string,
+    options: {
+      toolId: string;
+      title?: string | null;
+      retries?: number | null;
+      answerSchema?: readonly Readonly<Record<string, unknown>>[] | null;
+    },
+  ) {
+    const { toolId, title = null, retries = null, answerSchema = null } = options;
     super(nodeId, { title });
     if (retries !== null) {
       const message = `node ${reprText(nodeId)}: retries must be a non-negative int, got ${valueRepr(retries)}`;
@@ -164,6 +176,15 @@ export class ToolNode extends Node {
     this.toolId = toolId;
     this.retries = retries ?? current().toolRetries;
     this.inputTypes = new Map();
+    this.answerSchema = answerSchema ?? [];
+  }
+
+  /**
+   * The built-in `toolId` names (`take`, `sleep` or `ask`), or `null` for a host tool. A getter, so
+   * it follows a reassigned `toolId` and is never an own field the manifest reads.
+   */
+  get builtin(): BuiltinToolId | null {
+    return BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId) ? (this.toolId as BuiltinToolId) : null;
   }
 
   /** Return this node's tool id, input names, proven input types, and output type. */

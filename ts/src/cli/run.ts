@@ -40,6 +40,7 @@ import { current, type Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { isSystemError, resolvedPath, type Skill, SkillError, statOrNull } from "../skills/catalog.ts";
+import { LOAD_SKILL } from "../skills/tool.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import {
   canonicalTypeLabel,
@@ -81,6 +82,7 @@ import {
   staticNodes,
   updateRunIndex,
 } from "../run.ts";
+import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
 import { McpConnectError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
@@ -1421,7 +1423,7 @@ async function startRun(
       // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
       // broken config file can't block flows that never use MCP. The servers stay unopened here;
       // `openMcpServers` selects the ones the flow needs just before the run.
-      const known = new Set([...Object.keys(registeredTools()), "ask_user", "load_skill"]);
+      const known = new Set([...Object.keys(registeredTools()), ...BUILTIN_TOOL_IDS, ASK_USER, LOAD_SKILL]);
       const [toolIds, grants] = mcpNeededNames(flow);
       let servers: Record<string, McpServer> = {};
       if ([...toolIds, ...grants].some((id) => !known.has(id))) {
@@ -1455,7 +1457,7 @@ async function startRun(
           return await openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
             await writeWarnings();
             try {
-              return await start({ ...registeredTools(), ...selected, ask_user: terminal.askUser });
+              return await start({ ...registeredTools(), ...selected, ask: terminal.askUser });
             } finally {
               // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
               reporter?.stop();

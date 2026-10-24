@@ -679,7 +679,7 @@ output: \${ask.output}
 `);
   const error = await runStartError(flow, { tools: {} });
   expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toStartWith("TOOL node 'ask' names 'ask_user': no ask_user handler for this run");
+  expect(error.message).toStartWith("TOOL node 'ask' names 'ask_user': no ask handler for this run");
 });
 
 test("an input the tool does not take fails at run start", async () => {

@@ -1,12 +1,14 @@
 /**
- * Tool registry seam for TOOL, AGENT, and host-owned human interaction.
+ * Tool registry seam for TOOL and AGENT nodes, the run's ask slot and the pending marker.
  *
  * The core ships no domain tools; a host registers its own `FunctionTool`s with `registerTool`.
  * Model-requested calls use the strict public schema. Host-owned interactions use the trusted
  * path for injected metadata. `ToolSet` holds one run's tools: the global registry, or a host
- * mapping (with its `ask_user` handler) that replaces it. `tools/types` reads a tool's declared
- * argument types as yian types. `tools/context` holds `ToolContext`, the call's identity, the
- * host's app object and the call's abort signal. `tools/function_tools` holds `FunctionTool` (a
+ * mapping (with its `ask` handler, which serves both `ask_user` and the TOOL built-in `ask`) that
+ * replaces it. `tools/types` reads a tool's declared argument types as yian types. `tools/context`
+ * holds `ToolContext`, the call's identity, the host's app object and the call's abort signal; the
+ * built-in ids `take`, `sleep` and `ask`; and `pending()`, the marker a host handler returns when
+ * the answer comes later. `tools/function_tools` holds `FunctionTool` (a
  * tool given as a name, description, JSON Schema and `execute`, with optional Standard Schema
  * validators and an output JSON Schema) and `tool()`, which builds one from a Standard Schema
  * validator or a raw JSON Schema. `tools/errors` holds
@@ -22,7 +24,7 @@
  * Never imports: nodes, compile, compose, runtime, run, or cli.
  */
 
-export { ToolContext } from "./context.ts";
+export { ASK, isPending, pending, type PendingMarker, SLEEP, TAKE, ToolContext } from "./context.ts";
 export {
   isPermanentToolError,
   isReportedToolError,
@@ -59,6 +61,9 @@ export {
   mcpServer,
 } from "./mcp.ts";
 export {
+  type AskHandler,
+  type AskRequest,
+  type AskTool,
   type AskUserHandler,
   type AskUserRequest,
   type CheckedCall,

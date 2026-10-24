@@ -486,7 +486,7 @@ export class Terminal {
   }
 
   /**
-   * The run's ask_user handler (an `AskUserHandler` from tools/registry.ts): asks `request` in one
+   * The run's ask handler (an `AskUserHandler` from tools/registry.ts): asks `request` in one
    * turn and returns the answer. A question set (`questions`, the HUMAN_INPUT node's
    * `QuestionSpec`s) answers a record keyed by header; `options` a single choice; otherwise a
    * free-text prompt. `answerSchema` isn't used.
@@ -496,7 +496,7 @@ export class Terminal {
    * @throws TerminalStopped `"interrupt"` for Ctrl-C, `"eof"` for the end of input (even when the
    *   signal then aborted), `"closed"` when the terminal is closed.
    */
-  // A field, so a host can pass `terminal.askUser` unbound as the `ask_user` handler.
+  // A field, so a host can pass `terminal.askUser` unbound as the `ask` handler.
   readonly askUser = async (request: AskUserRequest, ctx: ToolContext): Promise<unknown> => {
     const signal = ctx.signal;
     const ended = await this.#runTurn(signal, (run) => promptRequest(run, this.#output, request));

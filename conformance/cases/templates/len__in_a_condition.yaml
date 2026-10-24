@@ -1,0 +1,8 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: ${len(xs) > 1}
+values:
+  xs: [1, 2]
+mode: condition
+expect:
+  value: true

@@ -1,0 +1,9 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: len(r)
+values:
+  r: {a: 1}
+expect:
+  raises:
+    class: ExpressionError
+    message: "expression function 'len' failed: len() takes str or list, got record"

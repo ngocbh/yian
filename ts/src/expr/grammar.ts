@@ -13,6 +13,8 @@
  *   `and` / `or` / `not`, `in` / `not in`. A chain of same-precedence operators is one flat
  *   node holding its operator tokens between the operands: `a + b - c` is one `sum`.
  * - List literals (`[1, "x"]`) and parenthesised sub-expressions.
+ * - Subscripts: a list slice `xs[a:b]` after any operand, with either bound omitted
+ *   (`xs[1:]`, `xs[:-1]`, `xs[:]`) and no step or index.
  * - Pure builtin calls (`upper(name)`, `join(items, ", ")`), with dotted access on the result
  *   (`fn(x).field`), keyword arguments (`f(a=1)`), constructor calls `T(x)` / `T(a=...)`, and
  *   the `isinstance(x, T)` special form, all parsed alike.
@@ -37,6 +39,10 @@
  * - `+ -`, `* / %`: `sum`, `product`, flat, with `ADD_OP` / `MUL_OP` tokens between the operands.
  * - Unary `-x`: `neg[x]`, no token.
  * - `**`: `power`, flat, with `POW_OP` tokens between the operands.
+ * - A postfix subscript `x[a:b]`: `subscript[x, slice[a, b]]`, where an omitted bound is
+ *   `omitted[]`. It binds tighter than unary minus and `**`, as Python's primary does:
+ *   `-xs[1:]` is `neg[subscript]`. It counts one nesting level, like a call; `slice` and
+ *   `omitted` add none.
  *
  * A chain of one level is one node, and author parentheses start a new one. A level with one
  * operand makes no node and parentheses make none, so a lone literal is a bare `Token`. The
@@ -62,12 +68,17 @@
  * operator. After a `.` every keyword is a plain field name (`record.output.in`, `x.inf`).
  * The post-parse checks reject the operator words as reference roots.
  *
+ * The colon rule: where the nearest enclosing bracket is a subscript's `[` (pending operators and
+ * prefixes don't count), the lexer tries `:` before `:-` and `:?`, so `xs[a:-b]` and
+ * `xs[n - 1:-1]` are slices. Inside parentheses, a call or a list within a bound, `:-` and `:?`
+ * are the escapes as elsewhere, so a default in a bound is written `xs[(n :- 0):]`.
+ *
  * ## Why the parser is iterative
  *
  * Expressions nest deeply (thousands of parentheses must parse, and thousands of nested
  * prefixes or calls must fail with the nesting message), which a recursive parser would turn
- * into a stack overflow. The parser keeps its pending groups, lists, calls and operators on an
- * explicit stack instead.
+ * into a stack overflow. The parser keeps its pending groups, lists, calls, subscripts and
+ * operators on an explicit stack instead.
  */
 
 import { current } from "../defaults.ts";
@@ -201,18 +212,21 @@ const VBAR = punctuation("|");
 const MINUS = punctuation("-");
 const DEFAULT = punctuation(":-");
 const REQUIRED = punctuation(":?");
+const COLON = punctuation(":");
 
 // Where an operand is expected. The first match wins, so the keywords beat NAME.
 const OPERAND: readonly Terminal[] = [LPAR, LSQB, MINUS, NOT, BOOL, NULL, INF, NAME, NUMBER, STRING];
 const OPERAND_WITHOUT_NOT = OPERAND.filter((t) => t !== NOT);
 // After an operand. NOT_IN before IN and `**` before `*`.
 const OPERATOR: readonly Terminal[] = [
-  NOT_IN, IN, AND, OR, VBAR, DEFAULT, REQUIRED, POW_OP, MUL_OP, ADD_OP, COMP_OP, RPAR, RSQB, COMMA,
+  NOT_IN, IN, AND, OR, VBAR, DEFAULT, REQUIRED, POW_OP, MUL_OP, ADD_OP, COMP_OP, RPAR, RSQB, COMMA, LSQB,
 ];
+// After an operand directly inside a subscript's brackets, where `:` ends a bound before `:-`/`:?`.
+const OPERATOR_IN_SLICE: readonly Terminal[] = [COLON, ...OPERATOR];
 // Every terminal, to name what a parse error met.
 const ALL: readonly Terminal[] = [
   NOT_IN, NOT, IN, AND, OR, BOOL, NULL, INF, NAME, NUMBER, STRING, POW_OP, MUL_OP, ADD_OP, COMP_OP,
-  DOT, COMMA, LPAR, RPAR, LSQB, RSQB, EQUAL, VBAR, DEFAULT, REQUIRED,
+  DOT, COMMA, LPAR, RPAR, LSQB, RSQB, EQUAL, VBAR, DEFAULT, REQUIRED, COLON,
 ];
 
 const WHITESPACE = /[ \t\f\r\n]+/y;
@@ -269,6 +283,12 @@ class Cursor {
     return true;
   }
 
+  /** Skip whitespace and return whether `literal` comes next, without consuming it. */
+  peek(literal: string): boolean {
+    this.skip();
+    return this.text.startsWith(literal, this.pos);
+  }
+
   /** Skip whitespace and consume a keyword argument's `=` (not `==`) if it comes next. */
   acceptLabel(): boolean {
     this.skip();
@@ -277,15 +297,12 @@ class Cursor {
     return true;
   }
 
-  /** Throw a `ParseError` naming what is at `pos` and its line and column. */
-  fail(pos: number): never {
+  /**
+   * Throw a `ParseError` with `message`, or else naming what is at `pos`, and the line and column
+   * of `pos`.
+   */
+  fail(pos: number, message?: string): never {
     const { text } = this;
-    let what = "end of expression";
-    if (pos < text.length) {
-      const token = lexAt(text, pos, ALL);
-      const ch = String.fromCodePoint(text.codePointAt(pos)!);
-      what = token ? reprText(token.value) : `character ${reprText(ch)}`;
-    }
     // Lines break at LF, CRLF and CR; columns count UTF-16 code units from 1.
     let line = 1;
     let lineStart = 0;
@@ -295,7 +312,15 @@ class Cursor {
         lineStart = i + 1;
       }
     }
-    throw new ParseError(`unexpected ${what} at line ${line}, column ${pos - lineStart + 1}`);
+    const where = `at line ${line}, column ${pos - lineStart + 1}`;
+    if (message !== undefined) throw new ParseError(`${message} ${where}`);
+    let what = "end of expression";
+    if (pos < text.length) {
+      const token = lexAt(text, pos, ALL);
+      const ch = String.fromCodePoint(text.codePointAt(pos)!);
+      what = token ? reprText(token.value) : `character ${reprText(ch)}`;
+    }
+    throw new ParseError(`unexpected ${what} ${where}`);
   }
 }
 
@@ -305,11 +330,36 @@ type Frame =
   | { kind: "list"; items: ExprNode[] }
   | { kind: "call"; children: ExprNode[]; args: Tree[]; label: Token | null }
   | { kind: "prefix"; level: typeof LEVEL.NOT | typeof LEVEL.UNARY; token: Token }
+  // `lower` is null until the slice's colon is read; `open` is the offset of the `[`.
+  | { kind: "subscript"; base: ExprNode; lower: ExprNode | null; open: number }
   // Waiting for its next operand, so `operands` is as long as `ops`.
   | { kind: "chain"; level: Level; operands: ExprNode[]; ops: Token[] };
 
 type ChainFrame = Extract<Frame, { kind: "chain" }>;
 type CallFrame = Extract<Frame, { kind: "call" }>;
+type SubscriptFrame = Extract<Frame, { kind: "subscript" }>;
+
+/** A new tree for an omitted slice bound. */
+const omitted = (): Tree => new Tree("omitted", []);
+
+const SLICE_REQUIRED = "inside a slice, `:` ends a bound; write `(a :? b)` for a required value";
+const SLICE_STEP = "slices take no step; for a default in a bound, use parentheses: `xs[(n :- 0):]`";
+const SLICE_INDEX = "indexing `xs[i]` is not supported; `xs[i:i + 1]` gives a one-item list";
+
+/**
+ * Read what may follow a slice's colon: the closing `]`, completing `frame` with no upper bound,
+ * or else nothing (the upper bound follows).
+ *
+ * @returns The finished subscript, or null when an upper bound follows.
+ */
+function afterColon(cursor: Cursor, stack: Frame[], frame: SubscriptFrame): Tree | null {
+  // `:?` and `::` lex as `:` here, so name what the author likely meant.
+  if (cursor.peek("?")) cursor.fail(cursor.pos, SLICE_REQUIRED);
+  if (cursor.peek(":")) cursor.fail(cursor.pos, SLICE_STEP);
+  if (!cursor.accept("]")) return null;
+  stack.pop();
+  return subscriptTree(frame, omitted());
+}
 
 /** The precedence level of each binary operator, by token type. */
 const OPERATOR_LEVEL: Readonly<Record<string, Level>> = {
@@ -372,6 +422,11 @@ function finishCall(cursor: Cursor, call: CallFrame): Tree {
   return new Tree("refcall", call.children);
 }
 
+/** Build the tree of a complete subscript whose lower bound is read. */
+function subscriptTree(frame: SubscriptFrame, upper: ExprNode): Tree {
+  return new Tree("subscript", [frame.base, new Tree("slice", [frame.lower!, upper])]);
+}
+
 /** Add `value`, under the pending label if any, as `call`'s next argument. */
 function addArg(call: CallFrame, value: ExprNode): void {
   call.args.push(new Tree("arg", call.label ? [call.label, value] : [value]));
@@ -392,6 +447,11 @@ function reduce(stack: Frame[], value: ExprNode, level: Level | 0): ExprNode {
       value = top.level === LEVEL.NOT ? new Tree("negate", [top.token, value]) : new Tree("neg", [value]);
     }
   }
+}
+
+/** Return the top-most frame on `stack` that opened a bracket (not a pending prefix or chain). */
+function nearestBracket(stack: Frame[]): Frame | undefined {
+  return stack.findLast((frame) => frame.kind !== "prefix" && frame.kind !== "chain");
 }
 
 /** Parse `text` into a tree, or throw a `ParseError`; no post-parse checks. */
@@ -449,7 +509,29 @@ function parseRaw(text: string): ExprNode {
       if (stack.length === 0) return value;
       cursor.fail(text.length);
     }
-    const token = cursor.next(OPERATOR);
+    // Scan for the nearest bracket only when a colon is next: a scan per operator would make a
+    // long chain of pending prefixes quadratic.
+    const inSlice = cursor.peek(":") && nearestBracket(stack)?.kind === "subscript";
+    const token = cursor.next(inSlice ? OPERATOR_IN_SLICE : OPERATOR);
+    if (token.type === "[") {
+      // Before any reduce, so the subscript binds to the bare operand, tighter than `-` and `**`.
+      const frame: SubscriptFrame = { kind: "subscript", base: value, lower: null, open: token.startPos };
+      stack.push(frame);
+      value = null;
+      if (cursor.accept(":")) {
+        frame.lower = omitted();
+        value = afterColon(cursor, stack, frame);
+      }
+      continue;
+    }
+    if (token.type === ":") {
+      value = reduce(stack, value, 0);
+      const frame = stack.at(-1) as SubscriptFrame;
+      if (frame.lower !== null) cursor.fail(token.startPos, SLICE_STEP);
+      frame.lower = value;
+      value = afterColon(cursor, stack, frame);
+      continue;
+    }
     const level = OPERATOR_LEVEL[token.type];
     if (level !== undefined) {
       value = reduce(stack, value, level);
@@ -473,6 +555,10 @@ function parseRaw(text: string): ExprNode {
       stack.pop();
       addArg(frame, value);
       value = finishCall(cursor, frame);
+    } else if (token.type === "]" && frame?.kind === "subscript") {
+      if (frame.lower === null) cursor.fail(frame.open, SLICE_INDEX);
+      stack.pop();
+      value = subscriptTree(frame, value);
     } else if (token.type === "]" && frame?.kind === "list") {
       stack.pop();
       frame.items.push(value);
@@ -649,15 +735,15 @@ export function rejectNestedSpans(text: string, { inSpan = false }: { inSpan?: b
 }
 
 // Parse nodes that only group the parts of a reference or call; they add no level.
-const WRAPPER_NODES: ReadonlySet<string> = new Set(["trailer", "call_suffix", "arg"]);
+const WRAPPER_NODES: ReadonlySet<string> = new Set(["trailer", "call_suffix", "arg", "slice", "omitted"]);
 
 /**
  * Throw if a parsed expression nests deeper than the value nesting limit.
  *
  * An expression nests no deeper than a value, so one limit, `current().maxValueNesting`, bounds
  * both. Each operator chain (`sum`, `product`, `power`, `and_expr`, `or_expr`), unary operator,
- * comparison, escape (`|`, `:-`, `:?`), list literal, and call is one level; a plain reference
- * and the parts of a reference or call add none, and parentheses make no node.
+ * comparison, escape (`|`, `:-`, `:?`), list literal, call and subscript is one level; a plain
+ * reference and the parts of a reference, call or slice add none, and parentheses make no node.
  *
  * @throws {ExpressionError} If any path from the root passes more than the limit.
  */
@@ -812,7 +898,8 @@ function rejectReservedReferenceRoots(tree: ExprNode): void {
  *   `STRING`, `BOOL`, `NULL` or `INF`) comes back as a bare `Token`, since a level with one
  *   operand makes no node.
  * @throws {ExpressionError} If `text` holds a `${...}` (see `rejectNestedSpans`), does not parse
- *   (`could not parse expression '<text>': unexpected <what> at line L, column C`), nests deeper
+ *   (`could not parse expression '<text>': unexpected <what> at line L, column C`, or a slice's
+ *   step, index or `:?` with the fix in place of `unexpected <what>`), nests deeper
  *   than `current().maxValueNesting` levels, holds a float literal outside the double range, is a
  *   dotted-callee builtin call, calls `isinstance` with anything but a value and a bare type
  *   name, repeats a keyword argument, or uses a reserved operator word as a reference root.

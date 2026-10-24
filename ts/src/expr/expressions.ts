@@ -868,6 +868,8 @@ class EvalExpr {
         return this.neg(node);
       case "list_lit":
         return this.listLit(node);
+      case "subscript":
+        return this.subscript(node);
     }
     throw new ExpressionError(`unsupported expression node ${reprText(node.data)}`);
   }
@@ -985,6 +987,53 @@ class EvalExpr {
       return MISSING;
     }
     return resolved as Value;
+  }
+
+  /**
+   * `base[lower:upper]` on a list, as Python's `slice.indices` with step 1: an omitted lower is 0
+   * and an omitted upper the length, a negative bound counts from the end, and both clamp to
+   * `[0, n]`. A null or missing base is a miss, as a `.field` on null is, and its bounds aren't
+   * read. When tracing, the route is a `list` of the base route projected to each kept index.
+   *
+   * @throws {ExpressionError} If a bound is null or not an int (a bool counts as 0 or 1), or the
+   *   base is not a list.
+   */
+  subscript(node: Tree): Walked {
+    const [baseNode, slice] = node.children as [ExprNode, Tree];
+    const base = this.walk(baseNode);
+    // A miss before the bounds are read, so `xs[n:] :- []` falls back whatever the bounds are.
+    if (base === MISSING || base === null) return MISSING;
+    const baseRoute = this.#trace ? this.#lastRoute! : null;
+    const lower = this.sliceBound(slice.children[0]!);
+    const upper = this.sliceBound(slice.children[1]!);
+    if (!Array.isArray(base)) throw new ExpressionError(`slicing takes a list, got ${kindName(base)}`);
+    const n = BigInt(base.length);
+    const clamp = (bound: bigint | null, fallback: bigint): number => {
+      let at = bound ?? fallback;
+      if (at < 0n) at += n;
+      return Number(at < 0n ? 0n : at > n ? n : at);
+    };
+    const start = clamp(lower, 0n);
+    const stop = Math.max(start, clamp(upper, n));
+    if (baseRoute !== null) {
+      // Each kept item is its base item, so feedback on it reaches that item.
+      const children = Array.from({ length: stop - start }, (_, k) => baseRoute.project([start + k]));
+      this.#frames.at(-1)!.route = new ValueRoute("list", {
+        children,
+        expression: "[" + children.map((child) => child.expression).join(", ") + "]",
+      });
+    }
+    return base.slice(start, stop);
+  }
+
+  /** One slice bound: `null` when omitted, else its int (a bool as 0 or 1). */
+  sliceBound(node: ExprNode): bigint | null {
+    if (node instanceof Tree && node.data === "omitted") return null;
+    const value = EvalExpr.orNone(this.walk(node));
+    if (value === null) throw new ExpressionError("slice bound is null; omit it to mean the end");
+    if (typeof value === "boolean") return value ? 1n : 0n;
+    if (typeof value !== "bigint") throw new ExpressionError(`slice bounds take int, got ${kindName(value)}`);
+    return value;
   }
 
   /**
@@ -1292,7 +1341,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *
  * The one evaluator for every `${...}` construct: references (bare, dotted, `item`-scoped),
  * arithmetic and comparisons over values (so text + text and list + list concatenate), boolean
- * combinators, list literals, and coalesce / default / required. The operators follow the TS
+ * combinators, list literals, list slices (`xs[a:b]`, as Python's with step 1; a slice of a
+ * miss or `null` is a miss), and coalesce / default / required. The operators follow the TS
  * number model: an int is a `bigint` at any size, a bool counts as 0 or 1, `/` always gives a
  * float, and a float result is IEEE's (`Infinity` is a value, NaN an error).
  *
@@ -1322,7 +1372,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * @throws {ExpressionError} On an unsupported node, a call to an unknown function or one that
  *   fails, an `isinstance` type absent from `types`, arithmetic or ordering over operand kinds
  *   the operator doesn't take (`null` included), a zero divisor, a NaN result, an int too large
- *   for the runtime, or a strict-mode miss.
+ *   for the runtime, a slice of anything but a list or with a bound that is null or not an int,
+ *   or a strict-mode miss.
  * @throws {TypeError} When a traced resolver doesn't return a `ResolvedValue`.
  */
 export function evalExpr(

@@ -9,7 +9,7 @@
  * doesn't return `ResolvedValue`, interpolation spans counting code points (also in
  * `validateRoute`), frozen routed feedback, `sourceKey`, `sameSource` (separately built sources with
  * the same key), and `sameFeedback` (true for separately built equal values, false for each kind of
- * difference). Python's
+ * difference), a slice's `list` route of projected base items, and `len`'s `opaque` route. Python's
  * `test_routes_are_immutable_serializable_and_keep_opaque_snapshots` is split in two: `routes are
  * immutable and serializable` (hand-built) and `routes keep opaque snapshots` (through a traced
  * binding).
@@ -1213,4 +1213,22 @@ test("a traced resolver must return ResolvedValue", () => {
   const error = thrown(() => evalExpr(parseExpr("a"), resolve, { trace: true }));
   expect(error).toBeInstanceOf(TypeError);
   expect((error as Error).message).toBe("a traced resolver must return ResolvedValue");
+});
+
+test("a slice route projects each kept item of its base", () => {
+  const sources = new Sources({ producer: { tags: ["a", "b", "c"] } });
+  const producer = sources.identities.producer!;
+  const result = sources.evaluate("producer.tags[1:]");
+  expect(result.value).toEqual(["b", "c"]);
+  expect(result.route.kind).toBe("list");
+  expect(result.route.children.map((child) => [child.kind, child.source?.path])).toEqual([
+    ["source", ["tags", 1]],
+    ["source", ["tags", 2]],
+  ]);
+  expect(messages(sources.feedback(result, [null, "Bad."]))).toEqual([[producer, { tags: [null, null, "Bad."] }]]);
+});
+
+test("len records an opaque route", () => {
+  const sources = new Sources({ producer: { tags: ["a"] } });
+  expect(sources.evaluate("len(producer.tags)").route.kind).toBe("opaque");
 });

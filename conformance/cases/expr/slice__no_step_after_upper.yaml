@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: "xs[1:2:1]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression 'xs[1:2:1]': slices take no step; for a default in a bound, use parentheses: `xs[(n :- 0):]` at line 1, column 7"

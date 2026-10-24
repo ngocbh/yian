@@ -1,0 +1,9 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: len(n)
+values:
+  n: null
+expect:
+  raises:
+    class: ExpressionError
+    message: "expression function 'len' failed: len() got null; give a default, e.g. `len(x :- [])`"

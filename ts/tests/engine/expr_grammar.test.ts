@@ -7,6 +7,9 @@
  * limit, float overflow and the order the checks run in; and the `${...}` helpers: a nested
  * span's error and rewrite, `findSpanEnd` and `wholeSpanInterior`; and the `scanTemplate` halves
  * of the reserved-keyword tests.
+ *
+ * TS-only: subscripts (list slices), their tree, how tightly they bind, and the colon rule inside
+ * a subscript's brackets.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -773,5 +776,85 @@ describe("span helpers", () => {
     expect(wholeSpanInterior("${a} > ${b}")).toBeNull();
     expect(wholeSpanInterior("a")).toBeNull();
     expect(wholeSpanInterior("${a")).toBeNull();
+  });
+});
+
+describe("subscripts", () => {
+  const omitted = () => new Tree("omitted", []);
+  const sub = (base: ExprNode, lower: ExprNode, upper: ExprNode) =>
+    new Tree("subscript", [base, new Tree("slice", [lower, upper])]);
+  /** The rule name of `node`, or its token type. */
+  const kindOf = (node: ExprNode) => (node instanceof Tree ? node.data : node.type);
+  /** The `slice` of the subscript `text` parses to. */
+  const sliceOf = (text: string) => {
+    const result = tree(text);
+    expect(result.data).toBe("subscript");
+    return result.children[1] as Tree;
+  };
+
+  test.each([
+    ["xs[1:]", sub(ref("xs"), num("1"), omitted())],
+    ["xs[:-1]", sub(ref("xs"), omitted(), new Tree("neg", [num("1")]))],
+    ["xs[:]", sub(ref("xs"), omitted(), omitted())],
+    ["xs[a :- b]", sub(ref("xs"), ref("a"), new Tree("neg", [ref("b")]))],
+  ])("%s parses as a slice", (text, expected) => expect(parsed(text)).toEqual(plain(expected)));
+
+  test("a subscript of a subscript", () => {
+    const result = tree("xs[1:][:1]");
+    expect(result.data).toBe("subscript");
+    expect(kindOf(result.children[0]!)).toBe("subscript");
+  });
+
+  test("a subscript binds tighter than unary minus and **", () => {
+    const negated = tree("-xs[1:]");
+    expect(negated.data).toBe("neg");
+    expect(negated.children.map(kindOf)).toEqual(["subscript"]);
+    const power = tree("xs[1:] ** 2");
+    expect(power.data).toBe("power");
+    expect(power.children.map(kindOf)).toEqual(["subscript", "POW_OP", "NUMBER"]);
+  });
+
+  test.each([
+    ["xs[n - 1:-1]", "sum"],
+    ["xs[a * 2:-b]", "product"],
+  ])("in %s a pending operator doesn't hide the slice's colon", (text, lower) => {
+    expect(sliceOf(text).children.map(kindOf)).toEqual([lower, "neg"]);
+  });
+
+  test("inside parentheses or a list, :- is still a default", () => {
+    expect(sliceOf("xs[(n :- 0):]").children.map(kindOf)).toEqual(["default_expr", "omitted"]);
+    const list = tree("[n :- 0]");
+    expect(list.data).toBe("list_lit");
+    expect(list.children.map(kindOf)).toEqual(["default_expr"]);
+  });
+
+  test("a long chain of prefixes parses in linear time", () => {
+    // Each `-` stays a pending frame, so a parse that scanned the stack per operator would be
+    // quadratic. Compare 8x the terms against the fastest of three runs each, which keeps the
+    // check about growth, not about the machine's speed.
+    const fastest = (terms: number) => {
+      const text = Array(terms).fill("-a").join(" ** ");
+      let best = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const start = performance.now();
+        expect(() => parseExpr(text)).toThrow("expression nests deeper than");
+        best = Math.min(best, performance.now() - start);
+      }
+      return best;
+    };
+    const small = fastest(4096);
+    // Linear growth gives about 8x; quadratic gives about 64x.
+    expect(fastest(32768) / Math.max(small, 1)).toBeLessThan(24);
+  });
+
+  test.each([
+    ["f(x)[1:]", "refcall"],
+    ["(xs + ys)[1:]", "sum"],
+    ["[1, 2, 3][1:]", "list_lit"],
+  ])("%s subscripts any operand", (text, base) => {
+    const result = tree(text);
+    expect(result.data).toBe("subscript");
+    expect(kindOf(result.children[0]!)).toBe(base);
+    if (base === "refcall") expect((result.children[0] as Tree).children.map(kindOf)).toContain("call_suffix");
   });
 });

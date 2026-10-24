@@ -178,9 +178,9 @@ A local name is typed by its binding: a typed binding by its declared type (plus
 inferred type when that fits, e.g. a case branch's member or a literal tag), a literal by
 its value, else the inferred type. So a CALL input can't read a field only the child's
 declared input has, and a LOOP's carried name may read a field the seed or the body's
-returned type has. Every shipped builtin returns text, so `${upper(x).f}` is a load error
-(`reads field 'f' on type str, which has no fields`); a host-registered builtin's result
-isn't checked.
+returned type has. Every shipped builtin but `len` returns text (`len` returns `int`), so
+`${upper(x).f}` and `${len(x).f}` are load errors (`reads field 'f' on type str, which has no
+fields`, and `on type int` for `len`); a host-registered builtin's result isn't checked.
 
 On a `Union(...)`, a field every member has reads anywhere (one type if the members
 agree, the merged `Literal` if every member's field is a string `Literal`, else

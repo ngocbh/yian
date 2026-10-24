@@ -1,0 +1,8 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+expr: "xs[1.0:]"
+values: {xs: [1, 2, 3, 4], ys: [5], a: 1, b: 1, m: 2, n: null, s: abc}
+expect:
+  raises:
+    class: ExpressionError
+    message: "slice bounds take int, got float"

@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: len() and list slicing (#1086)"
+# The base misses, so its bounds aren't read and the default applies.
+expr: "gone['a':] :- [0]"
+expect:
+  value: [0]

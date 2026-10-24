@@ -1,0 +1,42 @@
+kind: load
+python_skip: "TS-only: len() and list slicing (#1086)"
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+    xs: !list(int)
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: maybe
+      else: rejected
+    maybe:
+      kind: code
+      output: list(int)
+      code: |
+        return [1, 2]
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    use:
+      kind: code
+      output: list(int)
+      input:
+        q: ${(maybe.output[1:] :- null) + input.xs}
+      code: |
+        return inputs["q"]
+  output:
+    u: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''use'' input ''q'': ${(maybe.output[1:] :- null) + input.xs} does arithmetic on (maybe.output :- null), which is null when node ''maybe'' is skipped; give it a default with :-, e.g. (maybe.output :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [27, 10, 27, 50]

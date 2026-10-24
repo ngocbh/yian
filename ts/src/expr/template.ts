@@ -30,7 +30,8 @@
  *
  * This module also owns the strict AGENT prompt renderer (`renderTemplateRecord`)
  * and its compile-time companion (`promptRefs`), which lists the inputs a prompt reads and
- * rejects a call to anything but a formatting builtin. A prompt is not a binding (it reads inputs
+ * rejects a call to anything but a formatting builtin (every builtin but the shipped `len`, which
+ * computes a value and belongs in an input binding). A prompt is not a binding (it reads inputs
  * already bound to its node and mints no edge), but it is a `${...}` template and reuses this
  * scanner, so it lives here rather than in `expressions.ts`.
  *
@@ -46,9 +47,9 @@
  * Knows about: `expressions` (the evaluator, `ResolveMode`, `exprRefs`, `rewriteExprRefs`,
  * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`,
  * `ExpressionError`, `EvalOptions`, `TraceOptions`), `lineage` (`ValueRoute`, `ResolvedValue`,
- * `TracedValue`), `builtins` (`TEMPLATE_FNS`), `grammar` (`parseExpr`, `findSpanEnd`,
- * `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`, `ExprNode`, `Token`,
- * `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`,
+ * `TracedValue`), `builtins` (`TEMPLATE_FNS`, `isNonPromptBuiltin`), `grammar` (`parseExpr`,
+ * `findSpanEnd`, `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`,
+ * `ExprNode`, `Token`, `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`,
  * `compareCodeUnits`). Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool
  * (pool-agnostic via `resolve`).
  */
@@ -56,7 +57,7 @@
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import type { Value, ValueRecord } from "../typesys/index.ts";
 import { writeAsText } from "../typesys/values.ts";
-import { TEMPLATE_FNS } from "./builtins.ts";
+import { isNonPromptBuiltin, TEMPLATE_FNS } from "./builtins.ts";
 import {
   checkCalls,
   conversionHint,
@@ -671,8 +672,8 @@ export function renderTemplateRecord(text: string, record: ValueRecord): string 
  *
  * The compile-time companion to `renderTemplateRecord`, which compose uses to check a prompt's
  * names. Also rejects, so a bad prompt fails at load rather than at render: a callee that is no
- * `TEMPLATE_FNS` builtin, `isinstance` (a prompt has no type table), and a builtin called with
- * arguments it doesn't take.
+ * formatting builtin (one not in `TEMPLATE_FNS`, or the shipped `len`, which computes),
+ * `isinstance` (a prompt has no type table), and a builtin called with arguments it doesn't take.
  *
  * @param text The prompt template.
  * @returns Each plain-span path and each builtin-call argument path, in source order (not
@@ -716,16 +717,20 @@ function callCallees(tree: ExprNode): string[] {
  * Throw if a call in a scanned prompt span names anything but a formatting builtin.
  *
  * The compile-time mirror of the render-time unknown-function error, so compose rejects it
- * without evaluating. `isinstance` and `T(...)` constructors are rejected too: prompt builtins
- * only format, and a prompt has no type table.
+ * without evaluating. `isinstance`, `T(...)` constructors and the shipped `len`
+ * (`isNonPromptBuiltin`) are rejected too: prompt builtins only format (a value is computed in an
+ * input binding), and a prompt has no type table.
  */
 function rejectUnknownPromptBuiltin(tree: ExprNode): void {
   if (callCallees(tree).includes(ISINSTANCE)) {
     throw new ExpressionError("isinstance is not a prompt function; compute it in an input binding");
   }
-  const bad = callCalleesAbsentFromBuiltins(tree);
+  const bad = callCallees(tree).filter((callee) => isConstructorCallee(callee) || isNonPromptBuiltin(callee));
   if (bad.length > 0) {
-    const builtins = [...TEMPLATE_FNS.keys()].sort(compareCodeUnits).join(", ");
+    const builtins = [...TEMPLATE_FNS.keys()]
+      .filter((name) => !isNonPromptBuiltin(name))
+      .sort(compareCodeUnits)
+      .join(", ");
     const hint =
       conversionHint(bad[0]!) ||
       `; prompts call only formatting builtins (${builtins}); ` +

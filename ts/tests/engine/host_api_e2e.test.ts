@@ -10,8 +10,8 @@ import { join } from "node:path";
 
 import { START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { advance, close, foldRunLog, runFlow, send } from "../../src/run.ts";
-import { PoolCommitRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import { advance, cancel, close, complete, foldRunLog, pendingCalls, runFlow, send } from "../../src/run.ts";
+import { PoolCommitRecord, readRunLog, RunCancelledRecord, RunStartedRecord } from "../../src/runtime/log.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { handClock } from "./inbox_fixtures.ts";
@@ -224,4 +224,91 @@ test("YAML: an unanswered ask with a required answer type fails with tool.timeou
   expect((await runFlow(flow, {}, { log, env, tools, scheduler: handClock(T0) })).status).toBe("waiting");
   const advanced = await advance({ log, env, tools, scheduler: handClock(T0 + 2000) });
   expect([advanced.status, advanced.failure?.code]).toEqual(["failed", "tool.timeout"]);
+});
+
+const DRAIN = `id: drain
+name: drain
+input:
+  m: !Inbox(str)
+defs:
+  turn:
+    input:
+      seen: !list(str)
+      closed: !bool
+      m: !Inbox(str)
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.m}
+          take: one
+    output:
+      seen: \${input.seen + heard.output.events}
+      closed: \${heard.output.closed}
+nodes:
+  drain:
+    kind: loop
+    call: turn
+    input:
+      seen: []
+      closed: false
+      m: \${input.m}
+    while: "not closed"
+output: \${drain.output.seen}
+`;
+
+test("YAML: after close, takes drain what was sent, then read closed", async () => {
+  const log = freshLog();
+  expect((await runFlow(await loadFlow(DRAIN), {}, { log, env })).status).toBe("waiting");
+  await send(log, "m", "a", { env });
+  await send(log, "m", "b", { env });
+  await close(log, "m", { env });
+  const done = await advance({ log, env });
+  expect([done.status, done.output]).toEqual(["succeeded", ["a", "b"]]);
+});
+
+const ASK = `id: approve
+name: approve
+nodes:
+  lead:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: Approve this plan?
+      timeout: 1h
+output: \${lead.output}
+`;
+
+test("YAML: a host rebuilds its open ask from pendingCalls and completes it", async () => {
+  const log = freshLog();
+  const tools = { ask: () => pending() };
+  const started = await runFlow(await loadFlow(ASK), {}, { log, env, tools, scheduler: handClock(T0) });
+  expect(started.status).toBe("waiting");
+  const [call, ...rest] = pendingCalls(log);
+  expect(rest).toEqual([]);
+  expect(call).toEqual({
+    callId: `${started.runId}/lead`,
+    node: "lead",
+    tool: "ask",
+    arguments: expect.objectContaining({ prompt: "Approve this plan?" }),
+    pendingSeq: expect.any(Number),
+    deadline: "2026-10-24T10:00:00.000Z",
+  });
+  expect(readRunLog(log)[call!.pendingSeq]!.kind).toBe("node_step");
+  expect(typeof (await complete(log, call!.callId, { output: "yes" }, { env }))).toBe("number");
+  expect(pendingCalls(log)).toEqual([]);
+  const done = await advance({ log, env, tools, scheduler: handClock(T0) });
+  expect([done.status, done.output]).toEqual(["succeeded", "yes"]);
+});
+
+test("YAML: cancel closes the open ask and ends the run", async () => {
+  const log = freshLog();
+  const tools = { ask: () => pending() };
+  expect((await runFlow(await loadFlow(ASK), {}, { log, env, tools, scheduler: handClock(T0) })).status).toBe("waiting");
+  const open = pendingCalls(log);
+  expect(await cancel(log, { env })).toEqual(open);
+  expect(readRunLog(log).at(-1)!.record).toBeInstanceOf(RunCancelledRecord);
+  expect(pendingCalls(log)).toEqual([]);
+  expect((await advance({ log, env, tools })).status).toBe("cancelled");
 });

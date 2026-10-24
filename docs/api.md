@@ -553,6 +553,13 @@ The call id depends on who calls the tool:
   Each LOOP iteration and MAP item has its own expanded node id, so its own call
   id. A resumed run re-runs an interrupted TOOL node under the same call id.
 - A HUMAN_INPUT node's `ask_user` call uses the same form.
+- Changed (TS yian): a host tool a TOOL node calls may return `pending()`, exported from the
+  package root, when its answer comes later. The node records the call and its arguments
+  (refused over `YIAN_MAX_EVENT_BYTES`) and waits, and the host answers with `complete` under
+  the same call id. The re-run rules above apply: a handler that hadn't returned is called again
+  with the same id, a recorded call isn't called again, and an answer completed as an error
+  fails the node without a retry. A tool an AGENT calls can't return `pending()` in this
+  version (see [Blocking human interaction](#blocking-human-interaction)).
 - A call from an AGENT's tool loop gets an id of its own, unique per call and
   never reused for another call. It is not stable across resume: a resumed AGENT
   asks its model again and may make different calls, so reusing an id could make
@@ -1333,6 +1340,7 @@ is for debugging only; don't branch on it.
 | `provider.context_length` (TS yian) | The request is longer than the model's context window. | Shorten the inputs or history, or pick a model with a larger window. | No |
 | `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply, or the provider's content filter rejected the request (an HTTP 4xx naming `content_filter`, `content_policy_violation` or `ResponsibleAIPolicyViolation`). | Read `failure.message`; change the input. | Rarely |
 | `condition.evaluate` (TS yian) | A LOOP `while:`/`until:`, a CASE `when:`, or an `asserts:` condition can't be evaluated (an error, as opposed to evaluating false). | Fix the flow or its inputs. | No |
+| `tool.timeout` (TS yian) | A TOOL `ask` timed out with no answer and its declared output doesn't allow null. | Route on null with `output: Optional(T)`, or extend the timeout. | Only if someone may answer next time |
 
 Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian
 reports these failures as `node.execute`, except that an `asserts:` condition that
@@ -3383,10 +3391,27 @@ unchanged, and the TOOL built-in `ask`. It receives an `AskRequest`: the six fie
 fails with `no ask handler for this run; pass tools: {...registeredTools(), ask: handler} to
 runFlow or advance`. `take`, `sleep`, `ask`, `ask_user` and `load_skill` are reserved: no
 registered tool, `tools` key (other than the ask slot), group tool or MCP server may take one. An
-AGENT can't grant `take`, `sleep` or `ask` (it asks through `ask_user`), and in this version a
-TOOL node naming one is refused at run start.
+AGENT can't grant `take`, `sleep` or `ask` (it asks through `ask_user`). A TOOL node reaches
+them with `tool_id:`; `take` and `sleep` need nothing in the run's tools, and an `ask` node's
+inputs are checked at run start against yian's surface plus the extras the handler declares.
 `pending()`, exported from the package root, is the marker a host handler returns when the
 answer comes later; yian passes it through unchecked.
+
+Changed (TS yian): a TOOL `ask` handler may return `pending()`. The node then records a
+`pending` step (the call id, the tool, the call's arguments and its deadline) and waits; the host
+answers later with `complete`. The call id is `<run id>/<node path>`, the same on every attempt
+and start, and a handler that hadn't returned when the process crashed is called again with the
+same id, **so a handler must be idempotent by `callId`**. A re-run that finds the call recorded
+waits again without calling the handler, and one that finds it answered returns the answer; an
+answer completed as an error fails the node and is never retried. A `timeout` (a duration) sets
+`AskRequest.deadline` before the handler runs. When the deadline passes with no answer the output
+is null: a declared `output: Optional(T)` succeeds with null, so a `case` can route on it (the
+host's answer schema is `T`, so null always means nobody answered), and any other declared output
+fails the node with failure code `tool.timeout`; an `ask` with no `output:` returns null. An
+AGENT's tool call can't wait in this version: a tool it calls (its `ask_user` included) that
+returns `pending()` fails the agent, so answer inline or ask from a TOOL node. With
+`adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as
+`extra`, so the handler's `AskTool` declares them.
 
 An authored `human_input` node and an AGENT node granted `tools: [ask_user]` call the
 run's `ask_user` handler synchronously. A library host passes the handler with each

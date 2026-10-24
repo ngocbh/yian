@@ -468,6 +468,19 @@ The tools a run sees: without `tools`, the process registry; with `tools`, exact
   `isPending(value)` reads its brand. `ToolSet` passes the marker through without an output
   check.
 
+A host tool a TOOL node calls, or the run's `ask` handler for a TOOL `ask`, may return `pending()`:
+the node records a `pending` step (call id, tool, arguments, and an `ask`'s deadline) and waits
+until the host answers with `complete`. The call id is `<run id>/<node path>` on every attempt and
+start, and a handler that hadn't returned before a crash is called again with it, so a handler must
+be idempotent by `callId`; a recorded call isn't called again, and an answer completed as an error
+fails the node without a retry. Arguments over `YIAN_MAX_EVENT_BYTES` fail the node before anything
+is recorded. A tool an AGENT calls that returns `pending()` fails the agent in this version.
+
+An `ask` `timeout` sets `AskRequest.deadline`. If nobody answers in time the output is null: an
+`output: Optional(T)` succeeds with null, any other declared output fails with `tool.timeout`. A
+TOOL `take` or `sleep` needs nothing in the run's tools; the engine decides it. See [Blocking human
+interaction][docs/api.md#blocking-human-interaction].
+
 ### MCP servers
 
 ```ts

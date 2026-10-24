@@ -164,6 +164,8 @@ interface ScanOptions {
    * allowed. Defaults to telling the author to take from the inbox.
    */
   inboxTail?: string | null;
+  /** Lets an AGENT's `${x.new_messages}` be read; a CASE's routing reads only outputs. */
+  messages?: boolean;
 }
 
 /** Why most sites refuse a whole inbox read: only `take` reads its events. */
@@ -328,8 +330,9 @@ export function validateReferences(
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
   // An AGENT's new messages are read under their own pool name, `<id>.new_messages`.
+  const nodeTargets = new Set(buildResults.keys());
   const validTargets = new Set([
-    ...buildResults.keys(),
+    ...nodeTargets,
     ...[...buildResults].filter(([, result]) => result.node.producesMessages).map(([nodeId]) => messagesKey(nodeId)),
   ]);
   // Keep exact and partial carriers intact; the Compose projection below checks closed record
@@ -388,6 +391,7 @@ export function validateReferences(
       readFacts = null,
       routedBases = new Set<string>(),
       inboxTail = TAKE_TAIL,
+      messages = true,
     } = site;
     let paths: string[];
     try {
@@ -423,7 +427,7 @@ export function validateReferences(
         checkInboxRead(text, parts, where, rng, inboxTail);
         continue;
       }
-      let err = classifyPath(path, validTargets, flowInputs, extraHeads);
+      let err = classifyPath(path, messages ? validTargets : nodeTargets, flowInputs, extraHeads);
       const producer = siteProducers.get(parts[0]!);
       const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
@@ -752,6 +756,8 @@ export function validateReferences(
         readFacts,
         routedBases,
         inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
+        // A CASE's routing edges follow only `${x.output}` reads.
+        messages: !(node instanceof CaseNode),
       });
     }
   }

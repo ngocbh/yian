@@ -214,3 +214,35 @@ test("a node's own assert reading its new_messages is refused: it reads only its
     "${reply.new_messages} is not a declared input or `${output}`",
   );
 });
+
+/** A flow whose CASE `gate` (lines indented two spaces) routes to `a` or `b` after agent `reply`. */
+const ROUTED = (gate: string) => `${FLOW(`${gate}
+  a:
+    kind: code
+    code: return 1
+    output: int
+  b:
+    kind: code
+    code: return 2
+    output: int`, "${a.output :- b.output}")}`;
+
+test("a CASE can't route on new_messages, in on: or in a when:", async () => {
+  for (const gate of [
+    `  gate:\n    kind: case\n    on: \${reply.new_messages}\n    cases:\n      - when: x\n        then: a\n    else: b`,
+    `  gate:\n    kind: case\n    cases:\n      - when: "\${reply.new_messages != []}"\n        then: a\n    else: b`,
+  ]) {
+    const message = (await loadErrorAsync(loadFlow(ROUTED(gate)))).message;
+    expect(message).toContain("node 'gate'");
+    expect(message).toContain(NOT_AN_AGENT("reply"));
+  }
+});
+
+test("a reader behind a CASE branch reads new_messages", async () => {
+  const flow = await loadFlow(
+    ROUTED(`  gate:\n    kind: case\n    cases:\n      - when: "\${reply.output == 'x'}"\n        then: a\n    else: b`).replace(
+      "  a:\n    kind: code\n    code: return 1\n",
+      "  a:\n    kind: code\n    input:\n      history: !list(Message) ${reply.new_messages}\n    code: return inputs['history'].length\n",
+    ),
+  );
+  expect(flow.compiled.edges.some((edge) => edge.from === "reply" && edge.to === "a")).toBe(true);
+});

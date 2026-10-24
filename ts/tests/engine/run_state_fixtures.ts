@@ -99,15 +99,14 @@ import {
   type RunRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
-import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import {
   commitInitialPool,
   commitPrepared,
-  expansionCommits,
   type GrowBuilder,
   type GrowthIndex,
   growthIndex,
   isDerivedCommit,
+  planExpansion,
   prepareExpanded,
   prepareExpansionCommit,
   prepareNodeStarted,
@@ -116,9 +115,11 @@ import {
   prepareRecord,
   type PreparedTransition,
   prepareRunStarted,
+  rebuildCommitValue,
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
+import { decodeTyped, type RetainedTrace } from "../../src/runtime/trace.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
@@ -1140,6 +1141,12 @@ export function prepareOutput(
     const from = isDerivedCommit(state, nodeId) ? new Map(state.producers) : null;
     commitPrepared(log, state, preparePoolCommit(state, nodeId, output, { commitAs, from }));
   }
+  const pending = state.pendingCommits.get(nodeId)!;
+  if (pending.valueJson === null) {
+    // The success checks a derived value against the one evaluated: here, its own rebuild.
+    const rebuilt = decodeTyped(rebuildCommitValue(state, nodeId, pending.key, pending.from!));
+    return prepareNodeSucceeded(state, nodeId, { ...carriers, output: rebuilt });
+  }
   return prepareNodeSucceeded(state, nodeId, carriers);
 }
 
@@ -1155,9 +1162,9 @@ export function commitExpansion(
   growBuilder: GrowBuilder,
   from: ReadonlyMap<string, number> = new Map(),
 ): number {
-  const keys = expansionCommits(state, nodeId, grow, growBuilder);
-  for (const key of keys) commitPrepared(log, state, prepareExpansionCommit(state, nodeId, key, from));
-  return keys.length;
+  const { commits } = planExpansion(state, nodeId, grow, growBuilder);
+  for (const [key] of commits) commitPrepared(log, state, prepareExpansionCommit(state, nodeId, key, from));
+  return commits.length;
 }
 
 /** `commitExpansion`, then prepare the expansion with the carriers in `options`. */

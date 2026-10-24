@@ -20,7 +20,8 @@
  * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
  * `foldRunLog`, which replays a log and gives each accepted `pool_commit`'s value, a derived one
- * rebuilt from its `from` pointers.
+ * rebuilt from its `from` pointers, with `PoolCommitRecord` (`runtime/log.ts`) to read the records
+ * it returns.
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
  *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
@@ -134,6 +135,7 @@ import {
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import {
+  acceptedCommit,
   addCrashedAttempts,
   commitInitialPool,
   commitPrepared,
@@ -143,7 +145,6 @@ import {
   RunState,
   replayRecords,
 } from "./runtime/state.ts";
-import { decodeTyped } from "./runtime/trace.ts";
 import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { type ToolEntry, ToolSet } from "./tools/registry.ts";
@@ -156,7 +157,6 @@ import {
   fromHost,
   isRecord,
   jsTypeName,
-  normalizeTypedFiles,
   rejectDeepNesting,
   setField,
   type Type,
@@ -173,6 +173,7 @@ export { staticPathOf } from "./nodes/ids.ts";
 export {
   type IterRunRecordsOptions,
   iterRunRecords,
+  PoolCommitRecord,
   RunLogChangedError,
   type RunLogEntry,
   RunLogSchemaError,
@@ -1621,20 +1622,16 @@ export async function foldRunLog(log: string, options: { env?: Env | null; flow?
     checkRecorded(start.defaults);
     return resumedFlow(log, start, options.flow ?? null, null);
   });
-  const values: (TypedValue | null)[] = entries.map(() => null);
-  const accept = (seq: number, valueJson: string, files: Type | null): void => {
-    values[seq] = normalizeTypedFiles(files, decodeTyped(valueJson));
-  };
+  const values = new Map<number, TypedValue>();
   withEnv(env, () =>
     replayRunLog(flow, MemoryRunLog.fromRecords(entries.map((entry) => entry.envelope)), {
       onPrepared: (prepared) => {
-        const plan = prepared._plan;
-        if (plan.kind === "commit" && plan.initial) accept(prepared.expectedSequence, plan.valueJson!, null);
-        if (plan.kind === "success") accept((prepared.record as NodeSucceededRecord).commit, plan.delta.valueJson, plan.files);
+        const accepted = acceptedCommit(prepared);
+        if (accepted !== null) values.set(accepted.seq, accepted.value);
       },
     }),
   );
-  return { flow, records: entries.map((entry, seq) => ({ entry, value: values[seq]! })) };
+  return { flow, records: entries.map((entry, seq) => ({ entry, value: values.get(seq) ?? null })) };
 }
 
 /** Yield the envelope of each record of the log at `log`, read by `iterRunRecords`. */

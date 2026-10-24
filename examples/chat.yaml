@@ -5,7 +5,7 @@
 # `exited: true`. Anything else calls `respond`, where the AGENT sends the history as messages
 # and replies; `respond`'s output binding appends the turn's two messages. The AGENT outputs only
 # its reply and a binding does the append, so the run log grows linearly with the conversation.
-# The `prompt:` list style is TS-only (#1002).
+# The `prompt:` list style is TS-only.
 id: chat
 name: chat
 description: A turn-by-turn conversational assistant (one model call per turn, no tools).

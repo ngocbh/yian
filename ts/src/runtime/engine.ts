@@ -39,11 +39,11 @@ import {
 import type { NodeStepRecord, OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
 import {
   commitPrepared,
-  expansionCommits,
   type GrowBuilder,
   isDerivedCommit,
   NodeDataError,
   type PreparedTransition,
+  planExpansion,
   prepareExpanded,
   prepareExpansionCommit,
   prepareNodeFailed,
@@ -485,10 +485,11 @@ export class FlowEngine {
       try {
         // The child STARTs' values are written before the expansion that admits them: a crash
         // between them leaves orphan commits, and the spawner reruns.
-        for (const key of expansionCommits(state, nodeId, outcome, this.growBuilder, carriers)) {
+        const planned = planExpansion(state, nodeId, outcome, this.growBuilder, carriers);
+        for (const [key] of planned.commits) {
           commitPrepared(this.log, state, prepareExpansionCommit(state, nodeId, key, reads));
         }
-        prepared = prepareExpanded(state, nodeId, outcome, this.growBuilder, carriers);
+        prepared = prepareExpanded(state, nodeId, outcome, this.growBuilder, carriers, planned);
       } catch (error) {
         if (!(error instanceof GrowthRejected)) throw error;
         prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);

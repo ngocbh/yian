@@ -4008,6 +4008,8 @@ test.each([false, true])(
     class Prune extends Node {
       readonly kind = NodeKind.CODE;
       override readonly isSpawner = true;
+      // A live growth is checked against its rebuild from `from`, so the spawner double is derived.
+      override readonly derived = true;
 
       override forward(): NodeResult {
         return new Grow({}, [sharedStart, sharedEnd]);

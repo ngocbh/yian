@@ -309,11 +309,14 @@ replay rebuilds the value. `foldRunLog(log)` replays a log through the run reduc
 and returns `{flow, records}`: each record (`entry`, as `iterRunRecords` reads it) with `value`, the
 `TypedValue` an accepted `pool_commit` writes (held, or rebuilt from its `from`), or `null` for an
 orphan commit and any other record. A host reads a LOOP iteration's value, `<loop>#k/__end__`, this
-way:
+way (`PoolCommitRecord` is exported from `@ngocbh/yian/run` too):
 
 ```ts
 const { records } = await foldRunLog(log);
-const turn = records.find(({ entry }) => entry.kind === "pool_commit" && entry.envelope.payload.key === "chat#3/__end__");
+const turn = records.find(({ entry }) => {
+  const record = entry.envelope.record;
+  return record instanceof PoolCommitRecord && record.key === "chat#3/__end__";
+});
 const history = turn?.value?.toObject();
 ```
 

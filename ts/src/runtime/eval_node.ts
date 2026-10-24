@@ -1247,8 +1247,7 @@ export function rebind(
 
 /**
  * Rebuild a derived node's outcome: `rebind`, then its pure, synchronous `forward`. With `from`
- * empty (a child START over its constant wiring), it binds from constants only. The binding
- * capture is collected only with `options.capture`; `null` otherwise.
+ * empty (a child START over its constant wiring), it binds from constants only.
  *
  * @throws TypeError when `node` isn't derived, or its `forward` returns a promise or a route.
  * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
@@ -1259,13 +1258,12 @@ export function rebuildDerived(
   from: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
-  options: { capture?: boolean } = {},
-): { outcome: Output | Grow; capture: BindingCapture | null } {
+): { outcome: Output | Grow } {
   if (node.derived !== true) throw new TypeError(`node ${reprText(node.id)} is not derived`);
-  const { inputs, collector, caps } = bindFrom(node, flow, from, resolve, wiringOverride, options.capture === true);
+  const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride, false);
   const outcome: unknown = node.forward(inputs, caps);
   if (!(outcome instanceof Output || outcome instanceof Grow)) {
     throw new TypeError(`derived node ${reprText(node.id)} forward returned ${jsTypeName(outcome)}, not an Output or Grow`);
   }
-  return { outcome, capture: collector?.freeze() ?? null };
+  return { outcome };
 }

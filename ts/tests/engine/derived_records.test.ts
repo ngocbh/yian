@@ -21,7 +21,8 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { Node, Output } from "../../src/nodes/base.ts";
+import { Grow, Node, Output } from "../../src/nodes/base.ts";
+import { CallNode } from "../../src/nodes/call/node.ts";
 import { NodeExpanded, NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { foldRunLog, replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
 import { rebuildDerived } from "../../src/runtime/eval_node.ts";
@@ -37,7 +38,7 @@ import {
   type RecordEnvelope,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
-import { rebuildCommitValue, rebuildExpansion } from "../../src/runtime/state.ts";
+import { rebuildCommitValue, rebuildGrowth } from "../../src/runtime/state.ts";
 import { decodeTyped } from "../../src/runtime/trace.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
@@ -51,7 +52,7 @@ const freshLog = () => join(tmp, `log-${++logs}.jsonl`);
 
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 
-/** PR 1's chat loop, three scripted turns: each turn asks, replies, and appends in its END binding. */
+/** A chat loop of three scripted turns: each turn asks, replies, and appends in its END binding. */
 const CHAT = `
 id: chat
 name: chat
@@ -347,18 +348,20 @@ function rebuildAll(
       const record = prepared.record;
       if (record instanceof NodeSucceededRecord) {
         const commit = envelopes[record.commit]!.record as PoolCommitRecord;
-        if (commit.from === null || commit.nodeId !== record.nodeId) return;
-        const { valueJson } = rebuildCommitValue(state, record.nodeId, commit.key, commit.from);
+        if (commit.from === null) return;
+        if (commit.nodeId !== record.nodeId) {
+          // A child START: its expansion's admitted commit holds the value its START binds.
+          const valueJson = state.pendingCommits.get(record.nodeId)!.valueJson!;
+          expect([record.nodeId, decodeTyped(valueJson).toObject()]).toEqual([record.nodeId, outputs.get(record.nodeId) as never]);
+          return;
+        }
+        const valueJson = rebuildCommitValue(state, record.nodeId, commit.key, commit.from);
         expect([record.nodeId, decodeTyped(valueJson).toObject()]).toEqual([record.nodeId, outputs.get(record.nodeId) as never]);
         rebuilt += 1;
       } else if (record instanceof NodeExpandedRecord) {
         const pending = [...state.pendingCommits.values()].filter((commit) => commit.spawner === record.spawnerId);
-        const { seed, commits } = rebuildExpansion(state, record.spawnerId, pending[0]!.from, buildGrow);
+        const { seed } = rebuildGrowth(state, record.spawnerId, pending[0]!.from);
         expect([record.spawnerId, canonicalSeed(seed)[1]]).toEqual([record.spawnerId, seeds.get(record.spawnerId) as never]);
-        expect(commits.map(([key]) => key)).toEqual(pending.map((commit) => commit.key));
-        for (const [key, valueJson] of commits) {
-          expect([key, decodeTyped(valueJson).toObject()]).toEqual([key, outputs.get(key) as never]);
-        }
         rebuilt += 1;
       }
     },
@@ -554,15 +557,15 @@ test("foldRunLog reads an inner LOOP __end__ value from a finished log", async (
   expect(folded.flow.compiled.nodes.has("chat")).toBe(true);
 });
 
-test("foldRunLog yields null for an orphan commit", async () => {
+test("foldRunLog yields null for a commit no success accepts", async () => {
   const whole = await chatLog();
   const at = commitSeqOf(whole, "chat#1/__end__");
   const log = freshLog();
   await crashAfter(at + 1, () => runFlow(CHAT_FLOW!, {}, chatOptions(log)));
   const folded = await foldRunLog(log, { env: NO_ENV });
-  const orphan = folded.records[at]!;
-  expect(orphan.entry.envelope.record).toBeInstanceOf(PoolCommitRecord);
-  expect(orphan.value).toBeNull();
+  const pending = folded.records[at]!;
+  expect(pending.entry.envelope.record).toBeInstanceOf(PoolCommitRecord);
+  expect(pending.value).toBeNull();
 });
 
 test("a derived node whose value doesn't rebuild from its from fails the run at its success", async () => {
@@ -590,6 +593,34 @@ test("a derived node whose value doesn't rebuild from its from fails the run at 
     expect((error as Error).message).toContain("chat#0/__end__");
     expect((error as Error).message).toContain(`seq ${seq}`);
     expect(envelopes.some(({ record }) => record instanceof NodeSucceededRecord && record.nodeId === "chat#0/__end__")).toBe(false);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("a spawner whose growth doesn't rebuild from its from fails the run at its expansion", async () => {
+  // As for the END double: only the evaluation changes; the expansion rebuilds the seed from the
+  // expansion commits' `from` with the spawner's `forward`.
+  const original = Node.prototype.runForEvaluator;
+  const spy = spyOn(CallNode.prototype, "runForEvaluator").mockImplementation(async function (
+    this: CallNode,
+    inputs,
+    caps,
+    capture,
+  ) {
+    const result = await original.call(this, inputs, caps, capture);
+    return this.id === "count#0/step" ? new Grow({ x: 99n }) : result;
+  });
+  try {
+    const log = freshLog();
+    const error = await runFlow(await load(CALL_IN_LOOP), {}, { env: NO_ENV, log, runId: "r1", numWorkers: 0 }).then(
+      () => null,
+      (rejection: unknown) => rejection,
+    );
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toContain("count#0/step");
+    const envelopes = readRunLog(log);
+    expect(envelopes.some(({ record }) => record instanceof NodeExpandedRecord && record.spawnerId === "count#0/step")).toBe(false);
   } finally {
     spy.mockRestore();
   }

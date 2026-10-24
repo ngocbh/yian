@@ -59,7 +59,7 @@
       ]
     },
     "run_document": {
-      "description": "`yian run --json` (fresh or --resume): the run's terminal result. A run that fails exits 1 with status failed.",
+      "description": "`yian run --json` (fresh or --resume): the run's terminal result, or `waiting`. A run that fails exits 1 with status failed; a waiting run exits 0.",
       "oneOf": [
         {
           "type": "object",
@@ -79,6 +79,34 @@
             "format": {"$ref": "#/$defs/format"},
             "status": {"const": "failed"},
             "failure": {"$ref": "#/$defs/failure"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["format", "status", "waits", "wake_at"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "status": {"const": "waiting"},
+            "waits": {
+              "description": "The calls the run waits on, by waiting node in the order it started waiting.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["node", "call_id", "tool", "inbox", "deadline", "settled"],
+                "properties": {
+                  "node": {"type": "string"},
+                  "call_id": {"type": "string"},
+                  "tool": {"type": "string"},
+                  "inbox": {"type": ["string", "null"]},
+                  "deadline": {"type": ["string", "null"]},
+                  "settled": {"type": "boolean"}
+                }
+              }
+            },
+            "wake_at": {
+              "description": "The earliest deadline of a call not yet settled, or null when none has one.",
+              "type": ["string", "null"]
+            }
           }
         }
       ]

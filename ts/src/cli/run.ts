@@ -45,6 +45,7 @@ import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import {
   canonicalTypeLabel,
   FileRef,
+  isInboxType,
   isRecord,
   type Value,
   writeAsText,
@@ -611,20 +612,23 @@ export function mergeInputs(inputs: string | undefined, inputValues: readonly st
 const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
 
 /**
- * Return the inputs to add to `supplied`: each declaration it lacks (key presence) answered at
- * `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted inputs absent
- * for START. Returns null when a prompt is cancelled.
+ * @internal Return the inputs to add to `supplied`: each declaration it lacks (key presence)
+ * answered at `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted
+ * inputs absent for START. An inbox input is never asked for. Returns null when a prompt is
+ * cancelled.
  *
  * @throws {UsageError} Without a terminal, when required inputs are missing, naming them all in
  *   declaration order.
  */
-async function gatherMissingInputs(
+export async function gatherMissingInputs(
   decls: readonly Parameter[],
   supplied: Readonly<Record<string, unknown>>,
   terminal: Terminal | null,
 ): Promise<Record<string, unknown> | null> {
-  if (terminal !== null) return terminal.promptInputs(decls, supplied);
-  const required = decls.filter((decl) => decl.required && !Object.hasOwn(supplied, decl.name));
+  // An inbox takes events through `send`, never a value at the start.
+  const values = decls.filter((decl) => !isInboxType(decl.contract?.type ?? null));
+  if (terminal !== null) return terminal.promptInputs(values, supplied);
+  const required = values.filter((decl) => decl.required && !Object.hasOwn(supplied, decl.name));
   if (required.length > 0) {
     const noun = required.length === 1 ? "input" : "inputs";
     const names = required.map((decl) => decl.name).join(", ");
@@ -1228,7 +1232,9 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
  * printed and exits 1. The log is `log`, else `~/.yian/runs/<run id>/log.jsonl` in a fresh folder.
  * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
- * stderr and exits 1. A host failure (a bad option value, a log that can't be created, an MCP
+ * stderr and exits 1. A run that ends waiting prints `run waiting: <node> (<tool>), ...` and the
+ * `yian run --resume <log>` that continues it on stderr and exits 0; a cancelled one prints
+ * `run cancelled` and exits 1 (`run.cancelled`). An inbox input is never asked for. A host failure (a bad option value, a log that can't be created, an MCP
  * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an
  * `McpConnectError`'s notes on the lines below, and exits 1.
  *
@@ -1244,8 +1250,8 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * finished log prints its recorded outcome and appends nothing.
  *
  * Under `json`, stdout holds one
- * document: the output (`status: "succeeded"`), the failure (`status: "failed"`) or the error
- * (`compose.load`, `run.cancelled`, `run.setup`).
+ * document: the output (`status: "succeeded"`), the failure (`status: "failed"`), the waits and
+ * `wake_at` (`status: "waiting"`) or the error (`compose.load`, `run.cancelled`, `run.setup`).
  *
  * SIGINT, SIGTERM or SIGHUP from the command's start, Ctrl-C at a prompt during the run, or
  * `io.stop` aborting (with a `HostStop`) stops the run, closing a prompt that is up before it:
@@ -1572,12 +1578,48 @@ async function startRun(
     else await io.stdout.write(`${writeAsText(result.output as Value)}\n`);
     return 0;
   }
+  if (result.status === "waiting") {
+    if (json) await printJson(waitingDocument(result), io.stdout);
+    else await io.stderr.write(waitingText(result));
+    return 0;
+  }
+  if (result.status === "cancelled") {
+    await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
+    return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+  }
   const diagnostic = await renderRunError(result, flow, engineTrace, io.stderr, io.env);
   if (json) {
     const failure = { ...diagnosticJson(diagnostic), node: result.failure?.nodeId ?? null };
     await printJson({ status: "failed", failure }, io.stdout);
   }
   return 1;
+}
+
+/**
+ * @internal Return the `--json` document of a waiting result, without `format`: each wait, and
+ * `wake_at`, the earliest deadline of a call not yet settled (`null` when none has one).
+ */
+export function waitingDocument(result: RunResult): Record<string, JsonValue> {
+  let wakeAt: string | null = null;
+  for (const wait of result.waits) {
+    // Record times have one fixed-width form, so text order is time order.
+    if (!wait.settled && wait.deadline !== null && (wakeAt === null || wait.deadline < wakeAt)) wakeAt = wait.deadline;
+  }
+  const waits = result.waits.map((wait) => ({
+    node: wait.node,
+    call_id: wait.callId,
+    tool: wait.tool,
+    inbox: wait.inbox,
+    deadline: wait.deadline,
+    settled: wait.settled,
+  }));
+  return { status: "waiting", waits, wake_at: wakeAt };
+}
+
+/** @internal Return the text a waiting result prints on stderr: what it waits on and how to go on. */
+export function waitingText(result: RunResult): string {
+  const waits = result.waits.map((wait) => `${wait.node} (${wait.tool})`).join(", ");
+  return `run waiting: ${waits}\ncontinue with: yian run --resume ${result.log}\n`;
 }
 
 /**

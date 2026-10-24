@@ -47,6 +47,8 @@ test("failure carriers have no parallel location fields", () => {
     "failure",
     "events",
     "crashedAttempts",
+    "waits",
+    "unread",
   ]);
   expect([result.learning, result.backwardOutcome]).toEqual([null, null]);
 });

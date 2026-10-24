@@ -223,7 +223,7 @@ must keep one run per folder; Yian doesn't check it. The CLI uses `~/.yian/runs`
 
 | Field | Type |
 |---|---|
-| `status` | `"succeeded"` or `"failed"` |
+| `status` | `"succeeded"`, `"failed"`, `"cancelled"`, or `"waiting"` when the run stopped with nodes waiting on calls (see [Waiting runs](#waiting-runs)) |
 | `output` | the flow's value on success, else `null` |
 | `failure` | `Failure \| null` |
 | `input` | the inputs `RunStarted` kept |
@@ -231,10 +231,12 @@ must keep one run per folder; Yian doesn't check it. The CLI uses `~/.yian/runs`
 | `log` | the path as given, or `null` |
 | `events` | this call's post-durable events |
 | `crashedAttempts` | `ReadonlyMap<string, number>`: attempts a resume retried after a crash, by node id |
+| `waits` | `WaitInfo[]`: a waiting run's calls (`node`, `callId`, `tool`, `inbox`, `deadline`, `settled`), else `[]` |
+| `unread` | `ReadonlyMap<string, number[]>`: at a terminal status, the send seqs no take read, by inbox; else empty |
 | `backwardOutcome`, `learning` | the last observed backward attempt, else `null` |
 
 `await result.backward(feedback, { apiKey, headers, onEvent })` runs one backward attempt over a
-`learnable: true` run and resolves to a `BackwardOutcome` (`status`, `feedback`, `failure`,
+`learnable: true` run that succeeded or failed (a waiting or cancelled one throws `RangeError`) and resolves to a `BackwardOutcome` (`status`, `feedback`, `failure`,
 `learning`). See [`RunResult`][docs/api.md#runresult] and [Explicit backward
 feedback][docs/api.md#explicit-backward-feedback].
 
@@ -355,6 +357,25 @@ the run had. A resumed AGENT replays its recorded model calls and tool results i
 them again; a recorded call the resumed host would ask differently rejects the resume and leaves
 the run resumable. A log another yian version started resumes with a warning. See [Durable recovery
 with `resume_flow`][docs/api.md#durable-recovery-with-resume_flow].
+
+### Waiting runs
+
+A run whose nodes wait on calls (a host tool that returned `pending()`, an `ask`, a `take` or a
+`sleep`) and has nothing else to do ends with `status: "waiting"`: `runFlow` and `advance` record
+`run_waiting`, release the log's lock, and resolve. `advance` moves a waiting run on:
+
+- after a crash, a stop or with another `numWorkers`, it appends `run_resumed` first, as for any
+  unfinished run;
+- a waiting node whose calls are settled (answered, closed or timed out) or past their deadline
+  by the `scheduler`'s clock is woken (`node_woken`) and the run goes on;
+- a waiting run with neither appends nothing and returns `waiting` again.
+
+While the run waits, this process keeps its state in memory, by the log's real path, so the next
+`advance` skips the replay and recompile while the log is the file it left (same last record and
+size) and the call passes the same `codeRoot`, code-built `flow`, `apiKey` and `headers`; any
+other log write makes it rebuild. Each waiting run's state stays until the run moves on, so a host
+holding many waiting runs pays their memory. An `advance` of a run this process is moving rejects
+with the lock's busy message; one of a run another call is setting up waits for that call.
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
 `"failed"`, `"cancelled"`, `"waiting"`, `"stopped"` or `"crashed"`), `inFlight`, `crashedAttempts`,

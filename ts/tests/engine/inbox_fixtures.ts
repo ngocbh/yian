@@ -11,11 +11,13 @@ import { type CallView, HostToolCall, Parameter, ValueContract } from "../../src
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import type { Scheduler } from "../../src/platform.ts";
-import { startWiring } from "../../src/run.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { replayRunLog, startWiring } from "../../src/run.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
-import { formatRecordTime, MemoryRunLog, type RunLog } from "../../src/runtime/log.ts";
-import { commitInitialPool, commitPrepared, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
+import { formatRecordTime, JsonlRunLog, MemoryRunLog, type RunLog } from "../../src/runtime/log.ts";
+import { commitInitialPool, commitPrepared, prepareComplete, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { toolCallId } from "../../src/tools/context.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { inboxType, Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
@@ -258,3 +260,44 @@ export function handClock(start: number, onSleep?: (deadline: number) => void): 
 
 /** The record class names of `log`, in order. */
 export const recordNames = (log: RunLog): string[] => log.records().map((entry) => entry.record.constructor.name);
+
+/**
+ * Answer call `callId` of the waiting run at `log` as an outside writer does: lock and replay the
+ * log through `flow`, append the answer, and close. Returns the answer's seq, or `null` for a
+ * repeat.
+ */
+export function completeByHand(log: string, flow: ComposedFlow, callId: string, result: CompleteResult): number | null {
+  const authority = JsonlRunLog.resume(log);
+  try {
+    const state = replayRunLog(flow, authority);
+    const prepared = prepareComplete(state, callId, result);
+    if (prepared === null) return null;
+    commitPrepared(authority, state, prepared);
+    return prepared.expectedSequence;
+  } finally {
+    authority.close();
+  }
+}
+
+/**
+ * A host tool `gate` whose handler resolves `entered`, then waits until `release()` (answering
+ * with what it was given) or until its call's signal aborts (rejecting with the reason).
+ */
+export function gateTool(): { readonly tool: FunctionTool; readonly entered: Promise<void>; release(value?: unknown): void } {
+  const entered = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<unknown>();
+  const tool = new FunctionTool({
+    name: "gate",
+    description: "waits for the test",
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: async (_args, ctx) => {
+      entered.resolve();
+      const stopped = new Promise<never>((_, reject) => {
+        if (ctx.signal.aborted) reject(ctx.signal.reason);
+        ctx.signal.addEventListener("abort", () => reject(ctx.signal.reason), { once: true });
+      });
+      return await Promise.race([gate.promise, stopped]);
+    },
+  });
+  return { tool, entered: entered.promise, release: (value: unknown = "opened") => gate.resolve(value) };
+}

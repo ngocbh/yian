@@ -14,6 +14,11 @@
  *
  * Ported through `evalNode` (`drive`), the tool in the run's `ToolSet`:
  * `test_python_built_agent_with_tools_runs_the_tool_loop` (the bound tools read from the request).
+ *
+ * TS-only (pins): an `Optional(str)` agent without tools makes one unbound call with no output
+ * format and returns the text; an empty reply is `""`, not null; an interrupt before the first
+ * call gives `""`, not null. The interrupt pin changes to a null output once an interrupted
+ * `Optional(str)` agent returns null.
  */
 
 import { expect, test } from "bun:test";
@@ -131,4 +136,27 @@ test("an interrupt while streaming keeps the partial text", async () => {
     [" big", false],
     ["", true],
   ]);
+});
+
+test("an Optional(str) agent without tools makes one unbound call and returns the text", async () => {
+  const model = new ScriptedModel([reply("hello")], CONFIG);
+  expect(await run(["output: Optional(str)"], model)).toBe("hello");
+  expect(model.requests).toHaveLength(1);
+  expect(model.requests[0]!.tools).toEqual([]);
+  expect(model.requests[0]!.outputFormat).toBeNull();
+});
+
+test("an empty reply from an Optional(str) agent is empty text, not null", async () => {
+  const model = new ScriptedModel([reply("")], CONFIG);
+  expect(await run(["output: Optional(str)"], model)).toBe("");
+});
+
+test('an interrupt before the first call gives an Optional(str) agent "", not null', async () => {
+  // Null is reserved for an interrupt under the inbox model; until then an interrupt keeps text.
+  const interrupt = new AbortController();
+  interrupt.abort(new Error("interrupted"));
+  const model = new ScriptedModel([], CONFIG);
+  const steering = { interruptSignal: () => interrupt.signal, drain: () => [] };
+  expect(await run(["steerable: true", "output: Optional(str)"], model, { steering })).toBe("");
+  expect(model.requests).toEqual([]);
 });

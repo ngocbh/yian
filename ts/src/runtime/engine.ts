@@ -21,13 +21,14 @@ import {
   ModelCallFinished,
   ModelCallStarted,
   NodeAttemptResumed,
+  RunCancelled,
   type RunEvent,
   RunFailed,
   type StreamChunk,
   ToolCallFinished,
 } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import { CapabilityFault, Grow, markerMessage, Output, Pending, Route, type Steering } from "../nodes/base.ts";
+import { CapabilityFault, type CompleteResult, Grow, markerMessage, Output, Pending, Route, type Steering } from "../nodes/base.ts";
 import type { SourceResolver } from "../nodes/binding.ts";
 import { type CallView, isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
@@ -56,6 +57,8 @@ import {
   planExpansion,
   prepareExpanded,
   prepareExpansionCommit,
+  prepareComplete,
+  prepareInboxClosed,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -63,9 +66,11 @@ import {
   prepareNodeSucceeded,
   prepareNodeWaiting,
   preparePoolCommit,
+  prepareRunCancelled,
   prepareRunFailed,
   prepareRunStopped,
   prepareRunWaiting,
+  prepareSend,
   RunState,
   requireExpansionOutput,
   resolveFromPool,
@@ -121,12 +126,18 @@ type Completion =
   | { readonly nodeId: string; readonly outcome: EvaluatedOutcome }
   | { readonly nodeId: string; readonly error: unknown };
 
+/** A wake-up for the dispatcher with no settled worker: a delivery or a timer changed the state. */
+type Nudge = { readonly nudge: true };
+const NUDGE: Nudge = Object.freeze({ nudge: true });
+
 /** The settled workers in settle order, read by one dispatcher. */
 class CompletionQueue {
   readonly #entries: Completion[] = [];
   /** The next unread entry; read entries are dropped in batches so taking never shifts the array. */
   #head = 0;
-  #waiter: ((entry: Completion) => void) | null = null;
+  #waiter: ((entry: Completion | Nudge) => void) | null = null;
+  /** Whether a nudge waits for the next `take`; at most one is queued. */
+  #nudged = false;
 
   /** Add one settled worker, handing it straight to a waiting `take`. */
   push(entry: Completion): void {
@@ -139,14 +150,29 @@ class CompletionQueue {
     waiter(entry);
   }
 
+  /** Wake the dispatcher: hand a waiting `take` a nudge, or queue one for the next. */
+  nudge(): void {
+    const waiter = this.#waiter;
+    if (waiter === null) {
+      this.#nudged = true;
+      return;
+    }
+    this.#waiter = null;
+    waiter(NUDGE);
+  }
+
   /**
-   * Return the oldest unread entry, or a promise of the next one to arrive. At most one `take` may
-   * be pending: the queue has a single reader, the dispatcher.
+   * Return a queued nudge, else the oldest unread entry, or a promise of the next entry or nudge
+   * to arrive. At most one `take` may be pending: the queue has a single reader, the dispatcher.
    *
    * @throws Error when another `take` is still pending.
    */
-  take(): Completion | Promise<Completion> {
+  take(): Completion | Nudge | Promise<Completion | Nudge> {
     if (this.#waiter !== null) throw new Error("CompletionQueue has a take pending already");
+    if (this.#nudged) {
+      this.#nudged = false;
+      return NUDGE;
+    }
     if (this.#head === this.#entries.length) {
       return new Promise((resolve) => {
         this.#waiter = resolve;
@@ -187,6 +213,32 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
   return record.retryNodeIds.map(
     (nodeId) => new NodeAttemptResumed({ nodeId, crashed: state.crashedAttempts.get(nodeId) ?? 0 }),
   );
+}
+
+/** One host delivery: a send, a completed call, an inbox close or a cancel. */
+export type DeliveryOp =
+  | { readonly kind: "send"; readonly inbox: string; readonly event: unknown }
+  | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
+  | { readonly kind: "close"; readonly inbox: string }
+  | { readonly kind: "cancel" };
+
+/**
+ * @internal Prepare `op` on `state`; the engine and the run boundary share it.
+ *
+ * @returns null for a no-op (an identical repeat complete, or closing a closed inbox).
+ * @throws DeliveryRefused when the run refuses it.
+ * @throws TypeError when `op` is no delivery.
+ */
+export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | null {
+  const kind: unknown = typeof op === "object" && op !== null ? op.kind : undefined;
+  if (kind === "send") return prepareSend(state, (op as { inbox: string }).inbox, (op as { event: unknown }).event);
+  if (kind === "complete") {
+    const { callId, result } = op as Extract<DeliveryOp, { kind: "complete" }>;
+    return prepareComplete(state, callId, result);
+  }
+  if (kind === "close") return prepareInboxClosed(state, (op as { inbox: string }).inbox);
+  if (kind === "cancel") return prepareRunCancelled(state);
+  throw new TypeError(`a delivery's kind must be send, complete, close or cancel, got ${reprText(String(kind))}`);
 }
 
 /** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */
@@ -272,6 +324,10 @@ export class FlowEngine {
   #looping = false;
   /** The run's post-durable observers so far, in order. */
   readonly #events: RunEvent[] = [];
+  /** The pooled dispatcher's queue while it runs, so a delivery can wake it. */
+  #queue: CompletionQueue | null = null;
+  /** The run signal's reason once a host cancels the run. */
+  readonly #cancelled = new Error("run cancelled");
 
   /**
    * Borrow a prepared state and log and configure one drive.
@@ -344,6 +400,38 @@ export class FlowEngine {
   }
 
   /**
+   * Commit one host delivery synchronously, between two awaits of the loop. A cancel then aborts
+   * the run signal: `run()` resolves with the cancelled state once running nodes have drained.
+   * Then nudge the dispatcher and publish the observers.
+   *
+   * @returns The appended seq (null for a no-op) and the observers.
+   * @throws DeliveryRefused when the run refuses it; nothing is appended.
+   * @throws Error before `run()` was called.
+   * @throws The error of an `onEvent` that throws on these observers. The record is durable by
+   *   then. While the loop runs, the throw stops the run; after the loop has ended, it is only
+   *   rethrown.
+   */
+  deliver(op: DeliveryOp): { readonly seq: number | null; readonly events: readonly RunEvent[] } {
+    if (!this.#ran) throw new Error("FlowEngine.deliver needs run() first");
+    const { state, log } = this;
+    const prepared = prepareDelivery(state, op);
+    if (prepared === null) return { seq: null, events: [] };
+    const seq = prepared.expectedSequence;
+    const observers = commitPrepared(log, state, prepared);
+    if (state.result instanceof RunCancelled) this.#controller.abort(this.#cancelled);
+    this.#queue?.nudge();
+    if (this.#looping) {
+      this.#publish(observers, this.#events);
+    } else {
+      for (const observer of observers) {
+        this.#events.push(observer);
+        this.onEvent?.(observer);
+      }
+    }
+    return { seq, events: observers };
+  }
+
+  /**
    * Drive newly ready work to a terminal result.
    *
    * A node failure is a result: `run()` resolves with its `RunFailed`, whatever stops arrive while
@@ -407,8 +495,15 @@ export class FlowEngine {
         this.#publish(settled, events);
       }
     } catch (error) {
+      // A cancel aborted the evaluation; the run has its result, and nothing else runs.
+      if (this.#isCancelled()) return;
       throw this.#fail(error);
     }
+  }
+
+  /** Whether a host cancel ended the run: its result is `RunCancelled` and the run signal says so. */
+  #isCancelled(): boolean {
+    return this.state.result instanceof RunCancelled && this.#controller.signal.reason === this.#cancelled;
   }
 
   /**
@@ -424,6 +519,7 @@ export class FlowEngine {
     const events = this.#events;
     const completions = new CompletionQueue();
     const active = new Map<string, Promise<void>>();
+    this.#queue = completions;
     try {
       while (state.result === null) {
         signal.throwIfAborted();
@@ -446,6 +542,7 @@ export class FlowEngine {
           break;
         }
         const completion = await completions.take();
+        if ("nudge" in completion) continue;
         active.delete(completion.nodeId);
         // An entry taken after the abort is discarded; the abort's error is the run's.
         signal.throwIfAborted();
@@ -460,13 +557,19 @@ export class FlowEngine {
         this.#publish(settled, events);
       }
     } catch (error) {
+      if (this.#isCancelled()) {
+        await Promise.all(active.values());
+        return;
+      }
       const initiating = this.#fail(error);
       // Workers never reject, and the initiating error is kept first, so the drain can't replace it.
       await Promise.all(active.values());
       throw initiating;
+    } finally {
+      this.#queue = null;
     }
-    // A success result, or quiescence, means nothing else is ready or in flight, so there is
-    // nothing to drain.
+    // A cancel taken through a nudge ends the loop with workers still running; they drain here.
+    await Promise.all(active.values());
   }
 
   /**

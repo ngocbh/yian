@@ -27,6 +27,7 @@ import {
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeWaiting,
+  prepareNodeWoken,
   prepareRecord,
   prepareRunCancelled,
   prepareRunResumed,
@@ -280,4 +281,73 @@ test("run_resumed.closed_calls leaves out calls closed interrupted", () => {
   commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
   const resumed = prepareRunResumed(state, { numWorkers: 0 });
   expect((resumed.record as RunResumedRecord).closedCalls).toEqual([]);
+});
+
+test("the honor step names the node's pending interrupt, once, on a running node", () => {
+  const { log, state } = interruptible();
+  const seq = prepareInterrupt(state, "msgs", ["a"])!.expectedSequence;
+  commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+  const refuse = (node: string, body: Record<string, unknown>, message: RegExp) =>
+    expect(() => prepareNodeStep(state, node, body)).toThrow(message);
+  refuse("a", { kind: "interrupted", by: BigInt(seq + 1) }, /must name its pending interrupt/);
+  refuse("a", { kind: "interrupted", by: seq }, /must name its pending interrupt/); // not an int
+  refuse("a", { kind: "interrupted", by: BigInt(seq), extra: 1 }, /holds only kind and by/);
+  refuse("w", { kind: "interrupted", by: BigInt(seq) }, /records only a tool_result/); // waiting
+  refuse("t", { kind: "interrupted", by: BigInt(seq) }, /holds no pending interrupt/);
+  commitStep(log, state, "a", { kind: "interrupted", by: BigInt(seq) });
+  expect(state.waits.interrupts.has("a")).toBe(false);
+  refuse("a", { kind: "interrupted", by: BigInt(seq) }, /holds no pending interrupt/);
+});
+
+test("an agent writes one interrupted closer for its call the record closed", () => {
+  const { log, state } = interruptible();
+  commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+  expect(() => prepareNodeStep(state, "a", closerStep("c1", "crashed"))).toThrow(/closed \(interrupted\)/);
+  const seq = commitStep(log, state, "a", closerStep("c1", "interrupted"));
+  expect(state.waits.calls.get(agentCall("a", 1, 0))!.resultSeq).toBe(seq);
+  expect(() => prepareNodeStep(state, "a", closerStep("c1", "interrupted"))).toThrow(/already has its closer/);
+});
+
+test("a pending step after the record registers its call closed and withdraws it from the host", () => {
+  const { log, state } = interruptible();
+  commitStep(log, state, "a", pendingStep("a", 1, 1, "c2"));
+  commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+  const prepared = prepareNodeStep(state, "a", pendingStep("a", 1, 2, "c3"));
+  expect(prepared.observers.map((event) => [(event as CallClosed).callId, (event as CallClosed).reason])).toEqual([
+    [agentCall("a", 1, 2), "interrupted"],
+  ]);
+  expect(commitPrepared(log, state, prepared)).toEqual(prepared.observers);
+  expect(state.waits.calls.get(agentCall("a", 1, 2))).toMatchObject({ state: "closed", closedReason: "interrupted" });
+});
+
+test("a node_waiting may name a call an interrupt closed between the agent's Pending and it", () => {
+  const { log, state } = interruptible();
+  commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+  commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [agentCall("a", 1, 0)], steerInbox: "msgs" }));
+  expect(wakeableNodes(state.waits)).toEqual(["w", "a"]);
+});
+
+test("without a pending interrupt a node_waiting naming a closed call is still refused", () => {
+  const { log, state } = interruptible();
+  commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+  commitStep(log, state, "a", closerStep("c1", "interrupted"));
+  commitStep(log, state, "a", { kind: "interrupted", by: BigInt(state.waits.interrupts.get("a")!) });
+  expect(() => prepareNodeWaiting(state, "a", { callIds: [agentCall("a", 1, 0)] })).toThrow(/was closed \(interrupted\)/);
+});
+
+test("a timeout re-wait whose open call an interrupt closed in between is accepted and wakeable at once", () => {
+  const run = readersFlow();
+  const { log, state } = run;
+  commitPrepared(log, state, prepareNodeStarted(state, "a"));
+  commitStep(log, state, "a", replyStep(["ask", "ask_user"], ["hold", "ask_user"]));
+  commitStep(log, state, "a", pendingStep("a", 1, 0, "ask", { deadline: "2026-10-21T00:00:00.000Z" }));
+  commitStep(log, state, "a", pendingStep("a", 1, 1, "hold"));
+  const [ask, hold] = [agentCall("a", 1, 0), agentCall("a", 1, 1)];
+  commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [ask, hold], steerInbox: "msgs" }));
+  commitPrepared(log, state, prepareNodeWoken(state, "a", [ask]));
+  commitStep(log, state, "a", { ...closerStep("ask", "timed_out"), output: "timed out: no answer" });
+  // The woken agent pends `hold` again; the interrupt lands before its node_waiting.
+  commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
+  commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [hold], steerInbox: "msgs" }));
+  expect(wakeableNodes(state.waits)).toEqual(["a"]);
 });

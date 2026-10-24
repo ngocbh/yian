@@ -25,7 +25,7 @@ import {
 } from "../../llm/messages.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { builtinType, newMessagesType } from "../../typesys/types.ts";
-import { buildValueAs, FileRef, type TypedValue, writeAsJson } from "../../typesys/values.ts";
+import { buildValueAs, FileRef, TypeCheckError, type TypedValue, type Value, writeAsJson, writeAsText } from "../../typesys/values.ts";
 
 /** One part of a `Message`, told apart by `type`; `provider_payload` is opaque provider data, kept untouched. */
 export type MessagePart =
@@ -97,6 +97,68 @@ export function fromModelMessage(message: ModelMessage): Message {
     return { ...json, file: new FileRef(part.file) };
   });
   return checkMessage({ ...data, parts });
+}
+
+/** Return `value` as a `Message` when it is one, else `null`. */
+function asMessage(value: unknown): Message | null {
+  try {
+    return checkMessage(value);
+  } catch (error) {
+    if (error instanceof TypeCheckError) return null;
+    throw error;
+  }
+}
+
+/**
+ * Return the text parts a steer `Message` keeps, each of its parts as a user message carries it:
+ * text as is, a reasoning or refusal part's text, and any other part but media in its text form.
+ * Media is dropped (no route sends it yet), each drop told to `onDrop`.
+ */
+function steerParts(message: Message, onDrop: (part: number) => void): TextPart[] {
+  const parts: TextPart[] = [];
+  message.parts.forEach((part, index) => {
+    if (part.type === "media") onDrop(index);
+    else if (part.type === "text" || part.type === "reasoning" || part.type === "refusal") parts.push(new TextPart(part.text));
+    else {
+      const { provider_payload: _payload, ...rest } = part;
+      parts.push(new TextPart(writeAsText(rest as Value)));
+    }
+  });
+  return parts;
+}
+
+/**
+ * Return the model messages one steer read sends: each `Message` event (a value `checkMessage`
+ * accepts) as a user message keeping its author, parts a user message can't carry turned into
+ * text and media dropped (`onDrop(event, part)` hears each drop); each run of other events as one
+ * user message with a text part per event (a `str` as is, anything else in its text form,
+ * `writeAsText`). A `Message` left with no part holds its event's text form. Never throws: the
+ * events are already consumed when it runs.
+ */
+export function steerMessages(
+  values: readonly unknown[],
+  onDrop: (event: number, part: number) => void = () => {},
+): ModelMessage[] {
+  const messages: ModelMessage[] = [];
+  let run: TextPart[] = [];
+  const flush = (): void => {
+    if (run.length > 0) messages.push(new ModelMessage({ role: "user", parts: run }));
+    run = [];
+  };
+  values.forEach((value, event) => {
+    const message = typeof value === "string" ? null : asMessage(value);
+    if (message === null) {
+      run.push(new TextPart(writeAsText(value as Value)));
+      return;
+    }
+    flush();
+    const parts = steerParts(message, (part) => onDrop(event, part));
+    if (parts.length === 0) parts.push(new TextPart(writeAsText(value as Value)));
+    // An empty author can't be sent; the message goes without it.
+    messages.push(new ModelMessage({ role: "user", parts, author: message.author || null }));
+  });
+  flush();
+  return messages;
 }
 
 /** A conversation no model route can send: the message at `index` and why. */

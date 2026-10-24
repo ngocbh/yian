@@ -77,3 +77,42 @@ test("a send landing while the take evaluates is read by its decision", async ()
   expect(recordNames(run.log)).not.toContain("NodeWaitingRecord");
   expect(takeCommit(run)!.take).toEqual({ inbox: "m", events: [sent!], closed: false });
 });
+
+import { RunFailed, RunSucceeded } from "../../src/events.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
+import { formatRecordTime } from "../../src/runtime/log.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { FakeSleep, handClock } from "./inbox_fixtures.ts";
+
+const T0 = Date.UTC(2026, 9, 23, 12, 0, 0);
+
+/** A sleep `nap` between START and END. */
+const sleepFlow = (nap: FakeSleep) => inboxFlow([], [nap], [[START_ID, "nap"], ["nap", END_ID]]);
+
+test("a sleep that is already over commits null inline", async () => {
+  const run = inboxEngine(sleepFlow(new FakeSleep("nap", 0)), { scheduler: handClock(T0) });
+  const events = await run.run();
+  const records = run.log.records();
+  const commitAt = records.findIndex((entry) => entry.record instanceof PoolCommitRecord && entry.record.nodeId === "nap");
+  expect(records[commitAt + 1]!.record).toMatchObject({ nodeId: "nap" });
+  expect(records[commitAt + 1]!.record).toBeInstanceOf(NodeSucceededRecord);
+  expect(run.state.pool.get("nap")).toBeNull();
+  expect(events.at(-1)).toBeInstanceOf(RunSucceeded);
+});
+
+test("a sleep waits until its deadline", async () => {
+  const run = inboxEngine(sleepFlow(new FakeSleep("nap", 60)), { scheduler: handClock(T0) });
+  await run.run();
+  const waiting = run.log.records().at(-2)!.record as NodeWaitingRecord;
+  expect(waiting.waits).toEqual([{ callId: "run-123/nap", tool: "sleep", inbox: null, mode: null, deadline: formatRecordTime(T0 + 60_000) }]);
+  expect(recordNames(run.log).at(-1)).toBe("RunWaitingRecord");
+});
+
+test("a sleep whose output contract refuses null fails contract.output", async () => {
+  const nap = new FakeSleep("nap", 0);
+  nap.outputContract = new ValueContract(Type.scalar(ValueKind.STRING));
+  const run = inboxEngine(sleepFlow(nap), { scheduler: handClock(T0) });
+  const events = await run.run();
+  expect(events.at(-1)).toBeInstanceOf(RunFailed);
+  expect((events.at(-1) as RunFailed).failure.code).toBe("contract.output");
+});

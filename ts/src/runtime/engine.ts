@@ -693,7 +693,17 @@ export class FlowEngine {
       commitPrepared(log, state, prepareTakeCommit(state, nodeId, decision.commit));
       return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, carriers));
     }
-    if (decision.kind === "slept") throw new TypeError("sleep outcomes aren't decided yet");
+    if (decision.kind === "slept") {
+      let commit: PreparedTransition;
+      try {
+        commit = preparePoolCommit(state, nodeId, null);
+      } catch (error) {
+        if (!(error instanceof NodeDataError)) throw error;
+        return commitPrepared(log, state, this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers));
+      }
+      commitPrepared(log, state, commit);
+      return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, carriers));
+    }
     // The decision left is to wait. It isn't compared by name: "wait" is still a node kind, and the
     // kind census counts that comparison.
     return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry] }));

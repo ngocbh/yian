@@ -8,10 +8,12 @@
  * `onEvent`, and frames never enter the log.
  *
  * The channel keeps the chunks of each call in flight, one buffer per `(node, n)`, so the calls of
- * parallel nodes stay apart. A call's buffer goes when its step record is appended, when it ends
- * with an error, or when its node settles. A late viewer subscribes, reads the log to its end,
- * takes `snapshot()`, then follows the frames, skipping records at or below the snapshot's
- * `last_seq` and chunks below a call's `next_index`.
+ * parallel nodes stay apart. A call's buffer goes when its step record is appended (a failed
+ * attempt's too, before its end frame) or when its node settles. A late viewer subscribes and takes
+ * `snapshot()` in the same synchronous turn, buffering the frames that follow; reads the log up to
+ * the snapshot's `last_seq` (this may be async); then applies the buffered frames and follows. Every
+ * frame after the snapshot is new to it: records continue after `last_seq` and each call's chunks
+ * after its `next_index`, so it skips nothing.
  *
  * The stream is ephemeral: a subscriber's failure never reaches the run. A subscriber that throws is
  * dropped and reported to the host.
@@ -65,8 +67,8 @@ export interface LiveChannelOptions {
  */
 export class LiveChannel {
   readonly #subscribers = new Set<(frame: LiveFrame) => void>();
-  /** The calls in flight by node, then by `n`, in start order. */
-  readonly #calls = new Map<string, Map<number, LiveCall>>();
+  /** The chunks of each call in flight by node, then by `n`, in start order. */
+  readonly #calls = new Map<string, Map<number, string[]>>();
   readonly #onSubscriberError: (error: unknown, frame: LiveFrame) => void;
   /** The seq after the last record seen. */
   #nextSeq = 0;
@@ -88,52 +90,54 @@ export class LiveChannel {
     return () => void this.#subscribers.delete(subscriber);
   }
 
-  /** Return the last record's seq and a copy of each call in flight. */
+  /**
+   * Return the last record's seq and a copy of each call in flight. Take it in the same synchronous
+   * turn as `subscribe`, so the frames after it are exactly the ones the subscriber gets.
+   */
   snapshot(): LiveSnapshot {
     const calls: LiveCall[] = [];
-    for (const byN of this.#calls.values()) {
-      for (const call of byN.values()) calls.push({ ...call, chunks: [...call.chunks] });
+    for (const [node, byN] of this.#calls) {
+      // Chunk indexes are dense from 0, so the next one is the count so far.
+      for (const [n, chunks] of byN) calls.push({ node, n, chunks: [...chunks], next_index: chunks.length });
     }
     return { last_seq: this.#nextSeq - 1, calls };
   }
 
-  /** Engine only: send the start of the model call of `node`'s step `n`. */
+  /** @internal Engine only: send the start of the model call of `node`'s step `n`. */
   start(node: string, n: number, model: string | null, purpose: string, startedAt: string): void {
     let byN = this.#calls.get(node);
     if (byN === undefined) this.#calls.set(node, (byN = new Map()));
-    byN.set(n, { node, n, chunks: [], next_index: 0 });
+    byN.set(n, []);
     this.#send({ type: "start", node, n, model, purpose, started_at: startedAt });
   }
 
-  /** Engine only: send chunk `index` of the call of `node`'s step `n`. */
+  /** @internal Engine only: send chunk `index` (the call's next) of the call of `node`'s step `n`. */
   chunk(node: string, n: number, index: number, text: string): void {
-    const call = this.#calls.get(node)?.get(n);
-    if (call !== undefined) {
-      call.chunks.push(text);
-      call.next_index = index + 1;
-    }
+    this.#calls.get(node)?.get(n)?.push(text);
     this.#send({ type: "chunk", node, n, index, text });
   }
 
-  /** Engine only: send the end of the call of `node`'s step `n`; one that ended with `error` is dropped. */
+  /**
+   * @internal Engine only: send the end of the call of `node`'s step `n`. Its step record came
+   * first (a reply's, a cut reply's or a failed attempt's), and already dropped the call.
+   */
   end(node: string, n: number, error: string | null): void {
-    if (error !== null) this.#drop(node, n);
     this.#send({ type: "end", node, n, error });
   }
 
-  /** Engine only: drop the calls of `node`, which settled; no frame is sent. */
+  /** @internal Engine only: drop the calls of `node`, which settled; no frame is sent. */
   settle(node: string): void {
     this.#calls.delete(node);
   }
 
   /**
-   * Run boundary only: return a log that appends to `log` and sends each appended record to this
+   * @internal Run boundary only: return a log that appends to `log` and sends each appended record to this
    * channel once the append returns; a `node_step` drops its call. The other members read `log`;
    * closing it closes `log`. The records `log` already holds (a resumed run's) count as seen: the
    * snapshot's `last_seq` starts at the last.
    */
   wrap(log: RunLog): RunLog {
-    this.#nextSeq = Math.max(this.#nextSeq, log.nextSequence);
+    this.#nextSeq = log.nextSequence;
     const recorded = (envelope: RecordEnvelope) => {
       const { seq, record } = envelope;
       this.#nextSeq = seq + 1;

@@ -2573,10 +2573,11 @@ AGENT model call attempt, named by the step its record becomes, its chunks numbe
 (`error` is the error's name; a failed attempt's record comes first). Records never reach
 `on_event`, and frames never enter the log. `snapshot()` gives `{last_seq, calls: [{node, n,
 chunks, next_index}]}`: the last record's seq and each call in flight, one per `(node, n)`, so
-parallel calls stay apart; a call leaves it when its step record is appended, when it ends with an
-error, or when its node settles. A late viewer subscribes, reads the log to its end, takes the
-snapshot, then follows, skipping records at or below `last_seq` and chunks below a call's
-`next_index`. The stream is ephemeral: a subscriber that throws is dropped and reported
+parallel calls stay apart; a call leaves it when its step record is appended (a failed attempt's
+comes before its `end` frame) or when its node settles. A late viewer subscribes and takes the
+snapshot in the same synchronous turn, buffering the frames that follow; reads the log up to
+`last_seq` (possibly async); then applies the buffered frames and follows. Every frame after the
+snapshot is new to it, so it skips nothing. The stream is ephemeral: a subscriber that throws is dropped and reported
 (`onSubscriberError`, a warning by default) and never affects the run. A host forwards frames to
 other processes over its own channel; yian ships no transport.
 

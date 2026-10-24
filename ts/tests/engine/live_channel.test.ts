@@ -17,7 +17,9 @@ import { expect, test } from "bun:test";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { RunEvent } from "../../src/events.ts";
 import { type ChatModel, type Event, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import { Message, type Request } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { LiveChannel, type LiveFrame, type LiveSnapshot } from "../../src/runtime/live.ts";
 import {
   decodeRecord,
@@ -26,6 +28,7 @@ import {
   MemoryRunLog,
   NodeStartedRecord,
   NodeStepRecord,
+  type RecordEnvelope,
 } from "../../src/runtime/log.ts";
 import { withWarnings } from "../../src/platform.ts";
 import { resumeFlow, runFlow } from "../../src/run.ts";
@@ -92,7 +95,7 @@ test("the snapshot lists interleaved calls with their own chunks", () => {
   expect(snapshot.calls[1]!.chunks).toEqual(["b0"]);
 });
 
-test("a call's step record drops only that call; an end with an error drops it too", () => {
+test("a call's step record drops only that call; an end frame leaves the call to its record", () => {
   const { channel, append } = subscribed();
   channel.start("a", 1, null, "chat", T0);
   channel.start("b", 1, null, "chat", T0);
@@ -104,12 +107,11 @@ test("a call's step record drops only that call; an end with an error drops it t
   expect(channel.snapshot().calls.map((call) => call.node)).toEqual(["a", "b"]);
   append(step("a", 1));
   expect(channel.snapshot()).toEqual({ last_seq: 2, calls: [{ node: "b", n: 1, chunks: ["b0"], next_index: 1 }] });
-  channel.start("b", 2, null, "chat", T0);
+  // A run records a failed attempt before its end frame; the end itself drops nothing.
   channel.end("b", 1, "ProviderError");
-  expect(channel.snapshot().calls).toEqual([{ node: "b", n: 2, chunks: [], next_index: 0 }]);
-  // An end without an error leaves the call to its record.
-  channel.end("b", 2, null);
-  expect(channel.snapshot().calls).toEqual([{ node: "b", n: 2, chunks: [], next_index: 0 }]);
+  expect(channel.snapshot().calls).toEqual([{ node: "b", n: 1, chunks: ["b0"], next_index: 1 }]);
+  append(step("b", 1));
+  expect(channel.snapshot().calls).toEqual([]);
 });
 
 test("settling a node drops its calls", () => {
@@ -473,9 +475,10 @@ test("a resumed run's channel starts after the records the log holds and forward
 // ---------- a late viewer ----------
 
 /**
- * A viewer that joined a run: the log up to the snapshot's seq, the snapshot, then frames. It
- * rebuilds each call's text from the snapshot and later chunks, and checks it against the call's
- * `model_call` record when that arrives.
+ * A viewer that joined a run: the snapshot, taken in the same turn as its subscription, then the
+ * log up to the snapshot's seq, then every frame after the snapshot, in order. Nothing is skipped:
+ * each record must follow the last one, and each chunk its call's last. It rebuilds each call's
+ * text and checks it against the call's `model_call` record when that arrives.
  */
 class Viewer {
   lastSeq: number;
@@ -483,8 +486,11 @@ class Viewer {
   /** Each call followed live, by step id: its rebuilt text and its record's text. */
   readonly compared = new Map<string, [string, string]>();
 
-  constructor(snapshot: LiveSnapshot) {
-    this.lastSeq = snapshot.last_seq;
+  /** Join from `snapshot` and the log's records up to its `last_seq`, in order. */
+  constructor(snapshot: LiveSnapshot, records: readonly RecordEnvelope[]) {
+    expect(records.map((envelope) => envelope.seq)).toEqual(records.map((_, seq) => seq));
+    this.lastSeq = records.length - 1;
+    expect(this.lastSeq).toBe(snapshot.last_seq);
     for (const call of snapshot.calls) {
       this.live.set(key(call.node, call.n), { text: call.chunks.join(""), next: call.next_index });
     }
@@ -492,7 +498,6 @@ class Viewer {
 
   apply(frame: LiveFrame): void {
     if (frame.type === "record") {
-      if (frame.seq <= this.lastSeq) return;
       expect(frame.seq).toBe(this.lastSeq + 1);
       this.lastSeq = frame.seq;
       const { record } = decodeRecord(frame.line);
@@ -505,21 +510,21 @@ class Viewer {
     } else if (frame.type === "start") {
       this.live.set(key(frame.node, frame.n), { text: "", next: 0 });
     } else if (frame.type === "chunk") {
-      const call = this.live.get(key(frame.node, frame.n))!;
-      if (frame.index < call.next) return;
-      expect(frame.index).toBe(call.next);
-      call.text += frame.text;
-      call.next = frame.index + 1;
-    } else if (frame.error !== null) {
-      this.live.delete(key(frame.node, frame.n));
+      const call = this.live.get(key(frame.node, frame.n));
+      expect(call).toBeDefined();
+      expect(frame.index).toBe(call!.next);
+      call!.text += frame.text;
+      call!.next = frame.index + 1;
     }
   }
 }
 
 /**
  * Run `flow` over `replies`, opening gates in `order` (the reply keys; each call's chunks, then its
- * finish), and have a viewer join after `joinAt` of them; return the viewer once the run ends, with
- * the log's call texts.
+ * finish). After `joinAt` gates a viewer subscribes and takes the snapshot in one turn; `gap` more
+ * gates open (the run moves on, the frames buffered) before it reads the log up to the snapshot's
+ * seq, as an async read would let happen; then it applies the buffered frames and follows. Return
+ * the viewer once the run ends, with the log's call texts and last seq.
  */
 async function lateViewer(
   flow: string,
@@ -527,48 +532,62 @@ async function lateViewer(
   replies: Record<string, string[]>,
   order: string[],
   joinAt: number,
+  options: { gap?: number; numWorkers?: number; started?: number } = {},
 ): Promise<{ viewer: Viewer; texts: Map<string, string>; lastSeq: number }> {
+  const { gap = 2, numWorkers = 2, started = Object.keys(replies).length } = options;
   const live = new LiveChannel();
   const model = new GatedModel(replies);
-  const calls = Object.keys(replies).length;
   let frames = 0;
   live.subscribe(() => void frames++);
-  const { log, run } = start(flow, inputs, model, { live });
-  await until(() => live.snapshot().calls.length === calls);
-  let viewer: Viewer | null = null;
-  for (let released = 0; released <= order.length; released++) {
-    if (released === joinAt) {
-      // 1. subscribe; 2. read the log to its end; 3. take the snapshot; 4. follow.
-      const pending: LiveFrame[] = [];
-      live.subscribe((frame) => (viewer === null ? pending.push(frame) : viewer.apply(frame)));
-      let read = -1;
-      for (const { envelope } of iterRunRecords(log)) read = envelope.seq;
-      const joined = new Viewer(live.snapshot());
-      expect(joined.lastSeq).toBe(read);
-      for (const frame of pending) joined.apply(frame);
-      viewer = joined;
-    }
-    if (released === order.length) break;
+  const { log, run } = start(flow, inputs, model, { live, numWorkers });
+  await until(() => live.snapshot().calls.length === started);
+  const open = async (gate: number) => {
     const before = frames;
-    model.release(order[released]!);
+    model.release(order[gate]!);
     // A chunk, or the call's record, arrives.
     await until(() => frames > before);
-  }
+  };
+  let released = 0;
+  for (; released < joinAt; released++) await open(released);
+  // 1. Subscribe and take the snapshot in the same turn, buffering what follows.
+  const buffered: LiveFrame[] = [];
+  let viewer: Viewer | null = null;
+  live.subscribe((frame) => (viewer === null ? buffered.push(frame) : viewer.apply(frame)));
+  const snapshot = live.snapshot();
+  // 2. The run moves on while the log is read.
+  for (const end = Math.min(order.length, released + gap); released < end; released++) await open(released);
+  const records: RecordEnvelope[] = [];
+  for (const { envelope } of iterRunRecords(log)) if (envelope.seq <= snapshot.last_seq) records.push(envelope);
+  // 3. Apply the buffered frames, then follow.
+  const joined = new Viewer(snapshot, records);
+  for (const frame of buffered) joined.apply(frame);
+  viewer = joined;
+  for (; released < order.length; released++) await open(released);
   expect((await run).status).toBe("succeeded");
   const texts = callTexts(log);
   const lastSeq = readFileSync(log, "utf8").split("\n").filter((line) => line !== "").length - 1;
   return { viewer: viewer!, texts, lastSeq };
 }
 
+/** Check that every call `viewer` followed rebuilt its recorded text, and it saw the whole log. */
+function expectRebuilt(result: Awaited<ReturnType<typeof lateViewer>>, followed: number): void {
+  const { viewer, texts, lastSeq } = result;
+  expect(viewer.compared.size).toBe(followed);
+  for (const [id, [rebuilt, recorded]] of viewer.compared) {
+    expect(rebuilt).toBe(recorded);
+    expect(texts.get(id)).toBe(recorded);
+  }
+  expect(viewer.lastSeq).toBe(lastSeq);
+  expect(viewer.live.size).toBe(0);
+}
+
 test("a late viewer rebuilds one call's text exactly, joining at every chunk boundary", async () => {
   const replies = { t: ["he", "ll", "o"] };
   const order = ["t", "t", "t", "t"];
   for (let joinAt = 0; joinAt < order.length; joinAt++) {
-    const { viewer, texts, lastSeq } = await lateViewer(ONE_AGENT, { topic: "t" }, replies, order, joinAt);
-    expect([...viewer.compared.values()]).toEqual([["hello", "hello"]]);
-    expect([...texts.values()]).toEqual(["hello"]);
-    expect(viewer.lastSeq).toBe(lastSeq);
-    expect(viewer.live.size).toBe(0);
+    const result = await lateViewer(ONE_AGENT, { topic: "t" }, replies, order, joinAt);
+    expectRebuilt(result, 1);
+    expect([...result.texts.values()]).toEqual(["hello"]);
   }
 });
 
@@ -577,16 +596,65 @@ test("a late viewer rebuilds two parallel calls' texts exactly, joining at every
   // Each call's chunks, then its finish; `b` finishes while `a` still streams.
   const order = ["a", "b", "a", "b", "b", "a", "a"];
   for (let joinAt = 0; joinAt < order.length; joinAt++) {
-    const { viewer, texts, lastSeq } = await lateViewer(MAP_AGENTS, { topics: ["a", "b"] }, replies, order, joinAt);
-    // A call that finished before the viewer joined is in the log it read; every other one is
-    // followed from the snapshot, text for text.
-    const finishedBefore = joinAt > 4 ? 1 : 0;
-    expect(viewer.compared.size).toBe(2 - finishedBefore);
-    for (const [id, [rebuilt, recorded]] of viewer.compared) {
-      expect(rebuilt).toBe(recorded);
-      expect(texts.get(id)).toBe(recorded);
-    }
-    expect(viewer.lastSeq).toBe(lastSeq);
-    expect(viewer.live.size).toBe(0);
+    // A call that finished before the viewer subscribed is in the log it read.
+    expectRebuilt(await lateViewer(MAP_AGENTS, { topics: ["a", "b"] }, replies, order, joinAt), joinAt > 4 ? 1 : 2);
   }
+});
+
+test("a late viewer follows a call that starts and finishes while it reads the log", async () => {
+  // One item at a time: `b`'s call starts only once `a`'s has finished.
+  const replies = { a: ["a0"], b: ["b0", "b1"] };
+  const order = ["a", "a", "b", "b", "b"];
+  for (let joinAt = 0; joinAt < 2; joinAt++) {
+    const result = await lateViewer(MAP_AGENTS, { topics: ["a", "b"] }, replies, order, joinAt, {
+      gap: order.length,
+      numWorkers: 1,
+      started: 1,
+    });
+    expectRebuilt(result, 2);
+    expect([...result.viewer.compared.values()].map(([text]) => text).sort()).toEqual(["a0", "b0b1"]);
+  }
+});
+
+test("a resumed run that replays a recorded model call sends no start or chunk frames", async () => {
+  const flow = await loadFlow(ONE_AGENT);
+  const uncut = runLog();
+  const reply = [new TextDelta(0, "re"), new TextDelta(0, "play"), new Finish({ reason: "stop" })];
+  const scripted = () => new ScriptedModel([reply], CONFIG);
+  await runFlow(flow, { topic: "t" }, { log: uncut, env: NO_ENV, models: serving(scripted()) });
+  const lines = readFileSync(uncut, "utf8").split("\n").filter((line) => line !== "");
+  const kinds = lines.map((line) => decodeRecord(line).kind);
+  // Cut right after the model_call step, before the node's outcome.
+  const cut = kinds.indexOf("node_step") + 1;
+  const log = runLog();
+  await crashAfter(cut, () => runFlow(flow, { topic: "t" }, { log, env: NO_ENV, models: serving(scripted()) }));
+  const live = new LiveChannel();
+  const frames: LiveFrame[] = [];
+  live.subscribe((frame) => void frames.push(frame));
+  const resumed = await resumeFlow({ log, env: NO_ENV, models: serving(new ScriptedModel([], CONFIG)), live });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("replay");
+  expect(new Set(frames.map((frame) => frame.type))).toEqual(new Set(["record"]));
+});
+
+test("a retried call's snapshot drops attempt n once its failed step lands, before n + 1 starts", async () => {
+  const live = new LiveChannel();
+  const snapshots: LiveSnapshot[] = [];
+  live.subscribe((frame) => void (frame.type === "start" && snapshots.push(live.snapshot())));
+  const failing = [new TextDelta(0, "par"), new ProviderError("server", "boom", { retryAfter: 0.001 })];
+  const model = new ScriptedModel([failing, [new TextDelta(0, "whole"), new Finish({ reason: "stop" })]], CONFIG);
+  const env = (name: string) => (name === "YIAN_MODEL_RETRIES" ? "1" : NO_ENV(name));
+  const result = await runFlow(await loadFlow(ONE_AGENT), { topic: "t" }, {
+    log: runLog(),
+    env,
+    random: () => 0,
+    models: serving(model, env),
+    live,
+  });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(snapshots.map((snapshot) => snapshot.calls)).toEqual([
+    [{ node: "write", n: 1, chunks: [], next_index: 0 }],
+    [{ node: "write", n: 2, chunks: [], next_index: 0 }],
+  ]);
+  expect(live.snapshot().calls).toEqual([]);
 });

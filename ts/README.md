@@ -287,11 +287,17 @@ dropped and reported to `new LiveChannel({ onSubscriberError: (error, frame) => 
 warning by default, and the frame still reaches the others. `snapshot()` returns
 `{last_seq, calls: [{node, n, chunks, next_index}]}`: the seq of the last record (`-1` before any)
 and each call in flight with its chunks so far. The channel keeps one buffer per call, so calls of
-parallel nodes (a MAP's items) stay apart; a call leaves it when its step record is appended, when
-it ends with an error, or when its node settles (a stop). A late viewer subscribes, reads the log to
-its end with `iterRunRecords`, takes `snapshot()`, then follows the frames, skipping records at or
-below `last_seq` and chunks below a call's `next_index`. Getting frames to another process is the
-host's job: it sends them over its own channel.
+parallel nodes (a MAP's items) stay apart; a call leaves it when its step record is appended (a
+failed attempt's comes before its `end` frame) or when its node settles (a stop). A late viewer:
+
+1. calls `subscribe` and `snapshot()` in the same synchronous turn, buffering the frames that
+   follow;
+2. reads the log up to the snapshot's `last_seq` with `iterRunRecords` (this may be async);
+3. applies the buffered frames, then follows.
+
+Every frame after the snapshot is new to the viewer: records continue after `last_seq`, and each
+call's chunks after its `next_index`, so nothing is skipped. Getting frames to another process is
+the host's job: it sends them over its own channel.
 
 ## Recovering and inspecting runs
 

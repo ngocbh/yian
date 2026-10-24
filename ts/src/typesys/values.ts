@@ -1164,6 +1164,16 @@ export class Type {
   }
 }
 
+/** Return the type `Inbox(element)`: kind `inbox`, never nullable. */
+export function inboxType(element: Type): Type {
+  return new Type({ kind: ValueKind.INBOX, element });
+}
+
+/** Whether `typ` is an `Inbox(...)` type. */
+export function isInboxType(typ: Type | null | undefined): boolean {
+  return typ != null && typ.kind === ValueKind.INBOX;
+}
+
 /**
  * Return how many record and list levels a type nests.
  *
@@ -1253,7 +1263,12 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
     }
 
     const element = typ.element;
-    if (element !== undefined) {
+    if (typ.kind === ValueKind.INBOX) {
+      if (element === undefined) throw new RangeError("an inbox type needs an element type");
+      if (typ.nullable) throw new RangeError("an inbox is never optional");
+      validateTypeShape(element, active, validated);
+      if (element.kind === ValueKind.INBOX) throw new RangeError("an inbox holds values, not inboxes");
+    } else if (element !== undefined) {
       if (!isListKind(typ.kind)) {
         throw new RangeError("only list types may declare an element type");
       }
@@ -1483,6 +1498,11 @@ function canonicalNonnullableLabel(typ: Type): [string, string] {
     const tags = [...typ.tags].sort(compareCodeUnits);
     const key = "Literal[" + tags.map((tag) => JSON.stringify(tag)).join(",") + "]";
     return [literalLabel(tags), key];
+  }
+
+  if (typ.kind === ValueKind.INBOX) {
+    const [label, key] = labels(typ.element!);
+    return [`Inbox(${label})`, `Inbox[${key}]`];
   }
 
   if (isListKind(typ.kind)) {
@@ -1912,14 +1932,16 @@ export const FILE_FORM = new Type({
  *
  * The check is conservative: it may say two types overlap when no value satisfies both,
  * but never the reverse. It decides whether an untagged union's members can be told
- * apart from the data alone. `Any` overlaps every type except `None`. Since a `file`
- * slot reads a file's JSON form `{uri, mime, name}`, `file` overlaps plain `object`,
- * `Any`, and every record that admits that mapping.
+ * apart from the data alone. `Any` overlaps every type except `None` and `Inbox(T)`, and an
+ * inbox overlaps only another inbox. Since a `file` slot reads a file's JSON form
+ * `{uri, mime, name}`, `file` overlaps plain `object`, `Any`, and every record that admits
+ * that mapping.
  *
  * Example: `{action: Literal(buy), qty: int}` and `{action: Literal(sell), price: float}`
  * do not overlap; `{conviction: float}` overlaps itself.
  */
 export function typesOverlap(a: Type, b: Type): boolean {
+  if (a.kind === ValueKind.INBOX || b.kind === ValueKind.INBOX) return a.kind === b.kind;
   if (admitsNone(a) && admitsNone(b)) return true;
   if (a.kind === ValueKind.ANY || b.kind === ValueKind.ANY) {
     const other = a.kind === ValueKind.ANY ? b : a;

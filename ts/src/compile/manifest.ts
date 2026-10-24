@@ -119,7 +119,7 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "steerable",
   ],
   [NodeKind.CODE]: ["code"],
-  [NodeKind.TOOL]: ["toolId", "retries"],
+  [NodeKind.TOOL]: ["toolId", "retries", "answerSchema"],
   [NodeKind.CASE]: ["cases"],
   [NodeKind.HUMAN_INPUT]: ["prompt", "answerSchema", "questions", "questionsInput"],
   // WAIT's execution identity is its required flow-owned `until` wiring; the node owns no
@@ -159,8 +159,7 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // only labels a failing body's stack frames.
   [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeOrigin", "codeLineOrigins"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
-  // `answerSchema` is not part of a TOOL's identity yet: no loaded flow sets it.
-  [NodeKind.TOOL]: ["inputTypes", "answerSchema"],
+  [NodeKind.TOOL]: ["inputTypes"],
   [NodeKind.CASE]: [],
   [NodeKind.HUMAN_INPUT]: [],
   [NodeKind.WAIT]: [],
@@ -866,6 +865,10 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       // Left out at zero, so retries don't change the identity of flows that don't set them (the
       // shape follows Python's manifest).
       if (retries !== 0) manifest.retries = retries;
+      // Left out when empty, as for every tool but an ask with an `output:`.
+      if (tool.answerSchema.length > 0) {
+        manifest.answer_schema = canonicalValue(tool.answerSchema, ctx, `${path}.answerSchema`);
+      }
       break;
     }
     case NodeKind.CASE: {

@@ -36,6 +36,7 @@ import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { logJson } from "../../src/typesys/json.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
 import { callReply, serving, textReply } from "./run_state_fixtures.ts";
@@ -360,8 +361,17 @@ test("a finished run reopened has no tool groups: its group-granting occurrence 
   const events: unknown[] = [];
   const outcome = await reopened.backward("Shorter.", { onEvent: (event) => events.push(event) });
   expect(outcome.status, JSON.stringify(outcome.failure)).toBe("succeeded");
-  const [episode] = backend.learnContexts[0]!.episodes;
+  const context = backend.learnContexts[0]!;
+  const [episode] = context.episodes;
+  // Learning reads no prompt, memory sections or interactions of it; the rest stays.
   expect(episode!.prompt).toBeNull();
+  expect(episode!.memorySections).toEqual([]);
   expect(episode!.interactions).toEqual([]);
+  expect(episode!.output).toBe("done");
+  expect(logJson(context.feedback)).toContain("Shorter.");
+  // AGENT backward still runs, with no evaluation evidence.
+  const prompt = model.requests[0]!.messages[1]!.text();
+  expect(prompt).toContain("Shorter.");
+  expect(prompt).toMatch(/"evaluation_evidence": ?null/);
   expect(events).toEqual([new ReplayDegraded({ nodeId: "writer", reason: "rebuilt_request_differs" })]);
 });

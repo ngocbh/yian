@@ -136,8 +136,10 @@ memory episode's prompts, memory sections and interactions) is rebuilt from the 
 from the recorded flow and skills, the memory sections by recalling against the recorded
 snapshots, and the interactions from the invocation's `model_call` and `tool_result` steps, a
 reply's calls then their results in call order. Each rebuilt request must match the
-`request_sha256` its step recorded; an invocation whose request differs is left out and reported
-as a `ReplayDegraded` with reason `rebuilt_request_differs`. See
+`request_sha256` its step recorded. When one differs (or the render, recall, structured model or
+a tool group can't be rebuilt now), learning reads no prompt, memory sections or interactions of
+that invocation, though backward still reaches it and its episodes keep their inputs, output and
+feedback; it is reported as a `ReplayDegraded` with reason `rebuilt_request_differs`. See
 [explicit backward feedback](api.md#explicit-backward-feedback).
 
 See [runtime nodes](nodes.md#the-contract) for the hook contract and

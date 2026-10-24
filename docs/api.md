@@ -1468,18 +1468,24 @@ recorded flow and skills (no node runs), the memory sections by recalling agains
 snapshots, and the interactions from the invocation's `model_call` and `tool_result` steps.
 Interactions follow step order: each reply's text when it calls no tool, else its calls, then
 their results in call order, so two calls that ran one at a time read call A, call B, result A,
-result B. Every request rebuilt from them is checked against the `request_sha256` its step
-recorded; an invocation whose rebuilt request differs is left out (learning reads nothing of it)
-and reported to `onEvent` as a `ReplayDegraded` with reason `rebuilt_request_differs`. A
-structured agent's model is built, never called, to read its structured-output plan, and a grant
-of a tool group is expanded with the run's tools (a finished run that `advance` reopened has
-none, so its grants are read as tool names).
+result B. A structured agent's model is built, never called, to read its structured-output plan,
+and a grant of a tool group is expanded with the run's tools.
+
+Every request rebuilt from them is checked against the `request_sha256` its step recorded. When
+one differs, learning reads no prompt, memory sections or interactions of that invocation: AGENT
+backward still runs, with `evaluation_evidence` set to `null`, and its memory episodes keep their
+inputs, output and feedback. Each such invocation is reported to `onEvent` as a `ReplayDegraded`
+with reason `rebuilt_request_differs`. Besides a changed flow or skill, that happens when the
+render or recall fails now, when a structured agent's model can't be built now, and when a tool
+group can't be expanded: `run_started` records no group membership, and a finished run that
+`advance` reopened opens no tools, so its grants are read as tool names.
 
 Since recall is rebuilt, it must give the same text each time for the same snapshot and context.
 A custom memory's `recall`, and the `rewriteQuery()` a subclass of `EpisodicMemory` or
 `ReflectiveMemory` overrides, must return the same result for the same `RecallContext` every time.
 Otherwise a rebuilt request can differ from the recorded one: each occurrence the memory is scoped
-to whose request differs drops out of learning and is reported as `rebuilt_request_differs`.
+to whose request differs loses its prompt, memory sections and interactions in learning, and is
+reported as `rebuilt_request_differs`.
 
 Known callback/result failures return a failed outcome without partial root
 feedback. A later learner or commit failure retains already completed feedback.

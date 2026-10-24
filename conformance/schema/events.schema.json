@@ -246,13 +246,13 @@
       }
     },
     "ReplayDegraded": {
-      "description": "An AGENT's model left out replay state it couldn't send back, once per reason per invocation; the replayed turns' text and tool calls were still sent (in-loop, transient). One published during AGENT backward (under the AGENT's node_id) or with node_id __memory__ (a memory's learner) comes from outside a forward node; in practice it can't fire there, since those requests replay no assistant message. A backward pass also publishes one with reason rebuilt_request_differs, under an AGENT's node_id, when a request rebuilt from that occurrence's recorded steps doesn't match the digest its step recorded; learning then reads nothing of that occurrence.",
+      "description": "An AGENT's model left out replay state it couldn't send back, once per reason per invocation; the replayed turns' text and tool calls were still sent (in-loop, transient). One published during AGENT backward (under the AGENT's node_id) or with node_id __memory__ (a memory's learner) comes from outside a forward node; in practice it can't fire there, since those requests replay no assistant message. A backward pass also publishes one with reason rebuilt_request_differs, under an AGENT's node_id, when a request rebuilt from that occurrence's recorded steps doesn't match the digest its step recorded (or its render, recall, structured model or tool groups can't be rebuilt); learning then reads no prompt, memory sections or interactions of that occurrence, while its backward call and memory episodes still run with its inputs, output and feedback.",
       "type": "object",
       "required": ["node_id", "reason"],
       "properties": {
         "node_id": {"type": "string"},
         "reason": {
-          "description": "Why the replay state was left out; rebuilt_request_differs: why learning left an occurrence out.",
+          "description": "Why the replay state was left out; rebuilt_request_differs: why learning read no prompt, memory sections or interactions of an occurrence.",
           "type": "string",
           "enum": ["missing", "malformed", "unknown_version", "other_protocol", "other_provider", "other_model", "other_account", "unknown_field", "rebuilt_request_differs"]
         }

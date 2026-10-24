@@ -1368,8 +1368,9 @@ START is ready after the START inputs' commit; a success walks its
   where Python's `==` treats them equal).
 - `src/runtime/backward.ts` holds `learningMaterials(state, { memory, models, expandTools,
   onEvent })`, which rebuilds every occurrence's learning material once per attempt (one whose
-  rebuilt request misses its digest is left out and reported as `ReplayDegraded`
-  `rebuilt_request_differs`), and
+  rebuilt request misses its digest, or whose render, recall, structured model or tool groups
+  can't be rebuilt, has no material: learning reads no prompt, sections or interactions of it,
+  and it is reported as `ReplayDegraded` `rebuilt_request_differs`), and
   `computeBackward(trace, rootFeedback, { cache, materials, models, onEvent })`: one reverse walk over the
   accepted occurrences that gathers each occurrence's messages, calls its retained backward handler
   once with `{ models, onEvent }` (awaited; it may return a promise), validates the whole result

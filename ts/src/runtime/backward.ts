@@ -227,9 +227,12 @@ export type LearningMaterials = ReadonlyMap<string, LearningMaterial>;
  * (`occurrenceMaterial`), from the run's recorded skills and tool specs and, for an occurrence
  * with memories, a recall against `memory`, opened on the recorded snapshots.
  *
- * An occurrence whose rebuilt requests don't match its recorded digests is left out, so learning
- * reads nothing of it, and reported as a `ReplayDegraded` naming its node (reason
- * `rebuilt_request_differs`).
+ * An occurrence whose rebuilt requests don't match its recorded digests has no material, so
+ * learning reads no prompt, memory sections or interactions of it (its backward context's
+ * `_evaluation_evidence` is `null`, and its episodes keep their inputs, output and feedback). It
+ * is reported as a `ReplayDegraded` naming its node (reason `rebuilt_request_differs`). Besides a
+ * changed request, a render or recall that fails now, a structured model that can't be built and
+ * a tool group that can't be expanded fail the check too.
  *
  * @param options `memory` recalls for scoped occurrences (`null` recalls nothing); `models`
  *   builds a structured call's model to read its plan off; `expandTools` expands the run's tool

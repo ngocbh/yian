@@ -761,7 +761,8 @@ Most are just the functional model (above) made enforceable:
   occurrence's steps (kept on `TraceOccurrence`), its render with the recorded
   skills and a recall against the recorded snapshots, through the node's
   `learningMaterial` hook; a rebuilt request that misses its step's
-  `request_sha256` leaves the occurrence out (`ReplayDegraded`
+  `request_sha256` leaves out the occurrence's prompt, sections and
+  interactions, never its backward call or episodes (`ReplayDegraded`
   `rebuilt_request_differs`). `backwardContext` stays synchronous and takes the
   material, since the reducer validates backward results through it.
 - **Memory setup and learning are record-authoritative** — authored

@@ -16,8 +16,8 @@
  * and `isMemory`, which stands in for Python's `isinstance` check against the runtime-checkable
  * `Memory` protocol), and the learning results (`MemoryMutation`, `LearningFailure`,
  * `PolicyCommitOutcome`, `LearningResult`), what a learner sees of an AGENT invocation
- * (`MemorySection`, and the `VisibleInteraction` carriers `ModelTextInteraction`, `ModelValueInteraction`, `ToolCallInteraction`,
- * `ToolResultInteraction`), the learning inputs (`MemoryEpisode` with its
+ * (`MemorySection`, and the `VisibleInteraction` carriers `ModelTextInteraction`,
+ * `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`), the learning inputs (`MemoryEpisode` with its
  * `MemoryEpisodeStatus`, and `LearnContext`), and the recall carriers (`RecallContext`,
  * `MemoryContent`, `MemoryContext`, `MemoryRecallError`).
  * TS yian has no session memory and no conversation contracts: chat history is a LOOP-carried

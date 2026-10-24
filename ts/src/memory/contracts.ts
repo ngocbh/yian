@@ -11,8 +11,8 @@
  * carriers (`MemoryMutation` with its batch check `validateMutations`, `LearningFailure`,
  * `PolicyCommitOutcome`, `LearningResult`), frozen and holding their carriers by reference; and
  * what a learner sees of an AGENT invocation (its recalled `MemorySection` values and the visible
- * model and tool interactions), the accepted episodes (`MemoryEpisode`) and one memory's learning batch (`LearnContext`, with its feedback snapshot
- * `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
+ * model and tool interactions), the accepted episodes (`MemoryEpisode`) and one memory's learning
+ * batch (`LearnContext`, with its feedback snapshot `freezeFeedback`), whose JSON follows the yian value number rule; and the value comparisons of
  * the scope, snapshot, spec, operation failure and learning carriers (`sameMemoryScope`,
  * `sameMemorySnapshotEnvelope`, `sameMemorySpec`, `sameMemoryOperationFailure`, `sameMemoryMutation`, `sameLearningFailure`,
  * `samePolicyCommitOutcome`, `sameLearningResult`). It also holds the recall carriers
@@ -196,8 +196,8 @@ function freezeJson(
  * floats, well-formed strings, plain arrays and plain objects with string keys, copied into frozen
  * arrays and frozen objects whose keys are inserted in code-unit order. With `limitNesting` (the
  * default, for configs) it nests at most `current().maxValueNesting` container levels. With
- * `valueNumbers` (for interaction and episode values) numbers follow the yian value rule instead: NaN refused,
- * `±Infinity` kept, `-0` copied as `0`.
+ * `valueNumbers` (for interaction and episode values) numbers follow the yian value rule instead:
+ * NaN refused, `±Infinity` kept, `-0` copied as `0`.
  *
  * @throws TypeError when `value` isn't a plain object, holds a non-JSON value, or has a symbol key.
  * @throws RangeError for a refused number, a lone surrogate, a cycle, or nesting past the limit.
@@ -212,7 +212,7 @@ export function freezeJsonObject(
   return freezeJson(value, name, limit, options.valueNumbers ?? false) as JsonObject;
 }
 
-/** Validate and copy one interaction or episode JSON value at any depth under the yian value number rule. */
+/** Validate and copy one interaction or episode JSON value at any depth under the value number rule. */
 function freezeEvidenceJson(value: unknown, name: string): JsonValue {
   return freezeJson(value, name, Number.POSITIVE_INFINITY, true);
 }

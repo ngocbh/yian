@@ -37,18 +37,18 @@ import {
   ToolResultPart,
   ToolSpec,
 } from "../../llm/messages.ts";
-import { realScheduler } from "../../platform.ts";
-import type { Skill } from "../../skills/catalog.ts";
-import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
-import { isReportedToolError } from "../../tools/errors.ts";
-import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
-import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
 import {
   ModelTextInteraction,
   ToolCallInteraction,
   ToolResultInteraction,
   type VisibleInteraction,
 } from "../../memory/contracts.ts";
+import { realScheduler } from "../../platform.ts";
+import type { Skill } from "../../skills/catalog.ts";
+import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
+import { isReportedToolError } from "../../tools/errors.ts";
+import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
+import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
 import { Output } from "../base.ts";
 import {
   AgentLoopError,
@@ -243,8 +243,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
  * else its runnable calls, then the results recorded for them in call order (a `skipped` result
  * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
  * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
- * the node) show nothing. Steps of another kind are skipped. A request's
- * digest leaves steers out, as the writer does, so steers never break the check.
+ * the node) show nothing. Steps of another kind are skipped. A request's digest leaves steers
+ * out, as the writer does, so steers never break the check.
  *
  * @param steps The invocation's steps across its starts.
  * @param options `messages` are the system message (memory sections included) and the prompt's
@@ -429,7 +429,7 @@ interface ReplayedCall {
  * @throws A stop's reason, or a failed check's error (`failCall`).
  */
 async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
-  const { ctx, steps } = turn;
+  const { steps } = turn;
   let group: ReplayedCall[] = [];
   const commit = () => {
     for (const { call, result } of group) {
@@ -548,7 +548,7 @@ async function failCall(
   index: number,
   failed: { readonly error: unknown; readonly granted: boolean },
 ): Promise<true> {
-  const { ctx, live } = turn;
+  const { live } = turn;
   checkNodeStopped(turn);
   if (turn.interrupt?.aborted) return skipFrom(turn, index);
   if (failed.granted) {
@@ -576,7 +576,7 @@ async function failCall(
  */
 async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<boolean> {
   if (group.length === 0) return false;
-  const { ctx, live } = turn;
+  const { live } = turn;
   checkNodeStopped(turn);
   if (turn.interrupt?.aborted) return skipFrom(turn, group[0]!.index);
   const signal = nodeSignal(turn);

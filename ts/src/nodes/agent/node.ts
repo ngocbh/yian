@@ -89,6 +89,7 @@ import {
   typesNullable,
 } from "./llm_values.ts";
 import { runAgent, stepsMaterial } from "./loop.ts";
+import { systemPromptWithMemory } from "./memory.ts";
 import {
   checkMessage,
   checkModelConversation,
@@ -97,7 +98,6 @@ import {
   type Message,
   toModelMessage,
 } from "./messages.ts";
-import { systemPromptWithMemory } from "./memory.ts";
 import { OutputInvalidError } from "./structured.ts";
 
 /** The step key under which a call-time agent records the config it resolved. */
@@ -171,7 +171,7 @@ interface PromptMessage {
   readonly role: "user" | "assistant" | "tool";
   /** The text recall and learning read: a text message's text, or the model message's text parts. */
   readonly text: string;
-  /** A spliced `Message`'s model message; `null` for a text message, which `runContext` builds as before. */
+  /** A spliced `Message`'s model message; `null` for a text message, built when the prompt's messages are read. */
   readonly model: ModelMessage | null;
   /** `{role, text}` for a text message; a spliced `Message` value's wire JSON without its opaque fields. */
   readonly captured: Value;
@@ -911,8 +911,8 @@ export class AgentNode extends Node {
 
   /**
    * Render the prompt once (`renderAgentPrompt`, which publishes the render capture), recall with
-   * it, and run the loop. Recall and learning read the last message's text. No
-   * invocation state is stored on the node.
+   * it, and run the loop. Recall and learning read the last message's text. No invocation state
+   * is stored on the node.
    *
    * A call-time agent's model config is its bound `__llm_config` with the run's host key and
    * header values joined when it is marked for the host key; any other agent uses its run's

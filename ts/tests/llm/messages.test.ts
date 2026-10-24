@@ -1138,6 +1138,8 @@ describe("message schema", () => {
       const message = new Message({ role, parts: [new TextPart("x")] });
       expect(validate(SCHEMA, SCHEMA, message.toJSON())).toEqual([]);
     }
+    const authored = new Message({ role: "user", parts: [new TextPart("x")], author: "alice" });
+    expect(validate(SCHEMA, SCHEMA, authored.toJSON())).toEqual([]);
   });
 
   test.each([
@@ -1157,6 +1159,8 @@ describe("message schema", () => {
     ["is_error not a boolean", (data: Data) => (data["parts"][6]["is_error"] = "yes")],
     ["a missing part field", (data: Data) => delete data["parts"][4]["id"]],
     ["an explicit null protocol", (data: Data) => (data["protocol"] = null)],
+    ["an explicit null author", (data: Data) => (data["author"] = null)],
+    ["an empty author", (data: Data) => (data["author"] = "")],
     ["an explicit null provider_payload", (data: Data) => (data["provider_payload"] = null)],
     ["an explicit null part payload", (data: Data) => (data["parts"][0]["provider_payload"] = null)],
     ["an explicit null data", (data: Data) => (data["parts"][2]["data"] = null)],

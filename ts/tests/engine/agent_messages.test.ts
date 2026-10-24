@@ -12,7 +12,9 @@ import {
 } from "../../src/llm/messages.ts";
 import { checkMessage, fromModelMessage, type Message, toModelMessage } from "../../src/nodes/agent/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { typeFor } from "../../src/typesys/types.ts";
 import { FileRef, TypeCheckError, TypedValue, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
+import { loadSchema } from "../schema.ts";
 
 const FILE = { uri: "media/abc.png", mime: "image/png", name: null };
 
@@ -96,4 +98,22 @@ test("a Message and a list of them survive the run log's codec; checkMessage res
   const undecoded = fileOf((list.value as Message[])[2]!);
   expect(FileRef.isFileRef(undecoded)).toBe(false);
   expect(undecoded).toEqual(FILE);
+});
+
+describe("agreement with message.schema.json", () => {
+  const SCHEMA = loadSchema("message.schema.json") as { properties: Record<string, unknown>; $defs: Record<string, { properties: Record<string, unknown> }> };
+  const message = typeFor("Message", new Map());
+  const parts = message.fields!.get("parts")!.element!.variants!;
+  const partFields = (tag: string) =>
+    [...parts.find((p) => p.fields!.get("type")!.tags!.has(tag))!.fields!.keys()].sort();
+
+  test("every key a model message may hold has a field in Message", () => {
+    const keys = Object.keys(SCHEMA.properties).filter((key) => key !== "format");
+    expect(keys.filter((key) => !message.fields!.has(key))).toEqual([]);
+  });
+
+  test.each(["text", "reasoning", "refusal", "tool_call", "tool_result", "media"])("the %s part has the schema's keys", (tag) => {
+    const keys = Object.keys(SCHEMA.$defs[tag]!.properties).filter((key) => !(tag === "media" && (key === "data" || key === "url")));
+    expect(partFields(tag)).toEqual(keys.sort());
+  });
 });

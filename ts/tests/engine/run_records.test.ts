@@ -1211,6 +1211,12 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     "RunStarted tool_groups['g'][0] must be a non-empty string",
   ],
   [
+    "a tool group naming a tool the specs lack",
+    (payload) => (payload["tool_groups"] = { g: ["missing"] }),
+    RangeError,
+    "RunStarted tool_groups['g'] names 'missing', which tools doesn't hold",
+  ],
+  [
     "an empty yian version",
     (payload) => (payload["yian_version"] = ""),
     RangeError,

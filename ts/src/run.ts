@@ -1369,6 +1369,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkToolGrants(flow.compiled, runTools);
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
+      checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
 
       if (state.memories !== null) {
         checkRegistryTypes(memory!, state.memories);
@@ -1523,6 +1524,26 @@ function checkRecordedSpecs(
       if (logJson(was[field]) !== logJson(now[field])) {
         throw new RangeError(`${subject} ${field} differs from the recorded one`);
       }
+    }
+  }
+}
+
+/**
+ * Refuse a resume whose granted tool groups hold other tools, or other tools in another order,
+ * than the run recorded: learning expands the run's grants with the recorded membership.
+ *
+ * @throws RangeError naming the first group, by name, that differs.
+ */
+function checkRecordedToolGroups(
+  recorded: Readonly<Record<string, readonly string[]>>,
+  current: Readonly<Record<string, readonly string[]>>,
+): void {
+  const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
+  const members = (groups: Readonly<Record<string, readonly string[]>>, name: string) =>
+    Object.hasOwn(groups, name) ? logJson([...groups[name]!]) : null;
+  for (const name of names) {
+    if (members(recorded, name) !== members(current, name)) {
+      throw new RangeError(`resume refused: tool_groups.${name} differs from the recorded one`);
     }
   }
 }

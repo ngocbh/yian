@@ -297,8 +297,8 @@ export class RunStartedRecord {
    *   are only partly recorded, aren't sorted and unique, disagree on their keys or a stack names
    *   an unknown key, a defaults name is empty, `callTimeLlm` has missing or extra fields, no
    *   agent, an empty agent path or a non-JSON value, `flow.files` lacks `flow.root` or a file
-   *   its refs name, a name, the flow's root or folder or the version is empty, or a tool's
-   *   parameters aren't JSON.
+   *   its refs name, a name, the flow's root or folder or the version is empty, a tool's
+   *   parameters aren't JSON, or a tool group names a tool `tools` lacks.
    * @throws TypeCheckError at the bad part's path when the wiring override or the agent
    *   configuration holds NaN or another non-JSON value (see `jsonPart`).
    */
@@ -351,7 +351,7 @@ export class RunStartedRecord {
         parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
       };
     });
-    this.toolGroups = validatedToolGroups(toolGroups);
+    this.toolGroups = validatedToolGroups(toolGroups, this.tools);
     this.yianVersion = requireName(yianVersion, "RunStarted yian_version");
     this.parent = parent === null ? null : validatedParent(parent);
     Object.freeze(this);
@@ -383,15 +383,22 @@ function requireName(value: unknown, label: string): string {
  * Return a frozen copy of `RunStarted.tool_groups`: each group's tool names as a frozen array.
  *
  * @throws TypeError when `groups` isn't a plain object or a group isn't an array of strings.
- * @throws RangeError when a group or tool name is empty.
+ * @throws RangeError when a group or tool name is empty, or a group names a tool `tools` lacks.
  */
-function validatedToolGroups(groups: unknown): Readonly<Record<string, readonly string[]>> {
+function validatedToolGroups(
+  groups: unknown,
+  tools: Readonly<Record<string, RecordedTool>>,
+): Readonly<Record<string, readonly string[]>> {
   if (!isRecord(groups)) throw new TypeError("RunStarted tool_groups must be an object");
   const entries = Object.entries(groups).map(([name, members]): [string, readonly string[]] => {
     const label = `RunStarted tool_groups[${reprText(name)}]`;
     if (!name) throw new RangeError("RunStarted tool_groups names must be non-empty strings");
     if (!Array.isArray(members)) throw new TypeError(`${label} must be an array of tool names`);
-    return [name, Object.freeze(members.map((member, index) => requireName(member, `${label}[${index}]`)))];
+    const names = members.map((member, index) => requireName(member, `${label}[${index}]`));
+    for (const member of names) {
+      if (!Object.hasOwn(tools, member)) throw new RangeError(`${label} names ${reprText(member)}, which tools doesn't hold`);
+    }
+    return [name, Object.freeze(names)];
   });
   // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
   return Object.freeze(Object.fromEntries(entries));

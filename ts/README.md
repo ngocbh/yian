@@ -98,7 +98,7 @@ are internal: they serve the CLI and yian's own code, and may change without not
 | Import | Names |
 |---|---|
 | `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `advance`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `pending`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`, `WaitInfo`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskHandler`, `AskRequest`, `AskTool`, `AskUserHandler`, `AskUserRequest`, `pending`, `isPending`, `PendingMarker`, `TAKE`, `SLEEP`, `ASK`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
@@ -355,8 +355,9 @@ the run resumable. A log another yian version started resumes with a warning. Se
 with `resume_flow`][docs/api.md#durable-recovery-with-resume_flow].
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
-`"failed"`, `"stopped"` or `"crashed"`), `inFlight`, `crashedAttempts`, `runId`, `schema`,
-`flowFingerprint`, `learnable`, `lastSeq`, `startedAt`, `endedAt` and `failure`. Pass `flow` for an
+`"failed"`, `"cancelled"`, `"waiting"`, `"stopped"` or `"crashed"`), `inFlight`, `crashedAttempts`,
+`runId`, `schema`, `flowFingerprint`, `learnable`, `lastSeq`, `startedAt`, `endedAt`, `failure`, and
+for a waiting run `waits` (each waiting node's calls, `WaitInfo`s), `ready` and `wakeAt`. Pass `flow` for an
 exact status. See [Reading a run log with
 `inspectRun`][docs/api.md#reading-a-run-log-with-inspectrun].
 
@@ -1249,15 +1250,20 @@ Node 22, and so does every unit test; a change keeps both green.
   the line to the message.
 - `src/runtime/run_index.ts` (TS-only) holds the run index, `<runs>/index.sqlite`: `updateRunIndex`
   folds each run folder's log into one row from the byte offset the row reached
-  (`iterRunRecords`), keeping the run scan (`RunScan`: plain JSON data, folded one record at a
-  time by `foldRunScan`, read by `scanStatus`) in a `scan` column. `inspectRun`'s record scan is a
+  (`iterRunRecords`), keeping the run scan (`RunScan`: JSON data and the waits fold's JSON form, folded one record
+  at a time by `foldRunScan`, read by `scanStatus`, read back by `runScanFromJson`) in a `scan`
+  column. `inspectRun`'s record scan is a
   loop over the same `foldRunScan`, so both read a status by one set of rules. `readRunIndex` puts
-  `running` on top while a writer holds a run's lock. One `BEGIN IMMEDIATE` transaction with a busy
+  `running` on top while a writer holds a run's lock, and reads a waiting run's `waits`, `ready` and
+  `wakeAt` from the scan. One `BEGIN IMMEDIATE` transaction with a busy
   timeout serializes builders. Never imported by the reducer or the engine.
 - `src/runtime/waits.ts` (TS-only) holds the waits state a run's records build (`WaitsState`: the
-  waiting nodes, registered calls and inboxes; run status stays with `RunScan`), which
-  `RunState.waits` carries; `RunState.inboxEvents` holds each send's value by seq. The reducer
-  doesn't apply the inbox and wait records yet: it refuses them.
+  waiting nodes, registered calls and inboxes; run status stays with `RunScan`) and its one fold,
+  `applyWaitsRecord`, which the run scan applies to every record, with its queries (`nodeCalls`,
+  `isWakeable`, `wakeableNodes`, `dueTimeouts`, `wakeAt`, `waitInfos`, `unreadEvents`,
+  `availableUnread`) and `decideWait`, which decides a take or sleep when its node commits.
+  `RunState.waits` carries the same state; `RunState.inboxEvents` holds each send's value by seq.
+  The reducer doesn't apply the inbox and wait records yet: it refuses them.
 - `src/runtime/trace.ts` holds the retained trace of a learnable run (`RetainedTrace`: accepted
   sources, occurrences, current writers, boundaries and the terminal). `prepareTrace` checks one
   record against the trace and returns a frozen `TraceDelta`; the caller applies it

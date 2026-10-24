@@ -68,7 +68,7 @@ import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
 import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
-import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
+import { RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import type { FeedbackValue } from "./expr/lineage.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
@@ -132,11 +132,13 @@ import {
   type RecordEnvelope,
   type RunLog,
   type RunLogEntry,
+  RunFailedRecord,
   RunResumedRecord,
   RunStartedRecord,
 } from "./runtime/log.ts";
 import { MemoryRuntime } from "./runtime/memory_runtime.ts";
-import { emptyRunScan, foldRunScan, scanStatus } from "./runtime/run_index.ts";
+import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
+import { type WaitInfo, type WaitsState, wakeableNodes, wakeAt, waitInfos } from "./runtime/waits.ts";
 import {
   acceptedCommit,
   addCrashedAttempts,
@@ -218,6 +220,7 @@ export {
   type ValueRecord,
 } from "./typesys/values.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
+export type { WaitInfo } from "./runtime/waits.ts";
 export {
   readRunIndex,
   RunIndexBusyError,
@@ -1574,17 +1577,21 @@ export function runLogPath(runsDir: string, runId: string): string {
 }
 
 /** Where a run log stands, as `inspectRun` reads it. */
-export type RunStatus = "running" | "succeeded" | "failed" | "stopped" | "crashed";
+export type RunStatus = "running" | "succeeded" | "failed" | "cancelled" | "waiting" | "stopped" | "crashed";
 
 /** What `inspectRun` reads from one run log. */
 export interface RunInspection {
   /**
-   * `running` while a writer holds the log's lock; `succeeded` or `failed` once the run finished;
-   * `stopped` when the host stopped the last segment; otherwise `crashed` (the process ended
-   * without a stop). A run that isn't running or finished can be resumed.
+   * `running` while a writer holds the log's lock; `succeeded`, `failed` or `cancelled` once the
+   * run ended; `waiting` when its last segment ended with every unsettled node waiting (on a take,
+   * a sleep or a host call); `stopped` when the host stopped the last segment; otherwise `crashed`
+   * (the process ended without a stop). A run that isn't running or ended can be advanced.
    */
   readonly status: RunStatus;
-  /** The nodes started and not settled, in start order; `[]` for a finished run. */
+  /**
+   * The nodes started (or woken) and neither settled nor waiting, in start order; `[]` for an
+   * ended run.
+   */
   readonly inFlight: readonly string[];
   /**
    * By node id, the starts a resume retried with no stop covering them, plus, for a run that is
@@ -1608,25 +1615,43 @@ export interface RunInspection {
    */
   readonly startedAt: string | null;
   /**
-   * When a `succeeded` or `failed` run ended: the time of the log's last record (a backward
-   * attempt's records come after the run's outcome, so they move it); `null` for any other
-   * status. Times come from the writer's clock, so they aren't guaranteed to increase.
+   * When a `succeeded`, `failed` or `cancelled` run ended: the time of the log's last record (a
+   * backward attempt's records come after the run's outcome, so they move it); `null` for any
+   * other status. Times come from the writer's clock, so they aren't guaranteed to increase.
    */
   readonly endedAt: string | null;
   /**
    * The failure that ended a `failed` run: the node's failure, or the `graph.terminal_unreachable`
-   * failure of a route that proved END unreachable; `null` for any other status.
+   * failure of a route that proved END unreachable (or of the `RunFailed` that ended a run whose
+   * nodes waited); `null` for any other status.
    */
   readonly failure: Failure | null;
+  /**
+   * For a `waiting` run, the calls of each waiting node, oldest wait first; `[]` for any other
+   * status.
+   */
+  readonly waits: readonly WaitInfo[];
+  /**
+   * Whether a `waiting` run has a waiting node it can wake now (every call it waits on is
+   * settled); `false` for any other status. A host also advances a waiting run once `wakeAt` is
+   * due, though `ready` is still `false`.
+   */
+  readonly ready: boolean;
+  /**
+   * For a `waiting` run, the earliest deadline of an open call of a waiting node (a record time),
+   * when `advance` times it out; `null` when none has a deadline, and for any other status.
+   */
+  readonly wakeAt: string | null;
 }
 
 /**
  * Read where the run in `log` stands without changing the file or taking its lock.
  *
- * In-flight nodes and crashed counts come from the records. Without `flow`, the status is
- * read from the records too: `failed` after a node failure; `succeeded` after the top-level END
- * succeeded, and `failed` after a route proved END unreachable, each with nothing in flight. The
- * records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
+ * In-flight nodes, crashed counts and the waits come from the records. Without `flow`, the status
+ * is read from the records too: `cancelled` after a cancel; `failed` after a node failure or a
+ * `RunFailed`; with nothing in flight and nothing waiting, `succeeded` after the top-level END
+ * succeeded, else `failed` after a route proved END unreachable; then `waiting` when the last
+ * segment ended with every node waiting (`RunWaiting`). The records don't hold the ready nodes, so a run whose process ended after END succeeded (or after
  * that proof) but before a node already ready started reads as finished, though `advance` would
  * still run that node. With `flow`, the log is replayed as `advance` replays it, so the status
  * is exact; pass the flow when you have it. The lock is probed before and after the records are
@@ -1640,8 +1665,8 @@ export interface RunInspection {
  *   recorded ones against, as `advance`'s `env`; without one, the values already in effect.
  *   Reading without `flow` doesn't use it.
  * @returns The status, the nodes in flight, the crashed counts, the run's id, schema, flow
- *   fingerprint, learnable flag, last seq, start time and (once finished) end time, and a failed
- *   run's failure.
+ *   fingerprint, learnable flag, last seq, start time and (once ended) end time, a failed run's
+ *   failure, and a waiting run's waits, readiness and wake time.
  * @throws Error (code `ENOENT`) when `log` doesn't exist, and the `fs` error of a failed read.
  * @throws RunLogSchemaError when a record's schema isn't one this version reads.
  * @throws RunLogChangedError when the log shrank while it was read and no writer holds it.
@@ -1681,14 +1706,13 @@ export function inspectRun(
     running || envelopes === null
       ? scan
       : withEnv(options.env ?? processEnv, () => replayedScan(flow!, envelopes));
-  const { starts, crashed, lastStop, finished } = source;
-  let status: RunStatus;
-  if (running) status = "running";
-  else if (finished !== null) status = finished;
-  else status = lastStop === null ? "crashed" : "stopped";
-  // A running run's attempts are still running, and a finished run's are abandoned.
+  const { starts, crashed, lastStop, status: recorded, waits } = source;
+  const status: RunStatus = running ? "running" : recorded;
+  // A running run's attempts are still running, and an ended run's are abandoned.
   if (status === "crashed" || status === "stopped") addCrashedAttempts(crashed, starts, lastStop);
-  const inFlight = status === "succeeded" || status === "failed" ? [] : [...starts.keys()];
+  const ended = status === "succeeded" || status === "failed" || status === "cancelled";
+  const inFlight = ended ? [] : [...starts.keys()];
+  const waiting = status === "waiting";
   const { started } = scan;
   return {
     status,
@@ -1700,8 +1724,11 @@ export function inspectRun(
     learnable: started === null ? null : (started.record as RunStartedRecord).learnable,
     lastSeq: scan.lastSeq,
     startedAt: started?.at ?? null,
-    endedAt: status === "succeeded" || status === "failed" ? scan.lastAt : null,
+    endedAt: ended ? scan.lastAt : null,
     failure: status === "failed" ? source.failure : null,
+    waits: waiting ? waitInfos(waits) : [],
+    ready: waiting && wakeableNodes(waits).length > 0,
+    wakeAt: waiting ? wakeAt(waits) : null,
   };
 }
 
@@ -2276,10 +2303,12 @@ type RecordScan = {
   crashed: Map<string, number>;
   /** The sequence of the last `RunStopped` since the last `RunResumed`, or `null`. */
   lastStop: number | null;
-  /** How the records show the run finished, or `null` when they don't. */
-  finished: "succeeded" | "failed" | null;
-  /** The failure that ends the run when `finished` is `failed`. */
+  /** Where the records leave the run (`scanStatus`; with a replay, the reducer's result first). */
+  status: Exclude<RunStatus, "running">;
+  /** The failure that ends the run when `status` is `failed`. */
   failure: Failure | null;
+  /** The inbox and call fold. */
+  waits: WaitsState;
   /** The log's `RunStarted` envelope, or `null` for a log with no record. */
   started: RecordEnvelope | null;
   /** The last record's seq, or `null` for a log with no record. */
@@ -2289,12 +2318,13 @@ type RecordScan = {
 };
 
 /**
- * Read the in-flight nodes, crashed counts and terminal status from a log's records with the run
+ * Read the in-flight nodes, crashed counts, waits and status from a log's records with the run
  * scan the run index shares (`foldRunScan`, `scanStatus`), keeping the deciding failure itself.
  */
 function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   const scan = emptyRunScan();
   let nodeFailure: Failure | null = null;
+  let runFailure: Failure | null = null;
   let unreachable: Failure | null = null;
   let started: RecordEnvelope | null = null;
   let lastSeq: number | null = null;
@@ -2311,12 +2341,22 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
     // The first of each, as the scan keeps their seqs.
     if (record instanceof NodeFailedRecord) nodeFailure ??= record.failure;
     else if (record instanceof NodeRoutedRecord) unreachable ??= record.terminalFailure;
+    else if (record instanceof RunFailedRecord) runFailure ??= record.failure;
   }
   const status = scanStatus(scan);
-  const finished = status === "succeeded" || status === "failed" ? status : null;
-  const failure = finished === "failed" ? (nodeFailure ?? unreachable) : null;
+  const failure = status === "failed" ? (nodeFailure ?? runFailure ?? unreachable) : null;
   const starts = new Map(scan.inFlight);
-  return { starts, crashed: new Map(scan.crashed), lastStop: scan.lastStop, finished, failure, started, lastSeq, lastAt };
+  return {
+    starts,
+    crashed: new Map(scan.crashed),
+    lastStop: scan.lastStop,
+    status,
+    failure,
+    waits: scan.waits,
+    started,
+    lastSeq,
+    lastAt,
+  };
 }
 
 /**
@@ -2327,14 +2367,18 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
  */
 function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]): RecordScan {
   const state = replayRunLog(flow, MemoryRunLog.fromRecords(envelopes));
-  let finished: RecordScan["finished"] = null;
-  if (state.result !== null) finished = state.result instanceof RunSucceeded ? "succeeded" : "failed";
+  let status: RecordScan["status"];
+  if (state.result instanceof RunSucceeded) status = "succeeded";
+  else if (state.result instanceof RunFailed) status = "failed";
+  else if (state.result instanceof RunCancelled) status = "cancelled";
+  else status = unfinishedStatus(state.waits, state.lastStopSequence);
   return {
     starts: new Map(state.acceptedStarts),
     crashed: new Map(state.crashedAttempts),
     lastStop: state.lastStopSequence,
-    finished,
+    status,
     failure: state.result instanceof RunFailed ? state.result.failure : null,
+    waits: state.waits,
     started: envelopes[0] ?? null,
     lastSeq: envelopes.at(-1)?.seq ?? null,
     lastAt: envelopes.at(-1)?.at ?? null,

@@ -29,18 +29,27 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { openSqlite, withWarnings } from "../../src/platform.ts";
 import { inspectRun, readRunIndex, RunIndexBusyError, type RunIndexRow, runLogPath, updateRunIndex } from "../../src/run.ts";
-import { emptyRunScan, foldRunScan, scanStatus } from "../../src/runtime/run_index.ts";
+import { emptyRunScan, foldRunScan, type RunScan, runScanFromJson, scanStatus } from "../../src/runtime/run_index.ts";
+import { WaitsState } from "../../src/runtime/waits.ts";
+import { DEADLINE, runStart, sleepWait, send as sendTo, takeWait as takeWaitOn, WAIT_LOGS } from "./wait_logs.ts";
 import {
+  InboxClosedRecord,
   JsonlRunLog,
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
+  RunCancelledRecord,
+  RunFailedRecord,
+  type RunRecord,
   RunResumedRecord,
   RunStartedRecord,
   RunStoppedRecord,
+  RunWaitingRecord,
   readRunLog,
 } from "../../src/runtime/log.ts";
 import type { TypedValue } from "../../src/typesys/values.ts";
@@ -193,6 +202,9 @@ describe("updateRunIndex and readRunIndex", () => {
         cacheReadTokens: 64,
         reasoningTokens: 8,
         offset: readFileSync(join(runs, "run-succeeded", "log.jsonl")).length,
+        waits: [],
+        ready: false,
+        wakeAt: null,
       });
       expect(rows["run-failed"]).toMatchObject({
         status: "failed",
@@ -522,15 +534,19 @@ describe("the run scan, shared by inspectRun and the index", () => {
     const path = join(runs, "run-1", "log.jsonl");
     const scan = scanOf(path);
     // The resume came after a stop that covered both starts, so it counts no crashed attempt.
-    expect(scan).toEqual({
+    expect({ ...scan, waits: null }).toEqual({
       inFlight: [["b", 8]],
       lastStop: null,
       endSucceeded: false,
       crashed: [],
       nodeFailureSeq: null,
       unreachableSeq: 9,
+      runFailureSeq: null,
+      cancelled: false,
+      waits: null,
     });
-    expect(JSON.parse(JSON.stringify(scan))).toEqual(scan);
+    expect(scan.waits.lastFrontier).toBe("node_routed");
+    expect(runScanFromJson(JSON.stringify(scan))).toEqual(scan);
     expect(scanStatus(scan)).toBe("crashed");
     const inspection = inspectRun(path);
     expect([inspection.status, inspection.inFlight]).toEqual(["crashed", ["b"]]);
@@ -568,9 +584,218 @@ describe("the run scan, shared by inspectRun and the index", () => {
       const columns = db.prepare("PRAGMA table_info(runs)").all().map((row) => row["name"]);
       expect(columns).not.toContain("status");
       const stored = db.prepare("SELECT scan FROM runs").get()!;
-      expect(JSON.parse(stored["scan"] as string)).toEqual(scanOf(join(runs, "run-1", "log.jsonl")));
+      expect(runScanFromJson(stored["scan"] as string)).toEqual(scanOf(join(runs, "run-1", "log.jsonl")));
     } finally {
       db.close();
     }
   });
+
+  /** Fold `records` after the run start (seqs 0 and 1) into a fresh scan. */
+  function folded(...records: RunRecord[]): RunScan {
+    const scan = emptyRunScan();
+    const all = [runStarted(), new PoolCommitRecord(START_ID, START_ID, { kind: "object", value: {} }), ...records];
+    all.forEach((record, seq) => foldRunScan(scan, { seq, record }));
+    return scan;
+  }
+  const takeWait = (node: string) =>
+    new NodeWaitingRecord(node, [`r/${node}`], { waits: [{ callId: `r/${node}`, tool: "take", inbox: "msgs", mode: "one", deadline: null }] });
+  const send = (value: string) => new PoolCommitRecord(START_ID, `${START_ID}.msgs`, { kind: "str", value });
+  const unreachable = new Failure({ code: "graph.terminal_unreachable", message: "", nodeId: "gate" });
+  const endSuccess = [new NodeStartedRecord(END_ID), new PoolCommitRecord(END_ID, END_ID, { kind: "str", value: "x" })];
+
+  test("a waiting node leaves the nodes in flight; its wake puts it back at the wake's seq", () => {
+    const waiting = folded(new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"]));
+    expect(waiting.inFlight).toEqual([]);
+    expect(scanStatus(waiting)).toBe("waiting");
+    const woken = folded(new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"]), send("x"), new NodeWokenRecord("heard"));
+    expect(woken.inFlight).toEqual([["heard", 6]]);
+    expect(scanStatus(woken)).toBe("crashed");
+    // A crash while nodes wait retries only the running ones.
+    const resumed = folded(new NodeStartedRecord("a"), new NodeStartedRecord("heard"), takeWait("heard"), new RunResumedRecord(["a"], 0));
+    expect(resumed.crashed).toEqual([["a", 1]]);
+  });
+
+  test.each<[string, RunRecord[], ReturnType<typeof scanStatus>]>([
+    ["run_waiting after a wait", [new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"])], "waiting"],
+    ["run_waiting, then a resume", [new NodeStartedRecord("heard"), takeWait("heard"), new RunWaitingRecord(["heard"]), new RunResumedRecord([], 2)], "crashed"],
+    ["a stop after a wait", [new NodeStartedRecord("a"), new RunStoppedRecord("signal", "SIGINT", ["a"])], "stopped"],
+    [
+      "END succeeded while a node waits",
+      [new NodeStartedRecord("heard"), takeWait("heard"), ...endSuccess, new NodeSucceededRecord(END_ID, 5), new RunWaitingRecord(["heard"])],
+      "waiting",
+    ],
+    [
+      "END succeeded while a node waits, then a wake and the log ends",
+      [new NodeStartedRecord("heard"), takeWait("heard"), ...endSuccess, new NodeSucceededRecord(END_ID, 5), new RunWaitingRecord(["heard"]), send("x"), new NodeWokenRecord("heard")],
+      "crashed",
+    ],
+    [
+      "a route proves END unreachable while a node waits",
+      [new NodeStartedRecord("heard"), takeWait("heard"), new NodeStartedRecord("gate"), new NodeRoutedRecord("gate", "no", { terminalFailure: unreachable }), new RunWaitingRecord(["heard"])],
+      "waiting",
+    ],
+    [
+      "then run_failed",
+      [new NodeStartedRecord("heard"), takeWait("heard"), new NodeStartedRecord("gate"), new NodeRoutedRecord("gate", "no", { terminalFailure: unreachable }), new RunFailedRecord(unreachable)],
+      "failed",
+    ],
+    [
+      "a node failure, whatever else",
+      [new NodeStartedRecord("heard"), takeWait("heard"), new NodeStartedRecord("a"), new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "a" }))],
+      "failed",
+    ],
+    ["a cancel while a node waits", [new NodeStartedRecord("heard"), takeWait("heard"), new RunCancelledRecord()], "cancelled"],
+    ["a cancel after a close", [new NodeStartedRecord("heard"), takeWait("heard"), new InboxClosedRecord("msgs"), new RunCancelledRecord()], "cancelled"],
+    [
+      "END succeeded and END proved unreachable, nothing in flight",
+      [new NodeStartedRecord("gate"), new NodeRoutedRecord("gate", "no", { terminalFailure: unreachable }), ...endSuccess, new NodeSucceededRecord(END_ID, 5)],
+      "succeeded",
+    ],
+  ])("scanStatus: %s", (_name, records, status) => {
+    expect(scanStatus(folded(...records))).toBe(status);
+  });
+
+  test("the scan's waits fold round-trips through JSON", () => {
+    const scan = folded(new NodeStartedRecord("heard"), takeWait("heard"), send("x"), new RunWaitingRecord(["heard"]), new RunCancelledRecord());
+    expect(scan.waits).toBeInstanceOf(WaitsState);
+    const copy = runScanFromJson(JSON.stringify(scan));
+    expect(copy).toEqual(scan);
+    expect(copy.waits).toBeInstanceOf(WaitsState);
+    expect(copy.waits.calls.get("r/heard")).toMatchObject({ state: "answered", assigned: [4], closedReason: null });
+    expect(copy.waits.lastFrontier).toBe("run_waiting");
+  });
 });
+
+describe("waiting runs in the index", () => {
+  /** Write the run `runId` of the run start then `records`; keep it open when `keep`. */
+  function waitRun(runs: string, runId: string, records: readonly RunRecord[], { keep = false } = {}): JsonlRunLog {
+    return writeRun(
+      runs,
+      runId,
+      (log) => {
+        for (const record of [...runStart(), ...records]) log.append(record);
+      },
+      { keep },
+    );
+  }
+  const WAITING = [new NodeStartedRecord("heard"), takeWaitOn("heard"), new RunWaitingRecord(["heard"])];
+
+  test("a waiting take: waiting, not ready, no wake time; a send makes only its row ready, reading only the send", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-a", succeededRun);
+    const log = waitRun(runs, "run-w", WAITING, { keep: true });
+    try {
+      log.close();
+      updateRunIndex(runs);
+      const before = byId(readRunIndex(runs));
+      expect(before["run-w"]).toMatchObject({
+        status: "waiting",
+        endedAt: null,
+        ready: false,
+        wakeAt: null,
+        waits: [{ node: "heard", callId: "r/heard", tool: "take", inbox: "msgs", deadline: null, settled: false }],
+      });
+      const path = join(runs, "run-w", "log.jsonl");
+      const size = readFileSync(path).length;
+      const reopened = JsonlRunLog.resume(path, { clock: steppingClock() });
+      reopened.append(sendTo("hi"));
+      reopened.close();
+      const appended = readFileSync(path).length - size;
+      const reads = spyOn(fs, "readSync");
+      let bytes: number;
+      try {
+        updateRunIndex(runs);
+        bytes = reads.mock.results.reduce((sum, result) => sum + (result.value as number), 0);
+      } finally {
+        reads.mockRestore();
+      }
+      expect(bytes).toBe(appended + 1);
+      const after = byId(readRunIndex(runs));
+      expect(after["run-a"]).toEqual(before["run-a"]!);
+      expect(after["run-w"]).toMatchObject({ status: "waiting", ready: true, wakeAt: null, lastSeq: 5 });
+      expect(after["run-w"]!.waits[0]!.settled).toBe(true);
+    } finally {
+      log.close();
+    }
+  });
+
+  test("a sleep gives a wake time; outside waiting there is none and nothing is ready", () => {
+    const runs = freshRuns();
+    waitRun(runs, "run-nap", [new NodeStartedRecord("nap"), sleepWait("nap"), new RunWaitingRecord(["nap"])]);
+    waitRun(runs, "run-woken", [new NodeStartedRecord("nap"), sleepWait("nap"), new RunWaitingRecord(["nap"]), new NodeWokenRecord("nap", ["r/nap"])]);
+    updateRunIndex(runs);
+    const rows = byId(readRunIndex(runs));
+    expect(rows["run-nap"]).toMatchObject({ status: "waiting", ready: false, wakeAt: DEADLINE });
+    expect(rows["run-woken"]).toMatchObject({ status: "crashed", ready: false, wakeAt: null, waits: [] });
+  });
+
+  test("cancelled and run_failed runs end with an end time; a woken take after END's success reads crashed", () => {
+    const runs = freshRuns();
+    for (const [name, records] of Object.entries(WAIT_LOGS)) waitRun(runs, name.toLowerCase().replaceAll(/[^a-z]+/g, "-"), records);
+    updateRunIndex(runs);
+    const rows = byId(readRunIndex(runs));
+    expect(rows["two-takes-a-close-then-a-cancel"]).toMatchObject({ status: "cancelled", ready: false, waits: [] });
+    expect(rows["two-takes-a-close-then-a-cancel"]!.endedAt).not.toBeNull();
+    expect(rows["end-unreachable-while-a-take-waits-then-run-failed"]).toMatchObject({ status: "failed" });
+    expect(rows["end-unreachable-while-a-take-waits-then-run-failed"]!.endedAt).not.toBeNull();
+    expect(rows["end-succeeds-while-a-take-waits-the-woken-take-crashes"]).toMatchObject({ status: "crashed", endedAt: null });
+    // Deleting the index and building it again gives the same rows.
+    rmSync(join(runs, "index.sqlite"));
+    updateRunIndex(runs);
+    expect(byId(readRunIndex(runs))).toEqual(rows);
+  });
+
+  test("while a writer holds the lock, a waiting row reads running and a terminal one keeps its status; inspectRun reads both running", () => {
+    const runs = freshRuns();
+    const waiting = waitRun(runs, "run-w", WAITING, { keep: true });
+    const ended = waitRun(runs, "run-x", [...WAITING, new RunCancelledRecord()], { keep: true });
+    try {
+      updateRunIndex(runs);
+      const rows = byId(readRunIndex(runs));
+      expect(rows["run-w"]).toMatchObject({ status: "running", ready: false, wakeAt: null, waits: [] });
+      expect(rows["run-x"]!.status).toBe("cancelled");
+      // The intended difference: inspectRun reads any locked log as running, since a terminal run
+      // may still append backward records; the index overlays only runs that haven't ended.
+      expect(inspectRun(join(runs, "run-x", "log.jsonl")).status).toBe("running");
+    } finally {
+      waiting.close();
+      ended.close();
+    }
+    const released = byId(readRunIndex(runs));
+    expect([released["run-w"]!.status, released["run-x"]!.status]).toEqual(["waiting", "cancelled"]);
+  });
+
+  test.each(Object.entries(WAIT_LOGS))("the index and inspectRun agree at every cut: %s", (_name, scenario) => {
+    const records = [...runStart(), ...scenario];
+    for (let k = 1; k <= records.length; k++) {
+      const runs = freshRuns();
+      const log = JsonlRunLog.create(runLogPath(runs, "run-1"), "run-1", { clock: steppingClock() });
+      for (const record of records.slice(0, k)) log.append(record);
+      log.close();
+      updateRunIndex(runs);
+      const [row] = readRunIndex(runs);
+      const inspection = inspectRun(join(runs, "run-1", "log.jsonl"));
+      const parts = ({ status, ready, wakeAt, waits, endedAt }: typeof row & {}) => ({ status, ready, wakeAt, waits, endedAt });
+      expect(parts(row!)).toEqual(parts(inspection as never));
+    }
+  });
+
+  test("a stored scan that can't be read is rebuilt from 0", () => {
+    const runs = freshRuns();
+    waitRun(runs, "run-w", WAITING);
+    updateRunIndex(runs);
+    const before = readRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    try {
+      db.exec(`UPDATE runs SET scan = '{"inFlight": "junk"}', "offset" = 0`);
+    } finally {
+      db.close();
+    }
+    const warnings: string[] = [];
+    expect(withWarnings((message) => warnings.push(message), () => readRunIndex(runs))).toEqual([]);
+    expect(warnings).toEqual([expect.stringContaining("run index skipped run-w: run scan inFlight must be")]);
+    updateRunIndex(runs);
+    expect(readRunIndex(runs)).toEqual(before);
+  });
+});
+

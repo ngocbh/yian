@@ -2729,7 +2729,7 @@ function goldenLog(log: string, ctx: CaseContext): void {
  * 0); after the run's terminal outcome only backward and memory records follow; after a
  * `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a replay's
  * status, in-flight nodes, crashed counts and failure, and the log's run id, schema, flow
- * fingerprint, learnable flag and last seq, and without it the same except in its one blind
+ * fingerprint, learnable flag and last seq (and no waits), and without it the same except in its one blind
  * corner (nothing in flight, a node still ready, and END succeeded or proved unreachable); a finished
  * run's counts are `result`'s; and a finished log resumed with `options` gives the same status and
  * output and appends nothing.
@@ -2798,6 +2798,10 @@ async function checkInvariants(
     startedAt: first.at,
     endedAt: finished === null ? null : envelopes.at(-1)!.at,
     failure: terminal instanceof RunFailed ? failureForm(terminal.failure, flow) : null,
+    // No case waits yet, so the replay's waits read as none.
+    waits: [],
+    ready: false,
+    wakeAt: null,
   };
   const form = (inspection: RunInspection) => ({
     ...inspection,

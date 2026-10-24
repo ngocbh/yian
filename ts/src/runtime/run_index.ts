@@ -9,7 +9,7 @@
  * while a writer holds a run's lock.
  *
  * Knows about: compile (the END id), diagnostics, platform, runtime/log, runtime/state
- * (`addCrashedAttempts`), typesys.
+ * (`addCrashedAttempts`), runtime/waits (the waits fold), typesys.
  */
 
 import fs from "node:fs";
@@ -29,7 +29,11 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
+  RunCancelledRecord,
+  RunFailedRecord,
   RunLogChangedError,
   runRecordOffsets,
   RunResumedRecord,
@@ -38,12 +42,13 @@ import {
   RunStoppedRecord,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
+import { applyWaitsRecord, type WaitInfo, type WaitsJson, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
 
 /** The index layout's version, kept in `PRAGMA user_version`; an index of another is rebuilt. */
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
 
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -95,14 +100,15 @@ export interface RunIndexRow {
   /** The path of the flow file the run started from, or `null` for a flow built in code. */
   readonly flow: string | null;
   /**
-   * `succeeded` or `failed` once the records show the run finished; `stopped` when the host
-   * stopped the last segment; `crashed` otherwise. `running` replaces `stopped` or `crashed` while
-   * a writer holds the log's lock.
+   * `succeeded`, `failed` or `cancelled` once the records show the run ended; `waiting` when it
+   * ended its last segment with every unsettled node waiting; `stopped` when the host stopped the
+   * last segment; `crashed` otherwise. `running` replaces `waiting`, `stopped` or `crashed` while a
+   * writer holds the log's lock.
    */
   readonly status: RunIndexStatus;
   /** The time of the run's `run_started` record. */
   readonly startedAt: string;
-  /** For a `succeeded` or `failed` run, the time of the log's last record; otherwise `null`. */
+  /** For a `succeeded`, `failed` or `cancelled` run, the time of the log's last record; otherwise `null`. */
   readonly endedAt: string | null;
   /** The id of the run that started this one (`run_started.parent`), or `null`. */
   readonly parentRunId: string | null;
@@ -123,6 +129,12 @@ export interface RunIndexRow {
   readonly reasoningTokens: number;
   /** The byte offset the row was built up to: the end of the record at `lastSeq`. */
   readonly offset: number;
+  /** For a `waiting` run, the calls of each waiting node, oldest wait first; `[]` otherwise. */
+  readonly waits: readonly WaitInfo[];
+  /** Whether a `waiting` run has a waiting node it can wake now; `false` otherwise. */
+  readonly ready: boolean;
+  /** For a `waiting` run, the earliest deadline of an open call of a waiting node; `null` otherwise. */
+  readonly wakeAt: string | null;
 }
 
 /**
@@ -135,11 +147,15 @@ export class RunIndexBusyError extends Error {
 
 /**
  * What the records of a run log show about where it stands, folded one record at a time
- * (`foldRunScan`) by `inspectRun` and by the run index, which stores it between updates. Plain
- * JSON data: numbers are record seqs or counts.
+ * (`foldRunScan`) by `inspectRun` and by the run index, which stores it between updates. JSON
+ * data but for `waits`, which writes its own JSON form; `runScanFromJson` reads the stored text
+ * back. Numbers are record seqs or counts.
  */
 export interface RunScan {
-  /** `[node id, start seq]` of each node started and not settled, in first-start order. */
+  /**
+   * `[node id, start seq]` of each node in flight (started or woken, and neither settled nor
+   * waiting), in first-start order.
+   */
   inFlight: [string, number][];
   /** The seq of the last `RunStopped` since the last `RunResumed`, or `null`. */
   lastStop: number | null;
@@ -151,28 +167,92 @@ export interface RunScan {
   nodeFailureSeq: number | null;
   /** The seq of the first `NodeRouted` that proved END unreachable, or `null`. */
   unreachableSeq: number | null;
+  /** The seq of the `RunFailed` that ended the run, or `null`. */
+  runFailureSeq: number | null;
+  /** Whether a `RunCancelled` ended the run. */
+  cancelled: boolean;
+  /** The inbox and call fold (`applyWaitsRecord`): the waiting nodes, their calls and the inboxes. */
+  waits: WaitsState;
 }
 
 /** Return the scan of a log with no record. */
 export function emptyRunScan(): RunScan {
-  return { inFlight: [], lastStop: null, endSucceeded: false, crashed: [], nodeFailureSeq: null, unreachableSeq: null };
+  return {
+    inFlight: [],
+    lastStop: null,
+    endSucceeded: false,
+    crashed: [],
+    nodeFailureSeq: null,
+    unreachableSeq: null,
+    runFailureSeq: null,
+    cancelled: false,
+    waits: new WaitsState(),
+  };
+}
+
+/**
+ * Return the scan `JSON.stringify(scan)` wrote as `text`.
+ *
+ * @throws RangeError when `text` isn't such a scan.
+ */
+export function runScanFromJson(text: string): RunScan {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw new RangeError(`run scan isn't JSON: ${(error as Error).message}`, { cause: error });
+  }
+  const bad = (field: string, what: string) => new RangeError(`run scan ${field} must be ${what}`);
+  if (!isRecord(raw)) throw new RangeError("run scan must be an object");
+  const seqOrNull = (field: string): number | null => {
+    const value = raw[field];
+    if (value !== null && !Number.isSafeInteger(value)) throw bad(field, "an integer or null");
+    return value as number | null;
+  };
+  const pairs = (field: string): [string, number][] => {
+    const value = raw[field];
+    const ok =
+      Array.isArray(value) &&
+      value.every((pair) => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && Number.isSafeInteger(pair[1]));
+    if (!ok) throw bad(field, "an array of [node id, integer] pairs");
+    return (value as [string, number][]).map(([node, n]) => [node, n]);
+  };
+  const flag = (field: string): boolean => {
+    if (typeof raw[field] !== "boolean") throw bad(field, "a boolean");
+    return raw[field] as boolean;
+  };
+  return {
+    inFlight: pairs("inFlight"),
+    lastStop: seqOrNull("lastStop"),
+    endSucceeded: flag("endSucceeded"),
+    crashed: pairs("crashed"),
+    nodeFailureSeq: seqOrNull("nodeFailureSeq"),
+    unreachableSeq: seqOrNull("unreachableSeq"),
+    runFailureSeq: seqOrNull("runFailureSeq"),
+    cancelled: flag("cancelled"),
+    waits: WaitsState.fromJSON(raw["waits"] as unknown as WaitsJson),
+  };
 }
 
 /**
  * Fold the record `envelope` holds into `scan`, in place, as the reducer derives starts, outcomes,
- * stops and resumes: a start puts its node in flight (a node already in flight keeps its place),
- * an outcome settles it, a stop is remembered until the next resume, and a resume counts the
- * attempts no stop covers (`addCrashedAttempts`) and retries every node in flight.
+ * stops and resumes: a start or a wake puts its node in flight (a node already in flight keeps its
+ * place), a wait takes it out, an outcome settles it, a stop is remembered until the next resume,
+ * and a resume counts the attempts no stop covers (`addCrashedAttempts`) and retries every node in
+ * flight. Every record is folded into `scan.waits` too.
  */
 export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; readonly record: RunRecord }): void {
   const { seq, record } = envelope;
   const settle = (node: string) => {
     scan.inFlight = scan.inFlight.filter(([id]) => id !== node);
   };
-  if (record instanceof NodeStartedRecord) {
+  applyWaitsRecord(scan.waits, envelope);
+  if (record instanceof NodeStartedRecord || record instanceof NodeWokenRecord) {
     const entry = scan.inFlight.find(([id]) => id === record.nodeId);
     if (entry === undefined) scan.inFlight.push([record.nodeId, seq]);
     else entry[1] = seq;
+  } else if (record instanceof NodeWaitingRecord) {
+    settle(record.nodeId);
   } else if (record instanceof NodeSucceededRecord) {
     settle(record.nodeId);
     if (record.nodeId === END_ID) scan.endSucceeded = true;
@@ -193,22 +273,40 @@ export function foldRunScan(scan: RunScan, envelope: { readonly seq: number; rea
     scan.crashed = [...counts];
     scan.inFlight = [];
     scan.lastStop = null;
+  } else if (record instanceof RunFailedRecord) {
+    scan.runFailureSeq ??= seq;
+  } else if (record instanceof RunCancelledRecord) {
+    scan.cancelled = true;
   }
 }
 
 /**
- * Return where the scanned records leave the run, as `inspectRun` reads it without a flow: a node
- * failure, or a route that proved END unreachable with nothing in flight, is `failed`; the
- * top-level END's success with nothing in flight is `succeeded`; then `stopped` when the last
- * segment was stopped, else `crashed`. The records don't hold the ready nodes, so a node still
- * ready is missed.
+ * Return where the scanned records leave the run, as `inspectRun` reads it without a flow: a
+ * cancel is `cancelled`; a node failure or `RunFailed` is `failed`; with nothing in flight and
+ * nothing waiting, the top-level END's success is `succeeded`, else a route that proved END
+ * unreachable is `failed`; otherwise `unfinishedStatus`. The records don't hold the ready nodes,
+ * so a node still ready is missed.
  */
-export function scanStatus(scan: RunScan): "succeeded" | "failed" | "stopped" | "crashed" {
-  const idle = scan.inFlight.length === 0;
+export function scanStatus(scan: RunScan): "succeeded" | "failed" | "cancelled" | ReturnType<typeof unfinishedStatus> {
+  if (scan.cancelled) return "cancelled";
   // A node failure ends the run at once, ahead of a pending unreachable END.
-  if (scan.nodeFailureSeq !== null || (idle && scan.unreachableSeq !== null)) return "failed";
+  if (scan.nodeFailureSeq !== null || scan.runFailureSeq !== null) return "failed";
+  const idle = scan.inFlight.length === 0 && scan.waits.waiting.size === 0;
+  // END's stored output wins over a later unreachable proof, as the reducer reads it.
   if (idle && scan.endSucceeded) return "succeeded";
-  return scan.lastStop === null ? "crashed" : "stopped";
+  if (idle && scan.unreachableSeq !== null) return "failed";
+  return unfinishedStatus(scan.waits, scan.lastStop);
+}
+
+/**
+ * Return where an unfinished run stands: `waiting` when its last frontier record is `run_waiting`
+ * (every unsettled node waits, and no worker runs), `stopped` when the host stopped the last
+ * segment (`lastStop`, the seq of the last `RunStopped` since the last `RunResumed`), else
+ * `crashed`.
+ */
+export function unfinishedStatus(waits: WaitsState, lastStop: number | null): "waiting" | "stopped" | "crashed" {
+  if (waits.lastFrontier === "run_waiting") return "waiting";
+  return lastStop === null ? "crashed" : "stopped";
 }
 
 /** A row as the index stores it, and while an update builds it. */
@@ -246,7 +344,8 @@ function checkedTimeout(timeoutMs: unknown): number {
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
  * or a file error such as no permission) raises a warning through `warn` and keeps its row as it
- * was. An index of another layout version is dropped and built again.
+ * was. A row whose stored scan can't be read is built again from the start of its log. An index
+ * of another layout version is dropped and built again.
  *
  * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
  * It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it blocks its
@@ -282,7 +381,13 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
       for (const runId of fs.readdirSync(runsDir).sort(compareCodeUnits)) {
         const log = join(runsDir, runId, "log.jsonl");
         const stored = select.get(runId);
-        const saved = stored === undefined ? null : fromColumns(stored);
+        let saved: StoredRow | null = null;
+        try {
+          saved = stored === undefined ? null : fromColumns(stored);
+        } catch (error) {
+          // A row this version can't read is built again from the log.
+          if (!(error instanceof RangeError)) throw error;
+        }
         let built: StoredRow | null;
         try {
           const size = fs.statSync(log).size;
@@ -331,10 +436,13 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
 
 /**
  * Return the rows of `<runsDir>/index.sqlite`, by start time then run id, as the last update left
- * them, with `running` put on top of a `stopped` or `crashed` run whose log a writer holds now
+ * them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
  * (`isRunLogLocked`, probed on every read; a lock that can't be probed counts as free). A missing
- * index, or one of another layout version, has no rows. Reading doesn't update the index; it reads
- * while a builder works, and waits only while one commits.
+ * index, or one of another layout version, has no rows. A row whose stored scan can't be read is
+ * left out with a warning through `warn`; the next update builds it again. A `waiting` row's
+ * `waits`, `ready` and `wakeAt` are read from its scan's waits fold, as `inspectRun` reads them.
+ * Reading doesn't update the index; it reads while a builder works, and waits only while one
+ * commits.
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait while a builder commits, in milliseconds; 5000 by default.
@@ -354,13 +462,31 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
   } finally {
     db.close();
   }
-  return rows.map((columns) => {
-    const { scan, ...row } = fromColumns(columns);
+  return rows.flatMap((columns) => {
+    let stored: StoredRow;
+    try {
+      stored = fromColumns(columns);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      // The next update builds the row again; until then it isn't listed.
+      warn(`run index skipped ${columns["run_id"] as string}: ${error.message}`);
+      return [];
+    }
+    const { scan, ...row } = stored;
     let status: RunIndexStatus = scanStatus(scan);
-    if ((status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
+    if ((status === "waiting" || status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
       status = "running";
     }
-    return { ...row, status };
+    const waiting = status === "waiting";
+    return [
+      {
+        ...row,
+        status,
+        waits: waiting ? waitInfos(scan.waits) : [],
+        ready: waiting && wakeableNodes(scan.waits).length > 0,
+        wakeAt: waiting ? wakeAt(scan.waits) : null,
+      },
+    ];
   });
 }
 
@@ -453,7 +579,7 @@ function readRun(log: string, runId: string, saved: StoredRow | null): StoredRow
   }
   if (row !== null && lastAt !== null) {
     const status = scanStatus(row.scan);
-    row.endedAt = status === "succeeded" || status === "failed" ? lastAt : null;
+    row.endedAt = status === "succeeded" || status === "failed" || status === "cancelled" ? lastAt : null;
   }
   return row;
 }
@@ -503,7 +629,7 @@ function toColumns(row: StoredRow): (string | number | null)[] {
     row.cacheReadTokens,
     row.reasoningTokens,
     row.offset,
-    // Plain JSON data: ids, seqs, counts and a flag.
+    // JSON data: ids, seqs, counts, flags, and the waits fold's own JSON form.
     JSON.stringify(row.scan),
   ];
 }
@@ -523,6 +649,6 @@ function fromColumns(columns: SqliteRow): StoredRow {
     cacheReadTokens: columns["cache_read_tokens"] as number,
     reasoningTokens: columns["reasoning_tokens"] as number,
     offset: columns["offset"] as number,
-    scan: JSON.parse(columns["scan"] as string) as RunScan,
+    scan: runScanFromJson(columns["scan"] as string),
   };
 }

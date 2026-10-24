@@ -60,6 +60,8 @@ import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, VERSION } from "../../src/platform.ts";
 import { NO_ENV } from "../engine/run_state_fixtures.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
+import { parseJson } from "../../src/typesys/json.ts";
+import { type Schema, validate } from "../schema.ts";
 
 let tmp: string;
 
@@ -1454,6 +1456,9 @@ describe("status", () => {
       expect(await main(["status", "--json"], json.io)).toBe(0);
       const document = JSON.parse(json.stdout());
       expect(document.format).toBe("yian.cli.v1");
+      const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../../../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
+      const runsDocument = (schema["$defs"] as Record<string, Schema>)["runs_document"]!;
+      expect(validate(schema, runsDocument, parseJson(json.stdout(), "plain"))).toEqual([]);
       expect(document.runs.map((run: { run_id: string }) => run.run_id)).toEqual([...rows.map((row) => row.runId), "held"]);
       const succeeded = rows.find((row) => row.status === "succeeded")!;
       expect(document.runs.find((run: { run_id: string }) => run.run_id === succeeded.runId)).toEqual({
@@ -1469,6 +1474,8 @@ describe("status", () => {
         output_tokens: 0,
         cache_read_tokens: 0,
         reasoning_tokens: 0,
+        ready: false,
+        wake_at: null,
       });
       expect(document.runs[2]).toMatchObject({ run_id: "held", flow: null, status: "running", result: null });
     } finally {
@@ -1522,7 +1529,7 @@ describe("status", () => {
     const { io, stdout, stderr } = testIo();
     expect(await main(["status", log, "--json"], io)).toBe(0);
     expect(stdout()).toBe(
-      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"status":"succeeded"}\n',
+      '{"format":"yian.cli.v1","crashed_attempts":{},"in_flight":[],"ready":false,"status":"succeeded","wake_at":null}\n',
     );
     expect(stderr()).toBe("");
   });
@@ -1533,7 +1540,7 @@ describe("status", () => {
     const { io, stdout } = testIo();
     expect(await main(["status", log, "--json"], io)).toBe(0);
     expect(stdout()).toBe(
-      '{"format":"yian.cli.v1","crashed_attempts":{"echo":1},"in_flight":["echo"],"status":"crashed"}\n',
+      '{"format":"yian.cli.v1","crashed_attempts":{"echo":1},"in_flight":["echo"],"ready":false,"status":"crashed","wake_at":null}\n',
     );
     // It never appends.
     expect(readFileSync(log, "utf8")).toBe(before);
@@ -1562,6 +1569,8 @@ describe("status", () => {
         status: "running",
         in_flight: [],
         crashed_attempts: {},
+        ready: false,
+        wake_at: null,
       });
     } finally {
       log.close();

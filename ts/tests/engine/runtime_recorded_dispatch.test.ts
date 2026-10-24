@@ -186,6 +186,9 @@ class ExplicitCommitNode extends ActionNode {
 class GrowNode extends Node {
   readonly kind = NodeKind.CALL;
   override readonly isSpawner = true;
+  // A growth is rebuilt from its binding (live as a check, and on replay), so the double is
+  // derived: its forward is synchronous unless it waits on `entered`.
+  override readonly derived = true;
   override readonly growDepthDelta: number | null = 1;
   readonly seed: unknown;
   readonly entered: Promise<void> | null;
@@ -199,9 +202,8 @@ class GrowNode extends Node {
     this.entered = options.entered ?? null;
   }
 
-  override async forward(): Promise<NodeResult> {
-    if (this.entered !== null) await this.entered;
-    return new Grow(this.seed);
+  override forward(): NodeResult | Promise<NodeResult> {
+    return this.entered === null ? new Grow(this.seed) : this.entered.then(() => new Grow(this.seed));
   }
 }
 

@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { current, DefaultsError, type Env, read } from "../../src/defaults.ts";
-import { ToolContext } from "../../src/tools/context.ts";
+import { ASK, isPending, pending, SLEEP, TAKE, ToolContext } from "../../src/tools/context.ts";
 import {
   isPermanentToolError,
   isReportedToolError,
@@ -27,6 +27,9 @@ import {
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import * as tools from "../../src/tools/index.ts";
 import type {
+  AskHandler,
+  AskRequest,
+  AskTool,
   AskUserHandler,
   AskUserRequest,
   CheckedCall,
@@ -35,6 +38,7 @@ import type {
   StandardIssue,
   StandardResult,
   StandardSchemaV1,
+  PendingMarker,
   ToolEntry,
   ToolErrorKind as IndexToolErrorKind,
 } from "../../src/tools/index.ts";
@@ -223,6 +227,11 @@ test("ToolContext is frozen and keeps its fields", () => {
 test("tools/index.ts exports the tools API, the same objects as its modules'", () => {
   const expected: Record<string, unknown> = {
     ToolContext,
+    TAKE,
+    SLEEP,
+    ASK,
+    pending,
+    isPending,
     PermanentToolError,
     ReportedToolError,
     TransientToolError,
@@ -255,7 +264,8 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
     McpCallCancelled: mcp.McpCallCancelled,
     isMcpError: mcp.isMcpError,
   };
-  // Exactly these names: no translator, no `ask_user` id, no `isFunctionTool` or `isMcpServer`.
+  // Exactly these names: no translator, no `ask_user` id (the built-in ids are), no `isFunctionTool` or
+  // `isMcpServer`.
   expect(Object.keys(tools).sort()).toEqual(Object.keys(expected).sort());
   const exported = tools as Record<string, unknown>;
   expect(Object.keys(expected).filter((name) => exported[name] !== expected[name])).toEqual([]);
@@ -263,6 +273,10 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
   const kind: IndexToolErrorKind = "permanent" satisfies ToolErrorKind;
   const handler: AskUserHandler = (request: AskUserRequest) => request.question;
   const entry: ToolEntry = handler;
+  const ask: AskHandler = (request: AskRequest) => request.callId;
+  const askTool: AskTool = { handler: ask, inputs: {} };
+  const marker: PendingMarker = pending();
+  const entries: ToolEntry[] = [ask, askTool];
   const options: McpServerOptions = { command: "echo" };
   const invoke: InvokeOptions = { callId: "c1" };
   const toolIdOf = (call: CheckedCall): string => call.toolId;
@@ -279,4 +293,5 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
     "function",
   ]);
   expect([result.issues?.length, validator["~standard"].vendor]).toEqual([1, "hand"]);
+  expect([entries.length, isPending(marker)]).toEqual([2, true]);
 });

@@ -408,7 +408,7 @@ describe("FunctionTool in a ToolSet and the registry", () => {
 
   test("it can't be the ask_user handler", () => {
     expect(() => new ToolSet({ ask_user: build({ name: "ask_user" }) as never })).toThrow(
-      new TypeError('tools["ask_user"] must be a plain function handler; the engine supplies its schema'),
+      new TypeError('tools["ask_user"] must be a handler function or {handler, inputs, required?}; yian supplies the base schema'),
     );
   });
 

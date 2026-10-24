@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
-  type AskUserRequest,
+  type AskRequest,
   invokeTool,
   invokeToolTrusted,
   registerTool,
@@ -155,7 +155,7 @@ describe("the context a tool receives", () => {
   });
 
   test("test_ask_user_handler_with_context_receives_it_first (TS: second)", async () => {
-    const asked: [AskUserRequest, ToolContext<any>][] = [];
+    const asked: [AskRequest, ToolContext<any>][] = [];
     const tools = new ToolSet({
       ask_user: (request, ctx) => {
         asked.push([request, ctx]);
@@ -171,6 +171,9 @@ describe("the context a tool receives", () => {
     expect(ctx.callId).toBe("r/agent");
     expect(Object.keys(request).sort()).toEqual([
       "answerSchema",
+      "callId",
+      "deadline",
+      "extra",
       "nodeId",
       "options",
       "question",

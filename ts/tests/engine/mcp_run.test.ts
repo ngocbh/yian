@@ -306,7 +306,7 @@ test(
 );
 
 for (const [key, message] of [
-  ["ask_user", 'tools["ask_user"] must be a plain function handler'],
+  ["ask_user", 'tools["ask_user"] must be a handler function'],
   ["", "tool ids in tools must be non-empty strings"],
 ] as const) {
   test(

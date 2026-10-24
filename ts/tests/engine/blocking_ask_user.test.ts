@@ -42,7 +42,13 @@ import { Output } from "../../src/nodes/base.ts";
 import { Assertion, ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
-import { type AskUserHandler, type AskUserRequest, ToolSet } from "../../src/tools/registry.ts";
+import {
+  type AskHandler,
+  type AskRequest,
+  type AskUserHandler,
+  type AskUserRequest,
+  ToolSet,
+} from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { callReply, drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
@@ -59,7 +65,7 @@ const scripted = (replies: Response[]) => new ScriptedModel(replies, CONFIG);
 const agent = (tools: string[] = ["ask_user"]) => new AgentNode("agent", { prompt: "go", tools, llmConfig: CONFIG });
 
 /** Evaluate `node` over `model`, with `askUser` as the run's handler when given. */
-function evaluate(node: AgentNode, model: ChatModel, askUser?: AskUserHandler, signal?: AbortSignal) {
+function evaluate(node: AgentNode, model: ChatModel, askUser?: AskHandler, signal?: AbortSignal) {
   return drive(node, {
     models: serving(model),
     ...(askUser === undefined ? {} : { tools: new ToolSet({ ask_user: askUser }) }),
@@ -91,7 +97,7 @@ test("agent resolves its model at call time", async () => {
 
 test("ask_user answer is a tool message in the same loop", async () => {
   const model = scripted([callReply(["ask_user", { question: "Approve?" }, "question-1"]), textReply("approved result")]);
-  const prompts: AskUserRequest[] = [];
+  const prompts: AskRequest[] = [];
 
   const outcome = await evaluate(agent(), model, (request) => {
     prompts.push(request);
@@ -102,7 +108,17 @@ test("ask_user answer is a tool message in the same loop", async () => {
   expect(model.requests[0]!.tools.map((spec) => spec.name)).toEqual(["ask_user"]);
   expect(textOf(model.requests[0]!.messages[0]!)).toContain("Ask the user only through an explicitly granted tool");
   expect(prompts).toEqual([
-    { question: "Approve?", questions: null, answerSchema: null, title: null, nodeId: null, options: null },
+    {
+      question: "Approve?",
+      questions: null,
+      answerSchema: null,
+      title: null,
+      nodeId: null,
+      options: null,
+      callId: expect.any(String),
+      deadline: null,
+      extra: {},
+    },
   ]);
   const last = model.requests[1]!.messages.at(-1)!;
   expect(last.parts).toHaveLength(1);

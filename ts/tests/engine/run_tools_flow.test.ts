@@ -251,7 +251,7 @@ for (const [name, tools, message] of [
   [
     "a non-function ask_user",
     { ask_user: "not callable" },
-    'tools["ask_user"] must be a plain function handler; the engine supplies its schema',
+    'tools["ask_user"] must be a handler function or {handler, inputs, required?}; yian supplies the base schema',
   ],
   ["an empty key", { "": whoami }, "tool ids in tools must be non-empty strings"],
   [
@@ -274,7 +274,7 @@ test("human input without a run handler fails the node", async () => {
   const result = await run(LOOP_ASK_FLOW, {});
 
   expect(result.status).toBe("failed");
-  expect(result.failure!.message).toContain("no ask_user handler for this run");
+  expect(result.failure!.message).toContain("no ask handler for this run");
 });
 
 // --- AGENT tool groups ------------------------------------------------------------------ //
@@ -497,7 +497,7 @@ for (const [name, tools, message] of [
   [
     "ask_user without a handler",
     { lookup: textTool("lookup") },
-    "AGENT node 'agent' grants 'ask_user': no ask_user handler for this run",
+    "AGENT node 'agent' grants 'ask_user': no ask handler for this run",
   ],
 ] as const) {
   test(`an unresolvable plain grant fails at run start: ${name}`, async () => {

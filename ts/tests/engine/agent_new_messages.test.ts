@@ -20,6 +20,14 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { checkConversation, type Message as MessageValue } from "../../src/nodes/agent/messages.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { decodeRecord, MemoryRunLog, PoolCommitRecord, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
+import { BackwardAttribution } from "../../src/runtime/contracts.ts";
+import {
+  addMessage,
+  BackwardMessage,
+  type PendingMessages,
+  takeOccurrenceMessages,
+  workFeedback,
+} from "../../src/runtime/learning.ts";
 import { growthIndex } from "../../src/runtime/state.ts";
 import { foldRunLog, replayRunLog, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -331,4 +339,35 @@ test("a flow assert reads reply.new_messages: it passes, or fails the run at END
     tools: TOOLS,
   });
   expect([result.status, result.failure?.code, result.failure?.nodeId]).toEqual(["failed", "assertion.failed", "__end__"]);
+});
+
+// --- learning --- //
+
+test("workFeedback keeps text and flattens a selection of new messages to labelled lines", () => {
+  expect(workFeedback("too long")).toBe("too long");
+  expect(workFeedback(null)).toBeNull();
+  expect(workFeedback([null, { parts: [{ text: "wrong tool" }] }])).toBe("new_messages[1].parts[0].text: wrong tool");
+  expect(workFeedback([{ role: "a", parts: "b" }])).toBe("new_messages[0].parts: b\nnew_messages[0].role: a");
+  expect(workFeedback([null, null])).toBe("");
+});
+
+test("takeOccurrenceMessages adds the messages sent to an AGENT's new messages, as work feedback, in order", async () => {
+  const { log, flow } = await run(new ScriptedModel([textReply("hi")], CONFIG), TOP.replace("tools: [lookup]", "tools: []"), {
+    learnable: true,
+  });
+  const state = replayRunLog(flow, MemoryRunLog.fromRecords(readRunLog(log)));
+  const occurrence = state.trace!.occurrences.find((each) => each.nodeId === "reply")!;
+  const end = state.trace!.occurrences.find((each) => each.nodeId === "__end__")!;
+  const attribution = (index: number) => new BackwardAttribution(end.source, "history", index, 0, [0]);
+  const pending: PendingMessages = new Map();
+  addMessage(pending, occurrence.source, new BackwardMessage("short", attribution(0), [0, 1]));
+  addMessage(pending, occurrence.messagesSource!, new BackwardMessage([{ parts: [{ text: "curt" }] }], attribution(1), [0, 0]));
+  const taken = takeOccurrenceMessages(pending, occurrence);
+  expect(taken.map((message) => message.feedback)).toEqual(["new_messages[0].parts[0].text: curt", "short"]);
+  expect(taken.map((message) => message.attribution.messageIndex)).toEqual([1, 0]);
+  expect(pending.size).toBe(0);
+  // A node without new messages takes only its own.
+  expect(end.messagesSource).toBeNull();
+  addMessage(pending, end.source, new BackwardMessage("x", attribution(2), [1]));
+  expect(takeOccurrenceMessages(pending, end).map((message) => message.feedback)).toEqual(["x"]);
 });

@@ -49,7 +49,7 @@ import {
   projectRootBackward,
   proposalBatches,
   seedBackward,
-  takeMessages,
+  takeOccurrenceMessages,
 } from "./learning.ts";
 import {
   BackwardFinishedRecord,
@@ -143,7 +143,7 @@ export async function computeBackward(
   let rootInputs: Readonly<Record<string, readonly FeedbackValue[]>> = {};
   for (const occurrence of [...occurrences].reverse()) {
     const source = occurrence.source;
-    const messages = takeMessages(pending, source);
+    const messages = takeOccurrenceMessages(pending, occurrence);
     if (messages.length === 0) continue;
     // Trace lookups stay outside the callback's `try`: their faults aren't the callback's.
     const context = trace.backwardContext(source, {

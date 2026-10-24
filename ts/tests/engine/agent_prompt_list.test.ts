@@ -153,7 +153,7 @@ test.each([
 
   expect(error).toBeInstanceOf(ExpressionError);
   expect((error as Error).message).toStartWith(
-    "node 'reply' prompt[0]: ${history} must be a message (a record with `role` user or assistant and " +
+    "node 'reply' prompt[0]: ${history} must be a message (a `Message`, or a record with `role` user or assistant and " +
       "`text: str`) or a list of them",
   );
   expect(models.built).toBe(0);
@@ -217,5 +217,54 @@ test("the node refuses a malformed list prompt", () => {
   );
   expect(() => agent([{ role: "assistant", text: "x" }])).toThrow(
     new RangeError("AGENT node 'reply': the last message of a list prompt must be from the user"),
+  );
+});
+
+const TOOL_HISTORY = [
+  { role: "user", parts: [{ type: "text", text: "Read a.txt" }] },
+  { role: "assistant", parts: [{ type: "tool_call", id: "c1", name: "read_file", arguments: { path: "a.txt" } }] },
+  { role: "tool", parts: [{ type: "tool_result", call_id: "c1", name: "read_file", content: "hi" }] },
+  { role: "assistant", parts: [{ type: "text", text: "It says hi." }] },
+];
+
+test("a spliced list of Messages reaches the request with every part and role", async () => {
+  const { model } = await run(agent(CHAT), TOOL_HISTORY);
+
+  expect(model.requests[0]!.messages.slice(1, 5).map((message) => message.toJSON())).toEqual(
+    TOOL_HISTORY.map((message) => ({ format: "yian.message.v1", ...message })),
+  );
+  expect(sent(model).at(-1)).toEqual(["user", "Now: again"]);
+});
+
+test("Messages and {role, text} records splice together in order", async () => {
+  const history = [{ role: "user", text: "Hi", at: "9:00" }, TOOL_HISTORY[3]];
+  const { model } = await run(agent(CHAT), history);
+  expect(sent(model).slice(1)).toEqual([["user", "Hi"], ["assistant", "It says hi."], ["user", "Now: again"]]);
+});
+
+test("a spliced Message ending the list must be the user's", async () => {
+  const node = agent([{ role: "user", text: "Hi" }, { splice: "history" }]);
+  const models = serving(new ScriptedModel([textReply("done")], CONFIG));
+  const error = await rejected(node.forward({ history: TOOL_HISTORY, message: "x" }, { models }));
+  expect(error).toEqual(new ExpressionError("node 'reply' prompt: the last message must be from the user, got assistant"));
+  expect(models.built).toBe(0);
+});
+
+test("recall reads the last Message's text; the capture holds a spliced Message without its opaque fields", async () => {
+  const recalled: string[] = [];
+  const captures: Readonly<Record<string, unknown>>[] = [];
+  const reply = {
+    role: "assistant",
+    protocol: "anthropic_messages",
+    parts: [{ type: "reasoning", text: "r", provider_payload: { sig: "s" } }, { type: "text", text: "It says hi." }],
+  };
+  const last = { role: "user", author: null, parts: [{ type: "text", text: "Go" }] };
+  await run(agent([{ splice: "history" }]), [TOOL_HISTORY[0], reply, last], {
+    openMemoryContext: async (_system, prompt) => (recalled.push(prompt), new MemoryContext()),
+    captureRender: (captured) => void captures.push(captured),
+  });
+  expect(recalled).toEqual(["Go"]);
+  expect(captures[0]!["rendered_prompt"]).toBe(
+    logJson([TOOL_HISTORY[0], { role: "assistant", parts: [{ type: "reasoning", text: "r" }, { type: "text", text: "It says hi." }] }, last]),
   );
 });

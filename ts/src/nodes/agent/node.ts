@@ -24,7 +24,7 @@ import { evalTemplate, renderTemplateRecord, scanTemplate } from "../../expr/tem
 import type { HostConnection } from "../../llm_clients/config.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
 import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.ts";
-import { Message, TextPart } from "../../llm/messages.ts";
+import { MediaPart, Message as ModelMessage, MessageFormatError, TextPart } from "../../llm/messages.ts";
 import {
   iterMemoryDeclOrigins,
   MemoryContext,
@@ -42,6 +42,9 @@ import {
   isList,
   isRecord,
   type Type,
+  TypeCheckError,
+  TypedValue,
+  type Value,
   ValueKind,
   type ValueRecord,
   valueRepr,
@@ -84,6 +87,7 @@ import {
   typesNullable,
 } from "./llm_values.ts";
 import { runAgent } from "./loop.ts";
+import { checkMessage, type ConversationMessage, type Message, toModelMessage } from "./messages.ts";
 import { OutputInvalidError } from "./structured.ts";
 
 /** The step key under which a call-time agent records the config it resolved. */
@@ -149,30 +153,97 @@ function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
   }
 }
 
-/** One rendered prompt message. */
+/**
+ * One rendered prompt message: a text message's role and text, or a spliced `Message`'s model
+ * message; its render-capture form; and the prompt item it came from.
+ */
 interface PromptMessage {
-  readonly role: "user" | "assistant";
+  readonly role: "user" | "assistant" | "tool";
+  /** The text recall and evidence read: a text message's text, or the model message's text parts. */
   readonly text: string;
+  /** A spliced `Message`'s model message; `null` for a text message, which `runContext` builds as before. */
+  readonly model: ModelMessage | null;
+  /** `{role, text}` for a text message; a spliced `Message` value's wire JSON without its opaque fields. */
+  readonly captured: Value;
+  /** The index of the prompt item it came from. */
+  readonly item: number;
 }
 
-/** Whether `value` is a prompt message: a record with `role` user or assistant and a string `text`. */
-function isPromptMessage(value: unknown): value is PromptMessage {
+/** Return a text message of `role` from prompt item `item`. */
+function textMessage(role: "user" | "assistant", text: string, item: number): PromptMessage {
+  return { role, text, model: null, captured: { role, text }, item };
+}
+
+/** Return what `checkConversation` reads of a rendered message; a text message is one text part. */
+function conversationForm(rendered: PromptMessage): ConversationMessage {
+  return rendered.model ?? { role: rendered.role, parts: [{ type: "text" }] };
+}
+
+/** Return the model message a rendered message sends, building a text message's here, after recall. */
+function modelMessage(rendered: PromptMessage): ModelMessage {
+  return rendered.model ?? new ModelMessage({ role: rendered.role, parts: [new TextPart(rendered.text)] });
+}
+
+/** Whether `value` is a `{role, text}` prompt message: a record with `role` user or assistant and a string `text`. */
+function isTextMessage(value: unknown): value is { role: "user" | "assistant"; text: string } {
   return isRecord(value) && (value.role === "user" || value.role === "assistant") && typeof value.text === "string";
+}
+
+/** Return a `Message`'s capture form: its wire JSON without `protocol` or any `provider_payload`, which hold opaque provider data. */
+function captureForm(message: Message): Value {
+  const { protocol: _protocol, provider_payload: _payload, parts, ...rest } = message;
+  const bare = parts.map(({ provider_payload: _partPayload, ...part }) => part);
+  return new TypedValue(ValueKind.OBJECT, { ...rest, parts: bare } as unknown as ValueRecord).toWire().value as Value;
+}
+
+/**
+ * Return a spliced value's message: a record with a `text` field is a `{role, text}` message
+ * (other fields ignored); anything else must be a built-in `Message`, sent with all its parts.
+ *
+ * @throws ExpressionError when it is neither, or holds a media part, which no model route sends yet.
+ */
+function splicedMessage(nodeId: string, index: number, ref: string, value: unknown): PromptMessage {
+  if (isRecord(value) && Object.hasOwn(value, "text")) {
+    if (isTextMessage(value)) return textMessage(value.role, value.text, index);
+    throw notAMessage(nodeId, index, ref, null);
+  }
+  let message: Message;
+  let model: ModelMessage;
+  try {
+    message = checkMessage(value);
+    model = toModelMessage(message);
+  } catch (error) {
+    if (error instanceof TypeCheckError || error instanceof MessageFormatError) throw notAMessage(nodeId, index, ref, error.message);
+    throw error;
+  }
+  if (model.parts.some((part) => part instanceof MediaPart)) {
+    throw new ExpressionError(`node ${reprText(nodeId)} prompt[${index}]: ${ref} holds a media part; no model route sends media yet`);
+  }
+  return { role: model.role as "user" | "assistant" | "tool", text: model.text(), model, captured: captureForm(message), item: index };
+}
+
+/** The error for a spliced value that isn't a message, with why a `Message` didn't fit, if one was read. */
+function notAMessage(nodeId: string, index: number, ref: string, reason: string | null): ExpressionError {
+  return new ExpressionError(
+    `node ${reprText(nodeId)} prompt[${index}]: ${ref} must be a message (a \`Message\`, or a record with \`role\` user ` +
+      "or assistant and `text: str`) or a list of them" + (reason === null ? "" : `; ${reason}`),
+  );
 }
 
 /**
  * Render a list prompt against `record`: each message's text as a template, each splice's value
- * as one message or a list of them, keeping only `role` and `text`.
+ * as one message or a list of them. A `{role, text}` record keeps only `role` and `text`; a
+ * `Message` keeps every part.
  *
  * @throws ExpressionError when a template or splice names a missing value or reads a null, a
- *   spliced value isn't a message or a list of messages, or the list renders no message or ends
- *   in one that isn't the user's.
+ *   spliced value isn't a message or a list of messages or holds a media part, or the list
+ *   renders no message or ends in one that isn't the user's.
  */
 function renderPromptList(nodeId: string, items: readonly PromptItem[], record: ValueRecord): PromptMessage[] {
   const messages: PromptMessage[] = [];
   items.forEach((item, index) => {
     if (!("splice" in item)) {
-      messages.push({ role: item.role, text: renderTemplateRecord(item.text, record) });
+      messages.push(textMessage(item.role, renderTemplateRecord(item.text, record), index));
       return;
     }
     const ref = `\${${item.splice}}`;
@@ -180,13 +251,7 @@ function renderPromptList(nodeId: string, items: readonly PromptItem[], record: 
       mode: ResolveMode.STRICT_RAISE,
     });
     const spliced: readonly unknown[] = isList(value) ? value : [value];
-    if (!spliced.every(isPromptMessage)) {
-      throw new ExpressionError(
-        `node ${reprText(nodeId)} prompt[${index}]: ${ref} must be a message (a record with \`role\` user or ` +
-          "assistant and `text: str`) or a list of them",
-      );
-    }
-    for (const { role, text } of spliced as readonly PromptMessage[]) messages.push({ role, text });
+    for (const one of spliced) messages.push(splicedMessage(nodeId, index, ref, one));
   });
   const last = messages.at(-1);
   if (last === undefined) {
@@ -657,7 +722,7 @@ export class AgentNode extends Node {
   ): AgentRunContext {
     return {
       nodeId: this.id,
-      messages: messages.map(({ role, text }) => new Message({ role, parts: [new TextPart(text)] })),
+      messages: messages.map(modelMessage),
       promptText,
       tools: [...this.tools],
       llmConfig: config,
@@ -726,7 +791,8 @@ export class AgentNode extends Node {
    * variable values and domains, and the rendered prompt once, with the parts established so far
    * when preparation fails; unknown variables or an unfinished prompt stay `null`, and capture
    * faults propagate. A list prompt's template and rendered prompt are `logJson` text: the
-   * authored items, and the `{role, text}` messages. No invocation state is stored on the node.
+   * authored items, and the `{role, text}` messages and each spliced `Message` as its JSON without
+   * `protocol` or `provider_payload`. No invocation state is stored on the node.
    *
    * A call-time agent's model config is its bound `__llm_config` with the run's host key and
    * header values joined when it is marked for the host key; any other agent uses its run's
@@ -746,8 +812,9 @@ export class AgentNode extends Node {
    * @returns The model's answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
-   *   null, a spliced value isn't a message or a list of them, or a list prompt renders no
-   *   message or ends in one that isn't the user's.
+   *   null, a spliced value isn't a message (a `Message` or a `{role, text}` record) or holds a
+   *   media part, or a list prompt renders no message, ends in one that isn't the user's, or isn't
+   *   a conversation a model route can send.
    * @throws SkillError when the node grants skills the host did not supply.
    * @throws CapabilityFault when capture or memory access fails, the bound config differs from
    *   the one an earlier start recorded, or a recorded model call doesn't match the rebuilt
@@ -788,11 +855,11 @@ export class AgentNode extends Node {
       }
       const record = { ...inputs, ...variables } as ValueRecord;
       if (typeof this.prompt === "string") {
-        messages = [{ role: "user", text: renderTemplateRecord(this.prompt, record) }];
+        messages = [textMessage("user", renderTemplateRecord(this.prompt, record), 0)];
         if (captured !== null) captured["rendered_prompt"] = messages[0]!.text;
       } else {
         messages = renderPromptList(this.id, this.prompt, record);
-        if (captured !== null) captured["rendered_prompt"] = logJson(messages);
+        if (captured !== null) captured["rendered_prompt"] = logJson(messages.map((message) => message.captured));
       }
       systemPrompt = this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record);
     } finally {

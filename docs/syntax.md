@@ -782,7 +782,8 @@ is a whole input: it is never `Optional(...)`, never inside `list(...)`, a recor
 `Union(...)`, never holds another inbox, and is never an output (`Optional(Inbox(str))`
 fails with ``an inbox is never optional in 'Optional(Inbox(str))'; write Inbox(...)``).
 `Inbox(X)` relates only to another inbox, by its event type, so `Any` and `object` neither
-fill nor take one. `Inbox` is a reserved name: no typedef may take it.
+fill nor take one. `Inbox` is a reserved name: no typedef may take it. See
+[Inbox inputs](#inbox-inputs) for where an inbox may be declared and read.
 
 When the loader can't type a list's items (a tool's untyped array, a mixed or empty
 literal list), the list is a `list(Optional(Any))`, and its items are checked at
@@ -1111,6 +1112,51 @@ JSON value except null.
 
 An AGENT's `variables:` take the same form, and every variable needs a value:
 `num: !int(1..12) 4` (see [Agent-owned variables](#agent-owned-variables)).
+
+### Inbox inputs
+
+Changed (TS yian): a flow or def may declare an inbox, an input whose values arrive while the
+run goes on:
+
+```yaml
+input:
+  owner_messages: !Inbox(str)
+```
+
+An inbox input is required and takes no default: `!Inbox(str) hi` fails with
+``'owner_messages': an inbox input takes no default``, and `!Optional(Inbox(str))` doesn't
+load either. A run takes no input for it, since the host sends events to a top-level inbox by
+name; a run input naming one fails with ``inbox `owner_messages` receives events through
+send(); it takes no run input``. The top-level START binds the input to its handle, the
+`InboxRef` whose JSON form is `{inbox: owner_messages}`, and the run's recorded inputs leave it
+out.
+
+An inbox is read only whole, as `${input.owner_messages}`, bound to an input that a named
+`kind: call` or a `kind: loop` child declares as an `Inbox`:
+
+```yaml
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      owner_messages: ${input.owner_messages}
+      closed: false
+    while: not closed
+```
+
+Any other read is a load error at its site: text or an expression
+(`"Hi ${input.owner_messages}"`), a field read, a CODE, AGENT or TOOL input, a case `on:` or
+`when:`, a loop predicate, a record or typed binding holding it, an inline `call(...)` argument,
+an assert, a MAP's `over:` or inputs, a flow output, and an `llm_config` value. A node output,
+an agent variable, a typed binding and a flow output can't be typed `Inbox(...)`, and an inbox
+type has no constructor. A child's `Inbox` input takes only an inbox of the calling flow, whose
+event type fits its own.
+
+A loop carries an inbox into every iteration and leaves it out of its output. A flow that a
+`kind: map` calls can't declare an inbox input: map instances have no inboxes of their own yet.
+An inbox input that nothing reads is a load error, ``inbox input `m` is never read; take from
+it, or pass it to a call``, located at its declaration.
 
 ### Writing a tag
 

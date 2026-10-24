@@ -18,7 +18,7 @@ import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { ContractOrigins, isExactly, type Parameter, ValueContract } from "../../nodes/contracts.ts";
 import { MapNode } from "../../nodes/map/node.ts";
-import { Type, ValueKind } from "../../typesys/values.ts";
+import { isInboxType, Type, ValueKind } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import {
   type BuildContext,
@@ -145,8 +145,8 @@ export class CallDescriptor extends NodeDescriptor {
    * child's parameters; every problem found is reported together, at the node.
    *
    * @throws LoadError when a MAP's `input:` names `over`, the callable can't be resolved or
-   *   nests too deep, a MAP's child declares no output, or a binding names no child input or a
-   *   required child input is unbound.
+   *   nests too deep, a MAP's child declares no output or an inbox input, or a binding names no
+   *   child input or a required child input is unbound.
    */
   override build(ctx: BuildContext): BuildResult {
     // `MapDescriptor` alone sets `kind` to "map"; checking it spares `call.ts` importing `map.ts`,
@@ -180,6 +180,15 @@ export class CallDescriptor extends NodeDescriptor {
       });
       // `over` first: the wiring order is the edge order.
       wiring = new Map([["over", this.over], ...this.sinkWiring()]);
+      // A def the body calls can get an inbox only from the body, so the body's own inputs
+      // cover its whole subtree.
+      for (const input of sig.inputs) {
+        if (!isInboxType(input.contract?.type)) continue;
+        errors.push(
+          `map node ${reprText(this.id)}: ${callableDisplay(this.call, this.childLabel)} declares inbox input ` +
+            `${reprText(input.name)}; a map body can't read an inbox (per-instance inboxes aren't supported yet)`,
+        );
+      }
       if (sig.outputNames.length === 0) {
         errors.push(
           `map node ${reprText(this.id)}: ${callableDisplay(this.call, this.childLabel)} must declare a ` +

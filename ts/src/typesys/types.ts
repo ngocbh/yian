@@ -78,9 +78,13 @@ export interface EnumExpr {
   readonly tags: readonly string[];
 }
 
-/** `dict(K, V)`: resolves to a lenient object; key and value types are not kept. */
+/**
+ * `dict(K, V)`: resolves to a lenient object. Its key and value types, when read, are kept only to
+ * refuse an inbox inside it.
+ */
 export interface DictExpr {
   readonly kind: "dict";
+  readonly args?: readonly TypeExpr[];
 }
 
 /** The authored `Union(...)` members, in authored order. */
@@ -423,8 +427,7 @@ class TypeParser {
         return { kind: "enum", tags: this.literalTags() };
       case "dict":
       case "Dict":
-        this.args(name, 2);
-        return { kind: "dict" };
+        return { kind: "dict", args: this.args(name, 2) };
       case "Union": {
         const members = this.args(name, null);
         if (members.some((m) => m.kind === "scalar" && m.name === "None")) {
@@ -1011,6 +1014,11 @@ export function resolveType(
     case "enum":
       return new Type({ kind: ValueKind.STRING, tags: new Set(t.tags) });
     case "dict":
+      if (t.args?.some((arg) => namesInbox(arg, registry, seen))) {
+        // `formatTypeExpr` spells a dict as `dict`, the lenient object it reads as; show its parts.
+        const written = `dict(${t.args.map(formatTypeExpr).join(", ")})`;
+        throw new TypeCheckError(`an inbox is a whole input; it can't be a dict key or value in ${reprText(written)}`);
+      }
       return Type.scalar(ValueKind.OBJECT); // lenient (no key/value typing yet)
     case "union":
       return resolveUnion(t, registry, seen);
@@ -1242,6 +1250,32 @@ function refsInType(t: TypeExpr): Set<string> {
       return new Set(t.members.flatMap((member) => [...refsInType(member)]));
     default:
       return new Set(); // scalars, enums and the dict placeholder reference nothing
+  }
+}
+
+/**
+ * Whether type expression `t` is or holds an inbox, following alias names in `registry`. A name
+ * that is unknown, a record, or already on the `seen` path holds none here.
+ */
+function namesInbox(t: TypeExpr, registry: TypeRegistry, seen: ReadonlySet<string>): boolean {
+  switch (t.kind) {
+    case "inbox":
+      return true;
+    case "list":
+      return namesInbox(t.element, registry, seen);
+    case "optional":
+      return namesInbox(t.inner, registry, seen);
+    case "union":
+      return t.members.some((member) => namesInbox(member, registry, seen));
+    case "dict":
+      return (t.args ?? []).some((arg) => namesInbox(arg, registry, seen));
+    case "ref": {
+      const defn = registry.get(t.name);
+      if (defn?.kind !== "alias" || seen.has(t.name)) return false;
+      return namesInbox(defn.target, registry, new Set([...seen, t.name]));
+    }
+    default:
+      return false;
   }
 }
 

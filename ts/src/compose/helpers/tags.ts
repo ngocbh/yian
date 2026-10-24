@@ -41,6 +41,7 @@ import {
 import {
   buildValueAs,
   canonicalTypeLabel,
+  isInboxType,
   isListKind,
   isRecord,
   requiresFile,
@@ -466,9 +467,13 @@ function tagTextOf(typ: Type, registry: TypeRegistry): string | null {
   return writableAsTag(text) ? text : null;
 }
 
-/** Spell `typ` by its structure; only a list element may fall back to a typedef name. */
+/**
+ * Spell `typ` by its structure; only a list element may fall back to a typedef name. An inbox has
+ * no spelling here.
+ */
 function directTagText(typ: Type, registry: TypeRegistry): string | null {
-  if (typ.variants !== undefined || typ.fields !== undefined) return null;
+  // An inbox is only ever a flow input's type, so no other slot is told to tag one.
+  if (typ.variants !== undefined || typ.fields !== undefined || isInboxType(typ)) return null;
   let text: string;
   if (typ.tags !== undefined) {
     if (typ.tags.size !== 1) return null;
@@ -576,6 +581,8 @@ export interface TaggedValueOptions {
    * the top level.
    */
   nestedCallFix?: string;
+  /** Whether the slot may be an `Inbox(...)`: a flow or def input; defaults to `false`. */
+  inbox?: boolean;
 }
 
 /**
@@ -651,6 +658,7 @@ class TaggedValueReader {
   readonly ledger: Set<number>;
   readonly literalOnly: boolean;
   readonly nestedCallFix: string;
+  readonly inbox: boolean;
   readonly leafSites: [ValuePath, SourceCursor][] = [];
 
   constructor(registry: TypeRegistry, options: TaggedValueOptions) {
@@ -662,6 +670,7 @@ class TaggedValueReader {
     this.ledger = options.ledger;
     this.literalOnly = options.literalOnly ?? false;
     this.nestedCallFix = options.nestedCallFix ?? "bind it at the top level, or reword the text";
+    this.inbox = options.inbox ?? false;
   }
 
   /** Read the slot at `cursor`; see `readTaggedValue`. */
@@ -672,6 +681,11 @@ class TaggedValueReader {
       // is reported before the type is resolved.
       this.rejectSpacedTag(cursor, []);
       const typ = this.tagType(cursor, []);
+      if (isInboxType(typ) && cursor.hasValue) {
+        throw this.diagnostics.error(`${reprText(this.label)}: an inbox input takes no default`, {
+          range: cursor.range,
+        });
+      }
       const origin = this.catalogBuilder.register([...this.sitePath, "type", "root"], cursor);
       contract = new ValueContract(typ, new ContractOrigins({ default: origin }));
       if (!cursor.hasValue) return new TaggedSlot(null, contract, false);
@@ -774,15 +788,27 @@ class TaggedValueReader {
     return new Walked(value);
   }
 
-  /** Record the tag on `cursor` as consumed and return the type it names. */
+  /**
+   * Record the tag on `cursor` as consumed and return the type it names.
+   *
+   * @throws LoadError when the tag names an inbox anywhere but a slot that may be one.
+   */
   tagType(cursor: SourceCursor, path: ValuePath): Type {
     const definitionId = cursor.tagDefinitionId;
     if (definitionId !== null) this.ledger.add(definitionId);
-    return readTagType(cursor.tag!, this.registry, {
-      label: pathLabel(this.label, path),
+    const label = pathLabel(this.label, path);
+    const typ = readTagType(cursor.tag!, this.registry, {
+      label,
       diagnostics: this.diagnostics,
       range: cursor.range,
     });
+    if (isInboxType(typ) && (path.length > 0 || !this.inbox)) {
+      throw this.diagnostics.error(
+        `${reprText(label)}: \`!${cursor.tag}\` declares an inbox, which only a flow input can be`,
+        { range: cursor.range },
+      );
+    }
+    return typ;
   }
 
   /**

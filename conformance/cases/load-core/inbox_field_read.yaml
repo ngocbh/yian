@@ -1,0 +1,25 @@
+# TS-only: an inbox has no fields to read.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    greet:
+      kind: code
+      input:
+        text: ${input.m.text}
+      code: return inputs.text
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'greet' input 'text' from: ${input.m} is an inbox; it is read only whole, bound to a child's Inbox input (an inbox has no fields)
+      frames:
+      - label: flow.yaml
+        range: [9, 13, 9, 28]

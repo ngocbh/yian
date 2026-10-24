@@ -29,7 +29,15 @@
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord } from "../../expr/expressions.ts";
 import type { FeedbackValue } from "../../expr/index.ts";
-import { isRecord, normalizeFiles, setField, type Type, type Value, type ValueRecord } from "../../typesys/values.ts";
+import {
+  isInboxType,
+  isRecord,
+  normalizeFiles,
+  setField,
+  type Type,
+  type Value,
+  type ValueRecord,
+} from "../../typesys/values.ts";
 import {
   type BackwardContext,
   BackwardResult,
@@ -397,10 +405,10 @@ export class LoopNode extends Node {
    *   while: stop when the predicate is false on the carried record.
    *   until: do-while; stop when `k >= 1` and the predicate is true (`k` 0 always continues).
    *   times: stop when `k >= this.maxIters` (`times N` is baked as `maxIters`).
-   * On stop: `Output(carried, commitAs = origin)`. On continue: the runaway guard, only when
-   * `max:` is set, then `Grow([carried, k], prune)`, pruning body_{k-1} and this driver unless it
-   * is the origin. The reducer retires each body_{k-1} node with its whole grown subtree once
-   * every node in it is settled.
+   * On stop: `Output(carried, commitAs = origin)`, without the fields the body takes as inboxes.
+   * On continue: the runaway guard, only when `max:` is set, then `Grow([carried, k], prune)`,
+   * pruning body_{k-1} and this driver unless it is the origin. The reducer retires each
+   * body_{k-1} node with its whole grown subtree once every node in it is settled.
    *
    * @param inputs The carried record, keyed by the loop's input field names.
    * @returns The stopping `Output` or the continuing `Grow`; the seed's iteration is a `bigint`.
@@ -411,7 +419,7 @@ export class LoopNode extends Node {
     const origin = this.originId ?? this.id;
     const carried = this.readCarried({ ...inputs } as ValueRecord);
     const k = this.iteration;
-    if (this.shouldStopNow(carried, k)) return new Output(carried, { commitAs: origin });
+    if (this.shouldStopNow(carried, k)) return new Output(this.withoutInboxes(carried), { commitAs: origin });
     // Guard on `shouldStop(k)`, not `k + 1`: driver@k grows body_k, the (k+1)-th body, which is
     // within budget while `k < maxIters`, so `max: M` permits exactly M body runs. A `times` loop
     // stops above instead.
@@ -453,6 +461,15 @@ export class LoopNode extends Node {
       return read;
     }
     return carried;
+  }
+
+  /** Return `carried` without the fields the body takes as inboxes: a loop carries them, never returns them. */
+  private withoutInboxes(carried: ValueRecord): ValueRecord {
+    const inboxes = this.childInputs.filter((param) => isInboxType(param.contract?.type)).map((param) => param.name);
+    if (inboxes.length === 0) return carried;
+    const kept: ValueRecord = {};
+    for (const [name, value] of Object.entries(carried)) if (!inboxes.includes(name)) setField(kept, name, value);
+    return kept;
   }
 
   /** Continue-vs-stop on the carried record at index `k`; see `forward` for the stop rule. */

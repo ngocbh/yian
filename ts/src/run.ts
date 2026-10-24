@@ -159,6 +159,7 @@ import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
 import {
   canonicalTypeLabel,
   fromHost,
+  isInboxType,
   isRecord,
   jsTypeName,
   rejectDeepNesting,
@@ -691,7 +692,8 @@ function checkTestOptions(options: Pick<RunFlowOptions, "scheduler" | "random" |
  * @internal Take each supplied input through host intake, keyed as given.
  *
  * @throws TypeError when `inputs` isn't a record or is a Proxy.
- * @throws RangeError when a key names no declared input.
+ * @throws RangeError when a key names no declared input, or names an inbox, which takes events
+ *   through `send` instead.
  * @throws TypeCheckError when an input is an accessor property or isn't a yian value.
  */
 export function hostInputs(params: readonly Parameter[], inputs: unknown): Record<string, Value> {
@@ -699,6 +701,11 @@ export function hostInputs(params: readonly Parameter[], inputs: unknown): Recor
   if (types.isProxy(inputs)) throw new TypeError("inputs must be a mapping of input names to values, got Proxy");
   checkInputNames(params, inputs);
   const record = inputs as Readonly<Record<string, unknown>>;
+  for (const param of params) {
+    if (isInboxType(param.contract?.type) && Object.hasOwn(record, param.name)) {
+      throw new RangeError(`inbox \`${param.name}\` receives events through send(); it takes no run input`);
+    }
+  }
   const taken: ValueRecord = {};
   for (const name of Object.keys(record)) {
     const where = `input ${reprText(name)}`;
@@ -836,6 +843,25 @@ function checkEffectiveLlm(
 }
 
 /**
+ * @internal Return the top-level START's wiring for a run: each supplied input read from the run's
+ * input record, and each inbox input bound to its handle. An omitted input is left out, so START
+ * fills its default.
+ *
+ * @param params The flow's declared inputs.
+ * @param coerced The supplied inputs, already coerced at the run boundary.
+ */
+export function startWiring(
+  params: readonly Parameter[],
+  coerced: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const wiring: Record<string, unknown> = Object.fromEntries(
+    Object.keys(coerced).map((name) => [name, `\${input.${name}}`]),
+  );
+  for (const param of params) if (isInboxType(param.contract?.type)) wiring[param.name] = { inbox: param.name };
+  return wiring;
+}
+
+/**
  * @internal Return the run's inputs as run start resolves against them: the supplied inputs plus
  * each omitted input's valid default.
  *
@@ -965,7 +991,7 @@ async function startRun(
   pool.set(privateFlow.startId, coerced);
   seedSystemClock(pool, scheduler.now());
   pool.addSystem("run_id", canonicalRunId);
-  const startWiringOverride = Object.fromEntries(Object.keys(coerced).map((name) => [name, `\${input.${name}}`]));
+  const startWiringOverride = startWiring(flow.input, coerced);
 
   let memoryRuntime: MemoryRuntime | null = null;
   let layout: MemoryLayoutParts | null = null;

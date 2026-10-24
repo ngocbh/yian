@@ -1,0 +1,23 @@
+# TS-only: an inbox input nothing reads is a load error, at its declaration.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    greet:
+      kind: code
+      code: return "hi"
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unread inbox inputs:
+          inbox input `m` is never read; take from it, or pass it to a call
+      frames:
+      - label: flow.yaml
+        range: [4, 6, 4, 17]

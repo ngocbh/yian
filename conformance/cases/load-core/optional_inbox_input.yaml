@@ -1,0 +1,18 @@
+# TS-only: an inbox input is never optional.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Optional(Inbox(str))
+  nodes: {}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''m'': `!Optional(Inbox(str))` is not a type (an inbox is never optional in ''Optional(Inbox(str))''; write Inbox(...))'
+      frames:
+      - label: flow.yaml
+        range: [4, 6, 4, 27]

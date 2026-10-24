@@ -97,15 +97,21 @@ const UNIT_SECONDS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3600, d
 /**
  * Return the seconds in a duration: a positive integer then `s`, `m`, `h` or `d` (`24h` is 86400).
  *
- * @throws RangeError for anything else, a plain number included (its hint spells it in seconds),
- *   a zero duration, or one past `Number.MAX_SAFE_INTEGER` seconds.
+ * @throws TypeError for a value that isn't text.
+ * @throws RangeError for any other text: plain number text (its hint spells it in seconds when
+ *   that parses), a zero duration, or one past `Number.MAX_SAFE_INTEGER` seconds.
  */
 export function parseDuration(text: string): number {
+  if (typeof text !== "string") {
+    throw new TypeError(`a duration is text: a positive integer and a unit (${DURATION_FORMAT})`);
+  }
   const match = DURATION_RE.exec(text);
   const seconds = match === null ? 0 : Number(match[1]) * UNIT_SECONDS[match[2]!]!;
   if (match === null || seconds === 0 || !Number.isSafeInteger(seconds)) {
-    // A plain number is the likely slip; `0` gets no hint since `0s` is refused too.
-    const hint = /^[0-9]+$/.test(text) && Number(text) > 0 ? `; write ${text}s` : "";
+    // A plain number is the likely slip; `0` gets no hint since `0s` is refused too, and nor does
+    // a number too large to parse in seconds.
+    const plain = /^[0-9]+$/.test(text) ? Number(text) : 0;
+    const hint = plain > 0 && Number.isSafeInteger(plain) ? `; write ${text}s` : "";
     throw new RangeError(`a duration is a positive integer and a unit (${DURATION_FORMAT})${hint}`);
   }
   return seconds;

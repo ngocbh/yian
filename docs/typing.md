@@ -85,9 +85,11 @@ input, held as an `InboxRef` with one field, `inbox` (the inbox's name, non-empt
 JSON form is the mapping `{"inbox": ...}`, and its typed wire is
 `{"kind": "inbox", "value": {"inbox": ...}}`. An `Inbox(T)` slot reads that mapping, with
 exactly that key, as an `InboxRef`; text, a mapping with other keys, `null` and a list fail
-with `TypeCheckError`. `Any`, `object` and every other type refuse a handle, and load treats
-`Inbox(T)` as disjoint from all of them: `Inbox(T)` relates only to another `Inbox(U)`, as
-`T` to `U`. `inbox` is never inferred from a record; only an `InboxRef` infers it.
+with `TypeCheckError`. Every other type refuses a handle, except that an `object` slot reads a
+handle nested in its value as the `{"inbox": ...}` mapping, as it reads a nested `FileRef`; a
+handle at its top fails. Load treats `Inbox(T)` as disjoint from every other type: `Inbox(T)`
+relates only to another `Inbox(U)`, as `T` to `U`. `inbox` is never inferred from a record;
+only an `InboxRef` infers it.
 
 A `float` is finite. NaN, infinity, and `complex` numbers are not yian values, at any
 depth. The first boundary that sees one rejects it and names where it sits:

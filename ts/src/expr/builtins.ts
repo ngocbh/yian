@@ -15,13 +15,13 @@
  * (`render_as_json`, `join`, `upper`, `lower`); `builtinResultType` gives the type a shipped
  * builtin always returns, so the loader can reject a field read on its result.
  *
- * Knows about: `typesys` (`Value`, `FileRef`, `Type`, `ValueKind`, `fromHost`, `valueRepr`,
- * `writeAsText`, `writeAsJson`) and `diagnostics` (`reprText`). Never imports: `expressions`,
+ * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `Type`, `ValueKind`, `fromHost`,
+ * `valueRepr`, `writeAsText`, `writeAsJson`) and `diagnostics` (`reprText`). Never imports: `expressions`,
  * `template`, or anything above them.
  */
 
 import { reprText } from "../diagnostics.ts";
-import { FileRef, Type, type Value, ValueKind } from "../typesys/index.ts";
+import { FileRef, InboxRef, Type, type Value, ValueKind } from "../typesys/index.ts";
 import { fromHost, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
 
 /** One parameter of a builtin; one with an own `default` is optional. */
@@ -98,7 +98,8 @@ export function bindArguments<T>(
 
 /**
  * Return a value's kind as messages name it: `null`, `bool`, `int`, `float`, `str`, `list`,
- * `record` or `file`. The port of Python's `_kind`, which names a file by its class, `FileRef`.
+ * `record`, `file` or `inbox`. The port of Python's `_kind`, which names a file by its class,
+ * `FileRef`; Python has no inbox.
  */
 export function kindName(value: Value): string {
   if (value === null) return "null";
@@ -113,6 +114,7 @@ export function kindName(value: Value): string {
       return "str";
   }
   if (Array.isArray(value)) return "list";
+  if (InboxRef.isInboxRef(value)) return "inbox";
   return FileRef.isFileRef(value) ? "file" : "record";
 }
 

@@ -89,3 +89,20 @@ describe("the type language", () => {
     expect(() => readTypedefs({ A: "Inbox(B)", B: "Inbox(A)" })).toThrow();
   });
 });
+
+test("a dict can't hold an inbox, directly or through an alias", () => {
+  const NONE = readTypedefs({});
+  const CHAT = readTypedefs({ Chat: "Inbox(str)" });
+  for (const [text, registry] of [
+    ["dict(str, Inbox(str))", NONE],
+    ["dict(Inbox(str), int)", NONE],
+    ["list(dict(str, Inbox(str)))", NONE],
+    ["dict(str, Chat)", CHAT],
+  ] as const) {
+    expect(() => typeFor(text, registry)).toThrow("an inbox is a whole input; it can't be a dict key or value");
+  }
+  expect(() => typeFor("dict(str, Inbox(str))", NONE)).toThrow("in 'dict(str, Inbox(str))'");
+  expect(() => readTypedefs({ R: { m: "dict(str, Inbox(str))" } })).toThrow("can't be a dict key or value");
+  expect(typeFor("dict(str, int)", NONE).kind).toBe(ValueKind.OBJECT);
+  expect(typeFor("dict(str, Unknown)", NONE).kind).toBe(ValueKind.OBJECT);
+});

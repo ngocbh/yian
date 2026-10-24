@@ -1,9 +1,11 @@
 /** The inbox handle, its type and its codec. */
 import { describe, expect, test } from "bun:test";
 
+import { kindName } from "../../src/expr/builtins.ts";
 import { canonicalSeed, canonicalTyped } from "../../src/runtime/log.ts";
 import {
   buildValue,
+  FileRef,
   buildValueAs,
   fromHost,
   hasFile,
@@ -144,4 +146,19 @@ describe("inbox reading type", () => {
     expect(hasFile(inboxType(STR))).toBe(true);
     expect(requiresFile(inboxType(STR))).toBe(true);
   });
+});
+
+test("an expression error names a handle's kind as inbox", () => {
+  expect(kindName(new InboxRef("m"))).toBe("inbox");
+  expect(kindName(new FileRef({ uri: "s3://b/k" }))).toBe("file");
+  expect(kindName({ inbox: "m" })).toBe("record");
+});
+
+test("an object slot reads a nested handle as its mapping and refuses one at its top", () => {
+  const OBJECT = Type.scalar(ValueKind.OBJECT);
+  const read = buildValueAs(OBJECT, { a: new InboxRef("m") } as never);
+  expect(read.value).toEqual({ a: { inbox: "m" } });
+  expect(InboxRef.isInboxRef((read.value as Record<string, unknown>)["a"])).toBe(false);
+  expect(() => buildValueAs(OBJECT, new InboxRef("m") as never)).toThrow(TypeCheckError);
+  expect(() => buildValueAs(Type.scalar(ValueKind.ANY), { a: new InboxRef("m") } as never)).toThrow(TypeCheckError);
 });

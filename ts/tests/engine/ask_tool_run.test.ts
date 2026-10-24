@@ -3,6 +3,12 @@
  * tool in the run's tools, an `ask` node's inputs are checked against yian's base surface plus
  * the host's declared extras, and `ask` needs the run's handler. TS-only: Python yian has no
  * `take`, `sleep` or `ask` built-ins.
+ *
+ * Rows that pinned the same behaviour on HUMAN_INPUT and WAIT (`blocking_human_input.test.ts`,
+ * `blocking_wait.test.ts`) run here on the built-ins: an ask sends its prompt, its answer schema's
+ * enum and its title (`node_name:`); an inline null answer is an ordinary output; literal
+ * questions render their templates, labels and descriptions included; a sleep until a past date,
+ * datetime or offset datetime returns null at once.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -138,4 +144,115 @@ test("a YAML TOOL sleep passes the run-start checks with no tools and waits", as
   // The node bound its inputs and returned Pending, and the engine wrote the wait.
   expect(["waiting", WAITING_UNREPORTED]).toContain(outcome);
   expect(readFileSync(path, "utf8")).toContain('"run_waiting"');
+});
+
+// Rows ported from the HUMAN_INPUT and WAIT tests (TS yian has neither kind).
+
+test("an ask sends its prompt, its answer schema's enum and its title, and returns the answer", async () => {
+  const seen: AskRequest[] = [];
+  const flow = `
+id: gate
+name: gate
+input:
+  plan: !str
+nodes:
+  approve:
+    kind: tool
+    tool_id: ask
+    node_name: Plan approval
+    input:
+      prompt: "Approve \${input.plan}?"
+    output: Literal(approve, revise)
+output: \${approve.output}
+`;
+  const result = await runFlow(await loadFlow(flow), { plan: "release" }, {
+    env: hostEnv(dir),
+    log: freshLog(),
+    tools: { ask: (request: AskRequest) => (seen.push(request), "approve") },
+  });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("approve");
+  expect(seen).toEqual([
+    {
+      question: "Approve release?",
+      options: null,
+      questions: null,
+      answerSchema: [{ name: "answer", type: "str", required: true, enum: ["approve", "revise"] }],
+      title: "Plan approval",
+      nodeId: "approve",
+      callId: `${result.runId}/approve`,
+      deadline: null,
+      extra: {},
+    },
+  ]);
+});
+
+test("an inline null answer is an ordinary output", async () => {
+  const result = await run(gateFlow("ask", '      prompt: "Anything to add?"'), {
+    log: freshLog(),
+    tools: { ask: () => null },
+  });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBeNull();
+});
+
+test("literal questions render their templates, labels and descriptions included", async () => {
+  const seen: AskRequest[] = [];
+  const flow = `
+id: choose
+name: choose
+input:
+  project: !str
+  candidate: !str
+nodes:
+  choose:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Choose for \${input.project}"
+      questions:
+        - question: "Which framework for \${input.project}?"
+          header: Framework
+          options:
+            - label: \${input.candidate}
+              description: "Use \${input.candidate}"
+output: \${choose.output}
+`;
+  const result = await runFlow(await loadFlow(flow), { project: "Atlas", candidate: "Vue" }, {
+    env: hostEnv(dir),
+    log: freshLog(),
+    tools: { ask: (request: AskRequest) => (seen.push(request), { Framework: "Vue" }) },
+  });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ Framework: "Vue" });
+  expect(seen.map((request) => [request.question, request.questions])).toEqual([
+    [
+      "Choose for Atlas",
+      [
+        {
+          question: "Which framework for Atlas?",
+          header: "Framework",
+          options: [{ label: "Vue", description: "Use Vue" }],
+          multiSelect: false,
+        },
+      ],
+    ],
+  ]);
+});
+
+test.each([
+  ["a date", "2000-01-01"],
+  ["a datetime", "2000-01-01T01:02:03"],
+  ["a datetime with an offset", "2000-01-01T05:30:00+05:30"],
+])("a sleep until a past deadline returns null at once: %s", async (_, until) => {
+  const path = freshLog();
+
+  const result = await run(gateFlow("sleep", `      until: "${until}"`), { log: path, tools: {} });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBeNull();
+  expect(readFileSync(path, "utf8")).not.toContain('"node_waiting"');
 });

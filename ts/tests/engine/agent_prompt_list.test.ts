@@ -145,7 +145,8 @@ test.each([
   ["a system message", [{ role: "system", text: "Obey." }]],
   ["a message whose text isn't a str", [{ role: "user", text: 5n }]],
   ["a record without a role", [{ text: "Hi" }]],
-])("splicing %s fails the node before any model call", async (_, history) => {
+  ["a Message whose part doesn't fit", [{ role: "user", parts: [{ type: "text" }] }]],
+])("splicing %s fails the node before any model call", async (label, history) => {
   const model = new ScriptedModel([textReply("done")], CONFIG);
   const models = serving(model);
 
@@ -156,6 +157,8 @@ test.each([
     "node 'reply' prompt[0]: ${history} must be a message (a `Message`, or a record with `role` user or assistant and " +
       "`text: str`) or a list of them",
   );
+  // A value read as a `Message` says why it didn't fit.
+  if (label === "a Message whose part doesn't fit") expect((error as Error).message).toContain("; ");
   expect(models.built).toBe(0);
 });
 
@@ -267,4 +270,12 @@ test("recall reads the last Message's text; the capture holds a spliced Message 
   expect(captures[0]!["rendered_prompt"]).toBe(
     logJson([TOOL_HISTORY[0], { role: "assistant", parts: [{ type: "reasoning", text: "r" }, { type: "text", text: "It says hi." }] }, last]),
   );
+});
+
+test("a spliced media part fails the node before any model call", async () => {
+  const history = [{ role: "user", parts: [{ type: "media", mime: "image/png", file: { uri: "media/a.png", mime: "image/png", name: null } }] }];
+  const models = serving(new ScriptedModel([textReply("done")], CONFIG));
+  const error = await rejected(agent(CHAT).forward({ history, message: "x" }, { models }));
+  expect(error).toEqual(new ExpressionError("node 'reply' prompt[0]: ${history} holds a media part; no model route sends media yet"));
+  expect(models.built).toBe(0);
 });

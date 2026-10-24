@@ -17,8 +17,9 @@ import { Message as ModelMessage, Request, type Response, TextPart, ToolResultPa
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { steerMessages } from "../../src/nodes/agent/messages.ts";
+import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
+import { fromModelMessage, rebuildMessages, steerMessages } from "../../src/nodes/agent/messages.ts";
+import { renderTemplateRecord } from "../../src/expr/template.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
@@ -27,9 +28,11 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { replayRunLog, type RunFlowOptions, send } from "../../src/run.ts";
 import { JsonlRunLog, NodeStepRecord, PoolCommitRecord, readRunLog } from "../../src/runtime/log.ts";
 import type { RunState } from "../../src/runtime/state.ts";
+import { withWarnings } from "../../src/platform.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { FileRef, InboxRef, type ValueRecord } from "../../src/typesys/values.ts";
+import { FileRef, InboxRef, type Value, type ValueRecord } from "../../src/typesys/values.ts";
 import { callReply, crashAfter, NO_ENV, resumeWith, runWith, serving, textReply } from "./run_state_fixtures.ts";
 
 /** A pool whose START holds the handle of inbox `name`, as START binds an Inbox input. */
@@ -47,6 +50,15 @@ test("an agent with a steer inbox reserves its key, hides it from the model and 
   expect(node.modelHiddenInputs().has(STEER_INBOX_KEY)).toBe(true);
   expect(node.backwardInputNames()).not.toContain(STEER_INBOX_KEY);
   expect(new AgentNode("plain", { prompt: "hi" }).readsSteerInbox).toBe(false);
+});
+
+test("an agent keeps its steer render; a render without a steer inbox, or an empty one, is refused", () => {
+  expect(new AgentNode("c", { steerInbox: true, steerRender: "Note: ${event}" }).steerRender).toBe("Note: ${event}");
+  expect(new AgentNode("c", { steerInbox: true }).steerRender).toBeNull();
+  expect(() => new AgentNode("c", { steerRender: "x" })).toThrow(new RangeError("AGENT node 'c': a steer render needs a steer inbox"));
+  expect(() => new AgentNode("c", { steerInbox: true, steerRender: "" })).toThrow(
+    new TypeError("AGENT node 'c': steer render must be non-empty text or null"),
+  );
 });
 
 test("bindReserved resolves the steer inbox binding to the inbox name", () => {
@@ -116,7 +128,7 @@ test("a tool call part in a steer Message becomes text; nothing throws", () => {
 test("a Message steer's media is dropped and reported, never a failure", () => {
   const media = { role: "user", parts: [{ type: "media", mime: "image/png", file: new FileRef({ uri: "files/a.png", mime: "image/png", name: null }) }] };
   const drops: [number, number][] = [];
-  const messages = steerMessages(["first", media], (event, part) => drops.push([event, part]));
+  const messages = steerMessages(["first", media], { onDrop: (event, part) => drops.push([event, part]) });
   expect(drops).toEqual([[1, 0]]);
   expect(messages).toHaveLength(2);
   expect(messages[1]!.parts).toHaveLength(1);
@@ -128,10 +140,33 @@ test("an empty author is left out", () => {
   expect(shape(steerMessages([message]))).toEqual([["user", null, ["x"]]]);
 });
 
+test("a render makes each event one text part of the read's one user message", () => {
+  expect(shape(steerMessages(["a", "b"], { render: (value) => `> ${String(value)}` }))).toEqual([["user", null, ["> a", "> b"]]]);
+});
+
+test("a render turns Message events into text too", () => {
+  const message = { role: "assistant", author: "ana", parts: [{ type: "text", text: "hi" }] };
+  const render = (value: unknown) => renderTemplateRecord("${event.author}: ${event.parts}", { event: value } as ValueRecord);
+  const text = 'ana: [{"type":"text","text":"hi"}]';
+  expect(shape(steerMessages([message, message], { render }))).toEqual([["user", null, [text, text]]]);
+});
+
+test("an event whose render throws falls back to its default rendering; the read still sends", () => {
+  const fallbacks: number[] = [];
+  const message = { role: "user", author: "ana", parts: [{ type: "text", text: "hi" }] };
+  const render = (value: unknown) => {
+    if (value === "ok") return "rendered ok";
+    throw new Error("no field");
+  };
+  const messages = steerMessages(["ok", { note: null }, message], { render, onFallback: (index) => fallbacks.push(index) });
+  expect(shape(messages)).toEqual([["user", null, ["rendered ok", '{"note":null}', "hi"]]]);
+  expect(fallbacks).toEqual([1, 2]);
+});
+
 // --- the loop's reads (runAgent with a steer inbox double) --- //
 
 /** A steer inbox double: `queue` is what a read takes; `reads` logs each read's values, `null` for none. */
-function inboxDouble(queue: string[] = []) {
+function inboxDouble(queue: Value[] = []) {
   const reads: (readonly unknown[] | null)[] = [];
   let seq = 100;
   const inbox: SteerInbox = {
@@ -264,7 +299,7 @@ test("a trailing recorded steer and a live read both join the first live call, i
   ]);
 });
 
-test("no live read while recorded attempts continue the call", async () => {
+test("no live read while recorded attempts continue the call; the queued steer joins late, after its answer", async () => {
   const request = new Request({ messages: [SYSTEM, userMessage("go"), ...steerMessages(["a"])], tools: [] });
   const failed: ValueRecord = {
     kind: "model_call",
@@ -279,12 +314,65 @@ test("no live read while recorded attempts continue the call", async () => {
     retry_in: 0,
   };
   const double = inboxDouble(["b"]);
-  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const model = new ScriptedModel([textReply("done"), textReply("done with b")], CONFIG);
   const steps = recording([steerStep(["a"]), failed]);
-  expect(((await runAgent(loopContext(model, { steerInbox: double.inbox, steps }))) as Output).value).toBe("done");
+  expect(((await runAgent(loopContext(model, { steerInbox: double.inbox, steps }))) as Output).value).toBe("done with b");
   expect(sent(model.requests[0]!).slice(-1)).toEqual([["user", ["a"]]]);
-  expect(double.reads).toEqual([]);
-  expect(double.queue).toEqual(["b"]);
+  expect(sent(model.requests[1]!).slice(-2)).toEqual([
+    ["assistant", ["done"]],
+    ["user", ["b"]],
+  ]);
+  expect(double.reads).toEqual([["b"]]);
+});
+
+/** The `render:` template `template` as the agent renders it, over `${event}`. */
+const renderWith = (template: string) => (value: unknown) => renderTemplateRecord(template, { event: value } as ValueRecord);
+
+/** Run `fn`, collecting every `warn` it raises. */
+async function warnings<T>(fn: () => Promise<T>): Promise<{ result: T; warned: string[] }> {
+  const warned: string[] = [];
+  const result = await withWarnings((message) => warned.push(message), fn);
+  return { result, warned };
+}
+
+test("the agent renders over ${event}, inserting data without evaluating it", async () => {
+  const double = inboxDouble(["${secret}"]);
+  const model = new ScriptedModel([textReply("ok")], CONFIG);
+  const renderSteer = renderWith("From the owner: ${event}");
+  await runAgent(loopContext(model, { steerInbox: double.inbox, renderSteer }));
+  expect(sent(model.requests[0]!).at(-1)).toEqual(["user", ["From the owner: ${secret}"]]);
+});
+
+test("a render that reads a null field falls back to the default rendering for that event, with a warning", async () => {
+  const double = inboxDouble([{ note: "use 2024" }, { note: null }]);
+  const model = new ScriptedModel([textReply("ok")], CONFIG);
+  const renderSteer = renderWith("Note: ${event.note}");
+  const { result, warned } = await warnings(() => runAgent(loopContext(model, { steerInbox: double.inbox, renderSteer })));
+  expect((result as Output).value).toBe("ok");
+  expect(sent(model.requests[0]!).at(-1)).toEqual(["user", ["Note: use 2024", '{"note":null}']]);
+  expect(warned).toHaveLength(1);
+  expect(warned[0]).toStartWith("node 'chat': steer event 1 didn't render (");
+});
+
+test("the rebuild and learning render steers as the live loop did, fallback included, without warnings", async () => {
+  const steer: ValueRecord = { kind: "steer", inbox: "notes", from: [1n, 2n], values: [{ note: "a" }, { note: null }] };
+  const recorded: ValueRecord[] = [];
+  const model = new ScriptedModel([textReply("ok")], CONFIG);
+  const renderSteer = renderWith("Note: ${event.note}");
+  await warnings(() => runAgent(loopContext(model, { steps: recording([steer], recorded), renderSteer })));
+  const steps = [steer, ...recorded];
+  const live = model.requests[0]!.messages.at(-1)!;
+  const { result, warned } = await warnings(async () => {
+    const rebuilt = rebuildMessages(steps as JsonObject[], null, renderSteer).toObject() as unknown[];
+    const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null, baseSystemPrompt: DEFAULT_SYSTEM };
+    const rendered = await stepsMaterial(steps, { ...options, renderSteer });
+    const unrendered = await stepsMaterial(steps, options);
+    return { rebuilt, rendered, unrendered };
+  });
+  expect(result.rebuilt[0]).toEqual(fromModelMessage(live));
+  expect(result.rendered.digestOk).toBe(true);
+  expect(result.unrendered.digestOk).toBe(false);
+  expect(warned).toEqual([]);
 });
 
 // --- through runFlow and advance --- //

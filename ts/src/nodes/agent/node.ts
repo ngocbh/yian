@@ -103,6 +103,7 @@ import {
   type Message,
   messageSteps,
   rebuildMessages,
+  type SteerRender,
   toModelMessage,
 } from "./messages.ts";
 import { OutputInvalidError } from "./structured.ts";
@@ -392,6 +393,8 @@ export class AgentNode extends Node {
   skills: readonly string[] | "all";
   /** Whether this agent reads a steer inbox (`steer_inbox:`, the reserved `__steer_inbox` wiring). */
   readonly steerInbox: boolean;
+  /** The text template each steer event renders through, over `${event}`; `null` for the default rendering. */
+  readonly steerRender: string | null;
   /**
    * The author-facing phrase naming this agent's `llm_config` when a desugar synthesized the
    * agent from another node's text (e.g. `node 'ask' adaptive_questions.llm_config`).
@@ -436,10 +439,12 @@ export class AgentNode extends Node {
    * @param options.variables Exact `Parameter`s with literal defaults; defaults to `[]`.
    * @param options.skills Skill names, or `"all"`; defaults to `[]`.
    * @param options.steerInbox Whether this agent reads a steer inbox; defaults to `false`.
-   * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `memories`, `variables`
-   *   or `steerInbox`.
+   * @param options.steerRender The template each steer event renders through, over `${event}`;
+   *   defaults to `null`, the default rendering.
+   * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `memories`, `variables`,
+   *   `steerInbox` or `steerRender`.
    * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
-   *   `builtin_tools` grant, a memory without an AGENT
+   *   `builtin_tools` grant, a steer render without a steer inbox, a memory without an AGENT
    *   `DeclSite`, or a variable whose name repeats or whose default is missing or invalid.
    * @throws SkillError for a `load_skill` tool grant or a bad skill grant.
    */
@@ -457,6 +462,7 @@ export class AgentNode extends Node {
       variables?: readonly Parameter[] | null;
       skills?: readonly string[] | "all" | null;
       steerInbox?: boolean;
+      steerRender?: string | null;
     } = {},
   ) {
     const {
@@ -471,6 +477,7 @@ export class AgentNode extends Node {
       variables = null,
       skills = null,
       steerInbox = false,
+      steerRender = null,
     } = options;
     super(nodeId, { title });
     if (isList(prompt)) checkPromptItems(nodeId, prompt);
@@ -518,6 +525,13 @@ export class AgentNode extends Node {
     }
     this.steerInbox = steerInbox;
     this.readsSteerInbox = steerInbox;
+    if (steerRender !== null && (typeof steerRender !== "string" || steerRender === "")) {
+      throw new TypeError(`AGENT node ${reprText(nodeId)}: steer render must be non-empty text or null`);
+    }
+    if (steerRender !== null && !steerInbox) {
+      throw new RangeError(`AGENT node ${reprText(nodeId)}: a steer render needs a steer inbox`);
+    }
+    this.steerRender = steerRender;
     this.llmConfigLabel = null;
     this.wiresLlmConfig = false;
     this.llmValueTypes = [];
@@ -657,6 +671,12 @@ export class AgentNode extends Node {
     return isRecord(config) ? config : null;
   }
 
+  /** Render one steer event through this agent's `render:` template over `${event}`; `null` without one. */
+  private steerRenderer(): SteerRender | null {
+    const template = this.steerRender;
+    return template === null ? null : (value) => renderTemplateRecord(template, { event: value } as ValueRecord);
+  }
+
   /** Pick the steps of this agent's new messages (see `messageSteps` in `messages.ts`). */
   override messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
     return messageSteps(steps);
@@ -664,7 +684,7 @@ export class AgentNode extends Node {
 
   /** Rebuild this agent's new messages (see `rebuildMessages` in `messages.ts`). */
   override rebuildMessages(steps: readonly Readonly<JsonObject>[], output: TypedValue | null): TypedValue {
-    return rebuildMessages(steps, output);
+    return rebuildMessages(steps, output, this.steerRenderer());
   }
 
   /**
@@ -704,6 +724,7 @@ export class AgentNode extends Node {
       });
     }
     if (this.systemPrompt !== null) checkNamedPrompt(this.systemPrompt, `${subject} system_prompt`);
+    if (this.steerRender !== null) checkNamedPrompt(this.steerRender, `${subject} steer_inbox render`);
   }
 
   /** Require `"all"` or unique valid names, and no `load_skill` tool grant. */
@@ -872,6 +893,7 @@ export class AgentNode extends Node {
       skills: options.skills,
       steering: caps.steering,
       steerInbox: options.steerInbox,
+      renderSteer: this.steerRenderer() ?? undefined,
       models: options.models,
       sent: () => [],
       steps: caps.steps,
@@ -1221,6 +1243,7 @@ export class AgentNode extends Node {
       tools,
       structured,
       baseSystemPrompt: rendered.baseSystemPrompt,
+      renderSteer: this.steerRenderer(),
     });
     return {
       interactions,

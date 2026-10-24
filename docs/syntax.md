@@ -2708,11 +2708,36 @@ nodes:
   reply's tool calls. Nothing queued: nothing is read. A closed inbox still gives
   what is queued. The read is recorded as a `steer {inbox, from}` step, so a
   resumed run replays it (see [API](api.md#steering)).
+- **Late steers.** When the model answers with no tool call while steers are
+  queued, the node reads them and calls the model again, so a steer sent during
+  the final reply still gets an answer. Every reply counts toward
+  `max_tool_iterations` (see `env:`): at the cap the answer stands and the steers
+  stay queued, unread. The default, `-1`, has no cap. An interrupt that arrived
+  by the final answer beats a queued steer: the answer stands.
 - **Rendering.** One read is one user message: a `str` event is a text part, and
   any other event its text form (records as Yian writes them). A `Message` event
   (an `Inbox(Message)`) is its own user message, keeping its `author`; a message
   with another role becomes a user message, its tool calls, results and reasoning
   become text, and media is dropped with a warning.
+- **`render:`.** The mapping form gives a text template each event renders
+  through, over `${event}`:
+
+  ```yaml
+  steer_inbox:
+    from: ${input.notes}
+    render: |-
+      From the owner: ${event}
+  ```
+
+  With a render, one read is one user message holding one text part per event,
+  `Message` events included. The template's output is data, not instructions: an
+  event's text is inserted as written, never evaluated, so a `${...}` inside a
+  steer reaches the model as is. The template may read only `${event}`, and its
+  field reads are checked against the inbox's element type (`${event.text}` for
+  an `Inbox(Note)` whose `Note` has `text`). An event the template can't render
+  at run time (a field that is null) goes in its default rendering instead, with
+  a warning; the read never fails the node. `render:` is part of the flow's
+  identity.
 - **Interrupt.** The node checks for an interrupt at the top of each iteration,
   as each streamed chunk after the first arrives, and before each tool call. It
   then stops and **succeeds** with the text so far, so the flow or loop
@@ -2731,8 +2756,10 @@ nodes:
   before it go with that request, and an interrupt cuts its streaming text reply
   at the last chunk shown.
 
-`steer_inbox:` is a load error unless it is the lone `${input.<name>}` of an Inbox
-input, and on an AGENT whose output is anything but `str` or `Optional(str)`,
+`steer_inbox:` (or its `from:`) is a load error unless it is the lone
+`${input.<name>}` of an Inbox input. So is a mapping with no `from:` or with a key
+other than `from:` and `render:`, a `render:` that isn't non-empty text, and
+`steer_inbox:` on an AGENT whose output is anything but `str` or `Optional(str)`,
 because a structured value cannot be partial. An inbox read only by `steer_inbox:`
 counts as read. A model question from `ask_user` is still answered through
 `ask_user`, not by a steer. Hosts interrupt through the `steering` run option (see

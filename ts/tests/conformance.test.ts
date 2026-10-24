@@ -1087,20 +1087,25 @@ describe("run", () => {
   });
 
   test("a `host.sends` item with `after` is sent live when the run reaches it", async () => {
-    // Sent at the first chunk of the only reply, which the agent never reads again: it is logged
-    // before the agent's success.
-    const text = STEERING_CASE("[]", "done").replace(
-      "host:\n",
-      "host:\n  sends: [{inbox: notes, event: late, after: {node: chat, model_call: 1, chunk: 1}}]\n",
-    );
+    // Sent at the first chunk of the first reply, so the agent reads it late, after that reply,
+    // and calls the model again.
+    const text = STEERING_CASE("[]", "done")
+      .replace("host:\n", "host:\n  sends: [{inbox: notes, event: late, after: {node: chat, model_call: 1, chunk: 1}}]\n")
+      .replace(
+        "{agent: [{reply:",
+        "{agent: [{reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: draft}]}}, {reply:",
+      );
     await runCase(text);
     const kinds = readFileSync(join(made.at(-1)!, "run.jsonl"), "utf8")
       .split("\n")
       .filter((line) => line !== "")
       .map((line) => decodeRecord(line))
-      .map(({ kind, record }) => (record instanceof PoolCommitRecord ? record.key : kind));
-    expect(kinds.indexOf("__start__.notes")).toBeGreaterThan(-1);
-    expect(kinds.indexOf("__start__.notes")).toBeLessThan(kinds.indexOf("node_succeeded", kinds.indexOf("__start__.notes")));
+      .map(({ kind, record }) =>
+        record instanceof PoolCommitRecord ? record.key : record instanceof NodeStepRecord ? String(record.step["kind"]) : kind,
+      );
+    const sent = kinds.indexOf("__start__.notes");
+    expect(sent).toBeGreaterThan(-1);
+    expect(kinds.slice(sent + 1, sent + 4)).toEqual(["model_call", "steer", "model_call"]);
   });
 
   /**

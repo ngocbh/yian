@@ -910,7 +910,7 @@ test("test_expansion_digest_excludes_effective_but_includes_authored_llm_config"
 test("an AGENT leaves out unset variables, skills, steer inbox, system prompt, memories and mode", () => {
   const manifest = nodeManifest(singleNodeFlow(new AgentNode("node", { prompt: "p" })), "node");
 
-  for (const key of ["variables", "skills", "steer_inbox", "system_prompt", "memories", "mode"]) {
+  for (const key of ["variables", "skills", "steer_inbox", "steer_render", "system_prompt", "memories", "mode"]) {
     expect(key in manifest).toBe(false);
   }
   expect(manifest.retries).toBe(2);
@@ -929,6 +929,21 @@ test("a steer inbox is identity through its wiring", () => {
   expect(flowFingerprint(flow(true))).not.toBe(flowFingerprint(flow(false)));
   const manifest = nodeManifest(flow(true), "node");
   expect("steerable" in manifest || "steerInbox" in manifest || "steer_inbox" in manifest).toBe(false);
+});
+
+test("a steer render is identity, manifested only when set", () => {
+  const flow = (steerRender: string | null) => {
+    const node = new AgentNode("node", { prompt: "p", steerInbox: true, steerRender });
+    return new Flow(new Map([[node.id, node]]), [], {
+      wiring: new Map([[node.id, new Map<string, unknown>([[STEER_INBOX_KEY, new Binding("${input.m}")]])]]),
+      startId: node.id,
+      endId: node.id,
+    });
+  };
+  const fingerprints = [null, "Note: ${event}", "From the owner: ${event}"].map((render) => flowFingerprint(flow(render)));
+  expect(new Set(fingerprints).size).toBe(3);
+  expect(nodeManifest(flow("Note: ${event}"), "node").steer_render).toBe("Note: ${event}");
+  expect("steer_render" in nodeManifest(flow(null), "node")).toBe(false);
 });
 
 test("test_skills_are_identity_but_empty_and_order_are_not", () => {

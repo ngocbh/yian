@@ -1,0 +1,29 @@
+# TS-only: a `steer_inbox:` render reads only `${event}` (yian #1025).
+kind: load
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+flow: |
+  id: steer
+  name: steer
+  input:
+    notes: !Inbox(str)
+    topic: !str
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steer_inbox:
+        from: ${input.notes}
+        render: |-
+          About ${input.topic}: ${event}
+      output: str
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'chat' steer_inbox render: `${input.topic}` names `input`; a steer render reads only `${event}`
+      frames:
+      - label: flow.yaml
+        range: [12, 15, 14, 1]

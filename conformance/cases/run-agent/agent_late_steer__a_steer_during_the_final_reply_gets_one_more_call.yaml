@@ -1,0 +1,185 @@
+# TS-only (yian #1025): a steer sent while the model gives its final answer gets one more model
+# call. The agent reads it as a `steer` step after the final reply, and the second request ends
+# with the first reply and the steer.
+kind: run
+rules: [run-log]
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+flow: |
+  id: late
+  name: late
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - inbox: notes
+    event: and cite your sources
+    after: {node: chat, model_call: 1}
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: draft
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: final, with sources
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Help the user.
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: draft
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: and cite your sources
+expect:
+  output:
+    status: succeeded
+    output: final, with sources
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: and cite your sources}
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: draft, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
+        response_id: null
+        usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step:
+        from: [9]
+        inbox: notes
+        kind: steer
+  - - node_step
+    - chat
+    - n: 3
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: 'final, with sources', type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 645fd9612f696ece3b3c8d2b66d7905fda3376540cf8acfeee65faf332ff30fc
+        response_id: null
+        usage: null
+  - - pool_commit
+    - chat
+    - {value: 'final, with sources'}
+  - - pool_commit
+    - chat
+    - key: chat.new_messages
+      steps: [10, 11, 12]
+  - - node_succeeded
+    - chat
+    - {commit: 13, messages: 14}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: 'final, with sources'}
+  - - node_succeeded
+    - __end__
+    - {commit: 17}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: chat}
+  - - ModelCallStarted
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallStarted
+    - {node_id: chat, n: 2, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: chat, n: 2, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: chat, output: 'final, with sources'}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: 'final, with sources'}
+  - - RunSucceeded
+    - {output: 'final, with sources'}

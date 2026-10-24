@@ -27,6 +27,7 @@ import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesy
 import { CapabilityFault, type NodeCaps, type SteerInbox, type Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 import type { CloserReason } from "./memory.ts";
+import type { SteerRender } from "./messages.ts";
 
 /** The system prompt of an AGENT that authors none. */
 export const DEFAULT_SYSTEM =
@@ -78,6 +79,8 @@ export interface AgentRunContext {
   readonly steering?: Steering;
   /** The steer inbox this invocation reads; absent without `steer_inbox`. */
   readonly steerInbox?: SteerInbox;
+  /** Renders each steer event to text (the agent's `render:`); absent for the default rendering. */
+  readonly renderSteer?: SteerRender;
   /** The run's environment and model builder. */
   readonly models: ModelAccess;
   /** The credentials the built model's route sends, for scrubbing; `() => []` until it is built. */
@@ -296,6 +299,11 @@ export class AgentSteps {
       );
     }
     return { n: recorded.n, values };
+  }
+
+  /** Whether a steer read was recorded before the next logical call, which `takeRecordedSteer` would hand back. */
+  hasRecordedSteer(): boolean {
+    return this.#steers.has(this.#taken);
   }
 
   /**

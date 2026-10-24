@@ -498,13 +498,13 @@ export function validateReferences(
     where: string,
     rng: SourceRange | null,
     site: Pick<ScanOptions, "siteProducers" | "siteInputs">,
-  ): void {
+  ): string | null {
     const source = bindingSource(fromValue);
     const text = typeof source === "string" ? source : null;
     const lone = text !== null ? loneReferenceParts(text) : null;
     if (lone !== null && lone.length === 2 && lone[0] === "input" && inboxInputs.has(lone[1]!)) {
       scan(fromValue, where, rng, { ...site, constructors: false, inboxTail: null });
-      return;
+      return lone[1]!;
     }
     let readsInbox = false;
     try {
@@ -519,10 +519,46 @@ export function validateReferences(
     }
     if (readsInbox) {
       scan(fromValue, where, rng, { ...site, constructors: false });
-      return;
+      return null;
     }
     const written = text ?? valueRepr(source);
     errors.push([`${where}: \`${written}\` isn't an inbox; \`steer_inbox:\` names an Inbox input`, rng]);
+    return null;
+  }
+
+  /**
+   * Check an AGENT's steer `render:` template: it names only `${event}`, whose field reads are
+   * checked against `inbox`'s element type. A malformed span is one error at `where`.
+   */
+  function checkSteerRender(
+    where: string,
+    template: string,
+    inbox: string,
+    rng: SourceRange | null,
+    partialUnionFields: boolean,
+  ): void {
+    let refs: string[] = [];
+    try {
+      refs = promptRefs(template);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+    }
+    const others = refs.filter((ref) => ref.split(".", 1)[0]!.trim() !== "event");
+    for (const ref of others) {
+      const head = ref.split(".", 1)[0]!.trim();
+      errors.push([`${where}: \`\${${ref}}\` names \`${head}\`; a steer render reads only \`\${event}\``, rng]);
+    }
+    if (others.length > 0) return;
+    const element = inputContracts.get(inbox)?.type.element ?? null;
+    const contracts = new Map<string, LocalInput>(
+      element === null ? [] : [["event", new LocalInput([new ValueContract(element)])]],
+    );
+    checkTemplate(where, template, new Set(["event"]), rng, {
+      noun: "steer event",
+      hintTail: "a steer render",
+      contracts,
+      partialUnionFields,
+    });
   }
 
   /** Add one error at `where` per field read on a builtin's result in `trees`. */
@@ -658,10 +694,15 @@ export function validateReferences(
       // which would silently fall back to the whole `input:` block or node header.
       const reservedRng = franges.get(siteKey("field", key)) ?? inputRng;
       if (node instanceof AgentNode && key === STEER_INBOX_KEY) {
-        checkSteerInbox(nwiring.get(key), result.siteName(nodeId, "steer_inbox"), reservedRng, {
+        const where = result.siteName(nodeId, "steer_inbox");
+        const inbox = checkSteerInbox(nwiring.get(key), where, reservedRng, {
           siteProducers: nodeProducers,
           siteInputs: nodeInputs,
         });
+        if (node.steerRender !== null && inbox !== null) {
+          const renderRng = franges.get(siteKey("field", "steer_inbox.render")) ?? reservedRng;
+          checkSteerRender(`${where} render`, node.steerRender, inbox, renderRng, partialUnionFields);
+        }
         continue;
       }
       scan(nwiring.get(key), result.siteName(nodeId, node.reservedKeyLabel(key)), reservedRng, {

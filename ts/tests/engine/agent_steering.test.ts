@@ -124,7 +124,7 @@ import { NodeStepRecord } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareSend, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { unreadEvents } from "../../src/runtime/waits.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import type { Scheduler } from "../../src/platform.ts";
+import { type Scheduler, withWarnings } from "../../src/platform.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
@@ -197,10 +197,12 @@ function lookupTool(body: (topic: string) => string): FunctionTool {
  * it. START declares the inbox `notes: Inbox(str)`, which `chat` reads as its steer inbox unless
  * `steerInbox` is false.
  */
-function chatFlow(options: { steerInbox?: boolean; tools?: readonly string[]; after?: boolean } = {}): CompiledFlow {
-  const { steerInbox = true, tools = [], after = false } = options;
+function chatFlow(
+  options: { steerInbox?: boolean; tools?: readonly string[]; after?: boolean; steerRender?: string } = {},
+): CompiledFlow {
+  const { steerInbox = true, tools = [], after = false, steerRender = null } = options;
   const start = new StartNode(START_ID, { params: [NOTES] });
-  const chat = new AgentNode("chat", { prompt: "Help the user.", llmConfig: CONFIG, steerInbox, tools: [...tools] });
+  const chat = new AgentNode("chat", { prompt: "Help the user.", llmConfig: CONFIG, steerInbox, steerRender, tools: [...tools] });
   const chatWiring = steerInbox ? { [STEER_INBOX_KEY]: "${input.notes}" } : {};
   if (!after) {
     return graph([start, chat], [[START_ID, "chat"]], {
@@ -442,6 +444,36 @@ test("the agent's new messages hold each steer read where it joined, and replay 
   ]);
   const replayed = replayRecords(new RunState(copyGraph(flow)), running!.log.records(), { growBuilder: noGrowth });
   expect(logJson(replayed.pool.store.get("chat.new_messages")!.toWire())).toBe(logJson(value.toWire()));
+});
+
+/** The `[role, texts]` of the last run's `chat.new_messages`. */
+function newMessages(state: RunState): [string, string[]][] {
+  const value = state.pool.store.get("chat.new_messages")!.toObject() as { role: string; parts: { text?: string; type: string }[] }[];
+  return value.map((message) => [message.role, message.parts.map((part) => part.text ?? part.type)]);
+}
+
+test("a rendered steer appears in new_messages as its rendered text; replay rebuilds it", async () => {
+  const model = new ScriptedModel([reply("done")], CONFIG);
+  const flow = chatFlow({ steerRender: "Owner: ${event}" });
+  expect(await run(flow, model, { before: ["use B", "cite"] })).toBe("done");
+  expect(newMessages(running!.state)).toEqual([
+    ["user", ["Owner: use B", "Owner: cite"]],
+    ["assistant", ["done"]],
+  ]);
+  expect(model.requests[0]!.messages.at(-1)!.parts.map((part) => (part as TextPart).text)).toEqual(["Owner: use B", "Owner: cite"]);
+  const replayed = replayRecords(new RunState(copyGraph(flow)), running!.log.records(), { growBuilder: noGrowth });
+  expect(newMessages(replayed)).toEqual(newMessages(running!.state));
+});
+
+test("a render that falls back live falls back the same way in new_messages", async () => {
+  const model = new ScriptedModel([reply("done")], CONFIG);
+  // A str event has no field, so the render fails for it and the event goes as is.
+  const flow = chatFlow({ steerRender: "Owner: ${event.text}" });
+  expect(await withWarnings(() => {}, () => run(flow, model, { before: ["use B"] }))).toBe("done");
+  expect(newMessages(running!.state)).toEqual([
+    ["user", ["use B"]],
+    ["assistant", ["done"]],
+  ]);
 });
 
 test("a steer queued between two calls of a reply joins after both results", async () => {

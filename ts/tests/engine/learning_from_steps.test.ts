@@ -4,7 +4,8 @@
  *
  * Each run is learnable and logged; its log is replayed, and the material of each occurrence is
  * rebuilt from the replayed trace. Interactions follow step order: a reply's calls, then their
- * results in call order, so two unsafe calls read A, B, result A, result B.
+ * results in call order, so two unsafe calls read A, B, result A, result B. A grant naming a tool
+ * group is expanded with the run's tools, which a finished run reopened doesn't have.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -26,7 +27,7 @@ import {
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
-import { replayRunLog, runFlow } from "../../src/run.ts";
+import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
 import { learningMaterials } from "../../src/runtime/backward.ts";
 import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
@@ -289,4 +290,78 @@ test("a request that no longer matches its digest leaves the occurrence out and 
   expect(material).toBeNull();
   expect(evidence).toBeNull();
   expect(tampered.events).toEqual([new ReplayDegraded({ nodeId: "writer", reason: "rebuilt_request_differs" })]);
+});
+
+const GROUPED = `\
+id: grouped
+name: grouped
+llm_config: {provider: anthropic, model: claude-test}
+nodes:
+  writer:
+    kind: agent
+    long_term_memory: test
+    tools: [toolbox]
+    prompt: hi
+    output: str
+output: \${writer.output}
+`;
+
+/** The reply of an AGENT backward call: no feedback for inputs or variables. */
+const backwardReply = () => textReply(JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} }));
+
+/**
+ * Run `GROUPED` learnably, its grant naming the group `toolbox`, with `backend` as memory `test`;
+ * the model has one more reply, for a backward call.
+ */
+async function groupedRun(backend: FakeMemory) {
+  const path = join(dir, `grouped-${++count}.jsonl`);
+  const flow = await loadFlow(GROUPED);
+  const replies = [callReply(["lookup", { topic: "x" }, "call-x"]), textReply("done"), backwardReply()];
+  const model = new ScriptedModel(replies, { provider: "anthropic", model: "claude-test" });
+  const result = await runFlow(flow, {}, {
+    log: path,
+    learnable: true,
+    models: serving(model),
+    tools: { toolbox: [topicTool("lookup", "found"), topicTool("save", "saved")] },
+    memory: new Map([["test", backend]]),
+    env: hostEnv(dir),
+  });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  return { path, flow, result };
+}
+
+test("a grant naming a tool group is expanded with the run's tools when the same process learns", async () => {
+  const backend = new FakeMemory();
+  const { result } = await groupedRun(backend);
+  const events: unknown[] = [];
+  const outcome = await result.backward("Shorter.", { onEvent: (event) => events.push(event) });
+  expect(outcome.status, JSON.stringify(outcome.failure)).toBe("succeeded");
+  const [episode] = backend.learnContexts[0]!.episodes;
+  expect(episode!.prompt).toBe("hi");
+  expect(episode!.interactions).toEqual([
+    new ToolCallInteraction("lookup", { topic: "x" }),
+    new ToolResultInteraction("lookup", "found:x"),
+    new ModelTextInteraction("done"),
+  ]);
+  expect(events).toEqual([]);
+});
+
+test("a finished run reopened has no tool groups: its group-granting occurrence is left out and reported", async () => {
+  const { path } = await groupedRun(new FakeMemory());
+  const backend = new FakeMemory();
+  // A finished run opens no tools, so the grant `toolbox` is read as a tool name.
+  const model = new ScriptedModel([backwardReply()], { provider: "anthropic", model: "claude-test" });
+  const resumed = await resumeFlow({
+    log: path,
+    memory: new Map([["test", backend]]),
+    models: serving(model),
+    env: hostEnv(dir),
+  });
+  const events: unknown[] = [];
+  const outcome = await resumed.backward("Shorter.", { onEvent: (event) => events.push(event) });
+  expect(outcome.status, JSON.stringify(outcome.failure)).toBe("succeeded");
+  const [episode] = backend.learnContexts[0]!.episodes;
+  expect(episode!.prompt).toBeNull();
+  expect(episode!.interactions).toEqual([]);
+  expect(events).toEqual([new ReplayDegraded({ nodeId: "writer", reason: "rebuilt_request_differs" })]);
 });

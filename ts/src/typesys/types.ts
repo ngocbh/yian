@@ -1229,7 +1229,9 @@ function checkLocal(t: TypeExpr, registry: TypeRegistry): void {
       if (t.bounds !== undefined) validateNumericBounds(SCALAR_KIND.get(t.name)!, t.bounds);
       break;
     case "ref":
-      if (!registry.has(t.name)) throw new TypeCheckError(`unknown type ${reprText(t.name)}`);
+      if (!registry.has(t.name) && builtinType(t.name) === null) {
+        throw new TypeCheckError(`unknown type ${reprText(t.name)}`);
+      }
       break;
     case "list":
       checkLocal(t.element, registry);
@@ -1412,6 +1414,8 @@ function checkTypedefs(registry: TypeRegistry): void {
       let descended = false;
       for (let step = refs.next(); !step.done; step = refs.next()) {
         const ref = step.value;
+        // A built-in type is resolved, never walked.
+        if (!registry.has(ref)) continue;
         if (!backRefs.has(ref)) {
           backRefs.set(ref, new Set());
           stack.push([ref, refsOf(ref)]);
@@ -1428,7 +1432,10 @@ function checkTypedefs(registry: TypeRegistry): void {
     }
   }
 
-  const levels = new Map<string, number>();
+  // A built-in counts its resolved levels and adds nothing to a chain.
+  const levels = new Map<string, number>(
+    [...BUILTIN_RECORD_NAMES].map((name) => [name, typeLevels(builtinType(name)!)]),
+  );
   const chain = new Map<string, number>();
   for (const name of order) {
     const parts = parsed.get(name)!;
@@ -1558,6 +1565,12 @@ export function readTypedefs(
     if (!PASCAL_CASE.test(name)) {
       throw new TypeCheckError(
         `typedef name ${reprText(name)} must be PascalCase (an uppercase identifier)`,
+        { path: [name] },
+      );
+    }
+    if (BUILTIN_RECORD_NAMES.has(name)) {
+      throw new TypeCheckError(
+        `typedef name ${reprText(name)} shadows the built-in type ${reprText(name)}`,
         { path: [name] },
       );
     }

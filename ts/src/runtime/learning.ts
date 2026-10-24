@@ -56,6 +56,7 @@ import {
 } from "../nodes/base.ts";
 import { isExactly, sameExecutionScope, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
+import { NEW_MESSAGES } from "../typesys/pool.ts";
 import { isList, isRecord } from "../typesys/values.ts";
 import {
   AttributedBackwardResult,
@@ -141,6 +142,44 @@ export function takeMessages(pending: PendingMessages, source: SourceRef): Backw
   pending.delete(key);
   // JS sort is stable, as Python's `sorted` is.
   return [...messages].sort((a, b) => compareOrder(a.order, b.order));
+}
+
+/**
+ * Return feedback that reached an AGENT's new messages as feedback on its work, which its backward
+ * reads against its output: text and null as they are; a selection lifted to the `list(Message)`
+ * shape as one text, a line `new_messages<path>: <text>` per text leaf, lists by index and records
+ * by key in code-unit order, or null when it has no text leaf.
+ *
+ * @example
+ * workFeedback([null, { parts: [{ text: "wrong tool" }] }]); // "new_messages[1].parts[0].text: wrong tool"
+ */
+export function workFeedback(feedback: FeedbackValue): FeedbackValue {
+  if (feedback === null || typeof feedback === "string") return feedback;
+  const lines: string[] = [];
+  const walk = (value: FeedbackValue, label: string): void => {
+    if (typeof value === "string") lines.push(`${label}: ${value}`);
+    else if (isList(value)) value.forEach((item, index) => walk(item, `${label}[${index}]`));
+    else if (isRecord(value)) {
+      for (const key of Object.keys(value).sort(compareCodeUnits)) walk(value[key]!, `${label}.${key}`);
+    }
+  };
+  walk(feedback, NEW_MESSAGES);
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+/**
+ * Take `occurrence`'s pending messages: those sent to its source, and, for an AGENT, those sent to
+ * its new messages (`messagesSource`) as feedback on its work (`workFeedback`), sorted by order.
+ */
+export function takeOccurrenceMessages(pending: PendingMessages, occurrence: TraceOccurrence): BackwardMessage[] {
+  const own = takeMessages(pending, occurrence.source);
+  if (occurrence.messagesSource === null) return own;
+  const work = takeMessages(pending, occurrence.messagesSource).map(
+    (message) => new BackwardMessage(workFeedback(message.feedback), message.attribution, message.order, message.context),
+  );
+  if (work.length === 0) return own;
+  // JS sort is stable, as Python's `sorted` is.
+  return [...own, ...work].sort((a, b) => compareOrder(a.order, b.order));
 }
 
 /** Append `message` to `source`'s pending messages, starting its list when it has none. */
@@ -565,7 +604,7 @@ export function validateAttributedBackward(
   for (let index = occurrences.length - 1; index >= 0; index--) {
     const occurrence = occurrences[index]!;
     const item = attributedResults[index]!;
-    const messages = takeMessages(pending, occurrence.source);
+    const messages = takeOccurrenceMessages(pending, occurrence);
     const received = messages.map((message) => message.feedback);
     const attribution = messages.map((message) => message.attribution);
     if (
@@ -1384,7 +1423,7 @@ export function projectOwnerContexts(
   for (let index = occurrences.length - 1; index >= 0; index--) {
     const occurrence = occurrences[index]!;
     const item = attributedResults[index]!;
-    const messages = takeMessages(pending, occurrence.source);
+    const messages = takeOccurrenceMessages(pending, occurrence);
     const context = trace.backwardContext(occurrence.source);
     const key = sourceKey(occurrence.source);
     if (scopes.has(key)) {

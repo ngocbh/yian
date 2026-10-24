@@ -56,6 +56,7 @@ import type { LoopNode } from "../nodes/loop/node.ts";
 import type { MapNode } from "../nodes/map/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
+import { NEW_MESSAGES } from "../typesys/pool.ts";
 import { isList, isRecord, jsTypeName, type Value } from "../typesys/values.ts";
 import { revalidateScope } from "./execution_layout.ts";
 import { revalidateMemoryOccurrencePath, revalidateMemoryScope } from "./memory_layout.ts";
@@ -74,7 +75,8 @@ const SYNTH_PREFIX = "__assert_";
  *
  * - `${input.<k>...}` becomes `${<callsite>/<start>.output.<k>...}` (the namespaced child START's
  *   output object, read through the node-first head);
- * - `${<X>.output...}` becomes `${<callsite>/<X>.output...}`;
+ * - `${<X>.output...}` becomes `${<callsite>/<X>.output...}`, and an AGENT's
+ *   `${<X>.new_messages...}` `${<callsite>/<X>.new_messages...}`;
  * - `${system.X}`, `${item...}` (even `${item.output}`) and other heads are untouched.
  *
  * Every `${...}` span goes through `rewriteTemplateRefs`, so embedded, coalesced and
@@ -95,8 +97,9 @@ export function rensInternal(binding: Binding, callsite: string): Binding {
       return rest ? `${renamed}.${rest}` : renamed;
     }
     // `system` and `item` are reserved node ids, so `${item.output}` is the item's `output` field.
-    if (parts.length >= 2 && parts[1] === "output" && parts[0] !== "system" && parts[0] !== "item") {
-      return [`${ns(callsite, parts[0]!)}.output`, ...parts.slice(2)].join(".");
+    // An AGENT's `${x.new_messages}` renames like its `${x.output}`.
+    if (parts.length >= 2 && (parts[1] === "output" || parts[1] === NEW_MESSAGES) && parts[0] !== "system" && parts[0] !== "item") {
+      return [`${ns(callsite, parts[0]!)}.${parts[1]}`, ...parts.slice(2)].join(".");
     }
     return null;
   };

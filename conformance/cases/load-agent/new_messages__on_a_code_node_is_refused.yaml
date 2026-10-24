@@ -1,0 +1,28 @@
+# Only an AGENT node has new_messages; reading it from a CODE node is a load error.
+kind: load
+python_skip: "new_messages is TS-only (#1081)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    count:
+      kind: code
+      code: return 1
+      output: int
+    reader:
+      kind: code
+      input:
+        history: ${count.new_messages}
+      output: int
+      code: return 1
+  output: ${reader.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'reader' input 'history' from: reference ${count.new_messages} reads new_messages, which only an AGENT node has, from a node input, flow output or flow assert; node 'count' isn't one there
+      frames:
+      - label: flow.yaml
+        range: [11, 16, 11, 37]

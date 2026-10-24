@@ -1,0 +1,101 @@
+# TS-only: a LOOP of agents carries a history: each turn's prompt splices the history so far, and
+# the turn adds its agent's new messages to it.
+kind: run
+rules: [run-log]
+python_skip: "new_messages is TS-only (#1081)"
+flow: |
+  id: talk
+  name: talk
+  llm_config: {provider: anthropic, model: claude-test}
+  defs:
+    turn:
+      input:
+        history: !list(Message)
+        n: !int
+      nodes:
+        reply:
+          kind: agent
+          input:
+            history: ${input.history}
+            n: ${input.n}
+          system_prompt: Help.
+          prompt:
+            - ${history}
+            - user: "turn ${n}"
+          output: str
+      output:
+        history: ${input.history + reply.new_messages}
+        n: ${input.n + 1}
+  nodes:
+    chat:
+      kind: loop
+      call: turn
+      input:
+        history: []
+        n: 0
+      times: 2
+  output: ${chat.output.history}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    "chat#0/reply":
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: text, text: one}]
+    "chat#1/reply":
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: text, text: two}]
+expect:
+  output:
+    status: succeeded
+    output:
+    - role: assistant
+      parts: [{type: text, text: one}]
+    - role: assistant
+      parts: [{type: text, text: two}]
+  trace:
+    - [run_started, null, {effective_llm_by_static_path: {chat/reply: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, chat]
+    - [pool_commit, chat, {from: {}, key: chat#0/__start__}]
+    - [node_expanded, chat, {prune_ids: []}]
+    - [node_started, chat#0/__start__]
+    - [node_succeeded, chat#0/__start__, {commit: 9}]
+    - [node_started, chat#0/reply]
+    - [node_step, chat#0/reply, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: one, type: text}], role: assistant}, purpose: chat, request_sha256: f02880cbacf5818d5384c28a72572955b6eb242ee4a22e61fec68cda9784fb69, response_id: null, usage: null}}]
+    - [pool_commit, chat#0/reply, {value: one}]
+    - [pool_commit, chat#0/reply, {key: chat#0/reply.new_messages, steps: [14]}]
+    - [node_succeeded, chat#0/reply, {commit: 15, messages: 16}]
+    - [node_started, chat#0/__end__]
+    - [pool_commit, chat#0/__end__, {from: {chat#0/__start__: 9, chat#0/reply.new_messages: 16}}]
+    - [node_succeeded, chat#0/__end__, {commit: 19}]
+    - [node_started, chat~1]
+    - [pool_commit, chat~1, {from: {chat#0/__end__: 19}, key: chat#1/__start__}]
+    - [node_expanded, chat~1, {prune_ids: [chat#0/__end__, chat#0/__start__, chat#0/reply, chat~1]}]
+    - [node_started, chat#1/__start__]
+    - [node_succeeded, chat#1/__start__, {commit: 22}]
+    - [node_started, chat#1/reply]
+    - [node_step, chat#1/reply, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: two, type: text}], role: assistant}, purpose: chat, request_sha256: c5708bed6616030a65e886f426c3060e8f7d7e940c658a3bc0bc989be0c93c20, response_id: null, usage: null}}]
+    - [pool_commit, chat#1/reply, {value: two}]
+    - [pool_commit, chat#1/reply, {key: chat#1/reply.new_messages, steps: [27]}]
+    - [node_succeeded, chat#1/reply, {commit: 28, messages: 29}]
+    - [node_started, chat#1/__end__]
+    - [pool_commit, chat#1/__end__, {from: {chat#1/__start__: 22, chat#1/reply.new_messages: 29}}]
+    - [node_succeeded, chat#1/__end__, {commit: 32}]
+    - [node_started, chat~2]
+    - [pool_commit, chat~2, {from: {chat#1/__end__: 32}, key: chat}]
+    - [node_succeeded, chat~2, {commit: 35}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: [{parts: [{text: one, type: text}], role: assistant}, {parts: [{text: two, type: text}], role: assistant}]}]
+    - [node_succeeded, __end__, {commit: 38}]

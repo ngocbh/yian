@@ -65,6 +65,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { TAKE } from "../../tools/context.ts";
+import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
@@ -163,6 +164,8 @@ interface ScanOptions {
    * allowed. Defaults to telling the author to take from the inbox.
    */
   inboxTail?: string | null;
+  /** Lets an AGENT's `${x.new_messages}` be read; a CASE's routing reads only outputs. */
+  messages?: boolean;
 }
 
 /** Why most sites refuse a whole inbox read: only `take` reads its events. */
@@ -326,7 +329,12 @@ export function validateReferences(
   const { outputsRange = null, narrowing = null, registry = null, resolveOrigin = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
-  const validTargets = new Set(buildResults.keys());
+  // An AGENT's new messages are read under their own pool name, `<id>.new_messages`.
+  const nodeTargets = new Set(buildResults.keys());
+  const validTargets = new Set([
+    ...nodeTargets,
+    ...[...buildResults].filter(([, result]) => result.node.producesMessages).map(([nodeId]) => messagesKey(nodeId)),
+  ]);
   // Keep exact and partial carriers intact; the Compose projection below checks closed record
   // paths without inventing a Type for opaque fields.
   for (const [nodeId, contract] of producers) {
@@ -383,6 +391,7 @@ export function validateReferences(
       readFacts = null,
       routedBases = new Set<string>(),
       inboxTail = TAKE_TAIL,
+      messages = true,
     } = site;
     let paths: string[];
     try {
@@ -418,11 +427,19 @@ export function validateReferences(
         checkInboxRead(text, parts, where, rng, inboxTail);
         continue;
       }
-      let err = classifyPath(path, validTargets, flowInputs, extraHeads);
+      let err = classifyPath(path, messages ? validTargets : nodeTargets, flowInputs, extraHeads);
+      if (!messages && parts[1] === NEW_MESSAGES && validTargets.has(messagesKey(parts[0]!))) {
+        err =
+          `reference \${${path}}: a case can't route on an agent's new_messages yet; ` +
+          "read it in a node input, and route on that node's output";
+      }
       const producer = siteProducers.get(parts[0]!);
       const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
         err = outputContractPathError(producer, parts.slice(2), path, { partialUnionFields });
+      } else if (err === null && parts.length >= 2 && parts[1] === NEW_MESSAGES) {
+        const messages = siteProducers.get(messagesKey(parts[0]!));
+        if (messages !== undefined) err = outputContractPathError(messages, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && input !== undefined) {
         err = outputContractPathError(input, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[0] === "item" && elementContract !== null) {
@@ -744,6 +761,8 @@ export function validateReferences(
         readFacts,
         routedBases,
         inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
+        // A CASE's routing edges follow only `${x.output}` reads.
+        messages: !(node instanceof CaseNode),
       });
     }
   }

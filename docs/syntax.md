@@ -342,6 +342,7 @@ Everywhere you wire data you use a `${...}` reference:
 | `${node.output}` | node `node`'s whole value |
 | `${node.output.field}` | dot into an object value |
 | `${node.output.uri}` | the `uri` of a `file`; `.mime` and `.name` read its other fields |
+| `${agent.new_messages}` | the messages AGENT node `agent` added, a `list(Message)` (TS yian; see [below](#an-agents-new-messages)) |
 | `${name}` / bare `name` | a local input in a node's `prompt:` (AGENT or `human_input`), a `human_input` question's text, an AGENT's `system_prompt:`, or a `case` `when:`; AGENT prompts also see their own declared `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
@@ -477,6 +478,62 @@ adaptive brief), load silently (AGENT `0`, `false`, `[]`, `{}`; `human_input` li
 mappings), or load and fail when the gate ran (other `human_input` values). A non-text
 question field was a raw validation dump at `questions:`. Now each is a load error at
 the value; quote it.
+
+### An AGENT's new messages
+
+TS yian: `${x.new_messages}` is an AGENT node's second value, beside `${x.output}`. It holds
+the messages the agent's call added, as a `list(Message)`: each reply that arrived, and one
+tool message per answered tool call (see [Agent → Results](agent.md#results)). It doesn't
+hold the prompt, so a turn's user message isn't in it.
+
+- **Where:** a node input or reserved wiring (`over:`, `until:`, ...), a flow `output:`, and a
+  flow `asserts:` (lowered to END like a `${x.output}` read). A node's own `asserts:`, an
+  `llm_config:` value, a `case` (`on:` or a `when:`) and a prompt can't read it; bind it to a
+  node input first where a prompt needs it.
+- **Only AGENT nodes have it.** `${c.new_messages}` on any other node is a load error:
+
+  ```
+  reference ${c.new_messages} reads new_messages, which only an AGENT node has, from a node
+  input, flow output or flow assert; node 'c' isn't one there
+  ```
+
+- **Types and field reads** check against `list(Message)`: `history: !list(Message)
+  ${reply.new_messages}` loads, `!list(str)` doesn't, and a field read on the list
+  (`${reply.new_messages.role}`) is a load error.
+- **Edges and skips** follow it like `${x.output}`: the reader runs after the agent, a CALL,
+  MAP or LOOP child renames it into its namespace, and a maybe-skipped agent's read takes a
+  default, `${reply.new_messages :- []}`. A flow output reading only a skipped agent is null.
+
+A LOOP builds a chat history from it. Each turn splices the history so far into a list
+prompt and returns it with the turn's new messages added:
+
+```yaml
+defs:
+  turn:
+    input:
+      history: !list(Message)
+      n: !int
+    nodes:
+      reply:
+        kind: agent
+        input:
+          history: ${input.history}
+          n: ${input.n}
+        prompt:
+          - ${history}
+          - user: "turn ${n}"
+        output: str
+    output:
+      history: ${input.history + reply.new_messages}
+      n: ${input.n + 1}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input: {history: [], n: 0}
+    times: 3
+output: ${chat.output.history}
+```
 
 ### Narrowing inside a condition
 

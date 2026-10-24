@@ -63,6 +63,7 @@ import {
   sameOutputContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
+import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isInboxType, jsTypeName, Type, unionTagFields, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
@@ -161,7 +162,8 @@ export class LoweredAsserts {
  * - a PRE (boundary) assert rewrites each `${input.X}` ref to `${output.X}`, since START fires
  *   these from its ordinary `postAsserts` against its own bound output record; and
  * - a POST assert turns every non-`output` ref into a synthesized END param (`${producer.output}`
- *   to `${__assert_<pid>}`, `${input.X}` to `${__assert_input_<X>}`), with a matching
+ *   to `${__assert_<pid>}`, an AGENT's `${pid.new_messages}` to `${__assert_<pid>_new_messages}`,
+ *   `${input.X}` to `${__assert_input_<X>}`), with a matching
  *   `synthWiring` edge, so the producer value is present in END's record when the assert fires.
  *   Several refs to the same producer or input share one synth param.
  *
@@ -182,8 +184,9 @@ export class LoweredAsserts {
  *
  * @param assertList The flow's authored assertion carriers, in order.
  * @param flowInputs The flow's input names.
- * @param validTargets The flow's node ids.
- * @param producers Each typed producer's output contract; an opaque producer is absent.
+ * @param validTargets The flow's node ids, and `<id>.new_messages` for each AGENT.
+ * @param producers Each typed producer's output contract, and each AGENT's new messages under
+ *   `<id>.new_messages`; an opaque producer is absent.
  * @param assertRanges Each assert's range, aligned 1:1 with `assertList` (`null` where none).
  * @param options.inputContracts Each typed flow input's contract (default none).
  * @param options.registry The flow's typedefs (default none).
@@ -268,12 +271,14 @@ export function lowerFlowAsserts(
     return qualified !== path ? qualified : null;
   };
 
-  // The values whose field reads are checked, with the one contract each has.
+  // The values whose field reads are checked, with the one contract each has. An AGENT's new
+  // messages sit in `producers` under their own pool name, `<id>.new_messages`, which is the root.
+  const valueRoot = (key: string): string => (validTargets.has(key) && key.endsWith(`.${NEW_MESSAGES}`) ? key : `${key}.output`);
   const roots = new Map<string, readonly OutputContract[]>([
     ...[...inputContracts].map(([name, contract]): [string, OutputContract[]] => [`input.${name}`, [contract]]),
-    ...[...producers].map(([nodeId, contract]): [string, OutputContract[]] => [`${nodeId}.output`, [contract]]),
+    ...[...producers].map(([key, contract]): [string, OutputContract[]] => [valueRoot(key), [contract]]),
   ]);
-  const producerRoots = new Set([...producers.keys()].map((nodeId) => `${nodeId}.output`));
+  const producerRoots = new Set([...producers.keys()].map(valueRoot));
 
   assertList.forEach((assertion, i) => {
     const expr = assertion.expression;
@@ -354,6 +359,18 @@ export function lowerFlowAsserts(
           synthForInput.set(x, synth);
           synthParams.push(new Parameter(synth));
           synthWiring.set(synth, `\${input.${x}}`);
+        }
+        return [synth, ...segs.slice(2)].join(".");
+      }
+      // An AGENT's new messages: `pid.new_messages[.f...]`, bound like an output read.
+      if (segs.length >= 2 && segs[1] === NEW_MESSAGES && validTargets.has(messagesKey(head))) {
+        const key = messagesKey(head);
+        let synth = synthForProducer.get(key);
+        if (synth === undefined) {
+          synth = alloc(`${SYNTH_PREFIX}${head}_${NEW_MESSAGES}`);
+          synthForProducer.set(key, synth);
+          synthParams.push(new Parameter(synth));
+          synthWiring.set(synth, `\${${key}:-null}`);
         }
         return [synth, ...segs.slice(2)].join(".");
       }

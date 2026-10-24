@@ -68,7 +68,7 @@ import {
   validateOutputContract,
 } from "../nodes/contracts.ts";
 import { eventBytes, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
-import { messagesKey, VariablePool } from "../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES, VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
 import {
   isInboxType,
@@ -4735,6 +4735,15 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
   }
   // Python's `ChainMap(fragment.nodes, state.flow.nodes)`: a lookup, not a merged copy.
   const combinedNodeIds = { has: (id: string): boolean => fragment.nodes.has(id) || state.flow.nodes.has(id) };
+  // A reference may also read an AGENT's new messages, under their pool name `<id>.new_messages`.
+  const readableNames = {
+    has: (name: string): boolean => {
+      if (combinedNodeIds.has(name)) return true;
+      if (!name.endsWith(`.${NEW_MESSAGES}`)) return false;
+      const owner = name.slice(0, -NEW_MESSAGES.length - 1);
+      return (fragment.nodes.get(owner) ?? state.flow.nodes.get(owner))?.producesMessages === true;
+    },
+  };
   const fragmentProducerContracts = new Map<string, OutputContract>();
   for (const [nodeId, node] of fragment.nodes) {
     const contract = node.outputContract;
@@ -4844,7 +4853,7 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
       nodeId,
       node,
       wiring as Map<string, unknown>,
-      combinedNodeIds,
+      readableNames,
       producerContract,
       reservedKeys,
     );

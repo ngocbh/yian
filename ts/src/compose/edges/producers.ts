@@ -4,21 +4,23 @@
  * The two functions here map a binding value to the producer node ids it depends on: the
  * primitive the edges phase (`edges/data.ts`) and the later boundary synthesis
  * (`build/boundary.ts`, via `synthesizeBoundaryGraph`) both build on. A ref head of
- * `<id>.output[.…]` produces from node `<id>`; an `input.X` ref produces from the synthesized
+ * `<id>.output[.…]` or an AGENT's `<id>.new_messages[.…]` produces from node `<id>`; an `input.X` ref produces from the synthesized
  * `START_ID`; `system.X`/`item` produce nothing.
  *
- * Knows about: the compile model (`START_ID`), `expr` reference scanning, and binding sources.
+ * Knows about: the compile model (`START_ID`), `expr` reference scanning, binding sources, and
+ * the pool name of an AGENT's new messages (`typesys/pool.ts`).
  * Never imports: validate, build, the loader, or the runtime.
  */
 
 import { START_ID } from "../../compile/model.ts";
 import { ExpressionError, exprRefsOf } from "../../expr/index.ts";
 import { iterSourceStrings } from "../../nodes/contracts.ts";
+import { NEW_MESSAGES } from "../../typesys/pool.ts";
 
 /**
  * Return the producer node id of a `${...}` reference head.
  *
- * - `<id>.output[.…]`: produce from node `<id>`.
+ * - `<id>.output[.…]`, and an AGENT's `<id>.new_messages[.…]`: produce from node `<id>`.
  * - `input.<key>`: produce from the synthesized `START_ID`, so an `${input.X}` reader gets a
  *   `START_ID -> reader` data edge.
  * - `system.<key>` is run-global and produces no edge; `item` is MAP-body-local. Both are reserved
@@ -33,7 +35,7 @@ import { iterSourceStrings } from "../../nodes/contracts.ts";
 export function refProducer(path: string): string | null {
   const parts = path.split(".");
   if (parts.length >= 2 && parts[0] === "input") return START_ID;
-  if (parts.length >= 2 && parts[1] === "output" && parts[0] !== "system" && parts[0] !== "item") {
+  if (parts.length >= 2 && (parts[1] === "output" || parts[1] === NEW_MESSAGES) && parts[0] !== "system" && parts[0] !== "item") {
     return parts[0]!;
   }
   return null;

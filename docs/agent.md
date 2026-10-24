@@ -245,6 +245,23 @@ reported error; a failure that ends the node shows as the node's failure. The
 session transcript records the call as completed with that error text, and the
 evaluation trace records the text as the call's tool result, like any other.
 
+### Results
+
+TS yian: an AGENT has two values. `${x.output}` is its result, checked against its
+`output:` type. `${x.new_messages}` is the conversation its call added, a
+`list(Message)` (see [References → An AGENT's new messages](syntax.md#an-agents-new-messages)):
+
+- only replies that arrived count; a failed attempt that was retried isn't in it;
+- every tool call has its tool message, in call order, after the reply that made it;
+- a structured agent's list ends with one assistant message holding its final value as JSON
+  text; the internal call that returned the value isn't shown;
+- the prompt isn't in it, so a chat loop adds the user's own message itself.
+
+The engine records it as a messages commit naming the agent's steps, and rebuilds the value
+from them (see [Engine](engine.md)). Feedback that reaches `${x.new_messages}` goes to the
+agent's backward as text about its work (see
+[AGENT backward](#agent-backward-uses-the-recorded-invocation)).
+
 ### A tool call that waits
 
 Changed (TS yian): a tool an AGENT calls may answer later. Its handler (the run's `ask_user`
@@ -365,7 +382,10 @@ are not repeated. Partial established locals survive later forward failures,
 with unavailable values distinguished from empty ones.
 
 The model returns validated input, self, and local-variable feedback. This is
-advice, not an automatic variable update, graph rewrite, or rerun. With no
+advice, not an automatic variable update, graph rewrite, or rerun. TS yian:
+feedback on the agent's `${x.new_messages}` joins the feedback on its output, in
+order, as text: text feedback as it is, and a selection of messages as one line
+per text leaf, `new_messages[1].parts[0].text: wrong tool`. With no
 effective feedback, the AGENT backward call is skipped, while every memory key
 still learns from accepted history. Memory learners are separate
 callbacks from this AGENT model call. Terminal resume invokes neither; see

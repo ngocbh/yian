@@ -555,6 +555,9 @@ Each part is a record told apart by its `type`, and each may carry an opaque
 - **Labels:** the canonical label of a `Message` type is the expanded record.
 - **Nesting:** a `Message` adds three levels (the message, its parts list and a part) above a tool
   call's `arguments`, and counts three levels toward a typedef that names it.
+- **An AGENT's second value:** `${x.new_messages}` is typed `list(Message)`, so a typed binding,
+  a field read or a flow output reading it is checked against that type (see
+  [An AGENT's new messages](syntax.md#an-agents-new-messages)).
 
 ## Authored contract origins
 

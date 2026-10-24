@@ -48,7 +48,8 @@ import {
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { ASK } from "../../tools/context.ts";
-import type { TypeRegistry } from "../../typesys/types.ts";
+import { messagesKey } from "../../typesys/pool.ts";
+import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
@@ -2103,8 +2104,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     const producers = new Map<string, OutputContract>();
     for (const producerId of new Set(bindingProducers(binding))) {
       if (!descriptors.has(producerId)) continue;
-      const contract = cache.buildOne(producerId, bindingLabel, bindingRange).node.outputContract;
-      if (contract !== null) producers.set(producerId, contract);
+      const node = cache.buildOne(producerId, bindingLabel, bindingRange).node;
+      if (node.outputContract !== null) producers.set(producerId, node.outputContract);
+      if (node.producesMessages) producers.set(messagesKey(producerId), new ValueContract(newMessagesType()));
     }
     return resolveOutputBindingContract(binding, producers, flowInputContracts, { typeFn: constructorType });
   };
@@ -2147,7 +2149,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const baseEnv = flowEnv ?? {};
   for (const [nodeId, node] of nodesBuilt) node.env = { ...baseEnv, ...descriptors.get(nodeId)!.env };
   // producers: each built node's declared output contract (drives the case `on:` enum
-  // exhaustiveness + the dotted-field walk in ref/assert validation). A case node has no
+  // exhaustiveness + the dotted-field walk in ref/assert validation), and each AGENT's new
+  // messages under their pool name `<id>.new_messages` (ids hold no `.`). A case node has no
   // contract, so it is naturally excluded.
   const producers = new Map<string, OutputContract>();
   for (const [nodeId, node] of nodesBuilt) {
@@ -2160,6 +2163,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       );
     }
     producers.set(nodeId, contract);
+  }
+  for (const [nodeId, node] of nodesBuilt) {
+    if (node.producesMessages) producers.set(messagesKey(nodeId), new ValueContract(newMessagesType()));
   }
 
   const flowLlmValueTypes = attachLlmConfigWiring(
@@ -2278,7 +2284,10 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const lowered = lowerFlowAsserts(
     assertsSection,
     flowInputs,
-    new Set(descriptors.keys()),
+    new Set([
+      ...descriptors.keys(),
+      ...[...nodesBuilt].filter(([, node]) => node.producesMessages).map(([nodeId]) => messagesKey(nodeId)),
+    ]),
     producers,
     flowAssertionRanges,
     { inputContracts: flowInputContracts, registry, diagnostics },

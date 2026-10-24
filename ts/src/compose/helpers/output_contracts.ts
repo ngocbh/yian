@@ -41,6 +41,7 @@ import {
   unionField,
   ValueKind,
 } from "../../typesys/index.ts";
+import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { fileFieldType, typeEquals } from "../../typesys/values.ts";
 
 /** Marks a binding source that is a template, not a literal, in `literalValue`. */
@@ -105,10 +106,12 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
 }
 
 /**
- * Resolve one `input.X...` or `<id>.output...` path to its exact or projected contract.
+ * Resolve one `input.X...`, `<id>.output...` or an AGENT's `<id>.new_messages...` path to its
+ * exact or projected contract.
  *
  * @param path The dotted reference path.
- * @param producers Node output contracts by producer id.
+ * @param producers Node output contracts by producer id, and an AGENT's new messages' contract
+ *   under its pool name `<id>.new_messages`.
  * @param flowInputs Flow input contracts by name.
  * @returns The projected contract, or `null` for an unknown or unsupported path.
  * @throws TypeError when a referenced producer is not an `OutputContract`, or a flow-input
@@ -132,6 +135,10 @@ export function referenceContract(
       );
     }
     return projectOutputContract(contract, parts.slice(2));
+  }
+  if (parts.length >= 2 && parts[1] === NEW_MESSAGES) {
+    const messages = producers.get(messagesKey(parts[0]!));
+    return messages === undefined ? null : projectOutputContract(messages, parts.slice(2));
   }
   if (parts.length < 2 || parts[1] !== "output") return null;
 

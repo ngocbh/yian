@@ -152,6 +152,7 @@ Allowed only for the **leaf kinds** (`agent`, `code`, `tool`) —
 | `${input.X}` | field `X` of the flow input |
 | `${node.output}` | node `node`'s whole (typed) value |
 | `${node.output.field}` | dot into an object value |
+| `${agent.new_messages}` | TS yian: the messages AGENT `agent` added (replies and tool results), `list(Message)` |
 | `${name}` (bare) | a local input inside an AGENT `prompt:` or `system_prompt:`, an `adaptive_questions.prompt:`, or `case` `when:`; AGENT prompts also see their own `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
@@ -1317,6 +1318,17 @@ This shape keeps the run log linear (see [`examples/chat.yaml`](../../../example
 the reply is recorded, and the appended history is a derived value the log holds as `from`
 pointers. Don't have a node (or a value entry, which lowers to a CODE node) return the whole
 history every turn: that records it each turn and the log grows quadratically.
+
+To keep the agent's tool calls and results in the history, carry `!list(Message)` and append
+`${reply.new_messages}`, everything the agent's call added (its prompt isn't in it):
+```yaml
+    output:
+      history: ${input.history + reply.new_messages}
+```
+It reads like `${reply.output}`: in node inputs, flow outputs and flow asserts, not in a
+prompt, a `case` or `llm_config:`; only an AGENT has it, and a maybe-skipped agent needs
+`${reply.new_messages :- []}`. See
+[An AGENT's new messages](../../../docs/syntax.md#an-agents-new-messages).
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:

@@ -6,10 +6,12 @@
  */
 import { describe, expect, test } from "bun:test";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { CallClosed, NodeWaiting, NodeWoken, RunSucceeded, RunWaiting } from "../../src/events.ts";
-import type { CompleteResult } from "../../src/nodes/base.ts";
+import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
+import { CallClosed, NodeWaiting, NodeWoken, RunResumed, RunSucceeded, RunWaiting } from "../../src/events.ts";
+import type { CompleteResult, Node } from "../../src/nodes/base.ts";
 import { type CallView, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import {
   canonicalTyped,
@@ -18,6 +20,8 @@ import {
   NodeWaitingRecord,
   PoolCommitRecord,
   type RunLog,
+  RunResumedRecord,
+  RunStoppedRecord,
   RunWaitingRecord,
   type TakeCommit,
   type WaitEntry,
@@ -37,13 +41,14 @@ import {
   prepareRecord,
   prepareRunResumed,
   prepareRunStarted,
+  prepareRunStopped,
   prepareRunWaiting,
   prepareSend,
   prepareTakeCommit,
   RunState,
 } from "../../src/runtime/state.ts";
 import { TraceDelta } from "../../src/runtime/trace.ts";
-import { wakeableNodes } from "../../src/runtime/waits.ts";
+import { availableUnread, wakeableNodes } from "../../src/runtime/waits.ts";
 import { eventBytes, type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
@@ -669,5 +674,60 @@ describe("the take commit", () => {
     start(log, state, "heard");
     commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([s])));
     expect(() => prepareNodeSucceeded(state, "heard", { forwardCapture: null })).toThrow(/rebuilds to a value its target refuses/);
+  });
+});
+
+describe("resumes and the terminal", () => {
+  test("a resume drops an orphan inline take commit; its events stay unread for the re-run", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take")));
+    const first = send(log, state, "a");
+    start(log, state, "heard");
+    commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([first])));
+    // The process ends here; a host sends while it is down.
+    const downtime = send(log, state, "b");
+    const resumed = prepareRunResumed(state, { numWorkers: 0 });
+    expect(resumed.record).toEqual(new RunResumedRecord(["heard"], 0, []));
+    expect(resumed.observers).toEqual([new RunResumed()]);
+    commitPrepared(log, state, resumed);
+    expect(availableUnread(state.waits, "msgs")).toEqual([first, downtime]);
+    start(log, state, "heard");
+    takeAndSucceed(log, state, "heard", takeOf([first, downtime]));
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: ["a", "b"], closed: false });
+    expect(state.crashedAttempts.get("heard")).toBe(1);
+  });
+
+  test("a resume retries running nodes only, and checks its closed calls", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take"), tool("ask", "ask")));
+    start(log, state, "heard");
+    start(log, state, "ask");
+    wait(log, state, "heard", takeEntry("heard"));
+    expect(prepareRunStopped(state, "signal", "").record).toEqual(new RunStoppedRecord("signal", "", ["ask"]));
+    expect(() => prepareRecord(state, new RunResumedRecord(["ask"], 0, [call("heard")]))).toThrow(/closed_calls/);
+    expect(prepareRunResumed(state, { numWorkers: 0 }).record).toEqual(new RunResumedRecord(["ask"], 0, []));
+  });
+
+  test("a waiting node keeps the run from ending; its own success ends it", () => {
+    // `heard` has no edge to END, so END's success would end the run but for the wait.
+    const flow = CompiledFlow.fromParts(
+      new Map<string, Node>([
+        [START_ID, new StartNode(START_ID, { params: [MSGS] })],
+        ["heard", tool("heard", "take")],
+        [END_ID, EndNode.value(END_ID, { outputName: null })],
+      ]),
+      [new Edge("start-heard", START_ID, "heard"), new Edge("start-end", START_ID, END_ID)],
+    );
+    const { log, state } = started(flow);
+    start(log, state, "heard");
+    wait(log, state, "heard", takeEntry("heard"));
+    start(log, state, END_ID);
+    succeed(log, state, END_ID, "done");
+    expect(state.result).toBeNull();
+    const s = send(log, state, "hi");
+    commitPrepared(log, state, prepareNodeWoken(state, "heard"));
+    commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([s])));
+    const success = prepareNodeSucceeded(state, "heard", { forwardCapture: null });
+    expect(success.observers.at(-1)).toBeInstanceOf(RunSucceeded);
+    commitPrepared(log, state, success);
+    expect(state.result).toBeInstanceOf(RunSucceeded);
   });
 });

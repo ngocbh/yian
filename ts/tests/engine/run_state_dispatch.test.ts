@@ -375,6 +375,7 @@ test("RunResumed preparation keeps the retry order ahead of ready work", () => {
     kind: "resumed",
     retryNodeIds: ["first", "second"],
     numWorkers: 5,
+    closedCalls: [],
   });
   expect(state.ready).toEqual(["ordinary", END_ID]);
   expect([...state.inFlight]).toEqual(["first", "second"]);

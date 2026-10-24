@@ -778,6 +778,7 @@ interface RunResumedDelta {
   readonly kind: "resumed";
   readonly retryNodeIds: readonly string[];
   readonly numWorkers: number;
+  readonly closedCalls: readonly string[];
 }
 
 /** Appending one canonical step to an in-flight node's steps. */
@@ -1538,12 +1539,14 @@ export function prepareNodeFailed(
 /**
  * Prepare a recovery segment from the state's ordered unfinished starts.
  *
- * The retry list comes only from the insertion-ordered `state.inFlight`; the caller chooses only
- * the worker count of the new segment.
+ * The retry list comes only from the insertion-ordered `state.inFlight` (a waiting node isn't in
+ * flight, so it isn't retried), and the closed calls are the retried agents' open calls; the
+ * caller chooses only the worker count of the new segment.
  *
  * @param state An initialized nonterminal state rebuilt through a complete log prefix.
  * @param options.numWorkers The exact non-negative worker count; zero selects serial execution.
- * @returns The canonical `RunResumedRecord`, whose retries keep dispatch order.
+ * @returns The canonical `RunResumedRecord`, whose retries keep dispatch order, and its observers:
+ *   `RunResumed`, then a `CallClosed` for each closed call.
  * @throws TypeError when `state` has the wrong type or the worker count isn't a safe integer.
  * @throws RangeError when the worker count is negative, or the state is uninitialized or terminal.
  */
@@ -1553,7 +1556,7 @@ export function prepareRunResumed(state: RunState, options: { numWorkers: number
   if (!Number.isSafeInteger(numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
   if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
   requireInitializedNonterminal(state);
-  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers));
+  return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers, retriedAgentCalls(state)));
 }
 
 /**
@@ -1741,8 +1744,13 @@ export function prepareRecord(
     observers = [new NodeStarted({ nodeId: canonical.nodeId })];
   } else if (isExactly(canonical, RunResumedRecord)) {
     validateRunResumed(state, canonical);
-    delta = { kind: "resumed", retryNodeIds: canonical.retryNodeIds, numWorkers: canonical.numWorkers };
-    observers = [new RunResumed()];
+    delta = {
+      kind: "resumed",
+      retryNodeIds: canonical.retryNodeIds,
+      numWorkers: canonical.numWorkers,
+      closedCalls: canonical.closedCalls,
+    };
+    observers = [new RunResumed(), ...canonical.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(canonical, NodeStepRecord)) {
     validateNodeStep(state, canonical);
     // The decoded copy keeps the applied step apart from the returned record.
@@ -2883,7 +2891,7 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     ) {
       throw new RangeError("frontier resume delta disagrees with its record");
     }
-    observers = [new RunResumed()];
+    observers = [new RunResumed(), ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(record, NodeStepRecord) && delta.kind === "step") {
     if (delta.nodeId !== record.nodeId || logJson(delta.step) !== logJson(record.step)) {
       throw new RangeError("frontier step delta disagrees with its record");
@@ -3526,13 +3534,23 @@ function validateRunResumed(state: RunState, record: RunResumedRecord): void {
       throw new RangeError(`RunResumed retry node ${reprText(nodeId)} must have UNKNOWN disposition`);
     }
   }
-  // No record registers a call yet, so a resume has no open call to close.
-  if (record.closedCalls.length > 0) {
+  const closedCalls = retriedAgentCalls(state);
+  if (!sameItems(record.closedCalls, closedCalls)) {
     throw new RangeError(
       "RunResumedRecord closed_calls must exactly equal the retried nodes' open calls: " +
-        `expected [], found ${writeAsText([...record.closedCalls])}`,
+        `expected ${writeAsText(closedCalls)}, found ${writeAsText([...record.closedCalls])}`,
     );
   }
+}
+
+/**
+ * The open calls a resume closes, in registration order: those of retried (in-flight) nodes that
+ * make no direct host tool call, the agents'. A TOOL node's re-run reuses its call instead.
+ */
+function retriedAgentCalls(state: RunState): string[] {
+  return [...state.waits.calls.values()]
+    .filter((call) => call.state === "open" && state.inFlight.has(call.nodeId) && state.flow.nodes.get(call.nodeId)?.hostToolCall() === null)
+    .map((call) => call.callId);
 }
 
 /** Require a stop record to name the exact ordered in-flight nodes. */
@@ -4979,12 +4997,14 @@ function prepareTerminalDelta(
     terminalUnreachableFailure: Failure | null;
   },
 ): TerminalDelta | null {
+  // A waiting node blocks quiescence as an in-flight one does.
   if (
     state.result !== null ||
     state.ready.length > 0 ||
     outcome.newlyReadyIds.length > 0 ||
     state.inFlight.size !== 1 ||
-    !state.inFlight.has(outcome.completingNodeId)
+    !state.inFlight.has(outcome.completingNodeId) ||
+    state.waits.waiting.size > 0
   ) {
     return null;
   }

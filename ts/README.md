@@ -147,7 +147,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 14) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 15) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -226,7 +226,7 @@ must keep one run per folder; Yian doesn't check it. The CLI uses `~/.yian/runs`
 | `runId` | `string` |
 | `log` | the path as given, or `null` |
 | `events` | this call's post-durable events |
-| `interruptedAttempts` | `ReadonlyMap<string, number>`: attempts a resume retried, by node id |
+| `crashedAttempts` | `ReadonlyMap<string, number>`: attempts a resume retried after a crash, by node id |
 | `backwardOutcome`, `learning` | the last observed backward attempt, else `null` |
 
 `await result.backward(feedback, { apiKey, headers, onEvent })` runs one backward attempt over a
@@ -282,7 +282,7 @@ the run resumable. A log another yian version started resumes with a warning. Se
 with `resume_flow`][docs/api.md#durable-recovery-with-resume_flow].
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
-`"failed"`, `"stopped"` or `"interrupted"`), `inFlight`, `interruptedAttempts`, `runId`, `schema`,
+`"failed"`, `"stopped"` or `"crashed"`), `inFlight`, `crashedAttempts`, `runId`, `schema`,
 `flowFingerprint`, `learnable`, `lastSeq`, `startedAt`, `endedAt` and `failure`. Pass `flow` for an
 exact status. See [Reading a run log with
 `inspectRun`][docs/api.md#reading-a-run-log-with-inspectrun].
@@ -1071,7 +1071,7 @@ Node 22, and so does every unit test; a change keeps both green.
   never `bigint`.
 - A `SourceRef` compares by identity: key maps and sets by `sourceKey(ref)`.
 - `src/runtime/log.ts` holds the run records, `RecordEnvelope` and its codec (`encodeRecord`,
-  `decodeRecord`, schema 12), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
+  `decodeRecord`), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
   `encodePool`, `decodePool`), and the payload helpers later runtime modules share
   (`routePayload`, `routeFromPayload`, `executionScopePayload`, `evidencePayload`). Records and
   envelopes are frozen: a record's JSON values are deep-frozen canonical copies made once by its
@@ -1156,7 +1156,7 @@ START is ready after the START inputs' commit; a success walks its
   settles and its join is ready; a route settles its edges depth first in stored order, skips the
   heads whose joins are dead (following each skipped node's output redirect) and appends the heads
   that become ready in that order; a resume puts the retried nodes first, in dispatch order, ahead
-  of what was ready; a stop changes only the sequence and `lastStopSequence`. `interruptedAttempts`
+  of what was ready; a stop changes only the sequence and `lastStopSequence`. `crashedAttempts`
   counts, per node, the attempts a resume retried that no stop covered, using `lastStopSequence`
   (the sequence of the last stop since the last resume). The first route whose skips reach END
   derives the `graph.terminal_unreachable` failure (naming the first required END input it skipped);
@@ -1175,7 +1175,7 @@ START is ready after the START inputs' commit; a success walks its
   `GrowthRejected`. `replayRecords(state, envelopes, {growBuilder})` is the recovery fold: it folds
   a complete historical prefix through the same `prepare*` and `commitPrepared` path against a
   read-only `HistoricalLogCursor` that matches each record byte for byte instead of writing it, so
-  the replayed state, interrupted counts included, is exactly the live one; a corrupt record throws
+  the replayed state, crashed counts included, is exactly the live one; a corrupt record throws
   the underlying `RangeError` or `TypeError`, never `NodeDataError`. After the terminal, the
   backward and memory-commit records reduce through `reduceBackwardRecord`
   (`sameRuntimeBackwardState` compares the prepared and recomputed attempt state at commit).
@@ -1226,10 +1226,10 @@ START is ready after the START inputs' commit; a success walks its
   result (unreached ones uninvoked); a handler's throw is a `backward.execute`
   `BackwardComputeError` and a refused result `backward.result`, while trace faults escape
   unattributed. `driveBackward(state, log, feedback, { openMemory, models, onEvent })` runs one new
-  explicit attempt when a host calls it: it prepares its first record (an interrupted
+  explicit attempt when a host calls it: it prepares its first record (an unfinished
   `BackwardFinished` for an unfinished earlier attempt, else `BackwardStarted`) as a gate, opens the
   memory runtime (only when memories are enabled; the opener may be async) and checks it against the
-  recorded table and snapshots, then commits that record (and `BackwardStarted` after an interrupted
+  recorded table and snapshots, then commits that record (and `BackwardStarted` after an unfinished
   one), computes, projects owner contexts, stages every key's proposal, commits `BackwardReady`,
   requests and observes each key's commit in table order, and commits `BackwardFinished`; each
   record is prepared and committed with no await in between, and the runtime is always closed,
@@ -1246,7 +1246,7 @@ START is ready after the START inputs' commit; a success walks its
   recording the flow files, granted tool specs and skills, and drives a `FlowEngine` to a result,
   then closes what it opened. `resumeFlow` locks an existing log, compiles the flow it recorded,
   replays it on a private copy and drives the rest (a finished log returns its result and appends
-  nothing; an unfinished one first checks the granted tool specs and skills). `inspectRun` reads a log's status, in-flight nodes, interrupted counts,
+  nothing; an unfinished one first checks the granted tool specs and skills). `inspectRun` reads a log's status, in-flight nodes, crashed counts,
   run id, schema, flow fingerprint, learnable flag, last seq, start time (`startedAt`), a finished
   run's end time (`endedAt`, its last record's `at`) and a failed run's failure without taking
   its lock; a shrink under the read while a writer holds the lock (a rolled-back append)

@@ -10,6 +10,7 @@
  * algorithms.
  */
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
 import {
   buildValueAs,
@@ -1140,8 +1141,6 @@ export interface CallView {
   readonly deadline: string | null;
 }
 
-// The YIAN_MAX_EVENT_BYTES default; the engine passes the run's recorded value.
-const DEFAULT_MAX_EVENT_BYTES = 1024 * 1024;
 
 /**
  * The durable steps one start of a node reads and records, from the engine. Frozen.
@@ -1208,7 +1207,7 @@ export class NodeSteps {
     prior: readonly ValueRecord[],
     record: (step: ValueRecord, options?: { settled?: boolean }) => number,
     calls: readonly CallView[] = [],
-    maxEventBytes: number = DEFAULT_MAX_EVENT_BYTES,
+    maxEventBytes: number = current().maxEventBytes,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");

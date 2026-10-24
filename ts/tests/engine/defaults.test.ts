@@ -39,6 +39,7 @@ const TS_ONLY = [
   "MODEL_IDLE_TIMEOUT_SECONDS",
   "REQUEST_TIMEOUT_SECONDS",
   "MAX_MCP_MESSAGE_BYTES",
+  "MAX_EVENT_BYTES",
 ];
 
 /** Return the entry named `name`. */
@@ -137,13 +138,15 @@ describe("the table", () => {
       ["MODEL_IDLE_TIMEOUT_SECONDS", 240, "setting", 1, null, null],
       ["REQUEST_TIMEOUT_SECONDS", 30, "setting", 1, null, null],
       ["MAX_MCP_MESSAGE_BYTES", 16777216, "input cap", 1, null, null],
+      ["MAX_EVENT_BYTES", 1048576, "input cap", 1, null, null],
     ]);
-    // The four settings follow MCP_CALL_TIMEOUT_SECONDS; the cap follows MAX_MODEL_LIST_BYTES.
+    // The four settings follow MCP_CALL_TIMEOUT_SECONDS; the caps follow MAX_MODEL_LIST_BYTES.
     const at = (name: string) => names.indexOf(name);
     expect(names.slice(at("MCP_CALL_TIMEOUT_SECONDS") + 1, at("MCP_CALL_TIMEOUT_SECONDS") + 5)).toEqual(
       TS_ONLY.slice(0, 4),
     );
     expect(names[at("MAX_MODEL_LIST_BYTES") + 1]).toBe("MAX_MCP_MESSAGE_BYTES");
+    expect(names[at("MAX_MCP_MESSAGE_BYTES") + 1]).toBe("MAX_EVENT_BYTES");
   });
 
   test("variable names are prefixed and do not collide", () => {

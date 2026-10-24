@@ -97,7 +97,6 @@ const ALLOWED: Record<string, string> = {
   "llm_clients/auth/openai.ts: OpenAIAuth.deviceLogin.timeoutMs": "sign-in timeout",
   "llm_clients/auth/store.ts: AuthStore.constructor.lockTimeoutMs": "file lock timeout",
   "runtime/run_index.ts: DEFAULT_TIMEOUT_MS": "run index lock timeout, a host call's timeoutMs",
-  "nodes/contracts.ts: DEFAULT_MAX_EVENT_BYTES": "event cap of a NodeSteps built outside a run; the engine passes the run's recorded limit",
   "llm_clients/auth/store.ts: AuthStore.constructor.refreshMarginMs": "time before token expiry to refresh",
   "llm_clients/model_list.ts: MODEL_LIST_TIMEOUT_SECONDS": "network timeout",
   "tools/mcp.ts: MAX_PAGES": "tool-list pages read from an MCP server, as the SDK's cap",

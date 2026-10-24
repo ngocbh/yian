@@ -312,6 +312,13 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  // Media travel as run-folder file refs, so the cap is on text and structure.
+  entry("MAX_EVENT_BYTES", {
+    default: 1024 * 1024,
+    description: "Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes",
+    group: "input cap",
+    minimum: 1,
+  }),
   entry("MAX_BASE_URL_CHARS", {
     default: 2048,
     description: "Longest provider base URL accepted",

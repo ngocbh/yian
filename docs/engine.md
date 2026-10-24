@@ -223,7 +223,7 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
-Changed (TS yian): records use schema 21, with a `RunStoppedRecord`, every payload field
+Changed (TS yian): records use schema 22, with a `RunStoppedRecord`, every payload field
 required, the time each record was appended (`at`), a `RunStartedRecord` that holds the
 flow files, the skills, tool specs and tool groups the AGENTs grant, the yian version and the
 parent run, a `PoolCommitRecord` for every write to the variable pool (a derived value's holding `from`
@@ -231,7 +231,8 @@ pointers, not the value), no seed on `NodeExpandedRecord`, and node steps number
 node (`n`), an AGENT's model calls and tool results among them, no `evidence` on outcome
 records (learning reads the steps), the inbox and wait records, and forward captures that hold
 no bound inputs, interpolation text or node data (learning binds each node again from what its
-route read, and renders it again) and are left off derived records (rebuilt from their sources);
+route read, and renders it again) and are left off derived records (rebuilt from their sources),
+and an AGENT's messages commit beside its output commit;
 see
 [Authoritative run logs](api.md#authoritative-run-logs).
 
@@ -257,6 +258,21 @@ producer is a `RangeError`: the log and the flow disagree), and runs its pure `f
 apply in log order, so the pool then holds exactly what the binding read; no seq-to-value store is
 kept. A growth's seed is rebuilt the same way from its commits' `from`, before its prune applies,
 and checked by `topology_digest`. A child START names its expansion commit in its success.
+
+Changed (TS yian): an AGENT's success commits its new messages too. Right after its output
+commit the engine writes a messages commit under `<node>.new_messages` holding only `steps`, the
+seqs of the steps its messages are made of, and `node_succeeded.messages` names it. Nodes stay the
+authority on meaning and the runtime stays kind-blind: a node declares `producesMessages` and
+gives `messageSteps(steps)` (the `n`s of its recorded steps that make up its messages) and
+`rebuildMessages(steps, output)` (the `list(Message)` value, pure). The reducer keeps each
+unsettled node's step seqs beside its steps (`nodeStepSeqs`) to map `n` to seq, derives `steps`
+itself and refuses any other list, and rebuilds the value when the commit is prepared, holding it
+in `pendingMessages` until the success applies it to the pool and the producer index, beside the
+output. A resume drops a pending messages commit with its output commit; a prune drops
+`<node>.new_messages` with its agent. In a learnable run the success also gives the retained trace
+a second current writer, `<node>.new_messages`, whose source is the messages commit
+(`TraceOccurrence.messagesSource`), so `lookupSource` and the derived-value resolver read it like
+any writer.
 
 Changed (TS yian): a node can wait without holding a worker. `node_waiting` moves it out of the
 in-flight set into the waiting set, on the calls it waits on (a take, a sleep, or a host call its

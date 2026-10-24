@@ -2822,16 +2822,86 @@ by the log's real path. A later `advance` in that process reuses it, skipping th
 recompile, while the log still ends at the record it left, has the same size, device and inode,
 and the call passes the same `codeRoot`, code-built `flow`, `apiKey` and `headers`; anything else
 rebuilds from the log. The entry is kept until the run moves on, so a host holding many waiting
-runs pays for each one's state. `advance` of a run this process is moving rejects with the lock's
-busy message (`run log PATH is locked by another writer (is the run still active?)`); one started
-while another call in this process is setting the run up waits for that call to finish, then
-reads the log again. A missing log rejects with code `ENOENT`, from resolving its real path.
+runs pays for each one's state. `advance` of a run another writer holds rejects with
+`RunBusyError`, whose message is the lock's (`run log PATH is locked by another writer (is the run
+still active?)`): its `cause` is the busy `FileLockError` when another process (or any outside
+holder) has the lock, and it has none when this process is moving the run. An `advance` started
+while another call in this process is setting the run up waits for that call to finish, then reads
+the log again. A missing log rejects with code `ENOENT`, from resolving its real path.
 
 `RunResult.status` is `"succeeded"`, `"failed"`, `"cancelled"` (a host's cancel ended the run) or
 `"waiting"`. `waits` holds a waiting run's calls (`node`, `callId`, `tool`, `inbox`, `deadline`,
 `settled`), `[]` otherwise; `unread` holds, at a terminal status, the send seqs no take read, by
 inbox, and is empty while the run waits. `result.backward` needs a run that succeeded or failed;
 on a waiting or cancelled one it raises `RangeError`.
+
+### Host calls: `send`, `complete`, `close`, `cancel` and `pendingCalls`
+
+New (TS yian): a host reaches a run through its log path, whether this process is moving the run
+or nobody is:
+
+```ts
+import { advance, cancel, close, complete, pendingCalls, send } from "@ngocbh/yian";
+import { DeliveryRefused, RunBusyError } from "@ngocbh/yian/run";
+
+await send("run.jsonl", "messages", "hello");          // the send's seq
+await advance({ log: "run.jsonl" });                     // a take reads it
+for (const call of pendingCalls("run.jsonl")) {          // open asks and host-tool calls
+  await complete("run.jsonl", call.callId, { output: "approve" });
+}
+await close("run.jsonl", "messages");                    // a waiting take gets closed: true
+```
+
+- `send(log, inbox, event, options?)` sends `event` to the flow's top-level `Inbox(T)` input
+  `inbox` and returns the send's seq. `event` must be a `T`, within `YIAN_MAX_EVENT_BYTES`.
+- `complete(log, callId, result, options?)` answers an open host call (a host tool that returned
+  `pending()`, or a TOOL `ask`) with `{output}` or `{error}` and returns the answer's seq, or `null`
+  when the call is already answered with exactly that result, so a host's retry is safe.
+- `close(log, inbox, options?)` closes an inbox and returns its seq, or `null` when it is already
+  closed. Takes still read what was sent; a take waiting on it with nothing to read gets
+  `{events: [], closed: true}`.
+- `cancel(log, options?)` writes `run_cancelled`, which ends the run with no output and no
+  learning, and returns the open host calls it closed, as `pendingCalls` listed them.
+- `pendingCalls(log)` lists the open host calls (not takes or sleeps): `callId`, `node`, `tool`,
+  `arguments`, `pendingSeq` and `deadline`. It is synchronous, reads only the log's records and
+  takes no lock, so it reads a log another writer holds. Hosts rebuild their open asks from it, not
+  from a store of their own; a call leaves it once it is answered, timed out or closed.
+
+None of them moves the run: the live engine does, or a later `advance`.
+
+**Live or offline.** When this process is moving the run, a call goes to its engine, which appends
+and applies the record between two of its awaits; the options are ignored then. A cancel aborts the
+run's running nodes, and the engine publishes `CallClosed {reason: "cancelled"}` for each open host
+call. Otherwise the call takes the log's lock without blocking, appends one record and releases it.
+It reuses the state of a waiting run this process left (the registry `advance` uses) while the log
+is the file it left; else it compiles the recorded flow and replays the log, as `advance` does. So
+`options` are `advance`'s `env` (the run's recorded `YIAN_*` values must match it), `codeRoot` (a
+CODE file outside it is a `LoadError`, before anything is appended) and `flow` (for a flow built in
+code). The state is kept after a refused call too, since a refusal appends nothing.
+
+**Errors.** Nothing is appended when a call rejects.
+
+- `RunBusyError` when another writer holds the log (see above). Route the call to that writer.
+- `DeliveryRefused` (a `RangeError`) when the run refuses it, with `reason`:
+
+  | `reason` | When |
+  |---|---|
+  | `ended` | the run has a terminal result (checked first; a complete after a cancel, a second cancel) |
+  | `not_started` | the run start is incomplete |
+  | `unknown_inbox` | the flow has no such top-level `Inbox` input |
+  | `inbox_closed` | a send to a closed inbox |
+  | `invalid_value` | the event isn't a `T`, or the tool's output type (an `ask`'s answer can't be null) refuses the answer; the `TypeCheckError` is the `cause` |
+  | `too_large` | the event or answer is over the run's `YIAN_MAX_EVENT_BYTES` |
+  | `unknown_call` | no such call, its node settled, or its handler hasn't returned `pending()` yet |
+  | `not_host_call` | the call is a take or a sleep, which the run settles itself |
+  | `call_settled` | the call is answered, timed out or closed (`callState` says which), and this isn't an identical repeat |
+
+- `RangeError` when the log is empty or doesn't start with `run_started`; `TypeError` for an
+  `inbox` or `callId` that isn't a string, or a `result` that isn't `{output}` or `{error: string}`;
+  `LoadError` and `DefaultsMismatchError` as for `advance`; code `ENOENT` for a missing log.
+
+A live engine whose `onEvent` throws on a delivery's observers rethrows from the call after the
+record is durable; while the run is moving, the throw also stops it.
 
 Changed (TS yian): `advance({ log, numWorkers, onEvent, onStream, memory, tools, skills,
 steering, apiKey, headers, context, signal, env, codeRoot })` returns a Promise of the

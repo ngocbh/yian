@@ -1661,7 +1661,9 @@ interrupts through the same inbox with [`interrupt(log, inbox)`](#interrupting-a
   queue; the run reducer refuses any other. The consumed events leave the inbox's unread
   queue at the step, and their values stay in the run state until the agent settles.
 - **Late steers.** A reply with no tool call while steers are queued is followed by a read and
-  one more model call: in the log, `model_call` → `steer` → `model_call`. Every reply counts
+  one more model call: in the log, `model_call` → `steer` → `model_call`. An interrupt seen at
+  that point beats the late steer: the answer stands, no `steer` or `interrupted` step is
+  written, and the events stay unread. Every reply counts
   toward `max_tool_iterations`; at the cap the agent returns the answer it has, writes no `steer`
   step, and the events stay unread. A resumed agent that late-steered replays to the same point;
   one that crashed after its final reply, before any steer, reads what was sent while it was down.
@@ -1675,6 +1677,9 @@ interrupts through the same inbox with [`interrupt(log, inbox)`](#interrupting-a
   message, steers included. A send made while the run was down is read by the first live call.
 - **Run log.** A reader sees the `steer` step like any node step; `foldRunLog` gives each send
   in `from` as the `pool_commit` holding its value. Readers skip step kinds they don't know.
+- **A tool-free structured agent** makes one structured call; the steers queued before it join
+  that request the same way, and an interrupt before it is honored without the call.
+
 ## Interrupting an agent (TS yian)
 
 New (TS yian): `interrupt(log, inbox, options?)` cuts the current reply of every AGENT, running

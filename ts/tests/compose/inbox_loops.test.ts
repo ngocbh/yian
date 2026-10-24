@@ -90,6 +90,6 @@ test("an inline body's seed infers its Inbox type", () => {
   expect(fieldsOf(node)).toEqual(["done"]);
 });
 
-test("an inline body that doesn't read its inbox still loads", () => {
-  expect(fieldsOf(loopOf(inline("")))).toEqual(["done"]);
+test("an inline body that doesn't read its inbox is refused", () => {
+  expect(loadError(() => loopOf(inline(""))).message).toContain("inbox input `m` is never read");
 });

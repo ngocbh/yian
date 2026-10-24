@@ -68,3 +68,28 @@ test("the refusal names the site and the inbox", () => {
       "(take from it with `tool_id: take`)",
   );
 });
+
+test("an inbox input nothing reads is a load error at its declaration", () => {
+  const error = loadError(() =>
+    assembleText(
+      "id: f\nname: f\ninput:\n  m: !Inbox(str)\nnodes:\n  c:\n    kind: code\n    code: return 1\noutput: null\n",
+      "flow.yaml",
+      CHILDREN,
+    ),
+  );
+  expect(error.message).toContain("flow has unread inbox inputs");
+  expect(error.message).toContain("inbox input `m` is never read; take from it, or pass it to a call");
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(4);
+});
+
+test("a refused read wins over the unread inbox", () => {
+  const message = loadError(() =>
+    assembleText(
+      "id: f\nname: f\ninput:\n  m: !Inbox(str)\nnodes:\n  c:\n    kind: code\n    code: return 1\n    input:\n      t: ${input.m}\noutput: null\n",
+      "flow.yaml",
+      CHILDREN,
+    ),
+  ).message;
+  expect(message).toContain("take from it");
+  expect(message).not.toContain("never read");
+});

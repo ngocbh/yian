@@ -286,7 +286,8 @@ function itemContract(
  * An inbox input (`Inbox(T)` in `inputContracts`) is read only whole, as the lone
  * `${input.<name>}` bound to an input a named call's or a loop's child declares as an Inbox. Any
  * other read of it (a field, text or an expression, a typed binding or value, another node kind,
- * a MAP, an inline `call(...)`, a flow output) is an error at its site.
+ * a MAP, an inline `call(...)`, a flow output) is an error at its site. An inbox input with no
+ * whole read is an error too, located at its declaration, reported only when no other one is.
  *
  * @param buildResults Built nodes with their transient ranges, keyed by node id.
  * @param flowInputs The flow's input names.
@@ -303,7 +304,7 @@ function itemContract(
  * @param options.diagnostics Factory for located load errors.
  * @throws TypeError when a producer contract is not a `ValueContract` or `PartialRecordContract`.
  * @throws LoadError listing every unresolved reference, else every constructor call that can never
- *   succeed.
+ *   succeed, else every inbox input nothing reads.
  */
 export function validateReferences(
   buildResults: ReadonlyMap<string, BuildResult>,
@@ -733,6 +734,19 @@ export function validateReferences(
         range: firstRange,
       });
     }
+  }
+
+  // Reported only when no site error was: a refused read leaves its inbox unread too.
+  const unread = [...inboxInputs].filter((name) => !inboxesRead.has(name));
+  if (unread.length > 0) {
+    const problems = unread.map((name): [string, SourceRange | null] => {
+      const origin = inputContracts.get(name)!.origins.default;
+      const frame = origin !== null && resolveOrigin !== null ? resolveOrigin(origin) : null;
+      return [`inbox input \`${name}\` is never read; take from it, or pass it to a call`, frame?.range ?? outputsRange];
+    });
+    throw diagnostics.error(`flow has unread inbox inputs:\n  ${problems.map(([message]) => message).join("\n  ")}`, {
+      range: problems.find(([, range]) => range !== null)?.[1] ?? null,
+    });
   }
 }
 

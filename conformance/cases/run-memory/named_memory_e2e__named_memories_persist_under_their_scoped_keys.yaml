@@ -183,9 +183,12 @@ expect:
   - - pool_commit
     - ask
     - value: users=1 memories=notes
+  - - pool_commit
+    - ask
+    - {key: ask.new_messages, steps: [9]}
   - - node_succeeded
     - ask
-    - {commit: 10}
+    - {commit: 10, messages: 11}
   - [node_started, lib_step]
   - - pool_commit
     - lib_step
@@ -197,7 +200,7 @@ expect:
   - [node_started, lib_step/__start__]
   - - node_succeeded
     - lib_step/__start__
-    - commit: 13
+    - commit: 14
   - [node_started, lib_step/summarize]
   - - node_step
     - lib_step/summarize
@@ -218,17 +221,20 @@ expect:
   - - pool_commit
     - lib_step/summarize
     - value: users=1 memories=notes,lib.notes
+  - - pool_commit
+    - lib_step/summarize
+    - {key: lib_step/summarize.new_messages, steps: [19]}
   - - node_succeeded
     - lib_step/summarize
-    - {commit: 19}
+    - {commit: 20, messages: 21}
   - [node_started, lib_step/__end__]
   - - pool_commit
     - lib_step/__end__
     - key: lib_step
-      from: {lib_step/summarize: 19}
+      from: {lib_step/summarize: 20}
   - - node_succeeded
     - lib_step/__end__
-    - {commit: 22}
+    - {commit: 24}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -237,7 +243,7 @@ expect:
         summary: users=1 memories=notes,lib.notes
   - - node_succeeded
     - __end__
-    - {commit: 25}
+    - {commit: 27}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -338,14 +344,14 @@ expect:
     n: 1
   memory:
     lib.notes: |-
-      {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":15,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"q1"},"owner_static_path":["lib_step","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":17,"failure":null,"inputs":{"topic":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","summarize"],"prompt":"Summarize q1.","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:3>","episode":{"base_system_prompt":null,"execution_seq":21,"failure":null,"inputs":{"result":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:1>","episode":{"base_system_prompt":null,"execution_seq":16,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"q1"},"owner_static_path":["lib_step","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:2>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":18,"failure":null,"inputs":{"topic":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","summarize"],"prompt":"Summarize q1.","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:3>","episode":{"base_system_prompt":null,"execution_seq":23,"failure":null,"inputs":{"result":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
     notes: |-
       {"entry_id":"<id:4>","episode":{"base_system_prompt":null,"execution_seq":5,"failure":null,"inputs":{"question":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"question":"q1"},"owner_static_path":["__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
       {"entry_id":"<id:5>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":8,"failure":null,"inputs":{"question":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["ask"],"prompt":"q1","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:6>","episode":{"base_system_prompt":null,"execution_seq":12,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"kind":"grow","prune_ids":[],"seed":{"topic":"q1"}},"owner_static_path":["lib_step"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:7>","episode":{"base_system_prompt":null,"execution_seq":15,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"q1"},"owner_static_path":["lib_step","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:8>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":17,"failure":null,"inputs":{"topic":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","summarize"],"prompt":"Summarize q1.","run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:9>","episode":{"base_system_prompt":null,"execution_seq":21,"failure":null,"inputs":{"result":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
-      {"entry_id":"<id:10>","episode":{"base_system_prompt":null,"execution_seq":24,"failure":null,"inputs":{"answer":"users=1 memories=","summary":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"answer":"users=1 memories=","summary":"users=1 memories="},"owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:6>","episode":{"base_system_prompt":null,"execution_seq":13,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"kind":"grow","prune_ids":[],"seed":{"topic":"q1"}},"owner_static_path":["lib_step"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:7>","episode":{"base_system_prompt":null,"execution_seq":16,"failure":null,"inputs":{"topic":"q1"},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"topic":"q1"},"owner_static_path":["lib_step","__start__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:8>","episode":{"base_system_prompt":"You are an analysis agent inside a larger workflow. Follow the instructions precisely, use the available tools to gather any facts you need, and return a clear, self-contained answer. Ask the user only through an explicitly granted tool.","execution_seq":18,"failure":null,"inputs":{"topic":"q1"},"interactions":[{"kind":"model_text","text":"users=1 memories="}],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","summarize"],"prompt":"Summarize q1.","run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:9>","episode":{"base_system_prompt":null,"execution_seq":23,"failure":null,"inputs":{"result":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":"users=1 memories=","owner_static_path":["lib_step","__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}
+      {"entry_id":"<id:10>","episode":{"base_system_prompt":null,"execution_seq":26,"failure":null,"inputs":{"answer":"users=1 memories=","summary":"users=1 memories="},"interactions":[],"memory_sections":[],"occurrence_path":[],"output":{"answer":"users=1 memories=","summary":"users=1 memories="},"owner_static_path":["__end__"],"prompt":null,"run_id":"r1","status":"succeeded"}}

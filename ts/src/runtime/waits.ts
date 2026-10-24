@@ -602,17 +602,15 @@ export function dueTimeouts(w: WaitsState, nowMs: number): ReadonlyMap<string, r
   return due;
 }
 
-/** Return the earliest deadline of an open call of a waiting node, or `null` when none has one. */
-export function wakeAt(w: WaitsState): string | null {
+/**
+ * Return the earliest deadline of an open call of a waiting node, or `null` when none has one:
+ * from the waits state, or from its `waitInfos` (a `RunResult`'s `waits`).
+ */
+export function wakeAt(w: WaitsState | readonly WaitInfo[]): string | null {
   let earliest: string | null = null;
-  for (const waiting of w.waiting.values()) {
-    for (const callId of waiting.callIds) {
-      const call = w.calls.get(callId);
-      // Record times have one fixed-width form, so text order is time order.
-      if (call?.state === "open" && call.deadline !== null && (earliest === null || call.deadline < earliest)) {
-        earliest = call.deadline;
-      }
-    }
+  for (const wait of w instanceof WaitsState ? waitInfos(w) : w) {
+    // Record times have one fixed-width form, so text order is time order.
+    if (!wait.settled && wait.deadline !== null && (earliest === null || wait.deadline < earliest)) earliest = wait.deadline;
   }
   return earliest;
 }

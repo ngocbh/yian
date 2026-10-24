@@ -183,8 +183,11 @@ export {
   LiveChannel,
   type LiveCall,
   type LiveChannelOptions,
+  type LiveFollowFrame,
   type LiveFrame,
   type LiveSnapshot,
+  LiveView,
+  type LiveViewCall,
 } from "./runtime/live.ts";
 export {
   type IterRunRecordsOptions,

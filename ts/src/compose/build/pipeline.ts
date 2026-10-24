@@ -47,6 +47,7 @@ import {
   type ValuePath,
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { ASK } from "../../tools/context.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -76,6 +77,7 @@ import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { HumanInputDescriptor } from "../nodes/human_input.ts";
+import { ToolDescriptor } from "../nodes/tool.ts";
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
 import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
@@ -806,9 +808,10 @@ export function splitTypedInputs(
 }
 
 /**
- * Read each AGENT's and adaptive gate's `llm_config:` with the values and tags in it.
+ * Read each AGENT's and adaptive asking node's `llm_config:` with the values and tags in it.
  *
- * An AGENT's own layer and an adaptive gate's `adaptive_questions.llm_config` are read. A layer
+ * An AGENT's own layer and the `adaptive_questions.llm_config` of an adaptive gate or TOOL `ask`
+ * are read. A layer
  * holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one value),
  * and the value range of each key in it lands in the descriptor's `fieldRanges` under
  * `siteKey("llm_config", "<dotted.path>")`, so its errors point at the field; the adaptive desugar
@@ -846,7 +849,10 @@ function splitTypedLlmConfig(
         path = ["llm_config"];
         written = descriptor.llmConfig;
         prefix = `node ${reprText(nodeId)}: llm_config`;
-      } else if (descriptor instanceof HumanInputDescriptor && isRecord(descriptor.adaptiveQuestions)) {
+      } else if (
+        (descriptor instanceof HumanInputDescriptor || (descriptor instanceof ToolDescriptor && descriptor.toolId === ASK)) &&
+        isRecord(descriptor.adaptiveQuestions)
+      ) {
         path = ["adaptive_questions", "llm_config"];
         written = descriptor.adaptiveQuestions["llm_config"];
         prefix = `node ${reprText(nodeId)} adaptive_questions.llm_config`;

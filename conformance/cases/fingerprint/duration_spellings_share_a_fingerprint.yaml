@@ -1,0 +1,25 @@
+# TS-only: a duration is expanded to seconds at load, so its spellings share a fingerprint.
+kind: fingerprint
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    nap:
+      kind: tool
+      tool_id: sleep
+      input:
+        for: 24h
+  output: null
+other: |
+  id: f
+  name: f
+  nodes:
+    nap:
+      kind: tool
+      tool_id: sleep
+      input:
+        for: 86400s
+  output: null
+expect:
+  fingerprint: same

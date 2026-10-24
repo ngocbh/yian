@@ -37,8 +37,7 @@ import {
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
-import { SourceAccessError, type SourceCursor } from "../source/index.ts";
-import { MODE_REMOVED_FIX, retriesError } from "./agent.ts";
+import type { SourceCursor } from "../source/index.ts";
 import {
   type BuildContext,
   type BuildResult,
@@ -50,9 +49,15 @@ import {
   siteKey,
   wholeRefName,
 } from "./base.ts";
+import {
+  answerSchema,
+  checkAdaptiveBlock,
+  checkAdaptiveFields,
+  nonTextQuestionField,
+  recordAdaptiveRanges,
+} from "./tool.ts";
 
-/** The keys the adaptive desugar reads from an `adaptive_questions:` block. */
-const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config", "retries"]);
+export { answerSchema };
 
 /** The fields `HumanInputDescriptor`'s constructor takes: the common ones and the gate's own. */
 export interface HumanInputDescriptorFields extends NodeDescriptorFields {
@@ -136,45 +141,9 @@ export class HumanInputDescriptor extends NodeDescriptor {
   ): InstanceType<T> {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
     const id = reprText(nodeId);
-    const adaptive = cursor.get("adaptive_questions");
-    if (isRecord(adaptive)) {
-      if (Object.hasOwn(adaptive, "mode")) {
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`adaptive_questions.mode:\` was removed: ${MODE_REMOVED_FIX}`,
-          { range: keyRange(cursor.child("adaptive_questions"), "mode") ?? cursor.keyRangeOf("adaptive_questions") },
-        );
-      }
-      for (const key of Object.keys(adaptive)) {
-        if (ADAPTIVE_KEYS.has(key)) continue;
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`adaptive_questions:\` field ${reprText(key)} is not allowed ` +
-            `(allowed: ${[...ADAPTIVE_KEYS].sort(compareCodeUnits).join(", ")})`,
-          { range: keyRange(cursor.child("adaptive_questions"), key) ?? cursor.keyRangeOf("adaptive_questions") },
-        );
-      }
-    }
-    const brief = isRecord(adaptive) ? (adaptive["prompt"] ?? null) : null;
-    if (brief !== null) {
-      const briefRange = rangeAt(cursor, ["adaptive_questions", "prompt"]) ?? cursor.keyRangeOf("adaptive_questions");
-      if (typeof brief !== "string") {
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): ` + notTextError("adaptive_questions.prompt", brief),
-          { range: briefRange },
-        );
-      }
-      checkWrittenValue(brief, `node ${id} field 'adaptive_questions.prompt'`, briefRange, diagnostics);
-    }
+    checkAdaptiveBlock(nodeId, `kind=${this.kind}`, cursor, diagnostics);
     const desc = super.parse(nodeId, cursor) as HumanInputDescriptor;
-    if (isRecord(adaptive)) {
-      for (const [key, site] of [
-        ["prompt", siteKey("text", "adaptive_questions.prompt")],
-        ["llm_config", siteKey("field", "adaptive_questions.llm_config")],
-      ] as const) {
-        if (!Object.hasOwn(adaptive, key)) continue;
-        const range = rangeAt(cursor, ["adaptive_questions", key]);
-        if (range !== null) desc.fieldRanges.set(site, range);
-      }
-    }
+    recordAdaptiveRanges(desc, cursor);
     if (!isList(desc.questions)) return desc as InstanceType<T>;
     const questionsRange = desc.fieldRanges.get(siteKey("field", "questions")) ?? desc.range;
     const found = nonTextQuestionField(desc.questions);
@@ -236,20 +205,7 @@ export class HumanInputDescriptor extends NodeDescriptor {
         { range: autoRange },
       );
     }
-    if (auto !== null) {
-      if (!isRecord(auto) || !auto["prompt"]) {
-        throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`adaptive_questions:\` requires a \`prompt:\` (the LLM brief)`,
-          { range: autoRange },
-        );
-      }
-      const problem = Object.hasOwn(auto, "retries") ? retriesError(auto["retries"]) : null;
-      if (problem !== null) {
-        throw diagnostics.error(`node ${id} (kind=${this.kind}): \`adaptive_questions.retries:\` ${problem}`, {
-          range: autoRange,
-        });
-      }
-    }
+    if (auto !== null) checkAdaptiveFields(nodeId, `kind=${this.kind}`, auto, autoRange, diagnostics);
     const promptRange = ranges.get(siteKey("field", "prompt")) ?? ownRange;
     rejectNonText(this.kind, nodeId, "prompt", prompt, promptRange, diagnostics);
     if (prompt !== null) checkWrittenValue(prompt, `node ${id} field 'prompt'`, promptRange, diagnostics);
@@ -321,89 +277,4 @@ export class HumanInputDescriptor extends NodeDescriptor {
     }
     return new HumanInputNode(this.id, { prompt, title: this.nodeName });
   }
-}
-
-/**
- * Return the first question text field that is present and not text, as `[path, value]`.
- *
- * Checks each record question's `question` and `header`, then the `label` and `description` of
- * each record option in a list `options`; path steps are as in `templateSites`. Other shapes are
- * left to the question validator.
- *
- * @param questions The node's literal `questions:` list.
- * @returns The offending field's key path from the node body and its value, or `null` when every
- *   present text field is text.
- */
-function nonTextQuestionField(questions: readonly unknown[]): [(string | number)[], unknown] | null {
-  for (const [i, question] of questions.entries()) {
-    if (!isRecord(question)) continue;
-    for (const key of ["question", "header"]) {
-      if (Object.hasOwn(question, key) && typeof question[key] !== "string") {
-        return [["questions", i, key], question[key]];
-      }
-    }
-    const options = question["options"];
-    if (!isList(options)) continue;
-    for (const [j, option] of options.entries()) {
-      if (!isRecord(option)) continue;
-      for (const key of ["label", "description"]) {
-        if (Object.hasOwn(option, key) && typeof option[key] !== "string") {
-          return [["questions", i, "options", j, key], option[key]];
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Return the range of `key` in the mapping under `cursor`, or `null` when it has none.
- *
- * `null` also covers a mapping past a recursive alias cut, so the caller's error falls back to
- * an enclosing range.
- */
-function keyRange(cursor: SourceCursor, key: string): SourceRange | null {
-  try {
-    return cursor.keyRangeOf(key);
-  } catch (error) {
-    if (error instanceof SourceAccessError) return null;
-    throw error;
-  }
-}
-
-/** Return the answer-schema entry for field `name` of type `typ`. */
-function fieldSchema(name: string, typ: Type, required: boolean): Readonly<Record<string, unknown>> {
-  const entry: Record<string, unknown> = { name, type: typ.kind, required };
-  if (typ.tags !== undefined && typ.tags.size > 0) {
-    // A Literal enum: the allowed values.
-    entry["enum"] = [...typ.tags].sort(compareCodeUnits);
-  } else if (typ.element?.tags !== undefined && typ.element.tags.size > 0) {
-    // A list of a Literal enum: the element's values.
-    entry["enum"] = [...typ.element.tags].sort(compareCodeUnits);
-  }
-  if (typ.kind === ValueKind.OBJECT && typ.fields !== undefined && typ.fields.size > 0) {
-    const requiredKeys = typ.required ?? new Set<string>();
-    entry["fields"] = [...typ.fields].map(([key, field]) => fieldSchema(key, field, requiredKeys.has(key)));
-  }
-  return entry;
-}
-
-/**
- * Return a light answer-field schema for a HUMAN_INPUT, derived from its output type.
- *
- * A record output gives one entry per field (recursively); any other type (a scalar, an enum, a
- * list, a union) gives a single `answer` entry. Each entry is `{name, type, required}`, `type`
- * being the type's `ValueKind` text, plus a sorted `enum` for a `Literal` (or a list of one) and
- * `fields` for a nested record. A host renderer prompts against it.
- *
- * Example: `answerSchema(Type.scalar(ValueKind.STRING))` is
- * `[{ name: "answer", type: "str", required: true }]`; `answerSchema(null)` is `[]`.
- */
-export function answerSchema(typ: Type | null): Readonly<Record<string, unknown>>[] {
-  if (typ === null) return [];
-  if (typ.kind === ValueKind.OBJECT && typ.fields !== undefined && typ.fields.size > 0) {
-    const requiredKeys = typ.required ?? new Set<string>();
-    return [...typ.fields].map(([key, field]) => fieldSchema(key, field, requiredKeys.has(key)));
-  }
-  return [fieldSchema("answer", typ, !typ.nullable)];
 }

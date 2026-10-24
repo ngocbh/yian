@@ -1,0 +1,38 @@
+# TS-only: a loop predicate can't read the inbox the loop carries.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  defs:
+    body:
+      input:
+        m: !Inbox(str)
+        done: !bool
+      nodes:
+        heard:
+          kind: tool
+          tool_id: take
+          input:
+            from: ${input.m}
+      output:
+        done: ${heard.output.closed}
+  nodes:
+    l:
+      kind: loop
+      call: body
+      input:
+        m: ${input.m}
+        done: false
+      while: m == null
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "loop node 'l': `while:` reads `m`, an inbox; a loop predicate can't read an inbox"
+      frames:
+      - label: flow.yaml
+        range: [19, 3, 19, 4]

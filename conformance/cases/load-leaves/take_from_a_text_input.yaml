@@ -1,0 +1,23 @@
+# TS-only: a take's from must be an inbox input.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    t: !str
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.t}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'heard' (tool_id: take): take's from must be an Inbox input of this flow, as ${input.<name>}"
+      frames:
+      - label: flow.yaml
+        range: [10, 13, 10, 23]

@@ -1,0 +1,19 @@
+# TS-only: tool_id: ask_user still calls the agent surface as a plain tool, options and all.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    q:
+      kind: tool
+      tool_id: ask_user
+      retries: 2
+      input:
+        question: Ship it?
+        options:
+          - yes
+          - no
+  output: ${q.output}
+expect:
+  load: ok

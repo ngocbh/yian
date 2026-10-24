@@ -33,13 +33,14 @@ describe("ToolNode built-in fields", () => {
     expect(new ToolNode("a", { toolId: "ask", answerSchema: schema }).answerSchema).toEqual(schema);
   });
 
-  test("a TOOL manifest still builds, without either field", () => {
+  test("a TOOL manifest holds a non-empty answer schema, never builtin", () => {
     const plain = singleNodeFlow(new ToolNode("node", { toolId: "ask", retries: 0 }));
     const schema = [{ name: "answer", type: "str", required: true }];
     const withSchema = singleNodeFlow(new ToolNode("node", { toolId: "ask", retries: 0, answerSchema: schema }));
     const manifest = (flowManifest(withSchema).nodes as JsonObject)["node"] as JsonObject;
     expect(Object.keys(manifest)).not.toContain("builtin");
-    expect(Object.keys(manifest)).not.toContain("answerSchema");
-    expect(flowFingerprint(withSchema)).toBe(flowFingerprint(plain));
+    expect(Object.keys(manifest)).toContain("answer_schema");
+    expect(Object.keys((flowManifest(plain).nodes as JsonObject)["node"] as JsonObject)).not.toContain("answer_schema");
+    expect(flowFingerprint(withSchema)).not.toBe(flowFingerprint(plain));
   });
 });

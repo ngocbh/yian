@@ -1,0 +1,24 @@
+# TS-only: a take's output is inferred, so `output:` is refused.
+kind: load
+python_skip: "TS-only: inboxes and durable suspend (#1025)"
+flow: |
+  id: f
+  name: f
+  input:
+    m: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.m}
+      output: str
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'heard' (tool_id: take): take's output is inferred ({events: list(T), closed: bool}); remove `output:`"
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 16]

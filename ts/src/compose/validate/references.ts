@@ -66,6 +66,8 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { HumanInputNode, siteLabel, templateSites } from "../../nodes/human_input/node.ts";
+import { ToolNode } from "../../nodes/tool/node.ts";
+import { TAKE } from "../../tools/context.ts";
 import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
@@ -173,11 +175,12 @@ const MAP_TAIL = "(a map body can't read an inbox)";
 const EXPRESSION_TAIL = "(not inside text or an expression)";
 
 /**
- * Return why node `node`'s input `param` can't take an inbox whole, or `null` when it can: an
- * input a named call's or a loop's child declares as an Inbox, so a loop never carries an inbox it
- * can't drop.
+ * Return why node `node`'s input `param` can't take an inbox whole, or `null` when it can: a
+ * take's `from`, or an input a named call's or a loop's child declares as an Inbox, so a loop never
+ * carries an inbox it can't drop.
  */
 function inboxSiteTail(nodeId: string, node: Node, param: string): string | null {
+  if (node instanceof ToolNode && node.builtin === TAKE) return param === "from" ? null : TAKE_TAIL;
   if (node instanceof CaseNode) return EXPRESSION_TAIL;
   if (!(node instanceof CallNode || node.isLoop)) return TAKE_TAIL;
   if (nodeId.startsWith(SYNTH_PREFIX)) return "(pass it through a named `kind: call` node)";

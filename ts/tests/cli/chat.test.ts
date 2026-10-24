@@ -565,76 +565,8 @@ describe("yian chat's inbox and inputs", () => {
   );
 });
 
-/** The Phase 1 chat example on `Inbox(str)`: a transcript, one model call per turn. */
-const AGENT_CHAT = `id: chat
-name: chat
-input:
-  messages: !Inbox(str)
-typedefs:
-  Turn:
-    transcript: str
-    closed: bool
-defs:
-  respond:
-    input:
-      transcript: !str
-      said: !str
-    nodes:
-      reply:
-        kind: agent
-        input:
-          transcript: \${input.transcript}
-          said: \${input.said}
-        output: str
-        prompt: |-
-          You are a helpful conversational assistant.
-
-          Conversation so far:
-          \${transcript}
-
-          User: \${said}
-      turn_end: !Turn
-        transcript: |-
-          \${input.transcript}
-
-          User: \${input.said}
-
-          Assistant: \${reply.output}
-        closed: false
-    output: \${turn_end.output}
-  turn:
-    input:
-      transcript: !str
-      closed: !bool
-      messages: !Inbox(str)
-    nodes:
-      heard:
-        kind: tool
-        tool_id: take
-        input:
-          from: \${input.messages}
-          take: all
-      ended: !Turn
-        transcript: \${input.transcript}
-        closed: true
-      route:
-        kind: case
-        cases:
-          - when: \${heard.output.events == []}
-            then: ended
-        else: call(respond, transcript=\${input.transcript}, said=\${join(heard.output.events, "\\n")})
-    output: !Turn \${route.output}
-nodes:
-  chat:
-    kind: loop
-    call: turn
-    input:
-      transcript: ""
-      closed: false
-      messages: \${input.messages}
-    while: not closed
-output: \${chat.output.transcript}
-`;
+/** The chat example: one model call per turn, the history carried by bindings. */
+const EXAMPLE_CHAT = fileURLToPath(new URL("../../../examples/chat.yaml", import.meta.url));
 
 /** A one-word ("7") chat-completions stream. */
 const SEVEN =
@@ -646,7 +578,7 @@ const SEVEN =
     .join("") + "data: [DONE]\n\n";
 
 test(
-  "an agent chat replies to each line through the provider",
+  "examples/chat.yaml replies to each line through the provider",
   async () => {
     const env = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
     const { io, stdin, stdout, stderr } = chatIo({ env });
@@ -658,7 +590,7 @@ test(
       return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
     }) as unknown as typeof fetch;
     try {
-      const { code, log } = await runChat(flowFile(AGENT_CHAT), io);
+      const { code, log } = await runChat(EXAMPLE_CHAT, io);
       expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
       expect(stdout()).toBe("7\n7\n");
       expect(calls).toBe(2);

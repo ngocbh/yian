@@ -291,7 +291,6 @@ test("evaluator capture preserves typed values before node mutation", async () =
   node.params = [new Parameter("payload")];
   const flow = nodeFlow(node, { payload: [{ items: [file] }] });
   const evaluated = await evalNode(node, flow, poolOf(), { captureBindings: true });
-  expect(evaluated.evidence).toBeNull();
   expect(evaluated.bindings!.boundInputs).toEqual({ payload: [{ items: [file] }] });
   const captured = evaluated.bindings!.boundInputs!["payload"] as ValueRecord[];
   expect((captured[0]!["items"] as Value[])[0]).toBe(file);

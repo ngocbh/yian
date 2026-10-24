@@ -36,7 +36,6 @@ import { ExpressionError } from "../expr/expressions.ts";
 import { ResolvedValue, SourceRef, sameSource } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import {
-  EvaluationEvidence,
   MemoryScope,
   type MemorySnapshotEnvelope,
   type MemorySpec,
@@ -182,7 +181,7 @@ function fileReadingType(node: Node): Type | null {
 export class MemoryAuthority {
   /** The recorded snapshots, or `null` when memory is disabled. */
   readonly snapshots: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether the run records learning evidence. */
+  /** Whether the run retains what learning reads (forward capture and steps). */
   readonly learnable: boolean;
   /** The recorded memory key table, or `null` when memory is disabled. */
   readonly memories: readonly MemorySpec[] | null;
@@ -366,7 +365,7 @@ export class RunState {
   recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
   /** The tool specs `RunStarted` recorded, by name, which learning rebuilds requests with. */
   recordedTools: Readonly<Record<string, RecordedTool>> = {};
-  /** Whether accepted eligible outcomes must project durable learning evidence. */
+  /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
   learnable = false;
   /**
    * The `yian.defaults` values `RunStarted` recorded, the built-in values overlaid with the
@@ -612,7 +611,7 @@ export interface RunStartData {
   numWorkers: number;
   /** Canonical snapshots, one per memory key; `null` (the default) disables memory. */
   memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether eligible accepted outcomes must carry learning evidence; defaults to `false`. */
+  /** Whether accepted outcomes must carry forward capture for learning; defaults to `false`. */
   learnable?: boolean;
   /** The sorted memory key table paired with `memorySnapshots`; defaults to `null`. */
   memories?: readonly MemorySpec[] | null;
@@ -1129,7 +1128,6 @@ export function preparePoolCommit(
  *
  * @param state An initialized nonterminal state with `nodeId` in flight and its commit pending.
  * @param nodeId The exact id of the executing node.
- * @param options.evidence Frozen visible evidence captured during this exact evaluation.
  * @param options.forwardCapture The canonical binding capture, required exactly when learning.
  * @param options.output The value the node evaluated to; required for a derived commit, whose
  *   value rebuilt from its `from` must equal it.
@@ -1156,7 +1154,6 @@ export function prepareNodeSucceeded(
   return prepareSuccessTransition(
     state,
     new NodeSucceededRecord(nodeId, pending.seq, {
-      evidence: options.evidence ?? null,
       forwardCapture: options.forwardCapture ?? null,
     }),
     Object.hasOwn(options, "output") ? { output: options.output } : null,
@@ -1169,7 +1166,6 @@ export function prepareNodeSucceeded(
  * @param state An initialized nonterminal state with `nodeId` in flight.
  * @param nodeId The exact non-empty id of the executing router.
  * @param handle The exact non-empty handle the router selected.
- * @param options.evidence Frozen visible evidence captured during this exact evaluation.
  * @param options.forwardCapture The canonical binding capture, required exactly when learning.
  * @returns The canonical `NodeRoutedRecord` and a detached append-before-apply plan.
  * @throws TypeError when a carrier has the wrong type.
@@ -1193,7 +1189,6 @@ export function prepareNodeRouted(
   return prepareRouteTransition(
     state,
     new NodeRoutedRecord(nodeId, handle, {
-      evidence: options.evidence ?? null,
       forwardCapture: options.forwardCapture ?? null,
     }),
     true,
@@ -1205,7 +1200,6 @@ export function prepareNodeRouted(
  *
  * @param state An initialized nonterminal state with the failing node in flight.
  * @param failure The semantic failure whose non-empty `nodeId` names the executing node.
- * @param options.evidence Frozen visible evidence captured before the evaluation failed.
  * @param options.forwardCapture The canonical binding capture, including unavailable inputs on an
  *   early failure.
  * @returns The canonical `NodeFailedRecord` and a detached append-before-apply plan.
@@ -1222,7 +1216,6 @@ export function prepareNodeFailed(
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeFailed expects a RunState");
   if (!isExactly(failure, Failure)) throw new TypeError("prepareNodeFailed expects a Failure");
   const record = new NodeFailedRecord(failure, {
-    evidence: options.evidence ?? null,
     forwardCapture: options.forwardCapture ?? null,
   });
   requireInitializedNonterminal(state);
@@ -1438,7 +1431,7 @@ function prepareSuccessTransition(
   record: NodeSucceededRecord,
   live: { readonly output: unknown } | null = null,
 ): PreparedTransition {
-  validateNodeEvidence(state, record.nodeId, record.evidence);
+  validateLearnedScope(state, record.nodeId);
   // The caller checked that the record names the node's pending commit.
   let pending = state.pendingCommits.get(record.nodeId)!;
   if (pending.valueJson === null) {
@@ -1514,7 +1507,7 @@ function prepareRouteTransition(
   record: NodeRoutedRecord,
   deriveTerminalFailure: boolean,
 ): PreparedTransition {
-  validateNodeEvidence(state, record.nodeId, record.evidence);
+  validateLearnedScope(state, record.nodeId);
   const route = prepareRouteDelta(state, record, deriveTerminalFailure);
   const causalFailure = route.causalFailure;
   let delta = route.delta;
@@ -1522,7 +1515,6 @@ function prepareRouteTransition(
   // plain `OriginRef`: the wire's single-key identity shape.
   const recordForWire = new NodeRoutedRecord(record.nodeId, record.handle, {
     terminalFailure: causalFailure,
-    evidence: record.evidence,
     forwardCapture: record.forwardCapture,
   });
   const runId = state.runId;
@@ -1618,7 +1610,6 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
  * @param grow The seed-first expansion description and its dynamic-overlay prune set.
  * @param growBuilder The injected compile-owned interpreter from a copy of the spawner and the
  *   canonical seed to one self-contained `Flow` fragment.
- * @param options.evidence Frozen visible evidence captured during this exact evaluation.
  * @param options.forwardCapture The canonical binding capture, required exactly when learning.
  * @returns The canonical `NodeExpandedRecord` and its detached append-before-apply plan.
  * @throws GrowthRejected when the node-produced prune set or seed, the returned fragment, the
@@ -1650,7 +1641,6 @@ export function prepareExpanded(
   return prepareGrowthTransition(
     state,
     new NodeExpandedRecord(nodeId, pruneIds, digest, {
-      evidence: options.evidence ?? null,
       forwardCapture: options.forwardCapture ?? null,
     }),
     fragment,
@@ -3169,7 +3159,7 @@ function validateGrowthRecord(state: RunState, record: NodeExpandedRecord): void
     throw new RangeError("NodeExpandedRecord topology_digest must be lowercase SHA-256");
   }
   requireExpandingNode(state, spawnerId);
-  validateNodeEvidence(state, spawnerId, record.evidence);
+  validateLearnedScope(state, spawnerId);
 }
 
 /** Call the injected builder with a copy of the spawner and return a copy of its fragment. */
@@ -3923,16 +3913,15 @@ function recordedStack(stacks: readonly MemoryStack[], locator: readonly string[
   return low < stacks.length && sameItems(stacks[low]!.locator, locator) ? stacks[low]! : null;
 }
 
-/** Enforce recorded learning authority for one accepted graph outcome. */
-function validateNodeEvidence(state: RunState, nodeId: string, evidence: EvaluationEvidence | null): void {
+/**
+ * Require a learnable run's node that recalls memory to carry its exact recorded memory stack, so
+ * learning recalls and attributes against the stack the run recorded.
+ */
+function validateLearnedScope(state: RunState, nodeId: string): void {
   const node = state.flow.nodes.get(nodeId);
-  if (node === undefined) throw new RangeError(`evidence node ${reprText(nodeId)} does not exist in the flow`);
+  if (node === undefined) throw new RangeError(`node ${reprText(nodeId)} does not exist in the flow`);
+  if (state.learnable !== true || node.needsMemoryContext !== true) return;
   const scope = node.memoryScope;
-
-  if (state.learnable !== true || node.needsEvaluationTrace !== true) {
-    if (evidence !== null) throw new RangeError(`node ${reprText(nodeId)} is ineligible for evaluation evidence`);
-    return;
-  }
   if (scope !== null) {
     // Python rebuilds the frozen scope to revalidate it; a TS scope validated itself when built.
     if (!isExactly(scope, MemoryScope)) {
@@ -3950,15 +3939,6 @@ function validateNodeEvidence(state: RunState, nodeId: string, evidence: Evaluat
   } else if (state.memories !== null && state.memories.length > 0) {
     throw new RangeError(`node ${reprText(nodeId)} has no exact compiled memory scope`);
   }
-  if (evidence === null) {
-    throw new RangeError(`eligible node ${reprText(nodeId)} requires evaluation evidence while learning`);
-  }
-  if (!isExactly(evidence, EvaluationEvidence)) {
-    throw new TypeError("node evidence must be an EvaluationEvidence or null");
-  }
-  if (!sameOptional(evidence.scope, scope, sameMemoryScope)) {
-    throw new RangeError(`node ${reprText(nodeId)} evidence scope does not match its compiled scope`);
-  }
 }
 
 /** Validate a failure's exact diagnostic carriers and its executing node. */
@@ -3971,7 +3951,7 @@ function validateFailureRecord(state: RunState, record: NodeFailedRecord): void 
   if (typeof nodeId !== "string") throw new TypeError("NodeFailedRecord failure node_id must be a string");
   if (!nodeId) throw new RangeError("NodeFailedRecord failure node_id must be non-empty");
   requireFailingNode(state, nodeId);
-  validateNodeEvidence(state, nodeId, record.evidence);
+  validateLearnedScope(state, nodeId);
 }
 
 /**

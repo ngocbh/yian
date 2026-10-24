@@ -28,9 +28,12 @@ import {
 } from "../../src/memory/contracts.ts";
 import { replayRunLog, runFlow } from "../../src/run.ts";
 import { learningMaterials } from "../../src/runtime/backward.ts";
-import { evidencePayload, JsonlRunLog } from "../../src/runtime/log.ts";
+import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { evaluationEvidence } from "../../src/runtime/trace.ts";
+import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
+import { Skill } from "../../src/skills/catalog.ts";
+import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
@@ -59,7 +62,13 @@ function topicTool(name: string, prefix: string, safe = false): FunctionTool {
 async function rebuilt(
   text: string,
   replies: Response[],
-  options: { tools?: Record<string, FunctionTool>; memory?: FakeMemory; provider?: string; model?: string } = {},
+  options: {
+    tools?: Record<string, FunctionTool>;
+    memory?: FakeMemory;
+    provider?: string;
+    model?: string;
+    skills?: ReadonlyMap<string, Skill>;
+  } = {},
 ) {
   const path = join(dir, `run-${++count}.jsonl`);
   const flow: ComposedFlow = await loadFlow(text);
@@ -75,6 +84,7 @@ async function rebuilt(
     models: serving(model),
     tools: options.tools ?? {},
     memory: registry,
+    skills: options.skills ?? null,
     env,
   });
   expect(result.status, result.failure?.message).toBe("succeeded");
@@ -117,8 +127,7 @@ async function materialsOf(
     const agent = (nodeId: string) => {
       const occurrence = trace.occurrences.find((item) => item.nodeId === nodeId)!;
       const material = materials.get(sourceKey(occurrence.source)) ?? null;
-      const evidence = evaluationEvidence(occurrence, material);
-      return { occurrence, material, evidence, recorded: evidencePayload(occurrence.record.evidence) };
+      return { occurrence, material, evidence: evaluationEvidence(occurrence, material) };
     };
     return { agent, events };
   } finally {
@@ -148,14 +157,19 @@ const GROUP_REPLIES = [
 
 const GROUP_TOOLS = () => ({ lookup: topicTool("lookup", "found", true), save: topicTool("save", "saved") });
 
-test("the prompts come from the render with the recorded skills", async () => {
+test("the prompts come from the render", async () => {
   const { agent } = await rebuilt(GROUPS, GROUP_REPLIES, { tools: GROUP_TOOLS() });
-  const { material, evidence, recorded } = agent("writer");
+  const { material, evidence } = agent("writer");
   expect(material!.baseSystemPrompt).toBe("Help.");
   expect(material!.prompt).toBe("hi");
-  const { interactions: _rebuilt, ...rest } = evidence!;
-  const { interactions: _recorded, ...recordedRest } = recorded!;
-  expect(rest).toEqual(recordedRest);
+  const { interactions: _interactions, ...rest } = evidence!;
+  expect(rest).toEqual({
+    scope: null,
+    bound_inputs: {},
+    base_system_prompt: "Help.",
+    prompt: "hi",
+    memory_sections: [],
+  });
 });
 
 test("interactions follow step order: a reply's calls, then their results in call order", async () => {
@@ -175,20 +189,6 @@ test("interactions follow step order: a reply's calls, then their results in cal
     result("lookup", "found:y"),
     result("save", "saved:z"),
     new ModelTextInteraction("all done"),
-  ]);
-  // The recorded evidence ran each unsafe call's result before the next call.
-  expect((agent("writer").recorded!["interactions"] as { kind: string }[]).map((item) => item.kind)).toEqual([
-    "tool_call",
-    "tool_result",
-    "tool_call",
-    "tool_result",
-    "tool_call",
-    "tool_call",
-    "tool_result",
-    "tool_result",
-    "tool_call",
-    "tool_result",
-    "model_text",
   ]);
 });
 
@@ -210,14 +210,39 @@ output: \${count.output}
 `;
   const replies = [textReply('{"value": "seven"}'), textReply('{"value": 7}')];
   const { agent } = await rebuilt(text, replies, { provider, model });
-  const { material, evidence, recorded } = agent("count");
+  const { material } = agent("count");
   expect(material!.digestOk).toBe(true);
-  expect(evidence).toEqual(recorded);
   expect(material!.interactions).toEqual(
     provider === "vllm"
       ? [new ModelTextInteraction('{"value": "seven"}'), new ModelTextInteraction('{"value": 7}')]
       : [new ModelValueInteraction(7n)],
   );
+});
+
+test("a skill grant: the render lists the recorded skills and every request carries load_skill", async () => {
+  const text = `\
+id: skilled
+name: skilled
+llm_config: {provider: anthropic, model: claude-test}
+nodes:
+  review:
+    kind: agent
+    skills: [style]
+    prompt: review it
+    output: str
+output: \${review.output}
+`;
+  const skill = new Skill({ name: "style", description: "House style.", instructions: "Prefer small diffs." });
+  const replies = [callReply([LOAD_SKILL, { name: "style" }, "call-1"]), textReply("reviewed")];
+  const { agent } = await rebuilt(text, replies, { skills: new Map([["style", skill]]) });
+  const { material } = agent("review");
+  expect(material!.digestOk).toBe(true);
+  expect(material!.baseSystemPrompt).toBe(systemPromptWithSkills(DEFAULT_SYSTEM, [skill]));
+  expect(material!.interactions).toEqual([
+    new ToolCallInteraction(LOAD_SKILL, { name: "style" }),
+    new ToolResultInteraction(LOAD_SKILL, "Prefer small diffs."),
+    new ModelTextInteraction("reviewed"),
+  ]);
 });
 
 test("memory sections are recalled against the recorded snapshot", async () => {
@@ -235,8 +260,7 @@ output: \${work.output}
 `;
   const memory = new FakeMemory({ recallText: "notes" });
   const { agent } = await rebuilt(text, [textReply("done")], { memory });
-  const { material, evidence, recorded } = agent("work");
-  expect(evidence).toEqual(recorded);
+  const { material, evidence } = agent("work");
   expect(material!.memorySections).toEqual([new MemorySection("test", "notes")]);
   expect(evidence!["memory_sections"]).toEqual([{ memory: "test", text: "notes" }]);
 });

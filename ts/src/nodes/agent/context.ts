@@ -18,7 +18,7 @@ import type { ModelCallPurpose } from "../../events.ts";
 import { ProviderError } from "../../llm/errors.ts";
 import { MediaPart, Message, NamedTool, type Part, Request, Response, Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
-import type { EvaluationTrace, MemoryContext } from "../../memory/contracts.ts";
+import type { MemoryContext } from "../../memory/contracts.ts";
 import type { Scheduler } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
@@ -48,7 +48,7 @@ export interface AgentRunContext {
   readonly nodeId: string;
   /** The rendered prompt's messages, after the system message; the last is the user's. */
   readonly messages: readonly Message[];
-  /** The last message's text, which evidence records as the prompt. */
+  /** The last message's text, which recall reads as the prompt. */
   readonly promptText: string;
   /** The granted tool and group ids. */
   readonly tools: readonly string[];
@@ -62,8 +62,6 @@ export interface AgentRunContext {
   readonly maxToolIterations: number;
   /** The host's stop; absent for direct loop tests. */
   readonly signal?: AbortSignal;
-  /** The write-only visible evidence sink. */
-  readonly evaluationTrace?: EvaluationTrace;
   readonly memoryContext: MemoryContext;
   /** The run's tools and groups, which `tools` grants from. */
   readonly toolset: ToolSet | null;

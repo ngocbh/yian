@@ -67,12 +67,6 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  EvaluationEvidence,
-  ModelTextInteraction,
-  ToolCallInteraction,
-  ToolResultInteraction,
-} from "../../src/memory/contracts.ts";
 import { sourceKey } from "../../src/expr/lineage.ts";
 import { backwardAgent } from "../../src/nodes/agent/backward.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
@@ -82,7 +76,6 @@ import { BackwardContext, BackwardResult, CapabilityFault, validateBackwardResul
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { BackwardComputeError, computeBackward, learningMaterials } from "../../src/runtime/backward.ts";
 import { validateAttributedBackward } from "../../src/runtime/learning.ts";
-import { evidencePayload } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   prepareNodeStarted,
@@ -90,7 +83,7 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { writeAsText } from "../../src/typesys/values.ts";
+import { type Value, writeAsText } from "../../src/typesys/values.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
 import {
   engine,
@@ -337,13 +330,20 @@ test("AGENT backward uses the recorded model and no tools", async () => {
 });
 
 test("AGENT backward keeps visible tool evidence inert and separate", async () => {
-  const evidence = new EvaluationEvidence(null, {}, "Recorded base system.", "Recorded prompt.", [], [
-    new ToolCallInteraction("search", { query: "reefs" }),
-    new ToolResultInteraction("search", "Found reefs."),
-    new ModelTextInteraction("Recorded visible answer."),
-  ]);
+  const evidence = {
+    scope: null,
+    bound_inputs: {},
+    base_system_prompt: "Recorded base system.",
+    prompt: "Recorded prompt.",
+    memory_sections: [],
+    interactions: [
+      { kind: "tool_call", name: "search", arguments: { query: "reefs" } },
+      { kind: "tool_result", name: "search", text: "Found reefs." },
+      { kind: "model_text", text: "Recorded visible answer." },
+    ],
+  };
   const data = nodeData();
-  data["_evaluation_evidence"] = evidencePayload(evidence);
+  data["_evaluation_evidence"] = evidence;
   const chat = new ScriptedModel([reply()]);
 
   const node = new AgentNode("unused", { tools: ["search"] });
@@ -354,7 +354,7 @@ test("AGENT backward keeps visible tool evidence inert and separate", async () =
   expect(chat.requests[0]!.tools).toEqual([]);
   expect(chat.requests[0]!.messages.map((message) => message.role)).toEqual(["system", "user"]);
   const prompt = promptOf(chat);
-  expect(prompt).toContain(`"evaluation_evidence":${writeAsText(evidencePayload(evidence))}}`);
+  expect(prompt).toContain(`"evaluation_evidence":${writeAsText(evidence as unknown as Value)}}`);
   expect(prompt).toContain('"rendered_prompt":"reefs: concise"');
 });
 

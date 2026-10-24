@@ -43,7 +43,6 @@ import { sameFeedback } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { ToolSpec } from "../llm/messages.ts";
 import type {
-  EvaluationTrace,
   MemoryContext,
   MemoryScope,
   MemorySection,
@@ -915,11 +914,6 @@ export interface NodeCaps {
     event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
   ) => void;
   /**
-   * The invocation's write-only evidence sink; supplied to a node that declares
-   * `needsEvaluationTrace` while evidence capture is on.
-   */
-  readonly evaluationTrace?: EvaluationTrace;
-  /**
    * Opens the invocation's memory context once, from the visible base system prompt and the
    * rendered prompt; supplied to a node that declares `needsMemoryContext`.
    */
@@ -996,12 +990,6 @@ export abstract class Node {
    * the run boundary injected them and this is set. AGENT is the only built-in kind that opts in.
    */
   readonly needsSkills: boolean = false;
-  /**
-   * Declares "I can emit visible prompt, model and tool evidence": the evaluator supplies a
-   * write-only invocation-local trace only when evidence capture is on and this is set. AGENT is
-   * the only built-in kind that opts in.
-   */
-  readonly needsEvaluationTrace: boolean = false;
   /**
    * Declares "I can publish actual render locals for retained backward context": the evaluator
    * supplies a single-write capture callable only during retention.
@@ -1536,7 +1524,7 @@ export abstract class Node {
   }
 
   /**
-   * Return the bound inputs a model never sees (neither recalled on nor shown as evidence). They
+   * Return the bound inputs a model never sees (neither recalled on nor shown to a learner). They
    * stay in the bound record, so backward and resume read what ran. Empty by default.
    */
   modelHiddenInputs(): ReadonlySet<string> {

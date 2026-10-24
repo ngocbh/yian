@@ -130,6 +130,16 @@ effective model configuration. No prompt rendering, recall, tool execution,
 forward node, or expression function runs again. Variable feedback does not
 update variables or rewrite the graph.
 
+Changed (TS yian): learning reads steps. The run log holds no evidence. For each backward
+attempt, what a learner sees of an AGENT invocation (AGENT backward's evaluation evidence, and a
+memory episode's prompts, memory sections and interactions) is rebuilt from the log: the prompt
+from the recorded flow and skills, the memory sections by recalling against the recorded
+snapshots, and the interactions from the invocation's `model_call` and `tool_result` steps, a
+reply's calls then their results in call order. Each rebuilt request must match the
+`request_sha256` its step recorded; an invocation whose request differs is left out and reported
+as a `ReplayDegraded` with reason `rebuilt_request_differs`. See
+[explicit backward feedback](api.md#explicit-backward-feedback).
+
 See [runtime nodes](nodes.md#the-contract) for the hook contract and
 [the engine](engine.md#explicit-backward-attempts) for the reverse-fold rules.
 
@@ -267,7 +277,8 @@ Changed (TS yian): import `ProfileMemory` from `@ngocbh/yian` and pass it in a `
   version is a `MemorySetupError`, from `resume_flow` for an unfinished run and
   from each backward attempt for a finished one. The run log still holds
   profile text: AGENT evidence has the recalled document, and learning records
-  have the proposed one. Keep run logs as private as the profile.
+  have the proposed one. Keep run logs as private as the profile. (TS yian records no
+  evidence: learning recalls the document again, so the log holds only the proposed text.)
 - **Host edits.** `profile.read()` returns `(text, version)`, and
   `profile.write(text, base_version=version)` is the same compare-and-set without
   a size limit. `reset()` is refused; delete or rewrite the file through the store.

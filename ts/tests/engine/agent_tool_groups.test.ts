@@ -7,11 +7,11 @@
  * group, which runs and commits before the node fails. Results commit in call order whatever order
  * the calls finish in; a failing call aborts its group's siblings, and the node rejects only once
  * every started call has settled. A host interrupt never aborts a running group: it skips the calls
- * not started yet, a failed check after a committed group included, with interrupted brackets and
- * no evidence, while a run stop still wins.
+ * not started yet, a failed check after a committed group included, with interrupted brackets,
+ * while a run stop still wins.
  *
  * The tools here block on a gate the test settles, and log when they start and end; most rows run
- * `runAgent` directly with sinks for events and evidence, and the host-callback and run-stop rows
+ * `runAgent` directly with a sink for events, and the host-callback and run-stop rows
  * run the node through `FlowEngine`.
  */
 
@@ -22,13 +22,7 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  type EvaluationTrace,
-  MemoryContext,
-  ToolCallInteraction,
-  ToolResultInteraction,
-  type VisibleInteraction,
-} from "../../src/memory/contracts.ts";
+import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -160,11 +154,6 @@ function agent(
   } = {},
 ) {
   const events: unknown[] = [];
-  const interactions: VisibleInteraction[] = [];
-  const evaluationTrace: EvaluationTrace = {
-    recordPrompt: () => {},
-    recordInteraction: (interaction) => void interactions.push(interaction),
-  };
   const ctx: AgentRunContext = {
     nodeId: options.nodeId ?? "n",
     messages: [userMessage("go")],
@@ -175,7 +164,6 @@ function agent(
     retries: 0,
     maxToolIterations: -1,
     signal: options.signal,
-    evaluationTrace,
     memoryContext: new MemoryContext(),
     toolset,
     emitEvent: (event) => {
@@ -194,7 +182,7 @@ function agent(
     () => (settled = true),
     () => (settled = true),
   );
-  return { running, events, interactions, isSettled: () => settled };
+  return { running, events, isSettled: () => settled };
 }
 
 /** The tool events among `events`, as `started <name>` and `finished <name> <result or error>`. */
@@ -244,12 +232,6 @@ test("two safe calls run together and commit in call order", async () => {
   expect((await run.running).value).toBe("done");
   expect(log).toEqual(["a start", "b start", "b end", "a end"]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", "a result"), result(1, "b", "b result")]);
-  expect(run.interactions.slice(0, 4)).toEqual([
-    new ToolCallInteraction("a", { n: 1 }),
-    new ToolCallInteraction("b", { n: 2 }),
-    new ToolResultInteraction("a", "a result"),
-    new ToolResultInteraction("b", "b result"),
-  ]);
   // Started in call order, finished in finish order.
   expect(toolEvents(run.events)).toEqual(["started a", "started b", "finished b b result", "finished a a result"]);
 });
@@ -314,11 +296,6 @@ test("an event sink failing a group's second start starts no later call of the g
   expect(await rejected(run.running)).toBe(fault);
   expect(a.ctx!.signal.reason).toBe(fault);
   expect(log).toEqual(["a start", "a end"]);
-  expect(run.interactions).toEqual([
-    new ToolCallInteraction("a", {}),
-    new ToolCallInteraction("b", {}),
-    new ToolCallInteraction("c", {}),
-  ]);
 });
 
 test("a reported error in a group doesn't abort its sibling; both commit in call order", async () => {
@@ -422,11 +399,6 @@ test("an ungranted call fails the node after the group before it ran and committ
   expect(error).toBeInstanceOf(AgentLoopError);
   expect((error as Error).message).toContain("requested tool 'x', but it is not granted");
   expect(log).toEqual(["a start", "a end"]);
-  expect(run.interactions).toEqual([
-    new ToolCallInteraction("a", {}),
-    new ToolResultInteraction("a", "a result"),
-    new ToolCallInteraction("x", {}),
-  ]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result"]);
 });
 
@@ -443,11 +415,6 @@ test("invalid arguments fail the node after the group before them ran and commit
   const error = await rejected(run.running);
   expect(error).toBeInstanceOf(RangeError);
   expect(log).toEqual(["a start", "a end"]);
-  expect(run.interactions).toEqual([
-    new ToolCallInteraction("a", {}),
-    new ToolResultInteraction("a", "a result"),
-    new ToolCallInteraction("b", { bogus: 1 }),
-  ]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b RangeError"]);
 });
 
@@ -487,10 +454,6 @@ test("a reported error from the argument check is the call's error result, and t
   expect(log).toEqual([]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", "no such file", true)]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a ReportedToolError"]);
-  expect(run.interactions.slice(0, 2)).toEqual([
-    new ToolCallInteraction("a", {}),
-    new ToolResultInteraction("a", "no such file"),
-  ]);
 });
 
 test("nothing in a group starts until the group is formed", async () => {
@@ -542,11 +505,6 @@ test("a failing call aborts its siblings, and the node rejects with it once all 
 
   expect(await rejected(run.running)).toBe(failure);
   expect(log).toEqual(["a start", "b start", "c start", "b end", "c end", "a end"]);
-  expect(run.interactions).toEqual([
-    new ToolCallInteraction("a", {}),
-    new ToolCallInteraction("b", {}),
-    new ToolCallInteraction("c", {}),
-  ]);
   expect(toolEvents(run.events)).toEqual([
     "started a",
     "started b",
@@ -594,7 +552,6 @@ test.each([
   release.resolve();
 
   expect(await rejected(run.running)).toBe(reason);
-  expect(run.interactions).toEqual([new ToolCallInteraction("a", {}), new ToolCallInteraction("b", {})]);
   expect(model.requests).toHaveLength(1);
 });
 
@@ -722,7 +679,7 @@ test("an interrupt while a safe group runs lets every call of it finish and skip
   ]);
 });
 
-test("an interrupt seen at a later call's check skips it and the rest with no call evidence", async () => {
+test("an interrupt seen at a later call's check skips it and the rest", async () => {
   const log: string[] = [];
   const a = gated("a", log, { safe: false });
   const { steering, interrupt } = interruptible();
@@ -737,7 +694,6 @@ test("an interrupt seen at a later call's check skips it and the rest with no ca
 
   expect((await run.running).value).toBe("");
   expect(log).toEqual(["a start", "a end"]);
-  expect(run.interactions).toEqual([new ToolCallInteraction("a", {}), new ToolResultInteraction("a", "a result")]);
   expect(toolEvents(run.events)).toEqual([
     "started a",
     "finished a a result",
@@ -762,7 +718,6 @@ test("an interrupt inside a group before a failed check commits the group and sk
 
   expect((await run.running).value).toBe("");
   expect(log).toEqual(["b validate", "a start", "a end"]);
-  expect(run.interactions).toEqual([new ToolCallInteraction("a", {}), new ToolResultInteraction("a", "a result")]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b interrupted"]);
 });
 

@@ -148,7 +148,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 16) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 17) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -1018,7 +1018,7 @@ Node 22, and so does every unit test; a change keeps both green.
   list and ranges each item at `siteKey("field", "prompt[<i>]")`. A splice takes a built-in
   `Message` (sent with all its parts) or a `{role, text}` record, or a list of them. `forward`
   renders it into `AgentRunContext.messages` (a text prompt is one user message) and
-  `promptText`, the last message's text, which recall and evidence read; the rendered list must
+  `promptText`, the last message's text, which recall and learning read; the rendered list must
   pass `checkModelConversation` before any model is built, and the loop sends
   `[system, ...ctx.messages]`. A chat carries its history as a LOOP field and splices it before
   the new user message:
@@ -1097,8 +1097,8 @@ Node 22, and so does every unit test; a change keeps both green.
   `MemoryDecl`, `MemorySpec`, `MemoryStack`, `MemoryScope`), the declaration check
   `checkMemoryDeclaration`, the setup and operation failures, recorded snapshots, and the host
   memory objects (`Memory`, `MemorySession`, `isMemory`), the learning result carriers
-  (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`), and the
-  evidence carriers (`EvaluationEvidence`, `MemorySection`, `ModelTextInteraction`,
+  (`MemoryMutation`, `LearningFailure`, `PolicyCommitOutcome`, `LearningResult`), and what a
+  learner sees of an AGENT invocation (`MemorySection`, `ModelTextInteraction`,
   `ModelValueInteraction`, `ToolCallInteraction`, `ToolResultInteraction`), and the learning
   inputs (`MemoryEpisodeStatus`, `MemoryEpisode`, `LearnContext`) and the recall carriers
   (`RecallContext`, `MemoryContent`, `MemoryContext`, `MemoryRecallError`). A `MemoryContent` holds
@@ -1108,8 +1108,8 @@ Node 22, and so does every unit test; a change keeps both green.
   Python keeps `_validate_mutations` and `_freeze_feedback` private.
 - The learning result carriers are frozen and hold their nested carriers by reference (checked by
   exact class), where Python copies them.
-- The evidence carriers are frozen too and hold their nested carriers the same way. Their JSON
-  values (bound inputs, a model value, tool arguments) are deep-frozen copies under the value
+- The interaction carriers are frozen too. Their JSON values (a model value, tool arguments)
+  are deep-frozen copies under the value
   number rule: NaN is refused, `±Infinity` kept and `-0` copied as `0`. They have no memory
   nesting limit.
 - Episodes and learn contexts are frozen as well. An episode's JSON (inputs, output, failure) and
@@ -1188,7 +1188,7 @@ Node 22, and so does every unit test; a change keeps both green.
 - `src/runtime/log.ts` holds the run records, `RecordEnvelope` and its codec (`encodeRecord`,
   `decodeRecord`), the canonical helpers (`canonicalTyped`, `canonicalSeed`,
   `encodePool`, `decodePool`), and the payload helpers later runtime modules share
-  (`routePayload`, `routeFromPayload`, `executionScopePayload`, `evidencePayload`). Records and
+  (`routePayload`, `routeFromPayload`, `executionScopePayload`). Records and
   envelopes are frozen: a record's JSON values are deep-frozen canonical copies made once by its
   constructor, with no copy on read, and its frozen carriers are kept by reference. The one
   exception is a capture's `evaluatedKeys`, a `Set` that can't be frozen and is read-only by
@@ -1245,7 +1245,13 @@ Node 22, and so does every unit test; a change keeps both green.
   unchanged. Sources are keyed by `sourceKey`. Typed values (`SourceEntry.valueJson`,
   `TraceTerminal.outputJson`, the system values) are held as canonical log text (`logJson` of the
   typed wire) and decoded on each read, so every read gets a fresh value and equality is text
-  equality. An occurrence holds its envelope's round trip `decodeRecord(encodeRecord(envelope))`.
+  equality. An occurrence holds its envelope's round trip `decodeRecord(encodeRecord(envelope))`
+  and the steps its node recorded across its starts. `occurrenceMaterial(trace, source, caps)`
+  rebuilds what learning reads of an occurrence through its node's `learningMaterial` (an AGENT's
+  render, recall and interactions, each recorded request checked against its digest), and
+  `evaluationEvidence` shapes it as AGENT backward's `_evaluation_evidence`; `backwardContext`
+  stays synchronous and takes that material, since the state reducer validates backward results
+  through it.
 - `src/runtime/learning.ts` holds the pure backward transfer (`seedBackward`,
   `contextualTransfers`, `projectRootBackward`; `ContextCache` materializes each route context
   once per pass), the attributed validation `validateAttributedBackward`, the attempt state and
@@ -1315,7 +1321,7 @@ START is ready after the START inputs' commit; a success walks its
   node's inputs from the pool through the flow's wiring (or a per-run override), builds the
   capabilities the node's traits ask for, runs it, and resolves to an `EvaluatedOutcome`: one
   `Output`, `Route`, `Grow` or `EvaluationFailure` (a `Failure` classified by the stage that threw:
-  binding, assertion, body, result), with the evidence and captures a learnable run asks for. A stop
+  binding, assertion, body, result), with the captures a learnable run asks for. A stop
   (the node's aborted signal), a capability's host fault (the first one wins, even if the node caught
   it), an unexpected binder fault and malformed setup reject instead. `MemoryContextOpener` is the
   memory runtime's admission callback, `(scope, request, { signal }) => Promise<MemoryContext>`.
@@ -1356,19 +1362,22 @@ START is ready after the START inputs' commit; a success walks its
 - Changed: a session's `commit` may resolve to `undefined` or `null`.
 - Changed: a restored snapshot must equal the recorded one by value and type (`1` and `1.0` differ,
   where Python's `==` treats them equal).
-- `src/runtime/backward.ts` holds
-  `computeBackward(trace, rootFeedback, { cache, models, onEvent })`: one reverse walk over the
+- `src/runtime/backward.ts` holds `learningMaterials(state, { memory, models, expandTools,
+  onEvent })`, which rebuilds every occurrence's learning material once per attempt (one whose
+  rebuilt request misses its digest is left out and reported as `ReplayDegraded`
+  `rebuilt_request_differs`), and
+  `computeBackward(trace, rootFeedback, { cache, materials, models, onEvent })`: one reverse walk over the
   accepted occurrences that gathers each occurrence's messages, calls its retained backward handler
   once with `{ models, onEvent }` (awaited; it may return a promise), validates the whole result
   before routing input feedback, and returns the root projection with every occurrence's attributed
   result (unreached ones uninvoked); a handler's throw is a `backward.execute`
   `BackwardComputeError` and a refused result `backward.result`, while trace faults escape
-  unattributed. `driveBackward(state, log, feedback, { openMemory, models, onEvent })` runs one new
+  unattributed. `driveBackward(state, log, feedback, { openMemory, expandTools, models, onEvent })` runs one new
   explicit attempt when a host calls it: it prepares its first record (an unfinished
   `BackwardFinished` for an unfinished earlier attempt, else `BackwardStarted`) as a gate, opens the
   memory runtime (only when memories are enabled; the opener may be async) and checks it against the
   recorded table and snapshots, then commits that record (and `BackwardStarted` after an unfinished
-  one), computes, projects owner contexts, stages every key's proposal, commits `BackwardReady`,
+  one), rebuilds the learning material, computes, projects owner contexts, stages every key's proposal, commits `BackwardReady`,
   requests and observes each key's commit in table order, and commits `BackwardFinished`; each
   record is prepared and committed with no await in between, and the runtime is always closed,
   keeping the initiating error.

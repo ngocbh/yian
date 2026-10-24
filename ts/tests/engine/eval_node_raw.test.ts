@@ -69,7 +69,6 @@ import {
 import { BindingCollector } from "../../src/nodes/binding.ts";
 import { ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
 import { BackwardCapture } from "../../src/runtime/contracts.ts";
-import { EvaluationEvidence } from "../../src/memory/contracts.ts";
 import {
   EvaluatedOutcome,
   EvaluationFailure,
@@ -120,11 +119,11 @@ test("public evaluation always returns frozen slotted wrapper", async () => {
   const evaluated = await evalNode(node, nodeFlow(node), new VariablePool());
 
   expect(evaluated).toBeInstanceOf(EvaluatedOutcome);
-  expect(evaluated).toEqual(new EvaluatedOutcome(new Output("done"), null));
-  expect(Object.keys(evaluated)).toEqual(["outcome", "evidence", "bindings", "backwardCapture"]);
+  expect(evaluated).toEqual(new EvaluatedOutcome(new Output("done")));
+  expect(Object.keys(evaluated)).toEqual(["outcome", "bindings", "backwardCapture"]);
   expect(Object.isFrozen(evaluated)).toBe(true);
   expect(() => {
-    (evaluated as { evidence: unknown }).evidence = null;
+    (evaluated as { bindings: unknown }).bindings = null;
   }).toThrow(TypeError);
 });
 
@@ -633,41 +632,29 @@ describe("EvaluatedOutcome checks its fields", () => {
     }
   });
 
-  test("evidence must be exactly an EvaluationEvidence", () => {
-    const evidence = new EvaluationEvidence(null, null, null, null);
-    expect(new EvaluatedOutcome(new Output(), evidence).evidence).toBe(evidence);
-
-    class Subclass extends EvaluationEvidence {}
-    for (const bad of [new Subclass(null, null, null, null), {}]) {
-      expect(thrown(() => new EvaluatedOutcome(new Output(), bad as EvaluationEvidence))).toEqual(
-        new TypeError("evidence must be an EvaluationEvidence or null"),
-      );
-    }
-  });
-
   test("bindings and backward capture travel together", () => {
     const bindings = new BindingCollector().freeze();
     const capture = new BackwardCapture({ inputNames: ["x"] });
 
-    const evaluated = new EvaluatedOutcome(new Output(), null, bindings, capture);
+    const evaluated = new EvaluatedOutcome(new Output(), bindings, capture);
     expect(evaluated.bindings).toBe(bindings);
     expect(evaluated.backwardCapture).toBe(capture);
 
     const together = new RangeError("binding capture and backward invocation metadata must be retained together");
-    expect(thrown(() => new EvaluatedOutcome(new Output(), null, bindings, null))).toEqual(together);
-    expect(thrown(() => new EvaluatedOutcome(new Output(), null, null, capture))).toEqual(together);
+    expect(thrown(() => new EvaluatedOutcome(new Output(), bindings, null))).toEqual(together);
+    expect(thrown(() => new EvaluatedOutcome(new Output(), null, capture))).toEqual(together);
   });
 
   test("bindings must be exactly a BindingCapture", () => {
     const capture = new BackwardCapture();
-    expect(thrown(() => new EvaluatedOutcome(new Output(), null, {} as never, capture))).toEqual(
+    expect(thrown(() => new EvaluatedOutcome(new Output(), {} as never, capture))).toEqual(
       new TypeError("bindings must be a BindingCapture or null"),
     );
   });
 
   test("backward capture must be exactly a BackwardCapture and is checked again", () => {
     const bindings = new BindingCollector().freeze();
-    expect(thrown(() => new EvaluatedOutcome(new Output(), null, bindings, {} as never))).toEqual(
+    expect(thrown(() => new EvaluatedOutcome(new Output(), bindings, {} as never))).toEqual(
       new TypeError("backward_capture must be a BackwardCapture or null"),
     );
 
@@ -678,7 +665,7 @@ describe("EvaluatedOutcome checks its fields", () => {
       scope: null,
       nodeData: {},
     });
-    expect(thrown(() => new EvaluatedOutcome(new Output(), null, bindings, forged))).toEqual(
+    expect(thrown(() => new EvaluatedOutcome(new Output(), bindings, forged))).toEqual(
       new RangeError("input_names must contain unique names"),
     );
   });

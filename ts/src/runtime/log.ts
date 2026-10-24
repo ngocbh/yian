@@ -25,28 +25,18 @@ import {
 } from "../expr/lineage.ts";
 import {
   DeclSite,
-  EvaluationEvidence,
   LearningFailure,
   type LearningOperation,
   LearningResult,
   type LearningStatus,
   MemoryMutation,
-  MemoryOccurrenceKind,
-  MemoryOccurrenceSegment,
   MemoryOperationFailure,
-  MemoryScope,
-  MemorySection,
   MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
-  ModelTextInteraction,
-  ModelValueInteraction,
   PolicyCommitOutcome,
   type PolicyCommitStatus,
-  ToolCallInteraction,
-  ToolResultInteraction,
   validateMutations,
-  type VisibleInteraction,
 } from "../memory/contracts.ts";
 import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, VERSION } from "../platform.ts";
@@ -80,10 +70,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -159,10 +149,8 @@ export const RUN_STOP_REASONS = Object.freeze(["signal", "callback"] as const);
 /** One of `RUN_STOP_REASONS`. */
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
 
-/** The optional carriers accepted with a node outcome, both frozen and held by reference. */
+/** The optional carrier accepted with a node outcome, frozen and held by reference. */
 export interface OutcomeCarriers {
-  /** Visible evidence accepted with the outcome; defaults to `null`. */
-  evidence?: EvaluationEvidence | null;
   /** The binding capture accepted with the outcome; defaults to `null`. */
   forwardCapture?: ForwardCapture | null;
 }
@@ -227,7 +215,7 @@ export interface RunStartedFields {
   numWorkers: number;
   /** Recorded snapshots, one per memory key in key order; `null` (the default) when memory is disabled. */
   memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether the run retains learning evidence; defaults to `false`. */
+  /** Whether the run retains what learning reads; defaults to `false`. */
   learnable?: boolean;
   /** The memory key table, sorted by key; `null` (the default) when memory is disabled. */
   memories?: readonly MemorySpec[] | null;
@@ -268,7 +256,7 @@ export class RunStartedRecord {
   readonly numWorkers: number;
   /** Recorded snapshots, one per memory key in key order, or `null` when memory is disabled. */
   readonly memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether the run retains learning evidence. */
+  /** Whether the run retains what learning reads. */
   readonly learnable: boolean;
   /** The memory key table, sorted by key, or `null` when memory is disabled. */
   readonly memories: readonly MemorySpec[] | null;
@@ -673,21 +661,18 @@ export class NodeSucceededRecord {
   readonly nodeId: string;
   /** The seq of the node's `PoolCommitRecord` this success accepts. */
   readonly commit: number;
-  /** Visible evidence accepted with the outcome, if any. */
-  readonly evidence: EvaluationEvidence | null;
   /** The binding capture accepted with the outcome, if any. */
   readonly forwardCapture: ForwardCapture | null;
 
   /**
-   * @throws TypeError when the id isn't a string, or a carrier is of another class.
+   * @throws TypeError when the id isn't a string, or the capture is of another class.
    * @throws RangeError when the id is empty or `commit` isn't a positive safe integer.
    */
   constructor(nodeId: string, commit: number, options: OutcomeCarriers = {}) {
-    const { evidence = null, forwardCapture = null } = options;
+    const { forwardCapture = null } = options;
     this.nodeId = requireNonemptyString(nodeId, "node_id");
     if (!Number.isSafeInteger(commit) || commit < 1) throw new RangeError("commit must be a positive integer");
     this.commit = commit;
-    this.evidence = validatedEvidence(evidence);
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
@@ -701,8 +686,6 @@ export class NodeRoutedRecord {
   readonly handle: string;
   /** The terminal-unreachable failure this route first proves, if any. */
   readonly terminalFailure: Failure | null;
-  /** Visible evidence accepted with the outcome, if any. */
-  readonly evidence: EvaluationEvidence | null;
   /** The binding capture accepted with the outcome, if any. */
   readonly forwardCapture: ForwardCapture | null;
 
@@ -717,11 +700,10 @@ export class NodeRoutedRecord {
     handle: string,
     options: OutcomeCarriers & { terminalFailure?: Failure | null } = {},
   ) {
-    const { terminalFailure = null, evidence = null, forwardCapture = null } = options;
+    const { terminalFailure = null, forwardCapture = null } = options;
     this.nodeId = requireNonemptyString(nodeId, "node_id");
     this.handle = requireNonemptyString(handle, "handle");
     this.terminalFailure = terminalFailure === null ? null : retainedFailure(terminalFailure, "NodeRoutedRecord");
-    this.evidence = validatedEvidence(evidence);
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
@@ -739,8 +721,6 @@ export class NodeExpandedRecord {
   readonly pruneIds: readonly string[];
   /** The expanded topology's SHA-256 digest, 64 lowercase hex digits. */
   readonly topologyDigest: string;
-  /** Visible evidence accepted with the outcome, if any. */
-  readonly evidence: EvaluationEvidence | null;
   /** The binding capture accepted with the outcome, if any. */
   readonly forwardCapture: ForwardCapture | null;
 
@@ -750,11 +730,10 @@ export class NodeExpandedRecord {
    *   unique non-empty strings, or the digest isn't 64 lowercase hex digits.
    */
   constructor(spawnerId: string, pruneIds: readonly string[], topologyDigest: string, options: OutcomeCarriers = {}) {
-    const { evidence = null, forwardCapture = null } = options;
+    const { forwardCapture = null } = options;
     this.spawnerId = requireNonemptyString(spawnerId, "spawner_id");
     this.pruneIds = validatedIdArray(pruneIds, "prune_ids", true);
     this.topologyDigest = requireSha256(topologyDigest, "topology_digest");
-    this.evidence = validatedEvidence(evidence);
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
@@ -764,8 +743,6 @@ export class NodeExpandedRecord {
 export class NodeFailedRecord {
   /** The failure, kept through `retainFailure`; its node id is non-empty. */
   readonly failure: Failure;
-  /** Visible evidence accepted with the outcome, if any. */
-  readonly evidence: EvaluationEvidence | null;
   /** The binding capture accepted with the outcome, if any. */
   readonly forwardCapture: ForwardCapture | null;
 
@@ -777,9 +754,8 @@ export class NodeFailedRecord {
     failure: Failure,
     options: OutcomeCarriers = {},
   ) {
-    const { evidence = null, forwardCapture = null } = options;
+    const { forwardCapture = null } = options;
     this.failure = retainedFailure(failure, "NodeFailedRecord");
-    this.evidence = validatedEvidence(evidence);
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
@@ -1057,18 +1033,6 @@ function validatedCount(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError(`${name} must be an integer`);
   if (value < 0) throw new RangeError(`${name} must be non-negative`);
   return value;
-}
-
-/**
- * Return `evidence` when it is `null` or exactly an `EvaluationEvidence`.
- *
- * @throws TypeError otherwise.
- */
-function validatedEvidence(evidence: unknown): EvaluationEvidence | null {
-  if (evidence !== null && !isExactly(evidence, EvaluationEvidence)) {
-    throw new TypeError("evidence must be an EvaluationEvidence or null");
-  }
-  return evidence;
 }
 
 /**
@@ -2133,58 +2097,6 @@ function failureFromPayload(value: unknown, label: string, optionalNodeId = fals
   });
 }
 
-/** Encode one dynamic occurrence segment of a memory scope. */
-function occurrenceSegmentPayload(segment: MemoryOccurrenceSegment): JsonObject {
-  return { kind: segment.kind, static_path: [...segment.staticPath], index: BigInt(segment.index) };
-}
-
-/** The closed occurrence segment kinds. */
-const OCCURRENCE_KINDS: readonly string[] = Object.values(MemoryOccurrenceKind);
-
-/**
- * Decode one occurrence segment; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, an unknown kind or an index beyond ±(2^53 - 1),
- *   besides the segment's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function occurrenceSegmentFromPayload(value: unknown, label: string): MemoryOccurrenceSegment {
-  const wire = wireObject(value, label, ["kind", "static_path", "index"]);
-  const kind = wireText(wire["kind"], `${label} kind`);
-  // The segment refuses an unknown kind as a TypeError; on the wire it is a RangeError.
-  if (!OCCURRENCE_KINDS.includes(kind)) {
-    throw new RangeError(`${label} kind must be one of ${writeAsText([...OCCURRENCE_KINDS])}, got ${reprText(kind)}`);
-  }
-  return new MemoryOccurrenceSegment(
-    kind as MemoryOccurrenceKind,
-    wireTextArray(wire["static_path"], `${label} static_path`),
-    wireInt(wire["index"], `${label} index`),
-  );
-}
-
-/** Encode one compiled node's memory scope. */
-export function scopePayload(scope: MemoryScope): JsonObject {
-  return {
-    static_path: [...scope.staticPath],
-    memories: [...scope.memories],
-    occurrence_path: scope.occurrencePath.map(occurrenceSegmentPayload),
-  };
-}
-
-/**
- * Decode one memory scope; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, besides the segments' and scope's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function scopeFromPayload(value: unknown, label: string): MemoryScope {
-  const wire = wireObject(value, label, ["static_path", "memories", "occurrence_path"]);
-  return new MemoryScope(wireTextArray(wire["static_path"], `${label} static_path`), {
-    memories: wireTextArray(wire["memories"], `${label} memories`),
-    occurrencePath: wireItems(wire["occurrence_path"], `${label} occurrence_path`, occurrenceSegmentFromPayload),
-  });
-}
-
 /**
  * Return memory JSON as the log writes it. Memory's carriers keep `-0`, which canonical JSON
  * refuses, so it is written as `0`.
@@ -2310,71 +2222,6 @@ function memoryStackFromPayload(value: unknown, label: string): MemoryStack {
     wireTextArray(wire["locator"], `${label} locator`),
     wireTextArray(wire["memories"], `${label} memories`),
   );
-}
-
-/** Encode one recalled-memory section. */
-export function memorySectionPayload(section: MemorySection): JsonObject {
-  return { memory: section.memory, text: section.text };
-}
-
-/**
- * Decode one recalled-memory section; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an empty memory key.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function memorySectionFromPayload(value: unknown, label: string): MemorySection {
-  const wire = wireObject(value, label, ["memory", "text"]);
-  return new MemorySection(wireName(wire["memory"], `${label} memory`), wireText(wire["text"], `${label} text`));
-}
-
-/** Encode one member of the closed visible-interaction vocabulary. */
-export function interactionPayload(interaction: VisibleInteraction): JsonObject {
-  // Memory's JSON types are the read-only form of the same frozen values.
-  if (interaction instanceof ModelTextInteraction) return { kind: "model_text", text: interaction.text };
-  if (interaction instanceof ModelValueInteraction) {
-    return { kind: "model_value", value: interaction.value as JsonValue };
-  }
-  if (interaction instanceof ToolCallInteraction) {
-    return { kind: "tool_call", name: interaction.name, arguments: interaction.arguments as JsonObject };
-  }
-  return { kind: "tool_result", name: interaction.name, text: interaction.text };
-}
-
-/**
- * Decode one visible interaction of a closed kind; `label` names it in errors.
- *
- * @throws RangeError for an unknown kind, missing or extra fields or an empty tool name, besides
- *   the interaction's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function interactionFromPayload(value: unknown, label: string): VisibleInteraction {
-  const wire = wireObject(value, label);
-  // The other fields depend on the kind, so a missing kind is named before anything else.
-  if (!Object.hasOwn(wire, "kind")) requireFields(wire, ["kind"], label);
-  const kind = wireText(wire["kind"], `${label} kind`);
-  switch (kind) {
-    case "model_text":
-      requireFields(wire, ["kind", "text"], label);
-      return new ModelTextInteraction(wireText(wire["text"], `${label} text`));
-    case "model_value":
-      requireFields(wire, ["kind", "value"], label);
-      return new ModelValueInteraction(wire["value"]);
-    case "tool_call":
-      requireFields(wire, ["kind", "name", "arguments"], label);
-      return new ToolCallInteraction(
-        wireName(wire["name"], `${label} name`),
-        wireObject(wire["arguments"], `${label} arguments`),
-      );
-    case "tool_result":
-      requireFields(wire, ["kind", "name", "text"], label);
-      return new ToolResultInteraction(
-        wireName(wire["name"], `${label} name`),
-        wireText(wire["text"], `${label} text`),
-      );
-    default:
-      throw new RangeError(`unknown visible interaction kind: ${reprText(kind)}`);
-  }
 }
 
 /** Encode a route path: field names, and indexes as int tokens. */
@@ -2632,50 +2479,6 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     inputNames: wireTextArray(wire["input_names"], `${label} input_names`),
     variableNames: wireTextArray(wire["variable_names"], `${label} variable_names`),
   });
-}
-
-/**
- * Encode optional evaluation evidence, or `null` for none.
- *
- * @throws TypeError when `evidence` isn't `null` or exactly an `EvaluationEvidence`.
- */
-export function evidencePayload(evidence: EvaluationEvidence | null): JsonObject | null {
-  if (evidence === null) return null;
-  if (!isExactly(evidence, EvaluationEvidence)) throw new TypeError("evidence must be an EvaluationEvidence or null");
-  return {
-    scope: evidence.scope === null ? null : scopePayload(evidence.scope),
-    bound_inputs: evidence.boundInputs as JsonObject | null,
-    base_system_prompt: evidence.baseSystemPrompt,
-    prompt: evidence.prompt,
-    memory_sections: evidence.memorySections.map(memorySectionPayload),
-    interactions: evidence.interactions.map(interactionPayload),
-  };
-}
-
-/**
- * Decode one evaluation evidence; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an unknown interaction kind, besides the
- *   carriers' own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function evidenceFromPayload(value: unknown, label: string): EvaluationEvidence {
-  const wire = wireObject(value, label, [
-    "scope",
-    "bound_inputs",
-    "base_system_prompt",
-    "prompt",
-    "memory_sections",
-    "interactions",
-  ]);
-  return new EvaluationEvidence(
-    wire["scope"] === null ? null : scopeFromPayload(wire["scope"], `${label} scope`),
-    wireNullableObject(wire["bound_inputs"], `${label} bound_inputs`),
-    wireNullableText(wire["base_system_prompt"], `${label} base_system_prompt`),
-    wireNullableText(wire["prompt"], `${label} prompt`),
-    wireItems(wire["memory_sections"], `${label} memory_sections`, memorySectionFromPayload),
-    wireItems(wire["interactions"], `${label} interactions`, interactionFromPayload),
-  );
 }
 
 /** Encode one memory mutation. */
@@ -2971,27 +2774,20 @@ function backwardOutcomeFromPayload(value: unknown, label: string): BackwardOutc
   });
 }
 
-/** Encode an outcome record's optional evidence and capture. */
+/** Encode an outcome record's optional capture. */
 function outcomePayload(record: OutcomeCarriers): JsonObject {
-  const { evidence = null, forwardCapture = null } = record;
-  return {
-    evidence: evidencePayload(evidence),
-    forward_capture: forwardCapture === null ? null : capturePayload(forwardCapture),
-  };
+  const { forwardCapture = null } = record;
+  return { forward_capture: forwardCapture === null ? null : capturePayload(forwardCapture) };
 }
 
 /**
- * Decode an outcome payload's `evidence` and `forward_capture`; `label` names the payload.
+ * Decode an outcome payload's `forward_capture`; `label` names the payload.
  *
- * @throws RangeError or TypeError as `evidenceFromPayload` and `captureFromPayload`.
+ * @throws RangeError or TypeError as `captureFromPayload`.
  */
 function outcomeFromPayload(payload: JsonObject, label: string): OutcomeCarriers {
-  const evidence = payload["evidence"];
   const capture = payload["forward_capture"];
-  return {
-    evidence: evidence === null ? null : evidenceFromPayload(evidence, `${label} evidence`),
-    forwardCapture: capture === null ? null : captureFromPayload(capture, `${label} forward_capture`),
-  };
+  return { forwardCapture: capture === null ? null : captureFromPayload(capture, `${label} forward_capture`) };
 }
 
 /** The fields of a `run_started` payload; schema 13 writes every one. */
@@ -3183,14 +2979,14 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       );
     }
     case "node_succeeded":
-      requireFields(payload, ["node_id", "commit", "evidence", "forward_capture"], label);
+      requireFields(payload, ["node_id", "commit", "forward_capture"], label);
       return new NodeSucceededRecord(
         wireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["commit"], `${label} commit`),
         outcomeFromPayload(payload, label),
       );
     case "node_routed": {
-      requireFields(payload, ["node_id", "handle", "terminal_failure", "evidence", "forward_capture"], label);
+      requireFields(payload, ["node_id", "handle", "terminal_failure", "forward_capture"], label);
       const failure = payload["terminal_failure"];
       return new NodeRoutedRecord(
         wireName(payload["node_id"], `${label} node_id`),
@@ -3202,7 +2998,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       );
     }
     case "node_expanded":
-      requireFields(payload, ["spawner_id", "prune_ids", "topology_digest", "evidence", "forward_capture"], label);
+      requireFields(payload, ["spawner_id", "prune_ids", "topology_digest", "forward_capture"], label);
       return new NodeExpandedRecord(
         wireName(payload["spawner_id"], `${label} spawner_id`),
         wireTextArray(payload["prune_ids"], `${label} prune_ids`),
@@ -3210,7 +3006,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         outcomeFromPayload(payload, label),
       );
     case "node_failed":
-      requireFields(payload, ["failure", "evidence", "forward_capture"], label);
+      requireFields(payload, ["failure", "forward_capture"], label);
       return new NodeFailedRecord(
         failureFromPayload(payload["failure"], `${label} failure`),
         outcomeFromPayload(payload, label),

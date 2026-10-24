@@ -582,7 +582,8 @@ For example:
   `run_started`, `flow_fingerprint`, `start_wiring_override`, `memory_snapshots`, `memories`,
   `memory_stacks`, and the bulky `flow` (the flow files), `skills`, `tools` and `yian_version`;
   `topology_digest`; and every `evidence` field (the model and tool evaluation
-  evidence, whose shape is implementation-specific).
+  evidence, whose shape is implementation-specific; TS schema 17 writes none, since learning
+  reads the steps).
 - Failures: `node_failed.failure`, `node_routed.terminal_failure` and a backward failure's
   `cause` (when it is a node failure, with `trace`) are in failure form. A backward failure
   (`backward_finished.outcome.failure`) leaves out `cause_type` and `traceback`. Nothing else

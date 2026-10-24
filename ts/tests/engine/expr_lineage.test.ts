@@ -646,7 +646,6 @@ test("reserved MAP over uses the same capture path", async () => {
     captureBindings: true,
     sourceResolver: sources.resolve,
   });
-  expect(evaluated.evidence).toBeNull();
   expect(evaluated.bindings!.boundInputs).toEqual({ over: [] });
   expect(evaluated.bindings!.evaluatedKeys).toEqual(new Set(["over"]));
   expect(sources.reads).toEqual(["items"]);

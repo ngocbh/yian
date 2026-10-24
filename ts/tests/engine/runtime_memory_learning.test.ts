@@ -1,15 +1,15 @@
 /**
  * Memory learning projections: a port of `tests/engine/test_runtime_memory_learning.py`.
  * Ported: `test_commit_id_has_one_documented_canonical_encoding` (both pinned digests),
- * `test_causal_route_episode_retains_the_accepted_failure` (with the `_scope` and `_evidence`
- * helpers) and `test_route_and_growth_projection_use_closed_source_neutral_envelopes`.
+ * `test_causal_route_episode_retains_the_accepted_failure` (with the `_scope` helper) and `test_route_and_growth_projection_use_closed_source_neutral_envelopes`.
  *
  * Ported, the run-state tests (on the shared `startTraceNode`, Python's `_start_trace_node`; each
  * rejected row names its `RangeError` and full message, Python's `ValueError` matched in part):
- * `test_evidence_is_rejected_when_learning_is_not_enabled` (2 rows),
- * `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`,
+ * the scope halves of `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`
+ * and `test_empty_enabled_table_retains_scope_free_evidence_without_episodes` (TS records no
+ * evidence, so the scope check applies to a node that recalls memory, `needsMemoryContext`, and
+ * `test_evidence_is_rejected_when_learning_is_not_enabled` is not ported),
  * `test_learning_rejects_a_scope_without_a_recorded_stack`,
- * `test_empty_enabled_table_retains_scope_free_evidence_without_episodes`,
  * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows),
  * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (4 rows; the growth
  * into the shared `fragment`; the `failure` row reads the owner contexts through a local
@@ -112,7 +112,6 @@ import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import {
   DeclSite,
-  EvaluationEvidence,
   LearnContext,
   MemoryDecl,
   MemoryEpisodeStatus,
@@ -230,7 +229,7 @@ function scope(
 /** A trait-capable AGENT-kind node that evaluates without calling a model. */
 class TraceNode extends Node {
   readonly kind = NodeKind.AGENT;
-  override readonly needsEvaluationTrace = true;
+  override readonly needsMemoryContext = true;
 
   override forward(inputs: Record<string, unknown>): NodeResult {
     return new Output(inputs);
@@ -242,14 +241,7 @@ class TraceSpawner extends TraceNode {
   override readonly isSpawner = true;
 }
 
-/** Deterministic visible evidence for one accepted outcome. */
-function evidence(memoryScope: MemoryScope | null): EvaluationEvidence {
-  return new EvaluationEvidence(memoryScope, { question: "q" }, "system", "prompt", [], [
-    new ModelTextInteraction("answer"),
-  ]);
-}
-
-/** What learning reads of the occurrences of `nodeIds`: the material `evidence()` describes. */
+/** What learning reads of the occurrences of `nodeIds`: one prompt and one model answer. */
 function materialsFor(trace: RetainedTrace, ...nodeIds: string[]): Map<string, LearningMaterial> {
   const material: LearningMaterial = {
     interactions: [new ModelTextInteraction("answer")],
@@ -374,7 +366,7 @@ test("failure JSON refuses a value that isn't exactly a Failure and revalidates 
 
 test("causal route episode retains the accepted failure", () => {
   const failure = new Failure({ code: "graph.terminal_unreachable", message: "No terminal route.", nodeId: "agent" });
-  const record = new NodeRoutedRecord("agent", "go", { evidence: evidence(scope()), terminalFailure: failure });
+  const record = new NodeRoutedRecord("agent", "go", { terminalFailure: failure });
   const [status, output, failurePayload] = learning.episodeOutcome(record, null);
   expect(status).toBe(MemoryEpisodeStatus.FAILED);
   expect(output).toBeNull();
@@ -493,7 +485,6 @@ function successfulTerminal(): { state: RunState; log: MemoryRunLog; table: Memo
     log,
     state,
     prepareOutput(log, state, node.id, { answer: 7n }, {
-      evidence: evidence(memoryScope),
       forwardCapture: forwardCapture(node, { question: "q" }),
     }),
   );
@@ -570,7 +561,7 @@ test.each([
   });
   const physicalSequence = state.trace!.started.get(node.id);
   const outcomeSequence = state.nextSequence;
-  const carriers = { evidence: evidence(node.memoryScope), forwardCapture: forwardCapture(node, { question: "q" }) };
+  const carriers = { forwardCapture: forwardCapture(node, { question: "q" }) };
   const prepared = {
     success: () => prepareOutput(log, state, node.id, { answer: 7n }, carriers),
     route: () => prepareNodeRouted(state, node.id, "go", carriers),
@@ -605,7 +596,6 @@ test("a failure episode uses the full canonical durable failure JSON", async () 
     traceback: "debug trace",
   });
   const prepared = prepareNodeFailed(state, failure, {
-    evidence: evidence(memoryScope),
     forwardCapture: forwardCapture(node, { question: "q" }),
   });
   commitPrepared(log, state, prepared);
@@ -631,48 +621,11 @@ function committedTraceNode(node: Node, options: Parameters<typeof startTraceNod
   return built;
 }
 
-test.each([
-  ["memory disabled", false],
-  ["memory enabled", true],
-])("evidence is rejected when learning is not enabled: %s", (_label, enabled) => {
-  const node = new TraceNode("agent");
-  node.memoryScope = scope(node.id);
-  const { state } = committedTraceNode(node, { keys: enabled ? node.memoryScope.memories : null, learnable: false });
-
-  expectError(
-    () => prepareNodeSucceeded(state, node.id, { evidence: evidence(node.memoryScope) }),
-    RangeError,
-    "node 'agent' is ineligible for evaluation evidence",
-  );
-  expect((prepareNodeSucceeded(state, node.id).record as NodeSucceededRecord).evidence).toBeNull();
-});
-
-test("learning requires evidence and rejects an ineligible or unrecorded scope", () => {
-  const node = new TraceNode("agent");
-  node.memoryScope = scope(node.id);
-  const { state } = committedTraceNode(node, { keys: keys(), learnable: true });
-  expectError(
-    () => prepareNodeSucceeded(state, node.id, { forwardCapture: forwardCapture(node, {}) }),
-    RangeError,
-    "eligible node 'agent' requires evaluation evidence while learning",
-  );
-
+test("learning rejects a recalling node's unrecorded scope and leaves another node's unchecked", () => {
   const ordinary = new FuncNode("ordinary", () => "done");
-  ordinary.memoryScope = scope(ordinary.id);
+  ordinary.memoryScope = scope(ordinary.id, { memories: ["outer"] });
   const { state: ordinaryState } = committedTraceNode(ordinary, { keys: keys(), learnable: true });
-  expectError(
-    () =>
-      prepareNodeSucceeded(ordinaryState, ordinary.id, {
-        evidence: evidence(ordinary.memoryScope),
-        forwardCapture: forwardCapture(ordinary, { question: "q" }),
-      }),
-    RangeError,
-    "node 'ordinary' is ineligible for evaluation evidence",
-  );
-  const accepted = prepareNodeSucceeded(ordinaryState, ordinary.id, {
-    forwardCapture: forwardCapture(ordinary, {}),
-  });
-  expect((accepted.record as NodeSucceededRecord).evidence).toBeNull();
+  prepareNodeSucceeded(ordinaryState, ordinary.id, { forwardCapture: forwardCapture(ordinary, {}) });
 
   const mismatched = new TraceNode("agent");
   mismatched.memoryScope = scope(mismatched.id);
@@ -684,7 +637,6 @@ test("learning requires evidence and rejects an ineligible or unrecorded scope",
   expectError(
     () =>
       prepareNodeSucceeded(mismatchedState, mismatched.id, {
-        evidence: evidence(mismatched.memoryScope),
         forwardCapture: forwardCapture(mismatched, { question: "q" }),
       }),
     RangeError,
@@ -700,7 +652,6 @@ test("learning rejects a scope without a recorded stack", () => {
   expectError(
     () =>
       prepareNodeSucceeded(state, node.id, {
-        evidence: evidence(node.memoryScope),
         forwardCapture: forwardCapture(node, { question: "q" }),
       }),
     RangeError,
@@ -708,24 +659,11 @@ test("learning rejects a scope without a recorded stack", () => {
   );
 });
 
-test("an empty enabled table retains scope-free evidence without episodes", () => {
+test("an empty enabled table accepts a scope-free recalling node", () => {
   const node = new TraceNode("agent");
   const { state } = committedTraceNode(node, { keys: [], learnable: true });
-
-  const prepared = prepareNodeSucceeded(state, node.id, {
-    evidence: evidence(null),
-    forwardCapture: forwardCapture(node, { question: "q" }),
-  });
-  expect((prepared.record as NodeSucceededRecord).evidence!.scope).toBeNull();
-  expectError(
-    () =>
-      prepareNodeSucceeded(state, node.id, {
-        evidence: evidence(scope(node.id)),
-        forwardCapture: forwardCapture(node, { question: "q" }),
-      }),
-    RangeError,
-    "node 'agent' evidence scope does not match its compiled scope",
-  );
+  const prepared = prepareNodeSucceeded(state, node.id, { forwardCapture: forwardCapture(node, { question: "q" }) });
+  expect((prepared.record as NodeSucceededRecord).nodeId).toBe("agent");
 });
 
 test.each(["outer", "local"])("learning rejects a trace scope that omits a recorded memory: keeps %s", (retained) => {
@@ -749,7 +687,6 @@ test("a replay rejects an eligible node scope that differs from its recorded sta
     log,
     state,
     prepareOutput(log, state, node.id, "done", {
-      evidence: evidence(node.memoryScope),
       forwardCapture: forwardCapture(node, { question: "q" }),
     }),
   );
@@ -773,7 +710,6 @@ test("a graph outcome uses constant memory roots and an indexed scope", () => {
   const roots = [state.memories, state.memoryStacks, state.memorySnapshots];
 
   const prepared = prepareOutput(log, state, node.id, "done", {
-    evidence: evidence(node.memoryScope),
     forwardCapture: forwardCapture(node, { question: "q" }),
   });
   commitPrepared(log, state, prepared);
@@ -811,15 +747,14 @@ test("an expanded MAP occurrence projects and replays from the live node scope",
     }),
   );
 
-  const succeed = (nodeId: string, value: unknown, nodeEvidence: EvaluationEvidence | null = null) => {
+  const succeed = (nodeId: string, value: unknown, inputs: Record<string, unknown> = {}) => {
     expect(state.ready[0]).toBe(nodeId);
     commitPrepared(log, state, prepareNodeStarted(state, nodeId));
     commitPrepared(
       log,
       state,
       prepareOutput(log, state, nodeId, value, {
-        evidence: nodeEvidence,
-        forwardCapture: forwardCapture(state.flow.nodes.get(nodeId)!, nodeEvidence?.boundInputs ?? {}),
+        forwardCapture: forwardCapture(state.flow.nodes.get(nodeId)!, inputs),
       }),
     );
   };
@@ -829,7 +764,7 @@ test("an expanded MAP occurrence projects and replays from the live node scope",
   const dynamicScope = state.flow.nodes.get("map#0/agent")!.memoryScope!;
   expect(dynamicScope.constructor).toBe(MemoryScope);
   expect(dynamicScope.staticPath).toEqual(["flow", "map", "child", "agent"]);
-  succeed("map#0/agent", "visible", evidence(dynamicScope));
+  succeed("map#0/agent", "visible", { question: "q" });
   succeed("map#0/__end__", null);
   succeed("map/__end__", [null]);
   succeed(END_ID, null);
@@ -1305,7 +1240,6 @@ test.each([false, true])(
       log,
       state,
       prepareNodeFailed(state, new Failure({ code: "node.execute", message: "failed", nodeId: node.id }), {
-        evidence: evidence(node.memoryScope),
         forwardCapture: forwardCapture(node, { question: "q" }),
       }),
     );

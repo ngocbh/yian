@@ -443,7 +443,6 @@ describe("evalNode checks its arguments", () => {
   const pool = new VariablePool();
 
   for (const [label, options, error] of [
-    ["capture_evidence", { captureEvidence: 1 }, new TypeError("capture_evidence must be a bool")],
     ["capture_bindings", { captureBindings: "yes" }, new TypeError("capture_bindings must be a bool")],
     ["emit_stream", { emitStream: "sink" }, new TypeError("emit_stream must be callable or null")],
     ["emit_event", { emitEvent: {} }, new TypeError("emit_event must be callable or null")],
@@ -481,7 +480,6 @@ describe("evalNode checks its arguments", () => {
 
   test("well-formed options are accepted", async () => {
     const options: EvalNodeOptions = {
-      captureEvidence: false,
       captureBindings: false,
       emitStream: () => {},
       emitEvent: () => {},

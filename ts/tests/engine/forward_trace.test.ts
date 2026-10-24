@@ -4,9 +4,9 @@
  * `test_forward_capture_round_trips_invocation_names_and_structural_layout` (the caller's later
  * edit of `node_data` doesn't show),
  * `test_forward_capture_rejects_malformed_invocation_inventory_and_paths` (10 rows) and
- * `test_forward_capture_rejects_noncanonical_embedded_json` (5 rows), and
- * `test_scope_free_evidence_rejects_recalled_sections`. Python's `ValueError` is a `RangeError`
- * here.
+ * `test_forward_capture_rejects_noncanonical_embedded_json` (5 rows). Python's `ValueError` is a
+ * `RangeError` here. TS records no evidence (learning reads the steps), so
+ * `test_scope_free_evidence_rejects_recalled_sections` is not ported.
  *
  * Ported, the record halves on the run log: of
  * `test_forward_capture_round_trips_invocation_names_and_structural_layout`,
@@ -234,8 +234,8 @@
  * - `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`:
  *   the run records `resolveLlmCascade(flow, {}, ...)` as Python's `_engine` computes; the AGENT's
  *   model comes through `FlowEngineOptions.models` and replies with the prompt as its topic, since
- *   ESM can't patch `run_agent`, so each evidence holds that one model reply where Python's holds
- *   none. The forbidden replay methods are `spyOn` replacements of `AgentNode`'s `forward` and
+ *   ESM can't patch `run_agent`, so each occurrence holds that one model call's step where
+ *   Python's evidence holds none; the evidence a backward pass rebuilds from it isn't on the trace. The forbidden replay methods are `spyOn` replacements of `AgentNode`'s `forward` and
  *   `resolveVariables` and `Node`'s `captureBackwardContext` (`render_template_record` runs only
  *   inside `forward`), active through the backward-context reads; the agents changed after the
  *   replay are the ones its graph still holds, for Python's `handler.__self__`, and each gets a
@@ -269,7 +269,7 @@ import {
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding } from "../../src/expr/template.ts";
-import { EvaluationEvidence, MemoryScope, MemorySection, ModelTextInteraction } from "../../src/memory/contracts.ts";
+import { MemoryScope, ModelTextInteraction } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { DeclSite, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { BindingCapture } from "../../src/nodes/binding.ts";
@@ -313,7 +313,6 @@ import {
   canonicalTyped,
   decodeRecord,
   encodeRecord,
-  evidencePayload,
   type MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -734,19 +733,13 @@ test.each<[string, string, unknown, ErrorClass, string]>([
   expect(build).toThrow(message);
 });
 
-test("scope-free evidence rejects recalled sections", () => {
-  const build = () => new EvaluationEvidence(null, {}, null, null, [new MemorySection("outer", "recalled")]);
-  expect(build).toThrow(RangeError);
-  expect(build).toThrow("memory_sections memories must appear in scope.memories");
-});
-
 // --------------------------------------------------------------------------------------- //
 // Captures on the run log
 // --------------------------------------------------------------------------------------- //
 
 /** A node-success envelope at seq 3 carrying `capture`, naming its commit at seq 2. */
-function capturedEnvelope(capture: ForwardCapture, evidence: EvaluationEvidence | null = null) {
-  const record = new NodeSucceededRecord("work", 2, { evidence, forwardCapture: capture });
+function capturedEnvelope(capture: ForwardCapture) {
+  const record = new NodeSucceededRecord("work", 2, { forwardCapture: capture });
   return new RecordEnvelope(SCHEMA_VERSION, "run", 3, record);
 }
 
@@ -912,8 +905,7 @@ test("a forward capture round trips without a memory scope", () => {
     nodeData: { saved: [2n] },
   });
   inputs.value.push(99n);
-  const evidence = new EvaluationEvidence(null, { value: [1n, null] }, null, null);
-  const envelope = capturedEnvelope(capture, evidence);
+  const envelope = capturedEnvelope(capture);
 
   const decoded = decodeRecord(encodeRecord(envelope));
 
@@ -1130,7 +1122,7 @@ function committedSuccess(
   nodeId: string,
   target: string,
   value: { kind: string; value: unknown },
-  options: { forwardCapture?: ForwardCapture | null; evidence?: EvaluationEvidence | null } = {},
+  options: { forwardCapture?: ForwardCapture | null } = {},
 ): NodeSucceededRecord {
   const record = new NodeSucceededRecord(nodeId, 1, options);
   COMMITTED.set(record, { key: target, valueJson: logJson(value) });
@@ -3424,7 +3416,7 @@ test("discarded pooled outcomes are not trace occurrences", async () => {
   expect(built.state.backwardState.outcome!.feedback).toEqual(root);
 });
 
-test("the trace memory scope is detached and replayed without evidence", async () => {
+test("the trace memory scope is detached and replayed", async () => {
   const scope = new MemoryScope(["code"], { memories: ["memory"] });
   const node = new FuncNode("code", () => ({ items: [1n] }));
   node.memoryScope = scope;
@@ -3439,7 +3431,6 @@ test("the trace memory scope is detached and replayed without evidence", async (
   await built.run();
 
   const occurrence = built.state.trace!.occurrences.find((item) => item.nodeId === "code")!;
-  expect((occurrence.record as NodeSucceededRecord).evidence).toBeNull();
   expect(occurrence.memoryScope).toEqual(scope);
   const payload = (parseJson(occurrence.recordJson, "codec") as Record<string, object>).payload!;
   expect(Object.hasOwn(payload, "memory_scope")).toBe(false);
@@ -3878,7 +3869,6 @@ test.each(["selector-digest", "missing-field", "missing-item", "boundary-role"] 
     if (change === "missing-field" || change === "missing-item") {
       const changed = changedBuilder(replay.flow.nodes.get("spawn")!, { x: 7n });
       record = new NodeExpandedRecord(record.spawnerId, record.pruneIds, expansionDigest(changed), {
-        evidence: record.evidence,
         forwardCapture: record.forwardCapture,
       });
     }
@@ -3958,7 +3948,6 @@ function evaluateStarted(state: RunState, nodeId: string): Promise<EvaluatedOutc
   const trace = state.trace!;
   return evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
     wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
-    captureEvidence: true,
     captureBindings: true,
     effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
     sourceResolver: (path) => trace.resolve(path),
@@ -3978,10 +3967,7 @@ test("seed connections wait for the append and survive an unfinished start's ret
   commitPrepared(
     log,
     state,
-    prepareOutput(log, state, START_ID, (start.outcome as Output).value, {
-      evidence: start.evidence,
-      forwardCapture: joinedCapture(start),
-    }),
+    prepareOutput(log, state, START_ID, (start.outcome as Output).value, { forwardCapture: joinedCapture(start) }),
   );
   commitPrepared(log, state, prepareNodeStarted(state, "spawn"));
   const evaluated = await evaluateStarted(state, "spawn");

@@ -550,7 +550,7 @@ Most are just the functional model (above) made enforceable:
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
   no conversation records; session history lives only in the backend. TS yian
-  (schema 16) writes every pool write as a `pool_commit`: the run start's system
+  (schema 17) writes every pool write as a `pool_commit`: the run start's system
   values and START inputs right after `run_started` (applied at once; a log cut
   before the START inputs isn't resumable), and a node's output before the
   `node_succeeded` that names its seq; the success applies it, and a resume drops
@@ -757,6 +757,13 @@ Most are just the functional model (above) made enforceable:
   identity. Static capture remains separate. Accepted evidence retains base system
   prompt, ordered recall sections, and visible interactions; the private
   `_evaluation_evidence` backward-context bridge comes only from that record.
+  TS yian records no evidence: each backward attempt rebuilds it from the
+  occurrence's steps (kept on `TraceOccurrence`), its render with the recorded
+  skills and a recall against the recorded snapshots, through the node's
+  `learningMaterial` hook; a rebuilt request that misses its step's
+  `request_sha256` leaves the occurrence out (`ReplayDegraded`
+  `rebuilt_request_differs`). `backwardContext` stays synchronous and takes the
+  material, since the reducer validates backward results through it.
 - **Memory setup and learning are record-authoritative** — authored
   `long_term_memory:` entries become `MemoryDecl(name, type, config, site)`; a
   memory's key is its name prefixed by the site's `uses:` scope.

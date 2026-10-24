@@ -44,7 +44,6 @@ import { Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode, type EvalNodeOptions } from "../../src/runtime/eval_node.ts";
-import { NodeSucceededRecord, readRunLog } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { systemPromptWithSkills } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -114,14 +113,14 @@ test.each([
   const model = scripted(...(tools && structured ? ["done", ...answers] : answers));
   const node = agent({ structured, tools: tools ? ["noop"] : undefined });
 
-  const evaluated = await evaluate(node, { models: serving(model), captureEvidence: true, tools: noopTools() });
+  const evaluated = await evaluate(node, { models: serving(model), tools: noopTools() });
 
   expect(evaluated.outcome).toEqual(new Output(structured ? 7n : "done"));
   expect(systems(model)).toEqual(Array(model.requests.length).fill(RENDERED));
   expect(model.requests).toHaveLength(tools && structured ? 2 : 1);
   const user = model.requests[0]!.messages[1]!;
   expect([user.role, user.text()]).toEqual(["user", "Hello from Ada"]);
-  expect(evaluated.evidence!.baseSystemPrompt).toBe(RENDERED);
+  expect(renderAgentPrompt(node, { name: "Ada", title: "CTO" }, null).baseSystemPrompt).toBe(RENDERED);
 });
 
 test("the system prompt reads the node variables", async () => {
@@ -145,14 +144,12 @@ test("memory sections append after the authored prompt", async () => {
     return new MemoryContext({ sections });
   };
 
-  const evaluated = await evaluate(node, { models: serving(model), captureEvidence: true, memoryContextOpener });
+  const evaluated = await evaluate(node, { models: serving(model), memoryContextOpener });
 
   expect(evaluated.outcome).toEqual(new Output("done"));
   expect(recalled).toEqual([RENDERED]);
   expect(systems(model)).toEqual([systemPromptWithMemory(RENDERED, sections)]);
   expect(systems(model)[0]!.startsWith(RENDERED + "\n\nMemory context")).toBe(true);
-  expect(evaluated.evidence!.baseSystemPrompt).toBe(RENDERED);
-  expect(evaluated.evidence!.memorySections).toEqual(sections);
 });
 
 test("skills append after the authored prompt and recall skips them", async () => {
@@ -265,15 +262,6 @@ function served(model: ScriptedModel) {
   return { models: serving(model), env: hostEnv(dir) };
 }
 
-/** The recorded evidence of `reply`'s success in the log at `path`. */
-function replyEvidence(path: string) {
-  const records = readRunLog(path)
-    .map((envelope) => envelope.record)
-    .filter((record) => record instanceof NodeSucceededRecord && record.nodeId === "reply");
-  expect(records).toHaveLength(1);
-  return (records[0] as NodeSucceededRecord).evidence!;
-}
-
 test("run flow sends the rendered persona", async () => {
   const model = scripted("draft", "final");
   const result = await runFlow(await chatFlow(), INPUTS, served(model));
@@ -300,7 +288,6 @@ test("resume replays a finished node with its recorded system prompt", async () 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
   expect(model.requests.map((request) => request.messages.at(-1)!.text())).toEqual(["polish: draft"]);
-  expect(replyEvidence(path).baseSystemPrompt).toBe(RENDERED);
 
   // Backward on the resumed run reads the system prompt recorded before the crash.
   await resumed.backward("Warmer, please.");
@@ -322,7 +309,6 @@ test("retry after a mid node crash renders the same system prompt", async () => 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
   expect(systems(retry)[0]).toBe(RENDERED);
-  expect(replyEvidence(path).baseSystemPrompt).toBe(RENDERED);
 });
 
 test("resume refuses a flow whose system prompt changed", async () => {

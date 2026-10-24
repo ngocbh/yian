@@ -48,7 +48,6 @@ import type { ChatModel } from "../../llm/events.ts";
 import { Message, Request, TextPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
 import {
-  type EvaluationTrace,
   ModelTextInteraction,
   ModelValueInteraction,
   type VisibleInteraction,
@@ -74,7 +73,7 @@ import {
 import type { ValuePath } from "../contracts.ts";
 import { type AgentSteps, recordedResponse, requestSha256, type RetrySettings } from "./context.ts";
 import { callModel, type LiveSinks } from "./live.ts";
-import { pushVisible, recordModelText, recordModelValue } from "./text.ts";
+import { pushVisible } from "./text.ts";
 
 // ValueKind -> JSON Schema type of a scalar slot. date and datetime persist as ISO strings.
 const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
@@ -438,9 +437,7 @@ export function userMessage(text: string): Message {
  * instruction as a user message. Each call goes through `callModel` with purpose
  * `structured_fallback` for the prompt strategy, else `structured_native`. A reply
  * holding no valid answer (`StructuredOutputError`) or failing `checkReply` is not kept in the
- * conversation: the next call gets the earlier messages and a correction naming the error. The
- * prompt strategy records every reply's text in `evaluationTrace`, the other strategies the
- * returned value.
+ * conversation: the next call gets the earlier messages and a correction naming the error.
  *
  * @param messages The conversation so far; not changed.
  * @param typ The declared output type; `typeToSchema` must give it a schema.
@@ -460,12 +457,11 @@ export async function generateStructured(
     retries?: number;
     live?: LiveSinks | null;
     signal?: AbortSignal;
-    evaluationTrace?: EvaluationTrace | null;
     retry?: RetrySettings;
     steps?: AgentSteps;
   } = {},
 ): Promise<Value> {
-  const { live = null, signal, evaluationTrace, retry, steps } = options;
+  const { live = null, signal, retry, steps } = options;
   const retries = options.retries ?? current().agentRetries;
   const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
   const prompted = plan.strategy === "prompt";
@@ -484,7 +480,6 @@ export async function generateStructured(
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
-    if (prompted) recordModelText(evaluationTrace, response.message.text());
     let value: Value;
     try {
       value = checkReply(plan.parse(response), typ);
@@ -497,7 +492,6 @@ export async function generateStructured(
       conversation = [...conversation, correction];
       continue;
     }
-    if (!prompted) recordModelValue(evaluationTrace, value);
     return value;
   }
 }

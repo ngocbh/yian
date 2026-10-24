@@ -18,9 +18,8 @@
  * so an unregistered grant fails with `resolve`'s `RangeError` before the model call; a granted
  * skill binds `load_skill`; a reply with a parsed tool call and no grant fails at a cap of 1 with
  * `ToolIterationLimitError`, else with the ungranted `AgentLoopError`; an unparsed tool call is
- * ignored; a stop during the call wins over its text or tool-call reply, before any tool call is
- * recorded; `ctx.sent()` returns the built `RouteModel`'s route credentials; the prompt is recorded
- * in the evaluation trace.
+ * ignored; a stop during the call wins over its text or tool-call reply; `ctx.sent()` returns the
+ * built `RouteModel`'s route credentials; the memory sections follow the base system prompt.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -34,14 +33,7 @@ import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } 
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  type EvaluationTrace,
-  MemoryContext,
-  MemorySection,
-  ModelTextInteraction,
-  ToolCallInteraction,
-  type VisibleInteraction,
-} from "../../src/memory/contracts.ts";
+import { MemoryContext, MemorySection } from "../../src/memory/contracts.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
@@ -239,13 +231,10 @@ test("a parsed tool call at a cap of 1 fails with ToolIterationLimitError", asyn
 
 test("a parsed tool call with no grant fails with AgentLoopError", async () => {
   const model = new ScriptedModel([reply(CALL)]);
-  const interactions: VisibleInteraction[] = [];
-  const trace: EvaluationTrace = { recordPrompt: () => {}, recordInteraction: (i) => void interactions.push(i) };
-  const error = await rejection(runAgent(context(model, { nodeId: "n", evaluationTrace: trace })));
+  const error = await rejection(runAgent(context(model, { nodeId: "n" })));
   expect(error).toBeInstanceOf(AgentLoopError);
   expect(error).not.toBeInstanceOf(ToolIterationLimitError);
   expect((error as Error).message).toBe("agent node 'n' requested tool 'lookup', but it is not granted; granted tools: []");
-  expect(interactions).toEqual([new ToolCallInteraction("lookup", { q: "x" })]);
 });
 
 test("an unparsed tool call is ignored", async () => {
@@ -260,17 +249,13 @@ for (const [name, response] of [
 ] as const) {
   test(`a stop during the call wins over its ${name} reply`, async () => {
     const stop = new AbortController();
-    const interactions: VisibleInteraction[] = [];
-    const trace: EvaluationTrace = { recordPrompt: () => {}, recordInteraction: (i) => void interactions.push(i) };
     const ctx = context(new ScriptedModel([response]), {
       signal: stop.signal,
-      evaluationTrace: trace,
       emitEvent: (event) => {
         if (event instanceof ModelCallFinished) stop.abort(new Error("stopped"));
       },
     });
     expect(await rejection(runAgent(ctx))).toBe(stop.signal.reason);
-    expect(interactions).toEqual([]);
   });
 }
 
@@ -299,18 +284,12 @@ test("ctx.sent() returns the built RouteModel's route credentials", async () => 
   expect(ctx.sent()).toEqual(["sk-test-key-0123456789"]);
 });
 
-test("the prompt is recorded in the evaluation trace", async () => {
+test("the memory sections follow the base system prompt", async () => {
   const model = new ScriptedModel([textReply("hi")]);
-  const prompts: unknown[] = [];
-  const interactions: VisibleInteraction[] = [];
-  const trace: EvaluationTrace = {
-    recordPrompt: (...args) => void prompts.push(args),
-    recordInteraction: (interaction) => void interactions.push(interaction),
-  };
   const sections = [new MemorySection("m", "remember")];
   await runAgent(
-    context(model, { baseSystemPrompt: "sys", messages: [userMessage("p")], promptText: "p", evaluationTrace: trace, memoryContext: new MemoryContext({ sections }) }),
+    context(model, { baseSystemPrompt: "sys", messages: [userMessage("p")], promptText: "p", memoryContext: new MemoryContext({ sections }) }),
   );
-  expect(prompts).toEqual([["sys", "p", sections]]);
-  expect(interactions).toEqual([new ModelTextInteraction("hi")]);
+  expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithMemory("sys", sections));
+  expect(model.requests[0]!.messages[1]!.text()).toBe("p");
 });

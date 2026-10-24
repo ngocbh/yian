@@ -169,7 +169,7 @@ function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
  */
 interface PromptMessage {
   readonly role: "user" | "assistant" | "tool";
-  /** The text recall and evidence read: a text message's text, or the model message's text parts. */
+  /** The text recall and learning read: a text message's text, or the model message's text parts. */
   readonly text: string;
   /** A spliced `Message`'s model message; `null` for a text message, which `runContext` builds as before. */
   readonly model: ModelMessage | null;
@@ -414,7 +414,6 @@ function captureValue<T>(make: () => T): T {
  */
 export class AgentNode extends Node {
   readonly kind = NodeKind.AGENT;
-  override readonly needsEvaluationTrace: boolean = true;
   override readonly needsMemoryContext: boolean = true;
   override readonly needsRenderCapture: boolean = true;
   override readonly needsTools: boolean = true;
@@ -589,7 +588,7 @@ export class AgentNode extends Node {
     return new Set(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []);
   }
 
-  /** Hide `__llm_config` from recall and evidence, when this agent has it: it configures the call. */
+  /** Hide `__llm_config` from recall and learning, when this agent has it: it configures the call. */
   override modelHiddenInputs(): ReadonlySet<string> {
     return new Set(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []);
   }
@@ -860,7 +859,6 @@ export class AgentNode extends Node {
       retries: this.retries,
       maxToolIterations: this.maxToolIterations(),
       signal: caps.signal,
-      evaluationTrace: caps.evaluationTrace,
       memoryContext: options.memoryContext,
       toolset: caps.tools ?? null,
       emitStream: caps.emitStream,
@@ -913,7 +911,7 @@ export class AgentNode extends Node {
 
   /**
    * Render the prompt once (`renderAgentPrompt`, which publishes the render capture), recall with
-   * it, and run the loop. Recall, memory episodes and evidence read the last message's text. No
+   * it, and run the loop. Recall and learning read the last message's text. No
    * invocation state is stored on the node.
    *
    * A call-time agent's model config is its bound `__llm_config` with the run's host key and
@@ -929,8 +927,8 @@ export class AgentNode extends Node {
    *
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param caps The node's signal, checked before recall and the model call, its scheduler and
-   *   random draw for model-retry waits, and the capabilities its traits ask for: evidence, memory
-   *   context, render capture, tools, live sinks, skills, steering, model access and steps.
+   *   random draw for model-retry waits, and the capabilities its traits ask for: memory context,
+   *   render capture, tools, live sinks, skills, steering, model access and steps.
    * @returns The model's answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
@@ -1040,7 +1038,7 @@ export class AgentNode extends Node {
    * Live node fields are unused, except a host `api_key` and `headers` bound for the run.
    *
    * @param context Accepted context, including the recorded model configuration and the
-   *   render/evidence components.
+   *   render components; `_evaluation_evidence` is what learning rebuilt of the invocation.
    * @param feedback Ordered ordinary output messages. Empty effective feedback skips model
    *   construction.
    * @param options The model access (default `defaultModelAccess()`) and the observer for the

@@ -23,7 +23,15 @@
 import { compareCodeUnits, Failure } from "../diagnostics.ts";
 import { ExpressionError } from "../expr/expressions.ts";
 import { type FeedbackValue, ResolvedValue, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
-import { MemoryScope } from "../memory/index.ts";
+import {
+  type MemoryOccurrenceSegment,
+  MemoryScope,
+  type MemorySection,
+  ModelTextInteraction,
+  ModelValueInteraction,
+  ToolCallInteraction,
+  type VisibleInteraction,
+} from "../memory/index.ts";
 import {
   BackwardContext,
   type BackwardOptions,
@@ -61,8 +69,6 @@ import {
   canonicalSeed,
   decodeRecord,
   encodeRecord,
-  interactionPayload,
-  memorySectionPayload,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -72,7 +78,6 @@ import {
   type RecordEnvelope,
   RunResumedRecord,
   RunStartedRecord,
-  scopePayload,
 } from "./log.ts";
 
 /** An accepted outcome record, the record a trace occurrence holds. */
@@ -611,6 +616,36 @@ export function evaluationEvidence(occurrence: TraceOccurrence, material: Learni
     memory_sections: material.memorySections.map(memorySectionPayload),
     interactions: material.interactions.map(interactionPayload),
   };
+}
+
+/** Encode one memory scope as `_evaluation_evidence` holds it. */
+function scopePayload(scope: MemoryScope): JsonObject {
+  const segment = (item: MemoryOccurrenceSegment): JsonObject => ({
+    kind: item.kind,
+    static_path: [...item.staticPath],
+    index: BigInt(item.index),
+  });
+  return {
+    static_path: [...scope.staticPath],
+    memories: [...scope.memories],
+    occurrence_path: scope.occurrencePath.map(segment),
+  };
+}
+
+/** Encode one recalled memory section as `_evaluation_evidence` holds it. */
+function memorySectionPayload(section: MemorySection): JsonObject {
+  return { memory: section.memory, text: section.text };
+}
+
+/** Encode one visible interaction as `_evaluation_evidence` holds it. */
+function interactionPayload(interaction: VisibleInteraction): JsonObject {
+  // Memory's JSON types are the read-only form of the same frozen values.
+  if (interaction instanceof ModelTextInteraction) return { kind: "model_text", text: interaction.text };
+  if (interaction instanceof ModelValueInteraction) return { kind: "model_value", value: interaction.value as JsonValue };
+  if (interaction instanceof ToolCallInteraction) {
+    return { kind: "tool_call", name: interaction.name, arguments: interaction.arguments as JsonObject };
+  }
+  return { kind: "tool_result", name: interaction.name, text: interaction.text };
 }
 
 /**

@@ -45,9 +45,8 @@
  *
  * TS-only: `textOf` of a string, of a message with text, reasoning, tool-call and refusal parts
  * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
- * `reply`, `usage` (default `null`) and that it is an `Error`; `recordModelText`,
- * `recordModelValue`, `recordToolCall` and `recordToolResult` (an interaction recorded, a carrier
- * construction error ignored, a `null` trace does nothing); `toolText` of a string, a record, a
+ * `reply`, `usage` (default `null`) and that it is an `Error`; `pushVisible` (an interaction
+ * appended, a carrier construction error ignored, another error thrown); `toolText` of a string, a record, a
  * list, `null`, `Infinity`, a big int and a `Date` (a `TypeCheckError` naming the tool's result);
  * `reportedText` (the message, else the error's `name`; a branded non-`Error` by `String()`, else
  * its `typeof`); the `SKIPPED_TOOL_ERROR` text; the `DEFAULT_SYSTEM` text and the loop errors'
@@ -123,7 +122,6 @@ import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import {
-  type EvaluationTrace,
   ModelTextInteraction,
   ModelValueInteraction,
   ToolCallInteraction,
@@ -136,13 +134,7 @@ import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
 import { reportedText, toolText } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, isMaxToolIterations, isTextOutput } from "../../src/nodes/agent/node.ts";
-import {
-  recordModelText,
-  recordModelValue,
-  recordToolCall,
-  recordToolResult,
-  textOf,
-} from "../../src/nodes/agent/text.ts";
+import { pushVisible, textOf } from "../../src/nodes/agent/text.ts";
 import { BackwardContext, CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -205,49 +197,27 @@ test("ReplyInterrupted's usage defaults to null", () => {
   expect(new ReplyInterrupted(reply).usage).toBeNull();
 });
 
-/** A trace that keeps the interactions it is given. */
-function trace() {
+test("pushVisible appends an interaction and ignores a carrier construction error", () => {
   const interactions: VisibleInteraction[] = [];
-  const sink: EvaluationTrace = {
-    recordPrompt: () => {},
-    recordInteraction: (interaction) => void interactions.push(interaction),
-  };
-  return { sink, interactions };
-}
-
-test("recordModelText, recordToolCall and recordToolResult record their interactions", () => {
-  const { sink, interactions } = trace();
-  recordModelText(sink, "answer");
-  recordToolCall(sink, "lookup", { q: "x" });
-  recordToolResult(sink, "lookup", "found");
+  pushVisible(interactions, () => new ModelTextInteraction("answer"));
+  pushVisible(interactions, () => new ToolCallInteraction("lookup", { q: "x" }));
+  pushVisible(interactions, () => new ToolResultInteraction("lookup", "found"));
+  pushVisible(interactions, () => new ModelValueInteraction({ a: 1n }));
+  pushVisible(interactions, () => new ModelTextInteraction("\ud800"));
+  pushVisible(interactions, () => new ToolCallInteraction("lookup", { q: Number.NaN }));
+  pushVisible(interactions, () => new ToolResultInteraction("", "found"));
+  pushVisible(interactions, () => new ModelValueInteraction(Number.NaN));
   expect(interactions).toEqual([
     new ModelTextInteraction("answer"),
     new ToolCallInteraction("lookup", { q: "x" }),
     new ToolResultInteraction("lookup", "found"),
+    new ModelValueInteraction({ a: 1n }),
   ]);
-});
-
-test("recordModelText, recordToolCall and recordToolResult ignore a carrier construction error", () => {
-  const { sink, interactions } = trace();
-  recordModelText(sink, "\ud800");
-  recordToolCall(sink, "lookup", { q: Number.NaN });
-  recordToolResult(sink, "", "found");
-  recordToolResult(sink, "lookup", 3 as unknown as string);
-  expect(interactions).toEqual([]);
-});
-
-test("recordModelText, recordToolCall and recordToolResult do nothing without a trace", () => {
-  expect(recordModelText(null, "answer")).toBeUndefined();
-  expect(recordToolCall(undefined, "lookup", {})).toBeUndefined();
-  expect(recordToolResult(undefined, "lookup", "found")).toBeUndefined();
-});
-
-test("recordModelValue records the value, ignores a carrier construction error, and does nothing without a trace", () => {
-  const { sink, interactions } = trace();
-  recordModelValue(sink, { a: 1n });
-  recordModelValue(sink, Number.NaN);
-  expect(interactions).toEqual([new ModelValueInteraction({ a: 1n })]);
-  expect(recordModelValue(null, 1n)).toBeUndefined();
+  expect(() =>
+    pushVisible(interactions, () => {
+      throw new Error("host fault");
+    }),
+  ).toThrow("host fault");
 });
 
 test("toolText writes a tool result in the text form", () => {

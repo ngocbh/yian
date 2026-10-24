@@ -1,32 +1,34 @@
 /**
- * Run-record contracts for source-neutral memory evidence: a port of
- * `tests/engine/test_memory_run_records.py`. Ported: the evidence carriers,
+ * Run-record contracts for source-neutral memory carriers: a port of
+ * `tests/engine/test_memory_run_records.py`. Ported: the carriers of
  * `test_source_neutral_carriers_are_defensive_and_frozen` and
- * `test_evidence_requires_coherent_prompts_and_ordered_scope_sections`, the evidence line of
- * `test_memory_scope_requires_unique_keys_and_nested_occurrences`, and
  * `test_episode_accepts_binding_failure_and_typed_visible_material` (its keyword arguments are the
- * episode's options object). Python's `ValueError` is a
- * `RangeError` here; a frozen field throws `TypeError` where Python raises `FrozenInstanceError`.
+ * episode's options object). Python's `ValueError` is a `RangeError` here; a frozen field throws
+ * `TypeError` where Python raises `FrozenInstanceError`.
  *
- * TS-only: one row per carrier and evidence message with its class, in Python's check order; an
- * exact-class row for each nested carrier (a subclass is refused); the number rule of the evidence
- * JSON (`value`, `arguments`, `boundInputs`): `±Infinity` kept, `-0` read back as `0`, NaN refused;
- * bound inputs deeper than the value nesting limit are kept; evidence keeps its fields, and the
- * section and interaction arrays are copied, frozen and keep their order and their carriers by
- * reference.
+ * TS-only: one row per carrier message with its class, in Python's check order; the number rule
+ * of the interaction JSON (`value`, `arguments`): `±Infinity` kept, `-0` read back as `0`, NaN
+ * refused.
  *
  * Changed (TS yian):
  * - The carriers hold deep-frozen copies, with no copy on read: a reader's edit of `value`,
- *   `arguments`, `boundInputs` or a snapshot throws a `TypeError` where Python changes a private
- *   copy. The caller's later edits don't show, as in Python.
- * - The evidence JSON keeps `±Infinity` (decision 34: bound inputs are yian values) and has no
- *   memory nesting limit (bound inputs are values, bounded where they're made).
- * - Sections and interactions are arrays, not tuples; a missing value is `null`, not `None`.
+ *   `arguments` or a snapshot throws a `TypeError` where Python changes a private copy. The
+ *   caller's later edits don't show, as in Python.
+ *
+ * Not ported: TS records no evidence on outcome records (learning reads the steps), so
+ * `test_evidence_requires_coherent_prompts_and_ordered_scope_sections`, the evidence line of
+ * `test_memory_scope_requires_unique_keys_and_nested_occurrences`, the evidence half of
+ * `test_records_reject_forged_nested_carrier_subclasses`, and the outcome wire tests
+ * (`test_all_outcome_records_round_trip_closed_evidence`,
+ * `test_existing_outcome_records_round_trip_with_no_evidence`,
+ * `test_memory_scope_wire_has_no_boundary_field`, the evidence rows of
+ * `test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields` and the evidence half
+ * of `test_memory_payloads_name_keys_on_the_wire`) have no TS counterpart.
  *
  * Ported, the run-record constructors: `test_run_started_distinguishes_disabled_and_enabled_empty_memory`,
  * `test_run_started_requires_a_canonical_table_and_matching_snapshots` and the constructor rows of
- * `test_run_started_records_a_key_table_and_stacks` (each without its wire round trip),
- * `test_records_reject_forged_nested_carrier_subclasses`.
+ * `test_run_started_records_a_key_table_and_stacks` (each without its wire round trip), the
+ * mutation half of `test_records_reject_forged_nested_carrier_subclasses`.
  *
  * TS-only (run records): the memory table, stacks and snapshots are held as frozen arrays whose
  * items are the given carriers, unchanged by the caller's later edits; a table, stack or snapshot
@@ -37,7 +39,7 @@
  * - The memory table, stacks and snapshots are arrays, so the rejected container is a `Set`
  *   (Python passes a list) and the message says "arrays" where Python says "tuples".
  * - `test_records_reject_forged_nested_carrier_subclasses` constructs subclass instances (TS has
- *   no forged dataclasses); the evidence message says `…or null` where Python says `…or None`.
+ *   no forged dataclasses).
  *
  * Covered elsewhere: the scope rows of `test_memory_scope_requires_unique_keys_and_nested_occurrences`
  * by `memory_contracts.test.ts`; `test_memory_spec_config_rejects_private_keys` by
@@ -47,14 +49,6 @@
  * `test_codec_revalidates_carriers_mutated_after_record_construction` and
  * `test_codec_replays_outer_record_invariants_after_forging` (they forge frozen carriers with
  * `object.__setattr__`, which a frozen TS carrier refuses).
- *
- * Ported, the outcome wire: `test_all_outcome_records_round_trip_closed_evidence`,
- * `test_existing_outcome_records_round_trip_with_no_evidence`,
- * `test_memory_scope_wire_has_no_boundary_field`, the evidence rows of
- * `test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields` (an extra
- * `evidence.scope` field, the unknown interaction kind `provider_trace`, an extra `provider`) and
- * the evidence half of `test_memory_payloads_name_keys_on_the_wire`, each rejection with its
- * class and message.
  *
  * Ported, the run-start and memory-commit wire: `test_public_token_policy_options_round_trip_durably`,
  * `test_snapshot_envelope_preserves_opaque_public_memory_state`,
@@ -85,18 +79,13 @@
 
 import { expect, test } from "bun:test";
 
-import { current } from "../../src/defaults.ts";
-import { Failure } from "../../src/diagnostics.ts";
 import {
   DeclSite,
-  EvaluationEvidence,
   type JsonObject,
   MemoryEpisode,
   MemoryEpisodeStatus,
   MemoryMutation,
-  MemoryOccurrenceSegment,
   MemoryOperationFailure,
-  MemoryScope,
   MemorySection,
   MemorySnapshotEnvelope,
   MemorySpec,
@@ -115,9 +104,6 @@ import {
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
-  NodeExpandedRecord,
-  NodeFailedRecord,
-  NodeRoutedRecord,
   NodeSucceededRecord,
   RecordEnvelope,
   RunLogSchemaError,
@@ -143,115 +129,25 @@ function expectError(fn: () => unknown, cls: ErrorClass, message: string): void 
   expect((caught as Error).message).toBe(message);
 }
 
-const SCOPE = new MemoryScope(["flow", "agent"], { memories: ["notes", "reflective"] });
-
 test("source-neutral carriers are defensive and frozen", () => {
   const snapshotSource = { lessons: [{ text: "keep" }] };
   const valueSource = { nested: [1n] };
   const argumentsSource = { query: ["x"] };
-  const inputsSource = { question: ["hello"] };
   const snapshot = new MemorySnapshotEnvelope("reflective", snapshotSource);
   const value = new ModelValueInteraction(valueSource);
   const call = new ToolCallInteraction("search", argumentsSource);
-  const evidence = new EvaluationEvidence(
-    new MemoryScope(["flow", "agent"], { memories: ["reflective"] }),
-    inputsSource,
-    "base",
-    "prompt",
-    [new MemorySection("reflective", "memory")],
-    [value, call],
-  );
 
   snapshotSource.lessons[0]!.text = "changed";
   valueSource.nested.push(2n);
   argumentsSource.query.push("y");
-  inputsSource.question.push("changed");
   expect(() => (snapshot.snapshot.lessons as unknown[]).splice(0)).toThrow(TypeError);
   expect(() => ((value.value as JsonObject).nested as unknown[]).push(3n)).toThrow(TypeError);
   expect(() => (call.arguments.query as unknown[]).push("z")).toThrow(TypeError);
-  expect(() => (evidence.boundInputs!.question as unknown[]).push("again")).toThrow(TypeError);
 
   expect(snapshot.snapshot).toEqual({ lessons: [{ text: "keep" }] });
   expect(value.value).toEqual({ nested: [1n] });
   expect(call.arguments).toEqual({ query: ["x"] });
-  expect(evidence.boundInputs).toEqual({ question: ["hello"] });
-  expect(() => {
-    (evidence as { prompt: string | null }).prompt = "changed";
-  }).toThrow(TypeError);
-  expect(evidence.prompt).toBe("prompt");
 });
-
-test("evidence requires coherent prompts and ordered scope sections", () => {
-  expectError(
-    () => new EvaluationEvidence(SCOPE, {}, "base", null),
-    RangeError,
-    "base_system_prompt and prompt must both be present or absent",
-  );
-  expectError(
-    () => new EvaluationEvidence(SCOPE, {}, "base", "prompt", [new MemorySection("other", "x")]),
-    RangeError,
-    "memory_sections memories must appear in scope.memories",
-  );
-  expectError(
-    () =>
-      new EvaluationEvidence(SCOPE, {}, "base", "prompt", [
-        new MemorySection("notes", "a"),
-        new MemorySection("notes", "b"),
-      ]),
-    RangeError,
-    "memory_sections memory values must be unique",
-  );
-  expectError(
-    () =>
-      new EvaluationEvidence(SCOPE, {}, "base", "prompt", [
-        new MemorySection("reflective", "a"),
-        new MemorySection("notes", "b"),
-      ]),
-    RangeError,
-    "memory_sections must follow scope.memories order",
-  );
-  expectError(
-    () => new EvaluationEvidence(SCOPE, {}, "base", "prompt", [], [{} as never]),
-    TypeError,
-    "interactions items must be VisibleInteraction values",
-  );
-
-  const nonAgent = new EvaluationEvidence(SCOPE, null, null, null);
-  expect(nonAgent.boundInputs).toBeNull();
-  expect(nonAgent.memorySections).toEqual([]);
-  expect(nonAgent.interactions).toEqual([]);
-});
-
-// The evidence line of test_memory_scope_requires_unique_keys_and_nested_occurrences.
-test("evidence for a scope without memories has no sections", () => {
-  expect(new EvaluationEvidence(new MemoryScope(["neutral"]), {}, "base", "prompt").memorySections).toEqual([]);
-});
-
-test("evidence keeps its fields and the sections and interactions in order", () => {
-  const sections = [new MemorySection("notes", "a"), new MemorySection("reflective", "")];
-  const interactions = [
-    new ModelTextInteraction("hi"),
-    new ModelValueInteraction(null),
-    new ToolCallInteraction("search", {}),
-    new ToolResultInteraction("search", ""),
-  ];
-  const evidence = new EvaluationEvidence(SCOPE, {}, "", "", sections, interactions);
-  const kept = [...interactions];
-  sections.pop();
-  interactions.pop();
-  expect(evidence.scope).toBe(SCOPE);
-  expect([evidence.baseSystemPrompt, evidence.prompt]).toEqual(["", ""]);
-  expect(evidence.memorySections.map((section) => section.memory)).toEqual(["notes", "reflective"]);
-  expect(evidence.interactions).toEqual(kept);
-  expect(evidence.interactions[3]).toBe(kept[3]!);
-  expect(Object.isFrozen(evidence.memorySections)).toBe(true);
-  expect(Object.isFrozen(evidence.interactions)).toBe(true);
-  expect(new EvaluationEvidence(null, null, null, null).scope).toBeNull();
-});
-
-class SubScope extends MemoryScope {}
-class SubSection extends MemorySection {}
-class SubText extends ModelTextInteraction {}
 
 test.each<[string, () => unknown, ErrorClass, string]>([
   [
@@ -306,124 +202,11 @@ test.each<[string, () => unknown, ErrorClass, string]>([
     TypeError,
     "text must be a string",
   ],
-  [
-    "a scope that isn't a MemoryScope",
-    () => new EvaluationEvidence({ staticPath: ["a"], memories: [] } as never, null, null, null),
-    TypeError,
-    "scope must be a MemoryScope or null",
-  ],
-  [
-    "a MemoryScope subclass",
-    () => new EvaluationEvidence(new SubScope(["a"]), null, null, null),
-    TypeError,
-    "scope must be a MemoryScope or null",
-  ],
-  [
-    "bound inputs that aren't an object",
-    () => new EvaluationEvidence(null, [] as never, null, null),
-    TypeError,
-    "bound_inputs must be an exact JSON object or null",
-  ],
-  [
-    "bound inputs holding a non-JSON value",
-    () => new EvaluationEvidence(null, { x: undefined }, null, null),
-    TypeError,
-    "bound_inputs.x must contain exact JSON values",
-  ],
-  [
-    "bound inputs holding NaN",
-    () => new EvaluationEvidence(null, { x: [NaN] }, null, null),
-    RangeError,
-    "bound_inputs.x[0] JSON number must not be NaN",
-  ],
-  [
-    "a prompt without a base system prompt",
-    () => new EvaluationEvidence(null, null, null, "prompt"),
-    RangeError,
-    "base_system_prompt and prompt must both be present or absent",
-  ],
-  [
-    "a base system prompt that isn't a string",
-    () => new EvaluationEvidence(null, null, 1 as never, "prompt"),
-    TypeError,
-    "base_system_prompt must be a string",
-  ],
-  [
-    "a prompt that isn't a string",
-    () => new EvaluationEvidence(null, null, "base", 1 as never),
-    TypeError,
-    "prompt must be a string",
-  ],
-  [
-    "sections that aren't an array",
-    () => new EvaluationEvidence(SCOPE, null, null, null, new Set() as never),
-    TypeError,
-    "memory_sections must be an array",
-  ],
-  [
-    "a section that isn't a MemorySection",
-    () => new EvaluationEvidence(SCOPE, null, null, null, [{ memory: "notes", text: "x" } as never]),
-    TypeError,
-    "memory_sections items must be MemorySection values",
-  ],
-  [
-    "a MemorySection subclass",
-    () => new EvaluationEvidence(SCOPE, null, null, null, [new SubSection("notes", "x")]),
-    TypeError,
-    "memory_sections items must be MemorySection values",
-  ],
-  [
-    "a repeated section memory",
-    () =>
-      new EvaluationEvidence(SCOPE, null, null, null, [
-        new MemorySection("notes", "a"),
-        new MemorySection("notes", "b"),
-      ]),
-    RangeError,
-    "memory_sections memory values must be unique",
-  ],
-  [
-    "a section outside the scope",
-    () => new EvaluationEvidence(SCOPE, null, null, null, [new MemorySection("other", "x")]),
-    RangeError,
-    "memory_sections memories must appear in scope.memories",
-  ],
-  [
-    "sections out of scope order",
-    () =>
-      new EvaluationEvidence(SCOPE, null, null, null, [
-        new MemorySection("reflective", "a"),
-        new MemorySection("notes", "b"),
-      ]),
-    RangeError,
-    "memory_sections must follow scope.memories order",
-  ],
-  [
-    "interactions that aren't an array",
-    () => new EvaluationEvidence(SCOPE, null, null, null, [], "x" as never),
-    TypeError,
-    "interactions must be an array",
-  ],
-  [
-    "an interaction that isn't a VisibleInteraction",
-    () => new EvaluationEvidence(SCOPE, null, null, null, [], [new MemorySection("notes", "x") as never]),
-    TypeError,
-    "interactions items must be VisibleInteraction values",
-  ],
-  [
-    "a visible interaction subclass",
-    () => new EvaluationEvidence(SCOPE, null, null, null, [], [new SubText("x")]),
-    TypeError,
-    "interactions items must be VisibleInteraction values",
-  ],
-])("the evidence carriers reject %s", (_label, build, cls, message) => {
+])("the carriers reject %s", (_label, build, cls, message) => {
   expectError(build, cls, message);
 });
 
-test("the evidence JSON keeps infinities and reads negative zero back as zero", () => {
-  const evidence = new EvaluationEvidence(null, { up: Infinity, down: [-Infinity], zero: -0 }, null, null);
-  expect(evidence.boundInputs).toEqual({ down: [-Infinity], up: Infinity, zero: 0 });
-  expect(Object.is(evidence.boundInputs!.zero, 0)).toBe(true);
+test("the interaction JSON keeps infinities and reads negative zero back as zero", () => {
   const value = new ModelValueInteraction([Infinity, -Infinity, -0]);
   expect(value.value).toEqual([Infinity, -Infinity, 0]);
   expect(Object.is((value.value as number[])[2], 0)).toBe(true);
@@ -431,12 +214,6 @@ test("the evidence JSON keeps infinities and reads negative zero back as zero", 
   const call = new ToolCallInteraction("search", { limit: Infinity, offset: -0 });
   expect(call.arguments).toEqual({ limit: Infinity, offset: 0 });
   expect(Object.is(call.arguments.offset, 0)).toBe(true);
-});
-
-test("bound inputs deeper than the value nesting limit are kept", () => {
-  let deep: JsonObject = {};
-  for (let i = 0; i <= current().maxValueNesting; i++) deep = { d: deep };
-  expect(new EvaluationEvidence(null, deep, null, null).boundInputs).toEqual(deep);
 });
 
 // test_episode_accepts_binding_failure_and_typed_visible_material
@@ -611,49 +388,15 @@ test.each<[string, Pick<RunStartedFields, "memories" | "memoryStacks" | "memoryS
   expectError(() => started(fields), TypeError, message);
 });
 
-class ForgedEvidence extends EvaluationEvidence {}
 class ForgedMutation extends MemoryMutation {}
 
 test("records reject forged nested carrier subclasses", () => {
-  const forgedEvidence = new ForgedEvidence(SCOPE, { question: ["hello"] }, "base", "answer the question");
-
-  expectError(
-    () => new NodeSucceededRecord("agent", 1, { evidence: forgedEvidence }),
-    TypeError,
-    "evidence must be an EvaluationEvidence or null",
-  );
   expectError(
     () => new MemoryCommitRequestedRecord("reflective", "commit", [new ForgedMutation("m1", {})], 1),
     TypeError,
     "mutations items must be MemoryMutation values",
   );
 });
-
-// --------------------------------------------------------------------------------------- //
-// Outcome evidence on the run log
-// --------------------------------------------------------------------------------------- //
-
-const DIGEST = "b".repeat(64);
-
-/** Closed evidence with a scope, prompts, two sections and one interaction of each kind. */
-function evidence(): EvaluationEvidence {
-  return new EvaluationEvidence(
-    new MemoryScope(["flow", "agent"], {
-      memories: ["notes", "reflective"],
-      occurrencePath: [new MemoryOccurrenceSegment("map_item", ["flow"], 0)],
-    }),
-    { question: ["hello"] },
-    "base",
-    "answer the question",
-    [new MemorySection("notes", "flow memory"), new MemorySection("reflective", "agent memory")],
-    [
-      new ModelTextInteraction("draft"),
-      new ModelValueInteraction({ answer: "done" }),
-      new ToolCallInteraction("lookup", { key: "value" }),
-      new ToolResultInteraction("lookup", "result"),
-    ],
-  );
-}
 
 /** Encode `record` at seq 0 and decode it; the line must be stable. Return the decoded record. */
 function roundTrip(record: RunRecord): RunRecord {
@@ -669,86 +412,6 @@ function roundTrip(record: RunRecord): RunRecord {
 function wireOf(record: RunRecord): Record<string, any> {
   return parseJson(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record)), "codec") as Record<string, any>;
 }
-
-const FAILED = new Failure({ code: "node.execute", message: "failed", nodeId: "agent" });
-
-test.each<[string, () => RunRecord]>([
-  ["NodeSucceededRecord", () => new NodeSucceededRecord("agent", 1, { evidence: evidence() })],
-  ["NodeRoutedRecord", () => new NodeRoutedRecord("agent", "yes", { evidence: evidence() })],
-  ["NodeExpandedRecord", () => new NodeExpandedRecord("agent", [], DIGEST, { evidence: evidence() })],
-  ["NodeFailedRecord", () => new NodeFailedRecord(FAILED, { evidence: evidence() })],
-])("all outcome records round trip closed evidence: %s", (_name, build) => {
-  const record = build();
-  expect(roundTrip(record)).toEqual(record);
-});
-
-test("existing outcome records round trip with no evidence", () => {
-  for (const record of [
-    new NodeSucceededRecord("agent", 1),
-    new NodeRoutedRecord("agent", "yes"),
-    new NodeExpandedRecord("agent", [], DIGEST),
-    new NodeFailedRecord(FAILED),
-  ]) {
-    expect((roundTrip(record) as NodeSucceededRecord).evidence).toBeNull();
-  }
-});
-
-const EVIDENCE_LABEL = "node_succeeded payload evidence";
-
-test.each<[string, (evidence: Record<string, any>) => void, string]>([
-  [
-    "an extra scope field",
-    (wire) => {
-      wire.scope.extra = true;
-    },
-    `invalid ${EVIDENCE_LABEL} scope fields; missing=[], extra=["extra"]`,
-  ],
-  [
-    "an unknown interaction kind",
-    (wire) => {
-      wire.interactions[0].kind = "provider_trace";
-    },
-    "unknown visible interaction kind: 'provider_trace'",
-  ],
-  [
-    "an extra interaction field",
-    (wire) => {
-      wire.interactions[0].provider = "x";
-    },
-    `invalid ${EVIDENCE_LABEL} interactions item fields; missing=[], extra=["provider"]`,
-  ],
-])("the evidence wire rejects %s", (_name, mutate, message) => {
-  const wire = wireOf(new NodeSucceededRecord("agent", 1, { evidence: evidence() }));
-  mutate(wire.payload.evidence);
-  expectError(() => decodeRecord(logJson(wire)), RangeError, message);
-});
-
-test("the memory scope wire has no boundary field", () => {
-  const wire = wireOf(new NodeSucceededRecord("agent", 1, { evidence: evidence() }));
-  const scope = wire.payload.evidence.scope;
-  expect(Object.keys(scope).sort()).toEqual(["memories", "occurrence_path", "static_path"]);
-  scope.boundary = null;
-  expectError(
-    () => decodeRecord(logJson(wire)),
-    RangeError,
-    `invalid ${EVIDENCE_LABEL} scope fields; missing=[], extra=["boundary"]`,
-  );
-});
-
-test("memory payloads name keys on the wire", () => {
-  const record = new NodeSucceededRecord("agent", 1, { evidence: evidence() });
-  const wire = JSON.parse(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "run", 0, record))).payload.evidence;
-  expect(wire.scope).toEqual({
-    static_path: ["flow", "agent"],
-    memories: ["notes", "reflective"],
-    occurrence_path: [{ kind: "map_item", static_path: ["flow"], index: 0 }],
-  });
-  expect(wire.memory_sections).toEqual([
-    { memory: "notes", text: "flow memory" },
-    { memory: "reflective", text: "agent memory" },
-  ]);
-  expect(roundTrip(record)).toEqual(record);
-});
 
 // --------------------------------------------------------------------------------------- //
 // Run start and memory commits on the run log
@@ -902,7 +565,7 @@ test("proposals preserve order and reject duplicate ids", () => {
 
 // The schema row of test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields.
 test("the wire rejects an old schema", () => {
-  const wire = wireOf(new NodeSucceededRecord("agent", 1, { evidence: evidence() }));
+  const wire = wireOf(new NodeSucceededRecord("agent", 1));
   wire.schema = 3n;
   expectError(() => decodeRecord(logJson(wire)), RunLogSchemaError, "unsupported run-record schema: 3");
 });

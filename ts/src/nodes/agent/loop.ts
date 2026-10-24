@@ -42,7 +42,7 @@ import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
-import { rejectDeepNesting, type Type, type ValueRecord, writeAsText } from "../../typesys/values.ts";
+import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
 import {
   ModelTextInteraction,
   ToolCallInteraction,
@@ -75,7 +75,7 @@ import {
 } from "./live.ts";
 import { reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, TOOL_OUTCOME_UNKNOWN, toolText } from "./memory.ts";
 import { generateStructured, structuredMaterial, typeToSchema, userMessage } from "./structured.ts";
-import { pushVisible, recordModelText, recordToolCall, recordToolResult, textOf } from "./text.ts";
+import { pushVisible, textOf } from "./text.ts";
 
 /**
  * Run one AGENT invocation.
@@ -141,13 +141,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
   );
   const retry = { scheduler: ctx.scheduler, random: ctx.random };
   const messages = [system, ...ctx.messages];
-  ctx.evaluationTrace?.recordPrompt(ctx.baseSystemPrompt, ctx.promptText, ctx.memoryContext.sections);
   const schema = ctx.outputType !== null ? typeToSchema(ctx.outputType) : null;
   const structuredOptions = {
     retries: ctx.retries,
     live,
     signal: ctx.signal,
-    evaluationTrace: ctx.evaluationTrace,
     retry,
     steps,
   };
@@ -217,7 +215,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     );
     if (calls.length === 0) {
       const text = textOf(reply);
-      recordModelText(ctx.evaluationTrace, text);
       if (schema !== null) {
         return new Output(await generateStructured(model, messages, ctx.outputType!, structuredOptions));
       }
@@ -245,7 +242,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
  * Interactions follow step order: each chat reply's text when it makes no runnable tool call,
  * else its runnable calls, then the results recorded for them in call order (a `skipped` result
  * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
- * and a reply a host interrupt cut, show nothing. Steps of another kind are skipped. A request's
+ * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
+ * the node) show nothing. Steps of another kind are skipped. A request's
  * digest leaves steers out, as the writer does, so steers never break the check.
  *
  * @param steps The invocation's steps across its starts.
@@ -305,6 +303,13 @@ export async function stepsMaterial(
     const reply = Message.fromJSON(step["output"]);
     messages.push(reply);
     if (step["finish"] === "interrupted") continue;
+    try {
+      rejectInvalidArguments(reply);
+    } catch (error) {
+      // The run failed the node at this reply before acting on it.
+      if (error instanceof TypeCheckError) break;
+      throw error;
+    }
     calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
     if (calls.length === 0) pushVisible(interactions, () => new ModelTextInteraction(reply.text()));
     for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
@@ -416,8 +421,8 @@ interface ReplayedCall {
  * reading `TOOL_OUTCOME_UNKNOWN`. Unparsed calls are not in `turn.calls`, so they get nothing, as
  * live.
  *
- * Every call is checked, so the calls form the groups they formed live and the evidence is
- * recorded in the same order; a call with a recorded result keeps it whatever its check says now.
+ * Every call is checked, so the calls form the groups they formed live and their results commit
+ * in the same order; a call with a recorded result keeps it whatever its check says now.
  *
  * @returns Whether a host interrupt skipped calls of this reply when it was live (a recorded
  *   `skipped` result): the loop ends as it did then.
@@ -427,10 +432,8 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   const { ctx, steps } = turn;
   let group: ReplayedCall[] = [];
   const commit = () => {
-    for (const { call } of group) recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
     for (const { call, result } of group) {
       const { id: callId, name } = call;
-      recordToolResult(ctx.evaluationTrace, name, result.output);
       const part = new ToolResultPart({ callId, name, content: result.output, isError: result.isError });
       turn.messages.push(new Message({ role: "tool", parts: [part] }));
     }
@@ -468,7 +471,7 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
 /**
  * Report the calls from call `start` on as skipped by a host interrupt, in call order: each gets a
  * `skipped` `tool_result` step (`SKIPPED_TOOL_RESULT`, an error) and its skipped events. None of
- * them runs or leaves evidence.
+ * them runs.
  *
  * @returns `true`, for the caller to return.
  */
@@ -533,9 +536,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
  * Fail the node at a call whose check failed, once the calls before it committed.
  *
  * As for a call about to start, a stop wins first, then a host interrupt skips it and every later
- * call. Otherwise the call's evidence is recorded; a granted call whose arguments failed gets the
- * brackets of a call that threw, since Python checks them inside the call, and an ungranted one
- * gets none.
+ * call. Otherwise a granted call whose arguments failed gets the brackets of a call that threw,
+ * since Python checks them inside the call, and an ungranted one gets none.
  *
  * @returns `true` when a host interrupt skipped the call.
  * @throws The failed check's error, or what publishing its brackets throws.
@@ -549,7 +551,6 @@ async function failCall(
   const { ctx, live } = turn;
   checkNodeStopped(turn);
   if (turn.interrupt?.aborted) return skipFrom(turn, index);
-  recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
   if (failed.granted) {
     // Rejects with the failed check's error once its brackets are published.
     await observeToolCall(live, () => Promise.reject(failed.error), identityOf(turn, call, index), {
@@ -608,7 +609,6 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     }
   };
   try {
-    for (const { call } of group) recordToolCall(ctx.evaluationTrace, call.name, call.arguments);
     const settling: Promise<SettledCall>[] = [];
     for (const planned of group) {
       if (controller.signal.aborted) break;
@@ -646,7 +646,6 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
       // No outcome is an error: a failure was thrown above.
       const { content, reported } = outcome as Extract<ToolOutcome, { content: string }>;
       const { id: callId, name } = call;
-      recordToolResult(ctx.evaluationTrace, name, content);
       const part = new ToolResultPart({ callId, name, content, isError: reported });
       turn.messages.push(new Message({ role: "tool", parts: [part] }));
     }

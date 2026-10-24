@@ -51,7 +51,7 @@ import {
   OriginRef,
   reprText,
 } from "../src/diagnostics.ts";
-import { type ReplayDegraded, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../src/events.ts";
+import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../src/events.ts";
 import type { Steering } from "../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
 import {
@@ -97,11 +97,7 @@ import {
   type RunResult,
   runFlow,
 } from "../src/run.ts";
-import { sourceKey } from "../src/expr/lineage.ts";
-import { learningMaterials } from "../src/runtime/backward.ts";
-import { evidencePayload, JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
-import { MemoryRuntime } from "../src/runtime/memory_runtime.ts";
-import { evaluationEvidence } from "../src/runtime/trace.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addCrashedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
@@ -2536,7 +2532,6 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     // The memories stay open for the backward calls, and close even when one fails the case; the
     // close is outside the run's `try`, so a close error never replaces its `raises`.
     try {
-      if (result !== undefined && existsSync(log)) await checkEvidenceRebuild(flow, log, { env, models, memory });
       const entries = get(case_, "backward", []) as Case[];
       if (result !== undefined) outcomes = await callBackward(result, log, entries, flow);
     } finally {
@@ -2699,66 +2694,6 @@ function goldenLog(log: string, ctx: CaseContext): void {
   const at = seq === -1 ? actual.length : seq;
   const lines = `--- actual\n${actual[at] ?? ""}\n--- golden\n${expected[at] ?? ""}`;
   throw new CaseFailure(`the run log differs from ${basename(golden)} at record ${at}\n${lines}`);
-}
-
-/**
- * Throw a `CaseFailure` unless what learning reads of each occurrence of a learnable run, rebuilt
- * from its steps, render and recall (`learningMaterials`, `evaluationEvidence`), equals the
- * evidence its outcome record holds. The one allowed difference is the interactions' order (steps
- * show a reply's calls before their results); each such occurrence is printed for review. A
- * rebuilt request that misses its digest fails the case.
- */
-async function checkEvidenceRebuild(
-  flow: ComposedFlow,
-  log: string,
-  options: { env: Env; models: ModelAccess; memory: MemoryRegistry | null },
-): Promise<void> {
-  const envelopes = readRunLog(log);
-  const started = envelopes[0]?.record as RunStartedRecord | undefined;
-  if (started === undefined || !started.learnable) return;
-  const state = withEnv(options.env, () => replayRunLog(flow, MemoryRunLog.fromRecords(envelopes)));
-  if (state.trace === null) return;
-  const memories = state.memories ?? [];
-  const memory =
-    options.memory === null || memories.length === 0
-      ? null
-      : await MemoryRuntime.open({
-          memories,
-          origins: new Map(memories.map((spec) => [spec.key, null])),
-          memory: options.memory,
-          snapshots: state.memorySnapshots,
-        });
-  const reports: unknown[] = [];
-  let materials;
-  try {
-    materials = await withEnv(options.env, () =>
-      learningMaterials(state, {
-        memory,
-        models: options.models,
-        expandTools: null,
-        onEvent: (event) => reports.push(event),
-      }),
-    );
-  } finally {
-    await memory?.close();
-  }
-  if (reports.length > 0) throw new CaseFailure(`evidence rebuild reported ${logJson(reports.map((event) => (event as ReplayDegraded).toJSON()))}`);
-  for (const occurrence of state.trace.occurrences) {
-    const recorded = evidencePayload(occurrence.record.evidence);
-    const rebuilt = evaluationEvidence(occurrence, materials.get(sourceKey(occurrence.source)) ?? null);
-    if (logJson(recorded) === logJson(rebuilt)) continue;
-    const where = `evidence rebuild of node ${reprText(occurrence.nodeId)}`;
-    if (recorded === null || rebuilt === null) {
-      throw new CaseFailure(`${where}: recorded ${logJson(recorded)}, rebuilt ${logJson(rebuilt)}`);
-    }
-    const { interactions: was, ...wasRest } = recorded;
-    const { interactions: now, ...nowRest } = rebuilt;
-    const sorted = (items: unknown) => (items as JsonObject[]).map((item) => logJson(item)).sort(compareCodeUnits);
-    if (logJson(wasRest) !== logJson(nowRest) || logJson(sorted(was)) !== logJson(sorted(now))) {
-      throw new CaseFailure(`${where}: recorded ${logJson(recorded)}, rebuilt ${logJson(rebuilt)}`);
-    }
-    process.stderr.write(`${where}: interaction order\n  recorded ${logJson(was)}\n  rebuilt  ${logJson(now)}\n`);
-  }
 }
 
 /**

@@ -93,3 +93,36 @@ test("an inline body's seed infers its Inbox type", () => {
 test("an inline body that doesn't read its inbox is refused", () => {
   expect(loadError(() => loopOf(inline(""))).message).toContain("inbox input `m` is never read");
 });
+
+/** A loop body that takes inbox `m` and returns `done` and a field named `m`. */
+const SHADOW = handChild({
+  inputs: [inboxParam("m"), new Parameter("done", { required: true, contract: new ValueContract(BOOL) })],
+  output: { done: "${input.done}", m: "x" },
+});
+
+test("a body output field can't name an inbox input", () => {
+  const text = named("not done");
+  const message = loadError(() => assembleText(text, "flow.yaml", { children: { sink: SINK, body: SHADOW } })).message;
+  expect(message).toContain("loop node 'l': body output field `m` names an inbox input; a loop carries an inbox, never returns it");
+});
+
+test("an inline body output field can't name an inbox input", () => {
+  const text = `id: f
+name: f
+input:
+  m: !Inbox(str)
+nodes:
+  l:
+    kind: loop
+    while: not done
+    input:
+      m: \${input.m}
+      done: false
+    nodes:
+${READ_M}    output:
+      done: true
+      m: x
+output: null
+`;
+  expect(loadError(() => loopOf(text)).message).toContain("body output field `m` names an inbox input");
+});

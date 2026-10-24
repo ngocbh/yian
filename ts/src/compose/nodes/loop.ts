@@ -279,12 +279,19 @@ export class LoopDescriptor extends NodeDescriptor {
       );
     } else {
       const outside = [...outNames].filter((name) => !carried.has(name));
-      if (outside.length > 0) {
+      // The loop drops its inbox fields at the end, so a returned one would never reach its output.
+      const returnedInboxes = [...outNames].filter((name) => inboxFields.has(name)).toSorted(compareCodeUnits);
+      for (const name of returnedInboxes) {
+        errors.push(
+          `${subject}: body output field \`${name}\` names an inbox input; a loop carries an inbox, never returns it`,
+        );
+      }
+      if (returnedInboxes.length === 0 && outside.length > 0) {
         errors.push(
           `${subject}: body output field(s) ${namesText(outside)} are not carried record fields ` +
             `${carriedText} (a body returns a subset of the carried record)`,
         );
-      } else if (outNames.size !== carried.size) {
+      } else if (returnedInboxes.length === 0 && outNames.size !== carried.size) {
         node.returnedFields = carriedNames.filter((name) => outNames.has(name));
         node.outputContract = combineOutputContracts(
           new Map(

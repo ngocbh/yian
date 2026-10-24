@@ -315,7 +315,8 @@ function callViews(state: RunState, nodeId: string): CallView[] {
  * node settles; the appended records reach it through the log the run boundary wraps. Evidence and
  * binding capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
  * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
- * before `record` returns, with no observer, and the capability closes once the evaluation's
+ * before `record` returns, with no observer but the `CallClosed` of a call a `pending` step registers
+ * already closed (its node holds an interrupt), and the capability closes once the evaluation's
  * outcome is decided, as do the node's event sinks. Once the run stops, `record` throws the node
  * signal's reason and appends nothing, and the sinks drop what they get, except a settled step
  * (`{ settled: true }`) and a `ToolCallFinished` while the run has no terminal result: the node
@@ -723,19 +724,25 @@ export class FlowEngine {
       // A stopping run takes only a settled call's step, until it has a result; the stop is
       // control flow, not a host fault.
       if (signal.aborted && !(options?.settled === true && state.result === null)) throw signal.reason;
+      let prepared: PreparedTransition;
+      let observers: readonly RunEvent[];
       try {
-        const prepared = prepareNodeStep(state, nodeId, step);
-        commitPrepared(log, state, prepared);
-        return (prepared.record as NodeStepRecord).n;
+        prepared = prepareNodeStep(state, nodeId, step);
+        observers = commitPrepared(log, state, prepared);
       } catch (error) {
         // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);
       }
+      // A pending step on a node an interrupt names registers its call closed; the host withdraws it.
+      this.#publish(observers, this.#events);
+      return (prepared.record as NodeStepRecord).n;
     };
     // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
     // calling its handler again after a wake or a crash.
     const calls = callViews(state, nodeId);
-    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, calls, state.runDefaults.maxEventBytes, this.#durable);
+    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, calls, state.runDefaults.maxEventBytes, this.#durable, () =>
+      callViews(state, nodeId),
+    );
   }
 
   /**

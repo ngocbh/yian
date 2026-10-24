@@ -6,8 +6,13 @@ import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { CallClosed } from "../../src/events.ts";
-import { Node, NodeKind, type NodeCaps, type NodeResult, Output, type SteerInbox } from "../../src/nodes/base.ts";
+import { type CompleteResult, Node, NodeKind, type NodeCaps, type NodeResult, Output, type SteerInbox } from "../../src/nodes/base.ts";
+import { acceptsNull, type CallView, HostToolCall, NodeSteps } from "../../src/nodes/contracts.ts";
+import { toolCallId } from "../../src/tools/context.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
+import { RUN_ID } from "./run_state_fixtures.ts";
 import { InterruptedRecord, NodeWokenRecord } from "../../src/runtime/log.ts";
+import { typeFor } from "../../src/typesys/types.ts";
 import { commitPrepared, prepareInterrupt, prepareNodeStarted, prepareRunResumed } from "../../src/runtime/state.ts";
 import { InboxRef } from "../../src/typesys/values.ts";
 import { FakeHost, GateNode, inboxEngine, inboxFlow } from "./inbox_fixtures.ts";
@@ -160,4 +165,68 @@ test("an interrupt wakes a waiting reader, whose call it closed", async () => {
   // The host node reads its call closed and ends with null; its interrupt is dropped with it.
   expect(engine.state.pool.store.get("h")!.toObject()).toBeNull();
   expect(engine.state.waits.interrupts.size).toBe(0);
+});
+
+/** A host call node that pends its call, waits for `release()`, then returns its call as `currentCalls()` and `calls` see it. */
+class CallReader extends Node {
+  readonly kind = NodeKind.TOOL;
+  override readonly needsSteps = true;
+  readonly tool = "lookup";
+  readonly #started = Promise.withResolvers<void>();
+  readonly #gate = Promise.withResolvers<void>();
+  seen: { current: readonly CallView[]; snapshot: readonly CallView[] } | null = null;
+
+  get started(): Promise<void> {
+    return this.#started.promise;
+  }
+
+  release(): void {
+    this.#gate.resolve();
+  }
+
+  get callId(): string {
+    return toolCallId(RUN_ID, this.id);
+  }
+
+  override hostToolCall(): HostToolCall {
+    return new HostToolCall(this.tool, [], new Map(), null);
+  }
+
+  override waitResultStep(call: CallView, result: CompleteResult): JsonObject {
+    return { kind: "tool_result", call_id: call.callId, output: { kind: "str", value: String((result as { output: unknown }).output) } };
+  }
+
+  override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
+    const steps = caps.steps!;
+    steps.record({ kind: "pending", call_id: this.callId, tool: this.tool, arguments: {} });
+    this.#started.resolve();
+    await this.#gate.promise;
+    this.seen = { current: steps.currentCalls(), snapshot: steps.calls };
+    return new Output("done");
+  }
+}
+
+test("NodeSteps.currentCalls is calls outside a run", () => {
+  const call: CallView = { callId: "c", tool: "ask", resultKey: "c", state: "open", closedReason: null, result: null, deadline: null };
+  const steps = new NodeSteps(1, [], () => 1, [call]);
+  expect(steps.currentCalls()).toBe(steps.calls);
+});
+
+test("in a run, currentCalls sees an answer that landed since the evaluation began; calls doesn't", async () => {
+  const reader = new CallReader("h");
+  const engine = chain(reader);
+  const running = engine.run();
+  await reader.started;
+  engine.deliver({ kind: "complete", callId: reader.callId, result: { output: "yes" } });
+  reader.release();
+  await running;
+  expect(reader.seen!.snapshot).toEqual([]);
+  expect(reader.seen!.current.map((call) => [call.callId, call.state])).toEqual([[reader.callId, "answered"]]);
+  expect(reader.seen!.current[0]!.result).toMatchObject({ kind: "tool_result", call_id: reader.callId });
+  expect(Object.isFrozen(reader.seen!.current[0])).toBe(true);
+});
+
+test("acceptsNull: Optional(...) accepts null, str doesn't", () => {
+  expect(acceptsNull(typeFor("Optional(str)", new Map()))).toBe(true);
+  expect(acceptsNull(typeFor("str", new Map()))).toBe(false);
 });

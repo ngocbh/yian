@@ -824,7 +824,9 @@ async function evaluateNode(
         throw error;
       }
     };
-    caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes, steps.durable);
+    caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes, steps.durable, () =>
+      steps.currentCalls(),
+    );
   }
   if (steerInbox !== null && node.readsSteerInbox === true) {
     caps.openSteerInbox = steerInboxCapability(steerInbox, onFault, isClosed);

@@ -1133,6 +1133,8 @@ export class HostToolCall {
 export interface CallView {
   readonly callId: string;
   readonly tool: string;
+  /** The key the call's `tool_result` step's `call_id` holds: an agent's provider tool call id, else the call id. */
+  readonly resultKey: string;
   readonly state: "open" | "answered" | "timed_out" | "closed";
   readonly closedReason: "crashed" | "interrupted" | "timed_out" | "cancelled" | "failed" | null;
   /** The answering `tool_result` step's body, once the call is answered. */

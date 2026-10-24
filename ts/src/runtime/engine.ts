@@ -259,6 +259,7 @@ function callViews(state: RunState, nodeId: string): CallView[] {
     return {
       callId: call.callId,
       tool: call.tool,
+      resultKey: call.resultKey,
       state: call.state,
       closedReason: call.closedReason,
       result: answer === null ? null : structuredClone(answer),

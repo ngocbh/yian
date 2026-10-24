@@ -150,6 +150,7 @@ describe("take and sleep", () => {
     const held: CallView = {
       callId: "r1/heard",
       tool: "take",
+      resultKey: "r1/heard",
       state: "answered",
       closedReason: null,
       result: null,
@@ -174,7 +175,8 @@ function sendTool(ids: string[], answer: () => unknown = () => pending()): Funct
 
 /** One held call of node `send` (or `node`), open unless `fields` says otherwise. */
 function heldCall(fields: Partial<CallView> = {}): CallView {
-  return { callId: "r1/send", tool: "codex_send", state: "open", closedReason: null, result: null, deadline: null, ...fields };
+  const callId = fields.callId ?? "r1/send";
+  return { callId, tool: "codex_send", resultKey: callId, state: "open", closedReason: null, result: null, deadline: null, ...fields };
 }
 
 const APPROVAL = new Type({

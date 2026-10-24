@@ -1392,6 +1392,7 @@ function callView(state: RunState, call: Call): CallView {
   return Object.freeze({
     callId: call.callId,
     tool: call.tool,
+    resultKey: call.resultKey,
     state: call.state,
     closedReason: call.closedReason,
     result: callResultStep(state, call.callId),

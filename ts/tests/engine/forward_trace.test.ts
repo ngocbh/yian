@@ -161,8 +161,7 @@
  * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
  *
  * Ported, through the engine (`engine` with `learnable`):
- * `test_static_capture_host_fault_does_not_append_a_node_outcome` (the node's
- * `captureBackwardContext` replaced on the instance), `test_trace_source_is_the_actual_commit_as_producer`
+ * `test_trace_source_is_the_actual_commit_as_producer`
  * (the handler at the producer's source, called, is the producer's own `backward`),
  * `test_failed_binding_and_rejected_outcomes_retain_canonical_failures` (5 rows; the grow row's
  * seed is a `Set`), `test_learn_false_omits_backward_capture`,
@@ -174,10 +173,10 @@
  * Python's handler identity check is dropped, since a TS bound handler can't name its node).
  *
  * Ported (adapted), through the engine:
- * - `test_agent_render_capture_host_and_append_failures_do_not_install_worker_data` (2 rows): a
- *   local `needsRenderCapture` node for Python's AGENT, the run recording its effective model
- *   configuration; the capture fails reading a record whose getter throws, for Python's patched
- *   `canonical_seed`, and the append row replaces the log's `append` on the instance.
+ * - `test_agent_render_capture_host_and_append_failures_do_not_install_worker_data`: the append
+ *   row, on a CODE node, the log's `append` replaced on the instance. The capture row and
+ *   `test_static_capture_host_fault_does_not_append_a_node_outcome` aren't ported: an evaluation
+ *   captures no node data (learning rebuilds it), so no capture can fail before the append.
  * - `test_pooled_lookup_keeps_value_and_producer_identity_together`: a TS binding is synchronous,
  *   so no commit can land between two reads of one binding; instead `consumer` binds while `peer`
  *   is in flight and `late` after `peer` committed, each read's value and producer agreeing.
@@ -413,18 +412,11 @@ const ROUTE_X = ValueRoute.record([["x", ValueRoute.literal(1)]]);
 /** A capture of `x`. */
 const FINISHED = new ForwardCapture(ROUTE_X);
 
-test("a forward capture keeps invocation names and a detached copy of node data", () => {
-  const data = { input_output_paths: { result: [] as string[] } };
+test("a forward capture keeps invocation names", () => {
   const route = ValueRoute.record([["result", ValueRoute.literal({ items: [1] })]]);
-  const capture = new ForwardCapture(route, {
-    nodeData: data,
-    inputNames: ["result"],
-    variableNames: ["instruction"],
-  });
-  data.input_output_paths.result.push("changed");
+  const capture = new ForwardCapture(route, { inputNames: ["result"], variableNames: ["instruction"] });
   expect(capture.inputNames).toEqual(["result"]);
   expect(capture.variableNames).toEqual(["instruction"]);
-  expect(capture.nodeData).toEqual({ input_output_paths: { result: [] } });
 });
 
 test.each<[string, string, unknown, ErrorClass, string]>([
@@ -439,36 +431,7 @@ test.each<[string, string, unknown, ErrorClass, string]>([
     "variable_names must contain unique names",
   ],
   ["a non-string variable name", "variableNames", [false], TypeError, "variable_names must contain only strings"],
-  ["paths as an array", "nodeData", { input_output_paths: [] }, TypeError, "input_output_paths must be a record"],
-  [
-    "a path for an unknown input",
-    "nodeData",
-    { input_output_paths: { unknown: [] } },
-    RangeError,
-    "input_output_paths must name declared inputs",
-  ],
-  [
-    "a boolean path part",
-    "nodeData",
-    { input_output_paths: { result: [true] } },
-    RangeError,
-    "output path components must be strings or non-negative integers",
-  ],
-  [
-    "a negative path part",
-    "nodeData",
-    { input_output_paths: { result: [-1] } },
-    RangeError,
-    "output path components must be strings or non-negative integers",
-  ],
-  [
-    "a path as a string",
-    "nodeData",
-    { input_output_paths: { result: "result" } },
-    TypeError,
-    "input_output_paths values must be arrays",
-  ],
-])("a forward capture rejects malformed invocation inventory and paths: %s", (_label, field, value, cls, message) => {
+])("a forward capture rejects malformed invocation inventory: %s", (_label, field, value, cls, message) => {
   const options = { inputNames: ["result"], variableNames: ["instruction"], [field]: value };
   const route = ValueRoute.record([["result", ValueRoute.literal(1)]]);
   const build = () => new ForwardCapture(route, options as never);
@@ -519,14 +482,12 @@ test("a forward capture keeps frozen copies of its values", () => {
   const bound = { x: [1, 2] };
   const keys = new Set(["x"]);
   const items: [number, ForwardCapture][] = [[0, FINISHED], [2, FINISHED]];
-  const data = { static: { label: "a" }, input_output_paths: { x: [0] } };
   const names = ["x"];
   const scope = new ExecutionScope(["work"]);
   const capture = new ForwardCapture(ROUTE_X, {
     evaluatedKeys: keys,
     items,
     scope,
-    nodeData: data,
     inputNames: names,
     variableNames: ["tone"],
   });
@@ -534,7 +495,6 @@ test("a forward capture keeps frozen copies of its values", () => {
   keys.add("y");
   items.push([3, FINISHED]);
   items[0]![0] = 9;
-  data.static.label = "b";
   names.push("y");
 
   expect(capture.route).toBe(ROUTE_X);
@@ -543,16 +503,12 @@ test("a forward capture keeps frozen copies of its values", () => {
   expect(capture.items).toEqual([[0, FINISHED], [2, FINISHED]]);
   expect(capture.items[0]![1]).toBe(FINISHED);
   expect(capture.scope).toBe(scope);
-  expect(capture.nodeData).toEqual({ static: { label: "a" }, input_output_paths: { x: [0] } });
   expect(capture.inputNames).toEqual(["x"]);
   expect(capture.variableNames).toEqual(["tone"]);
 
   expect(() => (capture.items as unknown[]).push([5, FINISHED])).toThrow(TypeError);
   expect(() => {
     (capture.items[0] as unknown as number[])[0] = 7;
-  }).toThrow(TypeError);
-  expect(() => {
-    (capture.nodeData!.static as { label: string }).label = "c";
   }).toThrow(TypeError);
   expect(() => (capture.inputNames as string[]).push("z")).toThrow(TypeError);
   expect(() => (capture.variableNames as string[]).push("z")).toThrow(TypeError);
@@ -578,7 +534,6 @@ test("a forward capture defaults to empty keys, items and inventories", () => {
   expect(capture.evaluatedKeys.size).toBe(0);
   expect(capture.items).toEqual([]);
   expect(capture.scope).toBeNull();
-  expect(capture.nodeData).toBeNull();
   expect(capture.inputNames).toEqual([]);
   expect(capture.variableNames).toEqual([]);
 });
@@ -644,41 +599,26 @@ test.each<[string, () => unknown, ErrorClass, string]>([
     TypeError,
     "scope must be an ExecutionScope or null",
   ],
-  [
-    "node data as an array",
-    () => new ForwardCapture(ROUTE_X, { nodeData: [] as never }),
-    TypeError,
-    "node_data must be a record or null",
-  ],
 ])("a forward capture rejects %s", (_label, build, cls, message) => {
   expect(build).toThrow(cls);
   expect(build).toThrow(message);
 });
 
-test("a backward capture defaults to empty inventories, no scope and empty node data", () => {
-  for (const capture of [new BackwardCapture(), new BackwardCapture({ nodeData: null })]) {
-    expect(capture.inputNames).toEqual([]);
-    expect(capture.variableNames).toEqual([]);
-    expect(capture.scope).toBeNull();
-    expect(capture.nodeData).toEqual({});
-  }
+test("a backward capture defaults to empty inventories and no scope", () => {
+  const capture = new BackwardCapture();
+  expect(capture.inputNames).toEqual([]);
+  expect(capture.variableNames).toEqual([]);
+  expect(capture.scope).toBeNull();
 });
 
-test("a backward capture keeps a frozen copy of its node data", () => {
-  const data = { static: { label: "a" }, input_output_paths: { result: [] as string[] } };
+test("a backward capture keeps frozen copies of its inventories", () => {
   const names = ["result"];
   const scope = new ExecutionScope(["work"]);
-  const capture = new BackwardCapture({ inputNames: names, variableNames: ["tone"], scope, nodeData: data });
-  data.static.label = "b";
-  data.input_output_paths.result.push("changed");
+  const capture = new BackwardCapture({ inputNames: names, variableNames: ["tone"], scope });
   names.push("other");
-  expect(capture.nodeData).toEqual({ static: { label: "a" }, input_output_paths: { result: [] } });
   expect(capture.inputNames).toEqual(["result"]);
   expect(capture.variableNames).toEqual(["tone"]);
   expect(capture.scope).toBe(scope);
-  expect(() => {
-    (capture.nodeData.static as { label: string }).label = "c";
-  }).toThrow(TypeError);
   expect(() => (capture.inputNames as string[]).push("z")).toThrow(TypeError);
   expect(() => (capture.variableNames as string[]).push("z")).toThrow(TypeError);
   expect(() => {
@@ -696,20 +636,12 @@ test.each<[string, string, unknown, ErrorClass, string]>([
     "variable_names must contain unique names",
   ],
   [
-    "a path for an unknown input",
-    "nodeData",
-    { input_output_paths: { unknown: [] } },
-    RangeError,
-    "input_output_paths must name declared inputs",
-  ],
-  [
     "a scope that isn't an ExecutionScope",
     "scope",
     { staticPath: ["work"] },
     TypeError,
     "scope must be an ExecutionScope or null",
   ],
-  ["node data as an array", "nodeData", [], TypeError, "node_data must be a record"],
 ])("a backward capture rejects %s", (_label, field, value, cls, message) => {
   const options = { inputNames: ["result"], variableNames: ["instruction"], [field]: value };
   const build = () => new BackwardCapture(options as never);
@@ -749,12 +681,10 @@ function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, me
   expect((caught as Error).message).toBe(message);
 }
 
-test("a forward capture round trips invocation names and structural layout", () => {
-  const data = { input_output_paths: { result: [] as string[] } };
+test("a forward capture round trips invocation names", () => {
   const capture = new ForwardCapture(ValueRoute.record([["result", ValueRoute.literal({ items: [1n] })]]),
-    { nodeData: data, inputNames: ["result"], variableNames: ["instruction"] },
+    { inputNames: ["result"], variableNames: ["instruction"] },
   );
-  data.input_output_paths.result.push("changed");
   const envelope = capturedEnvelope(capture);
 
   const decoded = decodeRecord(encodeRecord(envelope));
@@ -763,7 +693,6 @@ test("a forward capture round trips invocation names and structural layout", () 
   const decodedCapture = (decoded.record as NodeSucceededRecord).forwardCapture!;
   expect(decodedCapture.inputNames).toEqual(["result"]);
   expect(decodedCapture.variableNames).toEqual(["instruction"]);
-  expect(decodedCapture.nodeData).toEqual({ input_output_paths: { result: [] } });
   expect(decoded.schema).toBe(SCHEMA_VERSION);
   const old = wireOf(envelope);
   old.schema = 6n;
@@ -796,36 +725,7 @@ test.each<[string, string, unknown, ErrorClass, string]>([
     TypeError,
     `${CAPTURE_LABEL} variable_names must be an array of strings`,
   ],
-  ["paths as an array", "node_data", { input_output_paths: [] }, TypeError, "input_output_paths must be a record"],
-  [
-    "a path for an unknown input",
-    "node_data",
-    { input_output_paths: { unknown: [] } },
-    RangeError,
-    "input_output_paths must name declared inputs",
-  ],
-  [
-    "a boolean path part",
-    "node_data",
-    { input_output_paths: { result: [true] } },
-    RangeError,
-    "output path components must be strings or non-negative integers",
-  ],
-  [
-    "a negative path part",
-    "node_data",
-    { input_output_paths: { result: [-1n] } },
-    RangeError,
-    "output path components must be strings or non-negative integers",
-  ],
-  [
-    "a path as a string",
-    "node_data",
-    { input_output_paths: { result: "result" } },
-    TypeError,
-    "input_output_paths values must be arrays",
-  ],
-])("a capture's record rejects malformed invocation inventory and paths: %s", (_label, field, value, cls, message) => {
+])("a capture's record rejects malformed invocation inventory: %s", (_label, field, value, cls, message) => {
   const capture = new ForwardCapture(ValueRoute.record([["result", ValueRoute.literal(1n)]]), {
     inputNames: ["result"],
     variableNames: ["instruction"],
@@ -884,7 +784,6 @@ test("a forward capture round trips without a memory scope", () => {
     evaluatedKeys: new Set(["value"]),
     items: [[0, item]],
     scope: new ExecutionScope(["work"]),
-    nodeData: { saved: [2n] },
   });
   inputs.value.push(99n);
   const envelope = capturedEnvelope(capture);
@@ -892,9 +791,6 @@ test("a forward capture round trips without a memory scope", () => {
   const decoded = decodeRecord(encodeRecord(envelope));
 
   expect(decoded).toEqual(envelope);
-  const decodedCapture = (decoded.record as NodeSucceededRecord).forwardCapture!;
-  expect(() => (decodedCapture.nodeData!.saved as unknown[]).push(9n)).toThrow(TypeError);
-  expect(capture.nodeData).toEqual({ saved: [2n] });
   expect(() => {
     (capture as { scope: ExecutionScope | null }).scope = null;
   }).toThrow(TypeError);
@@ -1153,11 +1049,12 @@ function install(trace: RetainedTrace, target: string, entry: SourceEntry): void
  * Install the occurrence of `a` started at seq 1, accepted with `record` at seq 2, its bound inputs
  * rebuilding to `{v: 1}`.
  */
-function installOccurrence(trace: RetainedTrace, record: OutcomeRecord): TraceOccurrence {
+function installOccurrence(trace: RetainedTrace, record: OutcomeRecord, nodeData: JsonObject = {}): TraceOccurrence {
   const capture = record.forwardCapture!;
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
   const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
     rebind: () => ({ inputs: { v: 1n }, capture, inputRoute: capture.route }),
+    nodeData: () => nodeData,
   });
   trace._occurrences.push(occurrence);
   trace.occurrenceBySource.set(sourceKey(occurrence.source), occurrence);
@@ -1166,13 +1063,16 @@ function installOccurrence(trace: RetainedTrace, record: OutcomeRecord): TraceOc
 
 /**
  * A trace of `learnableRun()`: START's source 0, `a`'s output (source 1) and its occurrence, accepted
- * with `record` (by default the run's `NodeSucceeded`).
+ * with `record` (by default the run's `NodeSucceeded`), whose node data rebuilds to `nodeData`.
  */
-function learnableTrace(record: OutcomeRecord = learnableRun()[2]!.record as NodeSucceededRecord): RetainedTrace {
+function learnableTrace(
+  record: OutcomeRecord = learnableRun()[2]!.record as NodeSucceededRecord,
+  nodeData: JsonObject = {},
+): RetainedTrace {
   const trace = new RetainedTrace(RUN, "__start__", "end", ["x"]);
   install(trace, "__start__", new SourceEntry(new SourceRef(RUN, 0), 0, typedJson({ x: 1n })));
   install(trace, "a", new SourceEntry(new SourceRef(RUN, 1), 2, typedJson(2n)));
-  installOccurrence(trace, record);
+  installOccurrence(trace, record, nodeData);
   return trace;
 }
 
@@ -1194,7 +1094,6 @@ test("captureBindings joins a binding capture and its backward capture", () => {
     inputNames: ["x", "f"],
     variableNames: ["v"],
     scope,
-    nodeData: { k: 1n },
   });
 
   const capture = captureBindings(bindings, backward);
@@ -1202,7 +1101,6 @@ test("captureBindings joins a binding capture and its backward capture", () => {
   expect(capture.route).toBe(bindings.route);
   expect([...capture.evaluatedKeys]).toEqual(["x"]);
   expect(capture.scope).toBe(scope);
-  expect(capture.nodeData).toEqual({ k: 1n });
   expect(capture.inputNames).toEqual(["x", "f"]);
   expect(capture.variableNames).toEqual(["v"]);
   expect(capture.items).toHaveLength(1);
@@ -1211,7 +1109,6 @@ test("captureBindings joins a binding capture and its backward capture", () => {
   expect(itemCapture.inputNames).toEqual([]);
   expect(itemCapture.variableNames).toEqual([]);
   expect(itemCapture.scope).toBeNull();
-  expect(itemCapture.nodeData).toEqual({});
 });
 
 test("captureBindings requires exact carriers", () => {
@@ -1501,26 +1398,24 @@ test("backwardContext adds the evaluation evidence from the material and reads a
   expect(trace.backwardContext(source).nodeData).toEqual({ _evaluation_evidence: null });
 });
 
-test("backwardContext refuses captured node data using the reserved evidence key", () => {
-  const capture = new ForwardCapture(ValueRoute.record([["v", ValueRoute.literal(1n)]]), {
-    nodeData: { _evaluation_evidence: "forged" },
+test("backwardContext refuses node data using the reserved evidence key", () => {
+  const capture = new ForwardCapture(ValueRoute.record([["v", ValueRoute.literal(1n)]]));
+  const trace = learnableTrace(new NodeRoutedRecord("a", "next", { forwardCapture: capture }), {
+    _evaluation_evidence: "forged",
   });
-  const trace = learnableTrace(new NodeRoutedRecord("a", "next", { forwardCapture: capture }));
   expectError(
     () => trace.backwardContext(new SourceRef(RUN, 1)),
     RangeError,
-    "captured node data uses reserved _evaluation_evidence",
+    "node data uses reserved _evaluation_evidence",
   );
 });
 
 test("backwardContext takes a routed terminal failure and reads output only for a success", () => {
-  const capture = new ForwardCapture(ValueRoute.record([["v", ValueRoute.literal(1n)]]), {
-    nodeData: { k: "kept" },
-  });
+  const capture = new ForwardCapture(ValueRoute.record([["v", ValueRoute.literal(1n)]]));
   const failure = new Failure({ code: "graph.terminal_unreachable", message: "Unreachable.", nodeId: "a" });
   // Source 1 holds a value, so the null output comes from the record's class.
   const record = new NodeRoutedRecord("a", "next", { terminalFailure: failure, forwardCapture: capture });
-  const trace = learnableTrace(record);
+  const trace = learnableTrace(record, { k: "kept" });
 
   const context = trace.backwardContext(new SourceRef(RUN, 1));
 
@@ -1677,7 +1572,12 @@ test("prepareTrace and apply build the trace record by record", () => {
     given = [new Map(sources), resolve("__start__", 0)];
     return { capture: new BindingCapture({ v: 1n }, ValueRoute.record([]), new Set()), failure: null };
   };
-  expect(step(trace, succeeded, node, { writerFiles: files, rebinder })).toBe(trace);
+  const rebuiltFrom: unknown[] = [];
+  const nodeData = (inputs: Readonly<Record<string, unknown>> | null) => {
+    rebuiltFrom.push(inputs);
+    return { k: "rebuilt" };
+  };
+  expect(step(trace, succeeded, node, { writerFiles: files, rebinder, nodeData })).toBe(trace);
   const source = new SourceRef(RUN, 2);
   const occurrence = trace.occurrences[0]!;
   expect(occurrence.source).toEqual(source);
@@ -1703,6 +1603,9 @@ test("prepareTrace and apply build the trace record by record", () => {
   handler(context, ["Review."]);
   expect(node.calls).toEqual([[context, ["Review."]]]);
   expect(context.inputs).toEqual({ v: 1n });
+  // The node data is rebuilt once, from the bound inputs binding the node again gave.
+  expect(context.nodeData).toEqual({ k: "rebuilt", _evaluation_evidence: null });
+  expect(rebuiltFrom).toEqual([{ v: 1n }]);
   const [names, read] = given!;
   expect([...names]).toEqual([["__start__", 0]]);
   expect(read.value.toObject()).toEqual({ x: 1n });
@@ -3167,7 +3070,7 @@ asserts: ["work.output != null"]
   expect(occurrences.get(START_ID)!.boundInputs).toEqual({ topic: "reefs" });
   expect(terminal.inputNames).toEqual(["result"]);
   expect(Object.keys(occurrences.get(END_ID)!.boundInputs!).length).toBeGreaterThan(1);
-  expect(terminal.nodeData).toEqual({ input_output_paths: { result: [] } });
+  expect(occurrences.get(END_ID)!.nodeData).toEqual({ input_output_paths: { result: [] } });
 
   const forbidden = () => {
     throw new Error("replay executed or recaptured a node");
@@ -3197,8 +3100,9 @@ asserts: ["work.output != null"]
   const occurrence = replay.trace!.occurrences.find((item) => item.nodeId === END_ID)!;
   const handler = replay.trace!.backwardHandlers.get(sourceKey(occurrence.source))!;
   const end = original.nodes.get(END_ID) as EndNode;
-  // The bound inputs are rebuilt from END's binding, so they are read before it changes.
+  // The bound inputs and node data are rebuilt from END, so they are read before it changes.
   const inputs = occurrence.boundInputs;
+  const nodeData = occurrence.nodeData;
   end.names = ["changed", "afterward"];
   end.params = [];
   const capture = (occurrence.record as NodeSucceededRecord).forwardCapture!;
@@ -3206,82 +3110,32 @@ asserts: ["work.output != null"]
     inputNames: capture.inputNames,
     variableNames: capture.variableNames,
     output: replay.trace!.sources.get(sourceKey(occurrence.source))!.value,
-    nodeData: capture.nodeData,
+    nodeData,
   });
   expect((await handler(context, ["Review the answer."])).inputFeedback).toEqual({ result: ["Review the answer."] });
 });
 
-test("a static capture host fault does not append a node outcome", async () => {
-  const expected = new RangeError("capture failed");
-  const node = new FuncNode("work", () => "body must not run");
-  node.captureBackwardContext = () => {
-    throw expected;
-  };
+test("an append failure does not install worker data", async () => {
+  const expected = new Error("append unavailable");
+  const node = new FuncNode("writer", () => "actual prompt");
   const built = learnableSingle(node);
+  const append = built.log.append.bind(built.log);
+  built.log.append = (record) => {
+    if (record instanceof NodeSucceededRecord && record.nodeId === "writer") {
+      expect(record.forwardCapture).not.toBeNull();
+      throw expected;
+    }
+    return append(record);
+  };
 
   expect(await rejected(built.run())).toBe(expected);
-  expect(built.log.records().at(-1)!.record).toEqual(new NodeStartedRecord("work"));
-  expect(built.state.trace!.occurrences.every((item) => item.nodeId !== "work")).toBe(true);
-  expect(built.state.pool.getValue("work")).toBeNull();
+  // The append failure refuses the success; the output's commit before it stays unread.
+  expect(built.log.records().at(-2)!.record).toEqual(new NodeStartedRecord("writer"));
+  const trace = built.state.trace!;
+  expect(trace.occurrences.every((item) => item.nodeId !== "writer")).toBe(true);
+  expect(trace.currentWriters.has("writer")).toBe(false);
+  expect(built.state.pool.getValue("writer")).toBeNull();
 });
-
-/** Publishes `rendered` through its render capture, then records the run and returns its prompt. */
-class RenderNode extends Node {
-  readonly kind = NodeKind.CODE;
-  override readonly needsRenderCapture = true;
-  readonly rendered: Readonly<Record<string, unknown>>;
-  /** The prompts the node ran with, in order. */
-  readonly runs: string[] = [];
-
-  constructor(nodeId: string, rendered: Readonly<Record<string, unknown>>) {
-    super(nodeId);
-    this.rendered = rendered;
-  }
-
-  override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
-    caps.captureRender!(this.rendered);
-    this.runs.push("actual prompt");
-    return new Output("actual prompt");
-  }
-}
-
-test.each(["capture", "append"] as const)(
-  "agent render capture host and append failures do not install worker data: %s",
-  async (failureAt) => {
-    const expected = new Error("capture or append unavailable");
-    // A capture that fails reading its record stands in for Python's failing `canonical_seed`.
-    const rendered =
-      failureAt === "capture"
-        ? {
-            get rendered_prompt(): string {
-              throw expected;
-            },
-          }
-        : { rendered_prompt: "actual prompt" };
-    const node = new RenderNode("writer", rendered);
-    const built = learnableSingle(node, { effectiveLlmByStaticPath: { writer: { provider: "test", model: "test" } } });
-    if (failureAt === "append") {
-      const append = built.log.append.bind(built.log);
-      built.log.append = (record) => {
-        if (record instanceof NodeSucceededRecord && record.nodeId === "writer") {
-          expect(record.forwardCapture!.nodeData!.rendered_prompt).toBe("actual prompt");
-          throw expected;
-        }
-        return append(record);
-      };
-    }
-
-    expect(await rejected(built.run())).toBe(expected);
-    expect(node.runs).toEqual(failureAt === "capture" ? [] : ["actual prompt"]);
-    // The append failure refuses the success; the output's commit before it stays unread.
-    const last = built.log.records().at(failureAt === "capture" ? -1 : -2)!.record;
-    expect(last).toEqual(new NodeStartedRecord("writer"));
-    const trace = built.state.trace!;
-    expect(trace.occurrences.every((item) => item.nodeId !== "writer")).toBe(true);
-    expect(trace.currentWriters.has("writer")).toBe(false);
-    expect(built.state.pool.getValue("writer")).toBeNull();
-  },
-);
 
 test("the trace source is the actual commit-as producer", async () => {
   /** Commits its value to `target`. */
@@ -3977,7 +3831,6 @@ function evaluateStarted(state: RunState, nodeId: string): Promise<EvaluatedOutc
   return evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
     wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
     captureBindings: true,
-    effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
     sourceResolver: (path) => trace.resolve(path),
   });
 }
@@ -4488,7 +4341,7 @@ output: {left: '\${left.output}', right: '\${right.output}'}
   for (const occurrence of agents) {
     const capture = captureOf(occurrence);
     const scope = capture.scope!;
-    const data = capture.nodeData!;
+    const data = occurrence.nodeData;
     expect(data["effective_llm_config"]).toEqual(built.state.effectiveLlmByStaticPath[scope.staticPath.join("/")]);
     expect(data["prompt_template"]).toBe("${topic}: ${instruction}");
     expect(data["variables"]).toEqual({ instruction: "clearly" });
@@ -4533,7 +4386,7 @@ output: {left: '\${left.output}', right: '\${right.output}'}
     // its one model call, where Python's patched `run_agent` recorded none.
     expect(evidence).toBeNull();
     expect(replay.trace!.occurrence(occurrence.source).steps.map((step) => step["kind"])).toEqual(["model_call"]);
-    expect(data).toEqual(captureOf(occurrence).nodeData!);
+    expect(data).toEqual(occurrence.nodeData);
   }
 });
 
@@ -4772,6 +4625,16 @@ test("a recorded interpolation route holding its text is refused", () => {
   expectError(() => decodeWire(wire), RangeError, "an interpolation route records no value_json");
 });
 
+test("a recorded capture holding node data is refused", () => {
+  const wire = wireOf(capturedEnvelope(new ForwardCapture(ValueRoute.record([]))));
+  wire.payload.forward_capture.node_data = {};
+  expectError(
+    () => decodeWire(wire),
+    RangeError,
+    `invalid ${CAPTURE_LABEL} fields; missing=[], extra=["node_data"]`,
+  );
+});
+
 test("a MAP's forward failing otherwise when bound again is a fault, not kept (TS-only)", async () => {
   const log = join(boundDir, "labels-fault.jsonl");
   const labels = await loadFlow(LABELS, { sourceLabel: "flow.yaml" });
@@ -4932,16 +4795,9 @@ async function picksLog(name: string, n: number): Promise<[string, string]> {
   return [log, result.status];
 }
 
-/** Replace the `node_data` of every capture `nodeId`'s outcome records in the log at `log` with `data`. */
-function rewriteNodeData(log: string, nodeId: string, data: Wire): void {
-  const lines = readFileSync(log, "utf8").trimEnd().split("\n").map((line) => parseJson(line, "codec") as Wire);
-  for (const line of lines) {
-    const payload = line["payload"] as Wire;
-    const owner = payload["node_id"] ?? (payload["failure"] as Wire | undefined)?.["node_id"];
-    const capture = payload["forward_capture"] as Wire | null | undefined;
-    if (owner === nodeId && capture != null) capture["node_data"] = data;
-  }
-  writeFileSync(log, `${lines.map((line) => logJson(line)).join("\n")}\n`);
+/** Whether any record of the log at `log` holds a `node_data` field. */
+function recordsNodeData(log: string): boolean {
+  return readFileSync(log, "utf8").includes('"node_data"');
 }
 
 /** Replay `PICKS`'s run log at `log` and return its trace's occurrences by node id. */
@@ -4960,7 +4816,7 @@ async function replayedPicks(log: string): Promise<(nodeId: string) => TraceOccu
 test("an AGENT's node data is rebuilt from its node and bound inputs, not read from the record (TS-only)", async () => {
   const [log, status] = await picksLog("picks", 2);
   expect(status).toBe("succeeded");
-  for (const nodeId of ["__start__", "pick", "writer"]) rewriteNodeData(log, nodeId, { forged: true });
+  expect(recordsNodeData(log)).toBe(false);
   const of = await replayedPicks(log);
   expect(of("__start__").nodeData).toEqual({ input_output_paths: { n: ["n"], topic: ["topic"] } });
   expect(of("pick").nodeData).toEqual({});
@@ -4987,12 +4843,11 @@ test("an AGENT's node data is rebuilt from its node and bound inputs, not read f
 test("an AGENT whose pre-assert failed rebuilds no render, and one whose binding failed no node data (TS-only)", async () => {
   const [log, status] = await picksLog("picks-negative", -1);
   expect(status).toBe("failed");
-  rewriteNodeData(log, "writer", { rendered_prompt: "forged" });
+  expect(recordsNodeData(log)).toBe(false);
   const of = await replayedPicks(log);
   expect((of("writer").record as NodeFailedRecord).failure.code).toBe("assertion.failed");
   expect(of("writer").nodeData).toEqual({});
   const greet = await greetLog("greet-node-data", null);
-  rewriteNodeData(greet, "shout", { forged: true });
   const shout = (await replayedOccurrences(greet))("shout");
   expect(shout.boundInputs).toBeNull();
   expect(shout.nodeData).toEqual({});

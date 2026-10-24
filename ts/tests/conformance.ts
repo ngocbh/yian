@@ -1995,7 +1995,7 @@ const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "defaults", "effective_llm_by_static_path", "call_time_llm", "parent", "waits", "timed_out", "closed_calls",
 ]);
 const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "evaluated_keys", "items", "node_data", "input_names", "variable_names",
+  "evaluated_keys", "items", "input_names", "variable_names",
 ]);
 const FAILURE_FIELDS: ReadonlyMap<string, string> = new Map([
   ["node_failed", "failure"],
@@ -2061,10 +2061,6 @@ function capture(captured: Case): Case {
     if (Object.hasOwn(lean, "snapshot")) lean["snapshot"] = route(lean["snapshot"] as Case);
     return lean;
   };
-  const data = get(captured, "node_data") ?? null;
-  if (isMapping(data) && (get(data, "effective_llm_config") ?? null) !== null) {
-    data["effective_llm_config"] = llm(data["effective_llm_config"] as Case);
-  }
   captured["route"] = route(captured["route"] as Case);
   for (const item of captured["items"] as Case[]) item["capture"] = capture(item["capture"] as Case);
   return Object.fromEntries(
@@ -2780,7 +2776,6 @@ async function checkInvariants(
   // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
   // agrees with a replay, not a second statement of its rules.
   const state = replay(envelopes.length);
-  checkNodeDataRebuild(state, fail);
   const terminal = state.result;
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
   const counts = new Map(state.crashedAttempts);
@@ -2836,22 +2831,6 @@ async function checkInvariants(
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
   }
   if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
-}
-
-/**
- * Fail unless every occurrence of a learnable replay rebuilds the node data its record holds: its
- * node data, rebuilt from the node and its bound inputs, equals the recorded one byte for byte (a
- * derived record's, the one its rebuilt capture holds).
- */
-function checkNodeDataRebuild(state: RunState, fail: (problem: string) => never): void {
-  for (const occurrence of state.trace?.occurrences ?? []) {
-    const recorded = logJson(occurrence.capture.nodeData ?? {});
-    const rebuilt = logJson(occurrence.nodeData);
-    if (rebuilt !== recorded) {
-      const at = `${occurrence.record.constructor.name} of ${occurrence.nodeId} (seq ${occurrence.outcomeSeq})`;
-      fail(`${at}: node data rebuilds to ${rebuilt}, not ${recorded}`);
-    }
-  }
 }
 
 /** The trace entries of node outcomes, which a crash sweep's strong oracle compares. */

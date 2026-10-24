@@ -76,8 +76,8 @@
  *   names Python yian; TS's own schemas 10 and 11 are retired as Python names its retired
  *   schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
  * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 13 and the float
- *   token `20.0` (the current schema written as a float); the float row is wire-only, since a JS
- *   `20.0` is the number 20.
+ *   token `21.0` (the current schema written as a float); the float row is wire-only, since a JS
+ *   `21.0` is the number 21.
  * - The writer's lock is a SQLite lock on the sibling `<log>.lock`, not a `flock` on the log:
  *   `test_jsonl_resume_locks_before_its_first_read` checks the lock is held when the log is read;
  *   `test_jsonl_lock_contention_names_the_log_and_the_likely_cause` pins a busy `FileLockError` as
@@ -144,8 +144,8 @@ const DIGEST = "d".repeat(64);
 const AT = "2026-10-20T14:02:11.123Z";
 const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
 /** The error text for the retired TS schema `schema`. */
-const retired = (schema: number) => `run log schema ${schema} predates schema 20 and is not supported`;
-const RETIRED_SCHEMA = retired(19);
+const retired = (schema: number) => `run log schema ${schema} predates schema 21 and is not supported`;
+const RETIRED_SCHEMA = retired(20);
 const PYTHON_SCHEMA = "run log schema 9 was written by Python yian; resume it with Python yian";
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
@@ -258,8 +258,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 20", () => {
-  expect(SCHEMA_VERSION).toBe(20);
+test("the schema version is 21", () => {
+  expect(SCHEMA_VERSION).toBe(21);
 });
 
 test.each([7, 8])("retired schema %d record is rejected by name", (schema) => {
@@ -273,11 +273,11 @@ test("a schema 9 record names Python yian", () => {
   expectError(() => new RecordEnvelope(9, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, PYTHON_SCHEMA);
 });
 
-test("a schema 19 record, from before forward captures dropped their interpolation text, is retired", () => {
-  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":19,"seq":0}`;
+test("a schema 20 record, from before forward captures dropped their node data, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":20,"seq":0}`;
   const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
-  expect(error.schema).toBe(19);
-  expectError(() => new RecordEnvelope(19, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
+  expect(error.schema).toBe(20);
+  expectError(() => new RecordEnvelope(20, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
 });
 
 test.each<[number, string]>([
@@ -293,7 +293,8 @@ test.each<[number, string]>([
   [16, retired(16)],
   [17, retired(17)],
   [18, retired(18)],
-  [19, RETIRED_SCHEMA],
+  [19, retired(19)],
+  [20, RETIRED_SCHEMA],
 ])("a retired schema %d log is rejected on resume", (schema, message) => {
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
@@ -308,10 +309,10 @@ test.each<[string, unknown, string]>([
   ["6", 6, "6"],
   ["7", 7, "7"],
   ["8", 8, "8"],
-  ["21", 21, "21"],
+  ["22", 22, "22"],
   ["true", true, "true"],
   ["false", false, "false"],
-  ["20.0", undefined, "20.0"],
+  ["21.0", undefined, "21.0"],
 ])("the schema check doesn't weaken validation: %s", (token, value, shown) => {
   const message = `unsupported run-record schema: ${shown}`;
   if (value !== undefined) {
@@ -355,7 +356,7 @@ test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]
       wire.kind = "unsupported";
     },
     RangeError,
-    "run-record kind 'unsupported' is unsupported in schema 20",
+    "run-record kind 'unsupported' is unsupported in schema 21",
   ],
 ])("the schema check doesn't weaken payload validation: %s", (_name, corrupt, cls, message) => {
   const wire = JSON.parse(wireLine());
@@ -1015,7 +1016,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
   ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
-  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 20"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 21"],
   ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
 ])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
   const file = path.join(dir, "run.jsonl");
@@ -1064,8 +1065,9 @@ test.each<[string, string, number]>([
   ["16", retired(16), 16],
   ["17", retired(17), 17],
   ["18", retired(18), 18],
-  ["19", RETIRED_SCHEMA, 19],
-  ["21", "unsupported run-record schema: 21", 21],
+  ["19", retired(19), 19],
+  ["20", RETIRED_SCHEMA, 20],
+  ["22", "unsupported run-record schema: 22", 22],
 ])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine({ schema })}\n`);
@@ -1314,7 +1316,7 @@ test.each<[string, string, string]>([
   [
     "kind",
     wireLine({ seq: 2 }).replace("node_started", "xnode_started"),
-    "run-record kind 'xnode_started' is unsupported in schema 20",
+    "run-record kind 'xnode_started' is unsupported in schema 21",
   ],
   ["sequence", wireLine({ seq: 5 }), "run-log sequence mismatch: expected 2, found 5"],
   ["run id", wireLine({ seq: 2, runId: "other" }), "run-log run_id mismatch: expected 'run', found 'other'"],

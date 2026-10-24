@@ -33,11 +33,10 @@ import {
   retainFailure,
   sameBackwardResult,
   validateDeclaredNames,
-  validateInputOutputPaths,
 } from "../nodes/base.ts";
 import { ExecutionScope, isExactly, sameExecutionScope, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { type JsonValue, parseJson } from "../typesys/json.ts";
-import { isList, isRecord } from "../typesys/values.ts";
+import { isList } from "../typesys/values.ts";
 
 /** A route field besides `kind` and `expression`. */
 type RouteField =
@@ -216,11 +215,11 @@ export function validateRoute(route: unknown, options: { deep?: boolean } = {}):
 }
 
 /**
- * Transient detached inventories, scope, and node material from one invocation. Frozen.
+ * Transient detached inventories and scope from one invocation. Frozen.
  *
  * This worker-owned snapshot becomes durable only through an accepted `ForwardCapture`. It
- * contains neither bound values nor outcomes. `nodeData` is a deep-frozen copy made by the
- * constructor; copy it before you modify it.
+ * contains neither bound values, outcomes nor node material: learning rebuilds the node data
+ * backward reads from the node (`TraceOccurrence.nodeData`).
  */
 export class BackwardCapture {
   /** Distinct eligible input names, snapshotted before binding can fail. */
@@ -229,26 +228,21 @@ export class BackwardCapture {
   readonly variableNames: readonly string[];
   /** This invocation's authored path and dynamic positions, if known. */
   readonly scope: ExecutionScope | null;
-  /** JSON static material and optional actual render data. */
-  readonly nodeData: Readonly<Record<string, unknown>>;
 
   /**
-   * Validate the declarations and retain a frozen copy of the node data.
+   * Validate and retain the declarations.
    *
    * @param options.inputNames Distinct eligible input names; defaults to empty.
    * @param options.variableNames Distinct local variable names; defaults to empty.
    * @param options.scope The invocation's execution scope; defaults to `null`.
-   * @param options.nodeData JSON node material; `null` or omitted is `{}`, including on early
-   *   binding failure.
-   * @throws TypeError for a malformed inventory, scope, or JSON container.
-   * @throws RangeError for a repeated name, an invalid output path, or NaN.
+   * @throws TypeError for a malformed inventory or scope.
+   * @throws RangeError for a repeated name.
    */
   constructor(
     options: {
       inputNames?: readonly string[];
       variableNames?: readonly string[];
       scope?: ExecutionScope | null;
-      nodeData?: Readonly<Record<string, unknown>> | null;
     } = {},
   ) {
     const { inputNames = [], variableNames = [], scope = null } = options;
@@ -258,13 +252,9 @@ export class BackwardCapture {
     if (scope !== null && !isExactly(scope, ExecutionScope)) {
       throw new TypeError("scope must be an ExecutionScope or null");
     }
-    const data: unknown = options.nodeData ?? {};
-    if (!isRecord(data)) throw new TypeError("node_data must be a record");
-    validateInputOutputPaths(data, inputNames);
     this.inputNames = Object.freeze([...inputNames]);
     this.variableNames = Object.freeze([...variableNames]);
     this.scope = scope;
-    this.nodeData = copyBackwardValue(data, "node_data") as typeof this.nodeData;
     Object.freeze(this);
   }
 }
@@ -274,11 +264,11 @@ export class BackwardCapture {
  *
  * The bound inputs aren't kept: learning rebuilds them by binding the node again from the values
  * its route read (`TraceOccurrence.boundInputs`). Its record holds no interpolation route's text
- * either; the same binding rebuilds it (`TraceOccurrence.capture`). An unfinished binding keeps
+ * either; the same binding rebuilds it (`TraceOccurrence.capture`). Nor node data: learning
+ * rebuilds it from the node (`TraceOccurrence.nodeData`). An unfinished binding keeps
  * its safe partial routes. Item captures retain explicit indices and actual second-template evaluation flags.
  * Outcomes and visible interactions stay on their accepted record. Scope may be absent for
- * synthetic nodes awaiting instantiation. JSON values are deep-frozen copies made by the
- * constructor; copy one before you modify it.
+ * synthetic nodes awaiting instantiation.
  */
 export class ForwardCapture {
   /** Record-shaped routes for the captured fields. */
@@ -289,15 +279,13 @@ export class ForwardCapture {
   readonly items: readonly (readonly [number, ForwardCapture])[];
   /** The captured authored location and occurrence, when available. */
   readonly scope: ExecutionScope | null;
-  /** Node-owned static backward material, if captured. */
-  readonly nodeData: Readonly<Record<string, unknown>> | null;
   /** Distinct eligible input names retained for this invocation. */
   readonly inputNames: readonly string[];
   /** Distinct local variable names retained for this invocation. */
   readonly variableNames: readonly string[];
 
   /**
-   * Validate the routes and retain frozen copies of the invocation data.
+   * Validate the routes and retain frozen copies of the invocation's inventories.
    *
    * @param route Record-shaped routes for the captured fields.
    * @param options.evaluatedKeys Captured keys whose template expressions were evaluated here;
@@ -305,12 +293,10 @@ export class ForwardCapture {
    * @param options.items Per-item index/capture pairs in increasing index order; defaults to
    *   empty. Item captures are held by reference, since they are frozen.
    * @param options.scope The captured execution scope; defaults to `null`.
-   * @param options.nodeData Node-owned static backward material; defaults to `null`.
    * @param options.inputNames Distinct eligible input names; defaults to empty.
    * @param options.variableNames Distinct local variable names; defaults to empty.
-   * @throws TypeError when a carrier, container, or JSON value has an invalid type.
-   * @throws RangeError when a route, inventory name, output path, or item index breaks the capture
-   *   contract, or for NaN.
+   * @throws TypeError when a carrier or container has an invalid type.
+   * @throws RangeError when a route, inventory name or item index breaks the capture contract.
    * @throws JSONDecodeError when a route's `valueJson` isn't JSON yian reads.
    */
   constructor(
@@ -319,7 +305,6 @@ export class ForwardCapture {
       evaluatedKeys?: ReadonlySet<string>;
       items?: readonly (readonly [number, ForwardCapture])[];
       scope?: ExecutionScope | null;
-      nodeData?: Readonly<Record<string, unknown>> | null;
       inputNames?: readonly string[];
       variableNames?: readonly string[];
     } = {},
@@ -328,7 +313,6 @@ export class ForwardCapture {
       evaluatedKeys = new Set<string>(),
       items = [],
       scope = null,
-      nodeData = null,
       inputNames = [],
       variableNames = [],
     } = options;
@@ -359,15 +343,10 @@ export class ForwardCapture {
     }
     validateDeclaredNames(inputNames, "input_names");
     validateDeclaredNames(variableNames, "variable_names");
-    if (nodeData !== null) {
-      if (!isRecord(nodeData)) throw new TypeError("node_data must be a record or null");
-      validateInputOutputPaths(nodeData, inputNames);
-    }
     this.route = route;
     this.evaluatedKeys = keys;
     this.items = Object.freeze(pairs.map(([index, capture]) => Object.freeze([index, capture] as const)));
     this.scope = scope;
-    this.nodeData = copyBackwardValue(nodeData, "node_data") as typeof this.nodeData;
     this.inputNames = Object.freeze([...inputNames]);
     this.variableNames = Object.freeze([...variableNames]);
     Object.freeze(this);

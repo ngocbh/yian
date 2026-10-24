@@ -31,7 +31,7 @@ expect:
     - - pool_commit
       - __start__
       - value: {}
-    - [node_succeeded, __start__, {commit: 6, forward_capture: {node_data: {input_output_paths: {}}, route: {kind: record}, scope: {boundary: start, flow_path: [], occurrence_path: [], static_path: [__start__]}}}]
+    - [node_succeeded, __start__, {commit: 6, forward_capture: {route: {kind: record}, scope: {boundary: start, flow_path: [], occurrence_path: [], static_path: [__start__]}}}]
     - [node_started, c]
     - - pool_commit
       - c
@@ -41,7 +41,7 @@ expect:
     - - pool_commit
       - __end__
       - value: hello
-    - [node_succeeded, __end__, {commit: 12, forward_capture: {evaluated_keys: [result], input_names: [result], node_data: {input_output_paths: {result: []}}, route: {children: [{kind: source, source: {execution_seq: 8, path: [], run_id: r1}}], kind: record, names: [result]}, scope: {boundary: end, flow_path: [], occurrence_path: [], static_path: [__end__]}}}]
+    - [node_succeeded, __end__, {commit: 12, forward_capture: {evaluated_keys: [result], input_names: [result], route: {children: [{kind: source, source: {execution_seq: 8, path: [], run_id: r1}}], kind: record, names: [result]}, scope: {boundary: end, flow_path: [], occurrence_path: [], static_path: [__end__]}}}]
     - [backward_started, null, {attempt_id: 1, feedback: shorter}]
     - - backward_ready
       - null

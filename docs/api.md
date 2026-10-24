@@ -2372,16 +2372,17 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 20, and readers accept only schema 20. The schema
+Changed (TS yian): records use schema 21, and readers accept only schema 21. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 19 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 20 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
 backward attempt was `backward.unfinished`, before derived commits held `from` pointers,
 before outcome records dropped `evidence`, before the inbox and wait records, before
-forward captures dropped their bound inputs, or before they dropped their interpolation text)
-with "run log schema N predates schema 20 and is not supported", and any other schema with
-"unsupported run-record schema: N" (a float token shows as `20.0`); the "predates" message for schemas 7
+forward captures dropped their bound inputs, before they dropped their interpolation text, or
+before they dropped their node data)
+with "run log schema N predates schema 21 and is not supported", and any other schema with
+"unsupported run-record schema: N" (a float token shows as `21.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2457,6 +2458,20 @@ at once, and START is ready only after the last.
   starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
   Read the record at seq `k`, such as the commit a success names, with
   `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
+
+Changed (TS yian, schema 21): a `forward_capture` holds no `node_data`. Learning rebuilds the node
+data backward reads (`TraceOccurrence.nodeData`, the `nodeData` of a `BackwardContext`) from the
+node that ran and its rebuilt bound inputs, when it first reads it: the node's static material
+(`captureBackwardContext()`, such as START's and END's `input_output_paths`), and, for an AGENT
+whose pre-asserts hold, its render (`Node.renderCapture(inputs)`, the same pure render as
+`forward`: `prompt_template`, `variables`, `variable_domains` and `rendered_prompt`, with the parts
+established before a render that fails) and `effective_llm_config`, the config the invocation
+bound with its inputs (a call-time agent's, which its `llm_config` step also holds) or else the
+run's `effective_llm_by_static_path` entry for its static path. A binding that didn't finish has
+no node data. An evaluation captures none (`NodeCaps.captureRender`, `Node.needsRenderCapture` and
+`evalNode`'s `effectiveLlmByStaticPath` are gone), and a decoder refuses a capture holding
+`node_data`. A learnable run's log now grows linearly with a chat's history (the rendered prompt
+was a copy of it per turn).
 
 Changed (TS yian, schema 20): an interpolation route in a `forward_capture` (a template with
 literal text, such as `"Hello, ${input.name}!"`) records `value_json: null`; a literal's,
@@ -3144,7 +3159,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `advance` reads (schema 20); a line of another schema raises
+- It reads every schema `advance` reads (schema 21); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

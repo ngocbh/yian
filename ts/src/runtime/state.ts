@@ -593,7 +593,7 @@ function rebuildDerivedRecord(
     capture: learnable,
   });
   if (!learnable) return { outcome, capture: null };
-  return { outcome, capture: captureBindings(capture!, nodeBackwardCapture(node, node.captureBackwardContext())) };
+  return { outcome, capture: captureBindings(capture!, nodeBackwardCapture(node)) };
 }
 
 /**

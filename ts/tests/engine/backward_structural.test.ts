@@ -30,11 +30,13 @@
  * `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs` (a `ScriptedModel`
  * from `models` replies the rendered prompt, for Python's patched `run_agent`).
  *
- * Ported (adapted): `test_static_backward_capture_and_names_are_detached_for_the_actual_invocation`:
- * the captured node data is deep-frozen, so the caller's write throws instead of changing a copy.
- *
- * Changed: `test_static_capture_serialization_faults_are_host_faults_before_the_body` refuses NaN
- * for Python's infinity, which is a value here, and a class instance for Python's `object()`.
+ * Changed: TS records no node data, so an evaluation calls no static capture hook and these rows
+ * read the node data learning rebuilds (`rebuildNodeData`, the AGENT's `renderCapture`) instead of
+ * a capture: the static capture faults are the rebuild's errors, not host faults before the body;
+ * `test_static_backward_capture_and_names_are_detached_for_the_actual_invocation` checks the names
+ * and scope only, and that the rebuild reads the node as it is then.
+ * `test_static_capture_serialization_faults_are_host_faults_before_the_body` refuses NaN for
+ * Python's infinity, which is a value here, and a class instance for Python's `object()`.
  */
 
 import { expect, test } from "bun:test";
@@ -60,7 +62,7 @@ import { Assertion, ExecutionScope, Parameter } from "../../src/nodes/contracts.
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
+import { EvaluationFailure, evalNode, rebuildNodeData } from "../../src/runtime/eval_node.ts";
 import { captureBindings } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { parametersFromYaml } from "../compose/declarations.ts";
@@ -361,7 +363,7 @@ test("stopped loop failure does not route an unaccepted carried output", () => {
   expect(node.backward(context, ["Review the loop."])).toEqual(new BackwardResult());
 });
 
-test("static backward capture and names are detached for the actual invocation", async () => {
+test("backward names are detached for the actual invocation, and no static material is captured", async () => {
   const node = new CaptureNode();
   const scope = new ExecutionScope(["authored"]);
   node.executionScope = scope;
@@ -372,7 +374,7 @@ test("static backward capture and names are detached for the actual invocation",
   const snapshot = evaluated.backwardCapture!;
   const capture = captureBindings(evaluated.bindings!, snapshot);
 
-  expect(node.captures).toBe(1);
+  expect(node.captures).toBe(0);
   expect(node.ran).toBe(true);
   expect(snapshot.inputNames).toEqual(["topic", "limit"]);
   expect(snapshot.variableNames).toEqual(["instruction"]);
@@ -381,11 +383,8 @@ test("static backward capture and names are detached for the actual invocation",
   expect(capture.scope).toEqual(scope);
   expect(node.executionScope).toBeNull();
   expect(evaluated.bindings!.boundInputs).toEqual({ topic: "reefs", limit: 4n });
-  expect(capture.nodeData).toEqual({ settings: { active: true } });
-  expect(() => {
-    (snapshot.nodeData["settings"] as Record<string, unknown>)["active"] = "changed by caller";
-  }).toThrow(TypeError);
-  expect(snapshot.nodeData).toEqual(capture.nodeData!);
+  // Learning rebuilds the node data from the node as it is then.
+  expect(rebuildNodeData(node, evaluated.bindings!.boundInputs, {})).toEqual({ settings: { active: false } });
 });
 
 test("early binding failure keeps inventories without usable inputs or fabricated layout", async () => {
@@ -398,7 +397,7 @@ test("early binding failure keeps inventories without usable inputs or fabricate
   expect(evaluated.bindings!.boundInputs).toBeNull();
   expect(capture.inputNames).toEqual(["topic", "limit"]);
   expect(capture.variableNames).toEqual(["instruction"]);
-  expect(capture.nodeData).toEqual({});
+  expect(rebuildNodeData(node, evaluated.bindings!.boundInputs, {})).toEqual({});
   expect(node.captures).toBe(0);
   expect(node.ran).toBe(false);
 });
@@ -411,37 +410,37 @@ const unserializableMaterials: [string, unknown][] = [
 ];
 
 test.each(unserializableMaterials)(
-  "static capture serialization faults are host faults before the body: %s",
-  async (_label, material) => {
+  "static material that isn't JSON fails the node data rebuild: %s",
+  (_label, material) => {
     const node = new CaptureNode();
     node.material = material;
-    const error = await rejected(
-      evalNode(node, null, new VariablePool(), { wiringOverride: { topic: "reefs" }, captureBindings: true }),
-    );
+    let error: unknown = null;
+    try {
+      rebuildNodeData(node, { topic: "reefs", limit: 4n }, {});
+    } catch (caught) {
+      error = caught;
+    }
     expect(error instanceof TypeError || error instanceof RangeError).toBe(true);
-    expect(node.ran).toBe(false);
   },
 );
 
-test("static capture exception escapes unchanged and capture off calls no hook", async () => {
+test("a static capture exception escapes the node data rebuild unchanged, and evaluation calls no hook", async () => {
   const expected = new RangeError("capture failed");
   const node = new CaptureNode();
   node.captureBackwardContext = () => {
     throw expected;
   };
-  const error = await rejected(
-    evalNode(node, null, new VariablePool(), { wiringOverride: { topic: "reefs" }, captureBindings: true }),
-  );
-  expect(error).toBe(expected);
-  expect(node.ran).toBe(false);
-  const evaluated = await evalNode(node, null, new VariablePool(), { wiringOverride: { topic: "reefs" } });
+  expect(() => rebuildNodeData(node, { topic: "reefs", limit: 4n }, {})).toThrow(expected);
+  const retained = await evalNode(node, null, new VariablePool(), {
+    wiringOverride: { topic: "reefs" },
+    captureBindings: true,
+  });
   expect(node.ran).toBe(true);
-  expect((evaluated.outcome as Output).value).toBe("reefs");
-  expect(evaluated.bindings).toBeNull();
-  expect(evaluated.backwardCapture).toBeNull();
+  expect((retained.outcome as Output).value).toBe("reefs");
+  expect(retained.bindings!.boundInputs).toEqual({ topic: "reefs", limit: 4n });
 });
 
-test("static layout is captured before a preassert failure after defaults", async () => {
+test("static layout is rebuilt for a preassert failure after defaults", async () => {
   const node = EndNode.value("end", { outputName: "result" });
   node.params = [new Parameter("result", { hasDefault: true, default: { items: [1n] } })];
   node.preAsserts = [new Assertion("false", "reject before body")];
@@ -452,11 +451,12 @@ test("static layout is captured before a preassert failure after defaults", asyn
   const { failure } = evaluated.outcome as EvaluationFailure;
   expect(failure.code).toBe("assertion.failed");
   expect(evaluated.bindings!.boundInputs).toEqual({ result: { items: [1n] } });
-  expect(capture.nodeData).toEqual({ input_output_paths: { result: [] } });
+  const nodeData = rebuildNodeData(node, evaluated.bindings!.boundInputs, {});
+  expect(nodeData).toEqual({ input_output_paths: { result: [] } });
   node.names = [];
   const context = new BackwardContext(evaluated.bindings!.boundInputs, {
     inputNames: capture.inputNames,
-    nodeData: capture.nodeData,
+    nodeData,
     failure,
   });
   expect(node.backward(context, ["Review the default."]).inputFeedback).toEqual({
@@ -464,7 +464,7 @@ test("static layout is captured before a preassert failure after defaults", asyn
   });
 });
 
-test("custom run uses its existing pre-run capture boundary", async () => {
+test("custom run captures its inputs at its existing pre-run boundary", async () => {
   class CustomRun extends CaptureNode {
     override async run(inputs: Readonly<Record<string, unknown>>): Promise<NodeResult> {
       return this.forward(inputs as Record<string, unknown>);
@@ -479,8 +479,7 @@ test("custom run uses its existing pre-run capture boundary", async () => {
   expect((evaluated.outcome as Output).value).toBe("reefs");
   expect(evaluated.bindings!.boundInputs).toEqual({ topic: "reefs", limit: 4n });
   expect(evaluated.backwardCapture!.inputNames).toEqual(["topic", "limit"]);
-  expect(evaluated.backwardCapture!.nodeData).toEqual({ settings: { active: true } });
-  expect(node.captures).toBe(1);
+  expect(node.captures).toBe(0);
 });
 
 test("an agent capture keeps the variable inventory separate from the delivered inputs", async () => {
@@ -503,7 +502,8 @@ test("an agent capture keeps the variable inventory separate from the delivered 
   expect((evaluated.outcome as Output).value).toBe("reefs: Summarize clearly");
   expect(model.requests[0]!.messages.at(-1)!.text()).toBe("reefs: Summarize clearly");
   expect(evaluated.backwardCapture!.variableNames).toEqual(["instruction"]);
-  expect(evaluated.backwardCapture!.nodeData["variables"]).toEqual({ instruction: "Summarize clearly" });
-  expect(evaluated.backwardCapture!.nodeData["rendered_prompt"]).toBe("reefs: Summarize clearly");
+  const render = node.renderCapture(evaluated.bindings!.boundInputs!);
+  expect(render["variables"]).toEqual({ instruction: "Summarize clearly" });
+  expect(render["rendered_prompt"]).toBe("reefs: Summarize clearly");
   expect(evaluated.bindings!.boundInputs).toEqual({ topic: "reefs" });
 });

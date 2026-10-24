@@ -1250,6 +1250,11 @@ export function fixedRebinder(inputs: ValueRecord | null): Rebinder {
   });
 }
 
+/** A node data rebuilder for an occurrence of a trace built by hand: it gives `data`. */
+export function fixedNodeData(data: JsonObject = {}): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
+  return () => data;
+}
+
 /** The root flow's declaration site. */
 const ROOT_SITE = new DeclSite([], ["root"]);
 

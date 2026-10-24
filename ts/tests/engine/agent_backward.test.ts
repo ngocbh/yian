@@ -110,11 +110,11 @@ test("the backward context rejects a captured reserved evidence collision", asyn
   const trace = built.state.trace!;
   const occurrence = trace.occurrences.find((item) => item.nodeId === "custom")!;
   expect(() => trace.backwardContext(occurrence.source)).toThrow(
-    new RangeError("captured node data uses reserved _evaluation_evidence"),
+    new RangeError("node data uses reserved _evaluation_evidence"),
   );
 });
 
-test("the backward context rebuilds node data the record lacks without changing the record", () => {
+test("the backward context rebuilds the node data the record doesn't hold", () => {
   const built = engine(graph([], []), { learnable: true });
   const { state, log } = built;
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
@@ -127,9 +127,7 @@ test("the backward context rebuilds node data the record lacks without changing 
   const trace = state.trace!;
   expect(trace.occurrences).toHaveLength(1);
   const occurrence = trace.occurrences[0]!;
-  expect(occurrence.record.forwardCapture!.nodeData).toBeNull();
   expect(trace.backwardContext(occurrence.source).nodeData).toEqual({ input_output_paths: {}, _evaluation_evidence: null });
-  expect(occurrence.record.forwardCapture!.nodeData).toBeNull();
 });
 
 test("the backward context exposes only accepted evidence and replays without agent calls", async () => {
@@ -164,7 +162,14 @@ test("the backward context exposes only accepted evidence and replays without ag
   await run.run();
 
   const occurrence = run.state.trace!.occurrences.find((item) => item.nodeId === "writer")!;
-  const accepted = occurrence.record.forwardCapture!.nodeData!;
+  const accepted = {
+    effective_llm_config: llmConfig,
+    prompt_template: "${topic}: ${tone}",
+    rendered_prompt: "reefs: concise",
+    variable_domains: { tone: "Literal(concise, detailed)" },
+    variables: { tone: "concise" },
+  };
+  expect(occurrence.nodeData).toEqual(accepted);
   const evidence = {
     scope: null,
     bound_inputs: { topic: "reefs", tags: ["a", "b"] },
@@ -196,7 +201,7 @@ test("the backward context exposes only accepted evidence and replays without ag
   const replay = replayRecords(new RunState(original), run.log.records(), { growBuilder: noGrowth });
 
   expect((await contextOf(replay)).nodeData).toEqual(expected);
-  expect(replay.trace!.occurrence(occurrence.source).record.forwardCapture!.nodeData).toEqual(accepted);
+  expect(replay.trace!.occurrence(occurrence.source).nodeData).toEqual(accepted);
   expect(built).toBe(1);
 });
 

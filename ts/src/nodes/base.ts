@@ -918,8 +918,6 @@ export interface NodeCaps {
    * rendered prompt; supplied to a node that declares `needsMemoryContext`.
    */
   readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
-  /** Receives the node's render capture once; supplied to a node that declares `needsRenderCapture`. */
-  readonly captureRender?: (captured: Readonly<Record<string, unknown>>) => void;
   /** The host inbox; supplied to a node that declares `needsSteering`. */
   readonly steering?: Steering;
   /** The run's environment and model builder; supplied to a node that declares `needsModels`. */
@@ -990,11 +988,6 @@ export abstract class Node {
    * the run boundary injected them and this is set. AGENT is the only built-in kind that opts in.
    */
   readonly needsSkills: boolean = false;
-  /**
-   * Declares "I can publish actual render locals for retained backward context": the evaluator
-   * supplies a single-write capture callable only during retention.
-   */
-  readonly needsRenderCapture: boolean = false;
   /**
    * Declares "I look up or invoke tools": the evaluator supplies the run's own tool set, so
    * per-run tools and the per-run `ask_user` handler never leak between runs. TOOL, HUMAN_INPUT

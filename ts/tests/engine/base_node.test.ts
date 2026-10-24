@@ -128,14 +128,13 @@ test("a new node starts with empty fields and every trait off", () => {
     node.isLoop,
     node.needsMemoryContext,
     node.needsSkills,
-    node.needsRenderCapture,
     node.needsTools,
     node.needsLiveEvents,
     node.needsSteps,
     node.needsSteering,
     node.needsModels,
     node.derived,
-  ]).toEqual(Array(13).fill(false));
+  ]).toEqual(Array(12).fill(false));
   expect([node.itemSourceKey, node.growDepthDelta]).toEqual([null, null]);
 });
 

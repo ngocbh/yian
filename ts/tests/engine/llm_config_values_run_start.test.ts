@@ -55,7 +55,8 @@ import { ApiKeyCredentials, OAuthCredentials } from "../../src/llm_clients/auth/
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
-import { runFlow, type RunFlowOptions, runStartInputs } from "../../src/run.ts";
+import { replayRunLog, runFlow, type RunFlowOptions, runStartInputs } from "../../src/run.ts";
+import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { rejected, serving, textReply } from "./run_state_fixtures.ts";
 
@@ -191,7 +192,7 @@ const GOLDEN_RUN_STARTED = {
     yian_version: "0.0.0",
   },
   run_id: "golden",
-  schema: 20,
+  schema: 21,
   seq: 0,
   at: "<at>",
 };
@@ -398,7 +399,16 @@ test("a run start agent binds no reserved llm config input", async () => {
   expect(capture).not.toBeNull();
   expect(capture["route"]["names"]).not.toContain("__llm_config");
   expect(capture["input_names"]).not.toContain("__llm_config");
-  expect(capture["node_data"]["effective_llm_config"]["model"]).toBe("gpt-learn");
+  // The record holds no node data; learning rebuilds the agent's config from the run's map.
+  expect(Object.hasOwn(capture, "node_data")).toBe(false);
+  const reopened = JsonlRunLog.resume(log);
+  try {
+    const trace = replayRunLog(flow, reopened).trace!;
+    const chat = trace.occurrences.find((occurrence) => occurrence.nodeId === "chat")!;
+    expect((chat.nodeData["effective_llm_config"] as Record<string, unknown>)["model"]).toBe("gpt-learn");
+  } finally {
+    reopened[Symbol.dispose]();
+  }
 });
 
 const MIXED = `id: f

@@ -110,9 +110,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          input_output_paths:
-            topic: [topic]
         route:
           children:
           - kind: source
@@ -176,15 +173,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          effective_llm_config:
-            model: gpt-picked
-            provider: openai
-            _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
-          prompt_template: '[{"user":"${topic}, ${count} lines"},{"assistant":"Which tone?"},{"user":"${tone}"}]'
-          rendered_prompt: '[{"role":"user","text":"reefs, 3 lines"},{"role":"assistant","text":"Which tone?"},{"role":"user","text":"concise"}]'
-          variable_domains: {count: int, tone: 'Literal(concise, detailed)'}
-          variables: {count: 3, tone: concise}
         route:
           children:
           - kind: source
@@ -215,9 +203,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - kind: source

@@ -137,12 +137,12 @@ export function decodeTyped(text: string): TypedValue {
 
 /**
  * Join detached binding and backward material into the capture a record holds: the routes and
- * item routes, not the delivered values, which learning rebuilds.
+ * item routes, not the delivered values or the node data, which learning rebuilds.
  *
  * @param bindings Actual delivered values, routes and indexed item bindings frozen by the
  *   evaluator.
- * @param backward The same invocation's declared names, scope and captured node data. Item seeds
- *   have no separate node inventory.
+ * @param backward The same invocation's declared names and scope. Item seeds have no separate
+ *   node inventory.
  * @returns Canonical material ready for accepted-record validation.
  * @throws TypeError when either transient carrier isn't exactly its class.
  * @throws RangeError or TypeCheckError when captured data can't satisfy the canonical wire contract.
@@ -154,7 +154,6 @@ export function captureBindings(bindings: BindingCapture, backward: BackwardCapt
     evaluatedKeys: bindings.evaluatedKeys,
     items: bindings.items.map(([index, item]) => [index, captureBindings(item, new BackwardCapture())] as const),
     scope: backward.scope,
-    nodeData: backward.nodeData,
     inputNames: backward.inputNames,
     variableNames: backward.variableNames,
   });
@@ -326,7 +325,7 @@ export class TraceOccurrence {
    * @param options.fillsText Whether `rebind` also rebuilds the capture's interpolation text,
    *   which `capture` and `inputRoute` then read; defaults to `false` (they give it as held).
    * @param options.nodeData Rebuilds the node data from the node and its bound inputs; `null`
-   *   (the default) reads the capture's.
+   *   (the default) leaves `nodeData` unreadable.
    * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
    *   `null` or exactly a `MemoryScope`, or there is no capture.
    * @throws RangeError when `fillsText` is given without `rebind`.
@@ -425,10 +424,13 @@ export class TraceOccurrence {
    * node and its bound inputs (`rebuildNodeData`): its static material and, for a node whose
    * `forward` rendered, the render and the model config it used. Built on the first read.
    *
-   * @throws RangeError as `boundInputs`, or when the run recorded no model config for the node.
+   * @throws RangeError when the occurrence was made without a rebuilder, as `boundInputs`, or when
+   *   the run recorded no model config for the node.
    */
   get nodeData(): JsonObject {
-    if (this.#rebuildNodeData === null) return (this.#capture.nodeData ?? {}) as JsonObject;
+    if (this.#rebuildNodeData === null) {
+      throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its node data`);
+    }
     this.#nodeData ??= this.#rebuildNodeData();
     return this.#nodeData;
   }
@@ -525,7 +527,6 @@ function withInterpolationText(capture: ForwardCapture, binding: BindingCapture)
     evaluatedKeys: capture.evaluatedKeys,
     items,
     scope: capture.scope,
-    nodeData: capture.nodeData,
     inputNames: capture.inputNames,
     variableNames: capture.variableNames,
   });
@@ -798,7 +799,8 @@ export class RetainedTrace {
   }
 
   /**
-   * Build detached context from accepted invocation facts without calling hooks.
+   * Build detached context from accepted invocation facts; the bound inputs and node data are
+   * rebuilt from the node (`TraceOccurrence`), and no other hook is called.
    *
    * The node data gains the reserved `_evaluation_evidence` entry: what the occurrence showed its
    * model, built from `options.material` (`evaluationEvidence`), or `null` without one.
@@ -807,7 +809,7 @@ export class RetainedTrace {
    * @param options.downstreamContext Transient attribution materialized by a caller, copied with
    *   the other context values; defaults to empty.
    * @param options.material The occurrence's learning material (`occurrenceMaterial`), if any.
-   * @throws RangeError when the occurrence or its accepted output source is absent, the captured
+   * @throws RangeError when the occurrence or its accepted output source is absent, the rebuilt
    *   node data already holds `_evaluation_evidence`, or a value breaks the context contract.
    * @throws TypeError when supplied context material breaks the context contract.
    */
@@ -822,9 +824,9 @@ export class RetainedTrace {
     const occurrence = this.occurrence(source);
     const record = occurrence.record;
     const capture = occurrence.capture;
-    const captured = occurrence.nodeData;
-    if (Object.hasOwn(captured, "_evaluation_evidence")) {
-      throw new RangeError("captured node data uses reserved _evaluation_evidence");
+    const data = occurrence.nodeData;
+    if (Object.hasOwn(data, "_evaluation_evidence")) {
+      throw new RangeError("node data uses reserved _evaluation_evidence");
     }
     const failure = isExactly(record, NodeFailedRecord)
       ? record.failure
@@ -840,7 +842,7 @@ export class RetainedTrace {
       runId: source.runId,
       nodeId: occurrence.nodeId,
       nodeStartedSeq: source.executionSeq,
-      nodeData: { ...captured, _evaluation_evidence: evaluationEvidence(occurrence, material) },
+      nodeData: { ...data, _evaluation_evidence: evaluationEvidence(occurrence, material) },
       downstreamContext,
     });
   }

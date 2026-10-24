@@ -87,8 +87,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        node_data:
-          input_output_paths: {}
         route: {kind: record}
         scope:
           boundary: start

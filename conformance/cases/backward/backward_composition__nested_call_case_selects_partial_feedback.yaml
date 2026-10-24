@@ -116,10 +116,6 @@ expect:
       forward_capture:
         evaluated_keys: [payload, selected]
         input_names: [selected, payload]
-        node_data:
-          input_output_paths:
-            payload: [payload]
-            selected: [selected]
         route:
           children:
           - kind: source
@@ -218,9 +214,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - kind: source

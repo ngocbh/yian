@@ -24,12 +24,14 @@
  * values), and no row counts renders; "nothing rendered" reads as nothing resolved and no model
  * call. The learnable run records the node's `llmConfig` as its model map by hand, where Python's
  * run start derives it. The float variable's int default is a `bigint` (Python: `type is int`).
- * `test_retained_render_locals_are_detached_before_render_and_model_callbacks`: only the model
- * build mutates (the node's prompt and the config it gets); TS can't patch the render, a
- * `Parameter`'s default is frozen, and the captured locals are frozen, so the reader's write throws.
+ * TS records no render locals: learning renders the occurrence again (`TraceOccurrence.nodeData`),
+ * which the retained rows read, so a row counts one more resolution once it reads them.
  * `test_render_capture_preparation_faults_escape_with_original_host_identity`: the domain fault is
  * a declaration whose `contract` read throws (for Python's patched `canonical_type_label`), the
- * copy fault a resolved record whose field read throws (for Python's patched `deepcopy`).
+ * copy fault a resolved record whose field read throws (for Python's patched `deepcopy`); each is a
+ * `CapabilityFault` from `renderCapture` carrying the original, since no evaluation captures.
+ * Not ported: `test_retained_render_locals_are_detached_before_render_and_model_callbacks` (nothing
+ * is captured to detach).
  * A variable colliding with an input is a `RangeError` with its full message.
  *
  * Ported through `loadFlow` and a `FlowEngine` run (`engine`), as Python's `_engine`:
@@ -59,7 +61,7 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { type MaterialCaps, Node, NodeKind, Output } from "../../src/nodes/base.ts";
+import { CapabilityFault, type MaterialCaps, Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
@@ -218,9 +220,11 @@ test("a retained agent captures its actual render locals once", async () => {
   });
   const resolved = spyResolve(node);
 
-  const { built, record, occurrence, models } = await retainedAgent(node, { topic: "reefs" });
+  const { built, occurrence, models } = await retainedAgent(node, { topic: "reefs" });
+  expect(resolved).toHaveLength(1);
 
-  const data = record.forwardCapture!.nodeData!;
+  // Learning renders the occurrence again, which resolves the variables again.
+  const data = occurrence.nodeData;
   expect(data).toEqual({
     prompt_template: "${instruction}: ${topic}; ${count}/${count}",
     // The float variable's int default stays an int.
@@ -229,35 +233,10 @@ test("a retained agent captures its actual render locals once", async () => {
     rendered_prompt: "${input.topic}: reefs; 4/4",
     effective_llm_config: llmConfig,
   });
-  expect(resolved).toHaveLength(1);
+  expect(resolved).toHaveLength(2);
   expect(models.prompts).toEqual(["${input.topic}: reefs; 4/4"]);
   expect(occurrence.boundInputs).toEqual({ topic: "reefs" });
   expect(built.state.effectiveLlmByStaticPath["writer"]).toEqual(data["effective_llm_config"] as JsonObject);
-  // Learning renders again what the run rendered.
-  expect(occurrence.nodeData).toEqual(data as JsonObject);
-});
-
-test("retained render locals are detached before the model call", async () => {
-  const node = new AgentNode("writer", {
-    prompt: "${settings}",
-    llmConfig: { provider: "test", model: "original" },
-    variables: variables("settings: !object {items: [original]}\n"),
-  });
-  const models = echo((config) => {
-    node.prompt = "different template";
-    (config as Record<string, unknown>)["model"] = "different model";
-  });
-
-  const { built, record } = await retainedAgent(node, {}, models);
-
-  const data = record.forwardCapture!.nodeData! as Record<string, unknown>;
-  expect(data["variables"]).toEqual({ settings: { items: ["original"] } });
-  expect(data["prompt_template"]).toBe("${settings}");
-  expect(data["effective_llm_config"]).toEqual({ provider: "test", model: "original" });
-  expect(built.state.effectiveLlmByStaticPath["writer"]).toEqual({ provider: "test", model: "original" });
-  const items = (data["variables"] as { settings: { items: string[] } }).settings.items;
-  expect(() => items.push("reader mutation")).toThrow(TypeError);
-  expect(record.forwardCapture!.nodeData!["variables"]).toEqual({ settings: { items: ["original"] } });
 });
 
 test.each(["resolve", "render", "empty"] as const)(
@@ -275,13 +254,12 @@ test.each(["resolve", "render", "empty"] as const)(
 
     const { record, occurrence, models } = await retainedAgent(node);
 
-    const data = record.forwardCapture!.nodeData!;
-    expect(data["prompt_template"]).toBe(node.prompt);
+    const data = occurrence.nodeData;
+    expect(data["prompt_template"]).toBe(node.prompt as string);
     expect(data["variable_domains"]).toEqual(stage === "empty" ? {} : { note: "Optional(str)" });
     expect(data["variables"]).toEqual(stage === "resolve" ? null : stage === "empty" ? {} : { note: null });
     expect(data["rendered_prompt"]).toBe(stage === "empty" ? "" : null);
     expect(occurrence.boundInputs).toEqual({});
-    expect(occurrence.nodeData).toEqual(data as JsonObject);
     expect(models.prompts).toEqual(stage === "empty" ? [""] : []);
     if (stage !== "empty") {
       expect(record).toBeInstanceOf(NodeFailedRecord);
@@ -303,19 +281,19 @@ test("a retained agent canonicalizes a supported file variable without changing 
     ],
   });
 
-  const { record } = await retainedAgent(node);
+  const { record, occurrence } = await retainedAgent(node);
 
-  expect(record.forwardCapture!.nodeData!["variables"]).toEqual({
+  expect(occurrence.nodeData["variables"]).toEqual({
     artifact: { uri: "file:///tmp/artifact.txt", mime: null, name: null },
   });
-  expect(record.forwardCapture!.nodeData!["variable_domains"]).toEqual({ artifact: "file" });
+  expect(occurrence.nodeData["variable_domains"]).toEqual({ artifact: "file" });
   expect(node.variables[0]!.default).toBe(file);
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 3, record);
   expect(decodeRecord(encodeRecord(envelope))).toEqual(envelope);
 });
 
 test.each(["domains", "copy"] as const)(
-  "render capture preparation faults escape with the original host identity: %s",
+  "render capture preparation faults are capability faults carrying the original: %s",
   async (phase) => {
     const expected = new Error("capture preparation failed");
     const node = new AgentNode("writer", {
@@ -345,12 +323,15 @@ test.each(["domains", "copy"] as const)(
         }),
       );
     }
-    const models = echo();
+    let error: unknown = null;
+    try {
+      node.renderCapture({});
+    } catch (caught) {
+      error = caught;
+    }
 
-    const error = await rejected(evalNode(node, null, new VariablePool(), { captureBindings: true, models }));
-
-    expect(error).toBe(expected);
-    expect(models.prompts).toEqual([]);
+    expect(error).toBeInstanceOf(CapabilityFault);
+    expect((error as CapabilityFault).original).toBe(expected);
   },
 );
 
@@ -363,7 +344,6 @@ test("a retained agent keeps early binding unavailable and capture off dormant",
   const missing = await evalNode(node, null, new VariablePool(), { captureBindings: true, models });
   expect(missing.outcome).toBeInstanceOf(EvaluationFailure);
   expect(missing.bindings!.boundInputs).toBeNull();
-  expect(missing.backwardCapture!.nodeData).toEqual({});
   expect(missing.backwardCapture!.variableNames).toEqual(["tone"]);
   expect(resolved).toEqual([]);
 
@@ -376,7 +356,6 @@ test("a retained agent keeps early binding unavailable and capture off dormant",
   expect(ordinary.outcome).toEqual(new Output("reefs"));
   expect(retained.outcome).toEqual(ordinary.outcome);
   expect(ordinary.backwardCapture).toBeNull();
-  expect(retained.backwardCapture!.nodeData["effective_llm_config"]).toBeNull();
   expect(resolved).toHaveLength(2);
 });
 

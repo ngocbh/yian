@@ -46,9 +46,6 @@ expect:
       forward_capture:
         evaluated_keys: [text]
         input_names: [text]
-        node_data:
-          input_output_paths:
-            text: [text]
         route:
           children:
           - kind: source
@@ -73,9 +70,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - kind: source

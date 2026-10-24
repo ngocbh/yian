@@ -59,9 +59,6 @@ expect:
     - commit: 6
       forward_capture:
         input_names: [note]
-        node_data:
-          input_output_paths:
-            note: [note]
         route:
           children:
           - {kind: literal, value_json: null}
@@ -85,15 +82,6 @@ expect:
       forward_capture:
         evaluated_keys: [note]
         input_names: [note]
-        node_data:
-          effective_llm_config:
-            model: claude-test
-            provider: anthropic
-            _connection: {method: api_key, source: environment, endpoint: null}
-          prompt_template: '${tone}: ${note}'
-          rendered_prompt: null
-          variable_domains: {tone: str}
-          variables: {tone: plain}
         route:
           children:
           - kind: source

@@ -135,9 +135,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          input_output_paths:
-            topic: [topic]
         route:
           children:
           - kind: source
@@ -178,12 +175,6 @@ expect:
       forward_capture:
         evaluated_keys: [topic]
         input_names: [topic]
-        node_data:
-          effective_llm_config: {model: local-test, provider: ollama}
-          prompt_template: Draft ${topic}
-          rendered_prompt: Draft reefs
-          variable_domains: {}
-          variables: {}
         route:
           children:
           - kind: source
@@ -224,12 +215,6 @@ expect:
       forward_capture:
         evaluated_keys: [draft]
         input_names: [draft]
-        node_data:
-          effective_llm_config: {model: local-test, provider: ollama}
-          prompt_template: Review ${draft}
-          rendered_prompt: Review draft
-          variable_domains: {}
-          variables: {}
         route:
           children:
           - kind: source
@@ -254,9 +239,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - kind: source

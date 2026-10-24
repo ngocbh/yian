@@ -60,9 +60,6 @@ expect:
       forward_capture:
         evaluated_keys: [n]
         input_names: [n]
-        node_data:
-          input_output_paths:
-            n: [n]
         route:
           children:
           - kind: source

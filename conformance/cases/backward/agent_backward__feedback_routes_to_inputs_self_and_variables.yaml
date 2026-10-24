@@ -92,10 +92,6 @@ expect:
       forward_capture:
         evaluated_keys: [tags, topic]
         input_names: [topic, tags]
-        node_data:
-          input_output_paths:
-            tags: [tags]
-            topic: [topic]
         route:
           children:
           - kind: source
@@ -141,15 +137,6 @@ expect:
       forward_capture:
         evaluated_keys: [tags, topic]
         input_names: [topic, tags]
-        node_data:
-          effective_llm_config:
-            _connection: {endpoint: https://api.openai.com/v1, method: api_key, source: missing}
-            model: gpt-5.5
-            provider: openai
-          prompt_template: '${topic}: ${tone}'
-          rendered_prompt: 'reefs: concise'
-          variable_domains: {tone: 'Literal(concise, detailed)'}
-          variables: {tone: concise}
         route:
           children:
           - kind: source
@@ -180,9 +167,6 @@ expect:
       forward_capture:
         evaluated_keys: [result]
         input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
         route:
           children:
           - kind: source

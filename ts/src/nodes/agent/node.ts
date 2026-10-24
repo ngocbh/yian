@@ -130,7 +130,7 @@ export type PromptItem =
 
 /**
  * Return a list prompt as authored: a splice as `${name}`, a message as `{<role>: <text>}`. The
- * manifest and the render capture hold this form.
+ * manifest and the render material (`renderCapture`) hold this form.
  */
 export function authoredPrompt(items: readonly PromptItem[]): (string | Record<string, string>)[] {
   return items.map((item) => ("splice" in item ? `\${${item.splice}}` : { [item.role]: item.text }));
@@ -313,7 +313,10 @@ function isRebuildRefusal(error: unknown): boolean {
   return error instanceof ExpressionError || error instanceof SkillError || error instanceof MemoryRecallError;
 }
 
-/** Return `make()`; its error is a capability fault, since the render capture is the host's. */
+/**
+ * Return `make()`; its error is a capability fault: building the render capture failed, which is
+ * not a refusal of the render.
+ */
 function captureValue<T>(make: () => T): T {
   try {
     return make();
@@ -333,7 +336,6 @@ function captureValue<T>(make: () => T): T {
 export class AgentNode extends Node {
   readonly kind = NodeKind.AGENT;
   override readonly needsMemoryContext: boolean = true;
-  override readonly needsRenderCapture: boolean = true;
   override readonly needsTools: boolean = true;
   override readonly needsLiveEvents: boolean = true;
   override readonly needsSkills: boolean = true;
@@ -828,8 +830,7 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Render the prompt once (`renderPrompt`, which publishes the render capture), recall with
-   * it, and run the loop. Recall and learning read the last message's text. No invocation state
+   * Render the prompt once (`renderPrompt`), recall with it, and run the loop. Recall and learning read the last message's text. No invocation state
    * is stored on the node.
    *
    * A call-time agent's model config is its bound `__llm_config` with the run's host key and
@@ -846,7 +847,7 @@ export class AgentNode extends Node {
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param caps The node's signal, checked before recall and the model call, its scheduler and
    *   random draw for model-retry waits, and the capabilities its traits ask for: memory context,
-   *   render capture, tools, live sinks, skills, steering, model access and steps.
+   *   tools, live sinks, skills, steering, model access and steps.
    * @returns The model's answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
@@ -854,7 +855,7 @@ export class AgentNode extends Node {
    *   media part, or a list prompt renders no message, ends in one that isn't the user's, or isn't
    *   a conversation a model route can send.
    * @throws SkillError when the node grants skills the host did not supply.
-   * @throws CapabilityFault when capture or memory access fails, the bound config differs from
+   * @throws CapabilityFault when memory access fails, the bound config differs from
    *   the one an earlier start recorded, or a recorded model call doesn't match the rebuilt
    *   request; the evaluator rethrows its original host error.
    * @throws The signal's reason once the host stopped the node.
@@ -863,10 +864,7 @@ export class AgentNode extends Node {
     if (caps.steps !== undefined && this.callTime !== null) {
       this.recordConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, caps.steps);
     }
-    const rendered = this.renderPrompt(inputs, caps.skills ?? null, {
-      capture: caps.captureRender,
-      signal: caps.signal,
-    });
+    const rendered = this.renderPrompt(inputs, caps.skills ?? null, { signal: caps.signal });
     const { systemPrompt, promptText, baseSystemPrompt } = rendered;
     const config = this.callConfig(inputs);
     const models = caps.models ?? defaultModelAccess();
@@ -928,7 +926,7 @@ export class AgentNode extends Node {
 
   /**
    * Render what one invocation sends: the pure half of `forward`, which `learningMaterial` also
-   * calls with the recorded skills.
+   * calls with the recorded skills, and `renderCapture` with a capture.
    *
    * The authored `systemPrompt` renders against the same inputs and variables as `prompt`; without
    * one it is `DEFAULT_SYSTEM`. A text prompt renders into one user message, a list prompt into its
@@ -941,8 +939,8 @@ export class AgentNode extends Node {
    *
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param skills The run's skills by name, or `null` when the host supplied none.
-   * @param options `capture` is the render capture; `signal` is checked after rendering, before the
-   *   skill grants are read.
+   * @param options `capture` receives the render capture; `signal` is checked after rendering,
+   *   before the skill grants are read.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError as `forward` documents for a prompt that can't render.
    * @throws SkillError when the node grants skills `skills` doesn't hold.
@@ -951,7 +949,7 @@ export class AgentNode extends Node {
   private renderPrompt(
     inputs: Readonly<Record<string, unknown>>,
     skills: ReadonlyMap<string, Skill> | null,
-    options: { capture?: NodeCaps["captureRender"]; signal?: AbortSignal } = {},
+    options: { capture?: (captured: Readonly<Record<string, unknown>>) => void; signal?: AbortSignal } = {},
   ): AgentPrompt {
     const { capture, signal } = options;
     const template = typeof this.prompt === "string" ? this.prompt : logJson(authoredPrompt(this.prompt));
@@ -1047,12 +1045,14 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Use only recorded invocation material for one tool-free backward call (`backwardAgent`).
+   * Use only the invocation material learning rebuilt for one tool-free backward call
+   * (`backwardAgent`).
    *
    * Live node fields are unused, except a host `api_key` and `headers` bound for the run.
    *
-   * @param context Accepted context, including the recorded model configuration and the
-   *   render components; `_evaluation_evidence` is what learning rebuilt of the invocation.
+   * @param context Accepted context, including the model configuration and the render
+   *   components learning rebuilt (`TraceOccurrence.nodeData`); `_evaluation_evidence` is what
+   *   learning rebuilt of the invocation's steps.
    * @param feedback Ordered ordinary output messages. Empty effective feedback skips model
    *   construction.
    * @param options The model access (default `defaultModelAccess()`) and the observer for the

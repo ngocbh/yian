@@ -198,20 +198,18 @@ test("a rendered list with no message fails the node", async () => {
 
 test("recall, learning and the render capture read the list's text forms", async () => {
   const recalled: string[] = [];
-  const captures: Readonly<Record<string, unknown>>[] = [];
   await run(agent(CHAT), HISTORY, {
     openMemoryContext: async (_system, prompt) => {
       recalled.push(prompt);
       return new MemoryContext();
     },
-    captureRender: (captured) => void captures.push(captured),
   });
 
   expect(recalled).toEqual(["Now: again"]);
   expect(renderPrompt(agent(CHAT), { history: HISTORY, message: "again" }, null).promptText).toBe("Now: again");
-  expect(captures).toHaveLength(1);
-  expect(captures[0]!["prompt_template"]).toBe(logJson(["${history}", { user: "Now: ${message}" }]));
-  expect(captures[0]!["rendered_prompt"]).toBe(
+  const capture = agent(CHAT).renderCapture({ history: HISTORY, message: "again" });
+  expect(capture["prompt_template"]).toBe(logJson(["${history}", { user: "Now: ${message}" }]));
+  expect(capture["rendered_prompt"]).toBe(
     logJson([
       { role: "user", text: "Hi" },
       { role: "assistant", text: "Hello! How can I help?" },
@@ -262,7 +260,6 @@ test("a spliced Message ending the list must be the user's", async () => {
 
 test("recall reads the last Message's text; the capture holds a spliced Message without its opaque fields", async () => {
   const recalled: string[] = [];
-  const captures: Readonly<Record<string, unknown>>[] = [];
   const reply = {
     role: "assistant",
     protocol: "anthropic_messages",
@@ -271,10 +268,10 @@ test("recall reads the last Message's text; the capture holds a spliced Message 
   const last = { role: "user", author: null, parts: [{ type: "text", text: "Go" }] };
   await run(agent([{ splice: "history" }]), [TOOL_HISTORY[0], reply, last], {
     openMemoryContext: async (_system, prompt) => (recalled.push(prompt), new MemoryContext()),
-    captureRender: (captured) => void captures.push(captured),
   });
   expect(recalled).toEqual(["Go"]);
-  expect(captures[0]!["rendered_prompt"]).toBe(
+  const capture = agent([{ splice: "history" }]).renderCapture({ history: [TOOL_HISTORY[0], reply, last] });
+  expect(capture["rendered_prompt"]).toBe(
     logJson([TOOL_HISTORY[0], { role: "assistant", parts: [{ type: "reasoning", text: "r" }, { type: "text", text: "It says hi." }] }, last]),
   );
 });

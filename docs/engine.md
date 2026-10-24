@@ -222,15 +222,16 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
-Changed (TS yian): records use schema 20, with a `RunStoppedRecord`, every payload field
+Changed (TS yian): records use schema 21, with a `RunStoppedRecord`, every payload field
 required, the time each record was appended (`at`), a `RunStartedRecord` that holds the
 flow files, the skills, tool specs and tool groups the AGENTs grant, the yian version and the
 parent run, a `PoolCommitRecord` for every write to the variable pool (a derived value's holding `from`
 pointers, not the value), no seed on `NodeExpandedRecord`, and node steps numbered within their
 node (`n`), an AGENT's model calls and tool results among them, no `evidence` on outcome
 records (learning reads the steps), the inbox and wait records, and forward captures that hold
-no bound inputs or interpolation text (learning binds each node again from what its route
-read) and are left off derived records (rebuilt from their sources); see
+no bound inputs, interpolation text or node data (learning binds each node again from what its
+route read, and renders it again) and are left off derived records (rebuilt from their sources);
+see
 [Authoritative run logs](api.md#authoritative-run-logs).
 
 Changed (TS yian): a node's output is a `pool_commit` written before the `node_succeeded` that
@@ -509,14 +510,14 @@ Changed (TS yian): the evaluator (`evalNode` in `ts/src/runtime/eval_node.ts`) r
 aborted, the evaluation rejects with the signal's reason, whatever the node threw, instead of
 classifying it as a failure.
 When a capability fails with a host fault (a stream or event sink, steering, the memory opener,
-render capture, `steps.record`), the first such fault is what the evaluation rejects with once
+`steps.record`), the first such fault is what the evaluation rejects with once
 the node settles, even if the node caught it and returned; capability promises the node
 started are awaited first. A node declaring `needsMemoryContext` gets
 `openMemoryContext(baseSystemPrompt, renderedPrompt)`; the memory opener the engine is given
 takes `(scope, recall, { signal })`, where `recall` is the node's `RecallContext`, and resolves
 to a `MemoryContext` of recalled sections. There is no transcript to close: the capability only
-refuses opens once the outcome is decided, as the steps capability and render capture refuse
-their calls. A node records nothing for learning while it runs. The backward driver
+refuses opens once the outcome is decided, as the steps capability refuses its calls. A node
+records nothing for learning while it runs, not even its render. The backward driver
 (`learningMaterials` in `ts/src/runtime/backward.ts`) rebuilds what learning reads of each
 occurrence through its node's `Node.learningMaterial(inputs, steps, caps)` hook, from the steps
 the node recorded, its render with the recorded skills and a recall against the recorded memory

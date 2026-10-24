@@ -71,10 +71,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -2704,7 +2704,6 @@ function capturePayload(capture: ForwardCapture): JsonObject {
     evaluated_keys: keys.sort(compareCodeUnits),
     items: capture.items.map(([index, item]) => ({ index: BigInt(index), capture: capturePayload(item) })),
     scope: executionScopePayload(capture.scope),
-    node_data: capture.nodeData as JsonObject | null,
     input_names: [...capture.inputNames],
     variable_names: [...capture.variableNames],
   };
@@ -2724,7 +2723,6 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     "evaluated_keys",
     "items",
     "scope",
-    "node_data",
     "input_names",
     "variable_names",
   ]);
@@ -2739,7 +2737,6 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     evaluatedKeys: new Set(keys),
     items,
     scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
-    nodeData: wireNullableObject(wire["node_data"], `${label} node_data`),
     inputNames: wireTextArray(wire["input_names"], `${label} input_names`),
     variableNames: wireTextArray(wire["variable_names"], `${label} variable_names`),
   });

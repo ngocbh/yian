@@ -879,7 +879,6 @@ export class FlowEngine {
         emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
         captureBindings: state.learnable || derived,
-        effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
         sourceResolver,
         memoryContextOpener: this.memoryContextOpener,
         tools: this.tools,

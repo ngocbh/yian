@@ -358,11 +358,21 @@ export class AgentSteps {
    */
   modelCall(call: ModelCallFields, options?: { settled?: boolean }): number {
     // The reducer rebuilds new_messages purely, so it can't warn; the drop is reported here, live.
-    if (call.purpose === "chat" && call.output.parts.some((part) => part instanceof MediaPart && part.file === null)) {
-      warn(
-        `node ${reprText(this.#nodeId)} replied with media that isn't a run-folder file ` +
-          "(a run without a log keeps it inline); new_messages leaves it out",
-      );
+    // Without steps the engine writes no messages commit, so nothing is dropped.
+    if (this.#steps !== undefined && call.purpose === "chat") {
+      const media = call.output.parts.filter((part): part is MediaPart => part instanceof MediaPart && part.file === null);
+      if (media.some((part) => part.data !== null)) {
+        warn(
+          `node ${reprText(this.#nodeId)} replied with media given inline, not as a run-folder file ` +
+            "(a run without a log keeps a reply's media inline); new_messages leaves it out",
+        );
+      }
+      if (media.some((part) => part.url !== null)) {
+        warn(
+          `node ${reprText(this.#nodeId)} replied with media given by URL, not as a run-folder file; ` +
+            "new_messages leaves it out",
+        );
+      }
     }
     return this.#record(
       {

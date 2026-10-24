@@ -564,30 +564,55 @@ test("a reply's media is a run file; the model_call and the next request hold it
   expect(second!["request_sha256"]).not.toBe(requestSha256(model.requests[1]!, new Set()));
 });
 
-test("a run without a folder warns that a reply's inline media is left out of new_messages", async () => {
-  const pictured = () =>
-    new Response({
-      message: new Message({ role: "assistant", parts: [new TextPart("see"), new MediaPart({ mime: "image/png", data: PNG })] }),
-      finishReason: "stop",
-    });
-  for (const log of [null, runLog()]) {
+test("a reply's media that isn't a run-folder file is warned about: inline without a log, or by URL", async () => {
+  const pictured = (media: MediaPart) =>
+    new Response({ message: new Message({ role: "assistant", parts: [new TextPart("see"), media] }), finishReason: "stop" });
+  const inline = () => new MediaPart({ mime: "image/png", data: PNG });
+  const linked = () => new MediaPart({ mime: "image/png", url: "https://example.com/a.png" });
+  const INLINE =
+    "node 'writer' replied with media given inline, not as a run-folder file (a run without a log keeps a reply's " +
+    "media inline); new_messages leaves it out";
+  const LINKED = "node 'writer' replied with media given by URL, not as a run-folder file; new_messages leaves it out";
+  for (const [log, media, expected] of [
+    [null, inline(), [INLINE]],
+    [runLog(), inline(), []],
+    [runLog(), linked(), [LINKED]],
+  ] as const) {
     const warnings: string[] = [];
     const flow = await loadFlow(flowText([]));
     const options = {
       llmConfig: CONFIG,
       env: retriesEnv(0),
       scheduler: virtualScheduler(START),
-      models: serving(new ScriptedModel([pictured()], CONFIG)),
+      models: serving(new ScriptedModel([pictured(media)], CONFIG)),
       log,
     };
     const result = await withWarnings((message) => warnings.push(message), () => runFlow(flow, {}, options));
     expect(result.status, result.failure?.message).toBe("succeeded");
-    expect(warnings).toEqual(
-      log === null
-        ? ["node 'writer' replied with media that isn't a run-folder file (a run without a log keeps it inline); new_messages leaves it out"]
-        : [],
-    );
+    expect(warnings).toEqual([...expected]);
   }
+});
+
+test("an agent that records no steps writes no messages commit, so its media isn't warned about", () => {
+  const steps = new AgentSteps(undefined, () => START, null, (error) => error, "writer");
+  const output = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: PNG })] });
+  const warnings: string[] = [];
+  withWarnings(
+    (message) => warnings.push(message),
+    () =>
+      steps.modelCall({
+        purpose: "chat",
+        model: "m",
+        requestSha256: "d".repeat(64),
+        startedAt: START,
+        firstTokenAt: null,
+        output,
+        responseId: null,
+        finish: "stop",
+        usage: null,
+      }),
+  );
+  expect(warnings).toEqual([]);
 });
 
 // --- AgentSteps alone --- //

@@ -1,0 +1,19 @@
+kind: load
+python_skip: "TS-only: list comprehensions (#1086)"
+# Reads through a variable are unchecked at load for now: m.txt on a Msg loads.
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Msg: {role: str, text: str}
+  input:
+    ms: !list(Msg)
+  nodes:
+    use:
+      kind: code
+      input:
+        v: ${[m.txt for m in input.ms]}
+      code: "return inputs['v']"
+  output: ${use.output}
+expect:
+  load: ok

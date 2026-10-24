@@ -1,0 +1,24 @@
+kind: load
+python_skip: "TS-only: list comprehensions (#1086)"
+# The when's reads and guards stay in lockstep: the iterable is renamed, the variable isn't.
+flow: |
+  id: p
+  name: p
+  input:
+    xs: !list(int)
+  nodes:
+    route:
+      kind: case
+      cases:
+        - when: len([x for x in input.xs if x > 1]) > 0
+          then: many
+      else: zero
+    many:
+      kind: code
+      code: "return 1"
+    zero:
+      kind: code
+      code: "return 0"
+  output: ${many.output :- zero.output}
+expect:
+  load: ok

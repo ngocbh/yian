@@ -15,6 +15,9 @@
  * - List literals (`[1, "x"]`) and parenthesised sub-expressions.
  * - Subscripts: a list slice `xs[a:b]` after any operand, with either bound omitted
  *   (`xs[1:]`, `xs[:-1]`, `xs[:]`) and no step or index.
+ * - List comprehensions as in Python: `[elem for x in xs]`, then any mix of `for x in ys` and
+ *   `if cond` clauses. A target is one bare name; each iterable and condition stops before the
+ *   escapes, as Python's `or_test` does, so an escape there needs parentheses.
  * - Pure builtin calls (`upper(name)`, `join(items, ", ")`), with dotted access on the result
  *   (`fn(x).field`), keyword arguments (`f(a=1)`), constructor calls `T(x)` / `T(a=...)`, and
  *   the `isinstance(x, T)` special form, all parsed alike.
@@ -43,6 +46,11 @@
  *   `omitted[]`. It binds tighter than unary minus and `**`, as Python's primary does:
  *   `-xs[1:]` is `neg[subscript]`. It counts one nesting level, like a call; `slice` and
  *   `omitted` add none.
+ * - A list comprehension: `list_comp[elem, clause, ...]`, clauses in source order, each
+ *   `comp_for[NAME, iterable, SOURCE]` (`SOURCE` holds the iterable's source text, for runtime
+ *   messages) or `comp_if[cond]`. It counts one nesting level, like a list; its clauses add none.
+ *   After the scoping pass a variable read is `comp_var[NAME, trailer*]`, which adds none, like a
+ *   plain reference.
  *
  * A chain of one level is one node, and author parentheses start a new one. A level with one
  * operand makes no node and parentheses make none, so a lone literal is a bare `Token`. The
@@ -51,7 +59,8 @@
  *
  * Token types: `NAME`, `NUMBER` (text; no `.` is an int, with `.` a float), `STRING` (keeps its
  * quotes), `BOOL`, `NULL` (`null` / `none`), `INF`, `NOT`, `NOT_IN` (keeps its source gap), `IN`,
- * `AND`, `OR`, `COMP_OP`, `ADD_OP`, `MUL_OP`, `POW_OP`. `startPos` / `endPos` are UTF-16 offsets.
+ * `AND`, `OR`, `COMP_OP`, `ADD_OP`, `MUL_OP`, `POW_OP`, and `SOURCE` (a comprehension iterable's
+ * text). `startPos` / `endPos` are UTF-16 offsets.
  *
  * ## Why `-` is not in `NAME` (and `#` / `/` are)
  *
@@ -68,23 +77,40 @@
  * operator. After a `.` every keyword is a plain field name (`record.output.in`, `x.inf`).
  * The post-parse checks reject the operator words as reference roots.
  *
+ * `for` and `if` are keywords only where an operator is expected, after a complete operand at
+ * any bracket depth: in a list's brackets `for` after the first element starts a comprehension
+ * and `if` after an iterable or condition adds a filter; anywhere else both are parse errors that
+ * name the fix. Where an operand is expected they are names, as before.
+ *
  * The colon rule: where the nearest enclosing bracket is a subscript's `[` (pending operators and
  * prefixes don't count), the lexer tries `:` before `:-` and `:?`, so `xs[a:-b]` and
  * `xs[n - 1:-1]` are slices. Inside parentheses, a call or a list within a bound, `:-` and `:?`
  * are the escapes as elsewhere, so a default in a bound is written `xs[(n :- 0):]`.
  *
+ * ## Comprehension scoping
+ *
+ * Every parse ends with a pass that turns each read of a comprehension variable into a
+ * `comp_var`, so the walkers that look for `refcall` reads (edges, name checks, guards, CASE
+ * renames) skip variables with no change and still see the outer reads around them. Scoping is
+ * lexical, as in Python: a variable is in scope in the elem and in the clauses after its own
+ * `for`, nested comprehensions included, and the first iterable runs in the enclosing scope. A
+ * variable may share a name with a node, an input, a typedef or a builtin; a call is never a
+ * variable read, nor is `isinstance`'s type name. The parser refuses a target that is a keyword,
+ * `input`, `system`, `item`, `output` or starts with `__` (generated locals use that prefix), and
+ * a `for` that rebinds a name already bound in its own or an enclosing comprehension.
+ *
  * ## Why the parser is iterative
  *
  * Expressions nest deeply (thousands of parentheses must parse, and thousands of nested
  * prefixes or calls must fail with the nesting message), which a recursive parser would turn
- * into a stack overflow. The parser keeps its pending groups, lists, calls, subscripts and
- * operators on an explicit stack instead.
+ * into a stack overflow. The parser keeps its pending groups, lists, calls, subscripts,
+ * comprehensions and operators on an explicit stack instead.
  */
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
 // expressions.ts imports this module too, so each uses the other's exports only inside functions.
-import { ExpressionError, ISINSTANCE } from "./expressions.ts";
+import { ExpressionError, ISINSTANCE, valueArgs } from "./expressions.ts";
 
 /** A terminal of the parse: its type, its source text, and where it sits in the text. */
 export class Token {
@@ -194,6 +220,8 @@ const OR = keyword("OR", "or");
 const BOOL = keyword("BOOL", "true|false");
 const NULL = keyword("NULL", "null|none");
 const INF = keyword("INF", "inf");
+const FOR = keyword("FOR", "for");
+const IF = keyword("IF", "if");
 const NAME = terminal("NAME", "[A-Za-z_][A-Za-z0-9_#/]*");
 const NUMBER = terminal("NUMBER", "[0-9]+(?:\\.[0-9]+)?");
 const STRING = terminal("STRING", `"[^"]*"|'[^']*'`);
@@ -219,13 +247,13 @@ const OPERAND: readonly Terminal[] = [LPAR, LSQB, MINUS, NOT, BOOL, NULL, INF, N
 const OPERAND_WITHOUT_NOT = OPERAND.filter((t) => t !== NOT);
 // After an operand. NOT_IN before IN and `**` before `*`.
 const OPERATOR: readonly Terminal[] = [
-  NOT_IN, IN, AND, OR, VBAR, DEFAULT, REQUIRED, POW_OP, MUL_OP, ADD_OP, COMP_OP, RPAR, RSQB, COMMA, LSQB,
+  NOT_IN, IN, AND, OR, FOR, IF, VBAR, DEFAULT, REQUIRED, POW_OP, MUL_OP, ADD_OP, COMP_OP, RPAR, RSQB, COMMA, LSQB,
 ];
 // After an operand directly inside a subscript's brackets, where `:` ends a bound before `:-`/`:?`.
 const OPERATOR_IN_SLICE: readonly Terminal[] = [COLON, ...OPERATOR];
 // Every terminal, to name what a parse error met.
 const ALL: readonly Terminal[] = [
-  NOT_IN, NOT, IN, AND, OR, BOOL, NULL, INF, NAME, NUMBER, STRING, POW_OP, MUL_OP, ADD_OP, COMP_OP,
+  NOT_IN, NOT, IN, AND, OR, FOR, IF, BOOL, NULL, INF, NAME, NUMBER, STRING, POW_OP, MUL_OP, ADD_OP, COMP_OP,
   DOT, COMMA, LPAR, RPAR, LSQB, RSQB, EQUAL, VBAR, DEFAULT, REQUIRED, COLON,
 ];
 
@@ -332,12 +360,16 @@ type Frame =
   | { kind: "prefix"; level: typeof LEVEL.NOT | typeof LEVEL.UNARY; token: Token }
   // `lower` is null until the slice's colon is read; `open` is the offset of the `[`.
   | { kind: "subscript"; base: ExprNode; lower: ExprNode | null; open: number }
+  // A list comprehension after its first `for`: `pending` is the target of a `for` whose iterable,
+  // starting at offset `iterStart`, is being read; null while an `if` condition is.
+  | { kind: "comp"; elem: ExprNode; clauses: Tree[]; pending: Token | null; iterStart: number }
   // Waiting for its next operand, so `operands` is as long as `ops`.
   | { kind: "chain"; level: Level; operands: ExprNode[]; ops: Token[] };
 
 type ChainFrame = Extract<Frame, { kind: "chain" }>;
 type CallFrame = Extract<Frame, { kind: "call" }>;
 type SubscriptFrame = Extract<Frame, { kind: "subscript" }>;
+type CompFrame = Extract<Frame, { kind: "comp" }>;
 
 /** A new tree for an omitted slice bound. */
 const omitted = (): Tree => new Tree("omitted", []);
@@ -345,6 +377,19 @@ const omitted = (): Tree => new Tree("omitted", []);
 const SLICE_REQUIRED = "inside a slice, `:` ends a bound; write `(a :? b)` for a required value";
 const SLICE_STEP = "slices take no step; for a default in a bound, use parentheses: `xs[(n :- 0):]`";
 const SLICE_INDEX = "indexing `xs[i]` is not supported; `xs[i:i + 1]` gives a one-item list";
+const COMP_ONE_ELEMENT = "a comprehension has one element before `for`; write `[[a, b] for x in xs]`";
+const COMP_FOR_ONLY = "`for` makes a list comprehension only: write `[x for x in xs]`";
+const COMP_CONDITIONAL = "conditional expressions (`a if c else b`) aren't supported yet";
+const COMP_TARGET = "a comprehension's `for` takes a name, then `in`";
+const COMP_ESCAPE = "a comprehension's iterable and `if` stop before `:-`, `:?` and `|`; write `(a :- [])`";
+const COMP_RESERVED = (name: string) =>
+  `${reprText(name)} can't be a comprehension variable: input, system, item, output and names starting with __ are reserved`;
+const COMP_REBOUND = (name: string) => `comprehension variable ${reprText(name)} is already bound here; rename one`;
+// Names a variable would hide from the engine: the scopes every flow reads, and the `__` prefix
+// that generated locals (a CASE's `__rN`) use.
+const COMP_RESERVED_NAMES: ReadonlySet<string> = new Set(["input", "system", "item", "output"]);
+// The escapes sit below `or`, and a comprehension's iterable and condition are Python's `or_test`.
+const ESCAPES: ReadonlySet<string> = new Set(["|", ":-", ":?"]);
 
 /**
  * Read what may follow a slice's colon: the closing `]`, completing `frame` with no upper bound,
@@ -359,6 +404,34 @@ function afterColon(cursor: Cursor, stack: Frame[], frame: SubscriptFrame): Tree
   if (!cursor.accept("]")) return null;
   stack.pop();
   return subscriptTree(frame, omitted());
+}
+
+/** Complete the clause `frame` is reading, whose iterable or condition is `value` and ends at offset `end`. */
+function finishClause(text: string, frame: CompFrame, value: ExprNode, end: number): void {
+  frame.clauses.push(
+    frame.pending === null
+      ? new Tree("comp_if", [value])
+      : new Tree("comp_for", [frame.pending, value, new Token("SOURCE", text.slice(frame.iterStart, end).trim())]),
+  );
+}
+
+/** Read a `for` clause's target and its `in`, and set `frame` to read the iterable next. */
+function readTarget(cursor: Cursor, frame: CompFrame): void {
+  cursor.skip();
+  const name = lexAt(cursor.text, cursor.pos, [NAME]);
+  if (name === null) cursor.fail(cursor.pos, COMP_TARGET);
+  // `#` and `/` are runtime graph separators, so a variable can't hold them.
+  if (EXPRESSION_KEYWORDS.has(name.value) || name.value === "for" || name.value === "if" || /[#/]/.test(name.value)) {
+    cursor.fail(name.startPos, COMP_TARGET);
+  }
+  if (COMP_RESERVED_NAMES.has(name.value) || name.value.startsWith("__")) cursor.fail(name.startPos, COMP_RESERVED(name.value));
+  cursor.pos = name.endPos;
+  cursor.skip();
+  if (lexAt(cursor.text, cursor.pos, [IN]) === null) cursor.fail(name.endPos, COMP_TARGET);
+  cursor.next([IN]);
+  cursor.skip();
+  frame.pending = name;
+  frame.iterStart = cursor.pos;
 }
 
 /** The precedence level of each binary operator, by token type. */
@@ -454,9 +527,13 @@ function nearestBracket(stack: Frame[]): Frame | undefined {
   return stack.findLast((frame) => frame.kind !== "prefix" && frame.kind !== "chain");
 }
 
-/** Parse `text` into a tree, or throw a `ParseError`; no post-parse checks. */
+/**
+ * Parse `text` into a tree and scope its comprehension variables (`scopeComprehensions`), or throw
+ * a `ParseError`; no other post-parse checks.
+ */
 function parseRaw(text: string): ExprNode {
-  const cursor = new Cursor(text);
+  // Typed, so a `cursor.fail(...)` (which never returns) narrows the frame checked before it.
+  const cursor: Cursor = new Cursor(text);
   const stack: Frame[] = [];
   // The operand just read; null while one is expected.
   let value: ExprNode | null = null;
@@ -506,13 +583,38 @@ function parseRaw(text: string): ExprNode {
     }
     if (cursor.atEnd()) {
       value = reduce(stack, value, 0);
-      if (stack.length === 0) return value;
+      if (stack.length === 0) return scopeComprehensions(value, cursor);
       cursor.fail(text.length);
     }
     // Scan for the nearest bracket only when a colon is next: a scan per operator would make a
     // long chain of pending prefixes quadratic.
     const inSlice = cursor.peek(":") && nearestBracket(stack)?.kind === "subscript";
     const token = cursor.next(inSlice ? OPERATOR_IN_SLICE : OPERATOR);
+    if (token.type === "FOR") {
+      value = reduce(stack, value, 0);
+      let frame = stack.at(-1);
+      if (frame?.kind === "list" && frame.items.length === 0) {
+        stack.pop();
+        frame = { kind: "comp", elem: value, clauses: [], pending: null, iterStart: 0 };
+        stack.push(frame);
+      } else if (frame?.kind === "comp") {
+        finishClause(text, frame, value, token.startPos);
+      } else {
+        cursor.fail(token.startPos, frame?.kind === "list" ? COMP_ONE_ELEMENT : COMP_FOR_ONLY);
+      }
+      readTarget(cursor, frame);
+      value = null;
+      continue;
+    }
+    if (token.type === "IF") {
+      value = reduce(stack, value, 0);
+      const frame = stack.at(-1);
+      if (frame?.kind !== "comp") cursor.fail(token.startPos, COMP_CONDITIONAL);
+      finishClause(text, frame, value, token.startPos);
+      frame.pending = null;
+      value = null;
+      continue;
+    }
     if (token.type === "[") {
       // Before any reduce, so the subscript binds to the bare operand, tighter than `-` and `**`.
       const frame: SubscriptFrame = { kind: "subscript", base: value, lower: null, open: token.startPos };
@@ -532,6 +634,7 @@ function parseRaw(text: string): ExprNode {
       value = afterColon(cursor, stack, frame);
       continue;
     }
+    if (ESCAPES.has(token.type) && nearestBracket(stack)?.kind === "comp") cursor.fail(token.startPos, COMP_ESCAPE);
     const level = OPERATOR_LEVEL[token.type];
     if (level !== undefined) {
       value = reduce(stack, value, level);
@@ -559,6 +662,10 @@ function parseRaw(text: string): ExprNode {
       if (frame.lower === null) cursor.fail(frame.open, SLICE_INDEX);
       stack.pop();
       value = subscriptTree(frame, value);
+    } else if (token.type === "]" && frame?.kind === "comp") {
+      finishClause(text, frame, value, token.startPos);
+      stack.pop();
+      value = new Tree("list_comp", [frame.elem, ...frame.clauses]);
     } else if (token.type === "]" && frame?.kind === "list") {
       stack.pop();
       frame.items.push(value);
@@ -573,6 +680,58 @@ function parseRaw(text: string): ExprNode {
       cursor.fail(token.startPos);
     }
   }
+}
+
+/**
+ * Turn each read of a comprehension variable in `root` into `comp_var[NAME, trailer*]`, in place,
+ * and return `root`.
+ *
+ * A variable is in scope in its comprehension's elem and in every clause after its own `for`,
+ * nested comprehensions included, but not in its own or an earlier iterable: the first iterable
+ * runs in the enclosing scope, as in Python. Only a reference with no call suffix is a read, and
+ * `isinstance`'s type name is not one. So every walker that matches `refcall` skips variables
+ * with no change. Iterative, as the parser is.
+ *
+ * @throws {ParseError} If a `for` rebinds a name already bound there.
+ */
+function scopeComprehensions(root: ExprNode, cursor: Cursor): ExprNode {
+  if (!(root instanceof Tree)) return root;
+  const stack: [Tree, ReadonlySet<string>][] = [[root, new Set()]];
+  const visit = (parent: Tree, i: number, scope: ReadonlySet<string>): void => {
+    const child = parent.children[i];
+    if (!(child instanceof Tree)) return;
+    if (child.data === "refcall" && scope.has(String(child.children[0])) && callSuffixOf(child) === undefined) {
+      parent.children[i] = new Tree("comp_var", child.children);
+    } else {
+      stack.push([child, scope]);
+    }
+  };
+  while (stack.length > 0) {
+    const [node, scope] = stack.pop()!;
+    if (node.data === "list_comp") {
+      let bound = scope;
+      for (const clause of node.children.slice(1) as Tree[]) {
+        if (clause.data === "comp_for") {
+          const target = clause.children[0] as Token;
+          if (bound.has(target.value)) cursor.fail(target.startPos, COMP_REBOUND(target.value));
+          visit(clause, 1, bound);
+          bound = new Set([...bound, target.value]);
+        } else {
+          visit(clause, 0, bound);
+        }
+      }
+      visit(node, 0, bound);
+      continue;
+    }
+    const callSuffix = node.data === "refcall" ? callSuffixOf(node) : undefined;
+    if (callSuffix !== undefined) {
+      // An `arg` is never a reference itself, so it is walked rather than visited.
+      for (const arg of valueArgs(String(node.children[0]), callSuffix)) stack.push([arg, scope]);
+      continue;
+    }
+    for (let i = 0; i < node.children.length; i++) visit(node, i, scope);
+  }
+  return root;
 }
 
 const RESERVED_REFERENCE_ROOTS: ReadonlySet<string> = new Set(["and", "or", "not", "in"]);
@@ -735,7 +894,16 @@ export function rejectNestedSpans(text: string, { inSpan = false }: { inSpan?: b
 }
 
 // Parse nodes that only group the parts of a reference or call; they add no level.
-const WRAPPER_NODES: ReadonlySet<string> = new Set(["trailer", "call_suffix", "arg", "slice", "omitted"]);
+const WRAPPER_NODES: ReadonlySet<string> = new Set([
+  "trailer",
+  "call_suffix",
+  "arg",
+  "slice",
+  "omitted",
+  "comp_for",
+  "comp_if",
+  "comp_var",
+]);
 
 /**
  * Throw if a parsed expression nests deeper than the value nesting limit.
@@ -899,7 +1067,8 @@ function rejectReservedReferenceRoots(tree: ExprNode): void {
  *   operand makes no node.
  * @throws {ExpressionError} If `text` holds a `${...}` (see `rejectNestedSpans`), does not parse
  *   (`could not parse expression '<text>': unexpected <what> at line L, column C`, or a slice's
- *   step, index or `:?` with the fix in place of `unexpected <what>`), nests deeper
+ *   step, index or `:?`, or a misplaced `for`/`if`, a bad comprehension target or an escape in
+ *   an iterable or condition, with the fix in place of `unexpected <what>`), nests deeper
  *   than `current().maxValueNesting` levels, holds a float literal outside the double range, is a
  *   dotted-callee builtin call, calls `isinstance` with anything but a value and a bare type
  *   name, repeats a keyword argument, or uses a reserved operator word as a reference root.
@@ -915,7 +1084,8 @@ export function parseExpr(text: string): ExprNode {
       cause: error,
     });
   }
-  // First, as in Python: a too-deep expression reports the nesting limit before any other check.
+  // First, as in Python: a too-deep expression reports the nesting limit before any other
+  // post-parse check. (The comprehension scoping checks run inside the parse, without recursion.)
   rejectDeepExpression(tree);
   rejectOverflowingFloatLiterals(tree);
   rejectDottedCallee(tree);

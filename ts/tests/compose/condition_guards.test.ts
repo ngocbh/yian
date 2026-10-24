@@ -7,7 +7,8 @@
  * `[context, check, value, negated]`, leaving out its `node`, as Python's dataclass equality does.
  *
  * TS-only: `sameGuard`, `sameCheck` and `unknownCheck`, which stand in for Python's dataclass
- * equality and its `TypeError` for an unhandled check kind.
+ * equality and its `TypeError` for an unhandled check kind; a comprehension's reads stay in
+ * lockstep with `conditionReads`, and a comprehension proves nothing.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -381,4 +382,16 @@ test("sameGuard, sameCheck and unknownCheck", () => {
   const error = unknownCheck(new OtherCheck());
   expect(error).toBeInstanceOf(TypeError);
   expect(error.message).toBe("unhandled check kind OtherCheck");
+});
+
+test("a comprehension's reads match conditionReads, in order", () => {
+  const when = 'len(join([m.text for t in input.history for m in t], "")) > input.budget';
+  const paths = guards(when).map(([path]) => path);
+  expect(paths).toEqual(conditionReads(parseCondition(when)).map((r) => r.path));
+  expect(paths).toEqual(["input.history", "input.budget"]);
+});
+
+test("a comprehension proves nothing", () => {
+  expect(p("[x for x in xs if x.type == 'a']")).toStrictEqual(NOTHING);
+  expect(p("[x for x in xs if x.type == 'a']", false)).toStrictEqual(NOTHING);
 });

@@ -1,6 +1,6 @@
 /**
  * TS-only: `${x.new_messages}`, an AGENT's second readable value, typed `list(Message)`: what
- * loads and where, and each load error.
+ * loads and where, and each load error; a comprehension variable over it is not a reference.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -249,4 +249,21 @@ test("a reader behind a CASE branch reads new_messages", async () => {
     ),
   );
   expect(flow.compiled.edges.some((edge) => edge.from === "reply" && edge.to === "a")).toBe(true);
+});
+
+test("a comprehension over reply.new_messages reads the node, not its variables", async () => {
+  // The variable `reply` shadows the node inside; only the first iterable reads the node.
+  const flow = await loadFlow(FLOW(CODE_READER("      history: ${[reply.role for reply in reply.new_messages]}", "list(str)")));
+  expect(flow.compiled.edges.some((edge) => edge.from === "reply" && edge.to === "reader")).toBe(true);
+  expect(rensInternal(new Binding("${[r.output for r in reply.new_messages]}"), "cs")).toEqual(
+    new Binding("${[r.output for r in cs/reply.new_messages]}"),
+  );
+});
+
+test("a flow assert's comprehension over reply.new_messages renames only the iterable", async () => {
+  const flow = await loadFlow(ASSERTED("len([m for m in reply.new_messages if m.role == 'assistant']) > 0"));
+  const end = flow.compiled.nodes.get("__end__")!;
+  expect(end.postAsserts.map((assertion) => assertion.expression)).toEqual([
+    "len([m for m in __assert_reply_new_messages if m.role == 'assistant']) > 0",
+  ]);
 });

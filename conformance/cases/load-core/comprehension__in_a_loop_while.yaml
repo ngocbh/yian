@@ -1,0 +1,32 @@
+kind: load
+python_skip: "TS-only: list comprehensions (#1086)"
+# The first iterable reads the carried field ns; inside, the variable ns shadows it.
+flow: |
+  id: p
+  name: p
+  defs:
+    body:
+      input:
+        ns: !list(int)
+      nodes:
+        bump:
+          kind: code
+          input:
+            ns: ${input.ns}
+          output:
+            ns: list(int)
+          code: "return ({ns: [...inputs['ns'], 1]})"
+      output: ${bump.output}
+  input:
+    ns: !list(int)
+  nodes:
+    drive:
+      kind: loop
+      call: body
+      while: ${len([ns for ns in ns if ns > 0]) < 3}
+      max: 5
+      input:
+        ns: ${input.ns}
+  output: ${drive.output}
+expect:
+  load: ok

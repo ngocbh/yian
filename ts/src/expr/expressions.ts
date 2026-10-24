@@ -749,7 +749,8 @@ const OP_TOKEN_TYPES: ReadonlySet<string> = new Set(["NOT", "AND", "OR"]);
 /**
  * Recursive walker for a `parseExpr` tree, parameterised by `resolve`, `item` and `mode`.
  * Hand-written so coalesce / default / required can short-circuit: the fallback is evaluated
- * only when the head misses.
+ * only when the head misses. A comprehension runs its clauses in a loop rather than by
+ * recursion, and keeps its variables' items while it runs.
  *
  * A reference evaluates to `MISSING` on an unresolved path; every value consumer (operators,
  * comparisons, the top-level entry) maps `MISSING` to `null` in the non-strict modes or throws
@@ -764,6 +765,8 @@ class EvalExpr {
   readonly #frames: TraceFrame[] = [];
   #lastRoute: ValueRoute | null = null;
   #missPath: string | null = null;
+  // Comprehension variables in scope: name -> its item and, when tracing, the item's route.
+  readonly #vars = new Map<string, { value: Value; route: ValueRoute | null }>();
 
   constructor(
     resolve: (path: string) => Value | ResolvedValue,
@@ -870,6 +873,10 @@ class EvalExpr {
         return this.listLit(node);
       case "subscript":
         return this.subscript(node);
+      case "list_comp":
+        return this.listComp(node);
+      case "comp_var":
+        return this.compVar(node);
     }
     throw new ExpressionError(`unsupported expression node ${reprText(node.data)}`);
   }
@@ -1024,6 +1031,88 @@ class EvalExpr {
       });
     }
     return base.slice(start, stop);
+  }
+
+  /**
+   * A list comprehension, as Python's nested loops: the first iterable in the enclosing scope,
+   * each later clause once per binding of the clauses before it, an `if` keeping a binding when
+   * its condition is truthy, and the elem appended after the last clause. The clauses run depth
+   * first without recursion, so a long comprehension can't overflow the stack. When tracing, the
+   * route is a `list` of the elems' routes, and a variable carries its item's route, the
+   * iterable's route projected to the item, so feedback on an elem reaches that item. Conditions
+   * aren't part of the route, as a CASE condition isn't.
+   *
+   * @throws {ExpressionError} If an iterable is null, misses, or is not a list.
+   */
+  listComp(node: Tree): Value[] {
+    const [elem, ...clauses] = node.children as [ExprNode, ...Tree[]];
+    const out: Value[] = [];
+    const routes: ValueRoute[] = [];
+    // One entry per active `for`: its clause index, its items, the next index, and its iterable's route.
+    const loops: { at: number; items: Value[]; k: number; route: ValueRoute | null }[] = [];
+    // Move to the next binding of the innermost loop that has one; return the next clause index, or -1.
+    const next = (): number => {
+      while (loops.length > 0) {
+        const loop = loops.at(-1)!;
+        const name = String(clauses[loop.at]!.children[0]);
+        if (loop.k < loop.items.length) {
+          const route = loop.route?.project([loop.k]) ?? null;
+          this.#vars.set(name, { value: loop.items[loop.k++]!, route });
+          return loop.at + 1;
+        }
+        this.#vars.delete(name);
+        loops.pop();
+      }
+      return -1;
+    };
+    let i = 0;
+    while (i >= 0) {
+      if (i === clauses.length) {
+        out.push(this.asValue(this.walk(elem)));
+        if (this.#trace) routes.push(this.#lastRoute!);
+        i = next();
+      } else if (clauses[i]!.data === "comp_for") {
+        const [target, iterable, source] = clauses[i]!.children as [Token, ExprNode, Token];
+        const items = EvalExpr.orNone(this.walk(iterable));
+        if (items === null) {
+          throw new ExpressionError(
+            `comprehension \`for ${target} in ${source}\` iterates over null; give a default, e.g. \`(${source} :- [])\``,
+          );
+        }
+        if (!Array.isArray(items)) {
+          throw new ExpressionError(`comprehension \`for ${target} in ${source}\` takes a list, got ${kindName(items)}`);
+        }
+        loops.push({ at: i, items, k: 0, route: this.#trace ? this.#lastRoute : null });
+        i = next();
+      } else {
+        i = truthy(this.asValue(this.walk(clauses[i]!.children[0]!))) ? i + 1 : next();
+      }
+    }
+    if (this.#trace) {
+      this.#frames.at(-1)!.route = new ValueRoute("list", {
+        children: routes,
+        expression: "[" + routes.map((route) => route.expression).join(", ") + "]",
+      });
+    }
+    return out;
+  }
+
+  /**
+   * A comprehension variable read, then any `.field` trailers as `dottedStep` walks them. When
+   * tracing, its route is its item's route projected through the trailers.
+   */
+  compVar(node: Tree): Walked {
+    const name = String(node.children[0]);
+    const binding = this.#vars.get(name);
+    // Only a hand-built tree can read a variable outside its comprehension.
+    if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
+    const steps = node.children.slice(1).map((trailer) => String((trailer as Tree).children[0]));
+    // A null item is returned as is, as in Python; a `.field` on it misses.
+    let value: Walked = binding.value;
+    for (const step of steps) value = this.dottedStep(value, step);
+    if (value === MISSING) this.#missPath = [name, ...steps].join(".");
+    else if (this.#trace && binding.route !== null) this.#frames.at(-1)!.route = binding.route.project(steps);
+    return value;
   }
 
   /** One slice bound: `null` when omitted, else its int (a bool as 0 or 1). */
@@ -1342,7 +1431,9 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * The one evaluator for every `${...}` construct: references (bare, dotted, `item`-scoped),
  * arithmetic and comparisons over values (so text + text and list + list concatenate), boolean
  * combinators, list literals, list slices (`xs[a:b]`, as Python's with step 1; a slice of a
- * miss or `null` is a miss), and coalesce / default / required. The operators follow the TS
+ * miss or `null` is a miss), list comprehensions (as Python's; an elem miss is a `null` item and
+ * a condition miss is falsy outside strict mode, and a `null` item is returned as is), and
+ * coalesce / default / required. The operators follow the TS
  * number model: an int is a `bigint` at any size, a bool counts as 0 or 1, `/` always gives a
  * float, and a float result is IEEE's (`Infinity` is a value, NaN an error).
  *
@@ -1373,7 +1464,7 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *   fails, an `isinstance` type absent from `types`, arithmetic or ordering over operand kinds
  *   the operator doesn't take (`null` included), a zero divisor, a NaN result, an int too large
  *   for the runtime, a slice of anything but a list or with a bound that is null or not an int,
- *   or a strict-mode miss.
+ *   a comprehension over anything but a list (`null` or a miss included), or a strict-mode miss.
  * @throws {TypeError} When a traced resolver doesn't return a `ResolvedValue`.
  */
 export function evalExpr(

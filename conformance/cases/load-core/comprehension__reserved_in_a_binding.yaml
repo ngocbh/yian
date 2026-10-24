@@ -1,0 +1,22 @@
+kind: load
+python_skip: "TS-only: list comprehensions (#1086)"
+flow: |
+  id: p
+  name: p
+  input:
+    xs: !list(int)
+  nodes:
+    use:
+      kind: code
+      input:
+        v: ${[x for item in input.xs]}
+      code: "return inputs['v']"
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "use: could not parse expression '[x for item in input.xs]': 'item' can't be a comprehension variable: input, system, item, output and names starting with __ are reserved at line 1, column 8"
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 37]

@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+# A comprehension never misses, so `:- [9]` doesn't fall back.
+expr: "[[x for x in (n :- [])], [x for x in xs] :- [9]]"
+values: {xs: [1, 2, 3, 4], n: null}
+expect:
+  value: [[], [1, 2, 3, 4]]

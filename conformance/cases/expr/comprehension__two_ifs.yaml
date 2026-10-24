@@ -1,0 +1,6 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[x for x in xs if x > 0 if x < 3]"
+values: {xs: [1, 2, 3, 4]}
+expect:
+  value: [1, 2]

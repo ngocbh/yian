@@ -21,7 +21,8 @@
  *   the one request asking for structured output.
  * - Python's `ValueError` is a `RangeError`; CODE bodies are JavaScript (decision 11).
  *
- * TS-only: slice and `len` routes cross a public CALL the same way (Python has no slices).
+ * TS-only: slice, `len` and comprehension routes cross a public CALL the same way (Python has
+ * none of them).
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -722,6 +723,76 @@ output: \${outer.output}
       ["a", "b"],
       ["a", "b"],
     ]);
+  } finally {
+    if (saved === undefined) TEMPLATE_FNS.delete("composition_opaque");
+    else TEMPLATE_FNS.set("composition_opaque", saved);
+  }
+});
+
+test("comprehension routes cross a public call without reevaluation", async () => {
+  const calls: unknown[] = [];
+  const saved = TEMPLATE_FNS.get("composition_opaque");
+  registerTemplateFn("composition_opaque", {
+    params: [{ name: "value" }],
+    call: (value) => {
+      calls.push(structuredClone(value));
+      return value;
+    },
+  });
+  try {
+    const flow = await load(`id: comprehended-expressions
+name: comprehended_expressions
+long_term_memory: test
+input:
+  values: !list(str)
+defs:
+  identity:
+    input:
+      values: !list(str)
+    nodes: {}
+    output: \${input.values}
+  combine:
+    input:
+      values: !list(str)
+    nodes:
+      invoke:
+        kind: call
+        call: identity
+        input:
+          values: \${[v for v in input.values if v != "b"] + composition_opaque([v for v in input.values][:1])}
+    output: \${invoke.output}
+nodes:
+  outer:
+    kind: call
+    call: combine
+    input:
+      values: \${input.values}
+output: \${outer.output}
+`);
+    const backend = new FakeMemory();
+    const memory = new Map([["test", backend]]);
+    const path = fresh("comprehended.jsonl");
+    const result = await run(flow, { values: ["a", "b", "c"] }, { log: path, learnable: true, memory });
+    expect(result.status).toBe("succeeded");
+    expect(result.output).toEqual(["a", "c", "a"]);
+    // Once live and once in the CALL expansion's check against its rebuild from `from`.
+    expect(calls).toEqual([["a"], ["a"]]);
+    const outcome = await result.backward(["first", "second", "opaque 1"]);
+    expect(outcome.status).toBe("succeeded");
+    // Each kept item's feedback reaches its own index of the input, one contribution each.
+    expect(outcome.feedback).toEqual(
+      new BackwardResult({
+        inputFeedback: {
+          values: [
+            ["first", null, null],
+            [null, null, "second"],
+          ],
+        },
+      }),
+    );
+    // Learning rebinds the CALL, and the rebuilt capture equals the recorded one (a mismatch
+    // throws).
+    expect(calls).toEqual([["a"], ["a"], ["a"], ["a"]]);
   } finally {
     if (saved === undefined) TEMPLATE_FNS.delete("composition_opaque");
     else TEMPLATE_FNS.set("composition_opaque", saved);

@@ -9,7 +9,8 @@
  * of the reserved-keyword tests.
  *
  * TS-only: subscripts (list slices), their tree, how tightly they bind, and the colon rule inside
- * a subscript's brackets.
+ * a subscript's brackets; list comprehensions, their tree and clause order, and the scoping pass
+ * that turns comprehension-variable reads into `comp_var`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -856,5 +857,107 @@ describe("subscripts", () => {
     expect(result.data).toBe("subscript");
     expect(kindOf(result.children[0]!)).toBe(base);
     if (base === "refcall") expect((result.children[0] as Tree).children.map(kindOf)).toContain("call_suffix");
+  });
+});
+
+describe("comprehensions", () => {
+  /** The rule name of `node`, or its token type. */
+  const kindOf = (node: ExprNode) => (node instanceof Tree ? node.data : node.type);
+  /** Each clause of the comprehension `text` parses to, as its kind and, for a `for`, target and source. */
+  const clausesOf = (text: string) => {
+    const result = tree(text);
+    expect(result.data).toBe("list_comp");
+    return (result.children.slice(1) as Tree[]).map((clause) =>
+      clause.data === "comp_for" ? [clause.data, String(clause.children[0]), String(clause.children[2])] : [clause.data],
+    );
+  };
+
+  test("a map is a list_comp of its elem and one for", () => {
+    const result = tree("[x * 2 for x in xs]");
+    expect(result.data).toBe("list_comp");
+    expect(kindOf(result.children[0]!)).toBe("product");
+    expect(clausesOf("[x * 2 for x in xs]")).toEqual([["comp_for", "x", "xs"]]);
+    const source = (result.children[1] as Tree).children[2] as Token;
+    expect(source.type).toBe("SOURCE");
+  });
+
+  test("clauses keep source order", () => {
+    expect(clausesOf('[m for t in ts for m in t if m.role == "user"]')).toEqual([
+      ["comp_for", "t", "ts"],
+      ["comp_for", "m", "t"],
+      ["comp_if"],
+    ]);
+    expect(clausesOf("[x for x in xs if x > 0 if x < 3]")).toEqual([["comp_for", "x", "xs"], ["comp_if"], ["comp_if"]]);
+  });
+
+  test("an elem may be a comprehension or an escape", () => {
+    expect(kindOf(tree("[[c for c in r] for r in rows]").children[0]!)).toBe("list_comp");
+    expect(kindOf(tree("[a :- b for x in xs]").children[0]!)).toBe("default_expr");
+  });
+
+  test("SOURCE keeps the iterable's text, parentheses included", () => {
+    expect(clausesOf("[x for x in (a :- [])]")).toEqual([["comp_for", "x", "(a :- [])"]]);
+  });
+
+  test("for and if stay names in operand position", () => {
+    const list = tree("[for, if]");
+    expect(list.data).toBe("list_lit");
+    expect(list.children.map(kindOf)).toEqual(["refcall", "refcall"]);
+    expect(parsed("for.x")).toEqual(plain(ref("for", "x")));
+  });
+
+  test("5,000 if clauses parse, with no recursion and no clause cap", () => {
+    const result = tree(`[x for x in xs${" if true".repeat(5000)}]`);
+    expect(result.children.length).toBe(5002);
+  });
+});
+
+describe("comprehension scoping", () => {
+  /** The `comp_var` nodes in `node`, each as its plain form. */
+  const compVars = (node: Tree) => iterSubtrees(node).filter((n) => n.data === "comp_var").map(plain);
+  const compVar = (...parts: string[]) => plain(new Tree("comp_var", ref(...parts).children));
+  /** The `refcall` nodes in `node`, each as its plain form. */
+  const refcalls = (node: Tree) => iterSubtrees(node).filter((n) => n.data === "refcall").map(plain);
+
+  test("the elem's variable is a comp_var and the iterable a reference", () => {
+    const result = tree("[x * 2 for x in xs]");
+    expect(compVars(result)).toEqual([compVar("x")]);
+    expect(plain((result.children[1] as Tree).children[1]!)).toEqual(plain(ref("xs")));
+  });
+
+  test("a later iterable and condition see earlier variables", () => {
+    const result = tree('[m for t in ts for m in t if m.role == "user"]');
+    expect(plain((result.children[2] as Tree).children[1]!)).toEqual(compVar("t"));
+    expect(compVars(result)).toContainEqual(compVar("m", "role"));
+    expect(refcalls(result)).toEqual([plain(ref("ts"))]);
+  });
+
+  test("the first iterable runs in the enclosing scope", () => {
+    const result = tree("[x for x in x.items]");
+    expect(plain((result.children[1] as Tree).children[1]!)).toEqual(plain(ref("x", "items")));
+    expect(compVars(result)).toEqual([compVar("x")]);
+  });
+
+  test("a nested comprehension sees the enclosing variables", () => {
+    const result = tree("[[c + r0 for c in r] for r in rows]");
+    const inner = result.children[0] as Tree;
+    expect(compVars(inner).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual([
+      compVar("c"),
+      compVar("r"),
+    ]);
+    expect(refcalls(result)).toEqual([plain(ref("r0")), plain(ref("rows"))]);
+  });
+
+  test("isinstance's type name stays a name", () => {
+    expect(compVars(tree("[isinstance(T, T) for T in ts]"))).toEqual([compVar("T")]);
+  });
+
+  test("a call is never a variable read", () => {
+    const result = tree('[len(len) for len in ["ab"]]');
+    expect(plain(result.children[0]!)).toEqual(plain(call("len", [arg(new Tree("comp_var", [name("len")]))])));
+  });
+
+  test("an inner comprehension in the first iterable may reuse the name", () => {
+    expect(tree("[x for x in [x for x in a]]").data).toBe("list_comp");
   });
 });

@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[x for __x in xs]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression '[x for __x in xs]': '__x' can't be a comprehension variable: input, system, item, output and names starting with __ are reserved at line 1, column 8"

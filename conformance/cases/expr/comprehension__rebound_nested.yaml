@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[[x for x in a] for x in b]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression '[[x for x in a] for x in b]': comprehension variable 'x' is already bound here; rename one at line 1, column 9"

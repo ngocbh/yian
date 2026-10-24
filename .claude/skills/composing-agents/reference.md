@@ -50,6 +50,7 @@ One expression grammar, everywhere `${...}` appears:
 | `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call (null or wrong-typed args fail: `${upper(x :- "")}`) |
 | `${len(x)}` | TS yian: length of a list (items) or text (code points), an `int`; bindings and conditions only, not prompts |
 | `${xs[1:]}`, `${xs[:-n]}` | TS yian: a Python list slice (negative counts from the end, bounds clamp, no step or index); inside the brackets `:` ends a bound, so a default needs parentheses: `${xs[(n :- 0):]}` |
+| `${[m.text for m in ms if m.role == "user"]}` | TS yian: a Python list comprehension (more `for`/`if` clauses may follow, leftmost `for` outermost); iterables and `if` conditions stop before `:-`/`:?`/`\|`, so parenthesize: `${[m for m in (ms :- [])]}` |
 | `${Buy(action="buy", qty=n)}`, `${Buy(x)}` | constructor: build a typedef record from exactly these fields, or check and narrow `x` (like `!Buy ${x}`) |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
@@ -496,6 +497,10 @@ return only the fields that change; a field it omits keeps its value. See `chat.
 
 ## Gotchas
 
+- **Compute lists in a CALL binding or a `when:`, not an AGENT binding** (TS yian). An
+  AGENT/TOOL/CODE binding records one route per item of a computed list in learnable runs,
+  while a CALL's binding, a prompt and a `when:` don't. Bind an AGENT input to a plain reference,
+  and flatten (`${[m for t in input.history for m in t]}`) or measure (`len(...)`) elsewhere.
 - **Type a slot with a tag, not `T = value`.** `qty: int = ${x}` is a load error that
   shows `` `qty: !int ${x}` ``; `note: a = b` (no type on the left) is plain text.
   A multi-argument type in a tag is a load error: name it in `typedefs:` and tag by

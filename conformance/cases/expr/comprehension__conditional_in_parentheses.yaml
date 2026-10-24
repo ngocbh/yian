@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "(a if c else b)"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression '(a if c else b)': conditional expressions (`a if c else b`) aren't supported yet at line 1, column 4"

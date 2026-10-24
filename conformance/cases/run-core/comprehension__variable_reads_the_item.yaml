@@ -1,0 +1,111 @@
+kind: run
+rules: [run-log]
+python_skip: "TS-only: list comprehensions (#1086)"
+# Inside the comprehension, step, xs, Msg and len read the items, not the node, the input, the
+# typedef or the builtin; the call len(...) still calls the builtin.
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Msg: {role: str, text: str}
+  input:
+    xs: !list(int)
+  nodes:
+    step:
+      kind: code
+      output: int
+      code: "return 99"
+    use:
+      kind: code
+      input:
+        v: '${[[step, xs, Msg, len(len)] for step in input.xs for xs in [step * 10] for Msg in [xs + 1] for len in ["ab"]]}'
+      code: "return inputs['v']"
+  output: ${use.output}
+inputs:
+  xs: [1, 2]
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: [[1, 10, 11, 2], [2, 20, 21, 2]]
+  trace:
+  - - run_started
+    - null
+    - {learnable: false, num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: <id:1>}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value:
+        xs: [1, 2]
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        xs: [1, 2]
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, use]
+  - - pool_commit
+    - use
+    - value:
+      - [1, 10, 11, 2]
+      - [2, 20, 21, 2]
+  - - node_succeeded
+    - use
+    - {commit: 9}
+  - [node_started, step]
+  - - pool_commit
+    - step
+    - {value: 99}
+  - - node_succeeded
+    - step
+    - {commit: 12}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+      - [1, 10, 11, 2]
+      - [2, 20, 21, 2]
+  - - node_succeeded
+    - __end__
+    - {commit: 15}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        xs: [1, 2]
+  - - NodeStarted
+    - {node_id: use}
+  - - NodeSucceeded
+    - node_id: use
+      output:
+      - [1, 10, 11, 2]
+      - [2, 20, 21, 2]
+  - - NodeStarted
+    - {node_id: step}
+  - - NodeSucceeded
+    - {node_id: step, output: 99}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+      - [1, 10, 11, 2]
+      - [2, 20, 21, 2]
+  - - RunSucceeded
+    - output:
+      - [1, 10, 11, 2]
+      - [2, 20, 21, 2]

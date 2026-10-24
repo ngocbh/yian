@@ -1,0 +1,7 @@
+kind: expr
+python_skip: "TS-only: list comprehensions (#1086)"
+expr: "[x for x in a :- []]"
+expect:
+  raises:
+    class: ExpressionError
+    message: "could not parse expression '[x for x in a :- []]': a comprehension's iterable and `if` stop before `:-`, `:?` and `|`; write `(a :- [])` at line 1, column 15"

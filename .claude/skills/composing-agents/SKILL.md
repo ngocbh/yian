@@ -183,6 +183,12 @@ returned type has. Every shipped builtin but `len` returns text (`len` returns `
 `${upper(x).f}` and `${len(x).f}` are load errors (`reads field 'f' on type str, which has no
 fields`, and `on type int` for `len`); a host-registered builtin's result isn't checked.
 
+TS yian also has Python list comprehensions, `${[m.text for t in input.history for m in t if
+m.role == "user"]}`: a variable is local (it may share a node's or input's name), and an
+iterable or `if` needs parentheses around an escape (`(xs :- [])`). Reads through a variable
+aren't type-checked at load yet. Flatten or measure lists in a CALL binding or a `when:`, not in
+an AGENT binding, which records one route per item in learnable runs.
+
 On a `Union(...)`, a field every member has reads anywhere (one type if the members
 agree, the merged `Literal` if every member's field is a string `Literal`, else
 untyped). A field only some members have

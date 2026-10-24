@@ -673,6 +673,7 @@ appears — bindings, conditions, prompts. Inside it you may write:
 | `${upper(name)}`, `${join(items, ", ")}` | a pure builtin call (with dotted access on the result: `${fn(x).field}`); a null or wrong-typed argument fails, so default it: `${upper(name :- "")}` |
 | `${len(xs)}` | TS yian: the length of a list (items) or text (code points), an `int`, in bindings and conditions; a prompt can't call it |
 | `${xs[1:]}`, `${xs[:-n]}`, `${xs[a:b]}` | TS yian: a list slice as in Python. A negative bound counts from the end, and bounds clamp. Inside the brackets `:` ends a bound, so a default needs parentheses: `${xs[(n :- 0):]}`. There is no step and no index. Quote the YAML value |
+| `${[m.text for m in ms if m.role == "user"]}` | TS yian: a list comprehension as in Python (more `for` and `if` clauses may follow; the leftmost `for` is the outermost loop). Iterables and `if` conditions stop before `:-`/`:?`/`\|`, so parenthesize them: `${[m for m in (ms :- [])]}`. A variable is local and may share a name with a node or input |
 | `${Buy(action="buy", qty=n)}`, `${Buy(x)}` | a [constructor](expressions.md#constructors-t): a typedef name builds a record from exactly the given fields and checks it, or checks and narrows `x` like `!Buy ${x}` |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
@@ -1355,10 +1356,10 @@ There are no YAML tags inside `${...}`, so a typedef name works as a constructor
 fields and checks it. `${Buy(x)}` checks and narrows `x`, exactly like `!Buy ${x}`. See
 [Constructors](expressions.md#constructors-t).
 
-In TS yian an expression can also measure and slice a list: `${len(input.history)}` and
-`${input.history[len(input.history) - 4:]}` (see
+In TS yian an expression can also measure, slice and build a list: `${len(input.history)}`,
+`${input.history[len(input.history) - 4:]}` and `${[m for t in input.history for m in t]}` (see
 [Operators inside `${...}`](#operators-inside) and
-[Expressions → list slices](expressions.md#layer-1--grammar-parse-only)).
+[Expressions → list slices and comprehensions](expressions.md#layer-1--grammar-parse-only)).
 
 ### Load check
 
@@ -1379,8 +1380,9 @@ The loader compares the tag's type with the type it infers for the value:
   branch fails at load.
 - A MAP's lone `${item}` or `${item.field}` is inferred from the element type of
   `over:`, so `t: !str ${item}` over a `list(int)` fails at load.
-- A value whose type can't be inferred (arithmetic, a builtin call, a slice, an untyped
-  producer) is checked at runtime only.
+- A value whose type can't be inferred (arithmetic, a builtin call, a slice, a list
+  comprehension, an untyped producer) is checked at runtime only. So is a read through a
+  comprehension variable: `${[m.txt for m in input.ms]}` loads and misses at run time.
 
 Literals are checked against the type at load:
 

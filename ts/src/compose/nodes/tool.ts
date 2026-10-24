@@ -19,7 +19,7 @@ import { bindingSource, isExactly, ValueContract } from "../../nodes/contracts.t
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
-import { parseDuration } from "../../typesys/temporal.ts";
+import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
   isInboxType,
@@ -142,7 +142,8 @@ export class ToolDescriptor extends NodeDescriptor {
    * Sets the node's `params` from the authored `input:` and its output contract from the
    * optional `output:` (`null` when absent); `_finish` stamps the descriptor origin. A built-in
    * checks its inputs first and infers its output: `take` gives `{events: list(T), closed: bool}`
-   * for its `Inbox(T)`.
+   * for its `Inbox(T)`, `sleep` gives `None`. A literal duration (`timeout`, `for`) is wired as
+   * its seconds.
    *
    * @throws LoadError when `output:` isn't a valid type expression, or a built-in's input is
    *   unknown, missing or of the wrong type (at the input).
@@ -156,6 +157,10 @@ export class ToolDescriptor extends NodeDescriptor {
     if (this.toolId === TAKE) {
       node.outputContract = this.buildTake(ctx);
       this.wireDuration(ctx, wiring, "timeout");
+    } else if (this.toolId === SLEEP) {
+      this.checkSleep(ctx);
+      this.wireDuration(ctx, wiring, "for");
+      node.outputContract = new ValueContract(Type.scalar(ValueKind.NONE));
     } else {
       node.outputContract = this.outputContract(ctx);
     }
@@ -227,6 +232,47 @@ export class ToolDescriptor extends NodeDescriptor {
   }
 
   /**
+   * Check a sleep's inputs: exactly one of `until` and `for`. A literal `until` must be a date or
+   * datetime, and a reference to one must be able to hold a date, datetime or text.
+   *
+   * @throws LoadError for any other input, both or neither, or a bad `until`.
+   */
+  private checkSleep(ctx: BuildContext): void {
+    const id = reprText(this.id);
+    const names = Object.keys(this.inputs);
+    const extra = names.find((name) => name !== "until" && name !== "for");
+    if (extra !== undefined || names.length !== 1) {
+      const got = extra === undefined ? "" : `; got ${reprText(extra)}`;
+      throw ctx.diagnostics.error(`node ${id} (tool_id: sleep): sleep takes until: or for:, exactly one${got}`, {
+        range: extra === undefined ? (this.fieldRanges.get(siteKey("field", "inputs")) ?? this.range) : this.inputRange(extra),
+      });
+    }
+    if (names[0] !== "until") return;
+    const subject = this.inputSubject("until");
+    const range = this.inputRange("until");
+    const literal = literalValue(bindingSource(this.inputs["until"]));
+    if (literal !== NOT_LITERAL) {
+      if (typeof literal === "string") {
+        try {
+          parseDateOrDatetime(literal);
+          return;
+        } catch (error) {
+          if (!(error instanceof RangeError)) throw error;
+        }
+      }
+      throw ctx.diagnostics.error(`${subject}: must be a date or datetime, got ${valueRepr(literal)}; ${UNTIL_FIX}`, {
+        range,
+      });
+    }
+    const typ = this.inputType(ctx, "until");
+    if (typ === null || typeRelation(typ, DATE) !== "disjoint" || typeRelation(typ, DATETIME) !== "disjoint") return;
+    throw ctx.diagnostics.error(
+      `${subject}: must be a date or datetime, but the value is ${canonicalTypeLabel(typ)}; ${UNTIL_FIX}`,
+      { range },
+    );
+  }
+
+  /**
    * Rewrite duration input `name`'s wiring source, when present: a literal to its seconds (a
    * bigint); a reference stays as written once its type is `str`, and is parsed when the node runs.
    *
@@ -285,6 +331,9 @@ export class ToolDescriptor extends NodeDescriptor {
 
 /** The inputs a `take` reads. */
 const TAKE_INPUTS: ReadonlySet<string> = new Set(["from", "take", "timeout"]);
+const DATE = Type.scalar(ValueKind.DATE);
+const DATETIME = Type.scalar(ValueKind.DATETIME);
+const UNTIL_FIX = "write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`";
 /** The values of a take's `take:`. */
 const TAKE_MODE = new Type({ kind: ValueKind.STRING, tags: new Set(["one", "all"]) });
 

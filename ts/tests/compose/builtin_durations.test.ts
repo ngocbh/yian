@@ -49,3 +49,43 @@ test("a reference typed str loads unchanged", () => {
 test("a reference not typed str is refused", () => {
   expect(refused(takeFlow("${input.t}", "int"))).toContain("a duration reference must be typed str");
 });
+
+/** Return a flow with input `d` (a datetime) and sleep node `nap` with `inputs` lines. */
+const sleepFlow = (inputs: string) => `id: f
+name: f
+input:
+  d: !datetime
+nodes:
+  nap:
+    kind: tool
+    tool_id: sleep
+    input:
+${inputs}output: \${input.d}
+`;
+
+test("sleep for: compiles to seconds; its output is None", () => {
+  const text = sleepFlow("      for: 90s\n");
+  expect(wired(text, "nap", "for")).toBe(90n);
+  const node = assembleText(text).flow.compiled.nodes.get("nap")!;
+  expect(canonicalTypeLabel(outputContractType(node.outputContract)!)).toBe("None");
+});
+
+test.each([
+  ["a datetime", '      until: "2026-05-21T14:30Z"\n'],
+  ["a date", "      until: 2026-05-21\n"],
+  ["a datetime reference", "      until: ${input.d}\n"],
+])("sleep until: %s loads", (_label, inputs) => {
+  assembleText(sleepFlow(inputs));
+});
+
+test.each([
+  ["both", "      until: 2026-05-21\n      for: 90s\n", "sleep takes until: or for:, exactly one"],
+  ["neither", "      {}\n", "sleep takes until: or for:, exactly one"],
+  ["an extra input", "      for: 90s\n      x: 1\n", "sleep takes until: or for:, exactly one; got 'x'"],
+  ["until: tomorrow", "      until: tomorrow\n", "must be a date or datetime"],
+  ["until: a number reference", "      until: ${input.n}\n", "must be a date or datetime, but the value is int"],
+  ["for: 0s", "      for: 0s\n", "a duration is a positive integer and a unit"],
+])("sleep refuses %s", (_label, inputs, message) => {
+  const text = sleepFlow(inputs).replace("  d: !datetime\n", "  d: !datetime\n  n: !int\n");
+  expect(refused(text)).toContain(message);
+});

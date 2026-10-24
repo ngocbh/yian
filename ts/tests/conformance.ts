@@ -2922,8 +2922,9 @@ const OUTCOMES: ReadonlySet<string> = new Set([
  * `execution_seq` replaced by the kind and node of the record it names, and each success's
  * `commit` by the trace fields of the `pool_commit` it names, whose `from` seqs are replaced the
  * same way, and its `messages` by the messages commit's fields, each of whose `steps` is given as
- * its step's node and `n`: captures, successes, `from` and `steps` name records by seq, and a
- * resume adds records, so a crash sweep compares the records instead.
+ * its step's node and kind (a resumed call-time agent records its config again, so step numbers
+ * move): captures, successes, `from` and `steps` name records by seq, and a resume adds records,
+ * so a crash sweep compares the records instead.
  */
 export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
   const rename = (value: unknown): void => {
@@ -2965,7 +2966,8 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
       if (commit?.[0] !== "pool_commit") throw new CaseFailure(`a success names messages ${messages}, which isn't a pool_commit`);
       const steps = ((commit[2] as Case)["steps"] as bigint[]).map((seq) => {
         const step = entries[Number(seq)];
-        return `${String(step?.[0])} ${String(step?.[1])} ${String(((step?.[2] ?? {}) as Case)["n"])}`;
+        const body = (((step?.[2] ?? {}) as Case)["step"] ?? {}) as Case;
+        return `${String(step?.[0])} ${String(step?.[1])} ${String(body["kind"])}`;
       });
       (payload as Case)["messages"] = { ...(commit[2] as Case), steps };
     }

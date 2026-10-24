@@ -25,7 +25,9 @@
  * `markdownVersion` (`memory/storage/markdown`). `ProfileMemory` (`memory/profile`, Python's
  * `yian.memory.profile`, which Python's `yian` doesn't export) is here for hosts that keep the
  * profile document in their own `MarkdownStore`. `RunResult`, `BackwardOutcome` and `Steering` are
- * on `yian/run` (`run.ts`), as Python's `yian.run`.
+ * on `yian/run` (`run.ts`), as Python's `yian.run`. `Message`, `MessagePart`, `checkMessage`,
+ * `checkConversation` and `ConversationError` (`nodes/agent/messages`), the built-in message value
+ * and the conversation a model route can send, are also on `yian/run`.
  *
  * Knows about: compile, compose, diagnostics, expr, memory storage, `memory/profile`,
  * `memory_host`, nodes, `run`, tools and typesys.
@@ -50,6 +52,13 @@ export {
 } from "./memory/storage/markdown.ts";
 export { checkStoragePath, SQLiteStorage } from "./memory/storage/sqlite.ts";
 export { buildMemories, MemoryRegistry } from "./memory_host.ts";
+export {
+  checkConversation,
+  checkMessage,
+  ConversationError,
+  type Message,
+  type MessagePart,
+} from "./nodes/agent/messages.ts";
 export { ToolAttemptsFailed } from "./nodes/tool/node.ts";
 export { resumeFlow, runFlow } from "./run.ts";
 export { ToolContext } from "./tools/context.ts";

@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { readTypedefs, type RecordDef, typeFor } from "../../src/typesys/types.ts";
 import { buildValueAs, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 
@@ -230,6 +231,38 @@ describe("typedef names", () => {
 
   test("a Unicode PascalCase name loads", () => {
     expect(readTypedefs({ Größe: "int" }).get("Größe")?.kind).toBe("alias");
+  });
+
+  test("Message is reserved", () => {
+    expectRejected({ Message: { role: "str" } }, "typedef name 'Message' shadows the built-in type 'Message'", ["Message"]);
+  });
+
+  test("the part record names stay free", () => {
+    expect(readTypedefs({ Text: "str", ToolCall: { id: "str" } }).size).toBe(2);
+  });
+});
+
+describe("typedefs naming Message", () => {
+  test("a field, an alias and a union member may be Message", () => {
+    const registry = readTypedefs({
+      Turn: { message: "Message", at: "str" },
+      History: "list(Message)",
+      Note: { kind: "Literal(note)", text: "str" },
+      Entry: "Union(Message, Note)",
+    });
+    expect(typeFor("Turn", registry).fields!.get("message")).toBe(typeFor("Message", new Map()));
+    expect(typeFor("History", registry).element).toBe(typeFor("Message", new Map()));
+    expect(typeFor("Entry", registry).variants).toHaveLength(2);
+  });
+
+  test("Message's levels count toward a typedef's nesting", () => {
+    // Message is 3 levels, so `Deep` is 1 + 1 + 3.
+    install({ ...BUILTIN, maxTypeNesting: 4 });
+    try {
+      expect(() => readTypedefs({ Deep: { history: "list(Message)" } })).toThrow("type nests deeper than 4 levels");
+    } finally {
+      forget();
+    }
   });
 });
 

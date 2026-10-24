@@ -844,6 +844,10 @@ typedefs:
     note: Optional(str)                # nullable field
 ```
 
+Changed (TS yian): `Message` is built in: every flow can name it, and a typedef can't take its
+name (`bad typedefs: typedef name 'Message' shadows the built-in type 'Message'`). See
+[Types → The built-in Message type](typing.md#the-built-in-message-type).
+
 `Literal` tags and record field names are non-empty text. `Literal("", a)`, an empty
 field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same
 way wherever the type appears: in `typedefs:`, a tag, or an `output:` type.
@@ -1879,12 +1883,36 @@ defs:
 The node outputs only the new turn; the def's output binding appends both turns to the
 history, so a LOOP can carry it.
 
+A history of the built-in [`Message`](typing.md#the-built-in-message-type) type splices the same
+way, with no typedef, and keeps each message's parts:
+
+```yaml
+input:
+  history: !list(Message)
+  message: !str
+nodes:
+  reply:
+    kind: agent
+    input:
+      history: ${input.history}
+      message: ${input.message}
+    output: str
+    prompt:
+      - ${history}          # tool calls, their results and reasoning replay as sent
+      - user: ${message}
+```
+
 - Each item is either `${name}` alone, naming one of the node's inputs or variables, or a
   one-key `user:` or `assistant:` mapping whose text is a template with the same rules as a text
   `prompt:`.
-- A message is any record with `role` (`user` or `assistant`) and `text` (`str`). The flow
-  declares the type; yian has no built-in one. Only `role` and `text` are sent; other fields are
-  ignored. Messages hold text only, not tool calls or media.
+- A message is a built-in [`Message`](typing.md#the-built-in-message-type) or any record with
+  `role` (`user` or `assistant`) and `text` (`str`).
+  - A `Message` is sent with its parts and role (`user`, `assistant` or `tool`), so tool calls,
+    their results and reasoning replay as sent.
+  - A `{role, text}` record sends only those two fields; other fields are ignored.
+  - A spliced record with a `text` field is read as `{role, text}`.
+  - A `Message`'s `author` is sent for a user message only; a spliced assistant message reads as
+    the model's own words.
 - The request is the system message, then the rendered list in order. A text `prompt:` means a
   one-item list, `[user: <text>]`, and sends the same request as before.
 - These are load errors, each at its item: text that isn't a lone `${name}` (such as
@@ -1892,14 +1920,26 @@ history, so a LOOP can carry it.
   another shape ("a prompt list item is `${name}` or `user:`/`assistant:` text"), message text
   that isn't text (`user: 5`), a `system:` item (use `system_prompt:`), a last item
   that is an `assistant:` message, a `${name}` naming no input or variable, and a `${name}`
-  whose declared type can't hold messages (it must be a record with non-null `role` and
-  `text: str`, a list of those, `object`, `list(object)` or `Any`). An empty list is a load
-  error at `prompt:`.
+  whose declared type can't hold messages (it must be `Message`, `list(Message)`, a record with
+  non-null `role` and `text: str`, a list of those, `object`, `list(object)` or `Any`). An empty
+  list is a load error at `prompt:`.
 - At run time the node fails, before any model call, when a spliced value isn't a message or a
   list of messages, or the rendered list is empty or doesn't end with a `user` message.
+- The rendered list must be a conversation a model can take:
+  - each role holds only its parts (user: text, with media refused separately; assistant: text,
+    reasoning, refusals, tool calls; tool: tool results), and no message is empty;
+  - every tool call is answered by the tool messages right after it, before the next user or
+    assistant message; ids pair within that exchange and may repeat across turns;
+  - no tool result is left without its call.
+
+  Otherwise the node fails before any model call, naming the rendered message and the prompt
+  item it came from. For an unanswered call, that is the item holding the assistant message that
+  made the call.
+- A spliced media part fails the node, because no model route sends media yet.
 - Memory recall and evidence read the last message's text as the prompt. The render capture
   (and so AGENT backward) holds the list as JSON text: the authored items as the template, the
-  `{role, text}` messages as the rendered prompt.
+  `{role, text}` messages, and each spliced `Message` in its JSON form without `protocol` or
+  `provider_payload`, as the rendered prompt.
 - A list prompt goes into the flow's identity as its item list; a text prompt's identity is
   unchanged.
 

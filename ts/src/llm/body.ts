@@ -1,13 +1,18 @@
 /**
- * Merge a provider block into a request body yian built, and encode the body as JSON.
+ * Build request bodies the same way in every adapter: merge a provider block into a body yian
+ * built, encode the body as JSON, and render a user message's author.
  *
  * A provider block mirrors the request body of the API it reaches. Adapters build their own
  * fields first, then merge the block as written: objects key by key, arrays and scalars whole,
  * `null` meaning unset.
+ *
+ * A user message's author goes to the model as an `<authored_message author="...">` …
+ * `</authored_message>` wrapper around its parts, and the tag is escaped in every user and tool
+ * text, so only the adapter can write it.
  */
 
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
-import { copyJson, isPlainObject, put, typeName } from "./messages.ts";
+import { copyJson, isPlainObject, Message, type Part, put, TextPart, ToolResultPart, typeName } from "./messages.ts";
 
 /**
  * Deep-merge a provider block into a request body, in place.
@@ -145,4 +150,173 @@ function quote(text: string, at: number, what: string): string {
   // The escaped prefix, less its closing quote, ends where the surrogate would be written.
   const position = at + JSON.stringify(text.slice(0, i)).length - 1;
   throw new TypeError(`${what} has an unpaired surrogate at position ${position}`);
+}
+
+/** The tag name of the wrapper that carries a user message's author. */
+export const AUTHOR_TAG = "authored_message";
+
+// Any run of whitespace, backslashes, slashes, format characters and other default-ignorable
+// characters (zero-width, bidi controls, variation selectors, Hangul fillers) may sit between
+// `<` and the name, because `<\/authored_message>` (the JSON escaped-slash form a tool may return
+// as text) and an invisible character after `<` read as the tag. A `<` is escaped too when the
+// rest of its text is such a run and the start of the name, because adapters join parts and
+// Anthropic merges consecutive user and tool messages, so the next part or message can finish
+// the tag. Global regexes are stateful under `.test()`, so a change is detected by comparing the
+// replaced string with the original.
+const FILLER = String.raw`[\s\\\/\p{Cf}\p{Default_Ignorable_Code_Point}]`;
+const NAME_STARTS = Array.from({ length: AUTHOR_TAG.length }, (_, i) => AUTHOR_TAG.slice(0, AUTHOR_TAG.length - 1 - i));
+const TAG_OPENING = new RegExp(`<(?=${FILLER}*(?:${AUTHOR_TAG}|(?:${NAME_STARTS.join("|")})$))`, "giu");
+
+/**
+ * Return `text` with the `<` of every opening of the author tag, in any case, escaped as `&lt;`,
+ * and of a `<` that ends the text with only filler and the start of the name after it.
+ */
+export function escapeAuthorTags(text: string): string {
+  return text.replace(TAG_OPENING, "&lt;");
+}
+
+/** Return `value` escaped for an XML attribute: `&`, `<`, `>`, `"` and line breaks. */
+function attr(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("\n", "&#10;")
+    .replaceAll("\r", "&#13;");
+}
+
+/** Return the wrapper's opening tag naming `author`. */
+export function authorOpen(author: string): string {
+  return `<${AUTHOR_TAG} author="${attr(author)}">`;
+}
+
+/** Return the wrapper's closing tag. */
+export function authorClose(): string {
+  return `</${AUTHOR_TAG}>`;
+}
+
+/** One value still to escape in `escapeAuthorTagsInJson`, and where its copy goes. */
+interface EscapeTask {
+  item: JsonValue;
+  into: JsonValue[] | JsonObject;
+  key: string | number;
+}
+
+/**
+ * Return `value` with every string and object key passed through `escapeAuthorTags`, at any
+ * depth, or `value` itself when nothing changes. When two keys of one object escape to the same
+ * text, the first in key order is kept and the other dropped.
+ */
+export function escapeAuthorTagsInJson(value: JsonValue): JsonValue {
+  // An explicit stack, as `checkJsonValue` uses, since the value comes from `parseJson`, which
+  // reads any depth.
+  const root: JsonValue[] = [];
+  const stack: EscapeTask[] = [{ item: value, into: root, key: 0 }];
+  let changed = false;
+  while (stack.length > 0) {
+    const { item, into, key } = stack.pop()!;
+    if (typeof item === "string") {
+      const escaped = escapeAuthorTags(item);
+      if (escaped !== item) changed = true;
+      put(into, key, escaped);
+    } else if (Array.isArray(item)) {
+      const copy: JsonValue[] = [];
+      put(into, key, copy);
+      for (let i = item.length - 1; i >= 0; i--) stack.push({ item: item[i]!, into: copy, key: i });
+    } else if (item !== null && typeof item === "object") {
+      const copy: JsonObject = {};
+      put(into, key, copy);
+      const seen = new Set<string>();
+      const children: EscapeTask[] = [];
+      for (const each of Object.keys(item)) {
+        const escaped = escapeAuthorTags(each);
+        if (escaped !== each) changed = true;
+        if (seen.has(escaped)) continue;
+        seen.add(escaped);
+        children.push({ item: item[each]!, into: copy, key: escaped });
+      }
+      for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]!);
+    } else {
+      put(into, key, item);
+    }
+  }
+  return changed ? root[0]! : value;
+}
+
+/** Return `part` with its text escaped, or `part` itself when nothing changes. */
+function escapeText(part: TextPart): TextPart {
+  const text = escapeAuthorTags(part.text);
+  return text === part.text ? part : new TextPart(text, part.providerPayload);
+}
+
+/** Return `part` with its content escaped, or `part` itself when nothing changes. */
+function escapeResult(part: ToolResultPart): ToolResultPart {
+  const content = escapeAuthorTags(part.content);
+  if (content === part.content) return part;
+  return new ToolResultPart({
+    callId: part.callId,
+    name: part.name,
+    content,
+    isError: part.isError,
+    providerPayload: part.providerPayload,
+  });
+}
+
+/** Return `part` with `open + "\n"` before its text, or `"\n" + close` after it. */
+function foldTags(part: TextPart, open: string | null, close: string | null): TextPart {
+  const text = (open === null ? "" : `${open}\n`) + part.text + (close === null ? "" : `\n${close}`);
+  return new TextPart(text, part.providerPayload);
+}
+
+/**
+ * Return `message` as an adapter sends it: a user message's texts and a tool message's results
+ * with the author tag escaped, and an authored user message's parts wrapped in `authorOpen` and
+ * `authorClose` text parts.
+ *
+ * A user message is wrapped only when it has an author, `wrap` isn't `false`, and some text part
+ * holds more than whitespace; an unauthored one stays unmarked, as the flow's own user. With
+ * `inline`, the tags are folded into the first and last parts with `"\n"` when those are text,
+ * and added as parts of their own otherwise, for routes that send a one-text message as a
+ * string. System and assistant messages, and any message with nothing to change, are returned
+ * as they are; a copy keeps the role, author, protocol and payload.
+ */
+export function withAuthorWrapper(message: Message, options: { wrap?: boolean; inline?: boolean } = {}): Message {
+  // Every user and tool text is escaped, author or not, because a forged wrapper claims an
+  // author even where no real one exists.
+  let parts: Part[];
+  if (message.role === "user") {
+    parts = message.parts.map((part) => (part instanceof TextPart ? escapeText(part) : part));
+    const author = message.author;
+    const sendable = message.parts.some((part) => part instanceof TextPart && part.text.trim() !== "");
+    // The wrapper always closes: Anthropic merges consecutive user turns, and the next message's
+    // text must not read as this author's.
+    if (author !== null && options.wrap !== false && sendable) {
+      const open = authorOpen(author);
+      const close = authorClose();
+      if (!options.inline) {
+        parts = [new TextPart(open), ...parts, new TextPart(close)];
+      } else {
+        const first = parts[0];
+        if (first instanceof TextPart) parts[0] = foldTags(first, open, null);
+        else parts.unshift(new TextPart(open));
+        const end = parts.length - 1;
+        const last = parts[end];
+        if (last instanceof TextPart) parts[end] = foldTags(last, null, close);
+        else parts.push(new TextPart(close));
+      }
+    }
+  } else if (message.role === "tool") {
+    parts = message.parts.map((part) => (part instanceof ToolResultPart ? escapeResult(part) : part));
+  } else {
+    return message;
+  }
+  if (parts.length === message.parts.length && parts.every((part, i) => part === message.parts[i])) return message;
+  return new Message({
+    role: message.role,
+    parts,
+    author: message.author,
+    protocol: message.protocol,
+    providerPayload: message.providerPayload,
+  });
 }

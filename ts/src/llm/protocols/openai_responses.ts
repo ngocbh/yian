@@ -14,7 +14,7 @@
  */
 
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
-import { encodeBody, mergeRequestBody } from "../body.ts";
+import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { type ErrorKind, ProviderError } from "../errors.ts";
 import {
   type Event,
@@ -161,6 +161,9 @@ export class OpenAIResponses implements SseProtocol {
    * Build the Responses request body: `model`, `input` and `stream: true`, then the tools, the
    * tool choice and `parallel_tool_calls` when set, then `text.format` when the request sets
    * `outputFormat`, then the provider block, then (on the subscription) its settings.
+   *
+   * A user message's author is sent as the author wrapper, one `input_text` part per tag; the
+   * author tag is escaped in user text and tool output.
    *
    * An assistant message whose replay records can't be used is sent from its neutral fields,
    * and `onReplayDegraded` is called once for it; a throw from the callback propagates.
@@ -430,7 +433,7 @@ export class OpenAIResponses implements SseProtocol {
     const instructions: string[] = [];
     // The call ids of every function call sent so far, kept as items are appended.
     const callIds = new Set<string>();
-    for (const message of messages) {
+    for (const message of messages.map((each) => withAuthorWrapper(each))) {
       if (message.role === "system" && this.subscription) {
         const text = instructionText(message);
         if (text) instructions.push(text);

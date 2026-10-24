@@ -169,7 +169,7 @@ test.each([
   expect(message).toBe(
     "flow has unresolved references:\n  " +
       `node 'reply' prompt[0]: \${history} is \`${label}\`, which can't hold messages; ` +
-      "splice a record with `role` and `text: str`, or a list of them",
+      "splice a `Message`, a record with `role` and `text: str`, or a list of them",
   );
   expect(line).toBe(PROMPT_LINE);
 });
@@ -201,4 +201,24 @@ test("a list prompt is identity; a text prompt's manifest is unchanged", async (
 
   const texted = (await loadFlow(chatFlow([]).replace("    prompt:\n\n", "    prompt: ${message}\n"))).compiled;
   expect(((flowManifest(texted).nodes as JsonObject).reply as JsonObject).prompt).toBe("${message}");
+});
+
+test.each(["!list(Message)", "!Message", "!Optional(Message)", "!list(Optional(Message))"])("a %s history loads", (type) => {
+  expect(replyOf(chatFlow(["- ${history}", "- user: ${message}"], type)).prompt).toEqual([
+    { splice: "history" },
+    { role: "user", text: "${message}" },
+  ]);
+});
+
+test("a typedef holding Messages or text records loads", () => {
+  const text = chatFlow(["- ${history}", "- user: ${message}"], "!list(Entry)").replace(
+    "typedefs:\n",
+    "typedefs:\n  Entry: Union(Message, Msg)\n",
+  );
+  expect(replyOf(text).prompt).toHaveLength(2);
+});
+
+test("an AGENT can't output a Message", () => {
+  const { message } = failure(chatFlow(["- ${history}", "- user: ${message}"]).replace("    output: str\n", "    output: Message\n"));
+  expect(message).toContain("an AGENT can't produce this `output:`");
 });

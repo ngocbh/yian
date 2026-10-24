@@ -1,0 +1,26 @@
+# TS-only: `Message` is a built-in type every flow can name, with no typedef: a spliced
+# `!list(Message)` history, and a typedef field holding a `Message`.
+kind: load
+python_skip: "the built-in Message type is TS-only (#1042)"
+flow: |
+  id: chat
+  name: chat
+  typedefs:
+    Turn: {message: Message, at: str}
+  input:
+    history: !list(Message)
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt:
+        - ${history}
+        - user: ${message}
+  output: ${reply.output}
+expect:
+  load: ok

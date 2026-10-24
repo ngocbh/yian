@@ -1,0 +1,89 @@
+# TS-only: a spliced `!list(Message)` history reaches the request with every part and role: the
+# assistant's tool call, the tool message's result, then the user message.
+kind: run
+python_skip: "the built-in Message type is TS-only (#1042)"
+flow: |
+  id: chat
+  name: chat
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    history: !list(Message)
+    message: !str
+  nodes:
+    reply:
+      kind: agent
+      input:
+        history: ${input.history}
+        message: ${input.message}
+      output: str
+      system_prompt: You are a helpful conversational assistant.
+      prompt:
+        - ${history}
+        - user: ${message}
+  output: ${reply.output}
+inputs:
+  history:
+  - role: user
+    parts:
+    - {type: text, text: Read a.txt}
+  - role: assistant
+    parts:
+    - {type: tool_call, id: c1, name: read_file, arguments: {path: a.txt}}
+  - role: tool
+    parts:
+    - {type: tool_result, call_id: c1, name: read_file, content: hi}
+  - role: assistant
+    parts:
+    - {type: text, text: It says hi.}
+  message: again
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: You are a helpful conversational assistant.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Read a.txt
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: tool_call
+              id: c1
+              name: read_file
+              arguments: {path: a.txt}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: c1
+              name: read_file
+              content: hi
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - type: text
+              text: It says hi.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: again
+expect:
+  output:
+    status: succeeded
+    output: done

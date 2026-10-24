@@ -1,5 +1,5 @@
 /**
- * Flow inputs declared with YAML tags (`qty: !int`, `history: !list(Message) []`): a port of
+ * Flow inputs declared with YAML tags (`qty: !int`, `history: !list(ChatMsg) []`): a port of
  * the declaration tests of `tests/compose/test_tagged_inputs.py`, reading the declarations with
  * `parametersFromYaml` (`readSourceParameters`) where Python loads a flow. Ints are `bigint`;
  * a missing-field list is written in the text form (`["kind"]`).
@@ -49,12 +49,12 @@ afterEach(forget);
 
 const REG = readTypedefs({
   Cfg: { kind: "Literal(cfg)", a: "int" },
-  Message: { role: "str", content: "str" },
+  ChatMsg: { role: "str", content: "str" },
 });
 
 const DECLARATIONS = `\
 qty: !int
-history: !list(Message) []
+history: !list(ChatMsg) []
 model: !Optional(str)
 note: !Optional(str) null
 cfg: !Cfg {kind: cfg, a: 1}
@@ -71,7 +71,7 @@ id: tagged_inputs
 name: tagged_inputs
 typedefs:
   Cfg: {kind: Literal(cfg), a: int}
-  Message: {role: str, content: str}
+  ChatMsg: {role: str, content: str}
 `;
 
 const WORKER = "kind: code\noutput: object\ncode: return {...inputs}\n";
@@ -193,7 +193,7 @@ describe("tagged declarations", () => {
   });
 
   test("tagged parameter origins point at the declaration", async () => {
-    const text = `${HEADER}input:\n  qty: !int\n  history: !list(Message) []\n`;
+    const text = `${HEADER}input:\n  qty: !int\n  history: !list(ChatMsg) []\n`;
     const flow = await loadFlow(text + WORKER);
     const cursor = SourceDocument.parse(text).root.child("input");
     const resolver = flow.originResolver!;

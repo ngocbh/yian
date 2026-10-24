@@ -1,0 +1,25 @@
+# TS-only: `Message` is a built-in type, so a typedef can't take its name; the error is at the
+# typedef's key.
+kind: load
+python_skip: "the built-in Message type is TS-only (#1042)"
+flow: |
+  id: err-message-typedef
+  name: err_message_typedef
+  typedefs:
+    Message: str
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Rate ${topic}."
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "bad typedefs: typedef name 'Message' shadows the built-in type 'Message'"
+        frames: [{label: flow.yaml, range: [4, 3, 4, 10]}]

@@ -235,6 +235,8 @@ export interface RunStartedFields {
   skills?: Readonly<Record<string, RecordedSkill>>;
   /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
   tools?: Readonly<Record<string, RecordedTool>>;
+  /** Each tool group an AGENT grants, by name: its tools' names in group order; defaults to `{}`. */
+  toolGroups?: Readonly<Record<string, readonly string[]>>;
   /** The yian version that started the run; defaults to this one's `VERSION`. */
   yianVersion?: string;
   /** The run that started this one; `null` (the default) for a run the host started on its own. */
@@ -272,6 +274,8 @@ export class RunStartedRecord {
   readonly skills: Readonly<Record<string, RecordedSkill>>;
   /** The deep-frozen tools the AGENTs grant, by name. */
   readonly tools: Readonly<Record<string, RecordedTool>>;
+  /** The frozen tool groups the AGENTs grant, by name: each group's tool names, in group order. */
+  readonly toolGroups: Readonly<Record<string, readonly string[]>>;
   /** The yian version that started the run. */
   readonly yianVersion: string;
   /** The frozen parent run, or `null`. */
@@ -309,6 +313,7 @@ export class RunStartedRecord {
       flow = null,
       skills = {},
       tools = {},
+      toolGroups = {},
       yianVersion = VERSION,
       parent = null,
     } = fields;
@@ -346,6 +351,7 @@ export class RunStartedRecord {
         parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
       };
     });
+    this.toolGroups = validatedToolGroups(toolGroups);
     this.yianVersion = requireName(yianVersion, "RunStarted yian_version");
     this.parent = parent === null ? null : validatedParent(parent);
     Object.freeze(this);
@@ -371,6 +377,24 @@ function requireText(value: unknown, label: string): string {
 function requireName(value: unknown, label: string): string {
   if (requireText(value, label) === "") throw new RangeError(`${label} must be a non-empty string`);
   return value as string;
+}
+
+/**
+ * Return a frozen copy of `RunStarted.tool_groups`: each group's tool names as a frozen array.
+ *
+ * @throws TypeError when `groups` isn't a plain object or a group isn't an array of strings.
+ * @throws RangeError when a group or tool name is empty.
+ */
+function validatedToolGroups(groups: unknown): Readonly<Record<string, readonly string[]>> {
+  if (!isRecord(groups)) throw new TypeError("RunStarted tool_groups must be an object");
+  const entries = Object.entries(groups).map(([name, members]): [string, readonly string[]] => {
+    const label = `RunStarted tool_groups[${reprText(name)}]`;
+    if (!name) throw new RangeError("RunStarted tool_groups names must be non-empty strings");
+    if (!Array.isArray(members)) throw new TypeError(`${label} must be an array of tool names`);
+    return [name, Object.freeze(members.map((member, index) => requireName(member, `${label}[${index}]`)))];
+  });
+  // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
+  return Object.freeze(Object.fromEntries(entries));
 }
 
 /**
@@ -3028,6 +3052,7 @@ const RUN_STARTED_FIELDS = [
   "flow",
   "skills",
   "tools",
+  "tool_groups",
   "yian_version",
   "parent",
 ];
@@ -3050,6 +3075,7 @@ function payloadForRecord(record: RunRecord): JsonObject {
       flow: record.flow === null ? null : flowPayload(record.flow),
       skills: record.skills as unknown as JsonObject,
       tools: record.tools as unknown as JsonObject,
+      tool_groups: Object.fromEntries(Object.entries(record.toolGroups).map(([name, members]) => [name, [...members]])),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
     };
@@ -3192,6 +3218,12 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
         skills: wireEntries(payload["skills"], `${label} skills`, ["description", "instructions"]) as never,
         tools: wireEntries(payload["tools"], `${label} tools`, ["description", "parameters"]) as never,
+        toolGroups: Object.fromEntries(
+          Object.entries(wireObject(payload["tool_groups"], `${label} tool_groups`)).map(([name, members]) => [
+            name,
+            wireTextArray(members, `${label} tool_groups[${reprText(name)}]`),
+          ]),
+        ),
         yianVersion: wireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });

@@ -232,22 +232,21 @@ export type LearningMaterials = ReadonlyMap<string, LearningMaterial>;
  * `_evaluation_evidence` is `null`, and its episodes keep their inputs, output and feedback). It
  * is reported as a `ReplayDegraded` naming its node (reason `rebuilt_request_differs`). Besides a
  * changed request, a render or recall that fails now, a structured model that can't be built and
- * a tool group that can't be expanded fail the check too.
+ * a tool the recorded specs lack fail the check too. A grant naming a tool group is expanded with
+ * the groups the run recorded, so a run reopened without its tools learns the same.
  *
  * @param options `memory` recalls for scoped occurrences (`null` recalls nothing); `models`
- *   builds a structured call's model to read its plan off; `expandTools` expands the run's tool
- *   groups (`null` reads each grant as a tool name); `onEvent` receives the reports.
+ *   builds a structured call's model to read its plan off; `onEvent` receives the reports.
  */
 export async function learningMaterials(
   state: RunState,
   options: {
     memory: MemoryRuntime | null;
     models: BackwardOptions["models"] | null;
-    expandTools: ((ids: readonly string[]) => readonly string[]) | null;
     onEvent: BackwardOptions["onEvent"] | null;
   },
 ): Promise<LearningMaterials> {
-  const { memory, models, expandTools, onEvent } = options;
+  const { memory, models, onEvent } = options;
   const trace = state.trace!;
   const skills = new Map(
     Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
@@ -257,7 +256,10 @@ export async function learningMaterials(
   );
   const toolSpecs = (ids: readonly string[]): ToolSpec[] | null => {
     const specs: ToolSpec[] = [];
-    for (const name of expandTools === null ? ids : expandTools(ids)) {
+    // As `ToolSet.expand`: a group becomes its tools, and a tool granted twice is bound once.
+    const groups = state.recordedToolGroups;
+    const names = new Set(ids.flatMap((id) => (Object.hasOwn(groups, id) ? groups[id]! : [id])));
+    for (const name of names) {
       if (!Object.hasOwn(state.recordedTools, name)) return null;
       const { description, parameters } = state.recordedTools[name]!;
       specs.push(new ToolSpec({ name, description, parameters }));
@@ -296,7 +298,7 @@ async function driveOpenedBackward(
   state: RunState,
   log: RunLog,
   memory: MemoryRuntime | null,
-  options: BackwardOptions & { expandTools: ((ids: readonly string[]) => readonly string[]) | null },
+  options: BackwardOptions,
 ): Promise<BackwardOutcome> {
   const started = state.backwardState.started!;
   const attemptId = started.attemptId;
@@ -305,7 +307,6 @@ async function driveOpenedBackward(
   const materials = await learningMaterials(state, {
     memory,
     models: options.models ?? null,
-    expandTools: options.expandTools,
     onEvent: options.onEvent ?? null,
   });
   let root: BackwardResult;
@@ -439,7 +440,6 @@ export async function driveBackward(
   rootFeedback: FeedbackValue,
   options: {
     openMemory?: (() => MemoryRuntime | Promise<MemoryRuntime>) | null;
-    expandTools?: ((ids: readonly string[]) => readonly string[]) | null;
   } & BackwardOptions = {},
 ): Promise<BackwardOutcome> {
   if (!isExactly(state, RunState) || !isRunLog(log)) {
@@ -480,7 +480,6 @@ export async function driveBackward(
     return await driveOpenedBackward(state, log, memory, {
       models: options.models,
       onEvent: options.onEvent,
-      expandTools: options.expandTools ?? null,
     });
   } catch (error) {
     primary = { error };

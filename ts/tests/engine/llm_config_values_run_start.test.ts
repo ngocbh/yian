@@ -186,6 +186,7 @@ const GOLDEN_RUN_STARTED = {
     parent: null,
     skills: {},
     start_wiring_override: { topic: "${input.topic}" },
+    tool_groups: {},
     tools: {},
     yian_version: "0.0.0",
   },

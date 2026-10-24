@@ -926,7 +926,10 @@ other's tools, and `resume_flow` uses the groups passed to it (see
 
 Changed (TS yian): each item of a group array is a `FunctionTool`, named by its `name`;
 anything else throws `TypeError`. Groups follow the mapping's JS key order, so
-integer-like keys come first.
+integer-like keys come first. `run_started` records each group an AGENT grants, by name, with
+its tools' names (`tool_groups`), and each of those tools' specs (`tools`), so learning on a
+finished run reopened without its tools (another process calling `advance`) expands a grant the
+same way the run did.
 
 ### MCP servers
 
@@ -2388,7 +2391,9 @@ root is keyed by the file name of its label, and a host resolver's child's files
 real paths too. Two texts a host resolver gave that claim one path get keys of their own
 (`<key>~1`). A YAML root whose host-resolver child was built in code records `flow: null`. `skills`, each skill an AGENT
 grants, `{<name>: {description, instructions}}`; `tools`, each tool an AGENT grants, groups
-expanded, `{<name>: {description, parameters}}`; `yian_version`, the version that started the
+expanded, `{<name>: {description, parameters}}`; `tool_groups`, each tool group an AGENT
+grants, `{<group>: [<tool name>, ...]}` in group order, which learning expands grants with;
+`yian_version`, the version that started the
 run; and `parent`, `{run_id, node}` for a run the host started from another run (a child run
 or a learning pass, `runFlow`'s `parent` option; `node` is `null` when no one node did), else
 `null`. A CALL, MAP or LOOP splices its child into the same run, so a subflow has no `parent`.

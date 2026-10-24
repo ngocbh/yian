@@ -951,7 +951,7 @@ function roundTripRunStarted(): RunStartedRecord {
   });
 }
 
-/** A run-start record holding the flow files, skills, tool specs, version and parent. */
+/** A run-start record holding the flow files, skills, tool specs and groups, version and parent. */
 function sourcedRunStarted(): RunStartedRecord {
   return new RunStartedRecord({
     flowFingerprint: "a".repeat(64),
@@ -968,6 +968,7 @@ function sourcedRunStarted(): RunStartedRecord {
     },
     skills: { s: { description: "d", instructions: "i" } },
     tools: { t: { description: "d", parameters: { type: "object" } } },
+    toolGroups: { g: ["t"] },
     yianVersion: "0.0.0",
     parent: { runId: "p", node: "n" },
   });
@@ -1195,6 +1196,18 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     (payload) => (payload["tools"] = { t: { description: "d", parameters: [] } }),
     TypeError,
     "RunStarted tools['t'] parameters must be an object",
+  ],
+  [
+    "a tool group that isn't a list of names",
+    (payload) => (payload["tool_groups"] = { g: "t" }),
+    TypeError,
+    "run_started payload tool_groups['g'] must be an array of strings",
+  ],
+  [
+    "an empty tool name in a group",
+    (payload) => (payload["tool_groups"] = { g: [""] }),
+    RangeError,
+    "RunStarted tool_groups['g'][0] must be a non-empty string",
   ],
   [
     "an empty yian version",

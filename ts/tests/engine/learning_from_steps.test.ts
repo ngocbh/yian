@@ -5,7 +5,7 @@
  * Each run is learnable and logged; its log is replayed, and the material of each occurrence is
  * rebuilt from the replayed trace. Interactions follow step order: a reply's calls, then their
  * results in call order, so two unsafe calls read A, B, result A, result B. A grant naming a tool
- * group is expanded with the run's tools, which a finished run reopened doesn't have.
+ * group is expanded with the groups run_started records, so a finished run reopened learns the same.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -126,7 +126,6 @@ async function materialsOf(
     const materials = await learningMaterials(state, {
       memory,
       models: model instanceof ScriptedModel ? serving(model) : model,
-      expandTools: null,
       onEvent: (event) => events.push(event),
     });
     const trace = state.trace!;
@@ -386,10 +385,17 @@ test("a grant naming a tool group is expanded with the run's tools when the same
   expect(events).toEqual([]);
 });
 
-test("a finished run reopened has no tool groups: its group-granting occurrence is left out and reported", async () => {
+test("run_started records each granted tool group's members", async () => {
+  const { path } = await groupedRun(new FakeMemory());
+  const start = JSON.parse(readFileSync(path, "utf8").split("\n")[0]!);
+  expect(start.payload.tool_groups).toEqual({ toolbox: ["lookup", "save"] });
+  expect(Object.keys(start.payload.tools).sort()).toEqual(["lookup", "save"]);
+});
+
+test("a finished run reopened with no tools expands its grant from the recorded tool groups", async () => {
   const { path } = await groupedRun(new FakeMemory());
   const backend = new FakeMemory();
-  // A finished run opens no tools, so the grant `toolbox` is read as a tool name.
+  // A finished run opens no tools, as in a fresh process: the groups come from the log.
   const model = new ScriptedModel([backwardReply()], { provider: "anthropic", model: "claude-test" });
   const reopened = await advance({
     log: path,
@@ -402,15 +408,16 @@ test("a finished run reopened has no tool groups: its group-granting occurrence 
   expect(outcome.status, JSON.stringify(outcome.failure)).toBe("succeeded");
   const context = backend.learnContexts[0]!;
   const [episode] = context.episodes;
-  // Learning reads no prompt, memory sections or interactions of it; the rest stays.
-  expect(episode!.prompt).toBeNull();
-  expect(episode!.memorySections).toEqual([]);
-  expect(episode!.interactions).toEqual([]);
-  expect(episode!.output).toBe("done");
+  expect(episode!.prompt).toBe("hi");
+  expect(episode!.interactions).toEqual([
+    new ToolCallInteraction("lookup", { topic: "x" }),
+    new ToolResultInteraction("lookup", "found:x"),
+    new ModelTextInteraction("done"),
+  ]);
   expect(logJson(context.feedback)).toContain("Shorter.");
-  // AGENT backward still runs, with no evaluation evidence.
+  // AGENT backward reads the occurrence's evaluation evidence.
   const prompt = model.requests[0]!.messages[1]!.text();
   expect(prompt).toContain("Shorter.");
-  expect(prompt).toMatch(/"evaluation_evidence": ?null/);
-  expect(events).toEqual([new ReplayDegraded({ nodeId: "writer", reason: "rebuilt_request_differs" })]);
+  expect(prompt).not.toMatch(/"evaluation_evidence": ?null/);
+  expect(events).toEqual([]);
 });

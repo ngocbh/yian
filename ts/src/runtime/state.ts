@@ -371,6 +371,8 @@ export class RunState {
   recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
   /** The tool specs `RunStarted` recorded, by name, which learning rebuilds requests with. */
   recordedTools: Readonly<Record<string, RecordedTool>> = {};
+  /** The tool groups `RunStarted` recorded, by name, which learning expands grants with. */
+  recordedToolGroups: Readonly<Record<string, readonly string[]>> = {};
   /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
   learnable = false;
   /**
@@ -639,6 +641,8 @@ export interface RunStartData {
   skills?: Readonly<Record<string, RecordedSkill>>;
   /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
   tools?: Readonly<Record<string, RecordedTool>>;
+  /** Each tool group an AGENT grants, by name: its tools' names; defaults to `{}`. */
+  toolGroups?: Readonly<Record<string, readonly string[]>>;
   /** The yian version that starts the run; defaults to this one's. */
   yianVersion?: string;
   /** The run that started this one; `null` (the default) when none did. */
@@ -952,6 +956,7 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     flow: data.flow ?? null,
     skills: data.skills ?? {},
     tools: data.tools ?? {},
+    toolGroups: data.toolGroups ?? {},
     yianVersion: data.yianVersion,
     parent: data.parent ?? null,
   });
@@ -2297,6 +2302,7 @@ export function replayRecords(
     flow: start.flow,
     skills: start.skills,
     tools: start.tools,
+    toolGroups: start.toolGroups,
     yianVersion: start.yianVersion,
     parent: start.parent,
   });
@@ -4906,6 +4912,7 @@ interface RunStartedApply {
   memoryStacks: readonly MemoryStack[] | null;
   recordedSkills: Readonly<Record<string, RecordedSkill>>;
   recordedTools: Readonly<Record<string, RecordedTool>>;
+  recordedToolGroups: Readonly<Record<string, readonly string[]>>;
   learnable: boolean;
   runDefaults: Defaults;
   backwardState: RuntimeBackwardState;
@@ -4958,6 +4965,7 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     memoryStacks: record.memoryStacks,
     recordedSkills: record.skills,
     recordedTools: record.tools,
+    recordedToolGroups: record.toolGroups,
     learnable: record.learnable,
     runDefaults: fromRecorded(record.defaults),
     backwardState,
@@ -4996,6 +5004,7 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.memoryStacks = apply.memoryStacks;
   state.recordedSkills = apply.recordedSkills;
   state.recordedTools = apply.recordedTools;
+  state.recordedToolGroups = apply.recordedToolGroups;
   state.learnable = apply.learnable;
   state.runDefaults = apply.runDefaults;
   state.backwardState = apply.backwardState;

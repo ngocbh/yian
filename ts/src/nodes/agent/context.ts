@@ -20,13 +20,13 @@ import { MediaPart, Message, NamedTool, type Part, Request, Response, TextPart, 
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { MemoryContext } from "../../memory/contracts.ts";
 import { type Scheduler, warn } from "../../platform.ts";
-import type { CloserReason } from "./memory.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps, type SteerInbox, type Steering } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
+import type { CloserReason } from "./memory.ts";
 
 /** The system prompt of an AGENT that authors none. */
 export const DEFAULT_SYSTEM =

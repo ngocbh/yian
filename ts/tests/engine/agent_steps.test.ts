@@ -330,6 +330,18 @@ test("a reply whose arguments nest too deep still writes its model_call before t
   expect(shape(log)).toEqual(["NodeStartedRecord", "model_call 1", "NodeFailedRecord"]);
 });
 
+test("a reply that repeats a tool call id fails the node after its model_call, running no tool", async () => {
+  const seen: string[] = [];
+  const model = new ScriptedModel([calls(["call-1", "lookup", "a"], ["call-1", "lookup", "b"]), textReply("done")], CONFIG);
+  const { log, result } = await run(model, { tools: { lookup: topicTool("lookup", { log: seen }) }, flow: flowText(["lookup"]) });
+  expect(result.status).toBe("failed");
+  expect(result.failure?.message).toContain(
+    "the reply has two tool calls with id 'call-1' (lookup and lookup); each tool call in a reply needs its own id",
+  );
+  expect(seen).toEqual([]);
+  expect(shape(log)).toEqual(["NodeStartedRecord", "model_call 1", "NodeFailedRecord"]);
+});
+
 // --- failures --- //
 
 test("a retried call writes a failed model_call with its wait, then the successful one", async () => {

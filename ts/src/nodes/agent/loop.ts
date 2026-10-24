@@ -105,7 +105,7 @@ import { pushVisible, textOf } from "./text.ts";
  *   interrupt, the latest reply's visible text (`""` before any); or `Pending` naming the calls of
  *   the latest reply whose handler returned `pending()`, once the reply's other calls ran.
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
- * @throws TypeCheckError when a reply's tool call arguments nest too deep.
+ * @throws TypeCheckError when a reply repeats a tool call id or its tool call arguments nest too deep.
  * @throws ToolIterationLimitError when a reply calls tools at the `maxToolIterations`-th turn.
  * @throws AgentLoopError when a reply calls a tool that isn't granted.
  * @throws CapabilityFault when a recorded call doesn't match the rebuilt request
@@ -215,7 +215,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
     const { response, n, replayed } = called as { response: Response; n: number; replayed: boolean };
     // A stop that lands during the call wins over its reply.
     checkStopped(ctx);
-    rejectInvalidArguments(response.message);
+    rejectInvalidReply(response.message);
     reply = response.message;
     iterations += 1;
     messages.push(reply);
@@ -321,7 +321,7 @@ export async function stepsMaterial(
     messages.push(reply);
     if (step["finish"] === "interrupted") continue;
     try {
-      rejectInvalidArguments(reply);
+      rejectInvalidReply(reply);
     } catch (error) {
       // The run failed the node at this reply before acting on it.
       if (error instanceof TypeCheckError) break;
@@ -725,13 +725,28 @@ function identityOf(turn: ToolTurn, call: ToolCallPart, index: number): ToolCall
 }
 
 /**
- * Throw `TypeCheckError` if a tool call's arguments nest too deep.
+ * Throw `TypeCheckError` if two of a reply's tool calls share an id, or a tool call's arguments
+ * nest too deep.
  *
- * An unparsed call's raw arguments text is parsed at any depth and checked the same way, since the
- * assembler leaves a call unparsed when its arguments nest too deep; text that is not JSON is left
- * to the invalid call's own handling.
+ * Results are paired with their calls by id, so calls sharing one couldn't be told apart (the
+ * conversation sent next, a replay and an AGENT's new messages would all give each the last
+ * result). An unparsed call's raw arguments text is parsed at any depth and checked the same way,
+ * since the assembler leaves a call unparsed when its arguments nest too deep; text that is not
+ * JSON is left to the invalid call's own handling.
  */
-function rejectInvalidArguments(reply: Message): void {
+function rejectInvalidReply(reply: Message): void {
+  const names = new Map<string, string>();
+  for (const part of reply.parts) {
+    if (!(part instanceof ToolCallPart)) continue;
+    const first = names.get(part.id);
+    if (first !== undefined) {
+      throw new TypeCheckError(
+        `the reply has two tool calls with id ${reprText(part.id)} (${first} and ${part.name}); ` +
+          "each tool call in a reply needs its own id",
+      );
+    }
+    names.set(part.id, part.name);
+  }
   for (const part of reply.parts) {
     if (!(part instanceof ToolCallPart)) continue;
     // `ToolCallPart` already refuses parsed arguments past the limit; checking them again matters

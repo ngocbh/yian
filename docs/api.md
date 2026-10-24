@@ -1659,6 +1659,16 @@ interface lives in `nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
   own user message keeping its `author`. Nothing queued: no step. `from` is the whole unread
   queue; the run reducer refuses any other. The consumed events leave the inbox's unread
   queue at the step, and their values stay in the run state until the agent settles.
+- **Late steers.** A reply with no tool call while steers are queued is followed by a read and
+  one more model call: in the log, `model_call` → `steer` → `model_call`. Every reply counts
+  toward `max_tool_iterations`; at the cap the agent returns the answer it has, writes no `steer`
+  step, and the events stay unread. A resumed agent that late-steered replays to the same point;
+  one that crashed after its final reply, before any steer, reads what was sent while it was down.
+- **`render:`.** `steer_inbox: {from, render}` renders each event through the template over
+  `${event}`, one text part per event in the read's one user message; `AgentNode.steerRender`
+  holds it and the manifest records it as `steer_render` (flow identity). An event that fails to
+  render at run time goes in its default rendering, with a warning. Learning and the rebuilt
+  `new_messages` render steers the same way.
 - **Replay.** A resumed agent gets each recorded steer back with its values, from the run state,
   before the call it preceded, so the request is rebuilt as sent. `request_sha256` hashes every
   message, steers included. A send made while the run was down is read by the first live call.

@@ -1,0 +1,132 @@
+# TS-only (yian #1025): at `max_tool_iterations` the final answer stands. The agent checks the cap
+# before it reads, so the steer sent during the last reply stays unread: no `steer` step, no second
+# model call.
+kind: run
+rules: [run-log]
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+flow: |
+  id: late
+  name: late
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+      env:
+        max_tool_iterations: 1
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - inbox: notes
+    event: and cite your sources
+    after: {node: chat, model_call: 1}
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: draft
+expect:
+  output:
+    status: succeeded
+    output: draft
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: and cite your sources}
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: draft, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
+        response_id: null
+        usage: null
+  - - pool_commit
+    - chat
+    - {value: draft}
+  - - pool_commit
+    - chat
+    - key: chat.new_messages
+      steps: [10]
+  - - node_succeeded
+    - chat
+    - {commit: 11, messages: 12}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: draft}
+  - - node_succeeded
+    - __end__
+    - {commit: 15}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: chat}
+  - - ModelCallStarted
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: chat, output: draft}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: draft}
+  - - RunSucceeded
+    - {output: draft}

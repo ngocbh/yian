@@ -115,6 +115,7 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "memories",
     "variables",
     "skills",
+    "steerRender",
   ],
   [NodeKind.CODE]: ["code"],
   [NodeKind.TOOL]: ["toolId", "retries", "answerSchema"],
@@ -832,6 +833,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       }
       // Left out when unset so flows on the default system prompt keep their identity.
       if (agent.systemPrompt !== null) manifest.system_prompt = agent.systemPrompt;
+      // Left out when unset so flows without a render keep their identity.
+      if (agent.steerRender !== null) manifest.steer_render = agent.steerRender;
       const tools: unknown = agent.tools;
       if (!isList(tools)) throw new TypeError(`${path}.tools: expected array, got ${typeName(tools)}`);
       const memories = memoriesManifest(agent.memories, ctx, `${path}.memories`);

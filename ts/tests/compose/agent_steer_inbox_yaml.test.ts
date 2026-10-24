@@ -73,9 +73,59 @@ test.each([
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(9);
 });
 
-test("a mapping steer_inbox is refused", () => {
-  const error = loadError(() => assembleText(steerFlow("    steer_inbox:\n      from: ${input.notes}")));
-  expect(error.message).toContain("`steer_inbox:` must be `${input.<name>}` naming an Inbox input");
+test("steer_inbox: {from, render} loads with the render and the reserved wiring", () => {
+  const flow = flowOf(steerFlow("    steer_inbox:\n      from: ${input.notes}\n      render: |-\n        From the owner: ${event}"));
+  const chat = flow.nodes.get("chat") as AgentNode;
+  expect(chat.steerInbox).toBe(true);
+  expect(chat.steerRender).toBe("From the owner: ${event}");
+  expect((flow.wiring.get("chat")!.get(STEER_INBOX_KEY) as Binding).source).toBe("${input.notes}");
+});
+
+test("steer_inbox: {from} alone loads with no render", () => {
+  const chat = chatOf(steerFlow("    steer_inbox:\n      from: ${input.notes}"));
+  expect([chat.steerInbox, chat.steerRender]).toEqual([true, null]);
+});
+
+test.each([
+  ["no from", "    steer_inbox:\n      render: x", "`steer_inbox:` needs `from:` naming an Inbox input", 9],
+  ["an unknown key", "    steer_inbox:\n      from: ${input.notes}\n      when: x", "`steer_inbox:` takes only `from:` and `render:`", 11],
+  ["an empty render", '    steer_inbox:\n      from: ${input.notes}\n      render: ""', "`steer_inbox.render:` must be non-empty text", 11],
+  ["a render that isn't text", "    steer_inbox:\n      from: ${input.notes}\n      render: 3", "`steer_inbox.render:` must be non-empty text", 11],
+  ["an empty mapping", "    steer_inbox: {}", "`steer_inbox:` needs `from:` naming an Inbox input", 9],
+])("a steer_inbox mapping with %s is refused at its line", (_label, line, message, startLine) => {
+  const error = loadError(() => assembleText(steerFlow(line)));
+  expect(error.message).toContain(message);
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(startLine);
+});
+
+/** A steer flow whose `steer_inbox:` reads `notes` with render `render`, under `input`. */
+const renderFlow = (render: string, input = "  notes: !Inbox(str)") =>
+  steerFlow(`    steer_inbox:\n      from: \${input.notes}\n      render: |-\n        ${render}`, "    output: str", input);
+
+test.each([
+  ["an input", "${input.x}", "node 'chat' steer_inbox render: `${input.x}` names `input`; a steer render reads only `${event}`"],
+  ["a node output", "${reply.output}", "node 'chat' steer_inbox render: `${reply.output}` names `reply`; a steer render reads only `${event}`"],
+  ["a malformed span", "${event.}", "node 'chat' steer_inbox render: "],
+])("a render reading %s is refused at the render", (_label, render, message) => {
+  const error = loadError(() => assembleText(renderFlow(render, "  notes: !Inbox(str)\n  x: !str")));
+  expect(error.message).toContain(message);
+  // The block scalar's text starts on the line after `render: |-`.
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(12);
+});
+
+const NOTE_TYPES = "typedefs:\n  Note:\n    text: str\n";
+
+test("a render's field reads are checked against the inbox's element type", () => {
+  const typed = (render: string) => NOTE_TYPES + renderFlow(render, "  notes: !Inbox(Note)");
+  expect(chatOf(typed("Note: ${event.text}")).steerRender).toBe("Note: ${event.text}");
+  const error = loadError(() => assembleText(typed("Note: ${event.body}")));
+  expect(error.message).toContain("node 'chat' steer_inbox render: ");
+  expect(error.message).toContain("body");
+});
+
+test("a render over an Inbox(Message) reads its fields", () => {
+  const chat = chatOf(renderFlow("${event.author}: ${event.parts}", "  notes: !Inbox(Message)"));
+  expect(chat.steerRender).toBe("${event.author}: ${event.parts}");
 });
 
 test("an input named __steer_inbox is reserved", () => {

@@ -24,7 +24,8 @@
  * An agent with a steer inbox reads it at the top of each iteration (a recorded `steer` step) and,
  * until the interrupt moves to the run log, stops at a host interrupt between effects or before a
  * later chunk of a streamed reply, returning its latest reply's text (a cut reply's text so far);
- * an interrupt never aborts a running tool call.
+ * an interrupt never aborts a running tool call. A steer queued when the model gives its final
+ * answer gets one more model call, within `maxToolIterations`.
  *
  * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
  *                tools, typesys, peer AGENT modules.
@@ -85,7 +86,7 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
-import { steerMessages } from "./messages.ts";
+import { type SteerRender, steerMessages } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
 
@@ -93,7 +94,9 @@ import { pushVisible, textOf } from "./text.ts";
  * Run one AGENT invocation.
  *
  * Makes one model call without tools or skills, otherwise runs the tool loop until the model
- * answers. Sets `ctx.sent` to the built model's route credentials once the model is built. Each
+ * answers; either way, while the model answers with steers queued it reads them and calls again
+ * (each reply, late steers included, counts toward `maxToolIterations`; at the cap the answer
+ * stands and the steers stay queued). Sets `ctx.sent` to the built model's route credentials once the model is built. Each
  * reason the model gives for leaving out replay state reaches `ctx.emitEvent` once, as
  * `ReplayDegraded`. With `ctx.steps`, each model call and failed attempt is recorded as a
  * `model_call` step and each tool result as a `tool_result` step, a failed attempt's error
@@ -181,13 +184,20 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
   let reply: Message | null = null;
   const onDrop = (event: number, part: number) =>
     warn(`node ${reprText(ctx.nodeId)}: steer event ${event} part ${part} is media, which no route sends yet; dropped`);
+  // The events are already consumed, so a render that fails for one sends its default text instead.
+  const onFallback = (event: number, error: unknown) =>
+    warn(
+      `node ${reprText(ctx.nodeId)}: steer event ${event} didn't render (${error instanceof Error ? error.message : String(error)}); ` +
+        "sent as is",
+    );
+  const steerOptions = { render: ctx.renderSteer ?? null, onDrop, onFallback };
 
   while (true) {
     checkStopped(ctx);
     if (interruptRequested(interrupt, steps)) return interrupted(reply);
     // Steers join only here, never between a reply's tool calls and their results. The read is
     // synchronous, so neither a stop nor an interrupt lands between it and the model call.
-    for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, onDrop));
+    for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
     const request = new Request({ messages, tools: bound });
     let called: Awaited<ReturnType<typeof callModel>>;
     try {
@@ -220,6 +230,10 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
       (part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null,
     );
     if (calls.length === 0) {
+      // At the cap the answer stands and queued steers stay for the next reader: the cap is checked
+      // before anything is read, so nothing is consumed that won't be sent. The loop top checks a
+      // host interrupt before it reads, so an interrupt beats a late steer.
+      if (iterations !== ctx.maxToolIterations && lateSteer(steps, ctx.steerInbox)) continue;
       const text = textOf(reply);
       if (schema !== null) {
         return new Output(await generateStructured(model, messages, ctx.outputType!, structuredOptions));
@@ -242,6 +256,17 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
     // An agent given the host's interrupt signal never pends, so no interrupted turn gets here with a pended call.
     if (pended.size > 0) return new Pending([...pended].sort(([a], [b]) => a - b).map(([, callId]) => callId));
   }
+}
+
+/**
+ * Whether a steer joins after a final answer: one was recorded before the next call (replay of a
+ * run that steered late), or, once replay is over and no recorded attempt continues the call, the
+ * inbox has events queued now. The loop top reads them; nothing awaits between this check and
+ * that read.
+ */
+function lateSteer(steps: AgentSteps, inbox: SteerInbox | undefined): boolean {
+  if (steps.hasRecordedSteer()) return true;
+  return inbox !== undefined && !steps.replaying() && !steps.continuesCall() && inbox.queued();
 }
 
 /**
@@ -278,7 +303,8 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
  *   (no chat request then matches); `structured` builds the model the structured calls read
  *   their plan off and gives the output type, or `null` when it can't (no structured request
  *   then matches); `baseSystemPrompt` is the system prompt without recalled memory, which each
- *   request's digest reads in place of the system message (`digestRequest`).
+ *   request's digest reads in place of the system message (`digestRequest`); `renderSteer` is
+ *   the agent's steer render, which steer steps render through as the live loop did.
  * @returns The interactions, and whether every recorded request matched.
  */
 export async function stepsMaterial(
@@ -288,6 +314,7 @@ export async function stepsMaterial(
     tools: readonly ToolSpec[] | null;
     structured: () => Promise<{ model: ChatModel; typ: Type } | null>;
     baseSystemPrompt: string | null;
+    renderSteer?: SteerRender | null;
   },
 ): Promise<{ interactions: VisibleInteraction[]; digestOk: boolean }> {
   const messages = [...options.messages];
@@ -323,7 +350,7 @@ export async function stepsMaterial(
         digestOk = false;
         break;
       }
-      messages.push(...steerMessages(values));
+      messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
       continue;
     }
     if (step["kind"] !== "model_call") continue;

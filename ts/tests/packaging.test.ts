@@ -13,10 +13,12 @@
 // extracted under `YIAN_VENDORED_LICENSES`, or else each from the current `LICENSES`. With
 // `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the file also runs that binary:
 // `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a
-// cwd `.env` and `bunfig.toml` it must ignore.
+// cwd `.env` and `bunfig.toml` it must ignore. The `./code-worker` entry resolves to the build on
+// the Node `YIAN_TEST_NODE` names, and on Bun a compiled host runs CODE nodes with a shim entry
+// importing it, and fails them without one.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -26,13 +28,14 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { LICENSES } from "../src/cli/licenses.ts";
 import type { MarkdownStore } from "../src/index.ts";
@@ -82,6 +85,7 @@ const ENTRIES: Record<string, string> = {
   "./skills": "compose/skills",
   "./platform": "platform",
   "./llm_clients": "llm_clients/index",
+  "./code-worker": "nodes/code/worker",
 };
 
 /** The runtime names each export path must carry. */
@@ -182,6 +186,8 @@ const NAMES: Record<string, string[]> = {
     "ApiKeyCredentials",
     "ProviderSelection",
   ],
+  // Imported for its side effect, as a bundling host's compile entry; its named exports are internal.
+  "./code-worker": [],
 };
 
 /** Every file below `directory`, relative to `ROOT`. */
@@ -625,17 +631,18 @@ function killGroup(pid: number): void {
 }
 
 /**
- * Run the binary with `args` in `dir`, with only `PATH`, a `HOME` and an auth file in `dir`, and
- * `env`, in its environment, as the leader of a new process group. With `interrupt`, send it one
- * SIGINT once a line `ready` appears on stdout or stderr. On `SPAWN_LIMIT`, kill the group.
+ * Run the binary (`binary`, else `BINARY`) with `args` in `dir`, with only `PATH`, a `HOME` and an
+ * auth file in `dir`, and `env`, in its environment, as the leader of a new process group. With
+ * `interrupt`, send it one SIGINT once a line `ready` appears on stdout or stderr. On `SPAWN_LIMIT`,
+ * kill the group.
  */
 function runBinary(
   dir: string,
   args: string[],
-  options: { env?: Record<string, string>; interrupt?: boolean } = {},
+  options: { env?: Record<string, string>; interrupt?: boolean; binary?: string } = {},
 ): Promise<BinaryResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(BINARY!, args, {
+    const child = spawn(options.binary ?? BINARY!, args, {
       cwd: dir,
       env: {
         PATH: process.env.PATH ?? "",
@@ -844,5 +851,113 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
       expect(lastLine(result.stdout)).toBe("hi");
     },
     BINARY_TEST_LIMIT,
+  );
+});
+
+/** The `./code-worker` entry. Typed string so tsc doesn't resolve it to dist/, missing before a build. */
+const CODE_WORKER: string = "@ngocbh/yian/code-worker";
+const WORKER_BUILT = join(ROOT, "dist/src/nodes/code/worker.js");
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node case skipped.
+ * A copy of `tests/llm_clients.test.ts`'s: importing a test file would run its tests.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!existsSync(WORKER_BUILT)) throw new Error(`${WORKER_BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+/** How long compiling a host may take before it is killed. */
+const COMPILE_LIMIT = 30_000;
+/** Each host test's limit, above `COMPILE_LIMIT + SPAWN_LIMIT` so a step's own failure reports first. */
+const HOST_TEST_LIMIT = 100_000;
+
+/**
+ * Compile, with the running Bun, a host that imports yian through `node_modules` and runs the
+ * flow file its argument names with `{ n: 2 }`, printing the status, output and failure message.
+ * With `withShim`, a second entry `src/nodes/code/worker.ts` imports `@ngocbh/yian/code-worker`.
+ * Return the binary's path.
+ */
+function compileHost(withShim: boolean): string {
+  const host = workdir();
+  mkdirSync(join(host, "src/nodes/code"), { recursive: true });
+  mkdirSync(join(host, "node_modules/@ngocbh"), { recursive: true });
+  writeFileSync(join(host, "package.json"), '{"name":"host","private":true}');
+  symlinkSync(ROOT, join(host, "node_modules/@ngocbh/yian"));
+  writeFileSync(
+    join(host, "src/main.ts"),
+    'import { readFileSync } from "node:fs";\n' +
+      'import { loadFlow, runFlow } from "@ngocbh/yian";\n' +
+      'const flow = await loadFlow(readFileSync(process.argv[2]!, "utf8"), { baseDir: process.cwd() });\n' +
+      "const result = await runFlow(flow, { n: 2 });\n" +
+      'console.log(result.status, String(result.output), result.failure?.message ?? "");\n',
+  );
+  if (withShim) writeFileSync(join(host, "src/nodes/code/worker.ts"), `import ${JSON.stringify(CODE_WORKER)};\n`);
+  const args = ["build", "--compile", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig", "src/main.ts"];
+  if (withShim) args.push("src/nodes/code/worker.ts");
+  // No `--target`: the running Bun, so nothing is downloaded.
+  const result = spawnSync(process.execPath, [...args, "--outfile", "out/host"], {
+    cwd: host,
+    encoding: "utf8",
+    timeout: COMPILE_LIMIT,
+    killSignal: "SIGKILL",
+  });
+  expect(result.status, `error: ${result.error}, signal: ${result.signal}\nstderr: ${result.stderr}`).toBe(0);
+  return join(host, "out/host");
+}
+
+// After `lastLine`, so the names above are set when Node runs this body.
+describe("the code-worker entry", () => {
+  afterEach(() => {
+    for (const pid of groups.splice(0)) killGroup(pid);
+    for (const dir of workdirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test.skipIf(!NODE)("on Node it resolves to the build and imports without running a job", () => {
+    // `ts/node_modules/@ngocbh` doesn't exist, so this resolves only by self-reference through `exports`.
+    const name = JSON.stringify(CODE_WORKER);
+    const script = `await import(${name}); console.log(import.meta.resolve(${name}));`;
+    const result = spawnSync(NODE!, ["--input-type=module", "-e", script], {
+      cwd: ROOT,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(result.status, `signal: ${result.signal}\nstderr: ${result.stderr}`).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(realpathSync(fileURLToPath(result.stdout.trim()))).toBe(realpathSync(WORKER_BUILT));
+  });
+
+  test.if(process.versions.bun !== undefined)(
+    "a host compile with a code-worker shim entry runs CODE nodes",
+    async () => {
+      const result = await runBinary(workdir(CODE_FILES), ["flow.yaml"], { binary: compileHost(true) });
+      expect(result.code, context(result)).toBe(0);
+      expect(lastLine(result.stdout)).toBe("succeeded 12");
+    },
+    HOST_TEST_LIMIT,
+  );
+
+  test.if(process.versions.bun !== undefined)(
+    "a host compile without the shim entry fails its CODE nodes",
+    async () => {
+      const result = await runBinary(workdir(CODE_FILES), ["flow.yaml"], { binary: compileHost(false) });
+      expect(lastLine(result.stdout), context(result)).toStartWith("failed");
+      expect(result.stdout).toContain("CODE worker failed");
+    },
+    HOST_TEST_LIMIT,
   );
 });

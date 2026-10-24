@@ -584,3 +584,65 @@ test("registry hit: after advance waits, a call needs no recompile until another
   // The other process changed the log: the miss recompiles, and the CODE file is gone.
   expect(await rejected(complete(log, `${result.runId}/ask`, { output: "yes" }, { env }))).toBeInstanceOf(LoadError);
 }, 30_000);
+
+/** Write, in a fresh folder, a YAML flow whose CODE node runs `./fn.ts:up` beside a take from inbox `m`. */
+async function codeTakeFlow(): Promise<{ dir: string; flow: ComposedFlow }> {
+  const dir = join(mkdtempSync(join(ROOT, "code-take-")), "flows");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "fn.ts"), "export function up(): string {\n  return \"up\";\n}\n");
+  const text = [
+    "id: root",
+    "name: root",
+    "input:",
+    "  m: !Inbox(str)",
+    "nodes:",
+    "  up:",
+    "    kind: code",
+    "    code: ./fn.ts:up",
+    "    output: str",
+    "  heard:",
+    "    kind: tool",
+    "    tool_id: take",
+    "    input:",
+    "      from: ${input.m}",
+    "      take: all",
+    "output:",
+    "  up: ${up.output}",
+    "  heard: ${heard.output}",
+    "",
+  ].join("\n");
+  writeFileSync(join(dir, "flow.yaml"), text);
+  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml" }) };
+}
+
+test("YAML: a refused send keeps the idle state, so a good send needs no recompile", async () => {
+  const { dir, flow } = await codeTakeFlow();
+  const log = freshLog();
+  expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
+  unlinkSync(join(dir, "fn.ts"));
+  await refusedWith(log, () => send(log, "nope", "hi", { env }), "unknown_inbox");
+  // Still a hit: nothing recompiles, so the missing CODE file isn't read.
+  expect(typeof (await send(log, "m", "hi", { env }))).toBe("number");
+  expect(typeof (await close(log, "m", { env }))).toBe("number");
+});
+
+test("YAML codeRoot: send and close append once the CODE file is inside the root", async () => {
+  const { dir, flow } = await codeTakeFlow();
+  const root = join(dir, "..");
+  const out = mkdtempSync(join(ROOT, "out-"));
+  const log = freshLog();
+  expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
+  const code = readFileSync(join(dir, "fn.ts"));
+  renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
+  symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
+  const before = readFileSync(log);
+  for (const call of [() => send(log, "m", "hi", { env, codeRoot: root }), () => close(log, "m", { env, codeRoot: root })]) {
+    expect(await rejected(call())).toBeInstanceOf(LoadError);
+    expect(readFileSync(log).equals(before)).toBe(true);
+  }
+  unlinkSync(join(dir, "fn.ts"));
+  writeFileSync(join(dir, "fn.ts"), code);
+  expect(typeof (await send(log, "m", "hi", { env, codeRoot: root }))).toBe("number");
+  expect(typeof (await close(log, "m", { env, codeRoot: root }))).toBe("number");
+  expect((await advance({ log, env, codeRoot: root })).output).toEqual({ up: "up", heard: { events: ["hi"], closed: true } });
+});

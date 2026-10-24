@@ -157,6 +157,7 @@ import {
   type Call,
   type CallStateKind,
   nodeCalls,
+  seqList,
   WaitsState,
   wakeableNodes,
 } from "./waits.ts";
@@ -1289,7 +1290,7 @@ function sendKey(state: RunState, inbox: string): string {
 }
 
 /** The element type `T` of the START's top-level `Inbox(T)` param `name`, or `null` when it declares none. */
-function inboxElementType(state: RunState, name: string): Type | null {
+export function inboxElementType(state: RunState, name: string): Type | null {
   const start = state.flow.nodes.get(state.flow.startId);
   const type = (start?.params ?? []).find((param) => param.name === name)?.contract?.type;
   return type !== undefined && isInboxType(type) ? type.element! : null;
@@ -4107,6 +4108,46 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
     throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
   } else if (step["kind"] === "pending") {
     validatePendingStep(state, nodeId, step);
+  } else if (step["kind"] === "steer") {
+    validateSteerStep(state, nodeId, step);
+  }
+}
+
+/** The keys a `steer` step holds. */
+const STEER_STEP_KEYS = ["kind", "inbox", "from"] as const;
+
+/**
+ * Require a running node's `steer` step to consume the whole unread queue of its one steer inbox:
+ * the node reads a steer inbox (`readsSteerInbox`); exactly `kind`, `inbox` and `from`; `inbox` a
+ * declared top-level inbox, the one any earlier steer step of the node named; `from` the inbox's
+ * unread events a read may take (`availableUnread`), in order, at least one.
+ */
+function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  if (!state.flow.nodes.get(nodeId)!.readsSteerInbox) {
+    throw new RangeError(`a steer step on node ${reprText(nodeId)}, which reads no steer inbox`);
+  }
+  const keys = Object.keys(step);
+  if (keys.length !== STEER_STEP_KEYS.length || !STEER_STEP_KEYS.every((key) => Object.hasOwn(step, key))) {
+    throw new RangeError("a steer step holds only kind, inbox and from");
+  }
+  const inbox = step["inbox"];
+  if (typeof inbox !== "string" || inboxElementType(state, inbox) === null) {
+    throw new RangeError(`steer inbox ${typeof inbox === "string" ? reprText(inbox) : writeAsText(inbox ?? null)} is no inbox the START declares`);
+  }
+  const earlier = (state.nodeSteps.get(nodeId) ?? []).find((prior) => prior["kind"] === "steer");
+  if (earlier !== undefined && earlier["inbox"] !== inbox) {
+    throw new RangeError(
+      `node ${reprText(nodeId)} reads steer inbox ${reprText(String(earlier["inbox"]))}, not ${reprText(inbox)}`,
+    );
+  }
+  const from = seqList(step["from"]);
+  if (from === null) throw new RangeError("a steer step's from must be a list of send seqs");
+  if (from.length === 0) throw new RangeError("a steer step consumes at least one event");
+  const queue = availableUnread(state.waits, inbox);
+  if (from.length !== queue.length || from.some((seq, index) => seq !== queue[index])) {
+    throw new RangeError(
+      `a steer step must consume the whole unread queue [${queue.join(", ")}], found [${from.join(", ")}]`,
+    );
   }
 }
 

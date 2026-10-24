@@ -708,6 +708,30 @@ export class InboxClosedRecord {
   }
 }
 
+/**
+ * Interrupt the agents reading an inbox as their steer inbox: each named node's open calls close
+ * with reason `interrupted`, and it holds a pending interrupt until it honors it or settles.
+ * Frozen.
+ */
+export class InterruptedRecord {
+  /** The steer inbox the interrupt arrived on; non-empty. */
+  readonly inbox: string;
+  /** The interrupted node ids; unique, non-empty, at least one. */
+  readonly nodes: readonly string[];
+
+  /**
+   * @throws TypeError when `inbox` isn't a string.
+   * @throws RangeError when `inbox` is empty, or `nodes` is empty or isn't an array of unique
+   *   non-empty strings.
+   */
+  constructor(inbox: string, nodes: readonly string[]) {
+    this.inbox = requireNonemptyString(inbox, "inbox");
+    this.nodes = validatedIdArray(nodes, "nodes");
+    if (this.nodes.length === 0) throw new RangeError("nodes must be non-empty");
+    Object.freeze(this);
+  }
+}
+
 /** End the run because its host cancelled it. Terminal. Frozen. */
 export class RunCancelledRecord {
   constructor() {
@@ -1239,6 +1263,7 @@ export type RunRecord =
   | NodeWokenRecord
   | RunWaitingRecord
   | InboxClosedRecord
+  | InterruptedRecord
   | RunCancelledRecord
   | RunFailedRecord
   | NodeStartedRecord
@@ -1267,6 +1292,7 @@ const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass
   [NodeWokenRecord, "node_woken"],
   [RunWaitingRecord, "run_waiting"],
   [InboxClosedRecord, "inbox_closed"],
+  [InterruptedRecord, "interrupted"],
   [RunCancelledRecord, "run_cancelled"],
   [RunFailedRecord, "run_failed"],
   [NodeStartedRecord, "node_started"],
@@ -3159,6 +3185,7 @@ function payloadForRecord(record: RunRecord): JsonObject {
   if (record instanceof NodeWokenRecord) return { node_id: record.nodeId, timed_out: [...record.timedOut] };
   if (record instanceof RunWaitingRecord) return { node_ids: [...record.nodeIds] };
   if (record instanceof InboxClosedRecord) return { inbox: record.inbox };
+  if (record instanceof InterruptedRecord) return { inbox: record.inbox, nodes: [...record.nodes] };
   if (record instanceof RunCancelledRecord) return {};
   if (record instanceof RunFailedRecord) return { failure: failurePayload(record.failure) };
   if (record instanceof NodeStartedRecord) return { node_id: record.nodeId };
@@ -3316,6 +3343,9 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "inbox_closed":
       requireFields(payload, ["inbox"], label);
       return new InboxClosedRecord(wireName(payload["inbox"], `${label} inbox`));
+    case "interrupted":
+      requireFields(payload, ["inbox", "nodes"], label);
+      return new InterruptedRecord(wireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`));
     case "run_cancelled":
       requireFields(payload, [], label);
       return new RunCancelledRecord();

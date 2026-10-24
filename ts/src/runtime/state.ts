@@ -98,6 +98,7 @@ import {
   decodeRecord,
   encodeRecord,
   InboxClosedRecord,
+  InterruptedRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
@@ -1794,6 +1795,8 @@ export function prepareRecord(
   if (isExactly(record, RunCancelledRecord) || isExactly(record, RunFailedRecord)) {
     return prepareEndingTransition(state, record);
   }
+  // The kind is in the schema so interrupts need no later bump; this version doesn't apply it.
+  if (isExactly(record, InterruptedRecord)) throw new RangeError("interrupted records are not accepted yet");
   if (isExactly(record, NodeSucceededRecord)) {
     validateSuccessCommit(state, record);
     return prepareSuccessTransition(state, record);

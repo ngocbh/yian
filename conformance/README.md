@@ -553,6 +553,7 @@ they are, except as the rules below say), and an empty payload is left out.
 | `node_woken` (TS only) | `node_id` | `timed_out` |
 | `run_waiting` (TS only) | null | `node_ids` |
 | `inbox_closed` (TS only) | null | `inbox` |
+| `interrupted` (TS only, schema 22; not accepted yet) | null | `inbox`, `nodes` |
 | `run_cancelled` (TS only) | null | none |
 | `run_failed` (TS only) | null | `failure` |
 | `node_started` | `node_id` | none |

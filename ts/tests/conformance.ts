@@ -2022,6 +2022,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["node_woken", ["node_id", ["timed_out"]]],
   ["run_waiting", [null, ["node_ids"]]],
   ["inbox_closed", [null, ["inbox"]]],
+  ["interrupted", [null, ["inbox", "nodes"]]],
   ["run_cancelled", [null, []]],
   ["run_failed", [null, ["failure"]]],
   ["node_started", ["node_id", []]],

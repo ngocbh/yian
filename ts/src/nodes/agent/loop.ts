@@ -240,10 +240,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
       );
     }
 
-    const turn: ToolTurn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt, pended: new Map() };
+    const pended = new Map<number, string>();
+    const turn: ToolTurn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt, pended };
     if (await (replayed ? replayToolCalls(turn) : runToolCalls(turn))) return interrupted(reply);
     // An agent given the host's interrupt signal never pends, so no interrupted turn gets here with a pended call.
-    if (turn.pended.size > 0) return new Pending([...turn.pended].sort(([a], [b]) => a - b).map(([, callId]) => callId));
+    if (pended.size > 0) return new Pending([...pended].sort(([a], [b]) => a - b).map(([, callId]) => callId));
   }
 }
 
@@ -525,7 +526,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   const args = call.arguments!;
   if (skills.size > 0 && call.name === LOAD_SKILL) {
     // `load_skill` only reads the granted skills.
-    return { planned: { call, index, callId: undefined, invoke: async () => invokeLoadSkill(skills, args) }, safe: true };
+    const invoke = async () => invokeLoadSkill(skills, args);
+    return { planned: { call, index, callId: undefined, invoke }, safe: true };
   }
   if (!turn.granted.includes(call.name)) {
     const error = new AgentLoopError(
@@ -594,8 +596,9 @@ async function failCall(
  * finishes with a result, its text is computed and written as a `tool_result` step at once, in
  * finish order, unless the node has stopped by then; a call whose handler returned `pending()` is
  * written as a `pending` step instead and gets no tool message (the loop returns `Pending`). An
- * agent given the host's interrupt signal, or one outside a run, can't pend: that fails the group. Every started call is awaited; then a stop
- * wins, else the first failure is thrown with nothing of the group committed. A stop, then a host
+ * agent given the host's interrupt signal, or one outside a run, can't pend: that fails the group.
+ * Every started call is awaited; then a stop wins, else the first failure is thrown with nothing of
+ * the group committed. A stop, then a host
  * interrupt, is checked before the group starts; the interrupt skips from the group's first call.
  *
  * @returns Whether a host interrupt skipped the group and every later call.

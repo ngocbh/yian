@@ -478,7 +478,8 @@ export async function generateStructured(
       signal,
       retry,
       // No steers to leave out: a steerable agent's output is `str`, so it never calls here.
-      record: steps === undefined ? undefined : { steps, digest: requestSha256(digestRequest(request, baseSystemPrompt), new Set()) },
+      record:
+        steps === undefined ? undefined : { steps, digest: requestSha256(digestRequest(request, baseSystemPrompt), new Set()) },
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();

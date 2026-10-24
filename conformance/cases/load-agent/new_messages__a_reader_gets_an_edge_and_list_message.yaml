@@ -1,0 +1,20 @@
+# A CODE node reads an AGENT's new messages through a typed list(Message) input.
+kind: load
+python_skip: "new_messages is TS-only (#1081)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    reply:
+      kind: agent
+      prompt: hi
+      output: str
+    reader:
+      kind: code
+      input:
+        history: !list(Message) ${reply.new_messages}
+      output: int
+      code: return inputs['history'].length
+  output: ${reader.output}
+expect:
+  load: ok

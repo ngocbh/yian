@@ -1,0 +1,28 @@
+# new_messages is a list(Message), which has no fields to read.
+kind: load
+python_skip: "new_messages is TS-only (#1081)"
+flow: |
+  id: f
+  name: f
+  nodes:
+    reply:
+      kind: agent
+      prompt: hi
+      output: str
+    reader:
+      kind: code
+      input:
+        role: ${reply.new_messages.role}
+      output: int
+      code: return 1
+  output: ${reader.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'reader' input 'role' from: reference ${reply.new_messages.role} reads field 'role' on type list({"author":Optional(str),"parts":list(Union({"file":file,"mime":str,"name":Optional(str),"provider_payload":Optional(object),"type":Literal(media)},{"provider_payload":Optional(object),"text":str,"type":Literal(reasoning)},{"provider_payload":Optional(object),"text":str,"type":Literal(refusal)},{"provider_payload":Optional(object),"text":str,"type":Literal(text)},{"arguments":Optional(object),"id":str,"name":str,"provider_payload":Optional(object),"raw_arguments":Optional(str),"type":Literal(tool_call)},{"call_id":str,"content":str,"is_error":Optional(bool),"name":str,"provider_payload":Optional(object),"type":Literal(tool_result)})),"protocol":Optional(str),"provider_payload":Optional(object),"role":Literal(assistant, tool, user)}), which has no fields
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 39]

@@ -62,9 +62,10 @@ import {
   sameOptional,
   validateOutputContract,
 } from "../nodes/contracts.ts";
-import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { eventBytes, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
+  isInboxType,
   isRecord,
   jsTypeName,
   normalizeTypedFiles,
@@ -133,7 +134,7 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
-import { type CallStateKind, WaitsState } from "./waits.ts";
+import { applyWaitsRecord, type CallStateKind, WaitsState } from "./waits.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
 export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
@@ -784,6 +785,8 @@ interface CommitPlan extends PlanAnchors {
   readonly initial: boolean;
   /** Whether this is an expansion's commit for a child START, which waits under its key. */
   readonly expansion: boolean;
+  /** Whether this is a send to a START inbox, which applies at once to the inbox store. */
+  readonly send: boolean;
 }
 
 /** One dispatch, resume, step or stop. */
@@ -1123,6 +1126,63 @@ export function prepareInitialCommit(state: RunState, key: string, value: unknow
 }
 
 /**
+ * Prepare a host's send of `event` to the top-level inbox `inbox`: a commit by the START under
+ * `<START>.<inbox>`, applied at once to the inbox store, never to the pool.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @param event The value, checked against `T`.
+ * @returns The canonical `PoolCommitRecord` and its plan, with no observers.
+ * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
+ *   such inbox; `inbox_closed` once it is closed; `invalid_value` when `event` fails `T` (the
+ *   `TypeCheckError` is the cause); `too_large` when its run-log JSON is over the run's
+ *   `MAX_EVENT_BYTES`.
+ */
+export function prepareSend(state: RunState, inbox: string, event: unknown): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareSend expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  requireDeliverable(state);
+  const element = inboxElementType(state, inbox);
+  if (element === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  if (state.waits.inboxes.get(inbox)?.closed === true) {
+    throw new DeliveryRefused("inbox_closed", `inbox ${reprText(inbox)} is closed`);
+  }
+  let wire: TypedWire;
+  try {
+    [wire] = canonicalTyped(event, element);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new DeliveryRefused("invalid_value", `inbox ${reprText(inbox)} refuses the event: ${error.message}`, {
+      cause: error,
+    });
+  }
+  const size = eventBytes(wire.value);
+  if (size > state.runDefaults.maxEventBytes) {
+    throw new DeliveryRefused("too_large", eventTooLarge(`the event to inbox ${reprText(inbox)}`, size, state));
+  }
+  return prepareRecord(state, new PoolCommitRecord(state.flow.startId, sendKey(state, inbox), wire));
+}
+
+/** The message for a value of `size` bytes over the run's `MAX_EVENT_BYTES`; `what` names it. */
+function eventTooLarge(what: string, size: number, state: RunState): string {
+  return `${what} is ${size} bytes, over the run's limit of ${state.runDefaults.maxEventBytes} (YIAN_MAX_EVENT_BYTES)`;
+}
+
+/** The pool key a send to `inbox` commits under: the START's id, a dot, then the inbox's name. */
+function sendKey(state: RunState, inbox: string): string {
+  return `${state.flow.startId}.${inbox}`;
+}
+
+/** The element type `T` of the START's top-level `Inbox(T)` param `name`, or `null` when it declares none. */
+function inboxElementType(state: RunState, name: string): Type | null {
+  const start = state.flow.nodes.get(state.flow.startId);
+  const type = (start?.params ?? []).find((param) => param.name === name)?.contract?.type;
+  return type !== undefined && isInboxType(type) ? type.element! : null;
+}
+
+/**
  * Commit the run start's commits from `pool`, right after `RunStarted`: its system values in key
  * order, then its START inputs.
  *
@@ -1394,6 +1454,11 @@ export function prepareRecord(
       validateInitialCommit(state, record);
       return prepareCommitTransition(state, record, true);
     }
+    // `<START>.<name>` can't be a node id (ids hold no dot), so the prefix alone picks a send.
+    if (record.key.startsWith(sendKey(state, ""))) {
+      validateSend(state, record);
+      return prepareCommitTransition(state, record, false, false, true);
+    }
     // A key the flow doesn't hold yet is a child START the spawner's expansion is about to add.
     const expansion = !state.flow.nodes.has(record.key) && state.flow.nodes.get(record.nodeId)?.isSpawner === true;
     if (expansion) validateExpansionCommit(state, record);
@@ -1479,12 +1544,16 @@ export function prepareRecord(
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
 }
 
-/** Freeze one commit's plan and its canonical public record; `initial` for a run-start commit. */
+/**
+ * Freeze one commit's plan and its canonical public record; `initial` for a run-start commit,
+ * `expansion` for a spawner's commit for a child START, `send` for a send to an inbox.
+ */
 function prepareCommitTransition(
   state: RunState,
   record: PoolCommitRecord,
   initial: boolean,
   expansion = false,
+  send = false,
 ): PreparedTransition {
   const runId = state.runId;
   // Established by the initialized-state check.
@@ -1511,6 +1580,7 @@ function prepareCommitTransition(
     from: canonical.from,
     initial,
     expansion,
+    send,
   });
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
 }
@@ -2153,6 +2223,8 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
       throw new TypeError("unsupported prepared transition plan");
   }
   if (traceDelta !== null) state.trace = traceDelta.apply();
+  // Backward records come after the terminal result and change no wait.
+  if (kind !== "backward") applyWaitsRecord(state.waits, { seq: prepared.expectedSequence, record: prepared.record });
   return observers;
 }
 
@@ -2474,7 +2546,8 @@ function commitRunStarted(log: RunLog, state: RunState, prepared: PreparedTransi
 
 /**
  * Validate, append and apply one pool commit: a run-start commit writes the pool at once (the
- * START inputs' also make START ready); a node's waits on the node for its success.
+ * START inputs' also make START ready); a send enters the inbox store at once; a node's waits on
+ * the node for its success.
  */
 function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
@@ -2494,7 +2567,9 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   const input = startInputs ? (canonicalSeed(value!.toObject())[1] as JsonObject) : null;
 
   appendAndVerify(log, prepared);
-  if (!plan.initial) {
+  if (plan.send) {
+    state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
+  } else if (!plan.initial) {
     const pending: PendingCommit = {
       seq: prepared.expectedSequence,
       key: plan.key,
@@ -4183,6 +4258,29 @@ function validateExpansionCommit(state: RunState, record: PoolCommitRecord): voi
     throw new RangeError(`child START ${reprText(record.key)} already has a pending expansion commit`);
   }
   if (record.from === null) throw new RangeError(`the expansion commit for ${reprText(record.key)} holds no from`);
+}
+
+/**
+ * Validate a send: a commit by the START under `<START>.<name>` for a top-level `Inbox(T)` param,
+ * holding a value canonical for `T` and within the run's `MAX_EVENT_BYTES`, to an open inbox.
+ *
+ * @throws RangeError otherwise (a `TypeCheckError` when the value fails `T`).
+ */
+function validateSend(state: RunState, record: PoolCommitRecord): void {
+  const name = record.key.slice(sendKey(state, "").length);
+  if (record.nodeId !== state.flow.startId) {
+    throw new RangeError(`a send to ${reprText(record.key)} must name the START, not ${reprText(record.nodeId)}`);
+  }
+  const element = inboxElementType(state, name);
+  if (element === null) throw new RangeError(`send key ${reprText(record.key)} names no inbox the START declares`);
+  if (record.value === null) throw new RangeError(`a send to ${reprText(name)} holds its value`);
+  if (state.waits.inboxes.get(name)?.closed === true) throw new RangeError(`inbox ${reprText(name)} is closed`);
+  const [wire] = canonicalTyped(TypedValue.fromWire(record.value), element);
+  if (logJson(wire) !== logJson(record.value)) {
+    throw new RangeError(`the send to ${reprText(name)} isn't canonical for the inbox's type`);
+  }
+  const size = eventBytes(record.value.value);
+  if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the send to ${reprText(name)}`, size, state));
 }
 
 /**

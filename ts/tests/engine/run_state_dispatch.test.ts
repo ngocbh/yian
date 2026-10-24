@@ -778,7 +778,7 @@ test("prepareRunStopped lists the in-flight nodes in dispatch order", () => {
   });
 });
 
-test("a RunStopped commit changes only the sequence and the last stop, and returns no observers", () => {
+test("a RunStopped commit changes only the sequence, the last stop and the last frontier, and returns no observers", () => {
   const { state, log } = initialized();
   startFrontier(state, log, "first", "second");
   state.ready = ["ordinary"];
@@ -788,7 +788,8 @@ test("a RunStopped commit changes only the sequence and the last stop, and retur
 
   expect(observers).toEqual([]);
   expect(state.nextSequence).toBe(6);
-  expectUnchanged(state, { ...before, values: { ...before.values, nextSequence: 6, lastStopSequence: 5 } });
+  const waits = { ...(before.values.waits as object), lastFrontier: "run_stopped" };
+  expectUnchanged(state, { ...before, values: { ...before.values, nextSequence: 6, lastStopSequence: 5, waits } });
   expect(state.ready).toEqual(["ordinary"]);
   expectCommittedPath(
     log,

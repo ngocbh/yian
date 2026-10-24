@@ -1,7 +1,8 @@
 /** The inbox handle, its type and its codec. */
 import { describe, expect, test } from "bun:test";
 
-import { InboxRef, inboxName } from "../../src/typesys/values.ts";
+import { canonicalSeed, canonicalTyped } from "../../src/runtime/log.ts";
+import { InboxRef, inboxName, TypedValue, ValueKind } from "../../src/typesys/values.ts";
 
 describe("InboxRef", () => {
   test("holds a top-level inbox name and is frozen", () => {
@@ -26,5 +27,34 @@ describe("InboxRef", () => {
     expect(inboxName({ inbox: "m", x: 1n })).toBeNull();
     expect(inboxName({ inbox: "" })).toBeNull();
     expect(inboxName("m")).toBeNull();
+  });
+});
+
+describe("inbox wire", () => {
+  test("toWire and fromWire round-trip the handle", () => {
+    expect(new TypedValue(ValueKind.INBOX, new InboxRef("m")).toWire()).toEqual({
+      kind: "inbox",
+      value: { inbox: "m" },
+    });
+    const back = TypedValue.fromWire({ kind: "inbox", value: { inbox: "m" } });
+    expect(InboxRef.isInboxRef(back.value) && back.value.inbox).toBe("m");
+  });
+
+  test.each([
+    [{ kind: "inbox", value: "m" }],
+    [{ kind: "inbox", value: { inbox: "m", x: null } }],
+    [{ kind: "inbox", value: { inbox: "" } }],
+  ])("fromWire refuses %p", (wire) => {
+    expect(() => TypedValue.fromWire(wire)).toThrow(RangeError);
+  });
+
+  test("a seed writes a nested handle as its mapping", () => {
+    const [wire] = canonicalSeed({ owner_messages: new InboxRef("owner_messages"), n: 1n });
+    expect(wire).toEqual({ n: 1n, owner_messages: { inbox: "owner_messages" } });
+  });
+
+  test("an untyped record holding a handle commits as its mapping", () => {
+    const [wire] = canonicalTyped({ m: new InboxRef("m") }, null);
+    expect(wire).toEqual({ kind: "object", value: { m: { inbox: "m" } } });
   });
 });

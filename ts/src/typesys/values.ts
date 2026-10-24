@@ -888,6 +888,7 @@ const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
   [ValueKind.LIST_NUMBER, "an array of bigints, numbers other than NaN, or null"],
   [ValueKind.LIST_BOOLEAN, "an array of booleans or null"],
   [ValueKind.LIST_OBJECT, "an array of plain records or null"],
+  [ValueKind.INBOX, "an inbox handle {inbox}"],
 ]);
 
 /**
@@ -938,9 +939,9 @@ export class TypedValue {
   }
 
   /**
-   * Return the wire form `{kind, value}`, with every `FileRef` in the value (the root or
-   * nested) written as its mapping, as the run log's encoder takes it. The value is copied
-   * only on the paths to its files.
+   * Return the wire form `{kind, value}`, with every `FileRef` and `InboxRef` in the value (the
+   * root or nested) written as its mapping, as the run log's encoder takes it. The value is
+   * copied only on the paths to its files and handles.
    *
    * @throws TypeCheckError when the value isn't a JSON value (see `jsonPart`): a non-JSON part,
    *   NaN, text holding a lone surrogate, or a container inside itself. The unchecked
@@ -958,7 +959,8 @@ export class TypedValue {
    * `number` other than NaN (an int is refused: a `float` slot given an int stores kind
    * `int`), `date` and `datetime` text in their grammar, `bool` a boolean, `object` a plain
    * record, `file` a file's mapping with exactly `uri`, `mime` and `name` (read as a
-   * `FileRef`), `list[Any]` an array, and `list[X]` an array of `X` or null, where a
+   * `FileRef`), `inbox` a handle's mapping with exactly `inbox` (read as an `InboxRef`),
+   * `list[Any]` an array, and `list[X]` an array of `X` or null, where a
    * `list[float]` item may also be a `bigint` (a `list(float)` slot keeps its int items).
    * Contents aren't walked: the lossless reader made the data.
    *
@@ -981,6 +983,17 @@ export class TypedValue {
       } catch (error) {
         if (error instanceof RangeError) {
           throw new RangeError(`invalid file typed value: ${error.message}`);
+        }
+        throw error;
+      }
+    }
+    if (storage === ValueKind.INBOX && isRecord(value)) {
+      requireFields(value, INBOX_FIELDS, "inbox handle");
+      try {
+        return new TypedValue(storage, new InboxRef(value["inbox"] as string));
+      } catch (error) {
+        if (error instanceof RangeError) {
+          throw new RangeError(`invalid inbox typed value: ${error.message}`);
         }
         throw error;
       }
@@ -2086,7 +2099,10 @@ function rejectNonValue(value: unknown, path: ValuePath): void {
   if (reason !== null) throw new TypeCheckError(reason, { path });
 }
 
-/** What the JSON walk does with a `FileRef`: keep it, write it as its mapping, or refuse it. */
+/**
+ * What the JSON walk does with a `FileRef` or an `InboxRef`: keep it, write it as its mapping,
+ * or refuse it.
+ */
 type FileMode = "keep" | "mapping" | "refuse";
 
 /** An open list or record in the JSON walk. */
@@ -2103,18 +2119,19 @@ interface JsonFrame {
 
 /**
  * Return `root` as a JSON value: `null`, a boolean, a `bigint`, a `number`, text, and lists and
- * records of those, with `FileRef`s handled as `files` says.
+ * records of those, with `FileRef`s and `InboxRef`s handled as `files` says.
  *
  * `-0` becomes `0`, and under `"mapping"` each `FileRef` (the root too) becomes its mapping
- * `{uri, mime, name}`. Only the containers on the path to a change are copied; `root` itself is
- * returned when nothing changes, and a container shared by two parents is walked once. The
- * walk uses an explicit stack, so any depth works; nesting depth is left to the boundaries.
+ * `{uri, mime, name}` and each `InboxRef` its mapping `{inbox}`. Only the containers on the
+ * path to a change are copied; `root` itself is returned when nothing changes, and a container
+ * shared by two parents is walked once. The walk uses an explicit stack, so any depth works;
+ * nesting depth is left to the boundaries.
  *
  * @throws TypeCheckError at the bad part's path, the first depth-first in order: NaN or text
  *   holding a lone surrogate (a key: at its record's path) is not a yian value; `undefined` or
  *   a list hole is `undefined is not a JSON value`; a container inside itself is `value
  *   contains itself` at the entry holding it; anything else (a `Date`, a `Map`, a class
- *   instance, a `FileRef` under `"refuse"`) is `<valueRepr> is not a JSON value`.
+ *   instance, a `FileRef` or `InboxRef` under `"refuse"`) is `<valueRepr> is not a JSON value`.
  */
 export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
   const stack: JsonFrame[] = [];
@@ -2142,6 +2159,11 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
       if (files === "keep") return value;
       if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
       // Under "refuse" a file is not a JSON value.
+      return fail(key, `${valueRepr(value)} is not a JSON value`);
+    }
+    if (InboxRef.isInboxRef(value)) {
+      if (files === "keep") return value;
+      if (files === "mapping") return { inbox: value.inbox };
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (isList(value) || isRecord(value)) {

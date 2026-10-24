@@ -19,7 +19,8 @@
  * (`runtime/run_index.ts`) keep and read the runs folder's rebuildable `index.sqlite`, one row per
  * run. For hosts that read run-log values it re-exports
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
- * `toWire`/`fromWire`) and `FileRef` (`typesys/values.ts`), and `logJson`, `parseJson` and
+ * `toWire`/`fromWire`), `FileRef` and `InboxRef`, the handle an `Inbox(T)` input holds
+ * (`typesys/values.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
  * `foldRunLog`, which replays a log and gives each accepted `pool_commit`'s value, a derived one
  * rebuilt from its `from` pointers, with `PoolCommitRecord` (`runtime/log.ts`) to read the records
@@ -206,7 +207,14 @@ export {
   logJson,
   parseJson,
 } from "./typesys/json.ts";
-export { FileRef, type StorageKind, TypedValue, type Value, type ValueRecord } from "./typesys/values.ts";
+export {
+  FileRef,
+  InboxRef,
+  type StorageKind,
+  TypedValue,
+  type Value,
+  type ValueRecord,
+} from "./typesys/values.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
 export {
   readRunIndex,

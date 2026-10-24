@@ -16,6 +16,7 @@ import {
   boundText,
   canonicalUnionOrder,
   IDENTIFIER_PATTERN,
+  inboxType,
   listKindForElement,
   literalLabel,
   NAME_PATTERN,
@@ -88,6 +89,12 @@ export interface UnionExpr {
   readonly members: readonly TypeExpr[];
 }
 
+/** `Inbox(X)`: a handle on a top-level inbox whose events are `X`s. */
+export interface InboxExpr {
+  readonly kind: "inbox";
+  readonly element: TypeExpr;
+}
+
 /** A parsed type expression, still unresolved against any registry. */
 export type TypeExpr =
   | ScalarExpr
@@ -96,7 +103,8 @@ export type TypeExpr =
   | OptionalExpr
   | EnumExpr
   | DictExpr
-  | UnionExpr;
+  | UnionExpr
+  | InboxExpr;
 
 const SCALAR_KEYWORDS: ReadonlySet<string> = new Set([
   "str", "int", "float", "bool", "date", "datetime", "object", "file", "None", "none", "Any",
@@ -104,7 +112,7 @@ const SCALAR_KEYWORDS: ReadonlySet<string> = new Set([
 
 // Names a typedef must not shadow (typing constructors and the generic builtins).
 const TYPING_CONSTRUCTORS: ReadonlySet<string> = new Set([
-  "Optional", "Literal", "Union", "List", "Dict", "list", "dict", "Any",
+  "Optional", "Literal", "Union", "List", "Dict", "list", "dict", "Any", "Inbox",
 ]);
 
 /** The built-in record type names every flow may use and no typedef may take. */
@@ -156,9 +164,9 @@ function isShadow(name: string): boolean {
  * `None`, where `Any` is any JSON value except null and `object` is a JSON object,
  * inclusive ranges `int(1..12)`/`float(0.0..1.0)` (either end may be open), and the
  * constructors `list(X)`/`Optional(X)`/`dict(K, V)`/`Literal(a, "b c")`/
- * `Union(A, B, ...)`, plus the `topics` alias. A bare name that is neither a scalar nor a
- * constructor is a registry reference. `Union(...)` members are only checked to be
- * records when the type is resolved. A quoted `Literal` member takes JSON escapes.
+ * `Union(A, B, ...)`/`Inbox(X)`, plus the `topics` alias. A bare name that is neither a
+ * scalar nor a constructor is a registry reference. `Union(...)` members are only checked to
+ * be records when the type is resolved. A quoted `Literal` member takes JSON escapes.
  *
  * Example: `parseType("Union(Buy, Sell)")` gives
  * `{kind: "union", members: [{kind: "ref", name: "Buy"}, {kind: "ref", name: "Sell"}]}`.
@@ -167,8 +175,9 @@ function isShadow(name: string): boolean {
  *   parentheses, a lone Unicode surrogate, or an empty `Literal` member), uses an unknown
  *   constructor or the lowercase `any`, gives a numeric range with no end, no `..`, or as
  *   two arguments, spells a union as `A | B` (the hint suggests `Union(A, B)`), lists
- *   `None` as a `Union(...)` member (the hint suggests `Optional(Union(...))`), or holds a
- *   `[` outside a quoted string (the message shows the parenthesized spelling).
+ *   `None` as a `Union(...)` member (the hint suggests `Optional(Union(...))`), wraps an
+ *   `Inbox(...)` in `Optional(...)`, or holds a `[` outside a quoted string (the message shows
+ *   the parenthesized spelling).
  */
 export function parseType(text: string): TypeExpr {
   const src = text.trim();
@@ -225,6 +234,8 @@ function dictAsObject(t: TypeExpr): TypeExpr {
       return { kind: "scalar", name: "object" };
     case "list":
       return { kind: "list", element: dictAsObject(t.element) };
+    case "inbox":
+      return { kind: "inbox", element: dictAsObject(t.element) };
     case "optional":
       return { kind: "optional", inner: dictAsObject(t.inner) };
     case "union":
@@ -397,8 +408,17 @@ class TypeParser {
       case "list":
       case "List":
         return { kind: "list", element: this.oneType(name) };
-      case "Optional":
-        return { kind: "optional", inner: this.oneType(name) };
+      case "Optional": {
+        const inner = this.oneType(name);
+        if (inner.kind === "inbox") {
+          throw new TypeCheckError(
+            `an inbox is never optional in ${reprText(this.src)}; write Inbox(...)`,
+          );
+        }
+        return { kind: "optional", inner };
+      }
+      case "Inbox":
+        return { kind: "inbox", element: this.oneType(name) };
       case "Literal":
         return { kind: "enum", tags: this.literalTags() };
       case "dict":
@@ -951,7 +971,9 @@ export function builtinType(name: string): Type | null {
  * duplicate members, and requires every member to be a non-nullable record. Its members
  * must be told apart by a tag field or by shapes that can't overlap. A union with one
  * distinct member is that member. The result is a scalar, a typed list, a closed record,
- * a tag-constrained variant, or a union of records with members in canonical order.
+ * a tag-constrained variant, a union of records with members in canonical order, or an
+ * inbox. An inbox is a whole input: never optional, never a list item, record field or union
+ * member, and never holding an inbox.
  *
  * `seen` holds the registry names already being resolved on the current path, the cycle
  * guard; callers pass nothing.
@@ -962,8 +984,8 @@ export function builtinType(name: string): Type | null {
  * `Buy` then `Sell`.
  *
  * @throws TypeCheckError when a `RefExpr` names an unknown type, a record or alias
- *   reference is recursive, a union member is not a record or is nullable, or two union
- *   members can match the same value.
+ *   reference is recursive, a union member is not a record or is nullable, two union
+ *   members can match the same value, or an inbox sits where it can't.
  */
 export function resolveType(
   t: TypeExpr,
@@ -980,7 +1002,11 @@ export function resolveType(
       // Peel the whole chain in a loop so nested Optionals cost one frame, not one each.
       let inner: TypeExpr = t;
       while (inner.kind === "optional") inner = inner.inner;
-      return resolveType(inner, registry, seen).replace({ nullable: true });
+      const resolved = resolveType(inner, registry, seen);
+      if (resolved.kind === ValueKind.INBOX) {
+        throw new TypeCheckError(`an inbox is never optional in ${reprText(formatTypeExpr(t))}`);
+      }
+      return resolved.replace({ nullable: true });
     }
     case "enum":
       return new Type({ kind: ValueKind.STRING, tags: new Set(t.tags) });
@@ -990,7 +1016,21 @@ export function resolveType(
       return resolveUnion(t, registry, seen);
     case "list": {
       const element = resolveType(t.element, registry, seen);
+      if (element.kind === ValueKind.INBOX) {
+        throw new TypeCheckError(
+          `an inbox is a whole input; it can't be a list item in ${reprText(formatTypeExpr(t))}`,
+        );
+      }
       return new Type({ kind: listKindForElement(element), element });
+    }
+    case "inbox": {
+      const element = resolveType(t.element, registry, seen);
+      if (element.kind === ValueKind.INBOX) {
+        throw new TypeCheckError(
+          `an inbox holds values, not inboxes, in ${reprText(formatTypeExpr(t))}`,
+        );
+      }
+      return inboxType(element);
     }
     case "ref":
       break;
@@ -1010,11 +1050,18 @@ export function resolveType(
   }
   const fields = new Map<string, Type>();
   for (const [field, text] of defn.fields) {
-    fields.set(field, resolveType(parseType(text), registry, inner));
+    const typ = resolveType(parseType(text), registry, inner);
+    if (typ.kind === ValueKind.INBOX) throw inboxFieldError();
+    fields.set(field, typ);
   }
   // An `Optional(X)` field (its resolved type is nullable) is not required.
   const required = new Set([...fields].filter(([, typ]) => !typ.nullable).map(([f]) => f));
   return new Type({ kind: ValueKind.OBJECT, fields, required });
+}
+
+/** Build the error for a record field typed `Inbox(...)`. */
+function inboxFieldError(): TypeCheckError {
+  return new TypeCheckError("an inbox is a whole input; it can't be a record field");
 }
 
 /** One flattened union member: its display name, its origin and its resolved type. */
@@ -1142,6 +1189,8 @@ export function formatTypeExpr(t: TypeExpr): string {
       return t.name;
     case "list":
       return `list(${formatTypeExpr(t.element)})`;
+    case "inbox":
+      return `Inbox(${formatTypeExpr(t.element)})`;
     case "optional":
       return `Optional(${formatTypeExpr(t.inner)})`;
     case "enum":
@@ -1185,6 +1234,7 @@ function refsInType(t: TypeExpr): Set<string> {
     case "ref":
       return new Set([t.name]);
     case "list":
+    case "inbox":
       return refsInType(t.element);
     case "optional":
       return refsInType(t.inner);
@@ -1234,6 +1284,7 @@ function checkLocal(t: TypeExpr, registry: TypeRegistry): void {
       }
       break;
     case "list":
+    case "inbox":
       checkLocal(t.element, registry);
       break;
     case "optional":
@@ -1263,8 +1314,8 @@ function exprLevels(t: TypeExpr, levels: ReadonlyMap<string, number>): number {
     const [expr, above] = stack.pop()!;
     if (expr.kind === "list") {
       stack.push([expr.element, above + 1]);
-    } else if (expr.kind === "optional") {
-      stack.push([expr.inner, above]);
+    } else if (expr.kind === "optional" || expr.kind === "inbox") {
+      stack.push([expr.kind === "inbox" ? expr.element : expr.inner, above]);
     } else if (expr.kind === "union") {
       for (const member of expr.members) stack.push([member, above]);
     } else {
@@ -1447,7 +1498,8 @@ function checkTypedefs(registry: TypeRegistry): void {
         throw typedefError(name, field, exc);
       }
       try {
-        resolveType(t, registry, new Set([name]));
+        const typ = resolveType(t, registry, new Set([name]));
+        if (field !== null && typ.kind === ValueKind.INBOX) throw inboxFieldError();
       } catch (error) {
         if (!(error instanceof TypeCheckError)) throw error;
         throw typedefError(name, field, error, { cause: error });

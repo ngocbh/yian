@@ -34,7 +34,7 @@ tag, the name the run log and the wire use (it is `str`, never `string`). It is 
 authored syntax: authors write types with parentheses, such as `list(str)`.
 
 ```
-scalars   None  str  int  float  bool  date  datetime  object  file
+scalars   None  str  int  float  bool  date  datetime  object  file  inbox
 lists     list[Any]  list[str]  list[int]  list[float]  list[bool]  list[object]
 type-only Any
 ```
@@ -79,6 +79,15 @@ yet. Its JSON form is the mapping
 those keys, as a `FileRef`. An `object` slot reads a nested `FileRef` as its mapping, but
 a `FileRef` at the top of an `object` slot fails, and `Any` and `list[Any]` reject files.
 A typedef that names `file` (`FileT: file`) passes `isinstance` for the JSON form too.
+
+Changed (TS yian): `inbox` is a handle on a top-level inbox, the value of an `Inbox(T)`
+input, held as an `InboxRef` with one field, `inbox` (the inbox's name, non-empty text). Its
+JSON form is the mapping `{"inbox": ...}`, and its typed wire is
+`{"kind": "inbox", "value": {"inbox": ...}}`. An `Inbox(T)` slot reads that mapping, with
+exactly that key, as an `InboxRef`; text, a mapping with other keys, `null` and a list fail
+with `TypeCheckError`. `Any`, `object` and every other type refuse a handle, and load treats
+`Inbox(T)` as disjoint from all of them: `Inbox(T)` relates only to another `Inbox(U)`, as
+`T` to `U`. `inbox` is never inferred from a record; only an `InboxRef` infers it.
 
 A `float` is finite. NaN, infinity, and `complex` numbers are not yian values, at any
 depth. The first boundary that sees one rejects it and names where it sits:
@@ -390,6 +399,7 @@ dataclass whose `kind` is the storage tag, with optional refining fields:
 | **union** | `kind=OBJECT`, `variants=(record, ...)`: two or more non-nullable records |
 | **Optional(X)** | X's `Type` with `nullable=True` |
 | **Any** | `kind=ANY` only (type-only; the value keeps its natural kind) |
+| **Inbox(T)** (TS yian) | `kind=INBOX`, `element=<T>`; never nullable |
 
 For a refined specialized list, `Type.element.nullable` permits `None` alongside the
 element's ordinary values; a bare or non-nullable specialized list still rejects it. An

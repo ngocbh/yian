@@ -59,7 +59,8 @@ TS yian also exports, from the package root and from `yian/run`, the built-in
 form back as a `FileRef`; and `checkConversation(messages)` with its `ConversationError`, the
 conversation shape every model route can send (see
 [Reading values from a run log](#reading-values-from-a-run-log)). Python yian has no public
-message type.
+message type. Both also export `InboxRef`, the handle an `Inbox(T)` input holds (see
+[`ValueKind`](typing.md#valuekind-the-closed-vocabulary)); Python yian has no inboxes.
 
 Recovery, the result type, and the steering protocol live in `yian.run`:
 
@@ -3038,16 +3039,16 @@ No Python counterpart.
 ### Reading values from a run log
 
 Changed (TS yian): for hosts that read run-log values, `yian/run` exports the codec the log writes
-them with: `TypedValue` and `FileRef`, `logJson`, `parseJson` and `JSONDecodeError`, and the types
+them with: `TypedValue`, `FileRef` and `InboxRef`, `logJson`, `parseJson` and `JSONDecodeError`, and the types
 `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject` and `JsonMode`. A `pool_commit`
 payload is flat, `{node_id, key, kind, value}`, and its `kind` and `value` are the typed value's
 wire form. A derived commit holds `from` in their place; read its value with `foldRunLog`. `TypedValue.fromWire({ kind, value })` decodes it strictly: the object must hold exactly
 `kind` and `value`, `kind` must be a storage kind (not `Any`) and `value` of that kind, or it throws
 a `RangeError`. It checks the value's top level and a typed list's items, not nested contents, which
-it trusts `parseJson` to have read. Kind `file` gives a `FileRef`, and a `list[float]` keeps its int
-items as `bigint`s.
+it trusts `parseJson` to have read. Kind `file` gives a `FileRef`, kind `inbox` (a mapping with
+exactly `inbox`) an `InboxRef`, and a `list[float]` keeps its int items as `bigint`s.
 `typed.toWire()` gives `{kind, value}` back, each `FileRef` written as its `{uri, mime, name}`
-mapping.
+mapping and each `InboxRef` as its `{inbox}` mapping.
 
 `logJson(value)` writes JSON as a run-log line does: compact, keys in UTF-16 code-unit order, a
 `bigint` as an int of any size, a `number` as a float (`.0` added when it has no `.` or exponent),
@@ -3082,7 +3083,8 @@ The `json` conformance group (`conformance/cases/json/`) specifies the form, for
 - `toWire` throws `TypeCheckError` (a `RangeError`, not exported) for a value that isn't JSON, which
   the unchecked constructor, or `fromWire` given data `parseJson` didn't make, can hold.
 - A `FileRef` appears only for kind `file`; it holds only `uri`, `mime` and `name`, and yian stores
-  no file content.
+  no file content. Likewise an `InboxRef` appears only for kind `inbox`; it holds only `inbox`, the
+  name of a top-level inbox.
 - `logJson` writes every JS `number` as a float (`{a: 1}` gives `{"a":1.0}`), so pass ints as
   `bigint`s; it refuses `undefined` and a `Date`.
 - Plain `JSON.parse` reads `logJson` text, but loses ints past 2^53 and reads `±Infinity` as the

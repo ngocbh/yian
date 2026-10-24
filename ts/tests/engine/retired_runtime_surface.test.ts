@@ -62,6 +62,7 @@ import { ToolContext } from "../../src/tools/context.ts";
 import { PermanentToolError, ReportedToolError, TransientToolError } from "../../src/tools/errors.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
+import { InboxRef } from "../../src/typesys/values.ts";
 import { assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../compose/declarations.ts";
 
 test.each(["entry", "controls"])("retired agent authoring field %s is rejected", (field) => {
@@ -184,7 +185,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(getters).toEqual(["learning", "backwardOutcome"]);
 });
 
-test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed and the message names", () => {
+test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, the message names and InboxRef", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -218,6 +219,7 @@ test("the package root exports exactly its documented root list plus the memory 
     checkMessage,
     checkConversation,
     ConversationError,
+    InboxRef,
   };
   expect(Object.keys(yian).sort()).toEqual(Object.keys(expected).sort());
   const exported = yian as Record<string, unknown>;

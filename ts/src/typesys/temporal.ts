@@ -88,6 +88,29 @@ export function parseDateOrDatetime(text: string): ParsedDate | ParsedDatetime {
   throw new RangeError(`must be a date (${DATE_FORMAT}) or datetime (${DATETIME_FORMAT})`);
 }
 
+/** The duration forms, as messages show them. */
+export const DURATION_FORMAT = "90s | 30m | 24h | 2d";
+
+const DURATION_RE = /^([0-9]+)([smhd])$/;
+const UNIT_SECONDS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3600, d: 86400 };
+
+/**
+ * Return the seconds in a duration: a positive integer then `s`, `m`, `h` or `d` (`24h` is 86400).
+ *
+ * @throws RangeError for anything else, a plain number included (its hint spells it in seconds),
+ *   a zero duration, or one past `Number.MAX_SAFE_INTEGER` seconds.
+ */
+export function parseDuration(text: string): number {
+  const match = DURATION_RE.exec(text);
+  const seconds = match === null ? 0 : Number(match[1]) * UNIT_SECONDS[match[2]!]!;
+  if (match === null || seconds === 0 || !Number.isSafeInteger(seconds)) {
+    // A plain number is the likely slip; `0` gets no hint since `0s` is refused too.
+    const hint = /^[0-9]+$/.test(text) && Number(text) > 0 ? `; write ${text}s` : "";
+    throw new RangeError(`a duration is a positive integer and a unit (${DURATION_FORMAT})${hint}`);
+  }
+  return seconds;
+}
+
 function dateFrom(match: RegExpExecArray): ParsedDate {
   const [, year, month, day] = match;
   const parsed: ParsedDate = {

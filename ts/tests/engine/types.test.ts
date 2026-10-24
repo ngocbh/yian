@@ -1391,6 +1391,7 @@ describe("public exports", () => {
     expect(Object.keys(typesys).sort(compareCodeUnits)).toEqual([
       "BUILTIN_TYPE_NAMES",
       "FileRef",
+      "InboxRef",
       "Type",
       "TypeCheckError",
       "TypedValue",
@@ -1400,6 +1401,9 @@ describe("public exports", () => {
       "buildValueAs",
       "canonicalTypeLabel",
       "canonicalUnionOrder",
+      "inboxName",
+      "inboxType",
+      "isInboxType",
       "isList",
       "isRecord",
       "jsTypeName",

@@ -74,9 +74,10 @@ export function shownText(text: string): string {
  *
  * The text form is compact JSON with JS number spelling: `true`, `null`, `2.5`, `2` for the
  * float 2, `Infinity`, an int's digits, text JSON-quoted, a `FileRef` as its mapping
- * `{"uri":…,"mime":…,"name":…}`, records in JS property order. A part that isn't a yian
- * value (a `Date`, a `Map`, a class instance, a symbol, a function, `undefined`) shows as
- * `<Name object>`, and an int the runtime can't stringify as `<int too large to display>`.
+ * `{"uri":…,"mime":…,"name":…}`, an `InboxRef` as `{"inbox":…}`, records in JS property
+ * order. A part that isn't a yian value (a `Date`, a `Map`, a class instance, a symbol, a
+ * function, `undefined`) shows as `<Name object>`, and an int the runtime can't stringify as
+ * `<int too large to display>`.
  * The value never makes it throw: when a getter or proxy trap throws, the whole value shows as
  * `<Name object>`. The writer stops once it has more than the cap can show, so a long list,
  * a deep value or a cyclic one costs time bounded by the cap.
@@ -142,10 +143,11 @@ function textForm(root: unknown, budget: number): string {
       out += bigintText(value);
     } else if (typeof value === "string") {
       out += quoteHead(value, budget);
-    } else if (FileRef.isFileRef(value)) {
+    } else if (FileRef.isFileRef(value) || InboxRef.isInboxRef(value)) {
       out += "{";
       const container = value as unknown as { readonly [key: string]: unknown };
-      stack.push({ container, keys: FILE_FIELDS, index: 0 });
+      const keys = FileRef.isFileRef(value) ? FILE_FIELDS : INBOX_FIELDS;
+      stack.push({ container, keys, index: 0 });
     } else if (isList(value)) {
       out += "[";
       stack.push({ container: value, keys: null, index: 0 });
@@ -214,8 +216,8 @@ export function writeAsText(value: Value): string {
  * more, each item sits on its own line indented by `indent` spaces per level, items end with
  * `,`, and a key is followed by `": "`; an empty list or record is `[]` or `{}`. Text is
  * JSON-quoted with non-ASCII kept, an int is its digits, a float its JS spelling (`1` for the
- * float 1, bare `Infinity`), and a `FileRef` its mapping `{"uri", "mime", "name"}`; records keep
- * JS property order.
+ * float 1, bare `Infinity`), a `FileRef` its mapping `{"uri", "mime", "name"}`, and an
+ * `InboxRef` its mapping `{"inbox"}`; records keep JS property order.
  *
  * @throws TypeError `integer is too large for this runtime` when the runtime can't stringify an
  *   int, or `text is too long for this runtime` when the text passes the engine's string limit.
@@ -249,7 +251,11 @@ function jsonText(value: Value, indent: number | null, level: number): string {
     items = value.map((item) => jsonText(item, indent, level + 1));
   } else {
     const record = value as ValueRecord;
-    const keys = FileRef.isFileRef(value) ? FILE_FIELDS : Object.keys(record);
+    const keys = FileRef.isFileRef(value)
+      ? FILE_FIELDS
+      : InboxRef.isInboxRef(value)
+        ? INBOX_FIELDS
+        : Object.keys(record);
     const colon = indent === null ? ":" : ": ";
     items = keys.map((key) => JSON.stringify(key) + colon + jsonText(record[key] as Value, indent, level + 1));
   }
@@ -290,7 +296,8 @@ export function renderValuePath(path: readonly (string | number)[]): string {
 /**
  * Throw if a value nests deeper than `YIAN_MAX_VALUE_NESTING` levels (100 by default).
  *
- * Each array, record and `FileRef` is one level; a `TypedValue` is unwrapped and adds none.
+ * Each array, record, `FileRef` and `InboxRef` is one level; a `TypedValue` is unwrapped and
+ * adds none.
  * The walk is depth first and in order. A container already on the current path is skipped;
  * the codecs refuse cycles.
  *
@@ -411,10 +418,11 @@ function* walkNesting(value: unknown): Generator<NestingEntry> {
   }
 }
 
-/** Return the open frame of `container`, an array, record or `FileRef`, at `key`. */
+/** Return the open frame of `container`, an array, record, `FileRef` or `InboxRef`, at `key`. */
 function nestingFrame(container: object, key: string | number | null): NestingFrame {
   let keys: readonly string[] | null = null;
   if (FileRef.isFileRef(container)) keys = FILE_FIELDS;
+  else if (InboxRef.isInboxRef(container)) keys = INBOX_FIELDS;
   else if (!isList(container)) keys = Object.keys(container);
   return { container, keys, key, index: 0 };
 }
@@ -426,9 +434,9 @@ function framePath(
   return stack.slice(1).map((frame) => frame.key!);
 }
 
-/** Whether `value` is a nesting level: an array, a record or a `FileRef`. */
+/** Whether `value` is a nesting level: an array, a record, a `FileRef` or an `InboxRef`. */
 function isNestingLevel(value: unknown): value is object {
-  return isList(value) || isRecord(value) || FileRef.isFileRef(value);
+  return isList(value) || isRecord(value) || FileRef.isFileRef(value) || InboxRef.isInboxRef(value);
 }
 
 /** Return `value` with any `TypedValue` wrapping it removed. */
@@ -472,7 +480,8 @@ interface HostFrame {
 /**
  * Return a host value (a tool's result, a CODE body's return value) as a fresh yian value.
  *
- * `null`, a boolean, well-formed text, a `bigint` and a `FileRef` are taken as they are. A
+ * `null`, a boolean, well-formed text, a `bigint`, a `FileRef` and an `InboxRef` are taken as
+ * they are. A
  * `number` that is an integer within ±(2^53−1) becomes an int (`-0` becomes `0n`); any other
  * number but NaN (`±Infinity`, `1e20`, `2.5`, `9007199254740992`) is a float. A plain array
  * (prototype `Array.prototype`) and a plain record (prototype `Object.prototype` or `null`)
@@ -532,7 +541,7 @@ export function fromHost(value: unknown, where: string): Value {
     // Checked first: every later check (FileRef.isFileRef, isList, isRecord, jsTypeName) could
     // run a trap.
     if (types.isProxy(item)) fail("Proxy is not a yian value", ...at);
-    if (item === null || FileRef.isFileRef(item)) return item;
+    if (item === null || FileRef.isFileRef(item) || InboxRef.isInboxRef(item)) return item;
     const list = isList(item);
     if (list || isRecord(item)) {
       if (active.has(item)) fail("value contains itself", ...at);
@@ -585,7 +594,8 @@ interface ToHostFrame {
  * Return a yian value as a fresh host value, by design 3.2.1's host boundary (D9A).
  *
  * An int within ±(2^53−1) becomes a `number`; a bigger one stays a `bigint`. A float
- * (`±Infinity` included), text, a boolean, `null` and a `FileRef` are handed over as they are.
+ * (`±Infinity` included), text, a boolean, `null`, a `FileRef` and an `InboxRef` are handed over
+ * as they are.
  * Arrays and records become fresh arrays and records, their entries taken the same way; a
  * record key is set as an own data property, so a `__proto__` key stays data. A value shared
  * by two parents is copied once, and the walk uses an explicit stack, so any depth works.
@@ -602,7 +612,9 @@ export function toHost(value: Value): unknown {
       const n = Number(item);
       return Number.isSafeInteger(n) ? n : item;
     }
-    if (item === null || typeof item !== "object" || FileRef.isFileRef(item)) return item;
+    if (item === null || typeof item !== "object" || FileRef.isFileRef(item) || InboxRef.isInboxRef(item)) {
+      return item;
+    }
     const shared = copies.get(item);
     if (shared !== undefined) return shared;
     const keys = Array.isArray(item) ? null : Object.keys(item);
@@ -646,6 +658,8 @@ export function toHost(value: Value): unknown {
  * `object`, `list[Any]`, ...). The list kinds keep the bracket storage spelling
  * (`list[str]`); type labels spell them `list(str)`. `date` and `datetime` are stored
  * as strings and never inferred; `file` is reserved: never inferred, not authorable yet.
+ * `inbox` is a handle on a top-level inbox, an `Inbox(T)` input's value; never inferred from a
+ * record.
  */
 export const ValueKind = {
   NONE: "None",
@@ -657,6 +671,7 @@ export const ValueKind = {
   BOOLEAN: "bool",
   OBJECT: "object",
   FILE: "file",
+  INBOX: "inbox",
   ANY: "Any",
   LIST_ANY: "list[Any]",
   LIST_STRING: "list[str]",
@@ -679,9 +694,10 @@ const STORAGE_KINDS: ReadonlySet<string> = new Set(
 
 /**
  * A yian value as JS holds it: `null`, a `boolean`, an int as a `bigint`, a float as a
- * `number` (never NaN), a `string` (well-formed), a `FileRef`, an array or a `ValueRecord`.
+ * `number` (never NaN), a `string` (well-formed), a `FileRef`, an `InboxRef`, an array or a
+ * `ValueRecord`.
  */
-export type Value = null | boolean | bigint | number | string | FileRef | Value[] | ValueRecord;
+export type Value = null | boolean | bigint | number | string | FileRef | InboxRef | Value[] | ValueRecord;
 
 /**
  * A record: a plain object (prototype `Object.prototype` or `null`) whose own enumerable
@@ -766,6 +782,51 @@ function checkFileField(field: string, value: unknown, nullable: boolean): void 
 /** A file's fields: the keys of its JSON form and the only names a dotted read gives. */
 const FILE_FIELDS: readonly ("uri" | "mime" | "name")[] = ["uri", "mime", "name"];
 
+/** An inbox handle's one field: the key of its JSON form. */
+const INBOX_FIELDS: readonly "inbox"[] = ["inbox"];
+
+/**
+ * A handle on a top-level inbox: the value of an `Inbox(T)` input. Its JSON form is the mapping
+ * `{"inbox": <name>}`; an `Inbox(T)` slot reads that mapping as an `InboxRef`. Frozen.
+ */
+export class InboxRef {
+  readonly inbox: string;
+  // Set only by the constructor, so an object merely given this prototype isn't an InboxRef.
+  readonly #built = true;
+
+  /** Whether `value` is an `InboxRef` its constructor built. */
+  static isInboxRef(value: unknown): value is InboxRef {
+    return typeof value === "object" && value !== null && #built in value;
+  }
+
+  /**
+   * Build a handle on the top-level inbox `inbox`.
+   *
+   * @throws RangeError when `inbox` isn't non-empty text or holds a lone surrogate.
+   */
+  constructor(inbox: string) {
+    if (typeof inbox !== "string" || inbox === "") {
+      throw new RangeError(`inbox name must be non-empty text, got ${valueRepr(inbox)}`);
+    }
+    if (!inbox.isWellFormed()) throw new RangeError("inbox name holds a lone surrogate");
+    this.inbox = inbox;
+    Object.freeze(this);
+  }
+}
+
+/** Whether `value` is an inbox handle's JSON form: a record with exactly a usable `inbox` name. */
+function isInboxForm(value: unknown): value is { inbox: string } {
+  if (!isRecord(value) || Object.keys(value).length !== 1) return false;
+  const inbox = value["inbox"];
+  return typeof inbox === "string" && inbox !== "" && inbox.isWellFormed();
+}
+
+/** Return the inbox name an `InboxRef` or its JSON form holds, else `null`. */
+export function inboxName(value: unknown): string | null {
+  if (InboxRef.isInboxRef(value)) return value.inbox;
+  return isInboxForm(value) ? value.inbox : null;
+}
+
 /**
  * Read field `name` of `value`, as a dotted `${x.name}` read sees it.
  *
@@ -836,6 +897,7 @@ const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
   [ValueKind.LIST_NUMBER, "an array of bigints, numbers other than NaN, or null"],
   [ValueKind.LIST_BOOLEAN, "an array of booleans or null"],
   [ValueKind.LIST_OBJECT, "an array of plain records or null"],
+  [ValueKind.INBOX, "an inbox handle {inbox}"],
 ]);
 
 /**
@@ -886,9 +948,9 @@ export class TypedValue {
   }
 
   /**
-   * Return the wire form `{kind, value}`, with every `FileRef` in the value (the root or
-   * nested) written as its mapping, as the run log's encoder takes it. The value is copied
-   * only on the paths to its files.
+   * Return the wire form `{kind, value}`, with every `FileRef` and `InboxRef` in the value (the
+   * root or nested) written as its mapping, as the run log's encoder takes it. The value is
+   * copied only on the paths to its files and handles.
    *
    * @throws TypeCheckError when the value isn't a JSON value (see `jsonPart`): a non-JSON part,
    *   NaN, text holding a lone surrogate, or a container inside itself. The unchecked
@@ -906,7 +968,8 @@ export class TypedValue {
    * `number` other than NaN (an int is refused: a `float` slot given an int stores kind
    * `int`), `date` and `datetime` text in their grammar, `bool` a boolean, `object` a plain
    * record, `file` a file's mapping with exactly `uri`, `mime` and `name` (read as a
-   * `FileRef`), `list[Any]` an array, and `list[X]` an array of `X` or null, where a
+   * `FileRef`), `inbox` a handle's mapping with exactly `inbox` (read as an `InboxRef`),
+   * `list[Any]` an array, and `list[X]` an array of `X` or null, where a
    * `list[float]` item may also be a `bigint` (a `list(float)` slot keeps its int items).
    * Contents aren't walked: the lossless reader made the data.
    *
@@ -929,6 +992,17 @@ export class TypedValue {
       } catch (error) {
         if (error instanceof RangeError) {
           throw new RangeError(`invalid file typed value: ${error.message}`);
+        }
+        throw error;
+      }
+    }
+    if (storage === ValueKind.INBOX && isRecord(value)) {
+      requireFields(value, INBOX_FIELDS, "inbox handle");
+      try {
+        return new TypedValue(storage, new InboxRef(value["inbox"] as string));
+      } catch (error) {
+        if (error instanceof RangeError) {
+          throw new RangeError(`invalid inbox typed value: ${error.message}`);
         }
         throw error;
       }
@@ -1112,6 +1186,16 @@ export class Type {
   }
 }
 
+/** Return the type `Inbox(element)`: kind `inbox`, never nullable. */
+export function inboxType(element: Type): Type {
+  return new Type({ kind: ValueKind.INBOX, element });
+}
+
+/** Whether `typ` is an `Inbox(...)` type. */
+export function isInboxType(typ: Type | null | undefined): boolean {
+  return typ != null && typ.kind === ValueKind.INBOX;
+}
+
 /**
  * Return how many record and list levels a type nests.
  *
@@ -1201,7 +1285,12 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
     }
 
     const element = typ.element;
-    if (element !== undefined) {
+    if (typ.kind === ValueKind.INBOX) {
+      if (element === undefined) throw new RangeError("an inbox type needs an element type");
+      if (typ.nullable) throw new RangeError("an inbox is never optional");
+      validateTypeShape(element, active, validated);
+      if (element.kind === ValueKind.INBOX) throw new RangeError("an inbox holds values, not inboxes");
+    } else if (element !== undefined) {
       if (!isListKind(typ.kind)) {
         throw new RangeError("only list types may declare an element type");
       }
@@ -1431,6 +1520,11 @@ function canonicalNonnullableLabel(typ: Type): [string, string] {
     const tags = [...typ.tags].sort(compareCodeUnits);
     const key = "Literal[" + tags.map((tag) => JSON.stringify(tag)).join(",") + "]";
     return [literalLabel(tags), key];
+  }
+
+  if (typ.kind === ValueKind.INBOX) {
+    const [label, key] = labels(typ.element!);
+    return [`Inbox(${label})`, `Inbox[${key}]`];
   }
 
   if (isListKind(typ.kind)) {
@@ -1769,19 +1863,22 @@ function admitsNone(typ: Type): boolean {
 }
 
 /**
- * Whether `file` appears anywhere in `typ`: itself, a field, the element, or a member, so some
- * value of `typ` may hold a file. A type without `file` holds only JSON values, so every value
- * of it is an `Any` value.
+ * Whether `file` or `Inbox(T)` appears anywhere in `typ`: itself, a field, the element, or a
+ * member, so some value of `typ` may hold a file or an inbox handle, a value that isn't plain
+ * JSON (callers: `fileReadingType`, the `Any` relations, `compose/helpers/tags.ts`). A type
+ * without either holds only JSON values, so every value of it is an `Any` value.
  */
 export function hasFile(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
   if (typ.element !== undefined && hasFile(typ.element)) return true;
   if (typ.fields !== undefined && [...typ.fields.values()].some(hasFile)) return true;
   return typ.variants !== undefined && typ.variants.some(hasFile);
 }
 
 /**
- * Whether every non-null value of `typ` holds a file, so none is an `Any` value.
+ * Whether every non-null value of `typ` holds a file or an inbox handle, a value that isn't
+ * plain JSON (callers: `fileReadingType`, the `Any` relations, `compose/helpers/tags.ts`), so
+ * none is an `Any` value. An `Inbox(T)` always counts.
  *
  * A list counts when its element is a non-nullable type that requires a file: the empty list
  * is shared by every list type and is not counted as a shared value. A record counts when a
@@ -1790,7 +1887,7 @@ export function hasFile(typ: Type): boolean {
  * `Any` value) at runtime, where load can't tell.
  */
 export function requiresFile(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
   if (typ.variants !== undefined) return typ.variants.every(requiresFile);
   if (isListKind(typ.kind)) {
     const element = typ.element;
@@ -1860,14 +1957,16 @@ export const FILE_FORM = new Type({
  *
  * The check is conservative: it may say two types overlap when no value satisfies both,
  * but never the reverse. It decides whether an untagged union's members can be told
- * apart from the data alone. `Any` overlaps every type except `None`. Since a `file`
- * slot reads a file's JSON form `{uri, mime, name}`, `file` overlaps plain `object`,
- * `Any`, and every record that admits that mapping.
+ * apart from the data alone. `Any` overlaps every type except `None` and `Inbox(T)`, and an
+ * inbox overlaps only another inbox. Since a `file` slot reads a file's JSON form
+ * `{uri, mime, name}`, `file` overlaps plain `object`, `Any`, and every record that admits
+ * that mapping.
  *
  * Example: `{action: Literal(buy), qty: int}` and `{action: Literal(sell), price: float}`
  * do not overlap; `{conviction: float}` overlaps itself.
  */
 export function typesOverlap(a: Type, b: Type): boolean {
+  if (a.kind === ValueKind.INBOX || b.kind === ValueKind.INBOX) return a.kind === b.kind;
   if (admitsNone(a) && admitsNone(b)) return true;
   if (a.kind === ValueKind.ANY || b.kind === ValueKind.ANY) {
     const other = a.kind === ValueKind.ANY ? b : a;
@@ -1908,7 +2007,10 @@ export function typesOverlap(a: Type, b: Type): boolean {
 // Scalar type checks / coercion
 // --------------------------------------------------------------------------------------- //
 
-/** Return the storage kind a scalar, file or record infers as, or `null` for anything else. */
+/**
+ * Return the storage kind a scalar, file, inbox handle or record infers as, or `null` for
+ * anything else.
+ */
 function inferScalarKind(value: unknown): StorageKind | null {
   if (value === null) return ValueKind.NONE;
   if (typeof value === "boolean") return ValueKind.BOOLEAN;
@@ -1916,6 +2018,7 @@ function inferScalarKind(value: unknown): StorageKind | null {
   if (typeof value === "number") return ValueKind.NUMBER;
   if (typeof value === "string") return ValueKind.STRING;
   if (FileRef.isFileRef(value)) return ValueKind.FILE;
+  if (InboxRef.isInboxRef(value)) return ValueKind.INBOX;
   if (isRecord(value)) return ValueKind.OBJECT;
   return null;
 }
@@ -1937,7 +2040,8 @@ function temporalError(declared: ValueKind, value: string): string | null {
 
 /**
  * Whether `value` fits the scalar kind `declared`. A `float` slot takes an int (which stays
- * an int); a `file` slot takes a `FileRef` or a file's JSON form.
+ * an int); a `file` slot takes a `FileRef` or a file's JSON form, and an `inbox` slot an
+ * `InboxRef` or its JSON form.
  */
 function scalarMatches(declared: ValueKind, value: unknown): boolean {
   switch (declared) {
@@ -1958,6 +2062,8 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
       return isRecord(value);
     case ValueKind.FILE:
       return FileRef.isFileRef(value) || isFileForm(value);
+    case ValueKind.INBOX:
+      return InboxRef.isInboxRef(value) || isInboxForm(value);
     default:
       return false;
   }
@@ -1965,8 +2071,8 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
 
 /**
  * Return `value` as a `declared` slot stores it: `-0` in a `float` slot becomes `0`; a file's
- * JSON form in a `file` slot becomes a `FileRef`. Any other value (an int in a `float` slot
- * too) is returned unchanged.
+ * JSON form in a `file` slot becomes a `FileRef`, and an inbox handle's in an `inbox` slot an
+ * `InboxRef`. Any other value (an int in a `float` slot too) is returned unchanged.
  *
  * @throws TypeCheckError at `path` when a file form's text holds a lone surrogate.
  */
@@ -1976,6 +2082,7 @@ function coerceScalar(declared: ValueKind, value: unknown, path: ValuePath): unk
     for (const field of FILE_FIELDS) rejectNonValue(value[field], [...path, field]);
     return new FileRef(value);
   }
+  if (declared === ValueKind.INBOX && isInboxForm(value)) return new InboxRef(value.inbox);
   return value;
 }
 
@@ -2012,7 +2119,10 @@ function rejectNonValue(value: unknown, path: ValuePath): void {
   if (reason !== null) throw new TypeCheckError(reason, { path });
 }
 
-/** What the JSON walk does with a `FileRef`: keep it, write it as its mapping, or refuse it. */
+/**
+ * What the JSON walk does with a `FileRef` or an `InboxRef`: keep it, write it as its mapping,
+ * or refuse it.
+ */
 type FileMode = "keep" | "mapping" | "refuse";
 
 /** An open list or record in the JSON walk. */
@@ -2029,18 +2139,19 @@ interface JsonFrame {
 
 /**
  * Return `root` as a JSON value: `null`, a boolean, a `bigint`, a `number`, text, and lists and
- * records of those, with `FileRef`s handled as `files` says.
+ * records of those, with `FileRef`s and `InboxRef`s handled as `files` says.
  *
  * `-0` becomes `0`, and under `"mapping"` each `FileRef` (the root too) becomes its mapping
- * `{uri, mime, name}`. Only the containers on the path to a change are copied; `root` itself is
- * returned when nothing changes, and a container shared by two parents is walked once. The
- * walk uses an explicit stack, so any depth works; nesting depth is left to the boundaries.
+ * `{uri, mime, name}` and each `InboxRef` its mapping `{inbox}`. Only the containers on the
+ * path to a change are copied; `root` itself is returned when nothing changes, and a container
+ * shared by two parents is walked once. The walk uses an explicit stack, so any depth works;
+ * nesting depth is left to the boundaries.
  *
  * @throws TypeCheckError at the bad part's path, the first depth-first in order: NaN or text
  *   holding a lone surrogate (a key: at its record's path) is not a yian value; `undefined` or
  *   a list hole is `undefined is not a JSON value`; a container inside itself is `value
  *   contains itself` at the entry holding it; anything else (a `Date`, a `Map`, a class
- *   instance, a `FileRef` under `"refuse"`) is `<valueRepr> is not a JSON value`.
+ *   instance, a `FileRef` or `InboxRef` under `"refuse"`) is `<valueRepr> is not a JSON value`.
  */
 export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
   const stack: JsonFrame[] = [];
@@ -2068,6 +2179,11 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
       if (files === "keep") return value;
       if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
       // Under "refuse" a file is not a JSON value.
+      return fail(key, `${valueRepr(value)} is not a JSON value`);
+    }
+    if (InboxRef.isInboxRef(value)) {
+      if (files === "keep") return value;
+      if (files === "mapping") return { inbox: value.inbox };
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (isList(value) || isRecord(value)) {
@@ -2137,9 +2253,9 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
  * A `TypedValue` is returned as is, so the call is idempotent. Any other value is first walked
  * as a JSON value with files kept (see `jsonPart`): `-0` becomes `0` at any depth, and a part
  * that isn't a yian JSON value is refused. `file` is never inferred from a record or text;
- * only a `FileRef` is a file. A list of text, bools, ints or records infers its list kind, a
- * list of ints and floats is `list[float]` (each int stays an int), and an empty or mixed list
- * is `list[Any]`.
+ * only a `FileRef` is a file, and likewise only an `InboxRef` is an `inbox`. A list of text,
+ * bools, ints or records infers its list kind, a list of ints and floats is `list[float]` (each
+ * int stays an int), and an empty or mixed list is `list[Any]`.
  *
  * Example: `buildValue([1n, 2.5])` gives a `list[float]` holding `[1n, 2.5]`.
  *
@@ -2181,14 +2297,16 @@ function inferList(items: Value[]): TypedValue {
  * slot given an int stores kind `int`, a `list(float)` keeps its int items, and a record's
  * `float` field keeps the int. Conversions apply at any depth (a record field, a list item):
  * `-0` in a `float` slot becomes `0`; a file's JSON form `{uri, mime, name}` (exactly those
- * keys) filling a `file` slot becomes a `FileRef`; and a `FileRef` nested in an `object`
- * value or `list(object)` item becomes that mapping, copying only the containers on its
- * path.
+ * keys) filling a `file` slot becomes a `FileRef`; an inbox handle's JSON form `{inbox}`
+ * (exactly that key) filling an `Inbox(T)` slot becomes an `InboxRef`; and a `FileRef` nested
+ * in an `object` value or `list(object)` item becomes that mapping, copying only the
+ * containers on its path.
  *
  * `Any` accepts any non-null JSON value and stores it in its natural kind (a list as
  * `list[Any]`); its one conversion is `-0` to `0` at any depth, as in an `object` value. An
  * `object` value, a `list(object)` item and a `list[Any]` item must be JSON values (see
- * `jsonPart`); a `FileRef` is not one, so it fails anywhere in an `Any` or `list[Any]` value.
+ * `jsonPart`); a `FileRef` or `InboxRef` is not one, so it fails anywhere in an `Any` or
+ * `list[Any]` value, and a bare handle fails an `object` slot.
  * A record keeps the value's key order.
  *
  * `declared` is a `Type`, or a bare `ValueKind` for a scalar or flat list. A `TypedValue`
@@ -2299,6 +2417,12 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
     }
     const json = jsonPart(value, path, "refuse");
     return new TypedValue(isList(json) ? ValueKind.LIST_ANY : inferScalarKind(json)!, json);
+  }
+
+  // Named by its label, since the bare kind `inbox` isn't a type an author can write.
+  if (typ.kind === ValueKind.INBOX && !scalarMatches(typ.kind, value)) {
+    const label = canonicalTypeLabel(typ);
+    throw new TypeCheckError(`${valueRepr(value)} does not match declared type ${label}`, { path });
   }
 
   return buildScalarOrList(typ.kind, value, path);
@@ -2439,9 +2563,10 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
 /**
  * Return `value` with only its file and object representation read as `typ` reads it.
  *
- * At a `file` position a file's JSON form becomes a `FileRef`; at an `object` position (a
- * plain `object` value, a `list(object)` item, an `object` record field) each nested `FileRef`
- * becomes its mapping. Nothing else converts: an int at a `float` position stays an int, and a
+ * At a `file` position a file's JSON form becomes a `FileRef`, and at an `Inbox(T)` position
+ * an inbox handle's JSON form becomes an `InboxRef`; at an `object` position (a plain `object`
+ * value, a `list(object)` item, an `object` record field) each nested `FileRef` becomes its
+ * mapping. Nothing else converts: an int at a `float` position stays an int, and a
  * value that doesn't fit `typ` is walked as far as it fits and otherwise kept. A union member
  * is picked as `buildValueAs` picks it: by its tag, else the first member the value
  * satisfies. Only the containers on the path to a change are copied; `value` itself is
@@ -2489,6 +2614,7 @@ export function normalizeFiles(typ: Type, value: Value): Value {
     const fits = FILE_FIELDS.every((name) => nonValueReason(value[name]) === null);
     return fits ? new FileRef(value) : value;
   }
+  if (typ.kind === ValueKind.INBOX) return isInboxForm(value) ? new InboxRef(value.inbox) : value;
   if (typ.kind === ValueKind.OBJECT && (isList(value) || isRecord(value))) {
     try {
       return jsonPart(value, [], "mapping");
@@ -2519,12 +2645,14 @@ export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedV
 }
 
 /**
- * Whether `typ` has a `file` or an unrefined `object` position at any depth, so reading a
- * value through it may change how a file is held. Unlike `hasFile`, it also counts plain
- * `object` and flat `list(object)`, whose nested `FileRef`s are read as mappings.
+ * Whether `typ` has a `file`, `Inbox(T)` or unrefined `object` position at any depth, so
+ * reading a value through it may change how a file or inbox handle is held. Unlike `hasFile`,
+ * it also counts plain `object` and flat `list(object)`, whose nested `FileRef`s are read as
+ * mappings.
  */
 function readsFiles(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE || isPlainObject(typ)) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
+  if (isPlainObject(typ)) return true;
   if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;
   if (typ.element !== undefined && readsFiles(typ.element)) return true;
   if (typ.fields !== undefined && [...typ.fields.values()].some(readsFiles)) return true;

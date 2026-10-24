@@ -27,7 +27,8 @@
  * profile document in their own `MarkdownStore`. `RunResult`, `BackwardOutcome` and `Steering` are
  * on `yian/run` (`run.ts`), as Python's `yian.run`. `Message`, `MessagePart`, `checkMessage`,
  * `checkConversation` and `ConversationError` (`nodes/agent/messages`), the built-in message value
- * and the conversation a model route can send, are also on `yian/run`.
+ * and the conversation a model route can send, are also on `yian/run`. `InboxRef`
+ * (`typesys/values`), the handle an `Inbox(T)` input holds, is on both.
  *
  * Knows about: compile, compose, diagnostics, expr, memory storage, `memory/profile`,
  * `memory_host`, nodes, `run`, tools and typesys.
@@ -65,3 +66,4 @@ export { ToolContext } from "./tools/context.ts";
 export { PermanentToolError, ReportedToolError, TransientToolError } from "./tools/errors.ts";
 export { FunctionTool, tool } from "./tools/function_tools.ts";
 export { VariablePool } from "./typesys/pool.ts";
+export { InboxRef } from "./typesys/values.ts";

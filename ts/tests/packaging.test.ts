@@ -119,6 +119,7 @@ const NAMES: Record<string, string[]> = {
     "checkMessage",
     "checkConversation",
     "ConversationError",
+    "InboxRef",
   ],
   "./run": [
     "RunResult",
@@ -133,6 +134,7 @@ const NAMES: Record<string, string[]> = {
     "RunIndexBusyError",
     "TypedValue",
     "FileRef",
+    "InboxRef",
     "logJson",
     "parseJson",
     "JSONDecodeError",

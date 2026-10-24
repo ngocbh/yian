@@ -20,18 +20,22 @@ import { classifyPath } from "../compile/validation.ts";
 import { BUILTIN, type Defaults, fromRecorded } from "../defaults.ts";
 import { compareCodeUnits, Failure, type OriginRef, reprText, sameFailure } from "../diagnostics.ts";
 import {
+  CallClosed,
   NodeExpanded,
   NodeFailed,
   NodeRouted,
   NodeSkipped,
   NodeStarted,
   NodeSucceeded,
+  NodeWaiting,
+  NodeWoken,
   type RunCancelled,
   RunFailed,
   RunResumed,
   RunStarted,
   type RunEvent,
   RunSucceeded,
+  RunWaiting,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
 import { ResolvedValue, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
@@ -101,6 +105,8 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   type OutcomeCarriers,
   PoolCommitRecord,
   RecordEnvelope,
@@ -114,7 +120,9 @@ import {
   RunStartedRecord,
   type RunStopReason,
   RunStoppedRecord,
+  RunWaitingRecord,
   SCHEMA_VERSION,
+  type WaitEntry,
 } from "./log.ts";
 import {
   checkMemoryScope,
@@ -134,7 +142,15 @@ import {
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
-import { applyWaitsRecord, type CallStateKind, WaitsState } from "./waits.ts";
+import { SLEEP, TAKE, toolCallId } from "../tools/context.ts";
+import {
+  applyWaitsRecord,
+  availableUnread,
+  type CallStateKind,
+  nodeCalls,
+  WaitsState,
+  wakeableNodes,
+} from "./waits.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
 export type GrowBuilder = (spawner: Node, seed: JsonValue) => Flow;
@@ -771,6 +787,25 @@ interface RunStoppedDelta {
   readonly nodeIds: readonly string[];
 }
 
+/** Moving an in-flight node to the waiting set. */
+interface NodeWaitingDelta {
+  readonly kind: "waiting";
+  readonly nodeId: string;
+}
+
+/** Moving a waiting node back in flight; `closedCalls` are the timed-out host calls it closes. */
+interface NodeWokenDelta {
+  readonly kind: "woken";
+  readonly nodeId: string;
+  readonly closedCalls: readonly string[];
+}
+
+/** Recording that every unsettled node waits; it changes nothing but the sequence. */
+interface RunWaitingDelta {
+  readonly kind: "runWaiting";
+  readonly nodeIds: readonly string[];
+}
+
 /**
  * One pool commit. A run-start commit (`initial`) applies at once; a node's waits for its success.
  * `valueJson` is the value's canonical typed wire text.
@@ -789,10 +824,17 @@ interface CommitPlan extends PlanAnchors {
   readonly send: boolean;
 }
 
-/** One dispatch, resume, step or stop. */
+/** One dispatch, resume, step, stop, wait, wake or run wait. */
 interface FrontierPlan extends PlanAnchors {
   readonly kind: "frontier";
-  readonly delta: NodeStartedDelta | RunResumedDelta | NodeStepDelta | RunStoppedDelta;
+  readonly delta:
+    | NodeStartedDelta
+    | RunResumedDelta
+    | NodeStepDelta
+    | RunStoppedDelta
+    | NodeWaitingDelta
+    | NodeWokenDelta
+    | RunWaitingDelta;
 }
 
 /** The touched coordinates of one successful output commit. */
@@ -1411,6 +1453,64 @@ export function prepareRunStopped(state: RunState, reason: RunStopReason, messag
   return prepareRecord(state, new RunStoppedRecord(reason, message, [...state.inFlight]));
 }
 
+/**
+ * Prepare moving an in-flight node to the waiting set: it holds no worker until `node_woken`.
+ *
+ * @param state An initialized nonterminal state with `nodeId` in flight and no pending commit.
+ * @param nodeId The node whose evaluation ended waiting.
+ * @param options.callIds Every call the node waits on: each open call it registered since its
+ *   last wake, and the call `waits` registers.
+ * @param options.waits The take or sleep call this record registers, at most one; none by default.
+ * @returns The canonical `NodeWaitingRecord`, its plan and its `NodeWaiting` observer.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws RangeError when the record breaks a wait rule (see `validateNodeWaiting`).
+ */
+export function prepareNodeWaiting(
+  state: RunState,
+  nodeId: string,
+  options: { callIds: readonly string[]; waits?: readonly WaitEntry[] },
+): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWaiting expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  return prepareRecord(state, new NodeWaitingRecord(nodeId, options.callIds, { waits: options.waits ?? [] }));
+}
+
+/**
+ * Prepare moving a waiting node back in flight, timing out `timedOut` (calls whose deadline the
+ * engine saw pass; the reducer reads no clock).
+ *
+ * @param state An initialized nonterminal state in which `nodeId` waits.
+ * @param nodeId The waiting node.
+ * @param timedOut Open calls of the node with a deadline; none by default.
+ * @returns The canonical `NodeWokenRecord`, its plan and its observers: `NodeWoken`, then a
+ *   `CallClosed` for each timed-out host call.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws RangeError when the node isn't waiting, a timed-out id isn't an open call of it with a
+ *   deadline, or it still waits on an open call.
+ */
+export function prepareNodeWoken(state: RunState, nodeId: string, timedOut: readonly string[] = []): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareNodeWoken expects a RunState");
+  if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
+  return prepareRecord(state, new NodeWokenRecord(nodeId, timedOut));
+}
+
+/**
+ * Prepare recording that the run waits: nothing runs or is ready, and every unsettled node waits
+ * on an open call.
+ *
+ * @returns The canonical `RunWaitingRecord` naming the waiting nodes in `node_waiting` order, its
+ *   plan and its `RunWaiting` observer.
+ * @throws TypeError when `state` has the wrong type.
+ * @throws RangeError when a node is in flight or ready, none waits, one is wakeable, or the last
+ *   frontier record is already a `run_waiting`.
+ */
+export function prepareRunWaiting(state: RunState): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareRunWaiting expects a RunState");
+  requireInitializedNonterminal(state);
+  requireWaitingQuiescence(state, "RunWaiting");
+  return prepareRecord(state, new RunWaitingRecord([...state.waits.waiting.keys()]));
+}
+
 /** The post-terminal records `prepareRecord` hands to the backward reducer. */
 const BACKWARD_RECORDS = [
   BackwardStartedRecord,
@@ -1491,6 +1591,12 @@ export function prepareRecord(
     validateNodeStep(state, record);
   } else if (isExactly(record, RunStoppedRecord)) {
     validateRunStopped(state, record);
+  } else if (isExactly(record, NodeWaitingRecord)) {
+    validateNodeWaiting(state, record);
+  } else if (isExactly(record, NodeWokenRecord)) {
+    validateNodeWoken(state, record);
+  } else if (isExactly(record, RunWaitingRecord)) {
+    validateRunWaiting(state, record);
   } else {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
@@ -1522,6 +1628,22 @@ export function prepareRecord(
     validateRunStopped(state, canonical);
     delta = { kind: "stopped", nodeIds: canonical.nodeIds };
     observers = [];
+  } else if (isExactly(canonical, NodeWaitingRecord)) {
+    validateNodeWaiting(state, canonical);
+    delta = { kind: "waiting", nodeId: canonical.nodeId };
+    observers = [new NodeWaiting({ nodeId: canonical.nodeId, callIds: canonical.callIds })];
+  } else if (isExactly(canonical, NodeWokenRecord)) {
+    validateNodeWoken(state, canonical);
+    const closedCalls = hostCalls(state, canonical.timedOut);
+    delta = { kind: "woken", nodeId: canonical.nodeId, closedCalls };
+    observers = [
+      new NodeWoken({ nodeId: canonical.nodeId, timedOut: canonical.timedOut }),
+      ...closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
+    ];
+  } else if (isExactly(canonical, RunWaitingRecord)) {
+    validateRunWaiting(state, canonical);
+    delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
+    observers = [new RunWaiting({ nodeIds: canonical.nodeIds })];
   } else {
     // An exhaustive codec invariant.
     throw new TypeError("frontier envelope decoded to a different record kind");
@@ -2331,7 +2453,9 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
     delta.sequence !== prepared.expectedSequence ||
     delta.initialized !== null ||
     delta.started !== null ||
-    delta.resumed !== false
+    delta.resumed !== false ||
+    delta.parked !== null ||
+    delta.unparked !== null
   ) {
     throw new RangeError("outcome trace cannot change initialization or dispatch authority");
   }
@@ -2594,7 +2718,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   return [];
 }
 
-/** Validate, append and apply one sparse dispatch, recovery, step or stop delta. */
+/** Validate, append and apply one sparse dispatch, recovery, step, stop, wait, wake or run-wait delta. */
 function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
   const plan = prepared._plan;
   if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
@@ -2604,10 +2728,13 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       isExactly(record, NodeStartedRecord) ||
       isExactly(record, RunResumedRecord) ||
       isExactly(record, NodeStepRecord) ||
-      isExactly(record, RunStoppedRecord)
+      isExactly(record, RunStoppedRecord) ||
+      isExactly(record, NodeWaitingRecord) ||
+      isExactly(record, NodeWokenRecord) ||
+      isExactly(record, RunWaitingRecord)
     )
   ) {
-    throw new TypeError("frontier plan requires a dispatch, resume, step or stop record");
+    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake or run-wait record");
   }
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
@@ -2637,6 +2764,18 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       throw new RangeError("frontier stop delta disagrees with its record");
     }
     observers = [];
+  } else if (isExactly(record, NodeWaitingRecord) && delta.kind === "waiting") {
+    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wait delta disagrees with its record");
+    observers = [new NodeWaiting({ nodeId: record.nodeId, callIds: record.callIds })];
+  } else if (isExactly(record, NodeWokenRecord) && delta.kind === "woken") {
+    if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wake delta disagrees with its record");
+    observers = [
+      new NodeWoken({ nodeId: record.nodeId, timedOut: record.timedOut }),
+      ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
+    ];
+  } else if (isExactly(record, RunWaitingRecord) && delta.kind === "runWaiting") {
+    if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
+    observers = [new RunWaiting({ nodeIds: record.nodeIds })];
   } else {
     throw new TypeError("frontier record and prevalidated delta disagree");
   }
@@ -2675,6 +2814,19 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "stopped":
       state.lastStopSequence = prepared.expectedSequence;
+      break;
+    case "waiting":
+      // The waits fold moves it to the waiting set; its start count, steps and calls stay.
+      state.inFlight.delete(delta.nodeId);
+      state.acceptedStarts.delete(delta.nodeId);
+      break;
+    case "woken":
+      // The wake is the invocation's start from here on, so a later crash counts; the start count
+      // doesn't move, since no new start was recorded.
+      state.inFlight.add(delta.nodeId);
+      state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
+      break;
+    case "runWaiting":
       break;
   }
   state.nextSequence = prepared.expectedSequence + 1;
@@ -2825,7 +2977,9 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
     delta.originatingTrace !== state.trace ||
     !Number.isSafeInteger(delta.sequence) ||
     delta.sequence !== state.nextSequence ||
-    delta.resumed !== false
+    delta.resumed !== false ||
+    delta.parked !== null ||
+    delta.unparked !== null
   ) {
     throw new RangeError(message);
   }
@@ -2853,7 +3007,7 @@ function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null
   }
 }
 
-/** Permit only the canonical dispatch, resume, step or stop trace change before append. */
+/** Permit only the canonical dispatch, resume, step, stop, wait, wake or run-wait trace change before append. */
 function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition): void {
   const delta = prepared._plan.traceDelta;
   const record = prepared.record;
@@ -2888,12 +3042,26 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace step must only advance the accepted sequence");
     }
-  } else if (isExactly(record, RunStoppedRecord)) {
+  } else if (isExactly(record, RunStoppedRecord) || isExactly(record, RunWaitingRecord)) {
     if (delta.started !== null || delta.resumed !== false) {
       throw new RangeError("frontier trace stop must only advance the accepted sequence");
     }
+  } else if (isExactly(record, NodeWaitingRecord)) {
+    if (delta.started !== null || delta.resumed !== false || delta.parked !== record.nodeId) {
+      throw new RangeError("frontier trace wait must park its node's start");
+    }
+  } else if (isExactly(record, NodeWokenRecord)) {
+    if (delta.started !== null || delta.resumed !== false || delta.unparked !== record.nodeId) {
+      throw new RangeError("frontier trace wake must bring back its node's parked start");
+    }
   } else {
-    throw new RangeError("frontier trace requires a dispatch, resume, step or stop record");
+    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake or run-wait record");
+  }
+  if (!isExactly(record, NodeWaitingRecord) && delta.parked !== null) {
+    throw new RangeError("only a wait can park a start");
+  }
+  if (!isExactly(record, NodeWokenRecord) && delta.unparked !== null) {
+    throw new RangeError("only a wake can bring back a parked start");
   }
   const singles = [
     delta.initialized,
@@ -3099,6 +3267,9 @@ function requireInitialized(state: RunState): void {
   ) {
     throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
   }
+  if ([...state.waits.waiting.keys()].some((nodeId) => state.inFlight.has(nodeId) || !state.nodeStarts.has(nodeId))) {
+    throw new RangeError("a waiting node must have a start count and not be in flight");
+  }
   if (
     [...state.crashedAttempts].some(
       ([nodeId, count]) => typeof nodeId !== "string" || !Number.isSafeInteger(count) || count < 1,
@@ -3139,6 +3310,9 @@ function requireInitialized(state: RunState): void {
       state.trace.nextSequence !== state.nextSequence
     ) {
       throw new RangeError("run-state trace disagrees with recorded authority");
+    }
+    if (!sameIds(state.trace._parked, state.waits.waiting.keys())) {
+      throw new RangeError("run-state trace parks other starts than the waiting nodes");
     }
   } else if (state.trace !== null) {
     throw new RangeError("trace requires recorded learning");
@@ -3251,6 +3425,126 @@ function validateRunStopped(state: RunState, record: RunStoppedRecord): void {
       throw new RangeError(`RunStopped node ${reprText(nodeId)} must have UNKNOWN disposition`);
     }
   }
+}
+
+/** The host calls among `callIds`: the registered calls whose tool is neither take nor sleep, in order. */
+function hostCalls(state: RunState, callIds: Iterable<string>): string[] {
+  return [...callIds].filter((callId) => {
+    const tool = state.waits.calls.get(callId)?.tool;
+    return tool !== undefined && tool !== TAKE && tool !== SLEEP;
+  });
+}
+
+/**
+ * Require a wait record to move an in-flight node with no pending commit to the waiting set: its
+ * `waits` entry (a take or sleep TOOL node's own call, not yet registered; a take's inbox declared,
+ * open and with nothing unread a take may read), and `call_ids` naming exactly calls of the node
+ * registered since its last wake, not closed, including every open one.
+ */
+function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
+  const { nodeId } = record;
+  const node = state.flow.nodes.get(nodeId);
+  if (node === undefined) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} does not exist in the flow`);
+  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
+    throw new RangeError(`NodeWaiting node ${reprText(nodeId)} must have UNKNOWN disposition`);
+  }
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeWaiting node ${reprText(nodeId)} is not in-flight`);
+  requireNoPendingCommit(state, nodeId, "NodeWaiting");
+  if (record.steerInbox !== null) throw new RangeError("NodeWaiting steer_inbox is only for agents, which don't wait yet");
+  const w = state.waits;
+  const toolId = node.hostToolCall()?.toolId ?? null;
+  for (const entry of record.waits) {
+    if (toolId !== TAKE && toolId !== SLEEP) {
+      throw new RangeError(`NodeWaiting node ${reprText(nodeId)} registers a wait but is neither a take nor a sleep`);
+    }
+    if (entry.tool !== toolId) {
+      throw new RangeError(`NodeWaiting wait entry tool ${reprText(entry.tool)} isn't the node's tool ${reprText(toolId)}`);
+    }
+    if (entry.callId !== toolCallId(state.runId!, nodeId)) {
+      throw new RangeError(`NodeWaiting wait entry call_id ${reprText(entry.callId)} isn't the node's call id`);
+    }
+    if (w.calls.has(entry.callId)) {
+      throw new RangeError(`call ${reprText(entry.callId)} is already registered; it belongs to its node until the node settles`);
+    }
+    if (entry.inbox !== null) {
+      if (inboxElementType(state, entry.inbox) === null) {
+        throw new RangeError(`NodeWaiting wait entry inbox ${reprText(entry.inbox)} is no inbox the START declares`);
+      }
+      if (w.inboxes.get(entry.inbox)?.closed === true) {
+        throw new RangeError(`a take can't wait on closed inbox ${reprText(entry.inbox)}`);
+      }
+      if (availableUnread(w, entry.inbox).length > 0) {
+        throw new RangeError(`a take can't wait while inbox ${reprText(entry.inbox)} holds unread events it may read`);
+      }
+    }
+  }
+  const registering = new Set(record.waits.map((entry) => entry.callId));
+  const lastWoken = w._lastWoken.get(nodeId);
+  for (const callId of record.callIds) {
+    if (registering.has(callId)) continue;
+    const call = w.calls.get(callId);
+    if (call === undefined) throw new RangeError(`NodeWaiting call ${reprText(callId)} is not registered`);
+    if (call.nodeId !== nodeId) {
+      throw new RangeError(`NodeWaiting call ${reprText(callId)} belongs to node ${reprText(call.nodeId)}`);
+    }
+    if (lastWoken !== undefined && call.seq < lastWoken) {
+      throw new RangeError(`NodeWaiting call ${reprText(callId)} was registered before the node's last node_woken`);
+    }
+    if (call.state === "closed") throw new RangeError(`NodeWaiting call ${reprText(callId)} was closed (${call.closedReason})`);
+  }
+  for (const call of nodeCalls(w, nodeId)) {
+    if (call.state === "open" && !record.callIds.includes(call.callId)) {
+      throw new RangeError(`NodeWaiting must name the node's open call ${reprText(call.callId)}`);
+    }
+  }
+}
+
+/**
+ * Require a wake record to name a waiting node that is wakeable once its `timed_out` calls (open
+ * calls of the node with a deadline) time out.
+ */
+function validateNodeWoken(state: RunState, record: NodeWokenRecord): void {
+  const { nodeId } = record;
+  const w = state.waits;
+  const waiting = w.waiting.get(nodeId);
+  if (waiting === undefined) throw new RangeError(`NodeWoken node ${reprText(nodeId)} is not waiting`);
+  for (const callId of record.timedOut) {
+    const call = w.calls.get(callId);
+    if (call === undefined || call.nodeId !== nodeId || call.state !== "open" || call.deadline === null) {
+      throw new RangeError(`NodeWoken timed_out ${reprText(callId)} isn't an open call of the node with a deadline`);
+    }
+  }
+  const timedOut = new Set(record.timedOut);
+  const open = waiting.callIds.find((callId) => !timedOut.has(callId) && w.calls.get(callId)?.state === "open");
+  if (open !== undefined && !w.interrupts.has(nodeId)) {
+    throw new RangeError(`NodeWoken node ${reprText(nodeId)} still waits on open call ${reprText(open)}`);
+  }
+}
+
+/** Require quiescence with nodes waiting: none in flight or ready, at least one waiting, none wakeable. */
+function requireWaitingQuiescence(state: RunState, kind: string): void {
+  if (state.inFlight.size > 0 || state.ready.length > 0) throw new RangeError(`${kind} requires no node in flight or ready`);
+  if (state.waits.waiting.size === 0) throw new RangeError(`${kind} requires a waiting node`);
+  const wakeable = wakeableNodes(state.waits);
+  if (wakeable.length > 0) throw new RangeError(`${kind} while node ${reprText(wakeable[0]!)} is wakeable`);
+}
+
+/**
+ * Require a run-wait record at quiescence: nothing in flight or ready, waiting nodes named in
+ * `node_waiting` order, none wakeable, and no `run_waiting` as the last frontier record (nothing
+ * could have changed since).
+ */
+function validateRunWaiting(state: RunState, record: RunWaitingRecord): void {
+  const w = state.waits;
+  requireWaitingQuiescence(state, "RunWaiting");
+  const expected = [...w.waiting.keys()];
+  if (!sameItems(record.nodeIds, expected)) {
+    throw new RangeError(
+      "RunWaitingRecord node_ids must exactly equal the waiting nodes in order: " +
+        `expected ${writeAsText(expected)}, found ${writeAsText([...record.nodeIds])}`,
+    );
+  }
+  if (w.lastFrontier === "run_waiting") throw new RangeError("RunWaiting follows a RunWaiting with nothing changed");
 }
 
 /** Require a step record to name an existing unknown in-flight node and be its next step. */

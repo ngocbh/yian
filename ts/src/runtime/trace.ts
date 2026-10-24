@@ -74,6 +74,8 @@ import {
   NodeRoutedRecord,
   NodeStartedRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
   type RecordEnvelope,
   RunResumedRecord,
@@ -546,6 +548,11 @@ export class RetainedTrace {
   _currentWriters = new Map<string, SourceEntry>();
   /** @internal Accepted unfinished starts: node id to start sequence. */
   _started = new Map<string, number>();
+  /**
+   * @internal The starts of waiting nodes, moved out of `_started` while they wait (a resume
+   * doesn't retry them) and back when they wake: node id to start sequence.
+   */
+  _parked = new Map<string, number>();
   /** @internal Bound backward handlers by occurrence `sourceKey`. */
   _backwardHandlers = new Map<string, BackwardHandler>();
   /** @internal Bound learning material builders by occurrence `sourceKey`. */
@@ -810,6 +817,10 @@ export interface TraceDeltaFields {
   started?: readonly [string, number] | null;
   /** Whether a resume clears the unfinished starts. */
   resumed?: boolean;
+  /** A node that starts waiting: its start moves from the unfinished starts to the parked ones. */
+  parked?: string | null;
+  /** A woken node: its start moves back from the parked starts to the unfinished ones. */
+  unparked?: string | null;
   /** The accepted outcome's occurrence. */
   occurrence?: TraceOccurrence | null;
   /** The occurrence node's bound backward handler. */
@@ -852,6 +863,10 @@ export class TraceDelta {
   readonly started: readonly [string, number] | null;
   /** Whether a resume clears the unfinished starts. */
   readonly resumed: boolean;
+  /** A node that starts waiting, whose start is parked, or `null`. */
+  readonly parked: string | null;
+  /** A woken node, whose parked start comes back, or `null`. */
+  readonly unparked: string | null;
   /** The accepted outcome's occurrence, or `null`. */
   readonly occurrence: TraceOccurrence | null;
   /** The occurrence node's bound backward handler, or `null`. */
@@ -888,6 +903,8 @@ export class TraceDelta {
     this.initialized = fields.initialized ?? null;
     this.started = frozenPair(fields.started ?? null);
     this.resumed = fields.resumed ?? false;
+    this.parked = fields.parked ?? null;
+    this.unparked = fields.unparked ?? null;
     this.occurrence = fields.occurrence ?? null;
     this.handler = fields.handler ?? null;
     this.material = fields.material ?? null;
@@ -939,7 +956,16 @@ export class TraceDelta {
       const [nodeId, sequence] = this.started;
       trace._started.set(nodeId, sequence);
     }
+    // A resume retries only running nodes, so the parked starts stay.
     if (this.resumed) trace._started.clear();
+    if (this.parked !== null) {
+      trace._parked.set(this.parked, trace._started.get(this.parked)!);
+      trace._started.delete(this.parked);
+    }
+    if (this.unparked !== null) {
+      trace._started.set(this.unparked, trace._parked.get(this.unparked)!);
+      trace._parked.delete(this.unparked);
+    }
     if (this.occurrence !== null) {
       const key = sourceKey(this.occurrence.source);
       trace._occurrences.push(this.occurrence);
@@ -1084,14 +1110,16 @@ export interface PrepareTraceOptions {
  *
  * A learnable RunStarted creates an empty trace, and the run start's commits install the system
  * values and the START inputs (as source 0); a RunStarted that doesn't learn, and any record
- * before one, prepares `null`. A node's commit only advances the sequence. Outcomes join pending seed routes
- * into their input route (evaluated keys keep their own routes) and install their writer, seed
- * connections, child boundaries and terminal.
+ * before one, prepares `null`. A node's commit, and a send, only advance the sequence. A node that
+ * starts waiting parks its start, and its wake brings the start back. Outcomes join pending seed
+ * routes into their input route (evaluated keys keep their own routes) and install their writer,
+ * seed connections, child boundaries and terminal.
  *
  * @throws RangeError when the root metadata is missing, a capture has no trace, a derived record
  *   holds a capture (it is rebuilt from its sources), the record's
  *   coordinates or terminal payload disagree with the trace, a resume disagrees with the
- *   unfinished starts, an outcome lacks its capture or its accepted start, the capture's scope
+ *   unfinished starts, a waiting node has no accepted start or a woken one no parked start, an
+ *   outcome lacks its capture or its accepted start, the capture's scope
  *   differs from the node's, a route source isn't an earlier accepted producer or lacks its path,
  *   a seed connection isn't captured or its target or a boundary endpoint already has an owner,
  *   or a terminal disagrees with the root writer or has no causal occurrence.
@@ -1168,6 +1196,14 @@ export function prepareTrace(
       throw new RangeError("trace unfinished starts disagree with retry frontier");
     }
     return new TraceDelta(trace, envelope.seq, { resumed: true });
+  }
+  if (isExactly(record, NodeWaitingRecord)) {
+    if (!trace._started.has(record.nodeId)) throw new RangeError("trace waiting node requires its accepted start");
+    return new TraceDelta(trace, envelope.seq, { parked: record.nodeId });
+  }
+  if (isExactly(record, NodeWokenRecord)) {
+    if (!trace._parked.has(record.nodeId)) throw new RangeError("trace woken node requires its parked start");
+    return new TraceDelta(trace, envelope.seq, { unparked: record.nodeId });
   }
   if (!OUTCOME_RECORDS.some((cls) => isExactly<OutcomeRecord>(record, cls))) return new TraceDelta(trace, envelope.seq);
   if (!isExactly(capture, ForwardCapture)) {

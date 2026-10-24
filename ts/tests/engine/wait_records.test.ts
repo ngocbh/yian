@@ -341,9 +341,6 @@ test("a fresh RunState holds an empty waits fold and no inbox events", () => {
 });
 
 test.each<[string, () => RunRecord]>([
-  ["NodeWaitingRecord", () => new NodeWaitingRecord("work", ["r/work"])],
-  ["NodeWokenRecord", () => new NodeWokenRecord("work")],
-  ["RunWaitingRecord", () => new RunWaitingRecord(["work"])],
   ["InboxClosedRecord", () => new InboxClosedRecord("msgs")],
   ["RunCancelledRecord", () => new RunCancelledRecord()],
   ["RunFailedRecord", () => new RunFailedRecord(FAILURE)],

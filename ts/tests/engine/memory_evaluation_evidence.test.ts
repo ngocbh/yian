@@ -381,9 +381,10 @@ describe("learning reads the steps", () => {
 
       await built.run();
 
-      const record = built.state.trace!.occurrences.find((item) => item.nodeId === "work")!.record;
+      const occurrence = built.state.trace!.occurrences.find((item) => item.nodeId === "work")!;
+      const record = occurrence.record;
       expect(record).toBeInstanceOf(stage === "success" ? NodeSucceededRecord : NodeFailedRecord);
-      expect(record.forwardCapture!.boundInputs).toEqual({ topic: "reefs" });
+      expect(occurrence.boundInputs).toEqual({ topic: "reefs" });
       expect(record.forwardCapture!.nodeData).toEqual({
         prompt_template: "${instruction}: ${topic}",
         variables: { instruction: "Summarize clearly" },

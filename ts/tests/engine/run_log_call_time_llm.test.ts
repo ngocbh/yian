@@ -16,7 +16,7 @@
  *   value`), where Python's canonical JSON copy says `non-finite numbers are not valid canonical
  *   JSON`.
  * - `test_a_run_without_call_time_agents_writes_the_same_bytes`: schema 13 always writes both
- *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":18`.
+ *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":19`.
  * - `test_a_malformed_payload_is_rejected`: `null` is valid in schema 13 (no call-time agents), so
  *   its row is dropped; the other 10 rows are pinned with the record's class and message (a part of
  *   the wrong JSON type is a `TypeError`, where Python's pydantic raises `ValueError`).
@@ -98,11 +98,11 @@ const GOLDEN =
   '","learnable":false,' +
   '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"parent":null,"skills":{},' +
   '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"0.0.0"},"run_id":"r1",' +
-  '"schema":18,"seq":0}';
+  '"schema":19,"seq":0}';
 
-test("the schema is eighteen", () => {
-  expect(SCHEMA_VERSION).toBe(18);
-  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(18n);
+test("the schema is nineteen", () => {
+  expect(SCHEMA_VERSION).toBe(19);
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(19n);
 });
 
 test("call_time_llm round trips", () => {

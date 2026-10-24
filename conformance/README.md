@@ -607,8 +607,10 @@ For example:
   It also leaves out every other field equal to its empty value (null, `[]`, `0`, `""`), except
   `kind`, which always stays, and its `value_json` text is read as JSON (codec form). The
   capture leaves out `evaluated_keys`, `items`, `input_names` and `variable_names` when they
-  are `[]`, and `node_data` when it is null or `{}`; `bound_inputs` is kept as recorded, even
-  when empty. Each `items` entry is `{index, capture}`, and its `capture` is projected by these
+  are `[]`, and `node_data` when it is null or `{}`. A capture records no `bound_inputs`
+  (learning rebuilds them by binding the node again from what its route read), and a derived
+  record (a success naming a derived or expansion commit, and `node_expanded`) holds no
+  `forward_capture`: it is rebuilt from the record's sources. Each `items` entry is `{index, capture}`, and its `capture` is projected by these
   same rules. `node_data.effective_llm_config` is projected as below; everything else is kept
   as recorded (sources, spans). A route's `spans` are offsets in code points into its result
   text (the text its `value_json` holds).

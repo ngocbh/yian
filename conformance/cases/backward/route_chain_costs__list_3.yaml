@@ -61,8 +61,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs:
-          values: [v]
         evaluated_keys: [values]
         input_names: [values]
         node_data:
@@ -89,67 +87,11 @@ expect:
       key: outer/__start__
   - - node_expanded
     - outer
-    - forward_capture:
-        bound_inputs:
-          values: [v, v, v]
-        evaluated_keys: [values]
-        input_names: [values]
-        route:
-          children:
-          - children:
-            - kind: source
-              source:
-                execution_seq: 5
-                path: [values]
-                run_id: r1
-            - children:
-              - kind: source
-                source:
-                  execution_seq: 5
-                  path: [values]
-                  run_id: r1
-              - kind: source
-                source:
-                  execution_seq: 5
-                  path: [values]
-                  run_id: r1
-              kind: concat
-              sizes: [1, 1]
-            kind: concat
-            sizes: [1, 2]
-          kind: record
-          names: [values]
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [outer]
-      prune_ids: []
+    - prune_ids: []
   - [node_started, outer/__start__]
   - - node_succeeded
     - outer/__start__
     - commit: 9
-      forward_capture:
-        bound_inputs:
-          values: [v, v, v]
-        input_names: [values]
-        node_data:
-          input_output_paths:
-            values: [values]
-        route:
-          children:
-          - kind: literal
-            value_json: [v, v, v]
-          kind: record
-          names: [values]
-        scope:
-          boundary: start
-          flow_path: [outer]
-          occurrence_path:
-          - index: null
-            kind: call
-            static_path: [outer]
-          static_path: [outer, __start__]
   - [node_started, outer/__end__]
   - - pool_commit
     - outer/__end__
@@ -158,31 +100,6 @@ expect:
   - - node_succeeded
     - outer/__end__
     - commit: 14
-      forward_capture:
-        bound_inputs:
-          result: [v, v, v]
-        evaluated_keys: [result]
-        input_names: [result]
-        node_data:
-          input_output_paths:
-            result: []
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 11
-              path: [values]
-              run_id: r1
-          kind: record
-          names: [result]
-        scope:
-          boundary: end
-          flow_path: [outer]
-          occurrence_path:
-          - index: null
-            kind: call
-            static_path: [outer]
-          static_path: [outer, __end__]
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -191,8 +108,6 @@ expect:
     - __end__
     - commit: 17
       forward_capture:
-        bound_inputs:
-          result: [v, v, v]
         evaluated_keys: [result]
         input_names: [result]
         node_data:

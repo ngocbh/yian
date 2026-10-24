@@ -90,9 +90,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs:
-          tags: [a, b]
-          topic: reefs
         evaluated_keys: [tags, topic]
         input_names: [topic, tags]
         node_data:
@@ -142,9 +139,6 @@ expect:
     - writer
     - commit: 10
       forward_capture:
-        bound_inputs:
-          tags: [a, b]
-          topic: reefs
         evaluated_keys: [tags, topic]
         input_names: [topic, tags]
         node_data:
@@ -184,7 +178,6 @@ expect:
     - __end__
     - commit: 13
       forward_capture:
-        bound_inputs: {result: recorded answer}
         evaluated_keys: [result]
         input_names: [result]
         node_data:

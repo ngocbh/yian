@@ -70,10 +70,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -2666,12 +2666,12 @@ export function routeFromPayload(payload: unknown): ValueRoute {
 }
 
 /**
- * @internal Encode a forward capture's binding data; its route is checked once.
+ * Encode a forward capture's binding data; its route is checked once.
  *
  * @throws RangeError when an evaluated key names no captured route, besides `routePayload`'s
  *   errors.
  */
-export function capturePayload(capture: ForwardCapture): JsonObject {
+function capturePayload(capture: ForwardCapture): JsonObject {
   const route = routePayload(capture.route);
   // `evaluatedKeys` is a `Set`, which stays mutable inside a frozen capture, so it is the one
   // field checked again.
@@ -2680,7 +2680,6 @@ export function capturePayload(capture: ForwardCapture): JsonObject {
     throw new RangeError("evaluated_keys must name captured routes");
   }
   return {
-    bound_inputs: capture.boundInputs as JsonObject | null,
     route,
     evaluated_keys: keys.sort(compareCodeUnits),
     items: capture.items.map(([index, item]) => ({ index: BigInt(index), capture: capturePayload(item) })),
@@ -2701,7 +2700,6 @@ export function capturePayload(capture: ForwardCapture): JsonObject {
  */
 function captureFromPayload(value: unknown, label: string): ForwardCapture {
   const wire = wireObject(value, label, [
-    "bound_inputs",
     "route",
     "evaluated_keys",
     "items",
@@ -2717,8 +2715,7 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     const index = wireInt(pair["index"], `${label} item index`);
     return [index, captureFromPayload(pair["capture"], `${label} item capture`)] as const;
   });
-  const boundInputs = wireNullableObject(wire["bound_inputs"], `${label} bound_inputs`);
-  return new ForwardCapture(boundInputs, routeFromPayload(wire["route"]), {
+  return new ForwardCapture(routeFromPayload(wire["route"]), {
     evaluatedKeys: new Set(keys),
     items,
     scope: executionScopeFromPayload(wire["scope"], `${label} scope`),

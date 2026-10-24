@@ -380,7 +380,7 @@ test("static backward capture and names are detached for the actual invocation",
   expect(capture.variableNames).toEqual(snapshot.variableNames);
   expect(capture.scope).toEqual(scope);
   expect(node.executionScope).toBeNull();
-  expect(capture.boundInputs).toEqual({ topic: "reefs", limit: 4n });
+  expect(evaluated.bindings!.boundInputs).toEqual({ topic: "reefs", limit: 4n });
   expect(capture.nodeData).toEqual({ settings: { active: true } });
   expect(() => {
     (snapshot.nodeData["settings"] as Record<string, unknown>)["active"] = "changed by caller";
@@ -395,7 +395,7 @@ test("early binding failure keeps inventories without usable inputs or fabricate
   const capture = captureBindings(evaluated.bindings!, evaluated.backwardCapture!);
 
   expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
-  expect(capture.boundInputs).toBeNull();
+  expect(evaluated.bindings!.boundInputs).toBeNull();
   expect(capture.inputNames).toEqual(["topic", "limit"]);
   expect(capture.variableNames).toEqual(["instruction"]);
   expect(capture.nodeData).toEqual({});
@@ -451,10 +451,10 @@ test("static layout is captured before a preassert failure after defaults", asyn
   expect(evaluated.outcome).toBeInstanceOf(EvaluationFailure);
   const { failure } = evaluated.outcome as EvaluationFailure;
   expect(failure.code).toBe("assertion.failed");
-  expect(capture.boundInputs).toEqual({ result: { items: [1n] } });
+  expect(evaluated.bindings!.boundInputs).toEqual({ result: { items: [1n] } });
   expect(capture.nodeData).toEqual({ input_output_paths: { result: [] } });
   node.names = [];
-  const context = new BackwardContext(capture.boundInputs, {
+  const context = new BackwardContext(evaluated.bindings!.boundInputs, {
     inputNames: capture.inputNames,
     nodeData: capture.nodeData,
     failure,

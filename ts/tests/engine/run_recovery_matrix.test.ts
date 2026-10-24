@@ -890,7 +890,7 @@ function agentStarted(
   );
   commitInitialPool(log, state, pool);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  const forwardCapture = state.learnable ? new ForwardCapture({}, ValueRoute.record([])) : null;
+  const forwardCapture = state.learnable ? new ForwardCapture(ValueRoute.record([])) : null;
   commitPrepared(log, state, prepareOutput(log, state, START_ID, {}, { forwardCapture }));
   commitPrepared(log, state, prepareNodeStarted(state, "agent"));
   return { state, log };

@@ -2364,15 +2364,16 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 18, and readers accept only schema 18. The schema
+Changed (TS yian): records use schema 19, and readers accept only schema 19. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 17 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 18 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
 backward attempt was `backward.unfinished`, before derived commits held `from` pointers,
-before outcome records dropped `evidence`, or before the inbox and wait records)
-with "run log schema N predates schema 18 and is not supported", and any other schema with
-"unsupported run-record schema: N" (a float token shows as `18.0`); the "predates" message for schemas 7
+before outcome records dropped `evidence`, before the inbox and wait records, or before
+forward captures dropped their bound inputs)
+with "run log schema N predates schema 19 and is not supported", and any other schema with
+"unsupported run-record schema: N" (a float token shows as `19.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2448,6 +2449,20 @@ at once, and START is ready only after the last.
   starts, by seq: a header scan (`iterRunRecords` with `payloads: false`) that takes no lock.
   Read the record at seq `k`, such as the commit a success names, with
   `iterRunRecords(path, { afterOffset: offsets[k] })`. Nothing beside the log caches the pool.
+
+Changed (TS yian, schema 19): a `forward_capture` holds no `bound_inputs`, and a derived
+record holds none: a success naming a derived or expansion commit, and every `node_expanded`,
+records `forward_capture: null`. What it held is rebuilt, never stored twice. The bound inputs
+learning reads (`BackwardContext.inputs`, the episodes' inputs, AGENT backward's evaluation
+evidence) are rebuilt by binding the node again with the wiring it ran with, from the values its
+capture route read, each looked up in the retained trace's history by the producer the route
+names (`TraceOccurrence.boundInputs`); a binding that didn't finish rebuilds to `null`, as it
+was. A derived record's whole capture is rebuilt when the record is accepted, live and on
+replay, from its commit's `from` (for an expansion, its commits' `from`; for a child START, its
+constant wiring), with its value. A template function in a binding therefore runs again when
+learning first reads an occurrence's inputs, and when a replay checks recorded backward results.
+`run_started` also records `tool_groups`, so learning expands a grant naming a tool group the
+same way after the run is reopened without its tools.
 
 Changed (TS yian, schema 18): the inbox and wait records. Six record kinds, each with every
 field always present: `node_waiting {node_id, call_ids, waits, steer_inbox}` moves an in-flight
@@ -3021,7 +3036,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `advance` reads (schema 18); a line of another schema raises
+- It reads every schema `advance` reads (schema 19); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 

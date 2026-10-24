@@ -417,8 +417,8 @@ test("llm config is not model visible", async () => {
     .filter((entry) => entry.kind === "node_succeeded" && entry.payload["node_id"] === "chat")
     .map((entry) => entry.payload);
   expect(succeeded).toHaveLength(1);
-  // The bound record keeps it, so backward and resume read what ran.
-  expect(succeeded[0]!["forward_capture"]["bound_inputs"]["__llm_config"]["model"]).toBe("gpt-picked");
+  // The route keeps it, so the bound record backward and resume rebuild holds what ran.
+  expect(succeeded[0]!["forward_capture"]["route"]["names"]).toContain("__llm_config");
   const forward = model.requests.length;
   expect((await result.backward("Shorter.")).status).toBe("succeeded");
   const calls = model.requests.slice(forward);

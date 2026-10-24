@@ -280,9 +280,11 @@ output: \${each.output}
       expect(forwardChats.every((chat) => chat.requests.length === 1)).toBe(true);
       const forwardRecords = envelopes(path).map((envelope) => envelope.record);
       const succeeded = forwardRecords.filter((record) => record instanceof NodeSucceededRecord);
+      // An item END's record holds no capture (it is derived), so its item is read off its id.
       const itemEnds = succeeded
-        .filter((record) => record.forwardCapture!.scope!.staticPath.join("/") === "each/__end__")
-        .map((record) => record.forwardCapture!.scope!.occurrencePath[0]!.index);
+        .map((record) => /^each#(\d+)\/__end__$/.exec(record.nodeId))
+        .filter((match) => match !== null)
+        .map((match) => Number(match[1]));
       expect(itemEnds).toEqual([1, 0]);
       const before = readFileSync(path);
       const error = await rejected(result.backward([null]));
@@ -311,7 +313,7 @@ output: \${each.output}
       expect(backwardChats).toHaveLength(expectedIndices.length);
       const agentRecords = new Map(
         succeeded
-          .filter((record) => record.forwardCapture!.scope!.staticPath.join("/") === "each/answer")
+          .filter((record) => record.forwardCapture?.scope?.staticPath.join("/") === "each/answer")
           .map((record) => [record.nodeId, record]),
       );
       const observedPositions: number[] = [];
@@ -435,18 +437,18 @@ output:
   const trace = replay.trace!;
   const acceptedAgents = new Map(
     trace.occurrences
-      .filter((item) => item.record.forwardCapture!.nodeData?.["prompt_template"] === "${tone}: ${n}")
+      .filter((item) => item.capture.nodeData?.["prompt_template"] === "${tone}: ${n}")
       .map((item) => [item.nodeId, item]),
   );
   expect(acceptedAgents.size).toBe(6);
   expect(forwardConfigs.map(logJson).sort()).toEqual(
     [...acceptedAgents.values()]
-      .map((item) => logJson(item.record.forwardCapture!.nodeData!["effective_llm_config"]))
+      .map((item) => logJson(item.capture.nodeData!["effective_llm_config"]))
       .sort(),
   );
   const expectedMap = (all[0]!.record as RunStartedRecord).effectiveLlmByStaticPath;
   for (const occurrence of acceptedAgents.values()) {
-    const capture = occurrence.record.forwardCapture!;
+    const capture = occurrence.capture;
     const scope = capture.scope!;
     const positions = scope.occurrencePath;
     const bodies = positions.filter((position) => position.kind === "loop_body");
@@ -455,11 +457,11 @@ output:
     expect([0, 1]).toContain(body.index!);
     const direct = scope.staticPath[0] === "one";
     expect(positions.map((position) => position.kind)).toEqual([direct ? "call" : "map_item", "loop_body", "call"]);
-    expect(capture.boundInputs!["n"]).toBe(body.index === 1 ? 1n : direct ? 3n : [10n, 20n][positions[0]!.index!]!);
+    expect(occurrence.boundInputs!["n"]).toBe(body.index === 1 ? 1n : direct ? 3n : [10n, 20n][positions[0]!.index!]!);
     const data = capture.nodeData!;
     expect(data["variables"]).toEqual({ tone: "concise" });
     expect(data["variable_domains"]).toEqual({ tone: "str" });
-    expect(data["rendered_prompt"]).toBe(`concise: ${capture.boundInputs!["n"]}`);
+    expect(data["rendered_prompt"]).toBe(`concise: ${occurrence.boundInputs!["n"]}`);
     const selected = expectedMap[scope.staticPath.join("/")]!;
     expect(data["effective_llm_config"]).toEqual(selected);
     expect(selected["provider"]).toBe(direct ? "openai" : "deepseek");
@@ -468,7 +470,7 @@ output:
   }
 
   const priorBody = trace.occurrences.filter((item) => {
-    const scope = item.record.forwardCapture!.scope!;
+    const scope = item.capture.scope!;
     const owner = scope.staticPath.slice(0, -1).join("/");
     return (
       (owner === "one/loop" || owner === "many/loop") &&
@@ -527,9 +529,9 @@ output:
     expect(chat.requests[0]!.tools).toEqual([]);
     const forward = material(chat)["forward"];
     const occurrence = acceptedAgents.get(forward["node_id"])!;
-    const capture = occurrence.record.forwardCapture!;
+    const capture = occurrence.capture;
     expect(forward["node_started_seq"]).toBe(occurrence.source.executionSeq);
-    expect(forward["inputs"]).toEqual(asJson(capture.boundInputs));
+    expect(forward["inputs"]).toEqual(asJson(occurrence.boundInputs));
     expect(forward["output"]).toEqual({ n: 1 });
     for (const key of ["prompt_template", "rendered_prompt", "variables", "variable_domains"]) {
       expect(forward[key]).toEqual(asJson(capture.nodeData![key]));

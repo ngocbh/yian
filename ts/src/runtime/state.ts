@@ -1190,7 +1190,9 @@ export function preparePoolCommit(
  *
  * @param state An initialized nonterminal state with `nodeId` in flight and its commit pending.
  * @param nodeId The exact id of the executing node.
- * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning. A
+ *   success naming a derived or expansion commit doesn't record it: the capture is rebuilt with
+ *   the commit.
  * @param options.output The value the node evaluated to; required for a derived commit, whose
  *   value rebuilt from its `from` must equal it.
  * @returns The canonical `NodeSucceededRecord`, naming the commit's seq, and a detached
@@ -1213,10 +1215,11 @@ export function prepareNodeSucceeded(
   if (pending.valueJson === null && !Object.hasOwn(options, "output")) {
     throw new TypeError(`NodeSucceeded of derived node ${reprText(nodeId)} needs the value it evaluated to (output)`);
   }
+  const derived = pending.valueJson === null || pending.spawner !== null;
   return prepareSuccessTransition(
     state,
     new NodeSucceededRecord(nodeId, pending.seq, {
-      forwardCapture: options.forwardCapture ?? null,
+      forwardCapture: derived ? null : (options.forwardCapture ?? null),
     }),
     Object.hasOwn(options, "output") ? { output: options.output } : null,
   );
@@ -1678,7 +1681,8 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
  * @param grow The seed-first expansion description and its dynamic-overlay prune set.
  * @param growBuilder The injected compile-owned interpreter from a copy of the spawner and the
  *   canonical seed to one self-contained `Flow` fragment.
- * @param options.forwardCapture The canonical binding capture, required exactly when learning.
+ * @param options.forwardCapture The canonical binding capture, required exactly when learning. The
+ *   record doesn't hold it: an expansion's capture is rebuilt with its seed.
  * @returns The canonical `NodeExpandedRecord` and its detached append-before-apply plan.
  * @throws GrowthRejected when the node-produced prune set or seed, the returned fragment, the
  *   growth budget or the requested prune policy is invalid; `original` holds the exact error.
@@ -1711,9 +1715,7 @@ export function prepareExpanded(
   const { seed, pruneIds, fragment, validatedFragment, digest, commits } = expansion;
   return prepareGrowthTransition(
     state,
-    new NodeExpandedRecord(nodeId, pruneIds, digest, {
-      forwardCapture: options.forwardCapture ?? null,
-    }),
+    new NodeExpandedRecord(nodeId, pruneIds, digest),
     fragment,
     { actualDigest: digest, validatedFragment, seed, commits, capture },
   );

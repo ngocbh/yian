@@ -471,13 +471,11 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
     numWorkers: 0,
     learnable: true,
   });
-  const startCapture = new ForwardCapture({ x: 1n }, ValueRoute.record([["x", sourceRoute(0, ["x"])]]), {
+  const startCapture = new ForwardCapture(ValueRoute.record([["x", sourceRoute(0, ["x"])]]), {
     inputNames: ["x"],
     nodeData: { input_output_paths: startPaths },
   });
-  const pCapture = new ForwardCapture(
-    { v: 1n, w: 1n },
-    ValueRoute.record([
+  const pCapture = new ForwardCapture(ValueRoute.record([
       ["v", sourceRoute(2, ["x"])],
       ["w", sourceRoute(0, ["x"])],
     ]),
@@ -488,7 +486,7 @@ function chainTrace({ startPaths = { x: ["x"] }, pOutput = 2n, pPaths = null, pS
       scope: pScope,
     },
   );
-  const endCapture = new ForwardCapture({ value: pOutput }, ValueRoute.record([["value", sourceRoute(5)]]), {
+  const endCapture = new ForwardCapture(ValueRoute.record([["value", sourceRoute(5)]]), {
     inputNames: ["value"],
   });
   const nodes = { start: new TraceNode(START_ID), p: new TraceNode("p"), end: new TraceNode(END_ID) };
@@ -2743,12 +2741,11 @@ test.each([false, true])(
 
     const occurrence = trace.occurrences.find((item) => item.nodeId === "work")!;
     const result = resultAt(results, occurrence.source).result;
-    const capture = occurrence.record.forwardCapture!;
     const recovered = routeFeedback(
       occurrence.inputRoute.children[0]!,
       result.inputFeedback.file![0]!,
       (source) => trace.lookupSource(source),
-      { recordedValue: capture.boundInputs!.file },
+      { recordedValue: occurrence.boundInputs!.file },
     );
     expect(root).toEqual(new BackwardResult());
     expect(recovered.contributions).toEqual([]);
@@ -3146,7 +3143,7 @@ output: \${loop.output}
     expect(calls).toHaveLength(2);
     expect(new Set(calls).size).toBe(2);
     const drivers = trace.occurrences.filter((item) =>
-      isDeepStrictEqual(item.record.forwardCapture!.scope!.staticPath, ["loop"]),
+      isDeepStrictEqual(item.capture.scope!.staticPath, ["loop"]),
     );
     expect(drivers).toHaveLength(3);
     const reached = new Set(results.filter((result) => result.invoked).map((result) => sourceKey(result.source)));
@@ -3216,7 +3213,7 @@ test.each([false, true])(
       start.inputRoute.children[0]!,
       result.inputFeedback.file![0]!,
       (source) => trace.lookupSource(source),
-      { recordedValue: start.record.forwardCapture!.boundInputs!.file },
+      { recordedValue: start.boundInputs!.file },
     );
     expect(root).toEqual(new BackwardResult());
     expect(routed.contributions).toEqual([]);
@@ -3271,7 +3268,7 @@ test.each([
       start.inputRoute.children[0]!,
       result.inputFeedback.files![0]!,
       (source) => trace.lookupSource(source),
-      { recordedValue: start.record.forwardCapture!.boundInputs!.files },
+      { recordedValue: start.boundInputs!.files },
     );
     expect(root).toEqual(new BackwardResult());
     expect(routed.contributions).toEqual([]);

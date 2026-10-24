@@ -191,7 +191,7 @@ const GOLDEN_RUN_STARTED = {
     yian_version: "0.0.0",
   },
   run_id: "golden",
-  schema: 18,
+  schema: 19,
   seq: 0,
   at: "<at>",
 };
@@ -396,7 +396,7 @@ test("a run start agent binds no reserved llm config input", async () => {
   );
   const capture = succeeded[0]!.payload["forward_capture"];
   expect(capture).not.toBeNull();
-  expect("__llm_config" in capture["bound_inputs"]).toBe(false);
+  expect(capture["route"]["names"]).not.toContain("__llm_config");
   expect(capture["input_names"]).not.toContain("__llm_config");
   expect(capture["node_data"]["effective_llm_config"]["model"]).toBe("gpt-learn");
 });

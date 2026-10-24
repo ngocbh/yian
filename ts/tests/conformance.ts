@@ -97,7 +97,7 @@ import {
   type RunResult,
   runFlow,
 } from "../src/run.ts";
-import { capturePayload, JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addCrashedAttempts } from "../src/runtime/state.ts";
 import type { ToolContext } from "../src/tools/context.ts";
 import {
@@ -108,8 +108,7 @@ import {
 } from "../src/tools/errors.ts";
 import { tool } from "../src/tools/function_tools.ts";
 import type { AskHandler, AskRequest, ToolEntry } from "../src/tools/registry.ts";
-import { canonicalJson, type JsonValue, logJson, parseJson } from "../src/typesys/json.ts";
-import type { RunState } from "../src/runtime/state.ts";
+import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
 import { buildValueAs, FileRef, fromHost, InboxRef, isRecord } from "../src/typesys/values.ts";
@@ -2781,7 +2780,6 @@ async function checkInvariants(
   // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
   // agrees with a replay, not a second statement of its rules.
   const state = replay(envelopes.length);
-  checkCaptureRebuild(state, fail);
   const terminal = state.result;
   const finished = terminal === null ? null : terminal instanceof RunSucceeded ? "succeeded" : "failed";
   const counts = new Map(state.crashedAttempts);
@@ -2833,27 +2831,6 @@ async function checkInvariants(
     fail(`resuming the finished log gives ${reopened.status}, not ${finished}`);
   }
   if (result !== null) compare(`resumed output${at}`, output(reopened, flow), output(result, flow));
-}
-
-/**
- * Fail unless every occurrence of a learnable replay rebuilds what its record holds: its bound
- * inputs (`TraceOccurrence.boundInputs`, rebound from its route) equal the recorded
- * `bound_inputs`, and a derived record's capture, rebuilt from its sources, equals the recorded
- * one, byte for byte.
- */
-function checkCaptureRebuild(state: RunState, fail: (problem: string) => never): void {
-  for (const occurrence of state.trace?.occurrences ?? []) {
-    const recorded = occurrence.record.forwardCapture!;
-    const at = `${occurrence.record.constructor.name} of ${occurrence.nodeId} (seq ${occurrence.outcomeSeq})`;
-    const rebuilt = logJson(occurrence.boundInputs);
-    if (rebuilt !== logJson(recorded.boundInputs as JsonValue)) {
-      fail(`${at}: bound inputs rebuild to ${rebuilt}, not ${logJson(recorded.boundInputs as JsonValue)}`);
-    }
-    const capture = logJson(capturePayload(occurrence.capture));
-    if (capture !== logJson(capturePayload(recorded))) {
-      fail(`${at}: capture rebuilds to ${capture}, not ${logJson(capturePayload(recorded))}`);
-    }
-  }
 }
 
 /** The trace entries of node outcomes, which a crash sweep's strong oracle compares. */

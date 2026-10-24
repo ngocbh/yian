@@ -1194,7 +1194,7 @@ export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: 
     state,
     prepareOutput(log, state, START_ID, output === undefined ? { items: ["canonical"] } : output, {
       forwardCapture: state.learnable
-        ? new ForwardCapture({}, ValueRoute.record([]), { scope: start.executionScope })
+        ? new ForwardCapture(ValueRoute.record([]), { scope: start.executionScope })
         : null,
     }),
   );
@@ -1228,7 +1228,7 @@ export function forwardCapture(node: Node, inputs: Readonly<Record<string, unkno
   const route = ValueRoute.record(
     Object.entries(inputs ?? {}).map(([name, value]) => [name, ValueRoute.literal(value)] as const),
   );
-  return new ForwardCapture(inputs, route, { scope: node.executionScope });
+  return new ForwardCapture(route, { scope: node.executionScope });
 }
 
 /**

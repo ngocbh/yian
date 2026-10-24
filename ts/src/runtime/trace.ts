@@ -120,7 +120,8 @@ export function decodeTyped(text: string): TypedValue {
 }
 
 /**
- * Join detached binding and backward material through the existing seed codec.
+ * Join detached binding and backward material into the capture a record holds: the routes and
+ * item routes, not the delivered values, which learning rebuilds.
  *
  * @param bindings Actual delivered values, routes and indexed item bindings frozen by the
  *   evaluator.
@@ -133,8 +134,7 @@ export function decodeTyped(text: string): TypedValue {
 export function captureBindings(bindings: BindingCapture, backward: BackwardCapture): ForwardCapture {
   if (!isExactly(bindings, BindingCapture)) throw new TypeError("retained evaluation requires a BindingCapture");
   if (!isExactly(backward, BackwardCapture)) throw new TypeError("retained evaluation requires a BackwardCapture");
-  const boundInputs = canonicalSeed(bindings.boundInputs)[1] as Record<string, JsonValue> | null;
-  return new ForwardCapture(boundInputs, bindings.route, {
+  return new ForwardCapture(bindings.route, {
     evaluatedKeys: bindings.evaluatedKeys,
     items: bindings.items.map(([index, item]) => [index, captureBindings(item, new BackwardCapture())] as const),
     scope: backward.scope,
@@ -1060,7 +1060,8 @@ export interface PrepareTraceOptions {
  * into their input route (evaluated keys keep their own routes) and install their writer, seed
  * connections, child boundaries and terminal.
  *
- * @throws RangeError when the root metadata is missing, a capture has no trace, the record's
+ * @throws RangeError when the root metadata is missing, a capture has no trace, a derived record
+ *   holds a capture (it is rebuilt from its sources), the record's
  *   coordinates or terminal payload disagree with the trace, a resume disagrees with the
  *   unfinished starts, an outcome lacks its capture or its accepted start, the capture's scope
  *   differs from the node's, a route source isn't an earlier accepted producer or lacks its path,
@@ -1109,6 +1110,7 @@ export function prepareTrace(
     if (capture !== null) throw new RangeError("forward capture requires recorded learning");
     return null;
   }
+  if (rebuilt !== null && recorded !== null) throw new RangeError("a derived record holds no forward capture");
   if (trace.runId !== envelope.runId || trace.nextSequence !== envelope.seq) {
     throw new RangeError("trace disagrees with accepted record coordinates");
   }

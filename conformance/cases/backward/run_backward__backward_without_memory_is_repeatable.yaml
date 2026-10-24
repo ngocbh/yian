@@ -45,7 +45,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs: {text: hello}
         evaluated_keys: [text]
         input_names: [text]
         node_data:
@@ -73,7 +72,6 @@ expect:
     - __end__
     - commit: 9
       forward_capture:
-        bound_inputs: {result: hello}
         evaluated_keys: [result]
         input_names: [result]
         node_data:

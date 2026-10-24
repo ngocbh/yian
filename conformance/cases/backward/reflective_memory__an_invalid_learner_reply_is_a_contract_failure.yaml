@@ -63,7 +63,6 @@ expect:
     - __start__
     - commit: 6
       forward_capture:
-        bound_inputs: {}
         node_data:
           input_output_paths: {}
         route: {kind: record}
@@ -80,7 +79,6 @@ expect:
     - work
     - commit: 9
       forward_capture:
-        bound_inputs: {}
         route: {kind: record}
         scope:
           boundary: null
@@ -95,7 +93,6 @@ expect:
     - __end__
     - commit: 12
       forward_capture:
-        bound_inputs: {result: 7}
         evaluated_keys: [result]
         input_names: [result]
         node_data:

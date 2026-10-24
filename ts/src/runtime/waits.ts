@@ -122,6 +122,46 @@ export class WaitsState {
   readonly _lastWoken = new Map<string, number>();
   /** @internal Each in-flight node's take commit that no success has accepted yet. */
   readonly _pendingTakes = new Map<string, { readonly seq: number } & TakeCommit>();
+
+  /** Return the plain JSON form, each map as its `[key, value]` entries in order (`fromJSON` reads it back). */
+  toJSON(): WaitsJson {
+    return {
+      waiting: [...this.waiting],
+      calls: [...this.calls],
+      inboxes: [...this.inboxes],
+      interrupts: [...this.interrupts],
+      lastFrontier: this.lastFrontier,
+      inputsCommitted: this._inputsCommitted,
+      lastWoken: [...this._lastWoken],
+      pendingTakes: [...this._pendingTakes],
+    };
+  }
+
+  /** Return the state `json` (a `toJSON` form, as `JSON.parse` gives it back) holds, with copies of its parts. */
+  static fromJSON(json: WaitsJson): WaitsState {
+    const w = new WaitsState();
+    for (const [node, waiting] of json.waiting) w.waiting.set(node, { ...waiting, callIds: [...waiting.callIds] });
+    for (const [callId, call] of json.calls) w.calls.set(callId, { ...call, assigned: [...call.assigned] });
+    for (const [name, inbox] of json.inboxes) w.inboxes.set(name, { unread: [...inbox.unread], closed: inbox.closed, absorbing: [...inbox.absorbing] });
+    for (const [node, seq] of json.interrupts) w.interrupts.set(node, seq);
+    w.lastFrontier = json.lastFrontier;
+    w._inputsCommitted = json.inputsCommitted;
+    for (const [node, seq] of json.lastWoken) w._lastWoken.set(node, seq);
+    for (const [node, take] of json.pendingTakes) w._pendingTakes.set(node, { ...take, events: [...take.events] });
+    return w;
+  }
+}
+
+/** The plain JSON form of a `WaitsState`. */
+export interface WaitsJson {
+  readonly waiting: readonly (readonly [string, WaitingNode])[];
+  readonly calls: readonly (readonly [string, Call])[];
+  readonly inboxes: readonly (readonly [string, InboxState])[];
+  readonly interrupts: readonly (readonly [string, number])[];
+  readonly lastFrontier: string | null;
+  readonly inputsCommitted: boolean;
+  readonly lastWoken: readonly (readonly [string, number])[];
+  readonly pendingTakes: readonly (readonly [string, { readonly seq: number } & TakeCommit])[];
 }
 
 /** The prefix of a send's pool key: the START's id and a dot, then the inbox's name. */

@@ -41,6 +41,7 @@ const ALLOWED: Record<string, string> = {
   "memory/episodic.ts: SNAPSHOT_VERSION": "memory snapshot format version",
   "memory/reflective.ts: SNAPSHOT_VERSION": "memory snapshot format version",
   "memory/storage/sqlite.ts: VERSION": "sqlite store format version",
+  "runtime/run_index.ts: INDEX_VERSION": "run index layout version",
   "memory/storage/sqlite.ts: SQLITE_BUSY": "SQLite result code",
   "memory/storage/sqlite.ts: SQLITE_LOCKED": "SQLite result code",
   "memory/storage/sqlite.ts: SQLITE_CORRUPT": "SQLite result code",

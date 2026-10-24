@@ -170,6 +170,63 @@ const COMMANDS: Readonly<Record<string, Command>> = {
         );
     },
   },
+  chat: {
+    spec: {
+      name: "chat",
+      summary:
+        "Chat with a flow: each line you type is sent to its Inbox(str) input. Opens no MCP " +
+        "servers and loads no skills.",
+      positionals: [
+        {
+          name: "flow",
+          help: "Path to a flow .yaml with an Inbox(str) input",
+          path: { exists: true, dir: false, readable: true },
+        },
+      ],
+      options: [
+        {
+          name: "inbox",
+          type: "string",
+          help: "The Inbox(str) input to send lines to, when the flow has several.",
+        },
+        { name: "input", short: "i", type: "string", multiple: true, help: "Another input as k=v (repeatable)." },
+        {
+          name: "inputs",
+          type: "string",
+          path: { exists: true, dir: false, readable: true },
+          help: "A JSON file of the other inputs.",
+        },
+        {
+          name: "log",
+          type: "string",
+          path: { dir: false },
+          help: "Create the run log at PATH instead of the default location.",
+        },
+        { name: "num-workers", short: "w", type: "int", min: 0, help: "Worker pool size (default 8; 0 for serial)." },
+        { name: "provider", type: "string", help: "Provider for agents that set none (cascade)." },
+        { name: "model", type: "string", help: "Model for agents that set none (cascade)." },
+        { name: "engine-trace", type: "boolean", help: "On a failure, also print the engine traceback." },
+      ],
+    },
+    load: async () => {
+      const { chat } = await import("./chat.ts");
+      return ({ args, options: o }, io) =>
+        chat(
+          args["flow"] as string,
+          {
+            inbox: o["inbox"] as string | undefined,
+            inputValues: o["input"] as string[],
+            inputs: o["inputs"] as string | undefined,
+            log: o["log"] as string | undefined,
+            numWorkers: o["num-workers"] as number | undefined,
+            provider: o["provider"] as string | undefined,
+            model: o["model"] as string | undefined,
+            engineTrace: o["engine-trace"] === true,
+          },
+          io,
+        );
+    },
+  },
   auth: {
     spec: {
       name: "auth",

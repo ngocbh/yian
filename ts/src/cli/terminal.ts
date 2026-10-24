@@ -14,6 +14,7 @@ import { type JsonValue, JSONDecodeError, parseJson } from "../typesys/json.ts";
 import {
   buildValueAs,
   canonicalTypeLabel,
+  isInboxType,
   isListKind,
   rejectDeepNesting,
   type Type,
@@ -47,6 +48,11 @@ export interface TerminalOptions {
   onStop?: (reason: "interrupt" | "eof") => void;
   /** Called with true when a prompt turn takes the terminal and false when it gives it back. */
   onActive?: (active: boolean) => void;
+  /**
+   * Write each prompt once as it opens, with no escape codes or carriage returns, and leave the
+   * input in cooked mode: for an output or input that isn't a terminal.
+   */
+  plain?: boolean;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -99,6 +105,24 @@ const HIDE_CURSOR = `${ESC}?25l`;
 const PASTE_ON = `${ESC}?2004h`;
 const PASTE_OFF = `${ESC}?2004l`;
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
+
+/**
+ * `output` for a plain terminal: what is written loses its escape codes and carriage returns, and
+ * a write left empty is skipped. Only `write` and `columns`, which the terminal uses, are kept.
+ */
+function plainOutput(output: Output): Output {
+  const plain = {
+    write(chunk: unknown, ...rest: unknown[]): boolean {
+      const text = String(chunk).replace(ANSI, "").replaceAll("\r", "");
+      if (text === "") return true;
+      return (output.write as (...args: unknown[]) => boolean)(text, ...rest);
+    },
+    get columns() {
+      return output.columns;
+    },
+  };
+  return plain as unknown as Output;
+}
 
 /** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
 function crlf(text: string): string {
@@ -225,7 +249,7 @@ function textWidget(options: {
   mark?: string;
   instruction?: string;
   validate?: (text: string) => string | undefined;
-}): Widget<string> {
+}): Widget<string> & { text(): string } {
   const mark = options.mark ?? "?";
   const chars = Array.from(options.initial ?? "");
   let pos = chars.length;
@@ -267,6 +291,7 @@ function textWidget(options: {
     },
     done: (outcome) =>
       collapsed(mark, options.label, "value" in outcome && !options.mask ? shown(Array.from(outcome.value)) : ""),
+    text: () => chars.join(""),
   };
 }
 
@@ -379,6 +404,11 @@ function checkboxWidget(options: { label: string; titles: readonly string[] }): 
 /** One prompt turn: its signal, how it ended without an answer, and the active widget's wakeup. */
 interface Turn {
   signal: AbortSignal | undefined;
+  /**
+   * Ctrl-C ends only this turn, and neither stop goes to `onStop`: the caller (`readLine`) gets
+   * them as its answer.
+   */
+  keepOpen: boolean;
   /** The first way the turn ended without an answer; later ones don't replace it. */
   ending: Ending | undefined;
   /** Ends the active widget once `ending` is set; a no-op while no widget runs. */
@@ -397,8 +427,9 @@ function quietly(action: () => unknown): void {
 
 /**
  * The host's terminal for a run's prompts. Prompts take turns in one FIFO: each turn waits for the
- * ones before it, takes the terminal for its widgets and gives it back restored. Ctrl-C, the end of
- * input or `close()` closes the terminal, so every queued and later prompt gets no answer.
+ * ones before it, takes the terminal for its widgets and gives it back restored. Ctrl-C (except at
+ * `readLine`), the end of input or `close()` closes the terminal, so every queued and later prompt
+ * gets no answer.
  *
  * @example
  * const terminal = new Terminal({ onStop: () => controller.abort() });
@@ -409,6 +440,7 @@ export class Terminal {
   readonly #output: Output;
   readonly #onStop: TerminalOptions["onStop"];
   readonly #onActive: TerminalOptions["onActive"];
+  readonly #plain: boolean;
   #attached = false;
   #closed = false;
   /** Set once the input has ended or failed; the next widget ends with the EOF outcome. */
@@ -428,7 +460,9 @@ export class Terminal {
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
     this.#input = options.input ?? process.stdin;
-    this.#output = options.output ?? process.stderr;
+    this.#plain = options.plain === true;
+    const output = options.output ?? process.stderr;
+    this.#output = this.#plain ? plainOutput(output) : output;
     this.#onStop = options.onStop;
     this.#onActive = options.onActive;
   }
@@ -442,6 +476,31 @@ export class Terminal {
       run(textWidget({ label, initial: options.initial, mask: options.secret })),
     );
     return "value" in ended ? ended.value : null;
+  }
+
+  /**
+   * Read one line at a `> <label>` prompt, starting from `initial`: `{value}` when it is entered,
+   * `{interrupt}` for Ctrl-C, `{eof}` for the end of input or a closed terminal, `{aborted}` with
+   * the text typed so far (`draft`) when `signal` aborts first, which erases the prompt. Ctrl-C
+   * leaves the terminal open, so the next `readLine` works; keys typed after the prompt ends wait
+   * for the next one.
+   */
+  async readLine(
+    label: string,
+    options: { signal?: AbortSignal; initial?: string } = {},
+  ): Promise<{ value: string } | { eof: true } | { interrupt: true } | { aborted: true; draft: string }> {
+    const { signal, initial = "" } = options;
+    const widget = textWidget({ label, mark: ">", initial });
+    if (signal?.aborted) return { aborted: true, draft: initial };
+    let ended: { value: string } | { stop: StopReason };
+    try {
+      ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true });
+    } catch (error) {
+      if (signal?.aborted && error === signal.reason) return { aborted: true, draft: widget.text() };
+      throw error;
+    }
+    if ("value" in ended) return { value: ended.value };
+    return ended.stop === "interrupt" ? { interrupt: true } : { eof: true };
   }
 
   /** A single choice among strings; null when cancelled or closed. */
@@ -461,7 +520,8 @@ export class Terminal {
   }
 
   /**
-   * Prompt for each declaration not in `supplied` (key presence, `Object.hasOwn`), all in one turn.
+   * Prompt for each declaration not in `supplied` (key presence, `Object.hasOwn`), all in one turn;
+   * an inbox input is never asked for.
    * Returns the explicit answers (omitted inputs absent, Set null a present null), `{}` without
    * drawing when nothing is missing, or null when cancelled or the terminal is closed. Throws what
    * a widget or the output throws.
@@ -470,7 +530,10 @@ export class Terminal {
     decls: readonly Parameter[],
     supplied: Readonly<Record<string, unknown>>,
   ): Promise<Record<string, unknown> | null> {
-    const missing = decls.filter((decl) => !Object.hasOwn(supplied, decl.name));
+    // An inbox takes events through `send`, never a value at the start.
+    const missing = decls.filter(
+      (decl) => !isInboxType(decl.contract?.type ?? null) && !Object.hasOwn(supplied, decl.name),
+    );
     if (missing.length === 0) return {};
     const ended = await this.#runTurn(undefined, async (run) => {
       const gathered: [string, unknown][] = [];
@@ -592,6 +655,7 @@ export class Terminal {
   async #runTurn<R>(
     signal: AbortSignal | undefined,
     fn: (run: RunWidget) => Promise<R>,
+    { keepOpen = false }: { keepOpen?: boolean } = {},
   ): Promise<{ value: R } | { stop: StopReason }> {
     if (this.#closed) return { stop: "closed" };
     signal?.throwIfAborted();
@@ -599,7 +663,7 @@ export class Terminal {
     const { promise: finished, resolve: release } = Promise.withResolvers<void>();
     // The turn behind this one waits for the one ahead too, even when this one leaves early.
     this.#tail = ahead.then(() => finished);
-    const turn: Turn = { signal, ending: undefined, wake: () => {} };
+    const turn: Turn = { signal, keepOpen, ending: undefined, wake: () => {} };
     const { promise: queuedAbort, resolve: leaveQueue } = Promise.withResolvers<void>();
     const onAbort = (): void => {
       // A queued turn whose signal aborts after the terminal closed is refused as closed.
@@ -610,7 +674,7 @@ export class Terminal {
     signal?.addEventListener("abort", onAbort, { once: true });
     const input = this.#input;
     const output = this.#output;
-    const setsRaw = input.isTTY === true && typeof input.setRawMode === "function";
+    const setsRaw = !this.#plain && input.isTTY === true && typeof input.setRawMode === "function";
     // Read at turn start: while queued, the turn ahead may still hold the terminal raw.
     let wasRaw = false;
     // A `process.exit()` elsewhere skips the `finally` below.
@@ -655,8 +719,9 @@ export class Terminal {
     const ending = turn.ending;
     // After the restore, so a handler that prints or exits never meets a raw terminal; before the
     // turns behind are released, so they see what `onStop` did.
-    // Only the turn that closed the terminal records "interrupt" or "eof", so this runs once.
-    if (ending === "interrupt" || ending === "eof") quietly(() => this.#onStop?.(ending));
+    // Only the turn that closed the terminal records "interrupt" or "eof", so this runs once; a
+    // `keepOpen` turn hands its stop to its caller instead.
+    if ((ending === "interrupt" || ending === "eof") && !keepOpen) quietly(() => this.#onStop?.(ending));
     release();
     if (ending !== undefined && ending !== "aborted") return { stop: ending };
     if (signal?.aborted) throw signal.reason;
@@ -685,7 +750,8 @@ export class Terminal {
     const stop = (reason: "interrupt" | "eof"): void => {
       if (turn.ending === undefined) {
         turn.ending = reason;
-        this.#closed = true;
+        // A chat counts Ctrl-C presses at its line prompt, so the first one mustn't end the session.
+        if (!(turn.keepOpen && reason === "interrupt")) this.#closed = true;
       }
       finish({ stop: turn.ending });
     };
@@ -694,6 +760,8 @@ export class Terminal {
     let cursorRow = 0;
     const erase = (): string => `\r${cursorRow > 0 ? `${ESC}${cursorRow}A` : ""}${ESC}J`;
     const draw = (): void => {
+      // A plain prompt is written once, as it opens.
+      if (this.#plain) return;
       const columns = output.columns || 80;
       const lines = widget.lines();
       const cursor = widget.cursor();
@@ -722,13 +790,18 @@ export class Terminal {
       }
     };
     try {
-      output.write(widget.preface + PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
+      if (this.#plain) output.write(`${widget.preface}${widget.lines().join("\n")}\n`);
+      else output.write(widget.preface + PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
       while (outcome === undefined && this.#buffer.length > 0) feed(this.#buffer.shift()!);
       if (outcome === undefined && this.#ended) stop("eof");
       await settled;
-      output.write(erase() + crlf(widget.done(outcome!)) + "\r\n");
+      const ended = outcome!;
+      // A `readLine` a deadline took down leaves no line: the prompt comes back after the reply.
+      const vanish = turn.keepOpen && "stop" in ended && ended.stop === "aborted";
+      if (vanish) output.write(erase());
+      else if (!this.#plain) output.write(erase() + crlf(widget.done(ended)) + "\r\n");
     } catch (error) {
       finish({ error });
     } finally {

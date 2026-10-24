@@ -771,7 +771,9 @@ modules it imports, so packages bundled into the binary aren't visible to it.
 ## CLI
 
 The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
-`yian --help` lists its commands, and `yian --version` prints the version. yian's warnings (an
+`yian --help` lists its commands, and `yian --version` prints the version. `yian chat FLOW` is a
+terminal host for a flow with an `Inbox(str)` input: it sends each line you type and advances the
+run ([`docs/cli.md`][docs/cli.md], "Chatting with a flow"). yian's warnings (an
 unknown model, TLS checks off, ...) reach a library host through `process.emitWarning`
 (`process.on("warning")`); the CLI prints them as `warning:` lines.
 
@@ -1592,9 +1594,12 @@ START is ready after the START inputs' commit; a success walks its
 ### CLI
 
 - `src/cli/terminal.ts` holds `Terminal`, the host terminal a run prompts on: `askUser` (the
-  run's ask handler), `askText`, `askChoice`, `promptInputs` (the missing flow inputs) and
-  `close`. Prompts take turns in one FIFO and draw on stderr; `onStop` hears Ctrl-C or the end of
-  input, which close the terminal, and `onActive` hears a turn take and give back the terminal.
+  run's ask handler), `askText`, `askChoice`, `readLine` (the chat's line prompt), `promptInputs`
+  (the missing flow inputs) and `close`. Prompts take turns in one FIFO and draw on stderr;
+  `onStop` hears Ctrl-C or the end of input, which close the terminal (`readLine` returns them
+  instead, and Ctrl-C there leaves it open; an aborted `readLine` returns its draft), and
+  `onActive` hears a turn take and give back the terminal. A `plain` terminal (off a TTY) writes
+  each prompt once with no escape codes and leaves the input in cooked mode.
   A call the closed terminal ends throws `TerminalStopped`, or the signal's reason once it
   aborted (`askUser`), or returns null.
 - It reads keys with raw-mode `node:readline` and has no dependency: it imports only `node:`
@@ -1613,6 +1618,9 @@ START is ready after the START inputs' commit; a success walks its
   `loadSkillDir`, `inspectRun`, and `updateRunIndex` and `readRunIndex` (`yian status` with no
   log; `yian run` updates the index of `~/.yian/runs` when a run there ends); the diagnostic boxes, the banner, progress on stderr and
   `stopOnSignals` (SIGINT, SIGTERM and SIGHUP stop a run; exit 130).
+- `src/cli/chat.ts` holds `yian chat`, a host over the run boundary: `runFlow`, then per line
+  `send` (or `close` on `/exit`) and `advance`, with a timer that advances at the run's `wakeAt`
+  while the prompt is up; two Ctrl-Cs in a row `cancel` the run.
 - A stop aborts the run's controller with a `HostStop` (`utils.ts`) naming the signal; Ctrl-C at
   a prompt is a `HostStop("SIGINT")`.
 - A required provider key that is missing and that no prompt supplied throws `MissingKeyError`

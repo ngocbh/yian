@@ -609,8 +609,8 @@ export function mergeInputs(inputs: string | undefined, inputValues: readonly st
   return Object.assign(Object.create(null), fromFile, parseKv(inputValues));
 }
 
-// Click's hint for an error in the inputs `--input` and `--inputs` supply together.
-const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
+/** @internal Click's hint for an error in the inputs `--input` and `--inputs` supply together. */
+export const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
 
 /**
  * @internal Return the inputs to add to `supplied`: each declaration it lacks (key presence)
@@ -780,19 +780,19 @@ export function stopOnSignals(
   return dispose;
 }
 
-/** A flow or inputs file holding bytes that aren't UTF-8. */
-class NotUtf8Error extends Error {
+/** @internal A flow or inputs file holding bytes that aren't UTF-8. */
+export class NotUtf8Error extends Error {
   override name = "NotUtf8Error";
 }
 
 /**
- * Read the flow or inputs file at `path` as Python's `read_text(encoding="utf-8")` does: strict UTF-8, a BOM
+ * @internal Read the flow or inputs file at `path` as Python's `read_text(encoding="utf-8")` does: strict UTF-8, a BOM
  * kept, `\r\n` and `\r` read as `\n`.
  *
  * @throws {NotUtf8Error} When the file isn't UTF-8 text.
  * @throws {Error} A system error when the file can't be read.
  */
-function readFlowText(path: string): string {
+export function readFlowText(path: string): string {
   const bytes = readFileSync(path);
   let text: string;
   try {
@@ -826,12 +826,12 @@ interface RunOptions {
 }
 
 /**
- * Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
+ * @internal Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
  * with its stack: a bad value (a damaged or empty log, a defaults mismatch, a memory setup failure
  * included), an unreadable file, a run log another writer holds, a memory failure, an MCP server
  * that didn't start, the missing MCP SDK.
  */
-function isSetupError(error: unknown): error is Error {
+export function isSetupError(error: unknown): error is Error {
   return (
     error instanceof TypeError ||
     error instanceof RangeError ||

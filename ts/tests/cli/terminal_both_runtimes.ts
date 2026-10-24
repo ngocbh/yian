@@ -17,7 +17,7 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { parseQuestions } from "../../src/nodes/tool/questions.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import type { AskUserRequest } from "../../src/tools/registry.ts";
-import { Type, ValueKind } from "../../src/typesys/values.ts";
+import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
 
 export const UP = "\x1b[A";
 export const DOWN = "\x1b[B";
@@ -354,6 +354,108 @@ async function aNonTtyInputStillReadsALine(): Promise<void> {
   assert.equal(await answer, "answer");
   assert.deepEqual(input.rawCalls, []);
   assertRestored(input, output, exitHooks);
+}
+
+async function readLineReturnsEachLineThenTheEndOfInput(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, view, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const first = terminal.readLine("You:");
+  input.write("hi");
+  await tick();
+  assert.deepEqual(view().rows, ["> You: hi"]);
+  input.write(ENTER);
+  assert.deepEqual(await first, { value: "hi" });
+  assertRestored(input, output, exitHooks);
+  const second = terminal.readLine("You:");
+  input.end();
+  assert.deepEqual(await second, { eof: true });
+  // The caller handles its own stops: `onStop` hears of none.
+  assert.deepEqual(stops, []);
+  assert.deepEqual(await terminal.readLine("You:"), { eof: true });
+}
+
+async function ctrlCAtReadLineKeepsTheTerminalOpen(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const first = terminal.readLine("You:");
+  input.write("abc" + CTRL_C);
+  assert.deepEqual(await first, { interrupt: true });
+  assert.deepEqual(stops, []);
+  assertRestored(input, output, exitHooks);
+  const second = terminal.readLine("You:");
+  input.write("ok" + ENTER);
+  assert.deepEqual(await second, { value: "ok" });
+  // A prompt other than `readLine` still closes the terminal on Ctrl-C.
+  const name = terminal.askText("Name:");
+  input.write(CTRL_C);
+  assert.equal(await name, null);
+  assert.deepEqual(stops, ["interrupt"]);
+  assert.deepEqual(await terminal.readLine("You:"), { eof: true });
+}
+
+async function anAbortedReadLineKeepsLaterKeys(): Promise<void> {
+  const { input, output, terminal, exitHooks } = setup();
+  assert.deepEqual(await terminal.readLine("You:", { signal: AbortSignal.abort(new Error("woke")) }), {
+    aborted: true,
+    draft: "",
+  });
+  assert.equal(output.text, "");
+  const controller = new AbortController();
+  const line = terminal.readLine("You:", { signal: controller.signal });
+  await tick();
+  controller.abort(new Error("woke"));
+  assert.deepEqual(await line, { aborted: true, draft: "" });
+  assertRestored(input, output, exitHooks);
+  // Keys typed while no prompt is up wait for the next one.
+  input.write("later" + ENTER);
+  await tick();
+  assert.deepEqual(await terminal.readLine("You:"), { value: "later" });
+}
+
+async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const controller = new AbortController();
+  const line = terminal.readLine("You:", { signal: controller.signal });
+  input.write("half");
+  await tick();
+  controller.abort(new Error("woke"));
+  assert.deepEqual(await line, { aborted: true, draft: "half" });
+  // The aborted prompt is erased, not collapsed into a line.
+  assert.deepEqual(view().rows, []);
+  const next = terminal.readLine("You:", { initial: "half" });
+  await tick();
+  assert.deepEqual(view().rows, ["> You: half"]);
+  input.write(" done" + ENTER);
+  assert.deepEqual(await next, { value: "half done" });
+  // Aborted before it draws, the draft is the initial text.
+  const early = terminal.readLine("You:", { initial: "kept", signal: AbortSignal.abort(new Error("woke")) });
+  assert.deepEqual(await early, { aborted: true, draft: "kept" });
+}
+
+async function aPlainTerminalWritesNoEscapesAndSetsNoRawMode(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const terminal = new Terminal({ input, output, plain: true });
+  const line = terminal.readLine("You:");
+  input.write("hi" + ENTER);
+  assert.deepEqual(await line, { value: "hi" });
+  const choice = terminal.askChoice("Pick", ["a", "b"]);
+  input.write(DOWN + ENTER);
+  assert.equal(await choice, "b");
+  assert.deepEqual(input.rawCalls, []);
+  assert.ok(!/[\x1b\r]/.test(output.text), JSON.stringify(output.text));
+  // Each prompt is written once, as it opens.
+  assert.equal(output.text, "> You: \n? Pick (Use arrow keys)\n » a\n   b\n");
+}
+
+async function aNonTtyReadLineReadsOneLinePerCall(): Promise<void> {
+  const { input, terminal } = setup({ tty: false });
+  input.write("a\nb\n");
+  assert.deepEqual(await terminal.readLine("You:"), { value: "a" });
+  assert.deepEqual(await terminal.readLine("You:"), { value: "b" });
+  assert.deepEqual(input.rawCalls, []);
+  input.end();
+  assert.deepEqual(await terminal.readLine("You:"), { eof: true });
 }
 
 async function aThrowingOnStopStillRestoresTheTerminal(): Promise<void> {
@@ -1073,6 +1175,13 @@ async function suppliedInputsAreSkippedAndNothingMissingDrawsNothing(): Promise<
 
 // test_prompt_accepting_omission_preserves_start_owned_defaults (the prompt half; START applying
 // the defaults is the run's)
+async function anInboxInputIsNeverAsked(): Promise<void> {
+  const { output, terminal } = setup();
+  const inbox = decl("messages", inboxType(STR), { required: true });
+  assert.deepEqual(await terminal.promptInputs([inbox], {}), {});
+  assert.equal(output.text, "");
+}
+
 async function acceptingEveryPreselectionOmitsEachInput(): Promise<void> {
   const { input, terminal, view } = setup();
   const answer = terminal.promptInputs(
@@ -2066,6 +2175,12 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "the exit hook restores the terminal even when writing fails": theExitHookRestoresTheTerminalEvenWhenWritingFails,
   "a non-TTY input still reads a line": aNonTtyInputStillReadsALine,
   "a throwing onStop still restores the terminal": aThrowingOnStopStillRestoresTheTerminal,
+  "readLine returns each line, then the end of input": readLineReturnsEachLineThenTheEndOfInput,
+  "Ctrl-C at readLine keeps the terminal open": ctrlCAtReadLineKeepsTheTerminalOpen,
+  "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
+  "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
+  "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
+  "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
@@ -2107,6 +2222,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "prompt labels carry the type and the mark": promptLabelsCarryTheTypeAndTheMark,
   "supplied inputs are skipped and nothing missing draws nothing":
     suppliedInputsAreSkippedAndNothingMissingDrawsNothing,
+  "an inbox input is never asked": anInboxInputIsNeverAsked,
   "accepting every preselection omits each input": acceptingEveryPreselectionOmitsEachInput,
   "optional selects and a defaulted string collect answers": optionalSelectsAndADefaultedStringCollectAnswers,
   "Set null in a finite select gives a present null": setNullInAFiniteSelectGivesAPresentNull,

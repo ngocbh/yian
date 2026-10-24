@@ -144,6 +144,10 @@ The default yian chat can inspect, validate, run, and—after explicit
 approval—write flows inside its workspace. A supplied chat flow owns its own
 typed exit behavior.
 
+TS yian: `yian chat FLOW` takes a flow with an `Inbox(str)` input, such as
+[`examples/chat.yaml`](examples/chat.yaml), sends each line you type to it, and ends
+with `/exit`; see [Chatting with a flow](docs/cli.md#chatting-with-a-flow-yian-chat).
+
 ## Use the Python API
 
 ```python

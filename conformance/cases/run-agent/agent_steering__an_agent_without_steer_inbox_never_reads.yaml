@@ -1,27 +1,39 @@
 # From tests/engine/test_agent_steering.py::test_non_steerable_agent_never_calls_the_inbox.
-# An AGENT not authored `steerable: true` never reads its inbox: a queued steer and a set
-# interrupt change nothing, so the model gets the plain request and its reply is the output.
+# Changed (yian #1025): an AGENT without `steer_inbox:` never reads the inbox: a send during its
+# model call and a set interrupt change nothing, so the model gets the plain request and its
+# reply is the output. The take after it gets the event.
 kind: run
 rules: [run-log]
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer
   llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
   nodes:
     chat:
       kind: agent
-      steerable: false
       system_prompt: Help.
       prompt: Help the user.
       output: str
-  output: ${chat.output}
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.notes}
+      depends_on: [chat]
+  output:
+    answer: ${chat.output}
+    heard: ${heard.output.events}
 run:
   run_id: r1
   num_workers: 0
 host:
+  sends:
+  - {inbox: notes, event: for the take, after: {node: chat, model_call: 1, chunk: 1}}
   steering:
     chat:
-    - steer: [ignored]
     - interrupt: true
   models:
     chat:
@@ -47,7 +59,7 @@ host:
 expect:
   output:
     status: succeeded
-    output: done
+    output: {answer: done, heard: [for the take]}
   trace:
   - - run_started
     - null
@@ -76,11 +88,14 @@ expect:
   - [node_started, __start__]
   - - pool_commit
     - __start__
-    - value: {}
+    - value: {notes: {inbox: notes}}
   - - node_succeeded
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: for the take}
   - - node_step
     - chat
     - n: 1
@@ -100,26 +115,34 @@ expect:
   - - pool_commit
     - chat
     - value: done
-  - - pool_commit
-    - chat
-    - {key: chat.new_messages, steps: [9]}
   - - node_succeeded
     - chat
-    - {commit: 10, messages: 11}
+    - {commit: 11}
+  - [node_started, heard]
+  - - pool_commit
+    - heard
+    - closed: false
+      events: [9]
+      inbox: notes
+  - - node_succeeded
+    - heard
+    - {commit: 14}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: done
+    - value:
+        answer: done
+        heard: [for the take]
   - - node_succeeded
     - __end__
-    - {commit: 14}
+    - {commit: 17}
   events:
   - [RunStarted]
   - - NodeStarted
     - node_id: __start__
   - - NodeSucceeded
     - node_id: __start__
-      output: {}
+      output: {notes: {inbox: notes}}
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
@@ -138,12 +161,23 @@ expect:
     - node_id: chat
       output: done
   - - NodeStarted
+    - {node_id: heard}
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        events: [for the take]
+  - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: done
+      output:
+        answer: done
+        heard: [for the take]
   - - RunSucceeded
-    - output: done
+    - output:
+        answer: done
+        heard: [for the take]
   stream:
   - chunk: done
     final: false

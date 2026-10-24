@@ -4,15 +4,18 @@
 # calls) has been taken, after the AGENT's last poll. It changes nothing: `chat` succeeds with
 # "chat done" and the next AGENT's request renders it ("summarize: chat done").
 kind: run
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 rules: [run-log]
 flow: |
   id: steer
   name: steer
   llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
   nodes:
     chat:
       kind: agent
-      steerable: true
+      steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
       output: str
@@ -100,7 +103,7 @@ expect:
   - [node_started, __start__]
   - - pool_commit
     - __start__
-    - value: {}
+    - value: {notes: {inbox: notes}}
   - - node_succeeded
     - __start__
     - {commit: 6}
@@ -169,7 +172,7 @@ expect:
     - node_id: __start__
   - - NodeSucceeded
     - node_id: __start__
-      output: {}
+      output: {notes: {inbox: notes}}
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted

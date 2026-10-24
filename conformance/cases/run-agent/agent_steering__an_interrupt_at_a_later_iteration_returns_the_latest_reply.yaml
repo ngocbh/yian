@@ -1,17 +1,20 @@
 # From tests/engine/test_agent_steering.py::test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply.
-# A steer and an interrupt queued once tool call 1 returns are read at the top of the next
-# iteration: the interrupt wins before any steer is drained, so there is no second model call
-# and the output is the latest reply's text.
+# A steer sent and an interrupt set once tool call 1 returns are seen at the top of the next
+# iteration: the interrupt wins before the steer inbox is read, so there is no second model call,
+# the steer stays unread, and the output is the latest reply's text.
 kind: run
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 rules: [run-log]
 flow: |
   id: steer
   name: steer
   llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
   nodes:
     chat:
       kind: agent
-      steerable: true
+      steer_inbox: ${input.notes}
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
@@ -21,11 +24,10 @@ run:
   run_id: r1
   num_workers: 0
 host:
+  sends:
+  - {inbox: notes, event: too late, after: {node: chat, tool_call: 1}}
   steering:
     chat:
-    - after:
-        tool_call: 1
-      steer: [too late]
     - after:
         tool_call: 1
       interrupt: true
@@ -86,7 +88,7 @@ expect:
   - [node_started, __start__]
   - - pool_commit
     - __start__
-    - value: {}
+    - value: {notes: {inbox: notes}}
   - - node_succeeded
     - __start__
     - {commit: 6}
@@ -111,6 +113,9 @@ expect:
         request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
         response_id: null
         usage: null
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: too late}
   - - node_step
     - chat
     - n: 2
@@ -118,12 +123,9 @@ expect:
   - - pool_commit
     - chat
     - value: Looking.
-  - - pool_commit
-    - chat
-    - {key: chat.new_messages, steps: [9, 10]}
   - - node_succeeded
     - chat
-    - {commit: 11, messages: 12}
+    - {commit: 12}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -137,7 +139,7 @@ expect:
     - node_id: __start__
   - - NodeSucceeded
     - node_id: __start__
-      output: {}
+      output: {notes: {inbox: notes}}
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted

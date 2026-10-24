@@ -3,15 +3,18 @@
 # An interrupt set once model call 1 has finished keeps that reply's text as the output and runs
 # none of its two tool calls: each is reported as a ToolCallFinished with error `interrupted`.
 kind: run
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 rules: [run-log]
 flow: |
   id: steer
   name: steer
   llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
   nodes:
     chat:
       kind: agent
-      steerable: true
+      steer_inbox: ${input.notes}
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
@@ -87,7 +90,7 @@ expect:
   - [node_started, __start__]
   - - pool_commit
     - __start__
-    - value: {}
+    - value: {notes: {inbox: notes}}
   - - node_succeeded
     - __start__
     - {commit: 6}
@@ -146,7 +149,7 @@ expect:
     - node_id: __start__
   - - NodeSucceeded
     - node_id: __start__
-      output: {}
+      output: {notes: {inbox: notes}}
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted

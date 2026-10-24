@@ -4,6 +4,7 @@
 # keeps "partial" and skips its ping call; the interrupt stays with that occurrence, so
 # `loop#1/reply` runs normally ("turn2"), and the loop continues: "s|partial|turn2".
 kind: run
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 rules: [run-log]
 flow: |
   id: t
@@ -11,14 +12,16 @@ flow: |
   llm_config: {provider: openai, model: gpt-5.5}
   input:
     seed: !str
+    notes: !Inbox(str)
   defs:
     body:
       input:
         transcript: !str
+        notes: !Inbox(str)
       nodes:
         reply:
           kind: agent
-          steerable: true
+          steer_inbox: ${input.notes}
           tools: [ping]
           input:
             transcript: ${input.transcript}
@@ -33,6 +36,7 @@ flow: |
       call: body
       input:
         transcript: ${input.seed}
+        notes: ${input.notes}
       times: 2
   output: ${loop.output.transcript}
 inputs:
@@ -108,6 +112,7 @@ expect:
     - __start__
     - value:
         seed: s
+        notes: {inbox: notes}
   - - node_succeeded
     - __start__
     - {commit: 6}
@@ -232,6 +237,7 @@ expect:
     - node_id: __start__
       output:
         seed: s
+        notes: {inbox: notes}
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -239,6 +245,7 @@ expect:
         prune: []
         seed:
         - transcript: s
+          notes: {inbox: notes}
         - 0
       node_id: loop
   - - NodeStarted
@@ -247,6 +254,7 @@ expect:
     - node_id: loop#0/__start__
       output:
         transcript: s
+        notes: {inbox: notes}
   - - NodeStarted
     - node_id: loop#0/reply
   - - ModelCallStarted
@@ -291,6 +299,7 @@ expect:
         prune: [loop#0/__end__, loop#0/__start__, loop#0/reply, loop~1]
         seed:
         - transcript: s|partial
+          notes: {inbox: notes}
         - 1
       node_id: loop~1
   - - NodeStarted
@@ -299,6 +308,7 @@ expect:
     - node_id: loop#1/__start__
       output:
         transcript: s|partial
+        notes: {inbox: notes}
   - - NodeStarted
     - node_id: loop#1/reply
   - - ModelCallStarted

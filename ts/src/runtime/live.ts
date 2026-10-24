@@ -112,9 +112,11 @@ export class LiveChannel {
 
   /**
    * Return a log that appends to `log` and forwards each appended record to this channel once the
-   * append returns. The other members read `log`; closing it closes `log`.
+   * append returns. The other members read `log`; closing it closes `log`. The records `log`
+   * already holds (a resumed run's) count as seen: the snapshot's `last_seq` starts at the last.
    */
   wrap(log: RunLog): RunLog {
+    this.#lastSeq = Math.max(this.#lastSeq, log.nextSequence - 1);
     const forward = (envelope: RecordEnvelope) => this.#recorded(envelope.seq, encodeRecord(envelope), envelope.record);
     return {
       get runId() {

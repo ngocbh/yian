@@ -9,7 +9,7 @@
  * messages and never enter the log.
  *
  * Knows about:   compile/model, diagnostics, events, llm_clients (types), nodes, runtime
- *                eval_node, log, state and trace, skills, tools, typesys.
+ *                eval_node, live, log, state and trace, skills, tools, typesys.
  * Never imports: the run boundary, compose, or the CLI.
  */
 
@@ -17,7 +17,15 @@ import { AsyncResource } from "node:async_hooks";
 
 import { GrowthRejected } from "../compile/model.ts";
 import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
-import { NodeAttemptResumed, type RunEvent, RunFailed, type StreamChunk, ToolCallFinished } from "../events.ts";
+import {
+  ModelCallFinished,
+  ModelCallStarted,
+  NodeAttemptResumed,
+  type RunEvent,
+  RunFailed,
+  type StreamChunk,
+  ToolCallFinished,
+} from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { CapabilityFault, Grow, markerMessage, Output, Route, type Steering } from "../nodes/base.ts";
 import type { SourceResolver } from "../nodes/binding.ts";
@@ -36,6 +44,7 @@ import {
   requireModels,
   requireSteering,
 } from "./eval_node.ts";
+import { LiveChannel } from "./live.ts";
 import type { NodeStepRecord, OutcomeCarriers, RunLog, RunResumedRecord, RunStopReason } from "./log.ts";
 import {
   commitPrepared,
@@ -95,6 +104,11 @@ export interface FlowEngineOptions {
   random?: (() => number) | null;
   /** The run's folder (its log's folder), passed to every node; `null` for a run without a log. */
   runDir?: string | null;
+  /**
+   * Gets each AGENT model call's start, chunks and end, and drops a node's calls when the node
+   * settles; the run boundary hands it the appended records itself (`LiveChannel.wrap`).
+   */
+  live?: LiveChannel | null;
 }
 
 /** One settled worker: the outcome its evaluation resolved to, or the error it rejected with. */
@@ -174,7 +188,10 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
  * Drive a prepared append-only run frontier without owning its log.
  *
  * `run()` resolves to the observers returned after each record was appended and its reducer plan
- * applied; `onEvent` sees each first. Stream chunks reach only `onStream`. Evidence and binding
+ * applied; `onEvent` sees each first. Stream chunks reach only `onStream`. A `live` channel gets each
+ * AGENT model call's start (from `ModelCallStarted`), text chunks and end (from `ModelCallFinished`),
+ * dropped like the callbacks' once the run stops, and a node's calls are dropped from it when the
+ * node settles; the appended records reach it through the log the run boundary wraps. Evidence and binding
  * capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
  * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
  * before `record` returns, with no observer, and the capability closes once the evaluation's
@@ -216,6 +233,7 @@ export class FlowEngine {
   readonly random: (() => number) | null;
   readonly models: ModelAccess | null;
   readonly runDir: string | null;
+  readonly live: LiveChannel | null;
   /** The run's stop; single-use, so `run()` runs once. */
   readonly #controller = new AbortController();
   /** The host's stop, linked to the run's while `run()` runs. */
@@ -245,7 +263,7 @@ export class FlowEngine {
     const { growBuilder, numWorkers, onEvent = null, onStream = null, memoryContextOpener = null } = options;
     const { tools = null, skills = null, steering = null, models = null, signal = null, scheduler = null, random = null } =
       options;
-    const { runDir = null } = options;
+    const { runDir = null, live = null } = options;
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
     if (!isRunLog(log)) throw new TypeError("FlowEngine expects a RunLog");
     if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
@@ -269,6 +287,7 @@ export class FlowEngine {
     }
     if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
     if (runDir !== null && typeof runDir !== "string") throw new TypeError("run_dir must be a string or null");
+    if (live !== null && !(live instanceof LiveChannel)) throw new TypeError("live must be a LiveChannel or null");
     this.state = state;
     this.log = log;
     this.growBuilder = growBuilder;
@@ -283,6 +302,7 @@ export class FlowEngine {
     this.random = random;
     this.models = requireModels(models);
     this.runDir = runDir;
+    this.live = live;
     this.#hostSignal = signal;
     const inbox = this.steering;
     this.#steering =
@@ -539,7 +559,7 @@ export class FlowEngine {
    * signal aborts; the run state changes only through its recorded steps.
    */
   async #evaluate(nodeId: string): Promise<EvaluatedOutcome> {
-    const { state, onEvent, onStream } = this;
+    const { state, onEvent, onStream, live } = this;
     const trace = state.trace;
     const node = state.flow.nodes.get(nodeId)!;
     // A derived node gets an input route in every run: from the retained trace when there is one,
@@ -575,8 +595,8 @@ export class FlowEngine {
       return await evalNode(node, state.flow, state.pool, {
         wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
         signal: nodeController.signal,
-        emitStream: onStream === null ? null : (chunk) => this.#emit(onStream, chunk),
-        emitEvent: onEvent === null ? null : (event) => this.#emit(onEvent, event),
+        emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
+        emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
         captureEvidence: state.learnable,
         captureBindings: state.learnable || derived,
         effectiveLlmByStaticPath: state.effectiveLlmByStaticPath,
@@ -597,7 +617,29 @@ export class FlowEngine {
       });
     } finally {
       runSignal.removeEventListener("abort", relay);
+      live?.settle(nodeId);
     }
+  }
+
+  /** Pass one stream chunk to the live channel (an AGENT's text) and to `onStream`. */
+  #stream(chunk: StreamChunk): void {
+    const { live, onStream } = this;
+    if (live !== null && chunk.n !== null && chunk.index !== null && !chunk.final) {
+      this.#emit((item: StreamChunk) => live.chunk(item.nodeId, item.n!, item.index!, item.chunk), chunk);
+    }
+    if (onStream !== null) this.#emit(onStream, chunk);
+  }
+
+  /** Pass one in-loop event to the live channel (a model call's start or end) and to `onEvent`. */
+  #event(event: RunEvent): void {
+    const { live, onEvent } = this;
+    if (live !== null && event instanceof ModelCallStarted) {
+      const startedAt = new Date(event.startedAt).toISOString();
+      this.#emit((item: ModelCallStarted) => live.start(item.nodeId, item.n, item.model, item.purpose, startedAt), event);
+    } else if (live !== null && event instanceof ModelCallFinished) {
+      this.#emit((item: ModelCallFinished) => live.end(item.nodeId, item.n, item.error), event);
+    }
+    if (onEvent !== null) this.#emit(onEvent, event);
   }
 
   /**

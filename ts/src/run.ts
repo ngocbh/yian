@@ -111,6 +111,7 @@ import { realScheduler, type Scheduler, VERSION, warn } from "./platform.ts";
 import { driveBackward } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { FlowEngine, resumedAttemptEvents } from "./runtime/engine.ts";
+import { LiveChannel } from "./runtime/live.ts";
 import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts";
 import {
   decodeRecord,
@@ -179,6 +180,7 @@ export {
 } from "./nodes/agent/messages.ts";
 export type { Steering } from "./nodes/base.ts";
 export { staticPathOf } from "./nodes/ids.ts";
+export { LiveChannel, type LiveCall, type LiveFrame, type LiveSnapshot } from "./runtime/live.ts";
 export {
   type IterRunRecordsOptions,
   iterRunRecords,
@@ -504,6 +506,12 @@ export interface RunFlowOptions {
   /** Sees each transient stream chunk; called as `onEvent` is. */
   onStream?: StreamHook | null;
   /**
+   * The run's live channel: gets each record once it is appended, and each AGENT model call's
+   * start, chunks and end, for a viewer to follow the run (`LiveChannel`). A subscriber that throws
+   * ends the run as a host fault.
+   */
+  live?: LiveChannel | null;
+  /**
    * The per-run outer model configuration layer, taken through host intake (`{max_tokens: 1000}`
    * holds the int `1000n`). Its `api_key` goes only to the agents of its `provider`, with its
    * `base_url`, `organization`, `project` and `headers`; none of them is recorded.
@@ -608,6 +616,9 @@ export async function runFlow(
     if (typeof learnable !== "boolean") throw new TypeError("learnable must be a boolean");
     if (signal !== null && !(signal instanceof AbortSignal)) {
       throw new TypeError("signal must be an AbortSignal or null");
+    }
+    if (options.live != null && !(options.live instanceof LiveChannel)) {
+      throw new TypeError("live must be a LiveChannel or null");
     }
     signal?.throwIfAborted();
     const [otherTools, unopened] = splitRunServers(tools);
@@ -855,6 +866,7 @@ async function startRun(
   env: Env,
 ): Promise<RunResult> {
   const { log = null, runId = null, numWorkers = 8, onEvent = null, onStream = null, memory = null } = options;
+  const live = options.live ?? null;
   const { learnable = false, tools = null, skills = null, steering = null, context, signal = null } = options;
   const random = options.random ?? null;
   const scheduler = options.scheduler ?? realScheduler;
@@ -971,18 +983,21 @@ async function startRun(
       locator === null
         ? new MemoryRunLog(canonicalRunId, { clock })
         : JsonlRunLog.create(locator, canonicalRunId, { clock });
-    const observers = commitPrepared(authority, state, preparedStart);
+    // Every append goes through the live channel's wrapper; the authority itself is kept and closed.
+    const appender = live === null ? authority : live.wrap(authority);
+    const observers = commitPrepared(appender, state, preparedStart);
     // The pool's commits are validated as they are written, after `run_started` is on disk: input
     // intake has already rejected bad values, before any file exists, so a failure here is not an
     // input error.
-    commitInitialPool(authority, state, pool);
+    commitInitialPool(appender, state, pool);
     const runtime = memoryRuntime;
     // Built before publishing so a callback's rejected promise can stop it.
-    const engine = new FlowEngine(state, authority, {
+    const engine = new FlowEngine(state, appender, {
       growBuilder: buildGrow,
       numWorkers,
       onEvent,
       onStream,
+      live,
       // A bare `runtime.openContext` would lose its `this`.
       memoryContextOpener:
         runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
@@ -1084,6 +1099,11 @@ export interface ResumeFlowOptions {
   onEvent?: EventHook | null;
   /** Sees each new transient stream chunk; chunks are never replayed. */
   onStream?: StreamHook | null;
+  /**
+   * The live channel of this segment, as `runFlow`'s: it gets the records this call appends and
+   * the model calls it makes, never the replayed ones.
+   */
+  live?: LiveChannel | null;
   /**
    * The backend of each declared memory key, a `Map`, typically a `MemoryRegistry`. Required when
    * the run recorded memory and has unfinished work; a finished log opens no memory. For a
@@ -1204,6 +1224,9 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
     if (signal !== null && !(signal instanceof AbortSignal)) {
       throw new TypeError("signal must be an AbortSignal or null");
     }
+    if (options.live != null && !(options.live instanceof LiveChannel)) {
+      throw new TypeError("live must be a LiveChannel or null");
+    }
     signal?.throwIfAborted();
     const [otherTools, unopened] = splitRunServers(tools);
     // The other entries' errors come before the log is opened.
@@ -1293,14 +1316,18 @@ export async function resumeFlow(options: ResumeFlowOptions): Promise<RunResult>
 
       const numWorkers = options.numWorkers ?? state.numWorkers;
       const prepared = prepareRunResumed(state, { numWorkers });
-      const observers = commitPrepared(authority, state, prepared);
+      // This segment's appends go through the live channel's wrapper.
+      const live = options.live ?? null;
+      const appender = live === null ? authority : live.wrap(authority);
+      const observers = commitPrepared(appender, state, prepared);
       const runtime = memoryRuntime;
       // Built before publishing so a callback's rejected promise can stop it.
-      const engine = new FlowEngine(state, authority, {
+      const engine = new FlowEngine(state, appender, {
         growBuilder: buildGrow,
         numWorkers,
         onEvent: options.onEvent ?? null,
         onStream: options.onStream ?? null,
+        live,
         // A bare `runtime.openContext` would lose its `this`.
         memoryContextOpener:
           runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),

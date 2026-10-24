@@ -87,6 +87,7 @@ const ALLOWED: Record<string, string> = {
   "tools/mcp.ts: MAX_TIMER_MS": "the longest delay setTimeout takes",
   "platform.ts: SLEEP_CHUNK_MS": "longest timer armed at once; longer sleeps run in chunks",
   "llm/errors.ts: parseRetryAfter.now": "milliseconds per second",
+  "typesys/temporal.ts: UNIT_SECONDS": "seconds per duration unit",
   "cli/index.ts: args": "process.argv entries before the arguments",
   // Host call options and network tuning, passed per call.
   "run.ts: startRun.numWorkers": "host run option, passed per call",

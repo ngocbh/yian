@@ -45,6 +45,7 @@ import type { EvaluationTrace, MemoryContext, MemoryScope } from "../memory/cont
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
   fromHost,
@@ -61,6 +62,7 @@ import {
 import { applyDefaults, BindingError, copyValue, type ReservedBinder, validateParameters } from "./binding.ts";
 import {
   type Assertion,
+  type CallView,
   ExecutionScope,
   type HostToolCall,
   isExactly,
@@ -1453,6 +1455,17 @@ export abstract class Node {
    */
   hostToolCall(): HostToolCall | null {
     return null;
+  }
+
+  /**
+   * Shape the `tool_result` step for `complete` on one of this node's calls. Pure. The base node
+   * registers no host calls, so it throws; ToolNode overrides it.
+   *
+   * @throws TypeError on the base. An override throws TypeCheckError when the output fails the
+   *   tool's output type or ask's answer schema.
+   */
+  waitResultStep(call: CallView, _result: CompleteResult): JsonObject {
+    throw new TypeError(`node ${reprText(this.id)} registers no host calls; it can't take ${reprText(call.callId)}'s result`);
   }
 
   /**

@@ -35,3 +35,14 @@ test.each<[string, () => unknown, ErrorConstructor]>([
   ["take mode", () => new Pending([], { wait: { tool: "take", inbox: "m", mode: "many" as "one", timeoutSeconds: null } }), RangeError],
   ["unknown tool", () => new Pending([], { wait: { tool: "ask" } as never }), TypeError],
 ])("Pending refuses %s", (_n, build, type) => expect(build).toThrow(type));
+
+import { Node, NodeKind, Output } from "../../src/nodes/base.ts";
+class Plain extends Node {
+  readonly kind = NodeKind.CODE;
+  override forward() { return new Output(1); }
+}
+test("the base node registers no host calls, so it shapes no result step", () => {
+  const shape = () => new Plain("n").waitResultStep({ ...view, state: "open", result: null }, { output: 1 });
+  expect(shape).toThrow(TypeError);
+  expect(shape).toThrow(/registers no host calls/);
+});

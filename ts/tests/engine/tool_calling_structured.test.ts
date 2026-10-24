@@ -17,6 +17,10 @@
  * `openai`/`gpt-5.5` pair (Python: `anthropic`/`claude-sonnet-4-5`); a protocol-less model takes
  * the native `json_schema` plan whatever its provider, so the Ollama row asserts the structured
  * purpose. The tool is in a `ToolSet` given as `toolset`, where Python patches `TOOL_REGISTRY`.
+ *
+ * TS-only (pins): an `Optional(str)` output is text with or without tools: one chat call each turn,
+ * no trailing structured call, and `""` for an empty reply. `Optional(int)` and
+ * `Optional(Literal(...))` stay structured.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -177,3 +181,50 @@ test("test_tool_calling_final_answer_is_structured", async () => {
     ["assistant", [new TextPart("done")]],
   ]);
 });
+
+const OPTIONAL_STR = new Type({ kind: ValueKind.STRING, nullable: true });
+
+test("an Optional(str) output without tools makes one chat call and returns the text", async () => {
+  const model = new ScriptedModel([textReply("plain answer")], NATIVE);
+  const result = await run(model, OPTIONAL_STR, { prompt: "hi" });
+  expect(result.value).toBe("plain answer");
+  expect(result.purposes).toEqual(["chat"]);
+  expect(model.requests[0]!.outputFormat).toBeNull();
+});
+
+test("an empty Optional(str) reply is empty text, not null", async () => {
+  const model = new ScriptedModel([textReply("")], NATIVE);
+  expect((await run(model, OPTIONAL_STR)).value).toBe("");
+});
+
+test("an Optional(str) output after tools makes no trailing structured call", async () => {
+  const value = new FunctionTool({
+    name: "value",
+    description: "Look a topic up.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+    execute: (args) => `px:${args.topic}`,
+  });
+  const call = new ToolCallPart({ id: "1", name: "value", arguments: { topic: "ACME" } });
+  const model = new ScriptedModel(
+    [new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" }), textReply("done")],
+    NATIVE,
+  );
+  const result = await run(model, OPTIONAL_STR, { prompt: "hi", tools: ["value"], toolset: new ToolSet({ value }) });
+  expect(result.value).toBe("done");
+  // ScriptedModel throws on a third request, so this also proves no structured call follows.
+  expect(result.purposes).toEqual(["chat", "chat"]);
+  expect(model.requests.map((request) => request.outputFormat)).toEqual([null, null]);
+});
+
+for (const [id, outputType, reply, expected] of [
+  ["Optional(int)", new Type({ kind: ValueKind.INTEGER, nullable: true }), '{"value": null}', null],
+  ["Optional(Literal(a, b))", new Type({ kind: ValueKind.STRING, tags: new Set(["a", "b"]), nullable: true }), '{"value": "b"}', "b"],
+] as const) {
+  test(`${id} output stays structured`, async () => {
+    const model = new ScriptedModel([textReply(reply)], NATIVE);
+    const result = await run(model, outputType);
+    expect(result.value).toEqual(expected);
+    expect(result.purposes).toEqual(["structured_native"]);
+    expect(model.requests[0]!.outputFormat).not.toBeNull();
+  });
+}

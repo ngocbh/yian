@@ -50,9 +50,9 @@
  * construction error ignored, a `null` trace does nothing); `toolText` of a string, a record, a
  * list, `null`, `Infinity`, a big int and a `Date` (a `TypeCheckError` naming the tool's result);
  * `reportedText` (the message, else the error's `name`; a branded non-`Error` by `String()`, else
- * its `typeof`); the `SKIPPED_TOOL_ERROR` text; the `DEFAULT_SYSTEM`
- * text and the loop errors' names; `isTextOutput`; `isMaxToolIterations`; the default
- * `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward`'s host
+ * its `typeof`); the `SKIPPED_TOOL_ERROR` text; the `DEFAULT_SYSTEM` text and the loop errors'
+ * names; `isTextOutput`; `isTextOutput` on `Optional(str)` (pin); `isMaxToolIterations`; the
+ * default `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward`'s host
  * secrets (a static agent's own `api_key` and `headers`, a marked call-time agent's host key and
  * headers, an unmarked one's none) joined to the recorded config; the load-time hooks
  * (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`,
@@ -401,12 +401,17 @@ test("maxToolIterations defaults to the agent max tool iterations default", () =
   expect(node.maxToolIterations()).toBe(300);
 });
 
-test("isTextOutput accepts no contract and an untagged str", () => {
+test("isTextOutput accepts no contract and an untagged str, nullable or not", () => {
   expect(isTextOutput(null)).toBe(true);
   expect(isTextOutput(new ValueContract(Type.scalar(ValueKind.STRING)))).toBe(true);
   const tagged = new Type({ kind: ValueKind.STRING, tags: new Set(["a", "b"]) });
   expect(isTextOutput(new ValueContract(tagged))).toBe(false);
   expect(isTextOutput(new ValueContract(Type.scalar(ValueKind.INTEGER)))).toBe(false);
+  const optionalStr = new Type({ kind: ValueKind.STRING, nullable: true });
+  expect(isTextOutput(new ValueContract(optionalStr))).toBe(true);
+  const optionalTagged = new Type({ kind: ValueKind.STRING, tags: new Set(["a"]), nullable: true });
+  expect(isTextOutput(new ValueContract(optionalTagged))).toBe(false);
+  expect(isTextOutput(new ValueContract(new Type({ kind: ValueKind.INTEGER, nullable: true })))).toBe(false);
   class CustomContract extends ValueContract {}
   expect(isTextOutput(new CustomContract(Type.scalar(ValueKind.STRING)))).toBe(false);
 });

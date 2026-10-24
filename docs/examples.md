@@ -120,8 +120,8 @@ Python.
 !!! note "Why the example uses an enum"
     The synth node's verdict is a `Decision` enum because the following `case`
     routes directly on those tags. The enum itself uses structured generation,
-    as do record, number, boolean, and list outputs from AGENT nodes; only a bare `str` stays
-    on the free-text path. See
+    as do record, number, boolean, and list outputs from AGENT nodes; only `str`
+    and `Optional(str)` stay on the free-text path. See
     [Flow syntax → `agent`](syntax.md#agent-the-llm-backed-agent-node).
 
 ## Next

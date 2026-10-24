@@ -49,6 +49,15 @@ test("an agent with a steer inbox reserves its key, hides it from the model and 
   expect(new AgentNode("plain", { prompt: "hi" }).readsSteerInbox).toBe(false);
 });
 
+test("an agent keeps its steer render; a render without a steer inbox, or an empty one, is refused", () => {
+  expect(new AgentNode("c", { steerInbox: true, steerRender: "Note: ${event}" }).steerRender).toBe("Note: ${event}");
+  expect(new AgentNode("c", { steerInbox: true }).steerRender).toBeNull();
+  expect(() => new AgentNode("c", { steerRender: "x" })).toThrow(new RangeError("AGENT node 'c': a steer render needs a steer inbox"));
+  expect(() => new AgentNode("c", { steerInbox: true, steerRender: "" })).toThrow(
+    new TypeError("AGENT node 'c': steer render must be non-empty text or null"),
+  );
+});
+
 test("bindReserved resolves the steer inbox binding to the inbox name", () => {
   const node = new AgentNode("chat", { prompt: "hi", steerInbox: true });
   const wiring = new Map([[STEER_INBOX_KEY, new Binding("${input.m}")]]);

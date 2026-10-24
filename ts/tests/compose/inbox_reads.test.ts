@@ -93,3 +93,11 @@ test("a refused read wins over the unread inbox", () => {
   expect(message).toContain("take from it");
   expect(message).not.toContain("never read");
 });
+
+test("a case value reading an inbox is a load error, not a crash", () => {
+  const nodes = `  k:\n    kind: case\n    on: \${input.t}\n    cases:\n      - when: a\n        then: \${input.m}\n    else: x\n`;
+  const text = `id: f\nname: f\ninput:\n  m: !Inbox(str)\n  t: !str\nnodes:\n${nodes}${KEEP}output: null\n`;
+  expect(loadError(() => assembleText(text, "flow.yaml", CHILDREN)).message).toContain(
+    "case node 'k' then: a branch names a node or calls a flow",
+  );
+});

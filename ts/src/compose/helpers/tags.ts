@@ -467,9 +467,13 @@ function tagTextOf(typ: Type, registry: TypeRegistry): string | null {
   return writableAsTag(text) ? text : null;
 }
 
-/** Spell `typ` by its structure; only a list element may fall back to a typedef name. */
+/**
+ * Spell `typ` by its structure; only a list element may fall back to a typedef name. An inbox has
+ * no spelling here.
+ */
 function directTagText(typ: Type, registry: TypeRegistry): string | null {
-  if (typ.variants !== undefined || typ.fields !== undefined) return null;
+  // An inbox is only ever a flow input's type, so no other slot is told to tag one.
+  if (typ.variants !== undefined || typ.fields !== undefined || isInboxType(typ)) return null;
   let text: string;
   if (typ.tags !== undefined) {
     if (typ.tags.size !== 1) return null;

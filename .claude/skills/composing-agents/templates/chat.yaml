@@ -74,7 +74,7 @@ defs:
         cases:
           - when: ${heard.output.events == []}   # closed, nothing left to answer
             then: ended
-        else: call(respond, transcript=${input.transcript}, said=${join(heard.output.events, "\n")})
+        else: call(respond, transcript=${input.transcript}, said=${join(heard.output.events)})
     output: !Turn ${route.output}
 
 nodes:

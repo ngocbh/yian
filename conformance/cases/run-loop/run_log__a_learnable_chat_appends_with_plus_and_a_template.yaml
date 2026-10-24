@@ -30,16 +30,16 @@ flow: |
           kind: agent
           input:
             history: ${input.history}
-            message: ${join(heard.output.events, "\n")}
+            message: ${join(heard.output.events)}
           output: str
           prompt: |-
             Conversation so far: ${history}
             User: ${message}
       output:
-        history: ${input.history + [Msg(role="user", text=join(heard.output.events, "\n")), Msg(role="assistant", text=reply.output)]}
+        history: ${input.history + [Msg(role="user", text=join(heard.output.events)), Msg(role="assistant", text=reply.output)]}
         log: |-
           ${input.log}
-          User: ${join(heard.output.events, "\n")}
+          User: ${join(heard.output.events)}
           Assistant: ${reply.output}
   nodes:
     chat:

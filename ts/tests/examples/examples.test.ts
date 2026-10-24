@@ -92,3 +92,21 @@ test("chat waits for each message, answers it, and ends when its inbox closes", 
     { role: "assistant", text: "hello" },
   ]);
 }, 30_000);
+
+test("chat joins the messages one take reads with newlines before the model sees them", async () => {
+  const loaded = await load("chat.yaml");
+  const config = { provider: "anthropic", model: "claude-test" };
+  const models = serving(new ScriptedModel([textReply("ok")], config));
+  const log = join(tmp, "chat-joined.jsonl");
+  const options = { env: NO_ENV, numWorkers: 0, models };
+  expect((await runFlow(loaded, {}, { ...options, log, llmConfig: config })).status).toBe("waiting");
+  await send(log, "messages", "a", { env: NO_ENV });
+  await send(log, "messages", "b", { env: NO_ENV });
+  await close(log, "messages", { env: NO_ENV });
+  const result = await advance({ ...options, log });
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual([
+    { role: "user", text: "a\nb" },
+    { role: "assistant", text: "ok" },
+  ]);
+}, 30_000);

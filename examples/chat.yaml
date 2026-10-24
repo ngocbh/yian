@@ -59,7 +59,7 @@ defs:
         cases:
           - when: ${heard.output.events == []}   # closed, nothing left to answer
             then: ended
-        else: call(respond, history=${input.history}, message=${join(heard.output.events, "\n")})
+        else: call(respond, history=${input.history}, message=${join(heard.output.events)})
     output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
 nodes:

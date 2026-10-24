@@ -468,7 +468,7 @@ export class ToolNode extends Node {
    */
   private takeRequest(inputs: Record<string, unknown>): Pending {
     const inbox = inboxName(inputs.from);
-    if (inbox === null) throw inputError(`take \`from\` must be an inbox, got ${valueRepr(inputs.from)}`);
+    if (inbox === null) throw inputError(`take \`from\` must be an inbox, got ${valueRepr(inputs.from ?? null)}`);
     const mode = inputs.take ?? "one";
     if (mode !== "one" && mode !== "all") throw inputError(`take \`take\` must be one or all, got ${valueRepr(mode)}`);
     const timeoutSeconds = durationSeconds(inputs.timeout, TAKE, "timeout");

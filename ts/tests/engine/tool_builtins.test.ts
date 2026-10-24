@@ -102,6 +102,7 @@ describe("take and sleep", () => {
       "take `timeout` must be a duration, got 0",
     );
     await expectContractInput(take.forward({ from: "m" }, caps), 'take `from` must be an inbox, got "m"');
+    await expectContractInput(take.forward({}, caps), "take `from` must be an inbox, got null");
   });
 
   test("take and sleep write no step and call no tool", async () => {

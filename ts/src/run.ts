@@ -152,7 +152,7 @@ import {
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
 import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
-import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId } from "./tools/context.ts";
+import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
 import { RESERVED_TOOL_NAMES, type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { logJson } from "./typesys/json.ts";
@@ -1801,18 +1801,17 @@ function* streamedEnvelopes(log: string): Generator<RecordEnvelope, void, undefi
   for (const entry of iterRunRecords(log)) yield entry.envelope;
 }
 
-const BUILTIN_NOT_YET = "an engine built-in this version of yian doesn't run yet";
-
 /**
  * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
  *
- * An AGENT grant may name a tool group; a TOOL node must name one tool. Every static node is
- * checked, including nodes that may never run, so an unresolvable id rejects the run before any
- * record is written instead of failing its node when the node starts.
+ * An AGENT grant may name a tool group; a TOOL node must name one tool. `take` and `sleep` TOOL
+ * nodes need no tool: the engine runs them. Every static node is checked, including nodes that
+ * may never run, so an unresolvable id rejects the run before any record is written instead of
+ * failing its node when the node starts.
  *
  * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
  *   this run lacks, or `ask_user` with no handler; or a TOOL node names a tool this run lacks, a
- *   tool group, `ask` or `ask_user` with no handler, or a built-in, which no TOOL node runs yet.
+ *   tool group, or `ask` or `ask_user` with no handler.
  */
 function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
   for (const [nodeId, node] of staticNodes(flow)) {
@@ -1836,18 +1835,13 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       }
     }
     const call = node.hostToolCall();
-    if (call === null) continue;
-    const builtin = BUILTIN_TOOL_IDS.has(call.toolId as BuiltinToolId);
+    if (call === null || isEngineBuiltin(call.toolId)) continue;
     try {
-      // `take` and `sleep` are no tools a set resolves; `ask` is, through the run's handler.
-      if (builtin && call.toolId !== ASK) throw new RangeError(BUILTIN_NOT_YET);
       tools.resolve([call.toolId]);
-      // Until the TOOL node runs the built-ins, refuse them rather than call `ask` as a plain tool.
-      if (builtin) throw new RangeError(BUILTIN_NOT_YET);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       let reason: string;
-      if (builtin || call.toolId === ASK_USER || tools.groups.includes(call.toolId)) {
+      if (call.toolId === ASK || call.toolId === ASK_USER || tools.groups.includes(call.toolId)) {
         reason = `${reprText(call.toolId)}: ${error.message}`;
       } else {
         const known = tools.toolIds;
@@ -1860,6 +1854,11 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       throw new RangeError(`TOOL node ${reprText(nodeId)} names ${reason}`);
     }
   }
+}
+
+/** Whether a TOOL node's `toolId` is `take` or `sleep`, which the engine runs, not a tool. */
+function isEngineBuiltin(toolId: string): boolean {
+  return toolId === TAKE || toolId === SLEEP;
 }
 
 /**
@@ -1934,7 +1933,9 @@ function checkTemplateSource(binding: unknown, subject: string, types: ReadonlyM
 
 /**
  * Prove every static TOOL node's inputs and output agree with its tool's types. Every static node
- * is checked, including nodes that may never run, before any record is written.
+ * is checked, including nodes that may never run, before any record is written. `take` and
+ * `sleep` aren't tools and are skipped; an `ask` node is checked against yian's ask surface plus
+ * the extras the run's handler declares.
  *
  * @throws RangeError when a TOOL node passes an input its tool doesn't take, omits one the tool
  *   requires, binds an input whose type can never fit the tool's, or declares an output the tool
@@ -1943,7 +1944,7 @@ function checkTemplateSource(binding: unknown, subject: string, types: ReadonlyM
 function checkToolTypes(flow: CompiledFlow, tools: ToolSet): void {
   for (const [nodeId, node] of staticNodes(flow)) {
     const call = node.hostToolCall();
-    if (call === null) continue;
+    if (call === null || isEngineBuiltin(call.toolId)) continue;
     const declared = toolTypes(tools.resolve([call.toolId])[0]!);
     if (declared.inputs !== null) checkToolInputs(nodeId, call, declared.inputs, declared.required);
     if (declared.output !== null) checkToolOutput(nodeId, call, declared.output);

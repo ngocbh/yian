@@ -27,7 +27,7 @@ import {
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
-import { replayRunLog, resumeFlow, runFlow } from "../../src/run.ts";
+import { advance, replayRunLog, runFlow } from "../../src/run.ts";
 import { learningMaterials } from "../../src/runtime/backward.ts";
 import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
@@ -351,14 +351,14 @@ test("a finished run reopened has no tool groups: its group-granting occurrence 
   const backend = new FakeMemory();
   // A finished run opens no tools, so the grant `toolbox` is read as a tool name.
   const model = new ScriptedModel([backwardReply()], { provider: "anthropic", model: "claude-test" });
-  const resumed = await resumeFlow({
+  const reopened = await advance({
     log: path,
     memory: new Map([["test", backend]]),
     models: serving(model),
     env: hostEnv(dir),
   });
   const events: unknown[] = [];
-  const outcome = await resumed.backward("Shorter.", { onEvent: (event) => events.push(event) });
+  const outcome = await reopened.backward("Shorter.", { onEvent: (event) => events.push(event) });
   expect(outcome.status, JSON.stringify(outcome.failure)).toBe("succeeded");
   const [episode] = backend.learnContexts[0]!.episodes;
   expect(episode!.prompt).toBeNull();

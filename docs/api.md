@@ -1472,7 +1472,7 @@ result B. Every request rebuilt from them is checked against the `request_sha256
 recorded; an invocation whose rebuilt request differs is left out (learning reads nothing of it)
 and reported to `onEvent` as a `ReplayDegraded` with reason `rebuilt_request_differs`. A
 structured agent's model is built, never called, to read its structured-output plan, and a grant
-of a tool group is expanded with the run's tools (a finished run that `resumeFlow` reopened has
+of a tool group is expanded with the run's tools (a finished run that `advance` reopened has
 none, so its grants are read as tool names).
 
 Since recall is rebuilt, it must give the same text each time for the same snapshot and context.

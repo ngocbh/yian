@@ -322,7 +322,15 @@ A case can't hold code, so its host is declared under `host`.
   id>, error: <text>}` items. While the run ends `waiting` and items are left, the runner delivers
   the next one (`send`, `close` or `complete`) and moves the run on with `advance`, with the
   same host, clock and observers, so `events` and `stream` cover the whole run. A run still
-  waiting when the items run out fails the case. A case with `sends` gets no crash sweep.
+  waiting when the items run out fails the case. A case with such items gets no crash sweep.
+  Two more forms of a send item:
+  - `{inbox, event, after: {node: <node id>, <point>}}` is sent while the run is live, when it
+    reaches the point (`steering`'s points and counting), through the run's engine, as a host's
+    `send` does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it
+    joins the next model call after the reply's results. An item whose point is never reached
+    fails the case after the comparisons.
+  - `{inbox, event, down: true}`, `resume` cases only, is sent after the cut and before the
+    resume, as a host does while the run is down.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
   and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules
@@ -399,12 +407,12 @@ A case can't hold code, so its host is declared under `host`.
   In TS, the memories are `buildMemories(flow, {root, models, onEvent})` with the runner's
   scripted model access; the events `onEvent` gets (the learners' `ModelCallRetried` and
   `ReplayDegraded`, TS-only) are kept apart and never compared with `expect.events`.
-- **`steering`**: `{<node id>: [<action>, ...]}`, the host inbox a steerable AGENT polls (Python:
-  the `steering` argument of `run_flow` and `resume_flow`). The node id is the occurrence id, as
-  in `tool_calls`' `node` (`loop#0/chat` inside a LOOP or MAP). An action is
-  `{after: <point>, steer: [<text>, ...]}`, which queues steer messages, or
-  `{after: <point>, interrupt: true}`, which sets the node's interrupt. An action without `after`
-  is queued before the run. The points:
+- **`steering`**: `{<node id>: [<action>, ...]}`, the host's interrupts of an AGENT with a
+  `steer_inbox:` (Python: the `steering` argument of `run_flow` and `resume_flow`, whose inbox
+  also takes steers). The node id is the occurrence id, as in `tool_calls`' `node`
+  (`loop#0/chat` inside a LOOP or MAP). An action is `{after: <point>, interrupt: true}`, which
+  sets the node's interrupt; one without `after` is set before the run. Steers are `sends` items
+  with `after:` (TS-only: a case still holding a `steer:` action fails to load). The points:
   - `{model_call: n}`: once the node's `n`th `agent` model call has finished (its last chunk
     taken); not when the call raises;
   - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered; `k` counts the
@@ -415,17 +423,16 @@ A case can't hold code, so its host is declared under `host`.
 
   Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
   scripts do. Steering acts in the main run (and its resume), never in a `host.memory` `before`
-  run, whose calls aren't counted. Steers are drained once; an interrupt stays set. An action
-  whose point is never reached fails the case after the comparisons, like a leftover entry.
-  In a `resume` case the inbox is the same object across the cut, so a steer queued before the
-  cut and not yet read reaches the resumed run, and a set interrupt stays set. A resumed TS AGENT
-  reads neither while it replays its recorded calls (`resume/run_log__*`).
+  run, whose calls aren't counted. An interrupt stays set. An action whose point is never reached
+  fails the case after the comparisons, like a leftover entry. In a `resume` case the host is the
+  same object across the cut, so a set interrupt stays set. A resumed TS AGENT doesn't read it
+  while it replays its recorded calls (`resume/run_log__*`); recorded steers replay as steps.
 
-  The AGENT reads its inbox only at fixed places: steers and the interrupt at the top of each
-  loop iteration (just before a model call), the interrupt before each later chunk of a
-  streamed reply and before each tool call. A polled inbox can't act "before" a point, so:
-  - a steer before model call `n` is `after: {model_call: n-1}`, and one before model call 1
-    has no `after`;
+  The AGENT reads its steer inbox at the top of each loop iteration (just before a model call),
+  and the interrupt there, before each later chunk of a streamed reply and before each tool
+  call. A host can't act "before" a point, so:
+  - a steer before model call `n` is a `sends` item `after: {node, model_call: n-1}` (or
+    `{tool_call: i}` for a call of reply `n-1`);
   - an interrupt before tool call `i` is `after: {tool_call: i-1}`, or `after: {model_call: n}`
     for the first call of reply `n`. In TS this holds only when call `i` isn't in the same group
     as call `i-1`: the calls of `concurrency_safe` stub tools run together, so a group's later
@@ -439,8 +446,8 @@ A case can't hold code, so its host is declared under `host`.
 
   An interrupted AGENT succeeds with its text so far (`""` before any reply): mid-stream it keeps
   the chunks shown and ends the stream with a final `""` chunk, and on the last chunk it keeps the
-  whole reply. The tool calls it skips finish with error `interrupted`. Only an AGENT authored
-  `steerable: true` (with `str` output) reads the inbox.
+  whole reply. The tool calls it skips finish with error `interrupted`. Only an AGENT with a
+  `steer_inbox:` (and `str` output) reads the interrupt.
 - **`stop`**: `{<node id>: {after: <point>}}`, a stop of the run (TS only; the Python runner
   doesn't support it yet). The points and their counting are `steering`'s, and `after` is
   required. When the run reaches the point, the runner aborts the run's `signal` with a

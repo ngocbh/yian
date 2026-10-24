@@ -254,7 +254,10 @@ host answers each call with `complete(log, callId, {output} | {error})`, or list
 with `pendingCalls`; the call id is `<run id>/<node>/<n>/<index>`. Once every call is answered
 the agent wakes, replays its recorded model calls and tool results without making them again,
 and its next request reads every result of the reply in call order. A pended call is observed as
-a `ToolCallStarted` with no `ToolCallFinished`. Memory recalled at the wake doesn't change the
+a `ToolCallStarted` with no `ToolCallFinished`. The model may give `ask_user` a `timeout`, such as
+`30m`, `24h` or `2d`; when nobody answers in time it reads `timed out: no answer` as the call's
+error result, and if the run was cut off while a call waited it reads that the call's outcome is
+unknown. A run needs a log for a call to wait. Memory recalled at the wake doesn't change the
 replayed calls: a request's recorded digest leaves the recalled sections out, and the new call
 after the wake reads the fresh recall. See
 [Blocking human interaction](api.md#blocking-human-interaction).
@@ -271,7 +274,7 @@ after the wake reads the fresh recall. See
 | `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages; an AGENT with `tools:` or `skills:` runs the tool loop, and one without them makes one model call. A name may be a host-filled tool group, which expands to its tools. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` or `Optional(str)` remains free text. |
-| `steerable: true` plus host `steering=` | Sends the host's queued steer messages as `HumanMessage`s with the next model request, and stops the node on a host interrupt (a streamed reply is cut); the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steerable). |
+| `steer_inbox: ${input.<name>}` plus host `send` and `steering=` | Before each model call, reads everything queued in that `Inbox(...)` input and sends it with the request as one user message per read (a `Message` event as itself); the read is a recorded `steer` step. A host interrupt stops the node (a streamed reply is cut); the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steer_inbox). Python yian: `steerable: true`, whose host inbox's `drain` gives the steers. |
 | `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
 The system instruction is the rendered `system_prompt:` when the node has one,

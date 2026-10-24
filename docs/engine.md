@@ -295,8 +295,10 @@ an over sleep commits `null`; otherwise the node waits. Before it starts a ready
 dispatcher wakes the oldest waiting node whose calls are settled or past their deadline. A woken
 TOOL node returns from its settled call without calling anything, so it takes no worker slot; a
 woken agent calls its model, so it takes a slot as a start does, and when none is free waking
-stops until a running node settles (waking stays oldest first). Pooled mode keeps one scheduler
-timer for the earliest open deadline; serial mode notices a due deadline when the running node settles. At
+stops until a running node settles (waking stays oldest first). A waiting node is due as soon as
+any open call it waits on passes its deadline; the wake times those calls out and may leave its
+other calls open (a woken agent writes their closers and waits again on the rest). Pooled mode
+keeps one scheduler timer for the earliest open deadline, at which some waiting node is due; serial mode notices a due deadline when the running node settles. At
 quiescence with nodes waiting, `run()` records `run_waiting` and resolves instead of failing. A
 host's send, complete, inbox close or cancel reaches a running engine synchronously between two
 awaits (`FlowEngine.deliver`); a cancel aborts the running nodes and `run()` resolves cancelled.

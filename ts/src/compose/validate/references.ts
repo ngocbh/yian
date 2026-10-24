@@ -48,7 +48,7 @@ import {
 } from "../../expr/index.ts";
 import { Span } from "../../expr/template.ts";
 import type { Node } from "../../nodes/base.ts";
-import { AgentNode } from "../../nodes/agent/node.ts";
+import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
 import {
@@ -76,6 +76,7 @@ import {
   Type,
   typeEquals,
   ValueKind,
+  valueRepr,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
@@ -283,7 +284,8 @@ function itemContract(
  * Every builtin call in a binding or prompt must pass arguments the builtin takes.
  *
  * An inbox input (`Inbox(T)` in `inputContracts`) is read only whole, as the lone
- * `${input.<name>}` bound to an input a named call's or a loop's child declares as an Inbox. Any
+ * `${input.<name>}` bound to an input a named call's or a loop's child declares as an Inbox, or
+ * the lone `${input.<name>}` of an AGENT's `steer_inbox:`. Any
  * other read of it (a field, text or an expression, a typed binding or value, another node kind,
  * a MAP, an inline `call(...)`, a flow output) is an error at its site. An inbox input with no
  * whole read is an error too, located at its declaration, reported only when no other one is.
@@ -469,6 +471,43 @@ export function validateReferences(
     ]);
   }
 
+  /**
+   * Check an AGENT's `steer_inbox:` source: the lone `${input.<name>}` of an inbox input, counted
+   * as a whole read. Any other read of an inbox gets the inbox read errors; a source that reads no
+   * inbox isn't an inbox.
+   */
+  function checkSteerInbox(
+    fromValue: unknown,
+    where: string,
+    rng: SourceRange | null,
+    site: Pick<ScanOptions, "siteProducers" | "siteInputs">,
+  ): void {
+    const source = bindingSource(fromValue);
+    const text = typeof source === "string" ? source : null;
+    const lone = text !== null ? loneReferenceParts(text) : null;
+    if (lone !== null && lone.length === 2 && lone[0] === "input" && inboxInputs.has(lone[1]!)) {
+      scan(fromValue, where, rng, { ...site, constructors: false, inboxTail: null });
+      return;
+    }
+    let readsInbox = false;
+    try {
+      readsInbox =
+        text !== null &&
+        exprRefsOf(text).some((path) => {
+          const parts = path.split(".");
+          return parts[0] === "input" && inboxInputs.has(parts[1]!);
+        });
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+    }
+    if (readsInbox) {
+      scan(fromValue, where, rng, { ...site, constructors: false });
+      return;
+    }
+    const written = text ?? valueRepr(source);
+    errors.push([`${where}: \`${written}\` isn't an inbox; \`steer_inbox:\` names an Inbox input`, rng]);
+  }
+
   /** Add one error at `where` per field read on a builtin's result in `trees`. */
   function addBuiltinFieldErrors(trees: readonly ExprNode[], where: string, rng: SourceRange | null): void {
     for (const tree of trees) {
@@ -601,6 +640,13 @@ export function validateReferences(
       // A reserved wiring key is a KIND FIELD, so its range is keyed `field` — not the bare key,
       // which would silently fall back to the whole `input:` block or node header.
       const reservedRng = franges.get(siteKey("field", key)) ?? inputRng;
+      if (node instanceof AgentNode && key === STEER_INBOX_KEY) {
+        checkSteerInbox(nwiring.get(key), result.siteName(nodeId, "steer_inbox"), reservedRng, {
+          siteProducers: nodeProducers,
+          siteInputs: nodeInputs,
+        });
+        continue;
+      }
       scan(nwiring.get(key), result.siteName(nodeId, node.reservedKeyLabel(key)), reservedRng, {
         siteProducers: nodeProducers,
         siteInputs: nodeInputs,

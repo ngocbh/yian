@@ -256,7 +256,7 @@ function toolResults(model: ScriptedModel, index: number): ToolResultPart[] {
 function interruptible(): { steering: Steering; interrupt: () => void } {
   const controller = new AbortController();
   return {
-    steering: { interruptSignal: () => controller.signal, drain: () => [] },
+    steering: { interruptSignal: () => controller.signal },
     interrupt: () => controller.abort(new Error("interrupted")),
   };
 }

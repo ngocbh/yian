@@ -1,0 +1,47 @@
+# TS-only (#1025): the agent's `hold` handler returns pending() and the process is lost right
+# after its `pending` step (record 10), before the node waits. The resume closes the open call by
+# record (`run_resumed.closed_calls`), the agent's replay writes the `crashed` closer (the model
+# reads that the call's outcome is unknown) and the next model call goes on; the handler isn't
+# called again.
+kind: resume
+rules: [run-log]
+python_skip: an agent's pending host call is TS-only (#1025)
+flow: |
+  id: pending
+  name: pending
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    agent:
+      kind: agent
+      tools: [hold]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${agent.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    hold:
+      description: Wait for an answer.
+      parameters: {type: object, properties: {}}
+      pending: true
+  models:
+    agent:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-1, name: hold, arguments: {}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: checked}
+  crash_after_record: 10
+expect:
+  output:
+    status: succeeded
+    output: checked
+  trace: [[run_started, null, {effective_llm_by_static_path: {agent: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, learnable: false, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, agent], [node_step, agent, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{arguments: {}, id: call-1, name: hold, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 356406a9005ce75def4a94783abdcef0c728375f3f4e3bb983d48073fb88df74, response_id: null, usage: null}}], [node_step, agent, {n: 2, step: {call_id: r1/agent/1/0, index: 0, kind: pending, reply: 1, tool: hold, tool_call_id: call-1}}], [run_resumed, null, {closed_calls: [r1/agent/1/0], num_workers: 0, retry_node_ids: [agent]}], [node_started, agent], [node_step, agent, {n: 3, step: {call_id: call-1, closed: crashed, is_error: true, kind: tool_result, output: The tool call was interrupted; its outcome is unknown. Check its effect before retrying.}}], [node_step, agent, {n: 4, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: checked, type: text}], role: assistant}, purpose: chat, request_sha256: 7c6cd84fc79c4a6081c4fc4a5361c37236104a5ac242adb91b21135f53420e89, response_id: null, usage: null}}], [pool_commit, agent, {value: checked}], [pool_commit, agent, {key: agent.new_messages, steps: [9, 13, 14]}], [node_succeeded, agent, {commit: 15, messages: 16}], [node_started, __end__], [pool_commit, __end__, {value: checked}], [node_succeeded, __end__, {commit: 19}]]
+  tool_calls: {hold: [{args: {}, call_id: r1/agent/1/0, attempt: 1, node: agent}]}

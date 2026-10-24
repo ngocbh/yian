@@ -16,6 +16,7 @@ import { ToolContext } from "../../src/tools/context.ts";
 import { TOOL_ERROR } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
+  type AskRequest,
   type AskUserRequest,
   invokeTool,
   invokeToolTrusted,
@@ -298,7 +299,7 @@ describe("ToolSet construction", () => {
       "Ask the user one short question and wait for the answer. Use only when you need a decision or information that only the user can provide. Put the context they need in one or two sentences. When there are clear choices, pass 2-4 short `options`; the user can always type their own answer.",
     );
     expect(JSON.stringify(askUser!.parametersJsonSchema)).toBe(
-      '{"properties":{"question":{"type":"string"},"options":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"description":"Optional 2-4 short answer choices. The user can always type a different answer."}},"required":["question"],"type":"object"}',
+      '{"properties":{"question":{"type":"string"},"options":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"description":"Optional 2-4 short answer choices. The user can always type a different answer."},"timeout":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"description":"Optional: how long to wait for an answer, such as 30m, 24h or 2d. After it the call returns \'timed out: no answer\'."}},"required":["question"],"type":"object"}',
     );
     expect(await tools.invoke("ask_user", { question: "Approve?" }, { callId: "c" })).toBe("answer");
     expect(seen).toHaveLength(1);
@@ -468,7 +469,7 @@ describe("ask_user invocation", () => {
     const tools = new ToolSet({ ask_user: recordingHandler(seen) });
 
     const [askUser] = tools.resolve(["ask_user"]);
-    expect(Object.keys(askUser!.parametersJsonSchema.properties as object)).toEqual(["question", "options"]);
+    expect(Object.keys(askUser!.parametersJsonSchema.properties as object)).toEqual(["question", "options", "timeout"]);
     expect(await tools.invoke("ask_user", { question: "Approve?" })).toBe("answer");
 
     expect(seen).toEqual([{ question: "Approve?", ...NO_FIELDS }]);
@@ -485,6 +486,7 @@ describe("ask_user invocation", () => {
   });
 
   const INJECTED: [string, unknown][] = [
+    ["deadline", "2026-10-24T10:30:00.000Z"],
     ["questions", [{ id: "reason", prompt: "Why?" }]],
     ["answerSchema", [{ name: "reason", type: "str" }]],
     ["title", "Approval"],
@@ -498,7 +500,7 @@ describe("ask_user invocation", () => {
 
       expect(await rejected(tools.invoke("ask_user", { question: "Approve?", [key]: value }), RangeError)).toBe(
         `tool 'ask_user' received unsupported argument(s) ["${key}"] on its public invocation path; ` +
-          'allowed: ["options","question"]',
+          'allowed: ["options","question","timeout"]',
       );
       expect(seen).toEqual([]);
     });
@@ -530,8 +532,21 @@ describe("ask_user invocation", () => {
     const inputs = { question: "Approve?", questions: [], answerSchema: [], title: "T", nodeId: "n" };
     expect(await rejected(tools.invokeTrusted("ask_user", inputs), RangeError)).toBe(
       'tool \'ask_user\' received unsupported argument(s) ["answerSchema","nodeId","questions","title"] on its ' +
-        'trusted invocation path; allowed: ["options","question"]',
+        'trusted invocation path; allowed: ["deadline","options","question","timeout"]',
     );
+  });
+
+  // TS-only: the agent turns the model's `timeout` into `deadline` and checks the call on the
+  // trusted path; the handler gets the deadline, never the timeout text.
+  test("the trusted ask_user path hands the handler the deadline the agent computed", async () => {
+    const seen: AskRequest[] = [];
+    const tools = new ToolSet({ ask: (request: AskRequest) => (seen.push(request), "answer") });
+
+    const inputs = { question: "Approve?", timeout: "30m", deadline: "2026-10-24T10:30:00.000Z" };
+    const checked = await tools.validateTrusted("ask_user", inputs);
+    expect(await tools.invoke(checked, { node: "a" })).toBe("answer");
+
+    expect(seen).toEqual([{ ...NO_FIELDS, question: "Approve?", deadline: "2026-10-24T10:30:00.000Z" }]);
   });
 
   test("test_ask_user_never_falls_back_to_the_global_registry (invoke)", async () => {
@@ -566,7 +581,7 @@ describe("ask_user invocation", () => {
       [...types.inputs!].map(([name, typ]) => [name, typ === null ? null : canonicalTypeLabel(typ)]),
     );
 
-    expect(labels).toEqual({ question: "str", options: null });
+    expect(labels).toEqual({ question: "str", options: null, timeout: "Optional(str)" });
     expect(types.required).toEqual(new Set(["question"]));
   });
 });

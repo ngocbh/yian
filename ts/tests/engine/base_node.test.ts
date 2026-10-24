@@ -45,6 +45,7 @@ import {
   NodeAssertFailed,
   NodeBodyError,
   NodeKind,
+  type NodeCaps,
   Output,
   parseNamedCondition,
   Route,
@@ -131,7 +132,7 @@ test("a new node starts with empty fields and every trait off", () => {
     node.needsTools,
     node.needsLiveEvents,
     node.needsSteps,
-    node.needsSteering,
+    node.readsSteerInbox,
     node.needsModels,
     node.derived,
     node.producesMessages,
@@ -143,6 +144,12 @@ test("a node that produces no messages refuses the message methods", () => {
   const node = new FuncNode("n");
   expect(() => node.messageSteps([])).toThrow(new TypeError("node 'n' produces no messages"));
   expect(() => node.rebuildMessages([], null)).toThrow(new TypeError("node 'n' produces no messages"));
+});
+
+test("a node opts into its steer inbox through readsSteerInbox; the base node doesn't", () => {
+  expect(new FuncNode("f").readsSteerInbox).toBe(false);
+  const caps: NodeCaps = { openSteerInbox: (inbox) => ({ inbox, queued: () => false, read: () => null }) };
+  expect(caps.openSteerInbox!("m").read()).toBeNull();
 });
 
 test("node rejects an origin that isn't an OriginRef", () => {

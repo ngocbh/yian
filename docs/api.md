@@ -563,7 +563,8 @@ The call id depends on who calls the tool:
   the same call id. The re-run rules above apply: a handler that hadn't returned is called again
   with the same id, a recorded call isn't called again, and an answer completed as an error
   fails the node without a retry. A tool an AGENT calls may return `pending()` too (see
-  [Blocking human interaction](#blocking-human-interaction)).
+  [Blocking human interaction](#blocking-human-interaction)). A run with no log (`log: null`)
+  refuses `pending()`, TOOL or AGENT, failing the node, since nothing could answer the call.
 - Changed (TS yian): a call from an AGENT's tool loop has the id `"<run_id>/<node>/<n>/<index>"`:
   `n` is the step of the reply that made the call and `index` the call's place among the reply's
   runnable calls. A resumed AGENT replays its recorded replies, so the id is stable across resume,
@@ -1342,7 +1343,7 @@ is for debugging only; don't branch on it.
 | `provider.context_length` (TS yian) | The request is longer than the model's context window. | Shorten the inputs or history, or pick a model with a larger window. | No |
 | `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply, or the provider's content filter rejected the request (an HTTP 4xx naming `content_filter`, `content_policy_violation` or `ResponsibleAIPolicyViolation`). | Read `failure.message`; change the input. | Rarely |
 | `condition.evaluate` (TS yian) | A LOOP `while:`/`until:`, a CASE `when:`, or an `asserts:` condition can't be evaluated (an error, as opposed to evaluating false). | Fix the flow or its inputs. | No |
-| `tool.timeout` (TS yian) | A TOOL `ask` timed out with no answer and its declared output doesn't allow null. | Route on null with `output: Optional(T)`, or extend the timeout. | Only if someone may answer next time |
+| `tool.timeout` (TS yian) | A TOOL `ask` timed out with no answer and its declared output doesn't allow null, or it declares no `output:` (which reads as `str`). | Route on null with `output: Optional(T)`, or extend the timeout. | Only if someone may answer next time |
 
 Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian
 reports these failures as `node.execute`, except that an `asserts:` condition that
@@ -1575,8 +1576,7 @@ result stays in the loop's message history, the evidence, and any logs.
 
 ## Steering
 
-An AGENT authored `steerable: true` (see
-[Steering a running agent](syntax.md#steering-a-running-agent-steerable)) reads a
+An AGENT authored `steerable: true` (Python yian; TS yian reads a `steer_inbox:`, below) reads a
 host inbox while its tool loop runs. The inbox is any object with two methods:
 
 ```python
@@ -1640,23 +1640,37 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   nodes replay without reading it.
 - `yian.run.Steering` is the matching `typing.Protocol`.
 
-Changed (TS yian): the inbox is push-based. In place of `interrupted(node_id)`,
-`interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that
-node. `drain(nodeId)` returns the queued messages or a promise of them, and the node
-awaits it between its effects. Only the main thread reads the inbox (CODE bodies run on
-worker threads but never see it), so it needs no lock. The `Steering` interface lives in
-`nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
+Changed (TS yian): an AGENT reads steers from a declared inbox, `steer_inbox: ${input.<name>}`
+(see [Steering a running agent](syntax.md#steering-a-running-agent-steer_inbox)), and the
+host sends them like any event: `send(log, "<name>", event)`, through the live engine while the
+run moves, or under the log's lock while it is down. `steering` holds only the interrupt:
+`interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that node (an
+object without it is a `TypeError` before any record is written). Only the main thread reads
+it (CODE bodies run on worker threads but never see it), so it needs no lock. The `Steering`
+interface lives in `nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
 
-Also changed (TS yian): every model call streams, so the interrupt is read before each later
-text chunk of every chat call, and a host without `onStream` can cut a reply too; a reply
-whose text had all arrived is kept whole. So an interrupt during a reply's reasoning or
-tool-call stream takes effect at its next text chunk, or once the reply is complete. An interrupt during the wait before retrying a failed model
-call ends the wait at once, and the node succeeds with no new text (`""`, the cut call's
-empty reply). Steers are awaited at the top of each iteration only, and an interrupt that lands while
-an async `drain` settles stops the node before the next model call. A reply's tool calls
-are checked for an interrupt before each call's check, before each group, and before the
-node fails at a call whose check failed (see
-[Tool context](#tool-context)), and a group that is running finishes.
+- **Steers.** Before each model call, after the previous reply's tool results, the agent reads
+  everything queued in its inbox in one zero-wait read, through the engine. The read appends a
+  `steer {inbox, from: [<send seq>, ...]}` node step (exactly these keys) and its events join
+  the request: one user message per read, a text part per event, and a `Message` event as its
+  own user message keeping its `author`. Nothing queued: no step. `from` is the whole unread
+  queue; the run reducer refuses any other. The consumed events leave the inbox's unread
+  queue at the step, and their values stay in the run state until the agent settles.
+- **Replay.** A resumed agent gets each recorded steer back with its values, from the run state,
+  before the call it preceded, so the request is rebuilt as sent. `request_sha256` hashes every
+  message, steers included. A send made while the run was down is read by the first live call.
+- **Run log.** A reader sees the `steer` step like any node step; `foldRunLog` gives each send
+  in `from` as the `pool_commit` holding its value. Readers skip step kinds they don't know.
+- **Interrupts.** An interrupt is read at the top of each iteration, before the steer read, so
+  an honored interrupt leaves queued steers unread in the inbox. Every model call streams, so
+  the interrupt is read before each later text chunk of every chat call, and a host without
+  `onStream` can cut a reply too; a reply whose text had all arrived is kept whole. So an
+  interrupt during a reply's reasoning or tool-call stream takes effect at its next text
+  chunk, or once the reply is complete. An interrupt during the wait before retrying a failed
+  model call ends the wait at once, and the node succeeds with no new text (`""`, the cut
+  call's empty reply). A reply's tool calls are checked for an interrupt before each call's
+  check, before each group, and before the node fails at a call whose check failed (see
+  [Tool context](#tool-context)), and a group that is running finishes.
 
 ## Injecting agent memory
 
@@ -2465,8 +2479,8 @@ Changed (TS yian, schema 22): an AGENT's success writes three records with nothi
 its output `pool_commit`, then a messages commit, then `node_succeeded`, which names both. The
 messages commit, `pool_commit {node_id, key: "<node>.new_messages", steps: [seq, ...]}`, holds no
 value but `steps`: the seqs of the agent's own steps its new messages are made of, ascending:
-each chat `model_call` whose reply arrived, every `tool_result`, and for a structured agent its
-accepted structured call (the node's last `model_call`, when it is structured, has no `error` and
+each chat `model_call` whose reply arrived, every `tool_result`, every `steer` read, and for a
+structured agent its accepted structured call (the node's last `model_call`, when it is structured, has no `error` and
 wasn't cut). Failed attempts, `llm_config` steps and earlier structured attempts are left out.
 `node_succeeded` gains `messages`, the messages commit's seq (`null` for every other node; always
 on the wire). The reducer derives `steps` itself (`Node.messageSteps`, which picks step `n`s that
@@ -2476,7 +2490,10 @@ that names none. It rebuilds the value, a `list(Message)` (`Node.rebuildMessages
 commit is prepared, so a value that doesn't rebuild appends nothing: each reply as recorded, then
 one `tool` message per call it answered, in the reply's call order (results are recorded in
 finish order). A tool call with no result (its arguments didn't parse, or a host interrupt cut its
-reply) is left out, so every tool call in the value has a result; so is media that isn't a
+reply) is left out, so every tool call in the value has a result. Each `steer` read joins where
+it was read, after the previous reply's results, as the user messages the request held: one per
+`Message` event, keeping its author, and one for each run of other events, a text part per event
+(the reducer reads the events from the run's sends). Left out too is media that isn't a
 run-folder file (a run without a log keeps a reply's media inline; the agent warns when it records
 such a reply), and a message left with no parts. A structured agent's value ends with one
 assistant message holding its final value as JSON text; the recorded structured reply (an
@@ -2533,7 +2550,8 @@ whose binding finished (every outcome but a failure at a binding stage, whose in
 Changed (TS yian, schema 18): the inbox and wait records. Six record kinds, each with every
 field always present: `node_waiting {node_id, call_ids, waits, steer_inbox}` moves an in-flight
 node to the waiting set (`waits` holds at most one take or sleep call, `{call_id, tool, inbox,
-mode, deadline}`, with nulls where unused; `steer_inbox` is always null for now), `node_woken
+mode, deadline}`, with nulls where unused; `steer_inbox` names the steer inbox of an AGENT that
+waits with one open, else null), `node_woken
 {node_id, timed_out}` moves it back in flight, `run_waiting {node_ids}` marks a quiescence with
 nodes waiting, `inbox_closed {inbox}`, and the terminal `run_cancelled {}` and `run_failed
 {failure}`. `run_resumed` gains `closed_calls`, the open calls of the retried nodes it closes
@@ -2564,20 +2582,23 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   a result no call registered, such as an agent's inline call, stays the node's own detail.
 - An AGENT registers a call whose handler returned `pending()` with a `pending` step: `reply` is
   the `n` of its latest `model_call` step, `call_id` is `<run>/<node>/<reply>/<index>`, `tool` a
-  tool other than `take` or `sleep`, `tool_call_id` the provider's id, with no `arguments` and no
-  `deadline`, the whole step within `YIAN_MAX_EVENT_BYTES`. A provider's ids repeat across replies
+  tool other than `take` or `sleep`, `tool_call_id` the provider's id, with no `arguments` and a
+  `deadline` (a record time) only on `ask_user`, the whole step within `YIAN_MAX_EVENT_BYTES`. A provider's ids repeat across replies
   and nodes, so an AGENT's `tool_result` refers to a registered call only when the call is its own
   node's and of its latest reply. A call closed by record (a resume's `closed_calls`) takes one
   more result on its running AGENT, the closer that tells the model why: `closed` equal to the
-  call's reason, once. A `closed` result for an open call, a second closer, or another word is
+  call's reason (`crashed`, or `timed_out` with `output` `"timed out: no answer"`), once. A `closed` result for an open call, a second closer, or another word is
   refused; a TOOL node writes no closers.
 - `node_waiting` moves an in-flight node with no pending commit to the waiting set. Its `waits`
   entry is a take or sleep node's own call, not yet registered; a take may wait only on an open
   inbox with nothing unread it may read. `call_ids` names calls of the node registered since its
   last wake (in this start or an earlier one, so a restart can wait on the call it registered
-  before a crash) and not closed, including every open one. `node_woken` needs a waiting node
-  whose calls are all settled once its `timed_out` calls (open calls with a deadline; the
-  reducer reads no clock) time out; the wake is the node's accepted start from then on.
+  before a crash), or still open at that wake (open, or answered after it), and not closed,
+  including every open one. `node_woken` names a waiting node and its `timed_out` calls (open
+  calls with a deadline; the reducer reads no clock). A wake with no `timed_out` needs every call
+  the node waits on settled; a timeout wake may leave its other calls open, and an agent woken so
+  writes its closers and waits again on the rest. The wake is the node's accepted start from then
+  on.
   `run_waiting` needs nothing in flight or ready, every waiting node named in order, none
   wakeable, and no `run_waiting` as the last frontier record. A waiting node holds no worker,
   isn't retried by a resume, and keeps the run from ending, as an in-flight node does.
@@ -2592,8 +2613,9 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   answered and commits `{events: [], closed: true}`. `run_cancelled` ends the run;
   `run_failed` ends it at quiescence with nodes waiting, none wakeable, once a route proved END
   unreachable, holding that failure. Both close every open call, and, being terminal, refuse
-  every later record. `run_resumed.closed_calls` must be the retried agents' open calls (a TOOL
-  node's re-run reuses its call instead). The reducer publishes `CallClosed` for each host call it
+  every later record. `run_resumed.closed_calls` must be the retried agents' open calls registered
+  since their last wake (a call a timeout wake left open stays pending; a TOOL node's re-run
+  reuses its call). The reducer publishes `CallClosed` for each host call it
   closes: a timed-out `ask` in `node_woken`, a resume's closed calls, `run_cancelled`,
   `run_failed` and a `node_failed`; takes and sleeps get none.
 
@@ -2742,8 +2764,8 @@ on replay. Each `step` is a JSON object with a string `kind`:
   may have sent) and `retry_in` (the wait in seconds before the retry, `null` when it isn't
   retried) in place of `response_id` and `finish`. A call a stop or abort cut writes nothing.
   `request_sha256` is the SHA-256 of the request's messages (each message's `author` included),
-  tools, tool choice, parallel tool calls and output format, as `logJson` text, with the steers
-  the AGENT read left out. Media
+  tools, tool choice, parallel tool calls and output format, as `logJson` text; the steers the
+  AGENT read are messages like any other, so the digest covers them. Media
   in a reply is never inline: its bytes are stored as `media/<sha256>.<ext>` beside the run's
   log, `output` holds the file reference, and the request (and its digest) holds that form;
   only the request sent to the provider has the bytes inline.
@@ -3120,10 +3142,9 @@ the run log is not a durable replacement for that memory backend.
 Changed (TS yian): there is no session memory, so nothing keeps a conversation beside the
 run log; a chat's history is the value a LOOP carries, rebuilt on replay from the node outputs
 that made it (the turns' derived commits hold `from` pointers; see [Authoritative run
-logs](#authoritative-run-logs)). Steers aren't
-recorded: a steer an AGENT read before a crash is lost (the replayed requests don't hold it, and
-`request_sha256` leaves steers out so they still match), and one queued while the run was down
-joins the first live model call.
+logs](#authoritative-run-logs)). Each steer read is recorded as a `steer` step, so a steer an
+AGENT read before a crash joins the replayed requests where it joined the live ones, and one
+queued while the run was down joins the first live model call.
 
 Changed (TS yian): an AGENT records each model call and each tool result as a node step (see
 [Authoritative run logs](#authoritative-run-logs)), and a resumed AGENT replays them instead of
@@ -3132,12 +3153,21 @@ the recorded reply back without calling the model or publishing anything, once t
 `purpose` and `request_sha256` match the rebuilt ones. A tool call with a recorded result gets
 that result without running. A replayed call with no result (a crash or a stop cut it off) is
 checked as live and, when its check passes, closed with a `tool_result` written as
-`closed: "crashed"`, which the model reads as "outcome unknown"; it isn't run again. A recorded
+`closed: "crashed"`, which the model reads as "outcome unknown"; it isn't run again. A call that
+pended is closed by the record: when a crash or a stop retries the AGENT, `run_resumed.closed_calls`
+names its open calls (not those a timeout wake left open: they are still pending at the host, and
+the replay waits on them again), the host gets `CallClosed {reason: "crashed"}`, the calls leave
+`pendingCalls` and `complete` refuses them (`call_settled`); a `complete` made while the run was
+down, before the resume, is kept and replayed. The replay writes the closer with the word of the
+record that closed the call (`crashed`, or `timed_out` for an ask whose deadline passed), and the
+model decides what to do; the handler is never called again. A waiting AGENT isn't retried, so
+its calls stay open across a restart. A recorded
 reply a host interrupt cut, or recorded `skipped` results, end the AGENT as the interrupt did; a
 recorded call that failed for good fails the node again with its recorded error. Failed attempts
 after the last recorded call belong to the first live call: it waits the last one's `retry_in`
-again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. The AGENT reads its
-host inbox (steers and the interrupt) only once the replay ends. New steps are numbered after
+again and its attempts continue their count toward `YIAN_MODEL_RETRIES`. A recorded `steer`
+step gives its events back in place; the AGENT reads its steer inbox live, and the host's
+interrupt, only once the replay ends. New steps are numbered after
 the recorded ones; a call a crash cut before its `model_call` was written ran no tool, so no
 idempotency key names two calls that ran.
 
@@ -3216,7 +3246,9 @@ lists each waiting node's calls (`{ node, callId, tool, inbox, deadline, settled
 first), `ready` says whether some waiting node can be woken now (every call it waits on is
 settled), and `wakeAt` is the earliest deadline of an open call of a waiting node (`null` when none
 has one): a host advances a waiting run when it is `ready`, and also once `wakeAt` is due, when
-`advance` times that call out though `ready` is still `false`. For any other status they are `[]`,
+`advance` times that call out though `ready` is still `false`. A waiting node is due as soon as
+any of its open calls passes its deadline: those calls close `timed_out` and its other calls stay
+open, so `wakeAt` is always due when it passes. For any other status they are `[]`,
 `false` and `null`.
 The result also holds `runId`, `schema`, `flowFingerprint` and `learnable` from the log's
 `RunStarted`, `lastSeq`, the seq of its last complete record, and `failure`, the `Failure` that
@@ -3583,7 +3615,7 @@ answer completed as an error fails the node and is never retried. A `timeout` (a
 `AskRequest.deadline` before the handler runs. When the deadline passes with no answer the output
 is null: a declared `output: Optional(T)` succeeds with null, so a `case` can route on it (the
 host's answer schema is `T`, so null always means nobody answered), and any other declared output
-fails the node with failure code `tool.timeout`; an `ask` with no `output:` returns null. Since
+fails the node with failure code `tool.timeout`, as does an `ask` with no `output:` (which reads as `str`). Since
 null means nobody answered, `complete` refuses a null answer for an `ask`.
 
 Changed (TS yian): an AGENT's tool call may wait too. When a tool it calls (its `ask_user`
@@ -3591,8 +3623,14 @@ included) returns `pending()`, the agent records a `pending` step for the call (
 `<run id>/<node>/<n>/<index>`: the reply's `model_call` step and the call's place in the reply),
 runs the reply's other calls, and waits on every call of the reply that pended. The host answers
 each with `complete`; once all are answered the agent wakes, replays its recorded steps (no
-handler is called again) and calls its model with every result, in call order. An agent given the
-host's interrupt signal (a steerable agent) can't wait yet: its tool returning `pending()` fails
+handler is called again) and calls its model with every result, in call order. The model may pass
+`ask_user` a `timeout` (a duration, such as `30m`): the agent sets `AskRequest.deadline` before the
+handler runs and records it on the `pending` step. When it passes, the call closes `timed_out`
+(the host gets `CallClosed {reason: "timed_out"}` and a late `complete` is refused) and the model
+reads `timed out: no answer`, even while other calls of the reply are still open: the agent then
+waits again on those, and its next model call waits until every call of the reply is settled. A
+malformed `timeout` is the call's error result, and the handler isn't called. An agent given the
+host's interrupt signal (an agent with a `steer_inbox:` run with host steering) can't wait yet: its tool returning `pending()` fails
 it, so answer inline. A process lost after the `pending` step but before the agent waits closes
 the call as `crashed` on resume, and the model reads that the call's outcome is unknown. With
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as
@@ -3659,8 +3697,10 @@ asks, a flow whose AGENT grants `ask_user` fails before the run starts, and
 Changed (TS yian): the handler is `(request, ctx) => answer`, always given the call's
 `ToolContext` second, and may return a Promise. `request` is camelCase, `{ question,
 options, questions, answerSchema, title, nodeId }`, with `null` for an absent field;
-`invokeTrusted("ask_user", ...)` takes only `question` and `options`; the other fields come
-from a TOOL `ask` node, through the same handler. Each item of `questions` is a parsed
+`invokeTrusted("ask_user", ...)` takes only `question`, `options`, `timeout` and `deadline`; the
+other fields come from a TOOL `ask` node, through the same handler. The model may also pass
+`timeout` (a duration); the agent turns it into the request's `deadline` before the handler runs,
+and the handler never sees the `timeout` text. Each item of `questions` is a parsed
 spec `{ question, header, options: [{ label, description }], multiSelect }` with defaults
 filled. There is no signature check: any function is accepted as the handler.
 

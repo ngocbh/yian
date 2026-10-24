@@ -1,0 +1,184 @@
+# TS-only (yian #1025): a steer inbox of `Message`s. A `Message` event is its own user message,
+# keeping its author; its role becomes `user`. The second call's request isn't listed (Python's
+# case check has no `author`); its `request_sha256` in the trace covers the authored message.
+kind: run
+rules: [run-log]
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(Message)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - inbox: notes
+    event: {role: assistant, author: ana, parts: [{type: text, text: only the 2024 rows}]}
+    after: {node: chat, tool_call: 1}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: found a
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: lookup
+            arguments:
+              topic: a
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Help the user.
+          tools:
+          - name: lookup
+            description: Look up a topic.
+            parameters:
+              type: object
+              properties:
+                topic:
+                  type: string
+              required: [topic]
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: done
+expect:
+  output:
+    status: succeeded
+    output: done
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {topic: a}
+            id: call-1
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
+        response_id: null
+        usage: null
+  - - pool_commit
+    - __start__
+    - key: __start__.notes
+      value:
+        author: ana
+        parts:
+        - {text: only the 2024 rows, type: text}
+        role: assistant
+  - - node_step
+    - chat
+    - n: 2
+      step: {call_id: call-1, is_error: false, kind: tool_result, output: found a}
+  - - node_step
+    - chat
+    - n: 3
+      step:
+        from: [10]
+        inbox: notes
+        kind: steer
+  - - node_step
+    - chat
+    - n: 4
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: done, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 9bc372cd72b8ac374eb922ed027f2f0adcbd88e4ad0c3a8b2a24ef2d593b55ab
+        response_id: null
+        usage: null
+  - - pool_commit
+    - chat
+    - {value: done}
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages, steps: [9, 11, 12, 13]}
+  - - node_succeeded
+    - chat
+    - {commit: 14, messages: 15}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: done}
+  - - node_succeeded
+    - __end__
+    - {commit: 18}

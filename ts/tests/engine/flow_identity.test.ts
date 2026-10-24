@@ -199,7 +199,7 @@ import {
   MemoryOccurrenceSegment,
   MemoryScope,
 } from "../../src/memory/contracts.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import {
   Assertion,
@@ -907,13 +907,28 @@ test("test_expansion_digest_excludes_effective_but_includes_authored_llm_config"
   expect(expansionDigest(singleNodeFlow(first))).not.toBe(expansionDigest(singleNodeFlow(changedAuthored)));
 });
 
-test("an AGENT leaves out unset variables, skills, steerable, system prompt, memories and mode", () => {
+test("an AGENT leaves out unset variables, skills, steer inbox, system prompt, memories and mode", () => {
   const manifest = nodeManifest(singleNodeFlow(new AgentNode("node", { prompt: "p" })), "node");
 
-  for (const key of ["variables", "skills", "steerable", "system_prompt", "memories", "mode"]) {
+  for (const key of ["variables", "skills", "steer_inbox", "system_prompt", "memories", "mode"]) {
     expect(key in manifest).toBe(false);
   }
   expect(manifest.retries).toBe(2);
+});
+
+test("a steer inbox is identity through its wiring", () => {
+  const flow = (steerInbox: boolean) => {
+    const node = new AgentNode("node", { prompt: "p", steerInbox });
+    const wiring = new Map<string, unknown>(steerInbox ? [[STEER_INBOX_KEY, new Binding("${input.m}")]] : []);
+    return new Flow(new Map([[node.id, node]]), [], {
+      wiring: new Map([[node.id, wiring]]),
+      startId: node.id,
+      endId: node.id,
+    });
+  };
+  expect(flowFingerprint(flow(true))).not.toBe(flowFingerprint(flow(false)));
+  const manifest = nodeManifest(flow(true), "node");
+  expect("steerable" in manifest || "steerInbox" in manifest || "steer_inbox" in manifest).toBe(false);
 });
 
 test("test_skills_are_identity_but_empty_and_order_are_not", () => {

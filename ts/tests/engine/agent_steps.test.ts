@@ -38,7 +38,7 @@ import {
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
 import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/memory.ts";
-import type { Steering } from "../../src/nodes/base.ts";
+import { CapabilityFault, type Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
 import { advance, runFlow } from "../../src/run.ts";
@@ -47,7 +47,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
-import { crashAfter, NO_ENV, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, NO_ENV, rejected, serving, textReply, thrownBy } from "./run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-steps-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -59,17 +59,16 @@ const CONFIG = { provider: "anthropic", model: "claude-test" };
 const START = Date.UTC(2026, 9, 22, 10, 0, 0, 0);
 const TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 
-/** A flow whose agent `writer` may call `tools`; `steerable` lets a host interrupt it. */
-function flowText(tools: readonly string[] = ["lookup", "save"], steerable = false): string {
+/** A flow whose agent `writer` may call `tools`; `steerInbox` gives it a steer inbox, so a host may interrupt it. */
+function flowText(tools: readonly string[] = ["lookup", "save"], steerInbox = false): string {
   return `
 id: steps
 name: steps
-nodes:
+${steerInbox ? "input:\n  notes: !Inbox(str)\n" : ""}nodes:
   writer:
     kind: agent
     tools: [${tools.join(", ")}]
-    steerable: ${steerable}
-    prompt: hi
+${steerInbox ? "    steer_inbox: ${input.notes}\n" : ""}    prompt: hi
     output: str
 output: \${writer.output}
 `;
@@ -226,7 +225,7 @@ test("an AGENT writes each model call, then each of its tool results, before the
     response_id: null,
     usage: null,
   });
-  expect(first["request_sha256"]).toBe(requestSha256(model.requests[0]!, new Set()));
+  expect(first["request_sha256"]).toBe(requestSha256(model.requests[0]!));
   expect(Object.hasOwn(written[1]!, "closed")).toBe(false);
 });
 
@@ -406,7 +405,7 @@ test("a failed call writes what arrived and the usage reported before it failed"
 function interruptible(): { steering: Steering; interrupt: () => void } {
   const controller = new AbortController();
   return {
-    steering: { interruptSignal: () => controller.signal, drain: () => [] },
+    steering: { interruptSignal: () => controller.signal },
     interrupt: () => controller.abort(new Error("interrupted")),
   };
 }
@@ -497,7 +496,7 @@ test("a stop during a call writes nothing for it", async () => {
 
 // --- the request digest --- //
 
-test("requestSha256 hashes the request's log JSON, steers left out", () => {
+test("requestSha256 hashes the request's log JSON, every message", () => {
   const steer = new Message({ role: "user", parts: [new TextPart("also this")] });
   const user = new Message({ role: "user", parts: [new TextPart("hi")] });
   const tool = new ToolSpec({ name: "save", description: "Save.", parameters: { type: "object" } });
@@ -513,16 +512,15 @@ test("requestSha256 hashes the request's log JSON, steers left out", () => {
       }),
     )
     .digest("hex");
-  expect(requestSha256(request, new Set())).toBe(expected);
+  expect(requestSha256(request)).toBe(expected);
   const steered = new Request({ messages: [user, steer], tools: [tool] });
-  expect(requestSha256(steered, new Set([steer]))).toBe(expected);
-  expect(requestSha256(steered, new Set())).not.toBe(expected);
+  expect(requestSha256(steered)).not.toBe(expected);
   const forced = new Request({ messages: [user], tools: [tool], toolChoice: new NamedTool("save") });
-  expect(requestSha256(forced, new Set())).not.toBe(expected);
+  expect(requestSha256(forced)).not.toBe(expected);
   // A long int argument, which canonical (JCS) JSON can't write, still hashes.
   const call = new ToolCallPart({ id: "c1", name: "save", arguments: { n: 2n ** 70n } });
   const long = new Request({ messages: [user, new Message({ role: "assistant", parts: [call] })] });
-  expect(requestSha256(long, new Set())).toMatch(/^[0-9a-f]{64}$/);
+  expect(requestSha256(long)).toMatch(/^[0-9a-f]{64}$/);
 });
 
 const PNG = Buffer.from("not really a png").toString("base64");
@@ -560,8 +558,8 @@ test("a reply's media is a run file; the model_call and the next request hold it
     ),
     tools: model.requests[1]!.tools,
   });
-  expect(second!["request_sha256"]).toBe(requestSha256(filed, new Set()));
-  expect(second!["request_sha256"]).not.toBe(requestSha256(model.requests[1]!, new Set()));
+  expect(second!["request_sha256"]).toBe(requestSha256(filed));
+  expect(second!["request_sha256"]).not.toBe(requestSha256(model.requests[1]!));
 });
 
 test("a reply's media that isn't a run-folder file is warned about: inline without a log, or by URL", async () => {
@@ -694,6 +692,73 @@ test("AgentSteps scrubs a failed call's error and names its kind", () => {
     [{ kind: "server", message: "saw [REDACTED]" }, 1.5],
     [{ kind: "TypeError", message: "bad [REDACTED]" }, null],
   ]);
+});
+
+/** A recorded steer step reading `values`, as the engine's copy carries them. */
+const steerStep = (values: string[]): ValueRecord => ({ kind: "steer", inbox: "notes", from: values.map((_, i) => i), values });
+
+/** A recorded successful chat `model_call` step replying `reply`. */
+function callStep(reply: Message, digest = "d".repeat(64)): ValueRecord {
+  return {
+    kind: "model_call",
+    purpose: "chat",
+    model: "m",
+    request_sha256: digest,
+    started_at: "2026-10-22T10:00:00.000Z",
+    first_token_at: null,
+    output: reply.toJSON(),
+    response_id: null,
+    finish: "stop",
+    usage: null,
+  };
+}
+
+const replyText = (text: string) => new Message({ role: "assistant", parts: [new TextPart(text)] });
+const replyCall = (id: string) =>
+  new Message({ role: "assistant", parts: [new ToolCallPart({ id, name: "save", arguments: { topic: "a" } })] });
+const resultStep = (id: string): ValueRecord => ({ kind: "tool_result", call_id: id, started_at: null, output: "ok", is_error: false });
+
+test("AgentSteps hands back the steer recorded before each call, once", () => {
+  const prior = [steerStep(["a"]), callStep(replyCall("c1")), resultStep("c1"), steerStep(["b"]), callStep(replyText("done"))];
+  const { steps } = recordingSteps(prior);
+  expect(steps.takeRecordedSteer()).toEqual({ n: 1, values: ["a"] });
+  expect(steps.takeRecordedSteer()).toBeNull();
+  expect(steps.takeRecorded("chat", "d".repeat(64))!.n).toBe(2);
+  expect(steps.takeRecordedSteer()).toEqual({ n: 4, values: ["b"] });
+  expect(steps.takeRecorded("chat", "d".repeat(64))!.n).toBe(5);
+  expect(steps.takeRecordedSteer()).toBeNull();
+});
+
+test("a trailing steer is handed back after the last call", () => {
+  const { steps } = recordingSteps([callStep(replyText("done")), steerStep(["late"])]);
+  expect(steps.takeRecordedSteer()).toBeNull();
+  steps.takeRecorded("chat", "d".repeat(64));
+  expect(steps.replaying()).toBe(false);
+  expect(steps.takeRecordedSteer()).toEqual({ n: 2, values: ["late"] });
+});
+
+test("continuesCall is true while recorded failed attempts continue the next call", () => {
+  const failed: ValueRecord = {
+    ...callStep(replyText("x")),
+    output: null,
+    error: { kind: "server", message: "busy" },
+    retry_in: 2,
+  };
+  const { steps } = recordingSteps([steerStep(["a"]), failed]);
+  expect(steps.replaying()).toBe(false);
+  expect(steps.continuesCall()).toBe(true);
+  expect(steps.takeRecordedSteer()).toEqual({ n: 1, values: ["a"] });
+  expect(steps.priorAttempts("chat", "d".repeat(64))).toEqual({ attempts: 1, retryIn: 2 });
+  expect(steps.continuesCall()).toBe(false);
+});
+
+test("a steer copy without values is a host fault", () => {
+  const { steps } = recordingSteps([{ kind: "steer", inbox: "notes", from: [3] }]);
+  const error = thrownBy(() => steps.takeRecordedSteer());
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect(((error as CapabilityFault).original as Error).message).toBe(
+    "node 'writer' step 1: a steer step without its values; resume through the engine",
+  );
 });
 
 test("AgentSteps without node steps records nothing and still numbers its steps", () => {

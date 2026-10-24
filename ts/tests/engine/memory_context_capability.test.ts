@@ -16,8 +16,7 @@
  * the rows about how and when a turn closes have no counterpart.
  *
  * TS-only: a node that starts `openMemoryContext` and returns without awaiting it doesn't settle
- * before the open; a node that drops a rejecting opener or steering `drain` promise, or an open
- * after the evaluation, causes no unhandled rejection; invalid recall inputs, an opener result that
+ * before the open; a node that drops a rejecting opener promise, or an open after the evaluation, causes no unhandled rejection; invalid recall inputs, an opener result that
  * isn't a `MemoryContext`, and sections outside the scope's memories or without text are recall
  * failures.
  */
@@ -26,7 +25,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { StreamChunk } from "../../src/events.ts";
 import { MemoryContext, MemoryScope, MemorySection, type RecallContext } from "../../src/memory/contracts.ts";
-import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output, type Steering } from "../../src/nodes/base.ts";
+import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { EvaluationFailure, evalNode, type EvalNodeOptions, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { FuncNode, rejected } from "./run_state_fixtures.ts";
@@ -38,7 +37,7 @@ class Consumer extends Node {
   readonly kind = NodeKind.CODE;
   override readonly needsMemoryContext = true;
   override readonly needsLiveEvents = true;
-  override readonly needsSteering = true;
+  override readonly readsSteerInbox = true;
   readonly body: (open: Open, caps: NodeCaps) => NodeResult | Promise<NodeResult>;
 
   constructor(body: (open: Open, caps: NodeCaps) => NodeResult | Promise<NodeResult>) {
@@ -231,7 +230,7 @@ afterEach(() => {
   process.off("unhandledRejection", collect);
 });
 
-test("a dropped rejecting opener or drain promise, or an open after close, rejects nothing unhandled", async () => {
+test("a dropped rejecting opener promise, or an open after close, rejects nothing unhandled", async () => {
   const error = new Error("opening failed");
   const failing: MemoryContextOpener = async () => {
     throw error;
@@ -244,17 +243,6 @@ test("a dropped rejecting opener or drain promise, or an open after close, rejec
   });
   expect(await rejected(evaluate(dropsOpener, failing))).toBe(error);
   void retained[0]!("system", "prompt");
-
-  const drainError = new Error("inbox failed");
-  const steering: Steering = {
-    interruptSignal: () => new AbortController().signal,
-    drain: () => Promise.reject(drainError),
-  };
-  const dropsDrain = new Consumer((_open, caps) => {
-    void caps.steering!.drain("work");
-    return new Output(7n);
-  });
-  expect(await rejected(evaluate(dropsDrain, opener([]), { steering }))).toBe(drainError);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(unhandled).toEqual([]);
 });

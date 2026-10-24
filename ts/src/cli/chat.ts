@@ -284,8 +284,9 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     });
     let closed = false;
     let cancelled = false;
-    // A deadline that has passed without moving the run (its node waits on other calls too); a
-    // timer for it would only spin.
+    // The deadline the run was last moved at. A node is due once any of its calls passes its
+    // deadline, so that move times it out and `wakeAt` comes later; were it to stay, a timer for
+    // it would only spin.
     let spent: string | null = null;
     // What was typed at a prompt a deadline took down, shown again at the next one.
     let draft = "";

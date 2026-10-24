@@ -45,6 +45,17 @@ export const SKIPPED_TOOL_RESULT = "Not run: interrupted by the user.";
 export const TOOL_OUTCOME_UNKNOWN =
   "The tool call was interrupted; its outcome is unknown. Check its effect before retrying.";
 
+/** The result the model reads for an `ask_user` call nobody answered before its deadline. */
+export const ASK_TIMED_OUT_RESULT = "timed out: no answer";
+
+/** Why a call was closed without its result, as an agent's closer records it. */
+export type CloserReason = "crashed" | "timed_out";
+
+/** Return the closer an agent writes for a call closed for `reason`: the text the model reads and the `closed` word. */
+export function closerResult(reason: CloserReason): { readonly output: string; readonly closed: CloserReason } {
+  return { output: reason === "timed_out" ? ASK_TIMED_OUT_RESULT : TOOL_OUTCOME_UNKNOWN, closed: reason };
+}
+
 /**
  * Return a tool result as the text the model reads: text as itself, any other value in the text
  * form (design 3.2.3), `null` as `null`.

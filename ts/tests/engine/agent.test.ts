@@ -608,8 +608,8 @@ test("validatePrompts names the node and the field of an unparseable span", () =
   expect(new AgentNode("x", { prompt: "Hi ${name}", systemPrompt: "Be ${tone}" }).validatePrompts()).toBeUndefined();
 });
 
-test("validateExecutionSetup lets a steerable agent with plain text output pass", () => {
-  const node = new AgentNode("chat", { steerable: true });
+test("validateExecutionSetup lets an agent with a steer inbox and plain text output pass", () => {
+  const node = new AgentNode("chat", { steerInbox: true });
   expect(node.validateExecutionSetup()).toBeUndefined();
   node.outputContract = new ValueContract(STR);
   expect(node.validateExecutionSetup()).toBeUndefined();

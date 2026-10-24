@@ -156,11 +156,13 @@ test("an ask that pends records its deadline; a recorded complete gives the answ
   expect(seen).toHaveLength(1);
 });
 
-test("an ask nobody answers by its deadline gives null, or fails tool.timeout when null isn't allowed", async () => {
+test("an ask nobody answers by its deadline gives null for Optional(T), else fails tool.timeout", async () => {
   const approval = Type.scalar(ValueKind.STRING);
+  // No `output:` reads as `str`, which a timeout can't give.
   for (const [output, expected] of [
     [approval.replace({ nullable: true }), "succeeded"],
     [approval, "failed"],
+    [null, "failed"],
   ] as const) {
     const seen: AskRequest[] = [];
     const tools = pendingAsk(seen);

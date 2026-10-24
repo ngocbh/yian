@@ -1196,6 +1196,11 @@ export class NodeSteps {
    * built-in value.
    */
   readonly maxEventBytes: number;
+  /**
+   * Whether the run has a durable log a host can answer a pending call in; `false` for a run
+   * without a log, where a node's `pending()` is an error.
+   */
+  readonly durable: boolean;
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
 
@@ -1214,6 +1219,7 @@ export class NodeSteps {
     record: (step: ValueRecord, options?: { settled?: boolean }) => number,
     calls: readonly CallView[] = [],
     maxEventBytes: number = MAX_EVENT_BYTES,
+    durable: boolean = true,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
@@ -1229,6 +1235,7 @@ export class NodeSteps {
     this.prior = Object.freeze([...prior]);
     this.calls = Object.freeze(calls.map((call) => Object.freeze({ ...call })));
     this.maxEventBytes = maxEventBytes;
+    this.durable = durable === true;
     this.#next = prior.length + 1;
     this.record = (step, options) => {
       const n = record(step, options);

@@ -36,8 +36,18 @@ import {
   ToolCallFinished,
 } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import { CapabilityFault, type CompleteResult, Grow, markerMessage, Output, Pending, Route, type Steering } from "../nodes/base.ts";
-import type { SourceResolver } from "../nodes/binding.ts";
+import {
+  CapabilityFault,
+  type CompleteResult,
+  Grow,
+  markerMessage,
+  Output,
+  Pending,
+  Route,
+  type SteerInbox,
+  type Steering,
+} from "../nodes/base.ts";
+import { copyValue, type SourceResolver } from "../nodes/binding.ts";
 import { type CallView, isExactly, NodeSteps } from "../nodes/contracts.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
@@ -84,11 +94,13 @@ import {
   prepareSend,
   prepareTakeCommit,
   RunState,
+  inboxElementType,
   requireExpansionOutput,
   resolveFromPool,
+  stepsWithSteerValues,
 } from "./state.ts";
 import { captureBindings, sourcePath } from "./trace.ts";
-import { decideWait, dueTimeouts, isWakeable, nodeCalls, wakeAt } from "./waits.ts";
+import { availableUnread, decideWait, dueTimeouts, isWakeable, nodeCalls, wakeAt } from "./waits.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
 export interface FlowEngineOptions {
@@ -112,8 +124,8 @@ export interface FlowEngineOptions {
   /** The run's host-supplied skills, passed to nodes declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
   /**
-   * The run's host inbox, passed to nodes declaring `needsSteering`; a method that throws, or
-   * returns a promise that rejects, stops the run with that error.
+   * The host's interrupt signal, passed to nodes declaring `readsSteerInbox`; a method that
+   * throws stops the run with that error.
    */
   steering?: Steering | null;
   /** The run's environment and model builder, passed to nodes declaring `needsModels`. */
@@ -126,6 +138,11 @@ export interface FlowEngineOptions {
   random?: (() => number) | null;
   /** The run's folder (its log's folder), passed to every node; `null` for a run without a log. */
   runDir?: string | null;
+  /**
+   * Whether the run has a durable log a host can answer pending calls in (`NodeSteps.durable`);
+   * `true` when omitted. A run without a log passes `false`, so a node's `pending()` fails it.
+   */
+  durable?: boolean;
   /**
    * Gets each AGENT model call's start, chunks and end, and drops a node's calls when the node
    * settles; the run boundary hands it the appended records itself (`LiveChannel.wrap`).
@@ -323,7 +340,9 @@ export class FlowEngine {
   readonly #controller = new AbortController();
   /** The host's stop, linked to the run's while `run()` runs. */
   readonly #hostSignal: AbortSignal | null;
-  /** The steering nodes receive: the host inbox, whose failures stop the run. */
+  /** Whether the run has a durable log a host can answer pending calls in. */
+  readonly #durable: boolean;
+  /** The steering nodes receive: the host's interrupt signal, whose failures stop the run. */
   readonly #steering: Steering | null;
   /** The error that ended the run, once one did; the first wins. */
   #failure: { readonly error: unknown } | null = null;
@@ -332,6 +351,8 @@ export class FlowEngine {
    * each: its commit's `from`. Taken when the node's outcome is committed.
    */
   readonly #reads = new Map<string, Map<string, number>>();
+  /** The steer inbox each running node opened, until its outcome commits. */
+  readonly #steerInboxes = new Map<string, string>();
   #ran = false;
   /** Whether a loop is driving the run; a delivery made after it ended publishes without it. */
   #looping = false;
@@ -399,13 +420,13 @@ export class FlowEngine {
     this.runDir = runDir;
     this.live = live;
     this.#hostSignal = signal;
+    this.#durable = options.durable ?? true;
     const inbox = this.steering;
     this.#steering =
       inbox === null
         ? null
         : {
             interruptSignal: (nodeId) => this.#callHost((id: string) => inbox.interruptSignal(id), nodeId),
-            drain: (nodeId) => this.#callHost((id: string) => inbox.drain(id), nodeId),
           };
   }
 
@@ -665,8 +686,9 @@ export class FlowEngine {
   #nodeSteps(nodeId: string, signal: AbortSignal): NodeSteps | null {
     const { state, log } = this;
     if (state.flow.nodes.get(nodeId)!.needsSteps !== true) return null;
-    // The recorded steps are frozen; the node gets copies it may change.
-    const prior = structuredClone(state.nodeSteps.get(nodeId) ?? []) as ValueRecord[];
+    // The recorded steps are frozen; the node gets copies it may change, each steer step's with
+    // the values it consumed.
+    const prior = stepsWithSteerValues(state, nodeId);
     const record: NodeSteps["record"] = (step, options) => {
       // A stopping run takes only a settled call's step, until it has a result; the stop is
       // control flow, not a host fault.
@@ -682,7 +704,46 @@ export class FlowEngine {
     };
     // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
     // calling its handler again after a wake or a crash.
-    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, callViews(state, nodeId), state.runDefaults.maxEventBytes);
+    const calls = callViews(state, nodeId);
+    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, calls, state.runDefaults.maxEventBytes, this.#durable);
+  }
+
+  /**
+   * Return the opener of a just-started node's steer inbox when the node declares
+   * `readsSteerInbox`, else `null`. Opening registers the node as reading that inbox until its
+   * outcome commits. A read is zero-wait: in one synchronous section it takes every event a read
+   * may take now, appends them as one `steer` step and returns their values, so no delivery lands
+   * between reading the queue and the append.
+   */
+  #steerInbox(nodeId: string, signal: AbortSignal): ((inbox: string) => SteerInbox) | null {
+    const { state, log } = this;
+    if (state.flow.nodes.get(nodeId)!.readsSteerInbox !== true) return null;
+    return (inbox) => {
+      if (typeof inbox !== "string" || inboxElementType(state, inbox) === null) {
+        throw new CapabilityFault(new RangeError(`steer inbox ${reprText(String(inbox))} is no inbox the START declares`));
+      }
+      this.#steerInboxes.set(nodeId, inbox);
+      return {
+        inbox,
+        queued: () => availableUnread(state.waits, inbox).length > 0,
+        read: () => {
+          if (signal.aborted) throw signal.reason;
+          const from = [...availableUnread(state.waits, inbox)];
+          if (from.length === 0) return null;
+          let n: number;
+          try {
+            // Seqs are ints, which the log keeps apart from floats only as bigints.
+            const prepared = prepareNodeStep(state, nodeId, { kind: "steer", inbox, from: from.map(BigInt) });
+            commitPrepared(log, state, prepared);
+            n = (prepared.record as NodeStepRecord).n;
+          } catch (error) {
+            // A refused or unrecorded step is a host fault, never the node's failure.
+            throw new CapabilityFault(error);
+          }
+          return { n, from, values: from.map((seq) => copyValue(state.inboxEvents.get(seq)!.toObject())) };
+        },
+      };
+    };
   }
 
   /** Prepare one outcome's record, append it and apply its plan, returning its observers. */
@@ -690,6 +751,8 @@ export class FlowEngine {
     if (!isExactly(evaluated, EvaluatedOutcome)) throw new TypeError("FlowEngine outcome must be an EvaluatedOutcome");
     const { state } = this;
     const { outcome } = evaluated;
+    const steerInbox = this.#steerInboxes.get(nodeId) ?? null;
+    this.#steerInboxes.delete(nodeId);
     const reads = this.#reads.get(nodeId) ?? new Map<string, number>();
     this.#reads.delete(nodeId);
     const carriers: OutcomeCarriers = {
@@ -739,7 +802,7 @@ export class FlowEngine {
         prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);
       }
     } else if (outcome instanceof Pending) {
-      return this.#commitPending(nodeId, outcome, carriers);
+      return this.#commitPending(nodeId, outcome, carriers, steerInbox);
     } else {
       throw new TypeError(`raw evaluator returned an unsupported outcome ${jsTypeName(outcome)}`);
     }
@@ -749,11 +812,13 @@ export class FlowEngine {
   /**
    * Commit a Pending outcome. Host calls: `node_waiting` naming them. A take or sleep: decide now
    * and append the result in this synchronous section, so no delivery lands between the decision
-   * and its records.
+   * and its records. A node that opened a steer inbox waits with it (`steerInbox`).
    */
-  #commitPending(nodeId: string, outcome: Pending, carriers: OutcomeCarriers): readonly RunEvent[] {
+  #commitPending(nodeId: string, outcome: Pending, carriers: OutcomeCarriers, steerInbox: string | null): readonly RunEvent[] {
     const { state, log } = this;
-    if (outcome.wait === null) return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: outcome.callIds }));
+    if (outcome.wait === null) {
+      return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: outcome.callIds, steerInbox }));
+    }
     const callId = toolCallId(state.runId!, nodeId);
     const decision = decideWait(state.waits, callId, outcome.wait, this.#now());
     if (decision.kind === "take") {
@@ -773,12 +838,12 @@ export class FlowEngine {
       return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, carriers));
     }
     // The decision left is to wait.
-    return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry] }));
+    return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry], steerInbox }));
   }
 
   /**
-   * Keep one scheduler sleep for the earliest open deadline of a waiting node; it nudges the
-   * dispatcher. `blocked` says a wakeable node waits for a worker slot.
+   * Keep one scheduler sleep for the earliest open deadline of a waiting node, at which that node
+   * is due; it nudges the dispatcher. `blocked` says a wakeable node waits for a worker slot.
    */
   #armTimer(blocked = false): void {
     const at = wakeAt(this.state.waits);
@@ -789,10 +854,9 @@ export class FlowEngine {
     const now = scheduler.now();
     const ms = recordTimeMs(at, "deadline") - now;
     if (ms <= 0) {
-      // The deadline passed since the dispatcher last looked: wake it now. A past deadline that
-      // isn't due waits on its node's other calls, and a timer for it would only spin.
-      // A due node that waits for a worker slot is looked at again once the next completion frees
-      // one, so nudging now would only spin.
+      // A deadline passed since the dispatcher last looked: wake its node now. A due node that
+      // waits for a worker slot is looked at again once the next completion frees one, so nudging
+      // now would only spin.
       if (!blocked && dueTimeouts(this.state.waits, now).size > 0) this.#queue?.nudge();
       return;
     }
@@ -918,6 +982,7 @@ export class FlowEngine {
         runDir: this.runDir,
         models: this.models,
         steps: this.#nodeSteps(nodeId, nodeController.signal),
+        steerInbox: this.#steerInbox(nodeId, nodeController.signal),
         // A capability fault ends the run now, not when the node settles, so a node that catches
         // it can't let a later stop replace it. For a failing host callback this is a no-op: the
         // engine's callback wrapper records the `callback` stop before the fault reaches here.

@@ -232,7 +232,8 @@ test("a complete after an ask timed out and its node settled is ended", async ()
   const { log, flow, tools, callId } = await waitingAsk({ timeout: "1s", scheduler: handClock(T0) });
   expect(pendingCalls(log)[0]!.deadline).toBe("2026-10-24T09:00:01.000Z");
   const advanced = await advance({ log, flow, tools, env, scheduler: handClock(T0 + 2000) });
-  expect([advanced.status, advanced.output]).toEqual(["succeeded", null]);
+  // The ask declares no `output:`, which reads as `str`, so its timeout fails it.
+  expect([advanced.status, advanced.failure?.code]).toEqual(["failed", "tool.timeout"]);
   await refusedWith(log, () => complete(log, callId, { output: "late" }, { env, flow }), "ended");
 });
 

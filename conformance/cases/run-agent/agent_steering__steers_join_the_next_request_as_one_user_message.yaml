@@ -1,16 +1,20 @@
 # From tests/engine/test_agent_steering.py::test_steers_are_sent_as_user_messages_at_the_top_of_each_iteration.
-# A steer queued before the run joins the first model request as a user message; the two
-# queued once tool call 1 returns join the next request, after the tool result, in order.
+# Changed (yian #1025): a steer is a send to the agent's `steer_inbox`. The two sent while tool
+# call 1 runs are read together before the next model call, as one `steer` step: they join that
+# request after the tool result as one user message with a text part each, in send order.
 kind: run
 rules: [run-log]
+python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer
   llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
   nodes:
     chat:
       kind: agent
-      steerable: true
+      steer_inbox: ${input.notes}
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
@@ -20,12 +24,9 @@ run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - steer: [use dataset B]
-    - after:
-        tool_call: 1
-      steer: [only the 2024 rows, and cite them]
+  sends:
+  - {inbox: notes, event: only the 2024 rows, after: {node: chat, tool_call: 1}}
+  - {inbox: notes, event: and cite them, after: {node: chat, tool_call: 1}}
   tools:
     lookup:
       description: Look up a topic.
@@ -61,11 +62,6 @@ host:
             parts:
             - type: text
               text: Help the user.
-          - format: yian.message.v1
-            role: user
-            parts:
-            - type: text
-              text: use dataset B
           tools:
           - name: lookup
             description: Look up a topic.
@@ -94,11 +90,6 @@ host:
             - type: text
               text: Help the user.
           - format: yian.message.v1
-            role: user
-            parts:
-            - type: text
-              text: use dataset B
-          - format: yian.message.v1
             role: assistant
             parts:
             - type: tool_call
@@ -118,9 +109,6 @@ host:
             parts:
             - type: text
               text: only the 2024 rows
-          - format: yian.message.v1
-            role: user
-            parts:
             - type: text
               text: and cite them
           tools:
@@ -164,7 +152,7 @@ expect:
   - [node_started, __start__]
   - - pool_commit
     - __start__
-    - value: {}
+    - value: {notes: {inbox: notes}}
   - - node_succeeded
     - __start__
     - {commit: 6}
@@ -188,6 +176,12 @@ expect:
         request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
         response_id: null
         usage: null
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: only the 2024 rows}
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: and cite them}
   - - node_step
     - chat
     - n: 2
@@ -195,6 +189,13 @@ expect:
   - - node_step
     - chat
     - n: 3
+      step:
+        kind: steer
+        from: [10, 11]
+        inbox: notes
+  - - node_step
+    - chat
+    - n: 4
       step:
         finish: null
         kind: model_call
@@ -205,7 +206,7 @@ expect:
           - {text: done, type: text}
           role: assistant
         purpose: chat
-        request_sha256: 9bd23c988490efccb4605c6ec21ee970dedaf06caa58006da9604f5d06a3daba
+        request_sha256: 02c0b5214f48e2f8554fa2ec2931bbc1080214d5c6db43b366be375e9279b86b
         response_id: null
         usage: null
   - - pool_commit
@@ -213,24 +214,24 @@ expect:
     - value: done
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [9, 10, 11]}
+    - {key: chat.new_messages, steps: [9, 12, 13, 14]}
   - - node_succeeded
     - chat
-    - {commit: 12, messages: 13}
+    - {commit: 15, messages: 16}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: done
   - - node_succeeded
     - __end__
-    - {commit: 16}
+    - {commit: 19}
   events:
   - [RunStarted]
   - - NodeStarted
     - node_id: __start__
   - - NodeSucceeded
     - node_id: __start__
-      output: {}
+      output: {notes: {inbox: notes}}
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted

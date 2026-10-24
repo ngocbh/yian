@@ -214,8 +214,8 @@ function acceptsNull(typ: Type): boolean {
  * start, so a handler must be idempotent by `callId`: a crash before it returned calls it again.
  * Every evaluation reads `caps.steps.calls` first: an open call waits again without calling the
  * handler, an answered one returns its output or fails with its error (never retried), and an
- * `ask` closed `timed_out` returns null when the declared output allows it, else fails with
- * `tool.timeout`. `ask` sends yian's base surface (prompt, questions, a `timeout` as a deadline)
+ * `ask` closed `timed_out` returns null when the declared output is `Optional(...)`, else (no
+ * `output:` included) fails with `tool.timeout`. `ask` sends yian's base surface (prompt, questions, a `timeout` as a deadline)
  * plus the host's declared extras.
  *
  * `inputTypes` maps each input name to the type the loader proved its binding has (a literal's
@@ -363,14 +363,14 @@ export class ToolNode extends Node {
   }
 
   /**
-   * Return null for an `ask` nobody answered in time when the declared output allows it (or
-   * none is declared).
+   * Return null for an `ask` nobody answered in time when the declared output is `Optional(...)`.
    *
-   * @throws ToolTimeoutError otherwise.
+   * @throws ToolTimeoutError otherwise, no `output:` included.
    */
   private timedOut(held: CallView): Output {
     const typ = outputContractType(this.outputContract);
-    if (typ === null || acceptsNull(typ)) return new Output(null);
+    // No `output:` reads as `str`, which a timeout can't give.
+    if (typ !== null && acceptsNull(typ)) return new Output(null);
     throw new ToolTimeoutError(
       `TOOL node ${reprText(this.id)} (ask): nobody answered by ${held.deadline}; ` +
         "declare output: Optional(...) to route on a timeout",
@@ -380,7 +380,7 @@ export class ToolNode extends Node {
   /**
    * Record the `pending` step of a call whose handler returned `pending()`, and wait on it.
    *
-   * @throws Error outside a durable run (no steps or no run id).
+   * @throws Error outside a durable run (no steps, no run id, or no log).
    * @throws ToolCheckError when the arguments are over the run's event size limit; nothing is
    *   recorded.
    */
@@ -392,7 +392,7 @@ export class ToolNode extends Node {
     deadline: string | null,
   ): Pending {
     const steps = caps.steps;
-    if (steps === undefined || callId === null) {
+    if (steps === undefined || callId === null || !steps.durable) {
       throw new Error(`tool ${reprText(tool)} returned pending() outside a durable run; give the run a log`);
     }
     const args = jsonPart(fromHost(inputs, `tool ${reprText(tool)} arguments`), [], "mapping") as ValueRecord;

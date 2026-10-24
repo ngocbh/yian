@@ -42,9 +42,9 @@
  * the abort still resolves.
  *
  * TS-only: the `EvaluatedOutcome` constructor checks, `requireSteering`, the steering
- * capability's checks on what the host inbox returns, a steering fault the node catches (thrown or
- * rejected) or a `drain` promise it drops still rejecting `evalNode`, the first of two faults
- * the node catches winning (and the only one `onFault` sees, when it is raised).
+ * capability's checks on what the host returns, a steering fault the node catches still rejecting
+ * `evalNode`, the first of two faults the node catches winning (and the only one `onFault` sees,
+ * when it is raised).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -518,44 +518,31 @@ describe("EvaluatedOutcome checks its fields", () => {
 });
 
 describe("requireSteering", () => {
-  const inbox: Steering = {
-    interruptSignal: () => new AbortController().signal,
-    drain: () => [],
-  };
+  const inbox: Steering = { interruptSignal: () => new AbortController().signal };
 
-  test("returns null or the inbox itself", () => {
+  test("returns null or the steering itself", () => {
     expect(requireSteering(null)).toBeNull();
     expect(requireSteering(inbox)).toBe(inbox);
   });
 
-  test("refuses anything without both methods", () => {
-    const message = "steering must provide interruptSignal(nodeId) and drain(nodeId), or be null";
-    for (const bad of [
-      undefined,
-      {},
-      "steering",
-      { drain: inbox.drain },
-      { interruptSignal: inbox.interruptSignal },
-      { interruptSignal: inbox.interruptSignal, drain: [] },
-    ]) {
+  test("refuses anything without interruptSignal", () => {
+    const message = "steering must provide interruptSignal(nodeId), or be null";
+    for (const bad of [undefined, {}, "steering", { drain: () => [] }, { interruptSignal: true }]) {
       expect(thrown(() => requireSteering(bad))).toEqual(new TypeError(message));
     }
   });
 });
 
 describe("the steering capability", () => {
-  /** Wrap an inbox whose methods are `interruptSignal` and `drain`. */
-  function wrap(methods: { interruptSignal?: (id: string) => unknown; drain?: (id: string) => unknown }): Steering {
-    return new SteeringCapability({
-      interruptSignal: methods.interruptSignal ?? (() => new AbortController().signal),
-      drain: methods.drain ?? (() => []),
-    } as Steering, () => {}, [], () => false);
+  /** Wrap a host whose interrupt signal is `interruptSignal`'s answer. */
+  function wrap(interruptSignal: (id: string) => unknown = () => new AbortController().signal): Steering {
+    return new SteeringCapability({ interruptSignal } as Steering, () => {}, () => false);
   }
 
   test("passes the node id and returns the host's signal", () => {
     const signal = new AbortController().signal;
     const seen: string[] = [];
-    const steering = wrap({ interruptSignal: (id) => (seen.push(id), signal) });
+    const steering = wrap((id) => (seen.push(id), signal));
 
     expect(steering.interruptSignal("n")).toBe(signal);
     expect(seen).toEqual(["n"]);
@@ -563,7 +550,7 @@ describe("the steering capability", () => {
 
   test("an interrupt signal that isn't an AbortSignal is a capability fault", () => {
     for (const bad of [true, null, {}]) {
-      const fault = thrown(() => wrap({ interruptSignal: () => bad }).interruptSignal("n"));
+      const fault = thrown(() => wrap(() => bad).interruptSignal("n"));
       expect(fault).toBeInstanceOf(CapabilityFault);
       expect((fault as CapabilityFault).original).toEqual(
         new TypeError("steering.interruptSignal must return an AbortSignal"),
@@ -571,147 +558,59 @@ describe("the steering capability", () => {
     }
   });
 
-  test("drain returns a fresh array of the host's messages", () => {
-    const messages = ["a", "b"];
-    const drained = wrap({ drain: () => messages }).drain("n");
-
-    expect(drained).toEqual(["a", "b"]);
-    expect(drained).not.toBe(messages);
-  });
-
-  test("drain may return a promise of the messages", async () => {
-    const drained = wrap({ drain: async () => ["a"] }).drain("n");
-
-    expect(drained).toBeInstanceOf(Promise);
-    expect(await drained).toEqual(["a"]);
-  });
-
-  test("drain messages that aren't an array of strings are a capability fault", async () => {
-    const shape = new TypeError("steering.drain must return an array of strings");
-    for (const bad of ["a", ["a", 1], null, new Set(["a"])]) {
-      const fault = thrown(() => wrap({ drain: () => bad }).drain("n"));
-      expect(fault).toBeInstanceOf(CapabilityFault);
-      expect((fault as CapabilityFault).original).toEqual(shape);
-
-      const late = await rejected(wrap({ drain: async () => bad }).drain("n"));
-      expect(late).toBeInstanceOf(CapabilityFault);
-      expect((late as CapabilityFault).original).toEqual(shape);
-    }
-  });
-
-  test("a host throw or rejection is a capability fault keeping the original", async () => {
+  test("a host throw is a capability fault keeping the original", () => {
     const expected = new Error("inbox failed");
-    for (const fault of [
-      thrown(() => wrap({ interruptSignal: () => { throw expected; } }).interruptSignal("n")),
-      thrown(() => wrap({ drain: () => { throw expected; } }).drain("n")),
-      await rejected(wrap({ drain: () => Promise.reject(expected) }).drain("n")),
-    ]) {
-      expect(fault).toBeInstanceOf(CapabilityFault);
-      expect((fault as CapabilityFault).original).toBe(expected);
-    }
+    const fault = thrown(() => wrap(() => { throw expected; }).interruptSignal("n"));
+    expect(fault).toBeInstanceOf(CapabilityFault);
+    expect((fault as CapabilityFault).original).toBe(expected);
   });
 
-  test("a node catching an inbox fault still rejects evalNode with the host's error", async () => {
-    const expected = new Error("inbox failed");
-
-    class SteeredNode extends Node {
-      readonly kind = NodeKind.CODE;
-      override needsSteering = true;
-
-      override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
-        try {
-          caps.steering!.drain(this.id);
-        } catch {
-          // Swallowed here; evalNode still reports it.
-        }
-        return new Output("swallowed");
-      }
-    }
-    const steering: Steering = {
-      interruptSignal: () => new AbortController().signal,
-      drain: () => {
-        throw expected;
+  /** A host whose `interruptSignal` throws `error`. */
+  function failing(error: unknown): Steering {
+    return {
+      interruptSignal: () => {
+        throw error;
       },
     };
-
-    expect(await rejected(drive(new SteeredNode("work"), { steering }))).toBe(expected);
-  });
-
-  /** A host inbox whose `drain` answers with `answer`. */
-  function inbox(answer: () => unknown): Steering {
-    return { interruptSignal: () => new AbortController().signal, drain: answer as Steering["drain"] };
   }
 
-  /** A node that runs `body` over its steering, then returns. */
-  class DrainNode extends Node {
+  /** A node that runs `body` over its capabilities, then returns. */
+  class SteeredNode extends Node {
     readonly kind = NodeKind.CODE;
-    override needsSteering = true;
+    override readsSteerInbox = true;
     override needsLiveEvents = true;
-    readonly body: (caps: NodeCaps, nodeId: string) => Promise<void> | void;
+    readonly body: (caps: NodeCaps, nodeId: string) => void;
 
-    constructor(nodeId: string, body: (caps: NodeCaps, nodeId: string) => Promise<void> | void) {
+    constructor(nodeId: string, body: (caps: NodeCaps, nodeId: string) => void) {
       super(nodeId);
       this.body = body;
     }
 
-    override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
-      await this.body(caps, this.id);
+    override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {
+      this.body(caps, this.id);
       return new Output("returned");
     }
   }
 
-  test("a node catching an async drain fault still rejects evalNode with the host's error", async () => {
+  test("a node catching a steering fault still rejects evalNode with the host's error", async () => {
     const expected = new Error("inbox failed");
-    const node = new DrainNode("work", async (caps, nodeId) => {
+    const node = new SteeredNode("work", (caps, nodeId) => {
       try {
-        await caps.steering!.drain(nodeId);
+        caps.steering!.interruptSignal(nodeId);
       } catch {
         // Swallowed here; evalNode still reports it.
       }
     });
 
-    expect(await rejected(drive(node, { steering: inbox(() => Promise.reject(expected)) }))).toBe(expected);
-    expect(await rejected(drive(node, { steering: inbox(async () => [1]) }))).toEqual(
-      new TypeError("steering.drain must return an array of strings"),
-    );
-  });
-
-  test("a drain the node drops and the host rejects after the node returns still rejects evalNode", async () => {
-    const expected = new Error("inbox failed");
-    const host = Promise.withResolvers<string[]>();
-    const unhandled: unknown[] = [];
-    const guard = (reason: unknown) => void unhandled.push(reason);
-    process.on("unhandledRejection", guard);
-    try {
-      const node = new DrainNode("work", (caps, nodeId) => {
-        caps.steering!.drain(nodeId);
-      });
-      let settled = false;
-      const evaluation = drive(node, { steering: inbox(() => host.promise) });
-      evaluation.then(
-        () => (settled = true),
-        () => (settled = true),
-      );
-
-      // A macrotask turn: the node has returned, and evalNode waits for the dropped drain.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(settled).toBe(false);
-      host.reject(expected);
-
-      expect(await rejected(evaluation)).toBe(expected);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    } finally {
-      process.off("unhandledRejection", guard);
-    }
-    expect(unhandled).toEqual([]);
+    expect(await rejected(drive(node, { steering: failing(expected) }))).toBe(expected);
   });
 
   test("of two faults the node catches, the first is thrown", async () => {
     const first = new Error("sink failed");
-    const node = new DrainNode("work", (caps, nodeId) => {
+    const node = new SteeredNode("work", (caps, nodeId) => {
       for (const fail of [
         () => caps.emitStream!(new StreamChunk({ nodeId, key: "output", chunk: "a" })),
-        () => caps.steering!.drain(nodeId),
+        () => caps.steering!.interruptSignal(nodeId),
       ]) {
         try {
           fail();
@@ -720,13 +619,10 @@ describe("the steering capability", () => {
         }
       }
     });
-    const steering = inbox(() => {
-      throw new Error("inbox failed");
-    });
 
     const error = await rejected(
       drive(node, {
-        steering,
+        steering: failing(new Error("inbox failed")),
         emitStream: () => {
           throw first;
         },
@@ -739,10 +635,10 @@ describe("the steering capability", () => {
   test("onFault sees the first fault's original once, when it is raised", async () => {
     const first = new Error("sink failed");
     const seen: unknown[] = [];
-    const node = new DrainNode("work", (caps, nodeId) => {
+    const node = new SteeredNode("work", (caps, nodeId) => {
       for (const fail of [
         () => caps.emitStream!(new StreamChunk({ nodeId, key: "output", chunk: "a" })),
-        () => caps.steering!.drain(nodeId),
+        () => caps.steering!.interruptSignal(nodeId),
       ]) {
         try {
           fail();
@@ -751,22 +647,20 @@ describe("the steering capability", () => {
       // Seen before the node settles.
       seen.push("returned");
     });
-    const steering = inbox(() => {
-      throw new Error("inbox failed");
-    });
     const emitStream = (): void => {
       throw first;
     };
 
-    expect(await rejected(drive(node, { steering, emitStream, onFault: (original) => void seen.push(original) }))).toBe(
-      first,
-    );
+    expect(
+      await rejected(
+        drive(node, { steering: failing(new Error("inbox failed")), emitStream, onFault: (original) => void seen.push(original) }),
+      ),
+    ).toBe(first);
     expect(seen).toEqual([first, "returned"]);
   });
 
-  test("a capability fault from the host passes through", async () => {
+  test("a capability fault from the host passes through", () => {
     const carried = new CapabilityFault(new Error("inner"));
-    expect(thrown(() => wrap({ drain: () => { throw carried; } }).drain("n"))).toBe(carried);
-    expect(await rejected(wrap({ drain: () => Promise.reject(carried) }).drain("n"))).toBe(carried);
+    expect(thrown(() => wrap(() => { throw carried; }).interruptSignal("n"))).toBe(carried);
   });
 });

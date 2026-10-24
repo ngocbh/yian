@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { pendingCalls } from "../../src/run.ts";
-import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { ASK_TIMED_OUT_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import { NodeStepRecord, RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
   callResultStep,
@@ -17,9 +17,11 @@ import {
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeWaiting,
+  prepareNodeWoken,
   prepareRunResumed,
   type RunState,
 } from "../../src/runtime/state.ts";
+import { wakeableNodes } from "../../src/runtime/waits.ts";
 import { RUN_ID } from "./run_state_fixtures.ts";
 import { call, paramFlow, started, tool } from "./waits_fixtures.ts";
 
@@ -96,6 +98,14 @@ describe("an agent's pending step", () => {
     expect(state.waits.waiting.get("a")!.callIds).toEqual([agentCall("a", 1, 0), agentCall("a", 1, 1)]);
   });
 
+  test("an ask_user's pending step may hold its deadline", () => {
+    const { log, state } = started(paramFlow([], agent("a")));
+    start(log, state, "a");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q", timeout: "1m" }]));
+    step(log, state, "a", { ...pendingOf("a", 1, 0, "c1"), deadline: "2026-10-21T00:00:00.000Z" });
+    expect(state.waits.calls.get(agentCall("a", 1, 0))!.deadline).toBe("2026-10-21T00:00:00.000Z");
+  });
+
   test("agent pending refusals", () => {
     const { log, state } = started(paramFlow([], agent("a"), agent("b")));
     start(log, state, "a");
@@ -110,7 +120,9 @@ describe("an agent's pending step", () => {
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), index: -1n });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), reply: 2n });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), arguments: {} });
-    refuse("a", { ...pendingOf("a", 1, 0, "c1"), deadline: "2026-10-21T00:00:00.000Z" });
+    // Only ask_user times out, and its deadline is a record time.
+    refuse("a", { ...pendingOf("a", 1, 0, "c1", "lookup"), deadline: "2026-10-21T00:00:00.000Z" });
+    refuse("a", { ...pendingOf("a", 1, 0, "c1"), deadline: "tomorrow" });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), tool: "take" });
     refuse("a", { ...pendingOf("a", 1, 0, "c1"), tool: "" });
     step(log, state, "a", result("c0", "x")); // a step after the reply: still the latest reply
@@ -231,4 +243,54 @@ test("pendingCalls reads an agent call's arguments from its reply", () => {
   expect(pendingCalls(path)).toEqual([
     { callId: agentCall("a", 1, 1), node: "a", tool: "lookup", arguments: { x: 1n }, pendingSeq: seq, deadline: null },
   ]);
+});
+
+describe("a timeout wake leaves the agent's other calls open", () => {
+  /** Agent `a` waiting on `ask_user` (with a deadline, provider id c1) and `lookup` (c2). */
+  const waitingOnTwo = () => {
+    const { log, state } = started(paramFlow([], agent("a")));
+    start(log, state, "a");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q", timeout: "1m" }], ["c2", "lookup", {}]));
+    step(log, state, "a", { ...pendingOf("a", 1, 0, "c1"), deadline: "2026-10-21T00:00:00.000Z" });
+    step(log, state, "a", pendingOf("a", 1, 1, "c2", "lookup"));
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [agentCall("a", 1, 0), agentCall("a", 1, 1)] }));
+    return { log, state, ask: agentCall("a", 1, 0), lookup: agentCall("a", 1, 1) };
+  };
+  const closer = (toolCallId: string) => result(toolCallId, ASK_TIMED_OUT_RESULT, { is_error: true, closed: "timed_out" });
+
+  test("the wake times out only the ask; a wake by answers still needs every call settled", () => {
+    const { log, state, ask } = waitingOnTwo();
+    expect(() => prepareNodeWoken(state, "a")).toThrow(/still waits on open call/);
+    commitPrepared(log, state, prepareNodeWoken(state, "a", [ask]));
+    expect(state.waits.calls.get(ask)!.closedReason).toBe("timed_out");
+  });
+
+  test("the re-wait names the still-open call registered before the wake", () => {
+    const { log, state, ask, lookup } = waitingOnTwo();
+    commitPrepared(log, state, prepareNodeWoken(state, "a", [ask]));
+    step(log, state, "a", closer("c1"));
+    // The timed-out ask is closed: it can't be waited on again.
+    expect(() => prepareNodeWaiting(state, "a", { callIds: [ask, lookup] })).toThrow(/was closed \(timed_out\)/);
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [lookup] }));
+    expect(state.waits.waiting.get("a")!.callIds).toEqual([lookup]);
+  });
+
+  test("a call answered after the wake may be named; the node is wakeable at once", () => {
+    const { log, state, ask, lookup } = waitingOnTwo();
+    commitPrepared(log, state, prepareNodeWoken(state, "a", [ask]));
+    step(log, state, "a", closer("c1"));
+    commitPrepared(log, state, prepareComplete(state, lookup, { output: "found" })!);
+    commitPrepared(log, state, prepareNodeWaiting(state, "a", { callIds: [lookup] }));
+    expect(wakeableNodes(state.waits)).toEqual(["a"]);
+  });
+
+  test("a call answered before the wake can't be named again after it", () => {
+    const { log, state, ask, lookup } = waitingOnTwo();
+    commitPrepared(log, state, prepareComplete(state, lookup, { output: "found" })!);
+    commitPrepared(log, state, prepareNodeWoken(state, "a", [ask]));
+    step(log, state, "a", closer("c1"));
+    expect(() => prepareNodeWaiting(state, "a", { callIds: [lookup] })).toThrow(
+      /registered before the node's last node_woken and had settled by then/,
+    );
+  });
 });

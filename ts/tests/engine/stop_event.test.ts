@@ -191,7 +191,7 @@ class ScriptNode extends Node {
   readonly kind = NodeKind.CODE;
   override readonly needsSteps = true;
   override readonly needsLiveEvents = true;
-  override needsSteering = true;
+  override readsSteerInbox = true;
   readonly body: (caps: NodeCaps) => unknown;
 
   constructor(nodeId: string, body: (caps: NodeCaps) => unknown) {
@@ -423,13 +423,12 @@ describe.each(MODES)("callback stops (%s)", (_, numWorkers) => {
     const error = new Error("inbox failed");
     const node = new ScriptNode("work", (caps) => {
       try {
-        caps.steering!.drain("work");
+        caps.steering!.interruptSignal("work");
       } catch {}
       return "done";
     });
     const steering = {
-      interruptSignal: () => new AbortController().signal,
-      drain: (): string[] => {
+      interruptSignal: (): AbortSignal => {
         throw error;
       },
     };
@@ -450,22 +449,6 @@ describe.each(MODES)("callback stops (%s)", (_, numWorkers) => {
     expect(await rejected(built.run())).toBe(error);
     expect(stops(built)).toEqual([new RunStoppedRecord("callback", "stream callback rejected", ["work"])]);
     expect(logged(built, NodeSucceededRecord, "work")).toBe(false);
-  });
-
-  test("a rejected steering drain promise the node leaves un-awaited records a callback stop", async () => {
-    const error = new Error("inbox rejected");
-    const node = new ScriptNode("work", (caps) => {
-      void caps.steering!.drain("work");
-      return "done";
-    });
-    const steering = {
-      interruptSignal: () => new AbortController().signal,
-      drain: (): Promise<string[]> => Promise.reject(error),
-    };
-    const built = fanEngine([node], { numWorkers, steering });
-
-    expect(await rejected(built.run())).toBe(error);
-    expect(stops(built)).toEqual([new RunStoppedRecord("callback", "inbox rejected", ["work"])]);
   });
 
   test("a segment that already has a RunStopped gets no second one", async () => {
@@ -807,10 +790,6 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
         calls.push("interruptSignal");
         throw new Error("inbox failed");
       },
-      drain: (): string[] => {
-        calls.push("drain");
-        throw new Error("inbox failed");
-      },
     };
     let keptCaps!: NodeCaps;
     const keeper = new ScriptNode("keeper", (caps) => {
@@ -819,7 +798,7 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
     });
     const refusals: unknown[] = [];
     const refuse = (): void => {
-      for (const call of [() => keptCaps.steering!.drain("keeper"), () => keptCaps.steering!.interruptSignal("keeper")]) {
+      for (const call of [() => keptCaps.steering!.interruptSignal("keeper")]) {
         try {
           call();
         } catch (error) {
@@ -840,7 +819,7 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
 
     expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
     refuse();
-    expect(refusals.length).toBe(4);
+    expect(refusals.length).toBe(2);
     for (const refusal of refusals) {
       expect(refusal).toBeInstanceOf(CapabilityFault);
       expect((refusal as CapabilityFault).original).toEqual(new Error("steering capability is closed"));

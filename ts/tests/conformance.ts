@@ -520,8 +520,8 @@ function checkModels(models: Value | undefined): void {
 
 /**
  * Throw unless `steering` is `host.steering`: node ids to lists of actions. An action is
- * `{after, steer: [text, ...]}` or `{after, interrupt: true}`, `after` optional and one of
- * `{model_call: n, chunk: k}`, `{model_call: n}` and `{tool_call: i}`, counted from 1.
+ * `{after, interrupt: true}`, `after` optional and one of `{model_call: n, chunk: k}`,
+ * `{model_call: n}` and `{tool_call: i}`, counted from 1. Steers are `host.sends` items.
  */
 function checkSteering(steering: Value | undefined): void {
   for (const [node, actions] of Object.entries(mapping("host.steering", steering))) {
@@ -530,20 +530,11 @@ function checkSteering(steering: Value | undefined): void {
     }
     actions.forEach((item, index) => {
       const where = `host.steering.${node}[${index}]`;
-      const action = keys(where, item, new Set(["after", "steer", "interrupt"]));
-      if (Object.hasOwn(action, "steer") === Object.hasOwn(action, "interrupt")) {
-        throw new Error(`\`${where}\` takes \`steer\` or \`interrupt\``);
+      if (isMapping(item) && Object.hasOwn(item, "steer")) {
+        throw new Error("`host.steering` steers moved to `host.sends` with `after:`");
       }
-      const steer = action["steer"];
-      if (
-        Object.hasOwn(action, "steer") &&
-        (!Array.isArray(steer) ||
-        steer.length === 0 ||
-        steer.some((text) => typeof text !== "string"))
-      ) {
-        throw new Error(`\`${where}.steer\` must be a non-empty list of text`);
-      }
-      if (Object.hasOwn(action, "interrupt") && action["interrupt"] !== true) {
+      const action = keys(where, item, new Set(["after", "interrupt"]), { required: ["interrupt"] });
+      if (action["interrupt"] !== true) {
         throw new Error(`\`${where}.interrupt\` must be \`true\``);
       }
       if (Object.hasOwn(action, "after")) checkPoint(`${where}.after`, action["after"]);
@@ -623,21 +614,31 @@ function checkStop(stop: Value | undefined): void {
 }
 
 /**
- * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}`, `{close}` and
- * `{complete, output}` or `{complete, error}` items.
+ * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` items, optionally with
+ * `after: {node, <point>}` (sent live when the run reaches the point) or, in a `resume` case,
+ * `down: true` (sent after the crash, before the resume), `{close}` items, and `{complete, output}`
+ * or `{complete, error}` items.
  */
-function checkSends(value: Value | undefined): void {
+function checkSends(value: Value | undefined, kind: Kind): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
-  for (const item of value) {
+  value.forEach((item, index) => {
     const fields = isMapping(item) ? Object.keys(item).sort(compareCodeUnits).join(",") : null;
-    const completes = typeof (item as Case)["complete"] === "string";
+    const send = typeof (item as Case | null)?.["inbox"] === "string";
+    const completes = typeof (item as Case | null)?.["complete"] === "string";
     const valid =
-      (fields === "event,inbox" && typeof (item as Case)["inbox"] === "string") ||
+      (fields === "event,inbox" && send) ||
+      (fields === "after,event,inbox" && send && isMapping((item as Case)["after"])) ||
+      (fields === "down,event,inbox" && send && (item as Case)["down"] === true && kind === "resume") ||
       (fields === "close" && typeof (item as Case)["close"] === "string") ||
       (fields === "complete,output" && completes) ||
       (fields === "complete,error" && completes && typeof (item as Case)["error"] === "string");
-    if (!valid) throw new Error("`host.sends` items are {inbox, event}, {close} or {complete, output | error}");
-  }
+    if (!valid) throw new Error("`host.sends` items are {inbox, event, after?|down?}, {close} or {complete, output | error}");
+    if (fields === "after,event,inbox") {
+      const { node, ...point } = (item as Case)["after"] as Case;
+      if (typeof node !== "string") throw new Error(`\`host.sends[${index}].after.node\` must be a node id`);
+      checkPoint(`host.sends[${index}].after`, point);
+    }
+  });
 }
 
 /** The answer a `host.sends` `{complete}` item gives: its `output`, or its `error`. */
@@ -704,7 +705,7 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
   checkSteering(get(host, "steering", {}));
   checkStop(get(host, "stop", {}));
-  checkSends(get(host, "sends", []));
+  checkSends(get(host, "sends", []), kind);
   const human = mapping("host.human", get(host, "human", {}));
   if (Object.values(human).some((answers) => !Array.isArray(answers))) {
     throw new Error("`host.human` maps node ids to lists of answers");
@@ -1620,27 +1621,40 @@ class ConformanceStop extends Error {
 }
 
 /**
- * The `host.steering` inbox an AGENT reads (`Steering`): steers and interrupts by node id, and the
- * `host.stop` points.
+ * The host an AGENT reads at run points: the `host.steering` interrupts by node id (`Steering`),
+ * the `host.stop` points, and the `host.sends` items sent at a point (`after`).
  *
- * An action without `after` is queued at once, the others when the run reaches their point.
- * Steers are drained once; an interrupt aborts the node's interrupt signal, which stays aborted.
- * Reaching a stop calls `onStop`. Calls are counted, and points reached, only once `armed`, so
- * that runs before the main one neither count nor steer.
+ * An interrupt without `after` is set at once, the others when the run reaches their point; an
+ * interrupt aborts the node's interrupt signal, which stays aborted. Reaching a stop calls
+ * `onStop`; reaching a send calls `deliver`. Calls are counted, and points reached, only once
+ * `armed`, so that runs before the main one neither count nor act.
  */
 class Inbox implements Steering {
   armed = false;
-  readonly #steers = new Map<string, string[]>();
   readonly #interrupts = new Map<string, AbortController>();
   readonly #counts = new Map<string, number>();
   readonly #pending: { label: string; node: string; action: Case }[] = [];
   readonly #onStop: () => void;
+  readonly #deliver: (inbox: string, event: Value) => void;
 
-  constructor(steering: Case, stop: Case = {}, onStop: () => void = () => {}) {
+  constructor(
+    steering: Case,
+    stop: Case = {},
+    onStop: () => void = () => {},
+    sends: readonly Case[] = [],
+    deliver: (inbox: string, event: Value) => void = () => {},
+  ) {
     this.#onStop = onStop;
+    this.#deliver = deliver;
     for (const [node, action] of Object.entries(stop)) {
       this.#pending.push({ label: `host.stop.${node}`, node, action: { ...(action as Case), stop: true } });
     }
+    sends.forEach((item, index) => {
+      if (!Object.hasOwn(item, "after")) return;
+      const { node, ...point } = item["after"] as Case;
+      const action: Case = { after: point, send: { inbox: item["inbox"]!, event: item["event"]! } };
+      this.#pending.push({ label: `host.sends[${index}]`, node: node as string, action });
+    });
     for (const [node, actions] of Object.entries(steering)) {
       (actions as Case[]).forEach((action, index) => {
         if (Object.hasOwn(action, "after")) {
@@ -1652,14 +1666,17 @@ class Inbox implements Steering {
     }
   }
 
-  /** Queue `action`'s steers for `node`, abort its interrupt signal, or stop the run. */
+  /** Send `action`'s event, abort `node`'s interrupt signal, or stop the run. */
   #act(node: string, action: Case): void {
     if (action["stop"] === true) {
       this.#onStop();
       return;
     }
-    const steers = this.#steers.get(node) ?? [];
-    this.#steers.set(node, [...steers, ...(get(action, "steer", []) as string[])]);
+    if (Object.hasOwn(action, "send")) {
+      const { inbox, event } = action["send"] as Case;
+      this.#deliver(inbox as string, event as Value);
+      return;
+    }
     if (action["interrupt"] === true) this.#controller(node).abort();
   }
 
@@ -1686,13 +1703,6 @@ class Inbox implements Steering {
       this.#pending.splice(this.#pending.indexOf(item), 1);
       this.#act(node, item.action);
     }
-  }
-
-  /** Remove and return the steers queued for `nodeId`. */
-  drain(nodeId: string): readonly string[] {
-    const steers = this.#steers.get(nodeId) ?? [];
-    this.#steers.delete(nodeId);
-    return steers;
   }
 
   /** The signal aborted once `nodeId`'s interrupt is set. */
@@ -1823,8 +1833,10 @@ interface Host {
   random: (() => number) | null;
   /** Builds every model the run calls; no call reaches a provider. */
   models: ModelAccess;
-  /** The `host.steering` inbox, which also reaches the `host.stop` points. */
+  /** The `host.steering` interrupts, which also reach the `host.stop` points and the `host.sends` `after` points. */
   inbox: Inbox;
+  /** Wait for the `host.sends` items sent at run points; reject with the first refusal. */
+  sent: () => Promise<void>;
   /** With `host.stop`, the run's signal and the error it is aborted with at the point. */
   stop: { signal: AbortSignal; error: ConformanceStop } | null;
   /** Each tool's calls in order, by tool name, as `{args, call_id, attempt, node}`. */
@@ -1859,8 +1871,18 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
   const stopper = new AbortController();
   const stopError = new ConformanceStop();
   const stop = Object.hasOwn(spec, "stop") ? { signal: stopper.signal, error: stopError } : null;
-  const inbox = new Inbox(get(spec, "steering", {}) as Case, get(spec, "stop", {}) as Case, () =>
-    stopper.abort(stopError),
+  const delivered: Promise<number>[] = [];
+  const inbox = new Inbox(
+    get(spec, "steering", {}) as Case,
+    get(spec, "stop", {}) as Case,
+    () => stopper.abort(stopError),
+    get(spec, "sends", []) as Case[],
+    // A live run takes the send through its engine at once; the promise settles after.
+    (name, event) => {
+      const sent = send(log, name, event, { env });
+      sent.catch(() => {});
+      delivered.push(sent);
+    },
   );
   const scripts = new Map<string, Value[]>(
     Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
@@ -1979,7 +2001,8 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
     if (first === -1) return;
     for (const item of taken.splice(first).reverse()) scripts.get(item.label)!.unshift(item.entry);
   };
-  return { tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, putBack, check };
+  const sent = async (): Promise<void> => void (await Promise.all(delivered));
+  return { tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, putBack, check, sent };
 }
 
 /** Return a run's `failure` in the case's failure form. */
@@ -2547,7 +2570,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const env = caseEnv(ctx);
   const spec = get(case_, "host", {}) as Case;
   const scripted = host(case_, log, env, flow);
-  const { tools, models, inbox, stop, calls, check } = scripted;
+  const { tools, models, inbox, stop, calls, check, sent } = scripted;
   const run = get(case_, "run", {}) as Case;
   const resume = get(case_, "resume", {}) as Case;
   const events: RunEvent[] = [];
@@ -2599,6 +2622,10 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       } finally {
         await cutMemory?.close();
       }
+      // The sends a host makes while the run is down.
+      for (const item of get(spec, "sends", []) as Case[]) {
+        if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env });
+      }
       events.length = 0;
       chunks.length = 0;
       const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
@@ -2609,10 +2636,15 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   let outcomes: Value[] = [];
   if (!Object.hasOwn(caught, "raises")) {
     let memory: MemoryRegistry | null = null;
-    const sends = [...(get(spec, "sends", []) as Case[])];
+    // The items sent while the run waits; the others are sent at a point, or while it is down.
+    const all = get(spec, "sends", []) as Case[];
+    const sends = all.filter((item) => !Object.hasOwn(item, "after") && !Object.hasOwn(item, "down"));
+    // A run must not end waiting when it was given items to send while it waits, or an empty list.
+    const waitingSends = Object.hasOwn(spec, "sends") && (sends.length > 0 || all.length === 0);
     try {
       memory = await memories();
       result = await start(memory);
+      await sent();
       // Each item is delivered while the run waits; the same collectors see every `advance`.
       while (result.status === "waiting" && sends.length > 0) {
         const item = sends.shift()!;
@@ -2620,11 +2652,12 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
         else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
         else await send(log, item["inbox"] as string, item["event"], { env });
         result = await advance({ ...advanceArguments, ...hooks, ...signal, memory });
+        await sent();
       }
     } catch (error) {
       caught = { raises: raised(error), error };
     }
-    if (Object.hasOwn(spec, "sends") && result?.status === "waiting") {
+    if (waitingSends && result?.status === "waiting") {
       await memory?.close();
       throw new CaseFailure("the run is still waiting after host.sends ran out");
     }

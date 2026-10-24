@@ -1,4 +1,5 @@
 kind: load
+python_skip: "TS-only (#1025): the allowed list has steer_inbox, which Python yian doesn't have"
 flow: |
   id: f
   name: f
@@ -12,7 +13,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''x'' (kind=agent): field ''when'' is not allowed (allowed: asserts, depends_on, env, input, kind, llm_config, long_term_memory, node_name, output, prompt, retries, runs_after, skills, steerable, system_prompt, tools, variables); to run a node only when a condition holds, route to it from a `case` node (`cases: [{when: ..., then: <node>}]`)'
+      message: 'node ''x'' (kind=agent): field ''when'' is not allowed (allowed: asserts, depends_on, env, input, kind, llm_config, long_term_memory, node_name, output, prompt, retries, runs_after, skills, steer_inbox, system_prompt, tools, variables); to run a node only when a condition holds, route to it from a `case` node (`cases: [{when: ..., then: <node>}]`)'
       frames:
       - label: flow.yaml
         range: [7, 11, 7, 22]

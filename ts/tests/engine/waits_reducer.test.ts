@@ -430,6 +430,8 @@ describe("pending and tool_result steps", () => {
     expect(() => prepareNodeStep(state, "b", resultStep("a"))).toThrow(/of node 'a', not 'b'/);
     // An agent's result, which no pending step registered, is the node's own detail.
     step(log, state, "b", { kind: "tool_result", call_id: "call-1", output: "skipped", is_error: true, closed: "skipped" });
+    // A TOOL node writes no closers.
+    expect(() => prepareNodeStep(state, "a", { ...resultStep("a"), closed: "crashed" })).toThrow(/can't be a closer/);
     step(log, state, "a", resultStep("a"));
     expect(state.waits.calls.get(call("a"))!.state).toBe("answered");
     expect(() => prepareNodeStep(state, "a", resultStep("a"))).toThrow(/answered/);

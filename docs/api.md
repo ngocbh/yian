@@ -562,18 +562,16 @@ The call id depends on who calls the tool:
   (a recorded step over `YIAN_MAX_EVENT_BYTES` is refused) and waits, and the host answers with `complete` under
   the same call id. The re-run rules above apply: a handler that hadn't returned is called again
   with the same id, a recorded call isn't called again, and an answer completed as an error
-  fails the node without a retry. A tool an AGENT calls can't return `pending()` in this
-  version (see [Blocking human interaction](#blocking-human-interaction)).
-- A call from an AGENT's tool loop gets an id of its own, unique per call and
-  never reused for another call. It is not stable across resume: a resumed AGENT
-  asks its model again and may make different calls, so reusing an id could make
-  an idempotency key drop the wrong action. Call a tool whose side effect must
-  happen once from a TOOL node.
+  fails the node without a retry. A tool an AGENT calls may return `pending()` too (see
+  [Blocking human interaction](#blocking-human-interaction)).
+- Changed (TS yian): a call from an AGENT's tool loop has the id `"<run_id>/<node>/<n>/<index>"`:
+  `n` is the step of the reply that made the call and `index` the call's place among the reply's
+  runnable calls. A resumed AGENT replays its recorded replies, so the id is stable across resume,
+  and a call with a recorded result isn't made again.
 - Outside a run, as with `invoke_tool` or a `ToolSet` not bound to a run, each
   call gets a fresh random id.
 
-Treat `call_id` as an opaque string and don't parse it; the AGENT form changes
-once AGENT steps are recorded. It is unique across runs only when run ids are: two
+Treat `call_id` as an opaque string and don't parse it. It is unique across runs only when run ids are: two
 runs given the same `run_id=` give their TOOL nodes the same call ids. When a
 broker limits the length or characters of its key, hash the id, for example
 `hashlib.sha256(ctx.call_id.encode()).hexdigest()[:32]`.
@@ -2517,7 +2515,10 @@ inbox, events, closed}`: the seqs of the send commits it consumed, in order, and
 the inbox closed; its success rebuilds the value from those sends. The reducer reads two step
 bodies, a TOOL's `pending` step `{kind: "pending", call_id, tool, arguments, deadline?}` and its
 answering `tool_result` step `{kind: "tool_result", call_id, output}` or `{..., error: {type,
-message}}`; any other step stays opaque. Deadlines are record times.
+message}}`, and (TS yian) an AGENT's `pending` step `{kind: "pending", call_id, tool, tool_call_id,
+reply, index}` (`reply` is the `n` of the reply's `model_call` step; the arguments stay in the
+reply) and its answering `tool_result` step `{kind: "tool_result", call_id: <tool call id>,
+started_at, output, is_error, closed?}`; any other step stays opaque. Deadlines are record times.
 
 The run reducer applies them with these rules, live and on replay (a broken rule is a
 `RangeError`):
@@ -2533,7 +2534,16 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   refused: a call belongs to its node until the node settles. A `tool_result` for a registered
   call must answer an open host call of its own node (a take's or sleep's call, which the run
   settles itself, and an answered, timed-out or closed one are refused);
-  a result no call registered, such as an agent's, stays the node's own detail.
+  a result no call registered, such as an agent's inline call, stays the node's own detail.
+- An AGENT registers a call whose handler returned `pending()` with a `pending` step: `reply` is
+  the `n` of its latest `model_call` step, `call_id` is `<run>/<node>/<reply>/<index>`, `tool` a
+  tool other than `take` or `sleep`, `tool_call_id` the provider's id, with no `arguments` and no
+  `deadline`, the whole step within `YIAN_MAX_EVENT_BYTES`. A provider's ids repeat across replies
+  and nodes, so an AGENT's `tool_result` refers to a registered call only when the call is its own
+  node's and of its latest reply. A call closed by record (a resume's `closed_calls`) takes one
+  more result on its running AGENT, the closer that tells the model why: `closed` equal to the
+  call's reason, once. A `closed` result for an open call, a second closer, or another word is
+  refused; a TOOL node writes no closers.
 - `node_waiting` moves an in-flight node with no pending commit to the waiting set. Its `waits`
   entry is a take or sleep node's own call, not yet registered; a take may wait only on an open
   inbox with nothing unread it may read. `call_ids` names calls of the node registered since its
@@ -2555,8 +2565,8 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   answered and commits `{events: [], closed: true}`. `run_cancelled` ends the run;
   `run_failed` ends it at quiescence with nodes waiting, none wakeable, once a route proved END
   unreachable, holding that failure. Both close every open call, and, being terminal, refuse
-  every later record. `run_resumed.closed_calls` must be the retried agents' open calls, `[]`
-  while only TOOL nodes register calls. The reducer publishes `CallClosed` for each host call it
+  every later record. `run_resumed.closed_calls` must be the retried agents' open calls (a TOOL
+  node's re-run reuses its call instead). The reducer publishes `CallClosed` for each host call it
   closes: a timed-out `ask` in `node_woken`, a resume's closed calls, `run_cancelled`,
   `run_failed` and a `node_failed`; takes and sleeps get none.
 
@@ -2877,15 +2887,18 @@ await close("run.jsonl", "messages");                    // a waiting take gets 
 - `send(log, inbox, event, options?)` sends `event` to the flow's top-level `Inbox(T)` input
   `inbox` and returns the send's seq. `event` must be a `T`, within `YIAN_MAX_EVENT_BYTES`.
 - `complete(log, callId, result, options?)` answers an open host call (a host tool that returned
-  `pending()`, or a TOOL `ask`) with `{output}` or `{error}` and returns the answer's seq, or `null`
-  when the call is already answered with exactly that result, so a host's retry is safe.
+  `pending()`, a TOOL `ask`, or an AGENT's tool call, its `ask_user` included) with `{output}` or
+  `{error}` and returns the answer's seq, or `null` when the call is already answered with exactly
+  that result, so a host's retry is safe. For an agent's call the answer becomes the text its
+  model reads (an error as an error result); it is accepted while the agent still runs the
+  reply's other calls.
 - `close(log, inbox, options?)` closes an inbox and returns its seq, or `null` when it is already
   closed. Takes still read what was sent; a take waiting on it with nothing to read gets
   `{events: [], closed: true}`.
 - `cancel(log, options?)` writes `run_cancelled`, which ends the run with no output and no
   learning, and returns the open host calls it closed, as `pendingCalls` listed them.
 - `pendingCalls(log)` lists the open host calls (not takes or sleeps): `callId`, `node`, `tool`,
-  `arguments`, `pendingSeq` and `deadline`. It is synchronous, reads only the log's records and
+  `arguments` (for an agent's call, those of the reply's tool call), `pendingSeq` and `deadline`. It is synchronous, reads only the log's records and
   takes no lock, so it reads a log another writer holds. Hosts rebuild their open asks from it, not
   from a store of their own; a call leaves it once it is answered, timed out or closed.
 
@@ -3541,9 +3554,17 @@ answer completed as an error fails the node and is never retried. A `timeout` (a
 is null: a declared `output: Optional(T)` succeeds with null, so a `case` can route on it (the
 host's answer schema is `T`, so null always means nobody answered), and any other declared output
 fails the node with failure code `tool.timeout`; an `ask` with no `output:` returns null. Since
-null means nobody answered, `complete` refuses a null answer for an `ask`. An
-AGENT's tool call can't wait in this version: a tool it calls (its `ask_user` included) that
-returns `pending()` fails the agent, so answer inline or ask from a TOOL node. With
+null means nobody answered, `complete` refuses a null answer for an `ask`.
+
+Changed (TS yian): an AGENT's tool call may wait too. When a tool it calls (its `ask_user`
+included) returns `pending()`, the agent records a `pending` step for the call (its id is
+`<run id>/<node>/<n>/<index>`: the reply's `model_call` step and the call's place in the reply),
+runs the reply's other calls, and waits on every call of the reply that pended. The host answers
+each with `complete`; once all are answered the agent wakes, replays its recorded steps (no
+handler is called again) and calls its model with every result, in call order. An agent given the
+host's interrupt signal (a steerable agent) can't wait yet: its tool returning `pending()` fails
+it, so answer inline. A process lost after the `pending` step but before the agent waits closes
+the call as `crashed` on resume, and the model reads that the call's outcome is unknown. With
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as
 `extra`, so the handler's `AskTool` declares them.
 

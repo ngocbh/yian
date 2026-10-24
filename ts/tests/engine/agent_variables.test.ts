@@ -374,7 +374,7 @@ test("an agent renders inputs and variable defaults without execution or memory 
 
   const output = await node.forward({ topic: "coral reefs" }, { models });
 
-  expect(output.value).toBe("Summarize clearly: coral reefs, 4 sentences, concise.");
+  expect((output as Output).value).toBe("Summarize clearly: coral reefs, 4 sentences, concise.");
   expect(models.prompts).toHaveLength(1);
 });
 
@@ -386,7 +386,7 @@ test("an agent resolves and renders once with repeated literal default reference
   const resolved = spyResolve(node);
   const models = echo();
 
-  expect((await node.forward({}, { models })).value).toBe("4/4: ${input.topic}/");
+  expect(((await node.forward({}, { models })) as Output).value).toBe("4/4: ${input.topic}/");
   expect(resolved).toEqual([{ count: 4n, instruction: "${input.topic}", empty: "" }]);
   expect(models.prompts).toHaveLength(1);
 });
@@ -400,9 +400,9 @@ test("mutable variable defaults are detached between invocations", async () => {
   const resolved = spyResolve(node) as unknown as { settings: { nested: { items: string[] } } }[];
   const models = echo();
 
-  const first = (await node.forward({}, { models })).value;
+  const first = ((await node.forward({}, { models })) as Output).value;
   resolved[0]!.settings.nested.items.push("changed");
-  const second = (await node.forward({}, { models })).value;
+  const second = ((await node.forward({}, { models })) as Output).value;
 
   expect(second).toBe(first);
   expect(preset).toEqual({ nested: { items: ["a", "b"] } });
@@ -418,10 +418,10 @@ test("nullable variable defaults follow the existing strict prompt rules", async
   const resolved = spyResolve(node);
   const models = echo();
 
-  expect((await node.forward({}, { models })).value).toBe("fallback");
+  expect(((await node.forward({}, { models })) as Output).value).toBe("fallback");
   expect(resolved).toEqual([{ note: null }]);
   node.prompt = "${note | 'fallback'}";
-  expect((await node.forward({}, { models })).value).toBe("fallback");
+  expect(((await node.forward({}, { models })) as Output).value).toBe("fallback");
   node.prompt = "${note}";
   const error = await rejected(node.forward({}, { models }));
   expect(error).toBeInstanceOf(ExpressionError);

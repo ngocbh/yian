@@ -34,6 +34,7 @@ import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
+import type { Output } from "../../src/nodes/base.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
@@ -75,7 +76,7 @@ async function run(
     models: { env: NO_ENV, createModel: () => model },
     sent: () => [],
   };
-  const value = (await runAgent(ctx)).value;
+  const value = ((await runAgent(ctx)) as Output).value;
   const purposes = events.filter((event) => event instanceof ModelCallStarted).map((event) => event.purpose);
   return { value, purposes };
 }

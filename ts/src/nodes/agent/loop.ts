@@ -14,6 +14,11 @@
  * call, and each tool call with a recorded result gets it without running; a replayed call with no
  * result is closed as `crashed`, its outcome unknown. Live calls follow the last recorded one.
  *
+ * A tool call whose handler returns `pending()` is written as a `pending` step, which registers it
+ * with the run under its call id `<run>/<node>/<n>/<index>`; the reply's other calls still run, and
+ * then the loop returns `Pending` naming every call of the reply that pended. A host's `complete`
+ * writes the call's `tool_result`; the woken agent replays and calls the model with every result.
+ *
  * A steerable agent reads the host's steers at the top of each iteration and stops at a host
  * interrupt between effects or before a later chunk of a streamed reply, returning its latest
  * reply's text (a cut reply's text so far); an interrupt never aborts a running tool call.
@@ -50,12 +55,13 @@ import { isPending } from "../../tools/context.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
-import { Output } from "../base.ts";
+import { Output, Pending } from "../base.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
   AgentSteps,
   checkStopped,
+  digestRequest,
   drainSteers,
   interruptRequested,
   type RecordedResult,
@@ -96,7 +102,8 @@ import { pushVisible, textOf } from "./text.ts";
  * reads them all.
  *
  * @returns The checked structured value, or the final reply's visible text; after a host
- *   interrupt, the latest reply's visible text (`""` before any).
+ *   interrupt, the latest reply's visible text (`""` before any); or `Pending` naming the calls of
+ *   the latest reply whose handler returned `pending()`, once the reply's other calls ran.
  * @throws RangeError when a grant names no tool of the run (`ToolSet.resolve`).
  * @throws TypeCheckError when a reply's tool call arguments nest too deep.
  * @throws ToolIterationLimitError when a reply calls tools at the `maxToolIterations`-th turn.
@@ -108,7 +115,7 @@ import { pushVisible, textOf } from "./text.ts";
  *   `toolText` refuses, or `generateStructured`'s `OutputInvalidError`. The host inbox's faults
  *   pass through.
  */
-export async function runAgent(ctx: AgentRunContext): Promise<Output> {
+export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> {
   const systemPrompt = systemPromptWithMemory(ctx.baseSystemPrompt, ctx.memoryContext.sections);
   const system = new Message({ role: "system", parts: [new TextPart(systemPrompt)] });
   const live = liveSinks(ctx);
@@ -150,6 +157,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
     signal: ctx.signal,
     retry,
     steps,
+    baseSystemPrompt: ctx.baseSystemPrompt,
   };
   const toolset = ctx.toolset ?? new ToolSet();
   // A granted id may name a host-filled group; grants are checked by tool name.
@@ -192,7 +200,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
         signal: ctx.signal,
         interrupt,
         retry,
-        record: { steps, digest: requestSha256(request, steered) },
+        record: { steps, digest: requestSha256(digestRequest(request, ctx.baseSystemPrompt), steered) },
       });
     } catch (error) {
       // The cut reply's text is kept; its calls, partial or not, never run.
@@ -232,8 +240,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
       );
     }
 
-    const turn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt };
+    const pended = new Map<number, string>();
+    const turn: ToolTurn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt, pended };
     if (await (replayed ? replayToolCalls(turn) : runToolCalls(turn))) return interrupted(reply);
+    // An agent given the host's interrupt signal never pends, so no interrupted turn gets here with a pended call.
+    if (pended.size > 0) return new Pending([...pended].sort(([a], [b]) => a - b).map(([, callId]) => callId));
   }
 }
 
@@ -246,14 +257,15 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output> {
  * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
  * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
  * the node) show nothing. Steps of another kind are skipped. A request's digest leaves steers
- * out, as the writer does, so steers never break the check.
+ * and recalled memory out, as the writer does, so neither breaks the check.
  *
  * @param steps The invocation's steps across its starts.
  * @param options `messages` are the system message (memory sections included) and the prompt's
  *   messages; `tools` the specs every chat request carries, `null` when they can't be rebuilt
  *   (no chat request then matches); `structured` builds the model the structured calls read
  *   their plan off and gives the output type, or `null` when it can't (no structured request
- *   then matches).
+ *   then matches); `baseSystemPrompt` is the system prompt without recalled memory, which each
+ *   request's digest reads in place of the system message (`digestRequest`).
  * @returns The interactions, and whether every recorded request matched.
  */
 export async function stepsMaterial(
@@ -262,6 +274,7 @@ export async function stepsMaterial(
     messages: readonly Message[];
     tools: readonly ToolSpec[] | null;
     structured: () => Promise<{ model: ChatModel; typ: Type } | null>;
+    baseSystemPrompt: string | null;
   },
 ): Promise<{ interactions: VisibleInteraction[]; digestOk: boolean }> {
   const messages = [...options.messages];
@@ -296,12 +309,13 @@ export async function stepsMaterial(
       const rest = steps.slice(index).filter((later) => later["kind"] === "model_call");
       const structured = await options.structured();
       if (structured === null) return { interactions, digestOk: false };
-      const material = structuredMaterial(structured.model, messages, structured.typ, rest);
+      const material = structuredMaterial(structured.model, messages, structured.typ, rest, options.baseSystemPrompt);
       interactions.push(...material.interactions);
       return { interactions, digestOk: digestOk && material.digestOk };
     }
     const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
-    if (request === null || step["request_sha256"] !== requestSha256(request, new Set())) digestOk = false;
+    const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt), new Set());
+    if (step["request_sha256"] !== digest) digestOk = false;
     if (Object.hasOwn(step, "error")) continue;
     const reply = recordedResponse(step).message;
     messages.push(reply);
@@ -344,13 +358,19 @@ interface ToolTurn {
   readonly calls: readonly ToolCallPart[];
   /** The host's interrupt signal, or `undefined` for an agent that isn't steerable. */
   readonly interrupt: AbortSignal | undefined;
+  /** The calls whose handler returned `pending()`: each one's yian call id by its index. */
+  readonly pended: Map<number, string>;
 }
 
 /**
  * How one tool call ended: the model reads `content` (a reported error's text when `reported`), or
- * it threw `error`, or its result had no text.
+ * it threw `error`, or its result had no text; or its handler returned `pending()`, so the call
+ * `pending` waits for a later answer.
  */
-type ToolOutcome = { readonly content: string; readonly reported: boolean } | { readonly error: unknown };
+type ToolOutcome =
+  | { readonly content: string; readonly reported: boolean }
+  | { readonly error: unknown }
+  | { readonly pending: string };
 
 /** One started call of a group and how it ended. */
 interface SettledCall {
@@ -362,6 +382,8 @@ interface SettledCall {
 interface PlannedCall {
   readonly call: ToolCallPart;
   readonly index: number;
+  /** The call's yian id, which a `pending` step names; `undefined` outside a run or for `load_skill`. */
+  readonly callId: string | undefined;
   /** Run the call under its group's signal. */
   readonly invoke: (signal: AbortSignal) => Promise<unknown>;
 }
@@ -504,7 +526,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   const args = call.arguments!;
   if (skills.size > 0 && call.name === LOAD_SKILL) {
     // `load_skill` only reads the granted skills.
-    return { planned: { call, index, invoke: async () => invokeLoadSkill(skills, args) }, safe: true };
+    const invoke = async () => invokeLoadSkill(skills, args);
+    return { planned: { call, index, callId: undefined, invoke }, safe: true };
   }
   if (!turn.granted.includes(call.name)) {
     const error = new AgentLoopError(
@@ -521,7 +544,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     checkNodeStopped(turn);
     // Python checks the arguments inside the call, where a reported error is the call's result.
     if (isReportedToolError(error)) {
-      return { planned: { call, index, invoke: () => Promise.reject(error) }, safe: false };
+      return { planned: { call, index, callId: undefined, invoke: () => Promise.reject(error) }, safe: false };
     }
     return { error, granted: true };
   }
@@ -531,18 +554,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // run (no run id) the tool set gives each call a fresh id.
   const runId = toolset.runId;
   const callId = runId ? `${runId}/${ctx.nodeId}/${turn.n}/${index}` : undefined;
-  const invoke = async (signal: AbortSignal) => {
-    const value = await toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
-    // An agent's pending call needs replay from its steps; until then a call answers in the call.
-    if (isPending(value)) {
-      throw new AgentLoopError(
-        `agent node ${reprText(ctx.nodeId)}: tool ${reprText(call.name)} returned pending(); an AGENT's tool call ` +
-          "can't wait for a later answer in this version, so answer it inline or ask from a TOOL node",
-      );
-    }
-    return value;
-  };
-  return { planned: { call, index, invoke }, safe: toolset.isConcurrencySafe(checked) };
+  const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
+  return { planned: { call, index, callId, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 
 /**
@@ -581,8 +594,11 @@ async function failCall(
  * (in time; a `ReportedToolError` is the call's error result, not a failure; a result `toolText`
  * refuses is a failure) aborts the group's signal, and no further call starts. As each call
  * finishes with a result, its text is computed and written as a `tool_result` step at once, in
- * finish order, unless the node has stopped by then. Every started call is awaited; then a stop
- * wins, else the first failure is thrown with nothing of the group committed. A stop, then a host
+ * finish order, unless the node has stopped by then; a call whose handler returned `pending()` is
+ * written as a `pending` step instead and gets no tool message (the loop returns `Pending`). An
+ * agent given the host's interrupt signal, or one outside a run, can't pend: that fails the group.
+ * Every started call is awaited; then a stop wins, else the first failure is thrown with nothing of
+ * the group committed. A stop, then a host
  * interrupt, is checked before the group starts; the interrupt skips from the group's first call.
  *
  * @returns Whether a host interrupt skipped the group and every later call.
@@ -606,10 +622,32 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
   };
   /**
    * Take the text the model reads for one call's result and write its step, as the call finishes;
-   * a result with no text, or a write that throws, fails the group.
+   * a result with no text, or a write that throws, fails the group. A pended call writes its
+   * `pending` step.
    */
-  const settle = (call: ToolCallPart, startedAt: number, value: unknown, reported: boolean): ToolOutcome => {
+  const settle = (planned: PlannedCall, startedAt: number, value: unknown, reported: boolean): ToolOutcome => {
+    const { call, index, callId } = planned;
     try {
+      if (!reported && isPending(value)) {
+        if (turn.interrupt !== undefined) {
+          // The host's in-memory interrupt can't reach a node that waits.
+          throw new AgentLoopError(
+            `agent node ${reprText(turn.ctx.nodeId)}: tool ${reprText(call.name)} returned pending(), but an agent given ` +
+              "the host's interrupt signal can't wait for a later answer yet; answer it inline",
+          );
+        }
+        if (callId === undefined || turn.ctx.steps === undefined) {
+          throw new AgentLoopError(
+            `agent node ${reprText(turn.ctx.nodeId)}: tool ${reprText(call.name)} returned pending() outside a durable run; ` +
+              "give the run a log",
+          );
+        }
+        if (!signal?.aborted) {
+          turn.steps.pending({ callId, tool: call.name, toolCallId: call.id, reply: turn.n, index });
+          turn.pended.set(index, callId);
+        }
+        return { pending: callId };
+      }
       const content = reported ? reportedText(call.name, value) : toolText(call.name, value);
       // Once the node stopped, the stop may be what ended the call, so its result isn't written.
       if (!signal?.aborted) {
@@ -639,9 +677,9 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
         { signal, text: (value) => toolText(call.name, value) },
       );
       const outcome = running.then(
-        (value): ToolOutcome => settle(call, startedAt, value, false),
+        (value): ToolOutcome => settle(planned, startedAt, value, false),
         (error): ToolOutcome => {
-          if (isReportedToolError(error)) return settle(call, startedAt, error, true);
+          if (isReportedToolError(error)) return settle(planned, startedAt, error, true);
           fail(error);
           return { error };
         },
@@ -656,6 +694,8 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     checkNodeStopped(turn);
     if (failure !== null) throw failure.error;
     for (const { call, outcome } of settled) {
+      // A pended call has no result yet; the loop returns before the model reads any.
+      if ("pending" in outcome) continue;
       // No outcome is an error: a failure was thrown above.
       const { content, reported } = outcome as Extract<ToolOutcome, { content: string }>;
       const { id: callId, name } = call;

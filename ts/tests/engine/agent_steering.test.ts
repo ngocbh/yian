@@ -423,7 +423,7 @@ test("an interrupt that lands during an async drain returns before any model cal
   await draining.promise;
   interrupt.abort();
   drained.resolve(["too late"]);
-  expect((await running).value).toBe("");
+  expect(((await running) as Output).value).toBe("");
   expect(model.requests).toEqual([]);
 });
 

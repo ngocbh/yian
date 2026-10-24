@@ -1392,6 +1392,7 @@ function callView(state: RunState, call: Call): CallView {
   return Object.freeze({
     callId: call.callId,
     tool: call.tool,
+    resultKey: call.resultKey,
     state: call.state,
     closedReason: call.closedReason,
     result: callResultStep(state, call.callId),
@@ -1408,9 +1409,13 @@ export function callResultStep(state: RunState, callId: string): Readonly<JsonOb
   const call = state.waits.calls.get(callId);
   if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
-  return (
-    steps.findLast((step) => step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey) ?? null
+  // An agent's provider id may name a later reply's call too; its answer is the first after its registration.
+  const from = steps.findIndex((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
+  const at = steps.findIndex(
+    (step, index) =>
+      index > from && step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey,
   );
+  return at < 0 ? null : steps[at]!;
 }
 
 /**
@@ -4000,13 +4005,19 @@ function validateNodeStep(state: RunState, record: NodeStepRecord): void {
 const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index"] as const;
 
 /**
- * Require a running node's `pending` step to register its own host call: the node makes a host
- * tool call that isn't a take or sleep, `tool` is its tool, `call_id` its TOOL call id, not yet
- * registered; no agent fields; a `deadline` only on an `ask`, as a record time; `arguments` an
- * object; and the whole step within the run's `MAX_EVENT_BYTES`.
+ * Require a running node's `pending` step to register its own host call. An AGENT's is checked by
+ * `validateAgentPendingStep`. Otherwise the node makes a host tool call that isn't a take or
+ * sleep, `tool` is its tool, `call_id` its TOOL call id, not yet registered; no agent fields; a
+ * `deadline` only on an `ask`, as a record time; `arguments` an object; and the whole step within
+ * the run's `MAX_EVENT_BYTES`.
  */
 function validatePendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
-  const toolId = state.flow.nodes.get(nodeId)!.hostToolCall()?.toolId ?? null;
+  const node = state.flow.nodes.get(nodeId)!;
+  if (node.hostToolCall() === null && node.grantedTools().length > 0) {
+    validateAgentPendingStep(state, nodeId, step);
+    return;
+  }
+  const toolId = node.hostToolCall()?.toolId ?? null;
   if (toolId === null) throw new RangeError(`a pending step on node ${reprText(nodeId)}, which calls no host tool`);
   if (toolId === TAKE || toolId === SLEEP) {
     throw new RangeError(`a pending step on node ${reprText(nodeId)}, whose ${toolId} the engine decides`);
@@ -4026,6 +4037,47 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
     requireRecordTime(deadline, "pending deadline");
   }
   if (!isRecord(step["arguments"])) throw new RangeError("pending arguments must be an object");
+  requireNewPendingCall(state, callId, step);
+}
+
+/**
+ * Require an AGENT's `pending` step to register a call of its latest reply: `tool` a granted
+ * tool's name, neither take nor sleep; `tool_call_id` the provider's id; `reply` the `n` of the
+ * node's latest `model_call` step and `index` the call's place among its runnable calls, which
+ * `call_id` (`<run>/<node>/<reply>/<index>`) names; no `arguments` (they are in the reply) and no
+ * `deadline`; not yet registered, and within the run's `MAX_EVENT_BYTES`.
+ */
+function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
+  const { call_id: callId, tool, tool_call_id: toolCallIdOf } = step;
+  if (typeof tool !== "string" || tool === "" || tool === TAKE || tool === SLEEP) {
+    throw new RangeError(`an agent's pending tool must name a host tool, got ${writeAsText(tool ?? null)}`);
+  }
+  if (typeof toolCallIdOf !== "string" || toolCallIdOf === "") {
+    throw new RangeError("an agent's pending tool_call_id must be a non-empty string");
+  }
+  const index = stepInt(step["index"]);
+  if (index === null || index < 0) throw new RangeError("an agent's pending index must be an int of at least 0");
+  const reply = stepInt(step["reply"]);
+  const latest = latestReply(state, nodeId);
+  if (reply === null || reply !== latest) {
+    throw new RangeError(
+      `an agent's pending reply must be node ${reprText(nodeId)}'s latest model_call step ${latest ?? "(none)"}, ` +
+        `got ${writeAsText(step["reply"] ?? null)}`,
+    );
+  }
+  if (callId !== `${state.runId}/${nodeId}/${reply}/${index}`) {
+    const which = `call ${index} of node ${reprText(nodeId)}'s reply ${reply}`;
+    throw new RangeError(`pending call_id ${writeAsText(callId ?? null)} isn't ${which}`);
+  }
+  if (Object.hasOwn(step, "arguments")) {
+    throw new RangeError("an agent's pending step holds no arguments; they are in its reply");
+  }
+  if (Object.hasOwn(step, "deadline")) throw new RangeError("an agent's pending step has no deadline");
+  requireNewPendingCall(state, callId, step);
+}
+
+/** Require a `pending` step within the run's `MAX_EVENT_BYTES` whose call isn't registered yet. */
+function requireNewPendingCall(state: RunState, callId: string, step: Readonly<JsonObject>): void {
   const size = eventBytes(step);
   if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the pending step of ${reprText(callId)}`, size, state));
   if (state.waits.calls.has(callId)) {
@@ -4033,15 +4085,32 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
   }
 }
 
+/** A step field's int (a recorded int reads back as a bigint), or `null` when it isn't a safe int. */
+function stepInt(value: unknown): number | null {
+  const n = typeof value === "bigint" ? Number(value) : value;
+  return typeof n === "number" && Number.isSafeInteger(n) ? n : null;
+}
+
+/** The `n` of `nodeId`'s latest `model_call` step, or `null` before any. */
+function latestReply(state: RunState, nodeId: string): number | null {
+  const at = (state.nodeSteps.get(nodeId) ?? []).findLastIndex((step) => step["kind"] === "model_call");
+  return at < 0 ? null : at + 1;
+}
+
 /**
  * Require a `tool_result` step for a registered call (its `tool_call_id ?? call_id` is the call's
  * result key) to answer an open host call of this node (never a take or sleep, which the run
- * settles itself), within the run's `MAX_EVENT_BYTES`. A result no
- * call registered (an agent's) is the node's own detail, refused only on a waiting node.
+ * settles itself), within the run's `MAX_EVENT_BYTES`. A result no call registered (an agent's
+ * inline call) is the node's own detail, refused only on a waiting node.
+ *
+ * An AGENT's result refers to a registered call only when that call is its own node's and of its
+ * latest reply (`resultCall`), since provider ids repeat across replies and nodes. A call closed
+ * by record takes one more result on a running AGENT, its closer: `closed` equal to the call's
+ * reason, once. No other result carries `closed` for a registered call.
  */
 function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<JsonObject>, waiting: boolean): void {
   const key = typeof step["tool_call_id"] === "string" ? step["tool_call_id"] : step["call_id"];
-  const call = [...state.waits.calls.values()].find((each) => each.resultKey === key);
+  const call = resultCall(state, nodeId, key);
   if (call === undefined) {
     if (waiting) {
       throw new RangeError(`waiting node ${reprText(nodeId)} records only a tool_result answering one of its open calls`);
@@ -4054,12 +4123,49 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   if (call.tool === TAKE || call.tool === SLEEP) {
     throw new RangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
   }
-  if (call.state !== "open") {
+  const agent = state.flow.nodes.get(nodeId)!.hostToolCall() === null;
+  const closed = step["closed"];
+  if (closed !== undefined && call.state === "open") {
+    const why = "only a record closes a call";
+    throw new RangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; ${why}`);
+  }
+  if (agent && !waiting && call.state === "closed" && closed === call.closedReason) {
+    if (call.resultSeq !== null) throw new RangeError(`call ${reprText(call.callId)} already has its closer`);
+  } else if (call.state !== "open") {
     const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
     throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${why}`);
   }
   const size = eventBytes(step);
   if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
+}
+
+/**
+ * The registered call a `tool_result` step on `nodeId` with result key `key` refers to, or
+ * `undefined`. A TOOL node's key is a call id, unique in the run, so any node's call may match (and
+ * the caller refuses another node's). An AGENT's key is a provider id, which repeats across
+ * replies and nodes, so only its own calls of its latest reply match.
+ *
+ * @throws RangeError when two calls of the latest reply share the key.
+ */
+function resultCall(state: RunState, nodeId: string, key: unknown): Call | undefined {
+  if (state.flow.nodes.get(nodeId)!.hostToolCall() !== null) {
+    return [...state.waits.calls.values()].find((each) => each.resultKey === key);
+  }
+  const latest = latestReply(state, nodeId);
+  const calls = nodeCalls(state.waits, nodeId).filter(
+    (each) => each.resultKey === key && stepInt(pendingStepOf(state, each)?.["reply"]) === latest,
+  );
+  if (calls.length > 1) {
+    const ids = writeAsText(calls.map((each) => each.callId));
+    throw new RangeError(`calls ${ids} of one reply share the tool call id ${reprText(String(key))}`);
+  }
+  return calls[0];
+}
+
+/** The `pending` step that registered `call` on its node, or `undefined` (a take or sleep). */
+function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | undefined {
+  const steps = state.nodeSteps.get(call.nodeId) ?? [];
+  return steps.find((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
 }
 
 /**

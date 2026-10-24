@@ -305,6 +305,39 @@ output: \${work.output}
   expect(evidence!["memory_sections"]).toEqual([{ memory: "test", text: "notes" }]);
 });
 
+test("memory that learned after the run doesn't fail an occurrence's digest", async () => {
+  const text = `\
+id: recalled
+name: recalled
+llm_config: {provider: anthropic, model: claude-test}
+nodes:
+  work:
+    kind: agent
+    long_term_memory: test
+    prompt: hi
+    tools: [lookup]
+    output: str
+output: \${work.output}
+`;
+  const path = join(dir, `learned-later-${++count}.jsonl`);
+  const flow = await loadFlow(text);
+  const memory = new FakeMemory({ recallText: "notes" });
+  const registry = new Map([["test", memory]]);
+  const model = new ScriptedModel([callReply(["lookup", { topic: "x" }, "call-x"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const tools = { lookup: topicTool("lookup", "found") };
+  const result = await runFlow(flow, {}, { log: path, learnable: true, models: serving(model), tools, memory: registry, env: hostEnv(dir) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  memory.recallText = "learned later";
+  const { agent, events } = await materialsOf(flow, path, registry, model);
+  const { material } = agent("work");
+  expect(material!.digestOk).toBe(true);
+  expect(material!.memorySections).toEqual([new MemorySection("test", "learned later")]);
+  expect(events).toEqual([]);
+});
+
 test("a request that no longer matches its digest leaves the occurrence out and is reported", async () => {
   const path = join(dir, "tampered.jsonl");
   const flow = await loadFlow(GROUPS);

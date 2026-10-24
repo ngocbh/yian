@@ -177,7 +177,7 @@ expect:
           - {text: users=1 memories=notes, type: text}
           role: assistant
         purpose: chat
-        request_sha256: 601f942816fb53077b632fdf94984cc35bb34aa6a4c2be974e4e3fb6af28de56
+        request_sha256: 5ef8895925952eea99b07ea911e8dce464b4e3ddf966510a931626c66dde8b4d
         response_id: null
         usage: null
   - - pool_commit
@@ -212,7 +212,7 @@ expect:
           - {text: 'users=1 memories=notes,lib.notes', type: text}
           role: assistant
         purpose: chat
-        request_sha256: c392f3d1612981ab5f65965328558ef0206c590404a5c8c821b3080fd5d4e8aa
+        request_sha256: f82346265f44a94a78c43ea93082f4ed28a5f81bac18776ef49af0caa46fc36c
         response_id: null
         usage: null
   - - pool_commit

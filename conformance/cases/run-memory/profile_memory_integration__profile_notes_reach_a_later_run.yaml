@@ -118,7 +118,7 @@ expect:
           - {text: Second reply., type: text}
           role: assistant
         purpose: chat
-        request_sha256: abb294d9bb0728d9db246e110f023412c41a854a4b4b52c547e6ce0398b1ced7
+        request_sha256: 973e22a6ea0116196f5c8fa5640a79574159007ae0cb179cd38e2fd2f5855d37
         response_id: null
         usage: null
   - - pool_commit

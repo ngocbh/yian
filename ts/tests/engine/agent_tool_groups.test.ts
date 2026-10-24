@@ -43,7 +43,7 @@ import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
-import type { Steering } from "../../src/nodes/base.ts";
+import type { Output, Steering } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool } from "../../src/skills/tool.ts";
@@ -213,7 +213,12 @@ function agent(
       .resolve(toolset.expand(tools))
       .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
     if (ctx.skills.length > 0) specs.push(loadSkillTool());
-    return stepsMaterial(steps, { messages: [system, ...ctx.messages], tools: specs, structured: async () => null });
+    return stepsMaterial(steps, {
+      messages: [system, ...ctx.messages],
+      tools: specs,
+      structured: async () => null,
+      baseSystemPrompt: DEFAULT_SYSTEM,
+    });
   };
   return { running, events, material, isSettled: () => settled };
 }
@@ -275,7 +280,7 @@ test("two safe calls run together and commit in call order", async () => {
   await flush();
   a.resolve("a result");
 
-  expect((await run.running).value).toBe("done");
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["a start", "b start", "b end", "a end"]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", "a result"), result(1, "b", "b result")]);
   expect(await learned(run)).toEqual([
@@ -366,7 +371,7 @@ test("a reported error in a group doesn't abort its sibling; both commit in call
   expect(b.ctx!.signal.aborted).toBe(false);
   b.resolve("b result");
 
-  expect((await run.running).value).toBe("done");
+  expect(((await run.running) as Output).value).toBe("done");
   expect(b.ctx!.signal.aborted).toBe(false);
   expect(toolResults(model, 1)).toEqual([result(0, "a", "a is missing", true), result(1, "b", "b result")]);
 });
@@ -390,7 +395,7 @@ test("an unsafe call waits for the group before it, and the next call waits for 
   await c.entered;
   c.resolve("c result");
 
-  expect((await run.running).value).toBe("done");
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["a start", "a end", "b start", "b end", "c start", "c end"]);
   expect(toolResults(model, 1).map((part) => part.content)).toEqual(["a result", "b result", "c result"]);
 });
@@ -407,7 +412,7 @@ test("a tool without isConcurrencySafe runs alone", async () => {
   // The gate is already settled for the second call, which starts only once the first ended.
   p.resolve("p result");
 
-  expect((await run.running).value).toBe("done");
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["p start", "p end", "p start", "p end"]);
 });
 
@@ -435,7 +440,7 @@ test("load_skill joins a group with safe tools; ask_user runs alone", async () =
   expect(log).toEqual(["a start"]);
   a.resolve("a result");
 
-  expect((await run.running).value).toBe("done");
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual(["a start", "a end", "ask_user", "b"]);
   expect(toolResults(model, 1).map((part) => part.content)).toEqual(["a result", "Tag, then publish.", "yes", "b done"]);
 });
@@ -507,7 +512,7 @@ test("a reported error from the argument check is the call's error result, and t
   const model = new ScriptedModel([callsReply(["a"]), textReply("done")], CONFIG);
   const run = agent(model, new ToolSet({ a: a.tool }), ["a"]);
 
-  expect((await run.running).value).toBe("done");
+  expect(((await run.running) as Output).value).toBe("done");
   expect(log).toEqual([]);
   expect(toolResults(model, 1)).toEqual([result(0, "a", "no such file", true)]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a ReportedToolError"]);
@@ -644,7 +649,7 @@ test("a settled group's signal no longer follows the node's signal", async () =>
 
   a.resolve("a result");
   b.resolve("b result");
-  expect((await run.running).value).toBe("done");
+  expect(((await run.running) as Output).value).toBe("done");
   stop.abort(new Error("late stop"));
 
   // A listener left on the node's signal would abort these.
@@ -745,7 +750,7 @@ test("an interrupt while a safe group runs lets every call of it finish and skip
   a.resolve("a result");
   b.resolve("b result");
 
-  expect((await run.running).value).toBe("");
+  expect(((await run.running) as Output).value).toBe("");
   expect(log).toEqual(["a start", "b start", "a end", "b end"]);
   expect(model.requests).toHaveLength(1);
   expect(toolEvents(run.events)).toEqual([
@@ -779,7 +784,7 @@ test("an interrupt seen at a later call's check skips it and the rest", async ()
   interrupt();
   a.resolve("a result");
 
-  expect((await run.running).value).toBe("");
+  expect(((await run.running) as Output).value).toBe("");
   expect(log).toEqual(["a start", "a end"]);
   expect(toolEvents(run.events)).toEqual([
     "started a",
@@ -804,7 +809,7 @@ test("an interrupt inside a group before a failed check commits the group and sk
   interrupt();
   a.resolve("a result");
 
-  expect((await run.running).value).toBe("");
+  expect(((await run.running) as Output).value).toBe("");
   expect(log).toEqual(["b validate", "a start", "a end"]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b interrupted"]);
   expect(await learned(run)).toEqual([called("a"), called("b"), returned("a", "a result")]);

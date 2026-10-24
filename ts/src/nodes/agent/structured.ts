@@ -71,7 +71,7 @@ import {
   ValueKind,
 } from "../../typesys/values.ts";
 import type { ValuePath } from "../contracts.ts";
-import { type AgentSteps, recordedResponse, requestSha256, type RetrySettings } from "./context.ts";
+import { type AgentSteps, digestRequest, recordedResponse, requestSha256, type RetrySettings } from "./context.ts";
 import { callModel, type LiveSinks } from "./live.ts";
 import { pushVisible } from "./text.ts";
 
@@ -444,7 +444,8 @@ export function userMessage(text: string): Message {
  * @param options `retries` defaults to `YIAN_AGENT_RETRIES`; `live` gets the call events;
  *   `signal` stops the run before each call and wins over the reply of a call it stopped during;
  *   `retry` is each call's retry settings; with `steps`, each call is written as a `model_call`
- *   step (`callModel`).
+ *   step (`callModel`), its digest taken with the system message reduced to `baseSystemPrompt`
+ *   (`digestRequest`; absent or `null` hashes the request as it is).
  * @returns The checked value, unwrapped.
  * @throws OutputInvalidError once `retries + 1` replies were invalid.
  * @throws Whatever a model call throws (a provider error, a stop's reason), unchanged.
@@ -459,9 +460,10 @@ export async function generateStructured(
     signal?: AbortSignal;
     retry?: RetrySettings;
     steps?: AgentSteps;
+    baseSystemPrompt?: string | null;
   } = {},
 ): Promise<Value> {
-  const { live = null, signal, retry, steps } = options;
+  const { live = null, signal, retry, steps, baseSystemPrompt = null } = options;
   const retries = options.retries ?? current().agentRetries;
   const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
   const prompted = plan.strategy === "prompt";
@@ -476,7 +478,8 @@ export async function generateStructured(
       signal,
       retry,
       // No steers to leave out: a steerable agent's output is `str`, so it never calls here.
-      record: steps === undefined ? undefined : { steps, digest: requestSha256(request, new Set()) },
+      record:
+        steps === undefined ? undefined : { steps, digest: requestSha256(digestRequest(request, baseSystemPrompt), new Set()) },
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
@@ -503,6 +506,8 @@ export async function generateStructured(
  * request carries.
  *
  * @param steps The structured calls' `model_call` steps.
+ * @param baseSystemPrompt The system prompt without recalled memory, which each digest reads in
+ *   place of the system message (`digestRequest`); `null` hashes each request as it is.
  * @returns The interactions, and whether each step recorded the purpose and the digest of the
  *   request rebuilt for it.
  */
@@ -511,6 +516,7 @@ export function structuredMaterial(
   messages: readonly Message[],
   typ: Type,
   steps: readonly ValueRecord[],
+  baseSystemPrompt: string | null = null,
 ): { interactions: VisibleInteraction[]; digestOk: boolean } {
   const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
   const prompted = plan.strategy === "prompt";
@@ -520,7 +526,8 @@ export function structuredMaterial(
   let digestOk = true;
   for (const step of steps) {
     const request = plan.apply(new Request({ messages: conversation }));
-    if (step["purpose"] !== purpose || step["request_sha256"] !== requestSha256(request, new Set())) digestOk = false;
+    const digest = requestSha256(digestRequest(request, baseSystemPrompt), new Set());
+    if (step["purpose"] !== purpose || step["request_sha256"] !== digest) digestOk = false;
     if (Object.hasOwn(step, "error")) continue;
     const response = recordedResponse(step);
     if (prompted) pushVisible(interactions, () => new ModelTextInteraction(response.message.text()));

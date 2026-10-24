@@ -16,7 +16,7 @@ import { join, resolve, sep } from "node:path";
 import { reprText } from "../../diagnostics.ts";
 import type { ModelCallPurpose } from "../../events.ts";
 import { ProviderError } from "../../llm/errors.ts";
-import { MediaPart, Message, NamedTool, type Part, Request, Response, Usage } from "../../llm/messages.ts";
+import { MediaPart, Message, NamedTool, type Part, Request, Response, TextPart, Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { MemoryContext } from "../../memory/contracts.ts";
 import type { Scheduler } from "../../platform.ts";
@@ -413,6 +413,22 @@ export class AgentSteps {
     return this.#record(step, options);
   }
 
+  /**
+   * Write a call whose handler returned `pending()` as a `pending` step: `call_id` (the yian call
+   * id), `tool`, `tool_call_id`, `reply` (the reply's `model_call` step `n`) and `index` (the call's
+   * place among the reply's runnable calls).
+   *
+   * @returns The step's `n`.
+   * @throws Whatever `NodeSteps.record` throws.
+   */
+  pending(call: { callId: string; tool: string; toolCallId: string; reply: number; index: number }): number {
+    const { callId, tool, toolCallId, reply, index } = call;
+    return this.#record(
+      { kind: "pending", call_id: callId, tool, tool_call_id: toolCallId, reply: BigInt(reply), index: BigInt(index) },
+      { settled: true },
+    );
+  }
+
   /** The fields every `model_call` step starts with. */
   #callStep(call: CallFields): ValueRecord {
     return {
@@ -513,6 +529,24 @@ export async function drainSteers(
 ): Promise<string[]> {
   if (ctx.steering === undefined || steps.replaying()) return [];
   return [...(await ctx.steering.drain(ctx.nodeId))];
+}
+
+/**
+ * Return `request` with its leading system message reduced to `baseSystemPrompt`, the system
+ * prompt without recalled memory: a request's digest covers what the flow and the conversation
+ * decide, not what memory recalled, so recorded calls replay whatever a later recall returns.
+ * `null`, or a request that doesn't start with a system message, returns `request` as it is.
+ */
+export function digestRequest(request: Request, baseSystemPrompt: string | null): Request {
+  const [first, ...rest] = request.messages;
+  if (baseSystemPrompt === null || first?.role !== "system") return request;
+  return new Request({
+    messages: [new Message({ role: "system", parts: [new TextPart(baseSystemPrompt)] }), ...rest],
+    tools: request.tools,
+    toolChoice: request.toolChoice,
+    parallelToolCalls: request.parallelToolCalls,
+    outputFormat: request.outputFormat,
+  });
 }
 
 /**

@@ -307,7 +307,10 @@ A case can't hold code, so its host is declared under `host`.
   `TransientToolError`, `ReportedToolError`, `ToolCheckError`, `TimeoutError` and
   `ConnectionError`; any other name raises a plain error with that class name.
   A call after the last entry fails the case before any result is compared, since it is the
-  case's own error; an entry left unused fails it after the comparisons.
+  case's own error; an entry left unused fails it after the comparisons. In place of `results`, a
+  tool may have `pending: true` (TS-only; the case has `python_skip`): each call's handler
+  returns `pending()`, so the call waits until a `host.sends` `{complete}` item answers it. A tool
+  takes `results` or `pending: true`, not both.
 - **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's ask handler gives to the
   calling node, in order; the same rules when they run out or are left over. The one handler
   answers a TOOL `ask` (TS) and an agent's `ask_user` tool. In TS it declares, as extra inputs,
@@ -315,8 +318,9 @@ A case can't hold code, so its host is declared under `host`.
   as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
   `ask` or `ask_user`.
 - **`sends`** (TS-only; a case using it has `python_skip`): a list of `{inbox: <name>, event:
-  <value>}` and `{close: <name>}` items. While the run ends `waiting` and items are left, the
-  runner delivers the next one (`send` or `close`) and moves the run on with `advance`, with the
+  <value>}`, `{close: <name>}` and `{complete: <call id>, output: <value>}` or `{complete: <call
+  id>, error: <text>}` items. While the run ends `waiting` and items are left, the runner delivers
+  the next one (`send`, `close` or `complete`) and moves the run on with `advance`, with the
   same host, clock and observers, so `events` and `stream` cover the whole run. A run still
   waiting when the items run out fails the case. A case with `sends` gets no crash sweep.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model

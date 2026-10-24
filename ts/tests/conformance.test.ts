@@ -265,7 +265,9 @@ describe("checkCase", () => {
     [`${RUN}host: {tools: 1}`, "`host.tools` must be a mapping"],
     [`${RUN}host: {tools: {t: 1}}`, "`host.tools.t` must be a mapping"],
     [`${RUN}host: {tools: {t: {results: []}}}`, "`host.tools.t.parameters` is required"],
-    [`${RUN}host: {tools: {t: {parameters: {}}}}`, "`host.tools.t.results` is required"],
+    ...["{parameters: {}}", "{parameters: {}, results: [], pending: true}", "{parameters: {}, pending: false}"].map(
+      (stub) => [`${RUN}host: {tools: {t: ${stub}}}`, "`host.tools.t` takes `results` or `pending: true`"],
+    ),
     [
       `${RUN}host: {tools: {t: {parameters: {}, results: [], x: 1}}}`,
       "unknown key `host.tools.t.x`",
@@ -305,9 +307,20 @@ describe("checkCase", () => {
       "a case with `host.human` declares no `ask` or `ask_user` tool",
     ],
     [`${RUN}host: {sends: 1}`, "`host.sends` must be a list"],
-    ...["[1]", "[{inbox: m}]", "[{close: m, inbox: m}]", "[{inbox: 1, event: a}]", "[{close: [m]}]"].map(
-      (items) => [`${RUN}host: {sends: ${items}}`, "`host.sends` items are {inbox, event} or {close}"],
-    ),
+    ...[
+      "[1]",
+      "[{inbox: m}]",
+      "[{close: m, inbox: m}]",
+      "[{inbox: 1, event: a}]",
+      "[{close: [m]}]",
+      "[{complete: r/n}]",
+      "[{complete: 1, output: a}]",
+      "[{complete: r/n, error: 1}]",
+      "[{complete: r/n, output: a, error: e}]",
+    ].map((items) => [
+      `${RUN}host: {sends: ${items}}`,
+      "`host.sends` items are {inbox, event}, {close} or {complete, output | error}",
+    ]),
     [`${LOAD}host: {sends: []}`, "`host` is not a key of a `load` case"],
     [`${RUN}host: {models: 1}`, "`host.models` must be a mapping"],
     [`${RUN}host: {models: {n: 1}}`, "`host.models.n` must be a mapping"],
@@ -1023,6 +1036,27 @@ describe("run", () => {
 
   test("`host.sends` delivers each item while the run waits", async () => {
     await runCase(SENDS_CASE("[{inbox: m, event: a}, {inbox: m, event: b}, {close: m}]", "[a, b]"));
+  });
+
+  /**
+   * A `run` case whose agent calls the pending host tool `hold`, then answers with the result it
+   * reads, given `host.sends`.
+   */
+  const PENDING_CASE = (sends: string, output: string) =>
+    "kind: run\nflow: |\n  id: f\n  name: f\n  llm_config: {provider: anthropic, model: claude-test}\n" +
+    "  nodes:\n    agent:\n      kind: agent\n      tools: [hold]\n      prompt: hi\n      output: str\n" +
+    "  output: ${agent.output}\nrun: {run_id: r1, num_workers: 0}\n" +
+    "host:\n  tools:\n    hold: {parameters: {type: object, properties: {}}, pending: true}\n" +
+    "  models:\n    agent:\n      agent:\n" +
+    "      - reply: {format: yian.message.v1, role: assistant, parts: [{type: tool_call, id: c1, name: hold, arguments: {}}]}\n" +
+    "      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}\n" +
+    `  sends: ${sends}\nexpect: {output: {status: succeeded, output: ${output}}}\n`;
+
+  test("a `pending: true` host tool waits; a `{complete}` item answers it, with an output or an error", async () => {
+    await runCase(PENDING_CASE("[{complete: r1/agent/1/0, output: ok}]", "done"));
+    await runCase(PENDING_CASE("[{complete: r1/agent/1/0, error: no}]", "done"));
+    const waiting = runCase(PENDING_CASE("[]", "done"));
+    await expect(waiting).rejects.toThrow("the run is still waiting after host.sends ran out");
   });
 
   test("a run still waiting after `host.sends` ran out fails the case", async () => {

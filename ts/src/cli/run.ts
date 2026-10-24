@@ -7,23 +7,26 @@
  *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
  *   `--resume` log, checking its recorded keys, and prints its output or its failure;
  *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
- *   document; `status` reports where the run in a run log stands, as text or a `--json` document.
+ *   document; `status` reports where the run in a run log stands, or, given no log, updates and
+ *   lists the run index of `~/.yian/runs`, as text or a `--json` document. A run whose log is in
+ *   `~/.yian/runs` updates that index when it ends.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
  * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
  *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part;
  *   `renderRunError` renders a failed run's diagnostic.
  * - `flowBanner` is the "what am I running" box; `ProgressReporter` draws per-node progress.
  * - `mergeInputs` reads `--inputs` then `--input k=v` (`readInputsJson`, `parseKv`).
- * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log; `reportRunLog` prints it.
+ * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log under `defaultRunsDir`;
+ *   `reportRunLog` prints it.
  * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
  * - `stopOnSignals` stops a run's controller with a `HostStop` on SIGINT, SIGTERM or SIGHUP.
  *
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { knownCallTimeBaseUrls, knownCallTimeProviders } from "../compile/llm_cascade.ts";
@@ -66,11 +69,14 @@ import {
   inspectRun,
   type LlmConfigsCheck,
   loadRecordedFlow,
+  readRunIndex,
   resumeFlow,
+  type RunIndexRow,
   type RunInspection,
   type RunResult,
   runFlow,
   runLogPath,
+  updateRunIndex,
   runStartLlm,
   skillGrants,
   staticNodes,
@@ -692,9 +698,8 @@ export function validateRunLogOptions(options: {
  *   `~/.yian` or `~/.yian/runs`, or anything holds the run folder's path.
  */
 export function defaultRunLogPath(runId: string, env: Env): string {
-  const stateDir = join(env("HOME") || homedir(), ".yian");
-  const runsDir = join(stateDir, "runs");
-  for (const dir of [stateDir, runsDir]) {
+  const runsDir = defaultRunsDir(env);
+  for (const dir of [dirname(runsDir), runsDir]) {
     try {
       mkdirSync(dir, { mode: 0o700 });
     } catch (error) {
@@ -704,6 +709,27 @@ export function defaultRunLogPath(runId: string, env: Env): string {
     chmodSync(dir, 0o700);
   }
   return runLogPath(runsDir, runId);
+}
+
+/** Return the CLI's runs folder, `~/.yian/runs`, with `HOME` from `env` as `defaultRunLogPath` reads it. */
+export function defaultRunsDir(env: Env): string {
+  return join(env("HOME") || homedir(), ".yian", "runs");
+}
+
+/**
+ * Update the run index of `~/.yian/runs` (`updateRunIndex`) after the run in `log` ended, when
+ * `log` is a run folder's log there; a failed update is a `warning:` line on stderr, and the logs
+ * it skips aren't reported (`yian status` reports them).
+ */
+async function indexRun(log: string, io: CliIo): Promise<void> {
+  const runsDir = defaultRunsDir(io.env);
+  if (resolve(dirname(dirname(log))) !== resolve(runsDir)) return;
+  try {
+    withWarnings(() => {}, () => updateRunIndex(runsDir));
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    await io.stderr.write(`${paint(`warning: run index not updated: ${error.message}`, "yellow", io.stderr, io.env)}\n`);
+  }
 }
 
 /** Write the run's log path to `out`, even when progress is quiet. */
@@ -1416,15 +1442,19 @@ async function startRun(
         controller.signal.throwIfAborted();
         await reportRunLog(log, io.stderr, io.env);
         host.started.value = true;
-        return openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
-          await writeWarnings();
-          try {
-            return await start({ ...registeredTools(), ...selected, ask_user: terminal.askUser });
-          } finally {
-            // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
-            reporter?.stop();
-          }
-        });
+        try {
+          return await openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
+            await writeWarnings();
+            try {
+              return await start({ ...registeredTools(), ...selected, ask_user: terminal.askUser });
+            } finally {
+              // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
+              reporter?.stop();
+            }
+          });
+        } finally {
+          await indexRun(log, io);
+        }
       };
       // Recovery takes no inputs, `--provider`/`--model` or key preflight: the log holds the run's
       // configuration, and its recorded keys are checked once it is replayed.
@@ -1712,14 +1742,15 @@ export async function check(
 
 /**
  * Report where the run recorded in the run log `log` stands (`inspectRun`), without appending to
- * it or taking its lock; returns the exit code.
+ * it or taking its lock; returns the exit code. Without `log`, list the runs instead (`listRuns`).
  *
  * As text, a `status: <status>` line on stdout, then `in flight: <ids>` and `crashed attempts:
  * <id>=<n>` lines when there are any; with `json`, one document with `status`, `in_flight` (in
  * start order) and `crashed_attempts`. A log that isn't a readable run log (empty, damaged,
  * not a run log, unreadable) prints its message on stderr and exits 1 (`run.setup`).
  */
-export async function status(log: string, { json }: { json: boolean }, io: CliIo): Promise<number> {
+export async function status(log: string | undefined, { json }: { json: boolean }, io: CliIo): Promise<number> {
+  if (log === undefined) return listRuns({ json }, io);
   let inspection: RunInspection;
   try {
     inspection = inspectRun(log);
@@ -1749,6 +1780,63 @@ export async function status(log: string, { json }: { json: boolean }, io: CliIo
     text += `crashed attempts: ${counts.join(", ")}\n`;
   }
   await io.stdout.write(text);
+  return 0;
+}
+
+/**
+ * Update the run index of `~/.yian/runs` (`updateRunIndex`) and list its rows (`readRunIndex`), by
+ * start time; returns the exit code. A missing runs folder lists nothing.
+ *
+ * As text, a header and one line per run on stdout, in aligned columns: run id, status, start time
+ * and flow file (`-` for a flow built in code); nothing when there are no runs. With `json`, one
+ * document whose `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`,
+ * `parent_run_id`, `last_seq`, `result` (the run's output, `null` until it succeeded) and the
+ * token sums. A log the update skips is a `warning:` line on stderr. An index that can't be
+ * updated (another update held it too long, or it isn't a database) prints its message on stderr
+ * and exits 1 (`run.setup`).
+ */
+async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
+  const runsDir = defaultRunsDir(io.env);
+  let rows: RunIndexRow[] = [];
+  try {
+    if (existsSync(runsDir)) {
+      updateRunIndex(runsDir);
+      rows = readRunIndex(runsDir);
+    }
+  } catch (error) {
+    if (!(error instanceof Error) || error instanceof TypeError) throw error;
+    const message = isSystemError(error) ? `can't read ${runsDir}: ${osReason(error)}` : error.message;
+    await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+    if (json) await printJson({ error: diagnosticJson(new Diagnostic({ code: "run.setup", message })) }, io.stdout);
+    return 1;
+  }
+  if (json) {
+    // `printJson` writes a number as a float and a `bigint` as an int.
+    const runs = rows.map((row) => ({
+      run_id: row.runId,
+      flow: row.flow,
+      status: row.status,
+      started_at: row.startedAt,
+      ended_at: row.endedAt,
+      parent_run_id: row.parentRunId,
+      last_seq: BigInt(row.lastSeq),
+      result: row.result === null ? null : parseJson(row.result, "codec"),
+      input_tokens: BigInt(row.inputTokens),
+      output_tokens: BigInt(row.outputTokens),
+      cache_read_tokens: BigInt(row.cacheReadTokens),
+      reasoning_tokens: BigInt(row.reasoningTokens),
+    }));
+    await printJson({ runs }, io.stdout);
+    return 0;
+  }
+  if (rows.length === 0) return 0;
+  const table = [
+    ["run id", "status", "started", "flow"],
+    ...rows.map((row) => [row.runId, row.status, row.startedAt, row.flow ?? "-"]),
+  ];
+  const widths = [0, 1, 2].map((column) => Math.max(...table.map((cells) => cells[column]!.length)));
+  const lines = table.map((cells) => cells.map((cell, column) => (column < 3 ? cell.padEnd(widths[column]!) : cell)).join("  "));
+  await io.stdout.write(`${lines.join("\n")}\n`);
   return 0;
 }
 

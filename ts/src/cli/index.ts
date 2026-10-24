@@ -269,11 +269,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   status: {
     spec: {
       name: "status",
-      summary: "Report the run recorded in a run log.",
+      summary: "Report the run recorded in a run log, or list the runs in ~/.yian/runs.",
       positionals: [
         {
           name: "log",
-          help: "Path to a run log, such as ~/.yian/runs/<run_id>/log.jsonl",
+          help: "Path to a run log, such as ~/.yian/runs/<run_id>/log.jsonl; left out, list the runs in ~/.yian/runs",
+          optional: true,
           path: { exists: true, dir: false },
         },
       ],
@@ -282,7 +283,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     load: async () => {
       const { status } = await import("./run.ts");
       return ({ args, options }, io) =>
-        status(args["log"] as string, { json: options["json"] === true }, io);
+        status(args["log"] as string | undefined, { json: options["json"] === true }, io);
     },
   },
   providers: {

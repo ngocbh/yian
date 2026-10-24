@@ -25,7 +25,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -54,6 +54,7 @@ import {
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
+import { readRunIndex } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, VERSION } from "../../src/platform.ts";
@@ -1412,10 +1413,88 @@ describe("check", () => {
 });
 
 describe("status", () => {
-  test("--help names the run log the CLI writes", async () => {
+  test("--help names the run log the CLI writes, and the list without one", async () => {
     const { io, stdout } = testIo();
     expect(await main(["status", "--help"], io)).toBe(0);
-    expect(stdout()).toMatch(/^ {2}LOG +Path to a run log, such as ~\/\.yian\/runs\/<run_id>\/log\.jsonl$/m);
+    expect(stdout()).toMatch(
+      /^ {2}\[LOG\] +Path to a run log, such as ~\/\.yian\/runs\/<run_id>\/log\.jsonl; left out, list the runs in ~\/\.yian\/runs$/m,
+    );
+  });
+
+  test("with no log, lists the runs of ~/.yian/runs from the index each run updates", async () => {
+    const runs = join(tmp, "home", ".yian", "runs");
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds"])).code).toBe(0);
+    expect((await runFlowCli(FAIL_FLOW, ["-q", "--input", "topic=rain"])).code).toBe(1);
+    // `yian run` updated the index.
+    const rows = readRunIndex(runs);
+    expect(rows.map((row) => row.status).sort()).toEqual(["failed", "succeeded"]);
+    const flow = join(realpathSync(tmp), "flow.yaml");
+    expect(rows.map((row) => row.flow)).toEqual([flow, flow]);
+    // A run folder the index hasn't seen yet is listed too: `status` updates first.
+    mkdirSync(join(runs, "held"));
+    const held = JsonlRunLog.create(join(runs, "held", "log.jsonl"), "held", {
+      clock: () => Date.parse("2999-01-01T00:00:00.000Z"),
+    });
+    held.append(
+      new RunStartedRecord({ flowFingerprint: "a".repeat(64), startWiringOverride: {}, effectiveLlmByStaticPath: {}, numWorkers: 0 }),
+    );
+    try {
+      const text = testIo({ HOME: join(tmp, "home") });
+      expect(await main(["status"], text.io)).toBe(0);
+      const width = rows[0]!.runId.length;
+      const line = (id: string, status: string, started: string, shown: string) =>
+        `${id.padEnd(width)}  ${status.padEnd(9)}  ${started.padEnd(24)}  ${shown}\n`;
+      expect(text.stdout()).toBe(
+        line("run id", "status", "started", "flow") +
+          rows.map((row) => line(row.runId, row.status, row.startedAt, flow)).join("") +
+          line("held", "running", "2999-01-01T00:00:00.000Z", "-"),
+      );
+      expect(text.stderr()).toBe("");
+      const json = testIo({ HOME: join(tmp, "home") });
+      expect(await main(["status", "--json"], json.io)).toBe(0);
+      const document = JSON.parse(json.stdout());
+      expect(document.format).toBe("yian.cli.v1");
+      expect(document.runs.map((run: { run_id: string }) => run.run_id)).toEqual([...rows.map((row) => row.runId), "held"]);
+      const succeeded = rows.find((row) => row.status === "succeeded")!;
+      expect(document.runs.find((run: { run_id: string }) => run.run_id === succeeded.runId)).toEqual({
+        run_id: succeeded.runId,
+        flow,
+        status: "succeeded",
+        started_at: succeeded.startedAt,
+        ended_at: succeeded.endedAt,
+        parent_run_id: null,
+        last_seq: succeeded.lastSeq,
+        result: { topic: "clouds" },
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        reasoning_tokens: 0,
+      });
+      expect(document.runs[2]).toMatchObject({ run_id: "held", flow: null, status: "running", result: null });
+    } finally {
+      held.close();
+    }
+  });
+
+  test("with no log and no runs folder, lists nothing; a run logged elsewhere isn't indexed; a bad log warns", async () => {
+    const empty = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], empty.io)).toBe(0);
+    expect([empty.stdout(), empty.stderr()]).toEqual(["", ""]);
+    const json = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], json.io)).toBe(0);
+    expect(json.stdout()).toBe('{"format":"yian.cli.v1","runs":[]}\n');
+    mkdirSync(join(tmp, "elsewhere", "run-1"), { recursive: true });
+    const log = join(tmp, "elsewhere", "run-1", "log.jsonl");
+    expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds", "--log", log])).code).toBe(0);
+    expect(existsSync(join(tmp, "elsewhere", "index.sqlite"))).toBe(false);
+    // A log the update can't read is a warning.
+    const damaged = join(tmp, "home", ".yian", "runs", "damaged");
+    mkdirSync(damaged, { recursive: true });
+    writeFileSync(join(damaged, "log.jsonl"), "not a run log\n");
+    const warned = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status"], warned.io)).toBe(0);
+    expect(warned.stdout()).toBe("");
+    expect(warned.stderr()).toStartWith(`warning: run index skipped ${join(damaged, "log.jsonl")}: run log `);
   });
 
   /** Run `ECHO_FLOW` to the end with its log at `tmp/<name>`, and return the log's path. */

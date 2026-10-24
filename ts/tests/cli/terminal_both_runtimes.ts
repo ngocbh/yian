@@ -397,18 +397,55 @@ async function anAbortedReadLineKeepsLaterKeys(): Promise<void> {
   const { input, output, terminal, exitHooks } = setup();
   assert.deepEqual(await terminal.readLine("You:", { signal: AbortSignal.abort(new Error("woke")) }), {
     aborted: true,
+    draft: "",
   });
   assert.equal(output.text, "");
   const controller = new AbortController();
   const line = terminal.readLine("You:", { signal: controller.signal });
   await tick();
   controller.abort(new Error("woke"));
-  assert.deepEqual(await line, { aborted: true });
+  assert.deepEqual(await line, { aborted: true, draft: "" });
   assertRestored(input, output, exitHooks);
   // Keys typed while no prompt is up wait for the next one.
   input.write("later" + ENTER);
   await tick();
   assert.deepEqual(await terminal.readLine("You:"), { value: "later" });
+}
+
+async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const controller = new AbortController();
+  const line = terminal.readLine("You:", { signal: controller.signal });
+  input.write("half");
+  await tick();
+  controller.abort(new Error("woke"));
+  assert.deepEqual(await line, { aborted: true, draft: "half" });
+  // The aborted prompt is erased, not collapsed into a line.
+  assert.deepEqual(view().rows, []);
+  const next = terminal.readLine("You:", { initial: "half" });
+  await tick();
+  assert.deepEqual(view().rows, ["> You: half"]);
+  input.write(" done" + ENTER);
+  assert.deepEqual(await next, { value: "half done" });
+  // Aborted before it draws, the draft is the initial text.
+  const early = terminal.readLine("You:", { initial: "kept", signal: AbortSignal.abort(new Error("woke")) });
+  assert.deepEqual(await early, { aborted: true, draft: "kept" });
+}
+
+async function aPlainTerminalWritesNoEscapesAndSetsNoRawMode(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const terminal = new Terminal({ input, output, plain: true });
+  const line = terminal.readLine("You:");
+  input.write("hi" + ENTER);
+  assert.deepEqual(await line, { value: "hi" });
+  const choice = terminal.askChoice("Pick", ["a", "b"]);
+  input.write(DOWN + ENTER);
+  assert.equal(await choice, "b");
+  assert.deepEqual(input.rawCalls, []);
+  assert.ok(!/[\x1b\r]/.test(output.text), JSON.stringify(output.text));
+  // Each prompt is written once, as it opens.
+  assert.equal(output.text, "> You: \n? Pick (Use arrow keys)\n » a\n   b\n");
 }
 
 async function aNonTtyReadLineReadsOneLinePerCall(): Promise<void> {
@@ -2142,6 +2179,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "Ctrl-C at readLine keeps the terminal open": ctrlCAtReadLineKeepsTheTerminalOpen,
   "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
+  "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
+  "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,

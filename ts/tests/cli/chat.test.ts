@@ -69,11 +69,13 @@ function chatIo({ tty = false, env = {} }: { tty?: boolean; env?: Record<string,
   stdin = new FakeInput({ tty });
   const out = sink();
   const err = sink();
+  // A TTY chat draws on a TTY stderr; a piped one on a plain one.
+  const stderrStream = Object.assign(new FakeOutput(), { isTTY: tty });
   const io: CliIo = {
     stdout: out.out,
     stderr: err.out,
     stdin,
-    stderrStream: new FakeOutput(),
+    stderrStream,
     env: (name) => (Object.hasOwn(env, name) ? env[name] : NO_ENV(name)),
   };
   return { io, stdin, stdout: out.text, stderr: err.text };
@@ -187,6 +189,31 @@ nodes:
 output: \${reply.output}
 `;
 
+/** A chat turn that sleeps 60 s after taking the lines, then replies. */
+const NAP_NODES = `      delay:
+        kind: code
+        input:
+          events: \${heard.output.events}
+        output: str
+        code: |
+          return "60s";
+      nap:
+        kind: tool
+        tool_id: sleep
+        input:
+          for: \${delay.output}
+`;
+const NAP_REPLY = `      reply:
+        kind: code
+        input:
+          events: \${heard.output.events}
+          napped: \${nap.output}
+        output: str
+        code: |
+          return "echo: " + inputs["events"].join(" | ");
+`;
+const NAP = turnFlow(NAP_REPLY, { nodes: NAP_NODES });
+
 describe("yian chat", () => {
   test(
     "each line is sent and answered; /exit closes the inbox and the run succeeds",
@@ -205,6 +232,8 @@ describe("yian chat", () => {
       expect(sent.length).toBe(2);
       expect(records(log).filter((record) => record instanceof InboxClosedRecord).length).toBe(1);
       expect(inspectRun(log).status).toBe("succeeded");
+      // Off a TTY the prompt is plain: no escape codes or carriage returns on stderr.
+      expect((io.stderrStream as FakeOutput).text).toBe("> You: \n".repeat(3));
     },
     TIMEOUT,
   );
@@ -282,7 +311,7 @@ describe("yian chat", () => {
   );
 
   test(
-    "SIGTERM stops the run, which stays resumable",
+    "SIGTERM stops the run and leaves its log",
     async () => {
       const { started, tools } = holdTool();
       const { io, stdin, stderr } = chatIo();
@@ -302,31 +331,9 @@ describe("yian chat", () => {
   test(
     "a sleep's deadline moves the run with no new line",
     async () => {
-      const nap = `      delay:
-        kind: code
-        input:
-          events: \${heard.output.events}
-        output: str
-        code: |
-          return "60s";
-      nap:
-        kind: tool
-        tool_id: sleep
-        input:
-          for: \${delay.output}
-`;
-      const reply = `      reply:
-        kind: code
-        input:
-          events: \${heard.output.events}
-          napped: \${nap.output}
-        output: str
-        code: |
-          return "echo: " + inputs["events"].join(" | ");
-`;
       const { io, stdin, stdout, stderr } = chatIo();
       stdin.write("hi\n");
-      const chatting = runChat(flowFile(turnFlow(reply, { nodes: nap })), io);
+      const chatting = runChat(flowFile(NAP), io);
       // The reply comes when the sleep ends, with stdin still open.
       await until(() => stdout().includes("echo: hi"));
       stdin.write("/exit\n");
@@ -335,6 +342,23 @@ describe("yian chat", () => {
       expect(stdout()).toBe("echo: hi\necho: \n");
       expect(stderr()).toContain("session ended");
       expect(inspectRun(log).status).toBe("succeeded");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a deadline taking the prompt down keeps the half-typed line for the next prompt",
+    async () => {
+      const { io, stdin, stdout } = chatIo({ tty: true });
+      stdin.write("hi" + ENTER + "hal");
+      const chatting = runChat(flowFile(NAP), io);
+      await until(() => stdout().includes("echo: hi"));
+      stdin.write("f" + ENTER);
+      await until(() => stdout().includes("echo: half"));
+      stdin.write("/exit" + ENTER);
+      const { code } = await chatting;
+      expect(code).toBe(0);
+      expect(stdout()).toBe("echo: hi\necho: half\necho: \n");
     },
     TIMEOUT,
   );
@@ -353,7 +377,7 @@ describe("yian chat", () => {
   );
 
   test(
-    "Ctrl-C at an ask prompt stops the run, which stays resumable",
+    "Ctrl-C at an ask prompt stops the run and leaves its log",
     async () => {
       const { io, stdin, stderr } = chatIo({ tty: true });
       stdin.write("hi" + ENTER + CTRL_C);

@@ -121,10 +121,11 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * `/exit`, `/quit` or the end of input closes the inbox; the run finishes, `session ended` goes to
  * stderr and the chat exits 0. Ctrl-C (at the prompt, or SIGINT while the run moves) prints a
  * hint; a second one in a row cancels the run (`chat cancelled`, exit 130). SIGTERM, SIGHUP or
- * `io.stop` stops the run and leaves its log resumable (`chat stopped; the run is in <log>`, exit
- * 130), as does Ctrl-C at an `ask` prompt. While the prompt is up, the run is advanced at its
- * `wakeAt`. An `ask` node prompts at the terminal. A line the inbox refuses prints
- * `not sent: <reason>` and the chat goes on. A failed run prints its diagnostic and exits 1; a
+ * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>`, exit 130), as
+ * does Ctrl-C at an `ask` prompt. While the prompt is up, the run is advanced at its `wakeAt`;
+ * what was typed so far comes back at the next prompt. Off a terminal (stdin or stderr isn't a
+ * TTY), each prompt is written once, with no escape codes. An `ask` node prompts at the terminal.
+ * A line the inbox refuses prints `not sent: <reason>` and the chat goes on. A failed run prints its diagnostic and exits 1; a
  * run that ends waiting after the inbox closed, with no deadline to wake it, prints what it waits
  * on and exits 0.
  *
@@ -167,7 +168,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
 
   const scheduler = deps.scheduler ?? realScheduler;
   const signals = deps.signals ?? process;
-  // SIGTERM, SIGHUP, `io.stop`, or Ctrl-C at an `ask` prompt: the run stops, resumable.
+  // SIGTERM, SIGHUP, `io.stop`, or Ctrl-C at an `ask` prompt: the run stops; its log stays.
   const stop = new AbortController();
   // Set once the run starts: before it, a stopped prompt answers null and the chat reports that.
   let log: string | null = null;
@@ -205,9 +206,12 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     }
     line?.abort();
   };
+  const tty = io.stdin.isTTY === true && (io.stderrStream as { isTTY?: boolean }).isTTY === true;
   const terminal = new Terminal({
     input: io.stdin,
     output: io.stderrStream,
+    // Off a terminal, stderr gets the prompts once each, with no escape codes.
+    plain: !tty,
     onStop: (reason) => {
       if (log !== null) stop.abort(reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof"));
     },
@@ -283,6 +287,8 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     // A deadline that has passed without moving the run (its node waits on other calls too); a
     // timer for it would only spin.
     let spent: string | null = null;
+    // What was typed at a prompt a deadline took down, shown again at the next one.
+    let draft = "";
     while (result.status === "waiting") {
       if (cancelling !== null) {
         cancelled = await cancelling;
@@ -322,7 +328,8 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         );
       }
       if (stop.signal.aborted) prompt.abort();
-      const read = await terminal.readLine("You:", { signal: prompt.signal });
+      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft });
+      draft = "aborted" in read ? read.draft : "";
       timer.abort();
       line = null;
       stop.signal.throwIfAborted();

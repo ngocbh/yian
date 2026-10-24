@@ -48,6 +48,11 @@ export interface TerminalOptions {
   onStop?: (reason: "interrupt" | "eof") => void;
   /** Called with true when a prompt turn takes the terminal and false when it gives it back. */
   onActive?: (active: boolean) => void;
+  /**
+   * Write each prompt once as it opens, with no escape codes or carriage returns, and leave the
+   * input in cooked mode: for an output or input that isn't a terminal.
+   */
+  plain?: boolean;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -100,6 +105,24 @@ const HIDE_CURSOR = `${ESC}?25l`;
 const PASTE_ON = `${ESC}?2004h`;
 const PASTE_OFF = `${ESC}?2004l`;
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
+
+/**
+ * `output` for a plain terminal: what is written loses its escape codes and carriage returns, and
+ * a write left empty is skipped. Only `write` and `columns`, which the terminal uses, are kept.
+ */
+function plainOutput(output: Output): Output {
+  const plain = {
+    write(chunk: unknown, ...rest: unknown[]): boolean {
+      const text = String(chunk).replace(ANSI, "").replaceAll("\r", "");
+      if (text === "") return true;
+      return (output.write as (...args: unknown[]) => boolean)(text, ...rest);
+    },
+    get columns() {
+      return output.columns;
+    },
+  };
+  return plain as unknown as Output;
+}
 
 /** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
 function crlf(text: string): string {
@@ -226,7 +249,7 @@ function textWidget(options: {
   mark?: string;
   instruction?: string;
   validate?: (text: string) => string | undefined;
-}): Widget<string> {
+}): Widget<string> & { text(): string } {
   const mark = options.mark ?? "?";
   const chars = Array.from(options.initial ?? "");
   let pos = chars.length;
@@ -268,6 +291,7 @@ function textWidget(options: {
     },
     done: (outcome) =>
       collapsed(mark, options.label, "value" in outcome && !options.mask ? shown(Array.from(outcome.value)) : ""),
+    text: () => chars.join(""),
   };
 }
 
@@ -416,6 +440,7 @@ export class Terminal {
   readonly #output: Output;
   readonly #onStop: TerminalOptions["onStop"];
   readonly #onActive: TerminalOptions["onActive"];
+  readonly #plain: boolean;
   #attached = false;
   #closed = false;
   /** Set once the input has ended or failed; the next widget ends with the EOF outcome. */
@@ -435,7 +460,9 @@ export class Terminal {
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
     this.#input = options.input ?? process.stdin;
-    this.#output = options.output ?? process.stderr;
+    this.#plain = options.plain === true;
+    const output = options.output ?? process.stderr;
+    this.#output = this.#plain ? plainOutput(output) : output;
     this.#onStop = options.onStop;
     this.#onActive = options.onActive;
   }
@@ -452,22 +479,24 @@ export class Terminal {
   }
 
   /**
-   * Read one line at a `> <label>` prompt: `{value}` when it is entered, `{interrupt}` for Ctrl-C,
-   * `{eof}` for the end of input or a closed terminal, `{aborted}` when `signal` aborts first.
-   * Ctrl-C leaves the terminal open, so the next `readLine` works; keys typed after the prompt
-   * ends wait for the next one.
+   * Read one line at a `> <label>` prompt, starting from `initial`: `{value}` when it is entered,
+   * `{interrupt}` for Ctrl-C, `{eof}` for the end of input or a closed terminal, `{aborted}` with
+   * the text typed so far (`draft`) when `signal` aborts first, which erases the prompt. Ctrl-C
+   * leaves the terminal open, so the next `readLine` works; keys typed after the prompt ends wait
+   * for the next one.
    */
   async readLine(
     label: string,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<{ value: string } | { eof: true } | { interrupt: true } | { aborted: true }> {
-    const { signal } = options;
-    if (signal?.aborted) return { aborted: true };
+    options: { signal?: AbortSignal; initial?: string } = {},
+  ): Promise<{ value: string } | { eof: true } | { interrupt: true } | { aborted: true; draft: string }> {
+    const { signal, initial = "" } = options;
+    const widget = textWidget({ label, mark: ">", initial });
+    if (signal?.aborted) return { aborted: true, draft: initial };
     let ended: { value: string } | { stop: StopReason };
     try {
-      ended = await this.#runTurn(signal, (run) => run(textWidget({ label, mark: ">" })), { keepOpen: true });
+      ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true });
     } catch (error) {
-      if (signal?.aborted && error === signal.reason) return { aborted: true };
+      if (signal?.aborted && error === signal.reason) return { aborted: true, draft: widget.text() };
       throw error;
     }
     if ("value" in ended) return { value: ended.value };
@@ -645,7 +674,7 @@ export class Terminal {
     signal?.addEventListener("abort", onAbort, { once: true });
     const input = this.#input;
     const output = this.#output;
-    const setsRaw = input.isTTY === true && typeof input.setRawMode === "function";
+    const setsRaw = !this.#plain && input.isTTY === true && typeof input.setRawMode === "function";
     // Read at turn start: while queued, the turn ahead may still hold the terminal raw.
     let wasRaw = false;
     // A `process.exit()` elsewhere skips the `finally` below.
@@ -731,6 +760,8 @@ export class Terminal {
     let cursorRow = 0;
     const erase = (): string => `\r${cursorRow > 0 ? `${ESC}${cursorRow}A` : ""}${ESC}J`;
     const draw = (): void => {
+      // A plain prompt is written once, as it opens.
+      if (this.#plain) return;
       const columns = output.columns || 80;
       const lines = widget.lines();
       const cursor = widget.cursor();
@@ -759,13 +790,18 @@ export class Terminal {
       }
     };
     try {
-      output.write(widget.preface + PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
+      if (this.#plain) output.write(`${widget.preface}${widget.lines().join("\n")}\n`);
+      else output.write(widget.preface + PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
       while (outcome === undefined && this.#buffer.length > 0) feed(this.#buffer.shift()!);
       if (outcome === undefined && this.#ended) stop("eof");
       await settled;
-      output.write(erase() + crlf(widget.done(outcome!)) + "\r\n");
+      const ended = outcome!;
+      // A `readLine` a deadline took down leaves no line: the prompt comes back after the reply.
+      const vanish = turn.keepOpen && "stop" in ended && ended.stop === "aborted";
+      if (vanish) output.write(erase());
+      else if (!this.#plain) output.write(erase() + crlf(widget.done(ended)) + "\r\n");
     } catch (error) {
       finish({ error });
     } finally {

@@ -42,6 +42,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import {
   buildValueAs,
   canonicalTypeLabel,
+  isInboxType,
   isList,
   isRecord,
   jsTypeName,
@@ -268,7 +269,7 @@ function literalItems(result: BuildResult, wiring: ReadonlyMap<string, unknown>)
  * `"2026-01-01"` fits a `date` input but `"3"` does not fit an `int` input. A lone `${item...}`, a
  * `${ref :- fallback}` or `${ref :? message}` over a reference, and a `|` coalesce are checked
  * operand by operand (see `operandMismatch`). Any other source is checked by its resolved
- * contract.
+ * contract. An Inbox input takes only an inbox of this flow (see `inboxMismatch`).
  *
  * @param src The binding, raw or a `Binding`.
  * @param decl The child input, with a declared contract.
@@ -277,6 +278,7 @@ function literalItems(result: BuildResult, wiring: ReadonlyMap<string, unknown>)
  *   its type is unproven.
  */
 function bindingMismatch(src: unknown, decl: Parameter, scope: Scope): string | null {
+  if (isInboxType(decl.contract!.type)) return inboxMismatch(src, decl, scope);
   const source = bindingSource(src);
   if (!(src instanceof Binding && src.contract !== null)) {
     const literal = literalValue(source);
@@ -307,6 +309,32 @@ function bindingMismatch(src: unknown, decl: Parameter, scope: Scope): string | 
     decl,
     { nonNull: !bindingCoSkips(source), registry: scope.registry },
   );
+}
+
+/**
+ * Return why one binding can't fill the child's Inbox input `decl`, else `null`.
+ *
+ * Only an inbox input of this flow, read whole as a lone `${input.<name>}`, fills one, so no
+ * literal can forge a handle; its element type must then fit the child's.
+ *
+ * @param src The binding, raw or a `Binding`.
+ * @param decl The child's Inbox input.
+ * @param scope What the node's bindings read.
+ * @returns The mismatch, or `null` when the binding fits.
+ */
+function inboxMismatch(src: unknown, decl: Parameter, scope: Scope): string | null {
+  const tree = src instanceof Binding && src.contract !== null ? null : loneSpan(bindingSource(src));
+  const path = tree === null ? null : operandPath(tree);
+  const parts = path === null ? [] : path.split(".");
+  const contract =
+    parts.length === 2 && parts[0] === "input" ? referenceContract(path!, scope.producers, scope.flowInputs) : null;
+  if (!(isExactly(contract, ValueContract) && isInboxType(contract.type))) {
+    return (
+      `child expects ${reprText(canonicalTypeLabel(decl.contract!.type))}, an inbox; bind it to an Inbox ` +
+      "input of this flow, as `${input.<name>}`"
+    );
+  }
+  return contractMismatch(contract, decl, { nonNull: false, registry: scope.registry });
 }
 
 /** Return the parsed expression of a source that is one whole `${...}`, else `null`. */

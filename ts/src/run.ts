@@ -110,10 +110,10 @@ import {
   sameItems,
   sameOptional,
 } from "./nodes/contracts.ts";
-import { realScheduler, type Scheduler, VERSION, warn } from "./platform.ts";
+import { FileLockError, realScheduler, type Scheduler, VERSION, warn } from "./platform.ts";
 import { driveBackward } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
-import { FlowEngine, resumedAttemptEvents } from "./runtime/engine.ts";
+import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
 import { LiveChannel } from "./runtime/live.ts";
 import { addNote, requireModels, requireSteering } from "./runtime/eval_node.ts";
 import {
@@ -144,6 +144,7 @@ import {
   addCrashedAttempts,
   commitInitialPool,
   commitPrepared,
+  DeliveryRefused,
   type PreparedTransition,
   prepareRunResumed,
   prepareRunStarted,
@@ -221,6 +222,9 @@ export {
 } from "./typesys/values.ts";
 export { BackwardOutcome } from "./runtime/contracts.ts";
 export type { WaitInfo } from "./runtime/waits.ts";
+export type { CompleteResult } from "./nodes/base.ts";
+export type { DeliveryOp } from "./runtime/engine.ts";
+export { DeliveryRefused, type DeliveryRefusal } from "./runtime/state.ts";
 export {
   readRunIndex,
   RunIndexBusyError,
@@ -469,15 +473,47 @@ function hold(key: string, idle: IdleRun | null): RunHold {
   };
 }
 
-/** The error for a run this process is moving: the lock's busy message. */
-function busyInProcess(locator: string): Error {
-  return new Error(`run log ${locator} is locked by another writer (is the run still active?)`);
+/**
+ * Another writer holds the run's log; route the call to it. `cause` is the busy `FileLockError`
+ * when another process (or an outside holder) has the lock; it is absent when this process is
+ * moving the run.
+ */
+export class RunBusyError extends Error {
+  override name = "RunBusyError";
+  /** The log's absolute path. */
+  readonly log: string;
+
+  /** Name the log at the absolute path `log` in the lock's busy message. */
+  constructor(log: string, options?: ErrorOptions) {
+    super(`run log ${log} is locked by another writer (is the run still active?)`, options);
+    this.log = log;
+  }
+}
+
+/** The error for a run this process is moving. */
+function busyInProcess(locator: string): RunBusyError {
+  return new RunBusyError(locator);
+}
+
+/**
+ * Open the log at `locator` under its lock.
+ *
+ * @throws RunBusyError when another writer holds the lock; the log's other open errors.
+ */
+function openLog(locator: string, clock: () => number): JsonlRunLog {
+  try {
+    return JsonlRunLog.resume(locator, { clock });
+  } catch (error) {
+    const cause = (error as Error | null)?.cause;
+    if (cause instanceof FileLockError && cause.reason === "busy") throw new RunBusyError(locator, { cause });
+    throw error;
+  }
 }
 
 /**
  * Wait until no other call in this process holds `key`, then hold it.
  *
- * @throws Error (the busy message) when this process is moving the run.
+ * @throws RunBusyError when this process is moving the run.
  */
 async function holdForAdvance(key: string, locator: string): Promise<RunHold> {
   for (;;) {
@@ -488,6 +524,22 @@ async function holdForAdvance(key: string, locator: string): Promise<RunHold> {
       continue;
     }
     return hold(key, entry ?? null);
+  }
+}
+
+/**
+ * Return the engine of the run at `key` when this process is moving it, else hold it. A run another
+ * call is setting up is waited for until it goes live or releases.
+ */
+async function liveOrHold(key: string): Promise<{ readonly engine: FlowEngine } | { readonly hold: RunHold }> {
+  for (;;) {
+    const entry = RUNS.get(key);
+    if (entry?.kind === "live") return { engine: entry.engine };
+    if (entry?.kind === "held") {
+      await entry.settled;
+      continue;
+    }
+    return { hold: hold(key, entry ?? null) };
   }
 }
 
@@ -1513,7 +1565,7 @@ export interface AdvanceOptions {
  * When the run ends waiting, the log's lock is released and its state stays in an in-process
  * registry keyed by the log's real path, so a later `advance` (or delivery) in this process reuses
  * it while the log is the file it left, with the same code root, code-built flow and credentials.
- * An `advance` of a run this process is moving rejects with the busy message; one of a run another
+ * An `advance` of a run this process is moving rejects with `RunBusyError`; one of a run another
  * call is setting up waits for it.
  *
  * @param options See `AdvanceOptions`.
@@ -1545,9 +1597,10 @@ export interface AdvanceOptions {
  * @throws LoadError when the recorded flow files no longer load (a CODE reference's file gone, or
  *   resolving outside `codeRoot`), before anything is appended.
  * @throws The signal's reason when it aborts.
- * @throws Error (code `ENOENT`) when `log` doesn't exist (from resolving its real path), the busy
- *   message when this process is moving the run, and the lock, repair, append, sync or close error
- *   of the log.
+ * @throws RunBusyError when another writer holds the log: another process or outside holder (the
+ *   busy `FileLockError` is its cause), or a run this process is moving (no cause).
+ * @throws Error (code `ENOENT`) when `log` doesn't exist (from resolving its real path), and the
+ *   lock, repair, append, sync or close error of the log.
  */
 export async function advance(options: AdvanceOptions): Promise<RunResult> {
   // As in `runFlow`, the scope covers everything the resume reads; a bad YIAN_<NAME> value fails
@@ -1596,7 +1649,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
     try {
-      authority = JsonlRunLog.resume(locator, { clock });
+      authority = openLog(locator, clock);
       const opened = authority;
       const start = startRecord(authority[Symbol.iterator]().next().value);
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
@@ -1850,6 +1903,120 @@ function checkRecordedToolGroups(
       throw new RangeError(`resume refused: tool_groups.${name} differs from the recorded one`);
     }
   }
+}
+
+/** The options of a host call on a run log. A live delivery ignores them. */
+export interface DeliveryOptions {
+  /**
+   * As `advance`'s `env`: the environment the call reads `YIAN_*` values from, which must be the
+   * ones the run recorded (default `processEnv`).
+   */
+  env?: Env | null;
+  /** As `advance`'s: recompiling the recorded flow refuses a CODE file outside it, before any append. */
+  codeRoot?: string | null;
+  /** The flow of a run built in code (`RunStarted` recorded no flow files), as `advance`'s. */
+  flow?: ComposedFlow | null;
+}
+
+/**
+ * Deliver `op` to the run at `log`: through this process's engine when it is moving the run,
+ * else under the log's lock, which is taken without blocking and released before this returns.
+ * Offline, a waiting run's registry entry is reused while the log is the file it left; otherwise
+ * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
+ * the entry. `before` sees the state just before the delivery, synchronously.
+ *
+ * @returns The appended record's seq, or `null` for a no-op.
+ */
+async function deliverTo(
+  log: string,
+  op: DeliveryOp,
+  options: DeliveryOptions,
+  before: (state: RunState) => void = () => {},
+): Promise<number | null> {
+  const env = options.env ?? processEnv;
+  return withEnv(env, async () => {
+    current();
+    const { codeRoot = null, flow: hostFlow = null } = options;
+    if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
+      throw new TypeError("a host call's flow must be a ComposedFlow or null");
+    }
+    // The absolute path is taken once, so a later directory change can't move the log.
+    const locator = resolve(log);
+    // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
+    const key = realpathSync(locator);
+    const want = { codeRoot: codeRoot === null ? null : resolve(codeRoot), hostFlow };
+    const found = await liveOrHold(key);
+    if ("engine" in found) {
+      before(found.engine.state);
+      return found.engine.deliver(op).seq;
+    }
+    const runHold = found.hold;
+    let authority: JsonlRunLog | null = null;
+    let primary: { error: unknown } | null = null;
+    let keep: () => IdleRun | null = () => null;
+    try {
+      // A delivery carries no deadline, so its record time is the wall clock's.
+      authority = openLog(locator, () => Date.now());
+      const opened = authority;
+      const start = startRecord(authority[Symbol.iterator]().next().value);
+      checkRecorded(start.defaults);
+      const kept = reusable(runHold.idle, authority, key, want);
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, codeRoot));
+      const state = kept?.state ?? replayRunLog(flow, authority);
+      // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
+      const credentials = { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };
+      keep = () => idleRun(state, flow, key, opened, { ...want, ...credentials });
+      before(state);
+      const prepared = prepareDelivery(state, op);
+      if (prepared === null) return null;
+      commitPrepared(authority, state, prepared);
+      return prepared.expectedSequence;
+    } catch (error) {
+      primary = { error };
+      throw error;
+    } finally {
+      await closeAndRelease({
+        servers: [],
+        memoryRuntime: null,
+        authority,
+        primary,
+        hold: runHold,
+        keep,
+        keepAfter: (failed) => failed.error instanceof DeliveryRefused,
+      });
+    }
+  });
+}
+
+/**
+ * Send `event` to the top-level inbox `inbox` of the run at `log`: a take reads it, now or when
+ * it next takes from the inbox.
+ *
+ * Through this process's engine when it is moving the run (the options are ignored then); else
+ * under the log's lock, taken without blocking, reusing the state of a waiting run this process
+ * left while the log is unchanged, or compiling the recorded flow and replaying the log as
+ * `advance` does. A send doesn't move the run: `advance` does (or the live engine).
+ *
+ * @param log The run's JSONL log.
+ * @param inbox The name of one of the flow's `Inbox(T)` inputs.
+ * @param event The value, checked against `T`.
+ * @param options See `DeliveryOptions`.
+ * @returns The send's seq.
+ * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
+ *   result, `unknown_inbox`, `inbox_closed`, `invalid_value` (the `TypeCheckError` is the cause)
+ *   or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
+ * @throws RunBusyError when another writer holds the log.
+ * @throws RangeError when the log is empty or doesn't start with `RunStarted`, or the run's flow
+ *   was built in code and `options.flow` is missing (or was recorded and it is given).
+ * @throws LoadError when the recorded flow no longer loads (a CODE file gone, or outside
+ *   `codeRoot`), before anything is appended.
+ * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
+ * @throws Error (code `ENOENT`) when `log` doesn't exist; the log's open, append and close errors.
+ */
+export async function send(log: string, inbox: string, event: unknown, options: DeliveryOptions = {}): Promise<number> {
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  return (await deliverTo(log, { kind: "send", inbox, event }, options))!;
 }
 
 /**

@@ -555,7 +555,7 @@ The call id depends on who calls the tool:
 - A HUMAN_INPUT node's `ask_user` call uses the same form.
 - Changed (TS yian): a host tool a TOOL node calls may return `pending()`, exported from the
   package root, when its answer comes later. The node records the call and its arguments
-  (refused over `YIAN_MAX_EVENT_BYTES`) and waits, and the host answers with `complete` under
+  (a recorded step over `YIAN_MAX_EVENT_BYTES` is refused) and waits, and the host answers with `complete` under
   the same call id. The re-run rules above apply: a handler that hadn't returned is called again
   with the same id, a recorded call isn't called again, and an answer completed as an error
   fails the node without a retry. A tool an AGENT calls can't return `pending()` in this
@@ -3407,7 +3407,8 @@ answer completed as an error fails the node and is never retried. A `timeout` (a
 `AskRequest.deadline` before the handler runs. When the deadline passes with no answer the output
 is null: a declared `output: Optional(T)` succeeds with null, so a `case` can route on it (the
 host's answer schema is `T`, so null always means nobody answered), and any other declared output
-fails the node with failure code `tool.timeout`; an `ask` with no `output:` returns null. An
+fails the node with failure code `tool.timeout`; an `ask` with no `output:` returns null. Since
+null means nobody answered, `complete` refuses a null answer for an `ask`. An
 AGENT's tool call can't wait in this version: a tool it calls (its `ask_user` included) that
 returns `pending()` fails the agent, so answer inline or ask from a TOOL node. With
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as

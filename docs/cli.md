@@ -581,7 +581,9 @@ Changed (TS yian): these prompts draw on stderr too, as the
 
 Changed (TS yian): the terminal handler also serves a TOOL `ask`. It answers inline and ignores
 `AskRequest.deadline`, so an `ask` `timeout` has no effect in `yian run`; the timeout matters
-for a host whose handler returns `pending()` and answers later.
+for a host whose handler returns `pending()` and answers later. `yian chat` uses the same inline
+handler, so an `ask` never pends there either; only `take` and `sleep` deadlines matter in chat,
+which advances at `wakeAt`.
 
 ```console
 yian run examples/human-approval.yaml --input task="Plan a team offsite"

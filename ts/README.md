@@ -92,8 +92,9 @@ console.log(result.status, result.output); // succeeded total: 7.5
 Only the names below are the supported surface. The other exports on `/run` (`hostInputs`,
 `runStartInputs`, `runStartLlm`, `LlmConfigsCheck`, `checkRecordedLlmFields`, `skillGrants`,
 `replayRunLog`, `replayCompiledRunLog`), on `/llm_clients` (`chatModelFromConfig`,
-`defaultModelAccess`, `ModelAccess`, `callCredentials`, `scrubCallCredentials`) and on `/platform`
-are internal: they serve the CLI and yian's own code, and may change without notice.
+`defaultModelAccess`, `ModelAccess`, `callCredentials`, `scrubCallCredentials`), on `/platform`
+and on `/code-worker` are internal: they serve the CLI and yian's own code, and may change without
+notice.
 
 | Import | Names |
 |---|---|
@@ -103,6 +104,7 @@ are internal: they serve the CLI and yian's own code, and may change without not
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
 | `@ngocbh/yian/llm_clients` | for hosts that set up providers: `LLMConfig`, `LLM_CONFIG_KEYS`, `SUPPORTED_LLM_PROVIDERS`, `LLMProvider`, `ValidationError`, `Issue`, `azureResourceEndpoint`; `listModels`, `ListModelsOptions`, `ModelListError`; `AuthStore`, `AuthStoreOptions`, `AuthState`, `ProviderSelection`, `Credentials`, `ApiKeyCredentials`, `OAuthCredentials`; `OpenAIAuth`, `AuthRequest`, `AuthRequestOptions`, `HttpResponse`, `AuthError` |
+| `@ngocbh/yian/code-worker` | for hosts that bundle yian: no names; imported for its side effect as a bundle entry (see [Bundling yian](#bundling-yian)) |
 
 `Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `AdvanceOptions`, `RunInspection`,
 `RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `StorageKind`, `Value`, `ValueRecord`,
@@ -141,8 +143,8 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   reads `inputs`, and run on worker threads, so aborting the run (the `signal`, or one Ctrl-C of the
   CLI) ends even a body that never yields (see [`code` /
   `tool`][docs/syntax.md#code--tool--the-other-leaves] in the syntax guide). A host that bundles
-  yian (esbuild, webpack, `bun build`) must ship the worker as its own entry at
-  `nodes/code/worker.js` beside the bundle file, or every CODE call fails.
+  yian must ship the worker as its own entry at `nodes/code/worker.js` relative to the bundle file,
+  or every CODE call fails (see [Bundling yian](#bundling-yian)).
 - **Errors.** Python's `ValueError` is a `RangeError` or `TypeError`, and every yian error sets
   `error.name` to its class. Some errors a call can throw aren't exported (`TypeCheckError`,
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
@@ -679,6 +681,33 @@ runtime differences remain: passing some but too few positional parameters throw
 NULL on Node (passing none binds NULL on both), and the drivers' error objects differ, so read the
 extended result code with `sqliteErrorCode(error)` (`& 0xff` for the primary code).
 
+## Bundling yian
+
+A CODE node runs its code on a worker thread started from yian's worker module. A host that bundles
+yian (with `bun build`, or esbuild with ESM output) must ship that worker as its own entry at
+`nodes/code/worker.js` relative to the bundle file, else every CODE call fails `CODE worker failed:
+Cannot find module ...`. The entry is a one-line shim:
+
+```ts
+// src/nodes/code/worker.ts
+import "@ngocbh/yian/code-worker";
+```
+
+Place it at `nodes/code/worker.ts` relative to the deepest directory holding every entry: with
+`src/main.ts` as the host's entry, the shim is `src/nodes/code/worker.ts`. An extra entry outside
+that directory moves the root and breaks the lookup, and so does naming yian's own worker file as
+the entry instead of a shim. With `bun build --compile`, pass both entries, as `bun run build:bin`
+builds yian's own binaries; the two no-autoload flags there keep the binary from reading a `.env`
+or `bunfig.toml` in its working directory:
+
+```sh
+bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
+  src/main.ts src/nodes/code/worker.ts --outfile out/host
+```
+
+A CODE file a flow references (`./helpers.ts:triple`) is read from disk at run time, with the
+modules it imports, so packages bundled into the binary aren't visible to it.
+
 ## CLI
 
 The `yian` command (`npx yian`, or a binary) is described in [`docs/cli.md`][docs/cli.md];
@@ -1077,10 +1106,8 @@ Node 22, and so does every unit test; a change keeps both green.
   aborts. A failing inline body's `CodeError` stack names its frames after the node's
   `sourceFile` (the load's source label, from `BuildContext.sourceFile`; `<inline-code>` by
   default) and the body's own line; `original` keeps the runtime's `yian-code:<id>` frames.
-- A host that bundles yian (esbuild, webpack, `bun build`) must ship the worker as its own entry
-  at `nodes/code/worker.js` relative to the bundle file, else every CODE call fails
-  `CODE worker failed: Cannot find module ...`. `bun build --compile` takes
-  `./src/nodes/code/worker.ts` as a second entry, with both entries under `src/`.
+- A host that bundles yian must ship the worker as its own entry at `nodes/code/worker.js`
+  relative to the bundle file; see [Bundling yian](#bundling-yian).
 - `code` may also be `{builtin: "identity", field}` (`mode: "builtin"`), the form a tagged value
   entry lowers to.
 - WAIT's `until` takes a date or datetime string only: dates are text in TS yian.

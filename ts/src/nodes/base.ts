@@ -3,7 +3,7 @@
  *
  * The base's async template method `run(inputs, caps)` fills defaults, checks the pre-asserts,
  * calls the kind's body, checks the post-asserts, and resolves to ONE of the closed sum
- * `Output | Route | Grow` (`NodeResult`). A kind supplies its body as `forward(inputs, caps)`,
+ * `Output | Route | Grow | Pending` (`NodeResult`). A kind supplies its body as `forward(inputs, caps)`,
  * which returns a result or a promise of one. The node never receives the pool: the engine's
  * evaluator binds its inputs (the read boundary) and hands it a record. Narrow effects enter
  * through one capabilities object, `caps`: the node's own abort `signal` and, when the host gives
@@ -171,8 +171,78 @@ export class Grow {
   }
 }
 
+/** A take or sleep the engine decides when it commits the node's outcome. */
+export type WaitRequest =
+  | { readonly tool: "take"; readonly inbox: string; readonly mode: "one" | "all"; readonly timeoutSeconds: number | null }
+  | { readonly tool: "sleep"; readonly until: string | null; readonly forSeconds: number | null };
+
+/** A host's answer to a pending call. */
+export type CompleteResult = { readonly output: unknown } | { readonly error: string };
+
+/**
+ * "I wait": on host calls the node registered (`callIds`), or on a take or sleep the engine
+ * decides when it commits the outcome (`wait`). Exactly one is given. Frozen.
+ */
+export class Pending {
+  /** The ids of the host calls the node waits on; empty when `wait` is set. */
+  readonly callIds: readonly string[];
+  /** The take or sleep the engine decides, or null when the node waits on host calls. */
+  readonly wait: WaitRequest | null;
+
+  /**
+   * Describe one wait; `callIds` and `wait` are copied.
+   *
+   * @throws TypeError when a call id isn't a string or `wait` names another tool.
+   * @throws RangeError when an id is empty or repeated, both or neither of `callIds` and `wait`
+   *   are given, or `wait`'s fields break their rules.
+   */
+  constructor(callIds: Iterable<string>, options: { wait?: WaitRequest | null } = {}) {
+    const ids = [...callIds];
+    for (const id of ids) {
+      if (typeof id !== "string") throw new TypeError(`pending call ids must be strings, got ${jsTypeName(id)}`);
+      if (id === "") throw new RangeError("pending call ids must be non-empty");
+    }
+    if (new Set(ids).size !== ids.length) throw new RangeError("pending call ids must be unique");
+    const wait = options.wait ?? null;
+    if (wait !== null) checkWaitRequest(wait);
+    if ((ids.length > 0) === (wait !== null)) throw new RangeError("Pending takes call ids or a wait, exactly one");
+    this.callIds = Object.freeze(ids);
+    this.wait = wait === null ? null : Object.freeze({ ...wait });
+    Object.freeze(this);
+  }
+}
+
+/** Require a take with an inbox, a known mode and an optional finite timeout, or a sleep with exactly one of `until` and `forSeconds`. */
+function checkWaitRequest(wait: WaitRequest): void {
+  const tool: unknown = isRecord(wait) ? wait.tool : undefined;
+  if (tool === "take") {
+    const take = wait as Extract<WaitRequest, { tool: "take" }>;
+    if (typeof take.inbox !== "string" || take.inbox === "") throw new RangeError("a take's inbox must be a non-empty string");
+    if (take.mode !== "one" && take.mode !== "all") throw new RangeError(`a take's mode must be "one" or "all", got ${reprText(String(take.mode))}`);
+    if (take.timeoutSeconds !== null && !isFiniteNumber(take.timeoutSeconds)) {
+      throw new RangeError("a take's timeoutSeconds must be null or a finite number");
+    }
+  } else if (tool === "sleep") {
+    const sleep = wait as Extract<WaitRequest, { tool: "sleep" }>;
+    const hasUntil = sleep.until !== null;
+    const hasFor = sleep.forSeconds !== null;
+    if (hasUntil === hasFor) throw new RangeError("a sleep takes until or forSeconds, exactly one");
+    if (hasUntil && (typeof sleep.until !== "string" || sleep.until === "")) {
+      throw new RangeError("a sleep's until must be a non-empty string");
+    }
+    if (hasFor && !isFiniteNumber(sleep.forSeconds)) throw new RangeError("a sleep's forSeconds must be a finite number");
+  } else {
+    throw new TypeError(`a wait's tool must be "take" or "sleep", got ${isRecord(wait) ? reprText(String(tool)) : jsTypeName(wait)}`);
+  }
+}
+
+/** Whether `value` is a finite JS number. */
+function isFiniteNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 /** The closed sum a node's `run` resolves to. */
-export type NodeResult = Output | Route | Grow;
+export type NodeResult = Output | Route | Grow | Pending;
 
 /** Require one batch of independent textual messages. */
 function validateTextFeedback(messages: unknown, name: string): void {

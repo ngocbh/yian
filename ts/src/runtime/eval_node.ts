@@ -46,6 +46,7 @@ import {
   type NodeCaps,
   type NodeResult,
   Output,
+  Pending,
   Route,
   type Steering,
 } from "../nodes/base.ts";
@@ -292,7 +293,7 @@ export class SteeringCapability implements Steering {
 }
 
 /** The closed raw worker result the append-only dispatcher consumes. */
-export type WorkerOutcome = Output | Route | Grow | EvaluationFailure;
+export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 
 /**
  * One raw worker outcome with frozen evidence and optional backward capture. Frozen.

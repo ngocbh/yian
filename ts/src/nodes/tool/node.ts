@@ -17,13 +17,31 @@
  */
 
 import { current } from "../../defaults.ts";
-import { reprText } from "../../diagnostics.ts";
+import { type FailureCode, reprText } from "../../diagnostics.ts";
 import { realScheduler } from "../../platform.ts";
-import { BUILTIN_TOOL_IDS, type BuiltinToolId } from "../../tools/context.ts";
+import { BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError } from "../../tools/errors.ts";
 import { ToolSet } from "../../tools/registry.ts";
-import { jsonSafeText, jsTypeName, shownText, type Type, type ValueRecord, valueRepr } from "../../typesys/values.ts";
-import { CapabilityFault, hostOutput, Node, type NodeCaps, NodeKind, Output } from "../base.ts";
+import { deadlineUtc, formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
+import {
+  inboxName,
+  jsonSafeText,
+  jsTypeName,
+  shownText,
+  type Type,
+  type ValueRecord,
+  valueRepr,
+} from "../../typesys/values.ts";
+import {
+  CapabilityFault,
+  hostOutput,
+  Node,
+  type NodeCaps,
+  NodeKind,
+  Output,
+  Pending,
+} from "../base.ts";
+import { BindingError } from "../binding.ts";
 import { HostToolCall, outputContractType } from "../contracts.ts";
 
 /**
@@ -104,6 +122,35 @@ function attemptsMessage(toolId: string, history: readonly ValueRecord[], attemp
   return `tool ${reprText(toolId)} failed after ${attempt} attempts: ` + parts.join("; ");
 }
 
+/** Return a `contract.input` failure of a built-in's input. */
+function inputError(message: string, cause?: unknown): BindingError {
+  return new BindingError(message, { failureCode: "contract.input", cause });
+}
+
+/**
+ * Return the seconds of a built-in's duration input `name`, or null when it is absent or null.
+ *
+ * A literal duration was checked at load and arrives as integer seconds; a `${...}` arrives as
+ * text and is parsed here.
+ *
+ * @throws BindingError classified `contract.input` for anything else, `0s` and a plain number
+ *   text included.
+ */
+function durationSeconds(value: unknown, tool: string, name: string): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    try {
+      return parseDuration(value);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      throw inputError(`${tool} \`${name}\` ${valueRepr(value)}: ${error.message}`, error);
+    }
+  }
+  const seconds = typeof value === "bigint" ? Number(value) : value;
+  if (typeof seconds === "number" && Number.isSafeInteger(seconds) && seconds >= 1) return seconds;
+  throw inputError(`${tool} \`${name}\` must be a duration, got ${valueRepr(value)}`);
+}
+
 /**
  * A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).
  *
@@ -125,6 +172,10 @@ function attemptsMessage(toolId: string, history: readonly ValueRecord[], attemp
  * retry, so a resumed run continues the attempt count; an unfinished attempt (a crash or stop
  * inside it) uses up no retry. A failure without a retry propagates unchanged; after a retry the
  * node rejects with `ToolAttemptsFailed`, whose message lists every attempt's error.
+ *
+ * `take` and `sleep` are engine built-ins, not tools: the node binds and checks their inputs and
+ * returns `Pending` with the wait request, and the engine decides, when it commits the outcome,
+ * whether the call completes at once or the node waits.
  *
  * `inputTypes` maps each input name to the type the loader proved its binding has (a literal's
  * exact type, a typed binding's declared type, or a reference's inferred type); an input whose
@@ -197,8 +248,15 @@ export class ToolNode extends Node {
     );
   }
 
+  /** A built-in's bad input keeps its `contract.input` code; everything else as the base classifies it. */
+  override exceptionCode(error: unknown): FailureCode {
+    if (error instanceof BindingError) return error.failureCode;
+    return super.exceptionCode(error);
+  }
+
   /**
-   * Call the tool, retrying failed attempts, and return its result.
+   * Call the tool, retrying failed attempts, and return its result; for `take` and `sleep`, return
+   * the wait the engine decides.
    *
    * `caps.tools` is the run's tool set (`new ToolSet()`, the global registry, when absent); the
    * backoff waits on `caps.scheduler` (`realScheduler` when absent) with `caps.signal`, and draws
@@ -212,8 +270,59 @@ export class ToolNode extends Node {
    * @throws HostOutputError when the result isn't a yian value; never retried.
    * @throws The reason of `caps.signal` once it aborts during a wait; a tool's error after a stop
    *   propagates unchanged, unretried and unrecorded.
+   * @throws BindingError classified `contract.input` when a `take` or `sleep` input is malformed.
    */
-  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
+  override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output | Pending> {
+    if (this.builtin === TAKE) return this.takeRequest(inputs);
+    if (this.builtin === SLEEP) return this.sleepRequest(inputs);
+    return await this.callTool(inputs, caps);
+  }
+
+  /**
+   * Return a take's wait request from its bound `from`, `take` and `timeout`. The engine decides
+   * whether it commits at once or waits, so nothing is recorded here.
+   *
+   * @throws BindingError classified `contract.input` when `from` isn't an inbox, `take` isn't
+   *   `one` or `all`, or `timeout` isn't a duration.
+   */
+  private takeRequest(inputs: Record<string, unknown>): Pending {
+    const inbox = inboxName(inputs.from);
+    if (inbox === null) throw inputError(`take \`from\` must be an inbox, got ${valueRepr(inputs.from)}`);
+    const mode = inputs.take ?? "one";
+    if (mode !== "one" && mode !== "all") throw inputError(`take \`take\` must be one or all, got ${valueRepr(mode)}`);
+    const timeoutSeconds = durationSeconds(inputs.timeout, TAKE, "timeout");
+    return new Pending([], { wait: { tool: TAKE, inbox, mode, timeoutSeconds } });
+  }
+
+  /**
+   * Return a sleep's wait request: `until` as a UTC record time, or `for` in seconds. A deadline
+   * already past is still a request, which the engine commits at once.
+   *
+   * @throws BindingError classified `contract.input` unless exactly one of `until` and `for` is
+   *   given, or when `until` isn't a date or datetime or `for` isn't a duration.
+   */
+  private sleepRequest(inputs: Record<string, unknown>): Pending {
+    const until = inputs.until ?? null;
+    const forValue = inputs.for ?? null;
+    if ((until === null) === (forValue === null)) throw inputError("sleep takes exactly one of `until` and `for`");
+    if (until === null) {
+      return new Pending([], { wait: { tool: SLEEP, until: null, forSeconds: durationSeconds(forValue, SLEEP, "for") } });
+    }
+    if (typeof until !== "string") {
+      throw inputError(`sleep \`until\` did not resolve to a date/datetime: ${valueRepr(until)}`);
+    }
+    let text: string;
+    try {
+      text = formatRecordTime(deadlineUtc(until));
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      throw inputError(`sleep \`until\` ${valueRepr(until)}: ${error.message}`, error);
+    }
+    return new Pending([], { wait: { tool: SLEEP, until: text, forSeconds: null } });
+  }
+
+  /** Call the host tool, retrying failed attempts, and return its result. */
+  private async callTool(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output> {
     const tools = caps.tools ?? new ToolSet();
     const scheduler = caps.scheduler ?? realScheduler;
     const random = caps.random ?? Math.random;

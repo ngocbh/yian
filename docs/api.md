@@ -2574,12 +2574,19 @@ AGENT model call attempt, named by the step its record becomes, its chunks numbe
 `on_event`, and frames never enter the log. `snapshot()` gives `{last_seq, calls: [{node, n,
 chunks, next_index}]}`: the last record's seq and each call in flight, one per `(node, n)`, so
 parallel calls stay apart; a call leaves it when its step record is appended (a failed attempt's
-comes before its `end` frame) or when its node settles. A late viewer subscribes and takes the
-snapshot in the same synchronous turn, buffering the frames that follow; reads the log up to
-`last_seq` (possibly async); then applies the buffered frames and follows. Every frame after the
-snapshot is new to it, so it skips nothing. The stream is ephemeral: a subscriber that throws is dropped and reported
+comes before its `end` frame) or when its node settles. A late viewer calls `follow(fn)`, which
+sends `{type: "snapshot", snapshot}`, then every later frame, the two taken in one synchronous
+turn; it reads the log up to `last_seq` (possibly async), then applies the frames that came
+meanwhile and follows. Every frame after the snapshot is new to it, so it skips nothing. The stream is ephemeral: a subscriber that throws is dropped and reported
 (`onSubscriberError`, a warning by default) and never affects the run. A host forwards frames to
-other processes over its own channel; yian ships no transport.
+other processes over its own channel; yian ships no transport. On the reading side, a `LiveView`
+folds a run: `LiveView.from(records, snapshot)` takes the log's records up to the snapshot's
+`last_seq` (later ones are ignored) and the snapshot, and `apply(frame)` folds each later frame,
+giving `lastSeq` and `calls()` (`{node, n, text, nextIndex}` per call in flight, one buffer per
+`(node, n)`). A duplicate record or chunk changes nothing; a call goes with its step record, an
+error `end`, or its node's `node_succeeded`, and every call goes on `node_failed` or `run_stopped`.
+`apply` returns `false` on a gap (a skipped seq, a skipped chunk index, or a chunk of a call it
+never saw start), and the host asks `follow` again. It never reads files.
 
 ## Durable recovery with `resume_flow`
 

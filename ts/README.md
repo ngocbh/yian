@@ -269,7 +269,7 @@ await runFlow(flow, inputs, { log, live });
 ```
 
 A `LiveChannel` (exported by `@ngocbh/yian/run`, with `LiveChannelOptions`, `LiveFrame`,
-`LiveSnapshot` and `LiveCall`)
+`LiveFollowFrame`, `LiveSnapshot` and `LiveCall`)
 is a run's live channel, passed as `runFlow`'s or `resumeFlow`'s `live`. Its frames are plain JSON
 with the log's snake_case keys, so a host can send them anywhere with `logJson`:
 
@@ -289,16 +289,35 @@ warning by default, and the frame still reaches the others. `snapshot()` returns
 `{last_seq, calls: [{node, n, chunks, next_index}]}`: the seq of the last record (`-1` before any)
 and each call in flight with its chunks so far. The channel keeps one buffer per call, so calls of
 parallel nodes (a MAP's items) stay apart; a call leaves it when its step record is appended (a
-failed attempt's comes before its `end` frame) or when its node settles (a stop). A late viewer:
+failed attempt's comes before its `end` frame) or when its node settles (a stop).
 
-1. calls `subscribe` and `snapshot()` in the same synchronous turn, buffering the frames that
-   follow;
-2. reads the log up to the snapshot's `last_seq` with `iterRunRecords` (this may be async);
-3. applies the buffered frames, then follows.
+`follow(fn)` is how a late viewer joins: it calls `fn` with `{type: "snapshot", snapshot}`, then
+with every later frame (a `LiveFollowFrame`), and returns the function that stops it. The snapshot
+and the subscription are taken in one synchronous turn, so every frame after the snapshot is new:
+records continue after `last_seq`, and each call's chunks after its `next_index`. The viewer reads
+the log up to `last_seq` with `iterRunRecords` (this may be async), then applies the frames that
+came meanwhile, and follows.
 
-Every frame after the snapshot is new to the viewer: records continue after `last_seq`, and each
-call's chunks after its `next_index`, so nothing is skipped. Getting frames to another process is
-the host's job: it sends them over its own channel.
+### Following a live run from another process
+
+Yian ships no transport: the host carries frames over its own channel, and Yian gives it both ends.
+
+1. The writing host calls `live.follow(fn)` and sends each frame, as one `logJson` line, on its
+   channel.
+2. The serving host keeps a `LiveView` per run: `LiveView.from(iterRunRecords(log), snapshot)`,
+   then `view.apply(frame)` for each later frame, including those that came while it read the log.
+3. A viewer gets the log up to `view.lastSeq` and `view.calls()` (`{node, n, text, nextIndex}`
+   each), then the frames.
+4. `apply` returning `false` is a gap (a record or chunk went missing): ask `follow` again and
+   rebuild the view.
+
+`LiveView` (exported with `LiveViewCall`) never reads files. `from` reads only each record's `seq`
+and ignores records past `last_seq`, which the frames bring again; it throws `RangeError` unless the
+records run from seq 0 to `last_seq`. `apply` folds one frame: a record or chunk it already has is a
+duplicate and changes nothing; a call goes when its step record arrives, when it ends with an
+error, or when its node's `node_succeeded` arrives, and every call goes on `node_failed` or
+`run_stopped`, which end the run. Each call has its own buffer, keyed by `(node, n)`, so a MAP's
+parallel calls stay apart, and a late snapshot lists every call in flight.
 
 ## Recovering and inspecting runs
 

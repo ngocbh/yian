@@ -9,11 +9,12 @@
  *
  * The channel keeps the chunks of each call in flight, one buffer per `(node, n)`, so the calls of
  * parallel nodes stay apart. A call's buffer goes when its step record is appended (a failed
- * attempt's too, before its end frame) or when its node settles. A late viewer subscribes and takes
- * `snapshot()` in the same synchronous turn, buffering the frames that follow; reads the log up to
- * the snapshot's `last_seq` (this may be async); then applies the buffered frames and follows. Every
- * frame after the snapshot is new to it: records continue after `last_seq` and each call's chunks
- * after its `next_index`, so it skips nothing.
+ * attempt's too, before its end frame) or when its node settles. A late viewer calls `follow`, which
+ * sends the snapshot, then every later frame; it reads the log up to the snapshot's `last_seq` (this
+ * may be async), then applies the frames that came meanwhile and follows. Every frame after the
+ * snapshot is new to it: records continue after `last_seq` and each call's chunks after its
+ * `next_index`, so it skips nothing. Yian ships no transport: a host sends the frames over its own
+ * channel, and the reading side folds them with a `LiveView`.
  *
  * The stream is ephemeral: a subscriber's failure never reaches the run. A subscriber that throws is
  * dropped and reported to the host.
@@ -122,8 +123,8 @@ export class LiveChannel {
   }
 
   /**
-   * Return the last record's seq and a copy of each call in flight. Take it in the same synchronous
-   * turn as `subscribe`, so the frames after it are exactly the ones the subscriber gets.
+   * Return the last record's seq and a copy of each call in flight. `follow` takes it in the same
+   * synchronous turn as its subscription, so the frames after it are exactly the ones it sends.
    */
   snapshot(): LiveSnapshot {
     const calls: LiveCall[] = [];

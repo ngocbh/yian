@@ -6,7 +6,7 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -98,23 +98,21 @@ test("an ask with no handler is refused before the log exists", async () => {
   expect(existsSync(path)).toBe(false);
 });
 
-// Until the engine commits a Pending outcome its evaluator refuses one; once it does, the run waits.
-const PENDING_REFUSED = "TypeError: raw evaluator returned an unsupported outcome Pending";
+// The run boundary that reports a waiting run lands after the engine that writes one; until then
+// it throws this once the engine has ended waiting.
+const WAITING_UNREPORTED = "Error: engine returned without deriving a terminal run result";
 
-for (const [tool, input] of [
-  ["sleep", '      for: "1s"'],
-  ["take", "      from: {inbox: m}\n      take: all"],
-] as const) {
-  test(`a YAML TOOL ${tool} passes the run-start checks with no tools and returns its wait`, async () => {
-    const path = freshLog();
+// A YAML take can't read an Inbox input until the loader lets it; tool_builtins_engine.test.ts
+// runs a take node through the engine.
+test("a YAML TOOL sleep passes the run-start checks with no tools and waits", async () => {
+  const path = freshLog();
 
-    const outcome = await run(gateFlow(tool, input), { log: path, tools: {} }).then(
-      (result) => result.status,
-      (error: unknown) => String(error),
-    );
+  const outcome = await run(gateFlow("sleep", '      for: "1s"'), { log: path, tools: {} }).then(
+    (result) => result.status,
+    (error: unknown) => String(error),
+  );
 
-    // The node bound its inputs and returned Pending: no run-start refusal, no input failure.
-    expect(["waiting", PENDING_REFUSED]).toContain(outcome);
-    expect(existsSync(path)).toBe(true);
-  });
-}
+  // The node bound its inputs and returned Pending, and the engine wrote the wait.
+  expect(["waiting", WAITING_UNREPORTED]).toContain(outcome);
+  expect(readFileSync(path, "utf8")).toContain('"run_waiting"');
+});

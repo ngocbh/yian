@@ -2827,9 +2827,11 @@ reads the log again, or the process exits. A host holding many waiting runs pays
 state. `advance` of a run another writer holds rejects with
 `RunBusyError`, whose message is the lock's (`run log PATH is locked by another writer (is the run
 still active?)`): its `cause` is the busy `FileLockError` when another process (or any outside
-holder) has the lock, and it has none when this process is moving the run. An `advance` started
-while another call in this process is setting the run up waits for that call to finish, then reads
-the log again. A missing log rejects with code `ENOENT`, from resolving its real path.
+holder) has the lock; route the call to that process. It has none when this process's engine is
+moving the run (its loop is running): nothing needs routing, since a delivery reaches that engine;
+call `advance` again once that run call returns. An `advance` started while another call in this
+process is setting the run up, or closing it after its loop ended, waits for that call to finish,
+then reads the log again. A missing log rejects with code `ENOENT`, from resolving its real path.
 
 `RunResult.status` is `"succeeded"`, `"failed"`, `"cancelled"` (a host's cancel ended the run) or
 `"waiting"`. `waits` holds a waiting run's calls (`node`, `callId`, `tool`, `inbox`, `deadline`,
@@ -2871,8 +2873,10 @@ await close("run.jsonl", "messages");                    // a waiting take gets 
 
 None of them moves the run: the live engine does, or a later `advance`.
 
-**Live or offline.** When this process is moving the run, a call goes to its engine, which appends
-and applies the record between two of its awaits; the options are ignored then. A cancel aborts the
+**Live or offline.** When this process's engine is moving the run and its loop is running, a call
+goes to the engine, which appends and applies the record between two of its awaits; the options
+are ignored then. A call made once the loop has ended (the run call is about to return) waits for
+that call to close the run, then appends offline, where the next `advance` reads it. A cancel aborts the
 run's running nodes, and the engine publishes `CallClosed {reason: "cancelled"}` for each open host
 call. Otherwise the call takes the log's lock without blocking, appends one record and releases it.
 It reuses the state of a waiting run this process left (the registry `advance` uses) while the log
@@ -2883,7 +2887,8 @@ code). The state is kept after a refused call too, since a refusal appends nothi
 
 **Errors.** Nothing is appended when a call rejects.
 
-- `RunBusyError` when another writer holds the log (see above). Route the call to that writer.
+- `RunBusyError` when another process (or an outside holder) has the log's lock; route the call to
+  that process. A host call never gets it for a run this process is moving.
 - `DeliveryRefused` (a `RangeError`) when the run refuses it, with `reason`:
 
   | `reason` | When |

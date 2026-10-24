@@ -31,7 +31,7 @@ import { FileLockError, lockFile } from "../../src/platform.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../../src/defaults.ts";
-import { CallClosed, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted } from "../../src/events.ts";
+import { CallClosed, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../../src/events.ts";
 import {
   advance,
   cancel,
@@ -646,3 +646,47 @@ test("YAML codeRoot: send and close append once the CODE file is inside the root
   expect(typeof (await close(log, "m", { env, codeRoot: root }))).toBe("number");
   expect((await advance({ log, env, codeRoot: root })).output).toEqual({ up: "up", heard: { events: ["hi"], closed: true } });
 });
+
+for (const numWorkers of [0, 2]) {
+  test(`numWorkers ${numWorkers}: a send as the run starts waiting lands, and is read live or by the next advance`, async () => {
+    const log = freshLog();
+    const flow = chatFlow();
+    let sent: Promise<number> | null = null;
+    const result = await runFlow(flow, {}, {
+      log,
+      env,
+      numWorkers,
+      onEvent: (event: RunEvent) => {
+        if (event instanceof NodeWaiting && event.nodeId === "heard") sent = send(log, "m", "hi", { env, flow });
+      },
+    });
+    const seq = await sent!;
+    expect(readRunLog(log)[seq]!.record).toBeInstanceOf(PoolCommitRecord);
+    const done = result.status === "waiting" ? await advance({ log, flow, env }) : result;
+    expect([done.status, done.output]).toEqual(["succeeded", { events: ["hi"], closed: false }]);
+  });
+
+  test(`numWorkers ${numWorkers}: a send and an advance just after the loop ended wait for the run's close, then the advance reads the send`, async () => {
+    const log = freshLog();
+    const flow = chatFlow();
+    let sent: Promise<number> | null = null;
+    let advanced: Promise<Awaited<ReturnType<typeof advance>>> | null = null;
+    const result = await runFlow(flow, {}, {
+      log,
+      env,
+      numWorkers,
+      onEvent: (event: RunEvent) => {
+        if (event instanceof RunWaiting) {
+          // A microtask later the loop has ended, but runFlow hasn't closed the run yet.
+          const gap = Promise.resolve();
+          sent = gap.then(() => send(log, "m", "hi", { env, flow }));
+          advanced = gap.then(() => advance({ log, flow, env }));
+        }
+      },
+    });
+    expect(result.status).toBe("waiting");
+    await sent!;
+    const done = await advanced!;
+    expect([done.status, done.output]).toEqual(["succeeded", { events: ["hi"], closed: false }]);
+  });
+}

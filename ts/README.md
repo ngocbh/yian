@@ -377,7 +377,8 @@ other log write makes it rebuild. Each waiting run's state stays until a call in
 the run move on; one another process moves on stays until a call here reads its log again, or the
 process exits. A host holding many waiting runs pays their memory. An `advance` of a run another writer holds rejects
 with `RunBusyError` (its `cause` is the busy `FileLockError` when another process holds the lock);
-one of a run another call in this process is setting up waits for that call.
+one of a run another call in this process is setting up, or closing after its loop ended, waits for
+that call.
 
 ### Host calls
 
@@ -393,8 +394,8 @@ A host reaches a run by its log path: `send` an event to a top-level `Inbox(T)` 
 an open host call (`{output}` or `{error}`; an identical repeat returns `null`), `close` an inbox
 (again: `null`), or `cancel` the run (returning the open host calls it closed). `pendingCalls`
 reads the log's records without the lock and lists the open host calls (`callId`, `node`, `tool`,
-`arguments`, `pendingSeq`, `deadline`). When this process is moving the run, a call goes to its
-engine; otherwise it takes the lock without blocking, appends one record and releases it, reusing a
+`arguments`, `pendingSeq`, `deadline`). While this process's engine is moving the run, a call goes
+to the engine (once its loop has ended, the call waits for the run call to close the run); otherwise it takes the lock without blocking, appends one record and releases it, reusing a
 waiting run's kept state or compiling the recorded flow as `advance` does (`DeliveryOptions` are
 `advance`'s `env`, `codeRoot` and `flow`). None moves the run; `advance` does. A refusal appends
 nothing: `DeliveryRefused` with a `reason` (`ended`, `unknown_inbox`, `inbox_closed`,

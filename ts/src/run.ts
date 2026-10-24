@@ -415,7 +415,7 @@ interface HeldRun {
   readonly done: Promise<void>;
 }
 
-/** A run this process is moving: deliveries go to its engine. */
+/** A run this process is moving: deliveries go to its engine while its loop runs. */
 interface LiveRun {
   readonly kind: "live";
   readonly engine: FlowEngine;
@@ -492,9 +492,9 @@ function hold(key: string, idle: IdleRun | null): RunHold {
 }
 
 /**
- * Another writer holds the run's log; route the call to it. `cause` is the busy `FileLockError`
- * when another process (or an outside holder) has the lock; it is absent when this process is
- * moving the run.
+ * Another writer holds the run's log. `cause` is the busy `FileLockError` when another process (or
+ * an outside holder) has the lock: route the call to it. It is absent for an `advance` of a run
+ * this process's engine is moving: advance again once that run call returns.
  */
 export class RunBusyError extends Error {
   override name = "RunBusyError";
@@ -531,13 +531,14 @@ function openLog(locator: string, clock: () => number): JsonlRunLog {
 /**
  * Wait until no other call in this process holds `key`, then hold it.
  *
- * @throws RunBusyError when this process is moving the run.
+ * @throws RunBusyError when this process's engine is moving the run (its loop runs).
  */
 async function holdForAdvance(key: string, locator: string): Promise<RunHold> {
   for (;;) {
     const entry = RUNS.get(key);
-    if (entry?.kind === "live") throw busyInProcess(locator);
-    if (entry?.kind === "held") {
+    if (entry?.kind === "live" && entry.engine.looping) throw busyInProcess(locator);
+    if (entry !== undefined && entry.kind !== "idle") {
+      // A holder setting the run up, or one whose loop has ended and is closing it.
       await entry.done;
       continue;
     }
@@ -546,13 +547,22 @@ async function holdForAdvance(key: string, locator: string): Promise<RunHold> {
 }
 
 /**
- * Return the engine of the run at `key` when this process is moving it, else hold it. A run another
- * call is setting up is waited for until it goes live or releases.
+ * Hand the run at `key` to `onLive` when this process's engine is moving it, in the same tick as
+ * the check, else hold it. A run another call is setting up is waited for until it goes live or
+ * releases; one whose loop has ended is waited for until its holder releases it, since a delivery
+ * the ended loop can't read must be appended where the next `advance` finds it.
  */
-async function liveOrHold(key: string): Promise<{ readonly engine: FlowEngine } | { readonly hold: RunHold }> {
+async function liveOrHold<T>(
+  key: string,
+  onLive: (engine: FlowEngine) => T,
+): Promise<{ readonly delivered: T } | { readonly hold: RunHold }> {
   for (;;) {
     const entry = RUNS.get(key);
-    if (entry?.kind === "live") return { engine: entry.engine };
+    if (entry?.kind === "live") {
+      if (entry.engine.looping) return { delivered: onLive(entry.engine) };
+      await entry.done;
+      continue;
+    }
     if (entry?.kind === "held") {
       await entry.settled;
       continue;
@@ -622,8 +632,8 @@ function idleRun(
  * Close what a run call opened and hand the run on, whatever fails.
  *
  * 1. Servers close, then memory.
- * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it counts
- *    late live deliveries), the log closes, and the hold is released.
+ * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it holds
+ *    every record appended under this hold), the log closes, and the hold is released.
  *
  * The entry is built only with a hold, and only when nothing failed or `keepAfter(primary)` says a
  * failure changed nothing (a refused delivery). Cleanup errors are noted on `primary`; with no
@@ -1583,8 +1593,9 @@ export interface AdvanceOptions {
  * When the run ends waiting, the log's lock is released and its state stays in an in-process
  * registry keyed by the log's real path, so a later `advance` (or delivery) in this process reuses
  * it while the log is the file it left, with the same code root, code-built flow and credentials.
- * An `advance` of a run this process is moving rejects with `RunBusyError`; one of a run another
- * call is setting up waits for it.
+ * An `advance` of a run this process's engine is moving (its loop running) rejects with
+ * `RunBusyError`; one of a run another call is setting up, or closing after its loop ended, waits
+ * for it.
  *
  * @param options See `AdvanceOptions`.
  * @returns The recorded terminal result, or the terminal or waiting result of the new segment with
@@ -1616,7 +1627,7 @@ export interface AdvanceOptions {
  *   resolving outside `codeRoot`), before anything is appended.
  * @throws The signal's reason when it aborts.
  * @throws RunBusyError when another writer holds the log: another process or outside holder (the
- *   busy `FileLockError` is its cause), or a run this process is moving (no cause).
+ *   busy `FileLockError` is its cause), or a run this process's engine is moving (no cause).
  * @throws Error (code `ENOENT`) when `log` doesn't exist (from resolving its real path), and the
  *   lock, repair, append, sync or close error of the log.
  */
@@ -1965,11 +1976,11 @@ async function deliverTo(
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
     const key = realpathSync(locator);
     const want = { codeRoot: codeRoot === null ? null : resolve(codeRoot), hostFlow };
-    const found = await liveOrHold(key);
-    if ("engine" in found) {
-      before(found.engine.state);
-      return found.engine.deliver(op).seq;
-    }
+    const found = await liveOrHold(key, (engine) => {
+      before(engine.state);
+      return engine.deliver(op).seq;
+    });
+    if ("delivered" in found) return found.delivered;
     const runHold = found.hold;
     let authority: JsonlRunLog | null = null;
     let primary: { error: unknown } | null = null;

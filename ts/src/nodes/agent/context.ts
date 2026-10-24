@@ -625,7 +625,13 @@ function base64Bytes(data: string, mime: string): Buffer {
 
 /** Return `message` with `parts` in place of its parts, everything else kept. */
 function withParts(message: Message, parts: readonly Part[]): Message {
-  return new Message({ role: message.role, parts, protocol: message.protocol, providerPayload: message.providerPayload });
+  return new Message({
+    role: message.role,
+    parts,
+    author: message.author,
+    protocol: message.protocol,
+    providerPayload: message.providerPayload,
+  });
 }
 
 /**

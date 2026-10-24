@@ -6,7 +6,8 @@
  *
  * Changed: `test_text_agent_without_tools_makes_one_unbound_call`,
  * `test_structured_agent_without_tools_makes_one_structured_call`,
- * `test_steer_joins_the_single_request_after_the_prompt` and
+ * `test_steer_joins_the_single_request_after_the_prompt` (the steer is a send to the agent's steer
+ * inbox, from `onEvent(RunStarted)`) and
  * `test_interrupt_while_streaming_keeps_the_partial_text` load the flow and run it through
  * `runWith` (`runFlow` with a `ScriptedModel` served by `models`, where Python patches
  * `model_from_config`); the request sending no tools stands for Python's unbound and structured
@@ -21,16 +22,20 @@
  * `Optional(str)` agent returns null.
  */
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { StreamChunk } from "../../src/events.ts";
+import { type RunEvent, RunStarted, type StreamChunk } from "../../src/events.ts";
 import { Finish, TextDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
-import type { RunFlowOptions } from "../../src/run.ts";
+import { type RunFlowOptions, send } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { drive, runWith, serving } from "./run_state_fixtures.ts";
@@ -41,13 +46,17 @@ function reply(text: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }), finishReason: "stop" });
 }
 
-/** One `chat` agent with no tools, plus the given body lines (Python's `_flow`). */
+/** The body line that gives `chat` the steer inbox `notes`. */
+const STEER = "steer_inbox: ${input.notes}";
+
+/** One `chat` agent with no tools, plus the given body lines (Python's `_flow`); `STEER` declares its inbox. */
 function chatFlow(...lines: string[]): string {
   const body = lines.map((line) => `    ${line}\n`).join("");
+  const input = lines.includes(STEER) ? "input:\n  notes: !Inbox(str)\n" : "";
   return `id: single
 name: single
 llm_config: {provider: anthropic, model: claude-test}
-nodes:
+${input}nodes:
   chat:
     kind: agent
     prompt: Help the user.
@@ -107,8 +116,11 @@ test("a Python-built agent with tools runs the tool loop", async () => {
 
 test("a steer joins the single request after the prompt", async () => {
   const model = new ScriptedModel([reply("ok")], CONFIG);
-  const steering = { interruptSignal: () => new AbortController().signal, drain: () => ["be brief"] };
-  expect(await run(["steerable: true", "output: str"], model, { steering })).toBe("ok");
+  const log = join(mkdtempSync(join(tmpdir(), "yian-no-tools-")), "log.jsonl");
+  const onEvent = (event: RunEvent) => {
+    if (event instanceof RunStarted) void send(log, "notes", "be brief");
+  };
+  expect(await run([STEER, "output: str"], model, { log, onEvent })).toBe("ok");
   expect(model.requests).toHaveLength(1);
   expect(model.requests[0]!.messages.slice(-2).map((message) => [message.role, message.text()])).toEqual([
     ["user", "Help the user."],
@@ -122,7 +134,7 @@ test("an interrupt while streaming keeps the partial text", async () => {
     CONFIG,
   );
   const interrupt = new AbortController();
-  const steering = { interruptSignal: () => interrupt.signal, drain: () => [] };
+  const steering = { interruptSignal: () => interrupt.signal };
   const chunks: StreamChunk[] = [];
   const onStream = (chunk: StreamChunk) => {
     chunks.push(chunk);
@@ -130,7 +142,7 @@ test("an interrupt while streaming keeps the partial text", async () => {
   };
   // Serial delivery, so the interrupt is set before the next chunk.
   const options = { steering, onStream, numWorkers: 0 };
-  expect(await run(["steerable: true", "output: str"], model, options)).toBe("hello big");
+  expect(await run([STEER, "output: str"], model, options)).toBe("hello big");
   expect(chunks.map((chunk) => [chunk.chunk, chunk.final])).toEqual([
     ["hello", false],
     [" big", false],
@@ -156,7 +168,7 @@ test('an interrupt before the first call gives an Optional(str) agent "", not nu
   const interrupt = new AbortController();
   interrupt.abort(new Error("interrupted"));
   const model = new ScriptedModel([], CONFIG);
-  const steering = { interruptSignal: () => interrupt.signal, drain: () => [] };
-  expect(await run(["steerable: true", "output: Optional(str)"], model, { steering })).toBe("");
+  const steering = { interruptSignal: () => interrupt.signal };
+  expect(await run([STEER, "output: Optional(str)"], model, { steering })).toBe("");
   expect(model.requests).toEqual([]);
 });

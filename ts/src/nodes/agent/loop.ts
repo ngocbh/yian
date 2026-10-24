@@ -19,9 +19,10 @@
  * then the loop returns `Pending` naming every call of the reply that pended. A host's `complete`
  * writes the call's `tool_result`; the woken agent replays and calls the model with every result.
  *
- * A steerable agent reads the host's steers at the top of each iteration and stops at a host
- * interrupt between effects or before a later chunk of a streamed reply, returning its latest
- * reply's text (a cut reply's text so far); an interrupt never aborts a running tool call.
+ * An agent with a steer inbox reads it at the top of each iteration (a recorded `steer` step) and,
+ * until the interrupt moves to the run log, stops at a host interrupt between effects or before a
+ * later chunk of a streamed reply, returning its latest reply's text (a cut reply's text so far);
+ * an interrupt never aborts a running tool call.
  *
  * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
  *                tools, typesys, peer AGENT modules.
@@ -48,21 +49,20 @@ import {
   ToolResultInteraction,
   type VisibleInteraction,
 } from "../../memory/contracts.ts";
-import { realScheduler } from "../../platform.ts";
+import { realScheduler, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { isPending } from "../../tools/context.ts";
 import { isReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
-import { Output, Pending } from "../base.ts";
+import { Output, Pending, type SteerInbox } from "../base.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
   AgentSteps,
   checkStopped,
   digestRequest,
-  drainSteers,
   interruptRequested,
   type RecordedResult,
   recordedResponse,
@@ -82,7 +82,8 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, TOOL_OUTCOME_UNKNOWN, toolText } from "./memory.ts";
-import { generateStructured, structuredMaterial, typeToSchema, userMessage } from "./structured.ts";
+import { steerMessages } from "./messages.ts";
+import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
 
 /**
@@ -94,8 +95,8 @@ import { pushVisible, textOf } from "./text.ts";
  * `ReplayDegraded`. With `ctx.steps`, each model call and failed attempt is recorded as a
  * `model_call` step and each tool result as a `tool_result` step, a failed attempt's error
  * scrubbed of every credential the call may have sent; the steps earlier starts recorded are
- * replayed first (`callModel`, `replayToolCalls`), and the host's steers and interrupt are read
- * only once they end.
+ * replayed first (`callModel`, `replayToolCalls`), and the host's interrupt is read only once they
+ * end; recorded steers are fed back as replay reaches them.
  *
  * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
  * then each iteration's steers, replies and tool results; a final structured call after tools
@@ -175,23 +176,15 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
   const interrupt = interruptSignal(ctx);
   let iterations = 0;
   let reply: Message | null = null;
-  // The steers this start sent, which the request digest leaves out.
-  const steered = new Set<Message>();
+  const onDrop = (event: number, part: number) =>
+    warn(`node ${reprText(ctx.nodeId)}: steer event ${event} part ${part} is media, which no route sends yet; dropped`);
 
   while (true) {
     checkStopped(ctx);
     if (interruptRequested(interrupt, steps)) return interrupted(reply);
-    // Steers join only here, never between a reply's tool calls and their results.
-    const steers = await drainSteers(ctx, steps);
-    // A stop during the drain wins; its steers are never sent.
-    checkStopped(ctx);
-    // So does an interrupt that lands while an async drain settles: no model call follows it.
-    if (interruptRequested(interrupt, steps)) return interrupted(reply);
-    for (const steer of steers) {
-      const message = userMessage(steer);
-      steered.add(message);
-      messages.push(message);
-    }
+    // Steers join only here, never between a reply's tool calls and their results. The read is
+    // synchronous, so neither a stop nor an interrupt lands between it and the model call.
+    for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, onDrop));
     const request = new Request({ messages, tools: bound });
     let called: Awaited<ReturnType<typeof callModel>>;
     try {
@@ -200,7 +193,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
         signal: ctx.signal,
         interrupt,
         retry,
-        record: { steps, digest: requestSha256(digestRequest(request, ctx.baseSystemPrompt), steered) },
+        record: { steps, digest: requestSha256(digestRequest(request, ctx.baseSystemPrompt)) },
       });
     } catch (error) {
       // The cut reply's text is kept; its calls, partial or not, never run.
@@ -249,6 +242,22 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
 }
 
 /**
+ * Return the steer reads that join the next model call, oldest first: the one recorded before it,
+ * then, once replay is over and no recorded attempt continues the call, a live read of everything
+ * queued (a send made while the run was down joins the first live call).
+ */
+function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly unknown[])[] {
+  const reads: (readonly unknown[])[] = [];
+  const recorded = steps.takeRecordedSteer();
+  if (recorded !== null) reads.push(recorded.values);
+  if (inbox !== undefined && !steps.replaying() && !steps.continuesCall()) {
+    const read = inbox.read();
+    if (read !== null) reads.push(read.values);
+  }
+  return reads;
+}
+
+/**
  * Rebuild what one AGENT invocation showed a learner from the steps it recorded, and check each
  * recorded request against the one rebuilt from them, as `runAgent` builds it.
  *
@@ -256,8 +265,9 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending> 
  * else its runnable calls, then the results recorded for them in call order (a `skipped` result
  * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
  * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
- * the node) show nothing. Steps of another kind are skipped. A request's digest leaves steers
- * and recalled memory out, as the writer does, so neither breaks the check.
+ * the node) show nothing. Steer steps add their messages where they were read; a steer step
+ * without its values fails the check. Steps of another kind are skipped. A
+ * request's digest leaves recalled memory out, as the writer does, so it doesn't break the check.
  *
  * @param steps The invocation's steps across its starts.
  * @param options `messages` are the system message (memory sections included) and the prompt's
@@ -303,6 +313,16 @@ export async function stepsMaterial(
       results.set(step["call_id"] as string, step);
       continue;
     }
+    if (step["kind"] === "steer") {
+      commit();
+      const values = step["values"];
+      if (!Array.isArray(values)) {
+        digestOk = false;
+        break;
+      }
+      messages.push(...steerMessages(values));
+      continue;
+    }
     if (step["kind"] !== "model_call") continue;
     commit();
     if (step["purpose"] !== "chat") {
@@ -314,8 +334,8 @@ export async function stepsMaterial(
       return { interactions, digestOk: digestOk && material.digestOk };
     }
     const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
-    const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt), new Set());
-    if (step["request_sha256"] !== digest) digestOk = false;
+    const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt));
+    if (digest === null || step["request_sha256"] !== digest) digestOk = false;
     if (Object.hasOwn(step, "error")) continue;
     const reply = recordedResponse(step).message;
     messages.push(reply);
@@ -356,7 +376,7 @@ interface ToolTurn {
   readonly messages: Message[];
   /** The reply's runnable tool calls, in call order. */
   readonly calls: readonly ToolCallPart[];
-  /** The host's interrupt signal, or `undefined` for an agent that isn't steerable. */
+  /** The host's interrupt signal, or `undefined` for an agent without a steer inbox. */
   readonly interrupt: AbortSignal | undefined;
   /** The calls whose handler returned `pending()`: each one's yian call id by its index. */
   readonly pended: Map<number, string>;

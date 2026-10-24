@@ -477,9 +477,9 @@ export async function generateStructured(
       purpose,
       signal,
       retry,
-      // No steers to leave out: a steerable agent's output is `str`, so it never calls here.
+      // A structured call reads the steers already in `messages`.
       record:
-        steps === undefined ? undefined : { steps, digest: requestSha256(digestRequest(request, baseSystemPrompt), new Set()) },
+        steps === undefined ? undefined : { steps, digest: requestSha256(digestRequest(request, baseSystemPrompt)) },
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
@@ -526,7 +526,7 @@ export function structuredMaterial(
   let digestOk = true;
   for (const step of steps) {
     const request = plan.apply(new Request({ messages: conversation }));
-    const digest = requestSha256(digestRequest(request, baseSystemPrompt), new Set());
+    const digest = requestSha256(digestRequest(request, baseSystemPrompt));
     if (step["purpose"] !== purpose || step["request_sha256"] !== digest) digestOk = false;
     if (Object.hasOwn(step, "error")) continue;
     const response = recordedResponse(step);

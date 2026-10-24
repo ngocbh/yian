@@ -64,7 +64,7 @@ import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
 import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isList, isRecord, jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
+import { isRecord, jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
 import { canonicalSeed } from "./log.ts";
 import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
@@ -191,15 +191,14 @@ function steerInboxCapability(
 }
 
 /**
- * Return a host steering inbox after checking its shape, or `null`.
+ * Return a host steering (the interrupt signal) after checking its shape, or `null`.
  *
- * @throws TypeError when `steering` isn't `null` and lacks the `interruptSignal` and `drain`
- *   methods.
+ * @throws TypeError when `steering` isn't `null` and lacks the `interruptSignal` method.
  */
 export function requireSteering(steering: unknown): Steering | null {
   const inbox = steering as Partial<Steering> | null | undefined;
-  if (steering !== null && !(typeof inbox?.interruptSignal === "function" && typeof inbox.drain === "function")) {
-    throw new TypeError("steering must provide interruptSignal(nodeId) and drain(nodeId), or be null");
+  if (steering !== null && typeof inbox?.interruptSignal !== "function") {
+    throw new TypeError("steering must provide interruptSignal(nodeId), or be null");
   }
   return steering as Steering | null;
 }
@@ -218,31 +217,23 @@ export function requireModels(models: unknown): ModelAccess | null {
 }
 
 /**
- * @internal The steering a node receives: it carries host inbox faults and malformed answers out
- * of the node body as capability faults, so a failing inbox stays a host fault, never a node
- * failure. The evaluator wraps the run's inbox in it.
+ * @internal The steering a node receives: it carries the host's faults and malformed answers out
+ * of the node body as capability faults, so a failing host stays a host fault, never a node
+ * failure. The evaluator wraps the run's steering in it.
  */
 export class SteeringCapability implements Steering {
   readonly #inbox: Steering;
   readonly #onFault: (fault: CapabilityFault) => void;
-  readonly #pending: Promise<unknown>[];
   readonly #isClosed: () => boolean;
 
   /**
-   * @param onFault Sees each capability fault before it is thrown or rejected with.
-   * @param pending Receives each promise `drain` hands out, for the evaluator to await.
+   * @param onFault Sees each capability fault before it is thrown.
    * @param isClosed Whether the evaluation ended; once it has, each method throws without calling
-   *   the inbox or `onFault`.
+   *   the host or `onFault`.
    */
-  constructor(
-    inbox: Steering,
-    onFault: (fault: CapabilityFault) => void,
-    pending: Promise<unknown>[],
-    isClosed: () => boolean,
-  ) {
+  constructor(inbox: Steering, onFault: (fault: CapabilityFault) => void, isClosed: () => boolean) {
     this.#inbox = inbox;
     this.#onFault = onFault;
-    this.#pending = pending;
     this.#isClosed = isClosed;
   }
 
@@ -264,43 +255,6 @@ export class SteeringCapability implements Steering {
       throw this.#fault(new TypeError("steering.interruptSignal must return an AbortSignal"));
     }
     return signal;
-  }
-
-  /**
-   * Return the node's queued steer messages as a fresh array of strings, or a promise of one when
-   * the host answers with a promise.
-   *
-   * @throws CapabilityFault (or rejects with one) carrying the host's error, or a `TypeError` when
-   *   the answer isn't an array of strings, or an `Error` once the evaluation ended.
-   */
-  drain(nodeId: string): readonly string[] | Promise<readonly string[]> {
-    this.#refuseClosed();
-    let messages: unknown;
-    try {
-      messages = this.#inbox.drain(nodeId);
-    } catch (error) {
-      throw this.#fault(error);
-    }
-    if (!(messages instanceof Promise)) return this.#checked(messages);
-    const checked = messages.then(
-      (answer: unknown) => this.#checked(answer),
-      (error: unknown) => {
-        throw this.#fault(error);
-      },
-    );
-    // A node may drop the promise: its fault must not become an unhandled rejection, and the
-    // evaluator awaits it so the fault still reaches `onFault` before the evaluation settles.
-    checked.catch(() => {});
-    this.#pending.push(checked);
-    return checked;
-  }
-
-  /** Return a fresh copy of drained steer messages after checking they are strings. */
-  #checked(messages: unknown): string[] {
-    if (!isList(messages) || messages.some((message) => typeof message !== "string")) {
-      throw this.#fault(new TypeError("steering.drain must return an array of strings"));
-    }
-    return [...(messages as string[])];
   }
 
   /**
@@ -530,7 +484,7 @@ export interface EvalNodeOptions {
   sourceResolver?: SourceResolver | null;
   /** The run's tool set, delivered only to a node declaring `needsTools`. */
   tools?: ToolSet | null;
-  /** The run's host inbox, delivered only to a node declaring `readsSteerInbox`. */
+  /** The host's interrupt signal, delivered only to a node declaring `readsSteerInbox`. */
   steering?: Steering | null;
   /** The run's environment and model builder, delivered only to a node declaring `needsModels`. */
   models?: ModelAccess | null;
@@ -567,9 +521,9 @@ export interface EvalNodeOptions {
  * @returns The outcome, with captures when asked for.
  * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink,
- *   steering inbox, including a `drain` promise the node dropped, a repeated memory context open
- *   or a failing opener, a `CapabilityFault` from `steps.record`), whatever the node then returned
- *   or threw.
+ *   the host's interrupt signal, a repeated memory context open or a failing opener, a
+ *   `CapabilityFault` from `steps.record` or the steer inbox), whatever the node then returned or
+ *   threw.
  * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
  *   exactly a `MemoryScope`; Error when a
  *   memory context node's scope has memories and no opener was injected.
@@ -854,7 +808,7 @@ async function evaluateNode(
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
   if (models !== null && node.needsModels === true) caps.models = models;
   if (steering !== null && node.readsSteerInbox === true) {
-    caps.steering = new SteeringCapability(steering, onFault, pending, isClosed);
+    caps.steering = new SteeringCapability(steering, onFault, isClosed);
   }
   if (steps !== null && node.needsSteps === true) {
     // The engine's recorder throws its faults as capability faults; a node can catch one, so the

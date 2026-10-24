@@ -38,18 +38,17 @@ const freshLog = () => join(dir, `run-${++logs}.jsonl`);
 
 const CONFIG = { provider: "openai", model: "test-model" };
 
-/** A flow whose one AGENT node `agent` grants `granted`; `steerable` gives it a host inbox. */
-const agentFlow = (granted: string, steerable = false) => `
+/** A flow whose one AGENT node `agent` grants `granted`; `steerInbox` gives it the steer inbox `notes`. */
+const agentFlow = (granted: string, steerInbox = false) => `
 id: agent_pending
 name: agent_pending
 llm_config: {provider: openai, model: test-model}
-nodes:
+${steerInbox ? "input:\n  notes: !Inbox(str)\n" : ""}nodes:
   agent:
     kind: agent
     prompt: go
     tools: [${granted}]
-    steerable: ${steerable}
-output: \${agent.output}
+${steerInbox ? "    steer_inbox: \${input.notes}\n" : ""}output: \${agent.output}
 `;
 
 /** A host tool `lookup` answering `answer()`. */
@@ -194,7 +193,7 @@ test("an ask_user answered inline works as before", async () => {
 
 test("an agent given the host's interrupt signal can't pend yet", async () => {
   const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"])], CONFIG);
-  const steering: Steering = { interruptSignal: () => new AbortController().signal, drain: () => [] };
+  const steering: Steering = { interruptSignal: () => new AbortController().signal };
   const { result } = await start(model, { ask_user: () => pending() }, "ask_user", { steering });
 
   expect(result.status).toBe("failed");

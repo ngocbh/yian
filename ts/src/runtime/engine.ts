@@ -124,8 +124,8 @@ export interface FlowEngineOptions {
   /** The run's host-supplied skills, passed to nodes declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
   /**
-   * The run's host inbox, passed to nodes declaring `readsSteerInbox`; a method that throws, or
-   * returns a promise that rejects, stops the run with that error.
+   * The host's interrupt signal, passed to nodes declaring `readsSteerInbox`; a method that
+   * throws stops the run with that error.
    */
   steering?: Steering | null;
   /** The run's environment and model builder, passed to nodes declaring `needsModels`. */
@@ -335,7 +335,7 @@ export class FlowEngine {
   readonly #controller = new AbortController();
   /** The host's stop, linked to the run's while `run()` runs. */
   readonly #hostSignal: AbortSignal | null;
-  /** The steering nodes receive: the host inbox, whose failures stop the run. */
+  /** The steering nodes receive: the host's interrupt signal, whose failures stop the run. */
   readonly #steering: Steering | null;
   /** The error that ended the run, once one did; the first wins. */
   #failure: { readonly error: unknown } | null = null;
@@ -419,7 +419,6 @@ export class FlowEngine {
         ? null
         : {
             interruptSignal: (nodeId) => this.#callHost((id: string) => inbox.interruptSignal(id), nodeId),
-            drain: (nodeId) => this.#callHost((id: string) => inbox.drain(id), nodeId),
           };
   }
 

@@ -841,8 +841,6 @@ export class CapabilityFault extends Error {
 export interface Steering {
   /** The signal the host aborts to interrupt node `nodeId` (its expanded id). */
   interruptSignal(nodeId: string): AbortSignal;
-  /** Remove and return the steer messages queued for `nodeId`, oldest first. */
-  drain(nodeId: string): readonly string[] | Promise<readonly string[]>;
 }
 
 /** One read of a node's steer inbox: the `steer` step's `n`, the sends it consumed (their seqs) and their values, oldest first. */

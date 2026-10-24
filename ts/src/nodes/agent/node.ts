@@ -65,6 +65,7 @@ import {
   NodeKind,
   type Output,
   type Pending,
+  type SteerInbox,
 } from "../base.ts";
 import { applyDefaults, BindingError, copyValue, type ReservedBinder, resolveSource, sourceOrigin } from "../binding.ts";
 import {
@@ -113,6 +114,16 @@ export const STEER_INBOX_KEY = "__steer_inbox";
 const CONFIG_STEP = "effective_llm_config";
 /** The `kind` of the step a call-time agent records its config in. */
 const CONFIG_STEP_KIND = "llm_config";
+
+/**
+ * Open the steer inbox named `inbox` through `caps.openSteerInbox`.
+ *
+ * @throws CapabilityFault carrying a TypeError when the evaluator gave no steer inbox.
+ */
+function openSteerInbox(caps: NodeCaps, inbox: string): SteerInbox {
+  if (caps.openSteerInbox === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no steer inbox"));
+  return caps.openSteerInbox(inbox);
+}
 
 /** Whether an AGENT output contract is plain text: none, or an untagged `str`, nullable or not (`Optional(str)`). */
 export function isTextOutput(contract: OutputContract | null): boolean {
@@ -840,6 +851,7 @@ export class AgentNode extends Node {
       baseSystemPrompt: string;
       skills: readonly Skill[];
       models: ModelAccess;
+      steerInbox: SteerInbox | undefined;
     },
   ): AgentRunContext {
     return {
@@ -859,6 +871,7 @@ export class AgentNode extends Node {
       baseSystemPrompt: options.baseSystemPrompt,
       skills: options.skills,
       steering: caps.steering,
+      steerInbox: options.steerInbox,
       models: options.models,
       sent: () => [],
       steps: caps.steps,
@@ -920,7 +933,8 @@ export class AgentNode extends Node {
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param caps The node's signal, checked before recall and the model call, its scheduler and
    *   random draw for model-retry waits, and the capabilities its traits ask for: memory context,
-   *   tools, live sinks, skills, steering, model access and steps.
+   *   tools, live sinks, skills, the steer inbox and the host's interrupt signal, model access and
+   *   steps.
    * @returns The model's answer, or Pending when a tool call waits for a later answer.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
@@ -937,6 +951,8 @@ export class AgentNode extends Node {
     if (caps.steps !== undefined && this.callTime !== null) {
       this.recordConfig(inputs[LLM_CONFIG_KEY] as Record<string, unknown>, caps.steps);
     }
+    // Opened before anything renders, so a replaying agent already reads its inbox.
+    const steerInbox = this.steerInbox ? openSteerInbox(caps, inputs[STEER_INBOX_KEY] as string) : undefined;
     const rendered = this.renderPrompt(inputs, caps.skills ?? null, { signal: caps.signal });
     const { systemPrompt, promptText, baseSystemPrompt } = rendered;
     const config = this.callConfig(inputs);
@@ -953,6 +969,7 @@ export class AgentNode extends Node {
       baseSystemPrompt,
       skills: rendered.skills,
       models,
+      steerInbox,
     });
     try {
       return await runAgent(ctx);

@@ -43,7 +43,7 @@ import {
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
-import type { Output, Steering } from "../../src/nodes/base.ts";
+import type { Output, SteerInbox } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { loadSkillTool } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -177,10 +177,20 @@ test("the memory sections follow the system prompt in the request", async () => 
   expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithMemory("sys", sections));
 });
 
-test("a steering inbox's steers join the loop's request after the prompt", async () => {
+test("a steer inbox's queued steers join the loop's request after the prompt", async () => {
   const model = new ScriptedModel([textReply("ok")]);
-  const steering: Steering = { interruptSignal: () => new AbortController().signal, drain: () => ["be brief"] };
-  expect(((await runAgent(context(model, { steering }))) as Output).value).toBe("ok");
+  let queued: string[] = ["be brief"];
+  const steerInbox: SteerInbox = {
+    inbox: "notes",
+    queued: () => queued.length > 0,
+    read: () => {
+      if (queued.length === 0) return null;
+      const values = queued;
+      queued = [];
+      return { n: 1, from: [1], values };
+    },
+  };
+  expect(((await runAgent(context(model, { steerInbox }))) as Output).value).toBe("ok");
   expect(model.requests[0]!.messages.map((message) => [message.role, message.text()])).toEqual([
     ["system", DEFAULT_SYSTEM],
     ["user", "x"],

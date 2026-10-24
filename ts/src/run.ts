@@ -12,7 +12,7 @@
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `advance` (Python's
  * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`) and
  * `Steering` (`nodes/base.ts`). Hosts reach a run by its log through `send`, `complete`, `close`,
- * `cancel` and `pendingCalls`, which throw `RunBusyError` and re-export `DeliveryRefused`
+ * `cancel` and `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
  * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
  * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and

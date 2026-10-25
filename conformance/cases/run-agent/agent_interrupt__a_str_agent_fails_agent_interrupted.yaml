@@ -1,0 +1,137 @@
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# An interrupted agent's output is null, so only an `Optional(...)` output can take it. This
+# agent's output is `str`: the interrupt delivered mid-stream cuts the reply and the agent writes
+# `interrupted {by}`, then fails with `agent.interrupted`.
+kind: run
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
+rules: [run-log]
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      system_prompt: Help.
+      prompt: Help the user.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1, chunk: 1}}
+  models:
+    chat:
+      agent:
+      - chunks:
+        - text: hello
+        - text: ' world'
+        - finish: stop
+expect:
+  output:
+    status: failed
+    failure:
+      code: agent.interrupted
+      message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+      node: chat
+      frames: [{label: flow.yaml, range: [7, 3, 7, 7]}]
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: interrupted
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: hello, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
+        response_id: null
+        usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step: {by: 9, kind: interrupted}
+  - - node_failed
+    - chat
+    - failure:
+        code: agent.interrupted
+        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+        frames:
+        - label: flow.yaml
+          range: [7, 3, 7, 7]
+        node: chat
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: chat}
+  - - ModelCallStarted
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeFailed
+    - failure:
+        code: agent.interrupted
+        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+        frames:
+        - label: flow.yaml
+          range: [7, 3, 7, 7]
+        node: chat
+  - - RunFailed
+    - failure:
+        code: agent.interrupted
+        message: "agent node 'chat' was interrupted and its output doesn't allow null; declare output: Optional(...) to route on an interrupt"
+        frames:
+        - label: flow.yaml
+          range: [7, 3, 7, 7]
+        node: chat
+  stream: [{node_id: chat, key: text, chunk: hello, final: false, n: 1, index: 0}, {node_id: chat, key: text, chunk: '', final: true, n: 1, index: 1}]

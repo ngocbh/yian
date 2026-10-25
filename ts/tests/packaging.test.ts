@@ -66,7 +66,6 @@ import type {
   JsonValue,
   Message,
   MessagePart,
-  Steering,
   StorageKind,
   Value,
   ValueRecord,
@@ -97,6 +96,7 @@ const NAMES: Record<string, string[]> = {
     "send",
     "complete",
     "close",
+    "interrupt",
     "cancel",
     "pendingCalls",
     "RunBusyError",
@@ -142,6 +142,7 @@ const NAMES: Record<string, string[]> = {
     "send",
     "complete",
     "close",
+    "interrupt",
     "cancel",
     "pendingCalls",
     "RunBusyError",
@@ -278,7 +279,6 @@ describe("entry points", () => {
   test("the type-only names are exported", () => {
     // The check is `bun run typecheck`: the imports above fail to compile without the names.
     const names = [] as [
-      Steering?,
       StorageKind?,
       Value?,
       ValueRecord?,

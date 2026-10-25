@@ -1,10 +1,10 @@
-# From tests/engine/test_agent_steering.py::test_interrupt_on_the_last_chunk_keeps_the_complete_reply.
-# The tool-call and usage chunks come first, then the text; an interrupt set once the last chunk
-# is delivered (here the finish chunk, chunk 5) leaves nothing to cut: the output is the whole
-# text "ok go", the ModelCallFinished usage is 500/20/520, and the reply's tool call is skipped
-# (ToolCallFinished error `interrupted`), so lookup never runs.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream
+# (Python's node keeps the text as its output; TS yian's output is null and the cut text stays in
+# the model_call step). An interrupt delivered once chunk 2 of the streamed reply is read cuts the
+# stream there (finish `interrupted`, "hello big"); the reply's tool call never runs.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: steer
@@ -19,18 +19,14 @@ flow: |
       tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: Optional(str)
   output: ${chat.output}
 run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - after:
-        model_call: 1
-        chunk: 5
-      interrupt: true
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1, chunk: 2}}
   tools:
     lookup:
       description: Look up a topic.
@@ -45,22 +41,19 @@ host:
     chat:
       agent:
       - chunks:
+        - text: hello
+        - text: ' big'
+        - text: ' world'
         - tool_call:
             index: 0
             id: call-1
             name: lookup
             arguments: '{"topic": "a"}'
-        - usage:
-            input_tokens: 500
-            output_tokens: 20
-            total_tokens: 520
-        - text: ok
-        - text: ' go'
         - finish: tool_calls
 expect:
   output:
     status: succeeded
-    output: ok go
+    output: null
   trace:
   - - run_started
     - null
@@ -94,46 +87,44 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
   - - node_step
     - chat
     - n: 1
       step:
-        finish: tool_calls
+        finish: interrupted
         kind: model_call
         model: gpt-5.5
         output:
           format: yian.message.v1
           parts:
-          - {text: ok go, type: text}
-          - arguments: {topic: a}
-            id: call-1
-            name: lookup
-            type: tool_call
+          - {text: hello big, type: text}
           role: assistant
         purpose: chat
         request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
         response_id: null
-        usage: {cache_read_tokens: null, input_tokens: 500, output_tokens: 20, reasoning_tokens: null}
+        usage: null
   - - node_step
     - chat
     - n: 2
-      step: {call_id: call-1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+      step: {by: 9, kind: interrupted}
   - - pool_commit
     - chat
-    - value: ok go
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [9, 10]}
+    - {key: chat.new_messages, steps: [10, 11]}
   - - node_succeeded
     - chat
-    - {commit: 11, messages: 12}
+    - {commit: 12, messages: 13}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: ok go
   - - node_succeeded
     - __end__
-    - {commit: 15}
+    - {commit: 16}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -154,47 +145,23 @@ expect:
       node_id: chat
       provider: openai
       purpose: chat
-      usage:
-        cache_creation_tokens: null
-        cache_read_tokens: null
-        input_tokens: 500
-        output_tokens: 20
-        reasoning_tokens: null
-        total_tokens: 520
-      n: 1
-  - - ToolCallStarted
-    - arguments:
-        topic: a
-      call_index: 0
-      name: lookup
-      node_id: chat
-      tool_call_id: call-1
-      n: 1
-  - - ToolCallFinished
-    - call_index: 0
-      error: interrupted
-      name: lookup
-      node_id: chat
-      tool_call_id: call-1
       n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: ok go
+      interrupted: true
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: ok go
   - - RunSucceeded
-    - output: ok go
   stream:
-  - chunk: ok
+  - chunk: hello
     final: false
     key: text
     node_id: chat
     n: 1
     index: 0
-  - chunk: ' go'
+  - chunk: ' big'
     final: false
     key: text
     node_id: chat

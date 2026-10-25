@@ -201,7 +201,6 @@ A failed flow resolves with `status: "failed"`; host, callback and log errors re
 | `learnable` | `boolean`: keep the run for `result.backward` | `false` |
 | `tools` | record of tool id to `ToolEntry`; replaces the registry | `null`: the registered tools |
 | `skills` | `Map<string, Skill>` | `null` |
-| `steering` | `Steering` | `null` |
 | `context` | the host's app object, as `ctx.context` | `undefined` |
 | `signal` | `AbortSignal` | `null` |
 | `env` | `(name: string) => string \| undefined` | `null`: the process environment |
@@ -341,7 +340,7 @@ readRunIndex(runsDir: string, options?: { timeoutMs?: number }): RunIndexRow[]
 ```
 
 `advance` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
-`onEvent`, `onStream`, `live`, `memory`, `tools`, `skills`, `steering`, `context`, `signal`, `env`,
+`onEvent`, `onStream`, `live`, `memory`, `tools`, `skills`, `context`, `signal`, `env`,
 `scheduler`, `random` and `models`, plus `loadFlow`'s `codeRoot`, and `apiKey` and `headers` for
 a run started with `llmConfig.api_key`. It runs the flow `RunStarted` recorded, compiled from the
 recorded flow files; `flow` is only for a run whose flow was built in code (`RunStarted.flow` is
@@ -386,13 +385,16 @@ that call.
 send(log: string, inbox: string, event: unknown, options?: DeliveryOptions): Promise<number>
 complete(log: string, callId: string, result: CompleteResult, options?: DeliveryOptions): Promise<number | null>
 close(log: string, inbox: string, options?: DeliveryOptions): Promise<number | null>
+interrupt(log: string, inbox: string, options?: DeliveryOptions): Promise<readonly PendingCall[]>
 cancel(log: string, options?: DeliveryOptions): Promise<readonly PendingCall[]>
 pendingCalls(log: string): readonly PendingCall[]
 ```
 
 A host reaches a run by its log path: `send` an event to a top-level `Inbox(T)` input, `complete`
 an open host call (`{output}` or `{error}`; an identical repeat returns `null`), `close` an inbox
-(again: `null`), or `cancel` the run (returning the open host calls it closed). `pendingCalls`
+(again: `null`), `interrupt` the AGENTs whose `steer_inbox:` is an inbox (returning the open host
+calls it closed; see [Steering](#steering)), or `cancel` the run (returning the open host calls it
+closed). `pendingCalls`
 reads the log's records without the lock and lists the open host calls (`callId`, `node`, `tool`,
 `arguments`, `pendingSeq`, `deadline`). While this process's engine is moving the run, a call goes
 to the engine (once its loop has ended, the call waits for the run call to close the run); otherwise it takes the lock without blocking, appends one record and releases it, reusing a
@@ -401,7 +403,7 @@ waiting run's kept state or compiling the recorded flow as `advance` does (`Deli
 result whose `waits` show a call `settled: true` needs another `advance`. A refusal appends
 nothing: `DeliveryRefused` with a `reason` (`ended`, `unknown_inbox`, `inbox_closed`,
 `invalid_value`, `too_large`, `unknown_call`, `not_host_call`, `call_settled`, `not_started`), or
-`RunBusyError` when another writer holds the log. See [Host calls][docs/api.md#host-calls-send-complete-close-cancel-and-pendingcalls].
+`RunBusyError` when another writer holds the log. See [Host calls][docs/api.md#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls].
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
 `"failed"`, `"cancelled"`, `"waiting"`, `"stopped"` or `"crashed"`), `inFlight`, `crashedAttempts`,
@@ -594,10 +596,12 @@ throws `SkillError`. See [Skills][docs/api.md#skills].
 
 An AGENT authored `steer_inbox: ${input.<name>}` reads steers from that `Inbox(...)` input before
 each model call; the host sends them with `send(log, "<name>", event)`. Each read is a recorded
-`steer {inbox, from}` step, which a resumed run replays. `steering` is an object with
-`interruptSignal(nodeId)`, returning an `AbortSignal` the host aborts to interrupt that AGENT
-node; it reaches AGENT nodes with a `steer_inbox:`. Pass the same object to `advance`. See
-[Steering][docs/api.md#steering].
+`steer {inbox, from}` step, which a resumed run replays. `interrupt(log, "<name>")` cuts the
+current reply of every AGENT reading that inbox, running or waiting: it records `interrupted
+{inbox, nodes}`, closes their open host calls, and each agent writes `interrupted {by}` and ends
+with output null. An `Optional(...)` output succeeds with null; any other fails
+`agent.interrupted`. Queued steers stay in the inbox. See [Interrupting an
+agent][docs/api.md#interrupting-an-agent-ts-yian].
 
 ## Provider setup
 
@@ -654,9 +658,9 @@ console.log(store.selection()?.model);
 A failed run's `result.failure` is a `Failure`: `code`, `message`, `nodeId`, `trace`, `causeType`
 (for debugging only) and `traceback`, with `toJSON()`. `code` is one of the codes in [Failure
 codes][docs/api.md#failure-codes]; TS yian adds `agent.output_invalid`, `provider.rate_limit`,
-`provider.quota`, `provider.unavailable`, `provider.context_length`, `provider.refused` and
+`provider.quota`, `provider.unavailable`, `provider.context_length`, `provider.refused`,
 `condition.evaluate`, which Python reports as `node.execute` (or, for an `asserts:` condition,
-`assertion.failed`). A failed run is terminal; branch on `code`, never on `causeType`.
+`assertion.failed`), and `agent.interrupted` (Python's interrupted AGENT succeeds with its text). A failed run is terminal; branch on `code`, never on `causeType`.
 
 A `Diagnostic` (from `LoadError.diagnostic` or `flow.diagnose(failure)`) holds `code`, `message`,
 `frames` (each with `label`, `text`, `range` and `note`), `notes`, `nodeId`, `causeType` and
@@ -793,7 +797,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/api.md#explicit-backward-feedback]: https://github.com/ngocbh/yian/blob/main/docs/api.md#explicit-backward-feedback
 [docs/api.md#failure-codes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#failure-codes
 [docs/api.md#following-a-run-log-with-iterrunrecords]: https://github.com/ngocbh/yian/blob/main/docs/api.md#following-a-run-log-with-iterrunrecords
-[docs/api.md#host-calls-send-complete-close-cancel-and-pendingcalls]: https://github.com/ngocbh/yian/blob/main/docs/api.md#host-calls-send-complete-close-cancel-and-pendingcalls
+[docs/api.md#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls]: https://github.com/ngocbh/yian/blob/main/docs/api.md#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls
 [docs/api.md#load_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#load_flow
 [docs/api.md#mcp-servers]: https://github.com/ngocbh/yian/blob/main/docs/api.md#mcp-servers
 [docs/api.md#naming-a-runs-nodes-with-staticnodes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#naming-a-runs-nodes-with-staticnodes
@@ -803,7 +807,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/api.md#run_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#run_flow
 [docs/api.md#runresult]: https://github.com/ngocbh/yian/blob/main/docs/api.md#runresult
 [docs/api.md#skills]: https://github.com/ngocbh/yian/blob/main/docs/api.md#skills
-[docs/api.md#steering]: https://github.com/ngocbh/yian/blob/main/docs/api.md#steering
+[docs/api.md#interrupting-an-agent-ts-yian]: https://github.com/ngocbh/yian/blob/main/docs/api.md#interrupting-an-agent-ts-yian
 [docs/api.md#the-run-index-with-updaterunindex]: https://github.com/ngocbh/yian/blob/main/docs/api.md#the-run-index-with-updaterunindex
 [docs/api.md#tool-context]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-context
 [docs/api.md#tool-groups]: https://github.com/ngocbh/yian/blob/main/docs/api.md#tool-groups
@@ -1113,8 +1117,8 @@ Node 22, and so does every unit test; a change keeps both green.
   agent (`callTime` set) also records its config as an `llm_config` step.
   `llmValueTypes` is an array of `[path, type]` entries, not a map keyed by path. AGENT is the node
   the remaining `NodeCaps` fields serve (`skills`, `emitStream`, `emitEvent`,
-  `openMemoryContext`, `openSteerInbox`, the engine's steer inbox, and `steering`, the host's
-  interrupt signal, both given only to an agent with a `steer_inbox:`). It records nothing for learning; the backward driver rebuilds what learning
+  `openMemoryContext`, and `openSteerInbox`, the engine's steer inbox with its interrupt signal,
+  given only to an agent with a `steer_inbox:`). It records nothing for learning; the backward driver rebuilds what learning
   reads from its steps (`AgentNode.learningMaterial`), and the node data AGENT backward reads from
   its render (`renderCapture`, the same pure render as `forward`).
 - AGENT `forward` (`node.ts` → `loop.ts` `runAgent` → `structured.ts` `generateStructured` or
@@ -1472,7 +1476,7 @@ START is ready after the START inputs' commit; a success walks its
   memory runtime's admission callback, `(scope, request, { signal }) => Promise<MemoryContext>`.
 - `src/runtime/engine.ts` holds `FlowEngine`, the only writer of a `RunState` while it runs. `new
   FlowEngine(state, log, { growBuilder, numWorkers, onEvent, onStream, memoryContextOpener, tools,
-  skills, steering, live })` borrows a state and log already initialized to the same sequence; `run()`
+  skills, live })` borrows a state and log already initialized to the same sequence; `run()`
   starts the head of `ready`, evaluates it, commits the outcome (a refused output, route or growth
   becomes a `contract.*` failure) and publishes each record's observers to `onEvent`, until the state
   has a result, and resolves to those observers. A node failure is a result; any other error aborts
@@ -1709,5 +1713,5 @@ development; it needs `--case`) writes each selected `run`, `resume` or `backwar
 log, `<name>.log.jsonl` beside the case, which later runs compare byte for byte.
 
 The runner runs every kind. A `run`, `resume` or `backward` case's `host` may hold `tools`,
-`human`, `jitter`, `models`, `memory`, `steering` and `stop`, and its `expect` may hold `memory`; a
+`human`, `jitter`, `models`, `memory`, `sends` and `stop`, and its `expect` may hold `memory`; a
 case using `host.skills` fails before it is set up.

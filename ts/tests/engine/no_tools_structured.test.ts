@@ -13,7 +13,8 @@
  * asserts the structured purpose and the value for an `ollama` `ScriptedModel`.
  *
  * TS-only: `systemPromptWithMemory` with no sections returns the base unchanged, and with sections
- * appends Python's text and canonical JSON; a steering inbox's steers join the loop's request after the prompt; a
+ * appends Python's text and canonical JSON; a steer inbox's steers join the loop's request after the prompt, and a
+ * tool-free structured agent's one structured request too, which an interrupt before it skips; a
  * granted tool runs in the loop; a grant without a tool set reads the registry (`new ToolSet()`),
  * so an unregistered grant fails with `resolve`'s `RangeError` before the model call; a granted
  * skill binds `load_skill`; a reply with a parsed tool call and no grant fails at a cap of 1 with
@@ -40,6 +41,7 @@ import {
   DEFAULT_SYSTEM,
   ToolIterationLimitError,
 } from "../../src/nodes/agent/context.ts";
+import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
@@ -182,6 +184,7 @@ test("a steer inbox's queued steers join the loop's request after the prompt", a
   let queued: string[] = ["be brief"];
   const steerInbox: SteerInbox = {
     inbox: "notes",
+    interrupt: new AbortController().signal, interruptedBy: () => null,
     queued: () => queued.length > 0,
     read: () => {
       if (queued.length === 0) return null;
@@ -303,4 +306,37 @@ test("the memory sections follow the base system prompt", async () => {
   );
   expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithMemory("sys", sections));
   expect(model.requests[0]!.messages[1]!.text()).toBe("p");
+});
+
+/** A steer inbox double holding `queued`, whose interrupt signal is `interrupt`, backed by record 9. */
+function steerDouble(queued: string[], interrupt = new AbortController().signal): SteerInbox {
+  return {
+    inbox: "notes",
+    interrupt,
+    interruptedBy: () => (interrupt.aborted ? 9 : null),
+    queued: () => queued.length > 0,
+    read: () => (queued.length === 0 ? null : { n: 1, from: [1], values: queued.splice(0) }),
+  };
+}
+
+test("a tool-free structured agent reads its steer inbox into its structured request", async () => {
+  const model = new ScriptedModel([textReply('{"name": "Ada", "score": 9}')], NATIVE);
+  const out = await runAgent(context(model, { outputType: RECORD, steerInbox: steerDouble(["be brief"]) }));
+  expect((out as Output).value).toEqual({ name: "Ada", score: 9n });
+  expect(model.requests[0]!.messages.map((message) => [message.role, message.text()])).toEqual([
+    ["system", DEFAULT_SYSTEM],
+    ["user", "x"],
+    ["user", "be brief"],
+  ]);
+});
+
+test("an interrupt before a tool-free structured agent's call honors it: no call, steers left queued", async () => {
+  const model = new ScriptedModel([textReply('{"name": "Ada", "score": 9}')], NATIVE);
+  const interrupt = new AbortController();
+  interrupt.abort();
+  const queued = ["be brief"];
+  const out = await runAgent(context(model, { outputType: RECORD, steerInbox: steerDouble(queued, interrupt.signal) }));
+  expect(out).toEqual(new Interrupted(9));
+  expect(model.requests).toHaveLength(0);
+  expect(queued).toEqual(["be brief"]);
 });

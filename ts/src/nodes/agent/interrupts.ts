@@ -1,5 +1,6 @@
 /**
- * The signal a host interrupt raises out of a streamed AGENT model reply or its retry wait.
+ * The signal a host interrupt raises out of a streamed AGENT model reply or its retry wait, and
+ * the result of an AGENT invocation that honored one.
  *
  * A leaf module, so the stream loop and the effect recorder share it without importing each
  * other.
@@ -30,5 +31,18 @@ export class ReplyInterrupted extends Error {
     super("model reply interrupted by the host");
     this.reply = reply;
     this.usage = usage;
+  }
+}
+
+/**
+ * An AGENT invocation ended by a host interrupt it honored: `by` is the seq of the `interrupted`
+ * record (its `interrupted {by}` step names it). The agent's output is null, which its declared
+ * output decides.
+ */
+export class Interrupted {
+  readonly by: number;
+
+  constructor(by: number) {
+    this.by = by;
   }
 }

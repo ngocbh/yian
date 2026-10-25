@@ -263,7 +263,7 @@ test("prepareNodeStep appends in order without observers", () => {
   expect(first.record).toStrictEqual(new NodeStepRecord("first", 1, FAILED));
   const plan = first._plan;
   if (plan.kind !== "frontier") throw new Error(`expected a frontier plan, found ${plan.kind}`);
-  expect(plan.delta).toEqual({ kind: "step", nodeId: "first", step: FAILED });
+  expect(plan.delta).toEqual({ kind: "step", nodeId: "first", step: FAILED, closedCalls: [] });
   expect(state.nodeSteps.has("first")).toBe(false);
   expect(commitPrepared(log, state, first)).toEqual([]);
   const second = prepareNodeStep(state, "first", started);

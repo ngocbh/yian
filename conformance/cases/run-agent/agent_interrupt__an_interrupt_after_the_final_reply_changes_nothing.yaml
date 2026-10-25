@@ -1,9 +1,10 @@
-# From tests/engine/test_agent_steering.py::test_interrupted_node_succeeds_and_the_flow_continues.
-# An AGENT interrupted before its first call succeeds with "", and the flow goes on: the next
-# (non-steerable) AGENT renders that empty draft into its prompt ("summarize: ") and its reply
-# is the run's output.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupt_for_a_finished_node_is_ignored.
+# An interrupt delivered once `chat`'s final reply (no tool calls) has been taken is recorded
+# (`interrupted {inbox, nodes: [chat]}`) but cuts nothing: the answer is whole, so `chat`
+# succeeds with "chat done" and writes no honor step; the next AGENT renders it.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: steer
@@ -17,7 +18,7 @@ flow: |
       steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: Optional(str)
     after:
       kind: agent
       input: {draft: "${chat.output}"}
@@ -29,10 +30,17 @@ run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - interrupt: true
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1}}
   models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: chat done
     after:
       agent:
       - reply:
@@ -52,7 +60,7 @@ host:
             role: user
             parts:
             - type: text
-              text: 'summarize: '
+              text: 'summarize: chat done'
 expect:
   output:
     status: succeeded
@@ -97,15 +105,35 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: chat done, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
+        response_id: null
+        usage: null
   - - pool_commit
     - chat
-    - value: ''
+    - value: chat done
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: []}
+    - {key: chat.new_messages, steps: [10]}
   - - node_succeeded
     - chat
-    - {commit: 9, messages: 10}
+    - {commit: 11, messages: 12}
   - [node_started, after]
   - - node_step
     - after
@@ -120,7 +148,7 @@ expect:
           - {text: summary, type: text}
           role: assistant
         purpose: chat
-        request_sha256: 52bf0f3cc45551fae17023c9ec3f183d12c45dac24166d96f5e46a9ffedeadc8
+        request_sha256: f00ecd6b8e198032b2999410d1d6658d699a957395beaff48fa75783b23eed15
         response_id: null
         usage: null
   - - pool_commit
@@ -128,17 +156,17 @@ expect:
     - value: summary
   - - pool_commit
     - after
-    - {key: after.new_messages, steps: [13]}
+    - {key: after.new_messages, steps: [15]}
   - - node_succeeded
     - after
-    - {commit: 14, messages: 15}
+    - {commit: 16, messages: 17}
   - [node_started, __end__]
   - - pool_commit
     - __end__
     - value: summary
   - - node_succeeded
     - __end__
-    - {commit: 18}
+    - {commit: 20}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -148,9 +176,21 @@ expect:
       output: {notes: {inbox: notes}}
   - - NodeStarted
     - node_id: chat
+  - - ModelCallStarted
+    - model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+      n: 1
+  - - ModelCallFinished
+    - model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+      n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: ''
+      output: chat done
   - - NodeStarted
     - node_id: after
   - - ModelCallStarted
@@ -176,6 +216,18 @@ expect:
   - - RunSucceeded
     - output: summary
   stream:
+  - chunk: chat done
+    final: false
+    key: text
+    node_id: chat
+    n: 1
+    index: 0
+  - chunk: ''
+    final: true
+    key: text
+    node_id: chat
+    n: 1
+    index: 1
   - chunk: summary
     final: false
     key: text

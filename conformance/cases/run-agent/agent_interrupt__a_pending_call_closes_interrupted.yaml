@@ -1,0 +1,194 @@
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# The reply calls `hold`, whose handler returns pending(), and `lookup`, answered inline; the agent
+# waits on `hold`. An interrupt delivered while it waits wakes it (`interrupted`, then
+# `node_woken`): `hold` closes `interrupted` (CallClosed), the agent writes the call's closer
+# result and `interrupted {by}`, and the Optional(str) agent succeeds null without a second model
+# call.
+kind: run
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
+rules: [run-log]
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [hold, lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: Optional(str)
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {interrupt: notes}
+  tools:
+    hold:
+      description: Wait for an answer.
+      parameters: {type: object, properties: {}}
+      pending: true
+    lookup:
+      description: Look up.
+      parameters: {type: object, properties: {}}
+      results:
+      - return: found
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: call-1, name: hold, arguments: {}}
+          - {type: tool_call, id: call-2, name: lookup, arguments: {}}
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {}
+            id: call-1
+            name: hold
+            type: tool_call
+          - arguments: {}
+            id: call-2
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: 04ab7aaf1f9e4b92b4c64754ac310d96cb5c69c5c04b1217bffd93f76ebc3385
+        response_id: null
+        usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step: {call_id: r1/chat/1/0, index: 0, kind: pending, reply: 1, tool: hold, tool_call_id: call-1}
+  - - node_step
+    - chat
+    - n: 3
+      step: {call_id: call-2, is_error: false, kind: tool_result, output: found}
+  - - node_waiting
+    - chat
+    - call_ids: [r1/chat/1/0]
+      steer_inbox: notes
+  - - run_waiting
+    - null
+    - node_ids: [chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
+  - [node_woken, chat]
+  - - node_step
+    - chat
+    - n: 4
+      step: {call_id: call-1, closed: interrupted, is_error: true, kind: tool_result, output: The user interrupted this tool call; its outcome is unknown. Check its effect before retrying.}
+  - - node_step
+    - chat
+    - n: 5
+      step: {by: 14, kind: interrupted}
+  - [pool_commit, chat]
+  - - pool_commit
+    - chat
+    - key: chat.new_messages
+      steps: [9, 11, 16, 17]
+  - - node_succeeded
+    - chat
+    - {commit: 18, messages: 19}
+  - [node_started, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 22}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: chat}
+  - - ModelCallStarted
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ToolCallStarted
+    - node_id: chat
+      n: 1
+      call_index: 0
+      tool_call_id: call-1
+      name: hold
+      arguments: {}
+  - - ToolCallStarted
+    - node_id: chat
+      n: 1
+      call_index: 1
+      tool_call_id: call-2
+      name: lookup
+      arguments: {}
+  - - ToolCallFinished
+    - {node_id: chat, n: 1, call_index: 1, tool_call_id: call-2, name: lookup, result: found}
+  - - NodeWaiting
+    - node_id: chat
+      call_ids: [r1/chat/1/0]
+  - - RunWaiting
+    - node_ids: [chat]
+  - - NodeWoken
+    - node_id: chat
+      timed_out: []
+  - - NodeSucceeded
+    - {node_id: chat, interrupted: true}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__}
+  - [RunSucceeded]
+  stream: [{node_id: chat, key: text, chunk: '', final: true, n: 1, index: 0}]

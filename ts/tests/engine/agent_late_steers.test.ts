@@ -31,12 +31,17 @@ import { callReply, crashAfter, NO_ENV, resumeWith, runWith, serving, textReply 
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 const SYSTEM = new Message({ role: "system", parts: [new TextPart(DEFAULT_SYSTEM)] });
 
-/** A steer inbox double: `queue` is what a read takes; `reads` logs each read's values, `null` for none. */
-function inboxDouble(queue: string[] = []) {
+/**
+ * A steer inbox double: `queue` is what a read takes; `reads` logs each read's values, `null` for
+ * none. `interrupt` is its interrupt signal, which an `interrupted` record at seq `by` backs.
+ */
+function inboxDouble(queue: string[] = [], interrupt = new AbortController().signal, by: number | null = null) {
   const reads: (readonly unknown[] | null)[] = [];
   let seq = 100;
   const inbox: SteerInbox = {
     inbox: "notes",
+    interrupt,
+    interruptedBy: () => (interrupt.aborted ? by : null),
     queued: () => queue.length > 0,
     read: () => {
       if (queue.length === 0) {
@@ -183,17 +188,20 @@ test("a reply with tool calls at the cap still fails", async () => {
 });
 
 test("an interrupt that lands during the final reply beats a queued steer: the answer stands, the steer stays", async () => {
-  const { inbox, queue, reads } = inboxDouble();
   const interrupt = new AbortController();
+  const { inbox, queue, reads } = inboxDouble([], interrupt.signal, 9);
   const model = hooked(new ScriptedModel([textReply("final")], CONFIG), () => {
     queue.push("late");
     interrupt.abort();
   });
-  const steering = { interruptSignal: () => interrupt.signal };
-  expect(await output(loopContext(model, { steerInbox: inbox, steering }))).toBe("final");
+  const recorded: ValueRecord[] = [];
+  const steps = new NodeSteps(1, [], (step) => recorded.push(step));
+  expect(await output(loopContext(model, { steerInbox: inbox, steps }))).toBe("final");
   expect(model.requests).toHaveLength(1);
   expect(queue).toEqual(["late"]);
   expect(reads).toEqual([null]);
+  // Neither a steer nor the honor of the interrupt is written: the reply was whole.
+  expect(recorded.map((step) => step["kind"])).toEqual(["model_call"]);
 });
 
 test("stepsMaterial rebuilds a late-steered occurrence with a matching digest", async () => {

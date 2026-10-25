@@ -1,0 +1,140 @@
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# An interrupt delivered once model call 1 has finished (record 9) skips both of the reply's tool
+# calls (records 11 and 12); the agent then writes `interrupted {by: 9}` (record 13).
+# A crash after the skipped results (record 12), before the agent's `interrupted {by}` step,
+# leaves the interrupt pending in the log. The resumed agent replays the reply and the skipped
+# results, finds the interrupt still pending, writes `interrupted {by: 9}` and succeeds null,
+# calling neither the model nor the tool.
+kind: resume
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
+rules: [run-log]
+flow: |
+  id: replay-interrupt
+  name: replay_interrupt
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [lookup]
+      prompt: Help the user.
+      output: Optional(str)
+  output: ${chat.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1}}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties: {topic: {type: string}}
+        required: [topic]
+      results: []
+  models:
+    chat:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts:
+              - {type: text, text: Checking both.}
+              - {type: tool_call, id: call-1, name: lookup, arguments: {topic: a}}
+              - {type: tool_call, id: call-2, name: lookup, arguments: {topic: b}}
+  crash_after_record: 12
+expect:
+  output: {status: succeeded, output: null}
+  tool_calls: {}
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: Checking both., type: text}
+          - arguments: {topic: a}
+            id: call-1
+            name: lookup
+            type: tool_call
+          - arguments: {topic: b}
+            id: call-2
+            name: lookup
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: ebacc62e132cd9941c4d717b278e46345cfc404ffd94dc5d4cd6237f0393e1ca
+        response_id: null
+        usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step: {call_id: call-1, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+  - - node_step
+    - chat
+    - n: 3
+      step: {call_id: call-2, closed: skipped, is_error: true, kind: tool_result, output: 'Not run: interrupted by the user.'}
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [chat]
+  - [node_started, chat]
+  - - node_step
+    - chat
+    - n: 4
+      step: {by: 9, kind: interrupted}
+  - [pool_commit, chat]
+  - - pool_commit
+    - chat
+    - key: chat.new_messages
+      steps: [10, 11, 12, 15]
+  - - node_succeeded
+    - chat
+    - {commit: 16, messages: 17}
+  - [node_started, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 20}
+  stream: []

@@ -46,7 +46,6 @@ import {
   Pending,
   Route,
   type SteerInbox,
-  type Steering,
 } from "../nodes/base.ts";
 import {
   applyDefaults,
@@ -163,7 +162,7 @@ function observerSink<T>(
 
 /**
  * Wrap the engine's steer inbox opener for one evaluation: once the evaluation ended, opening and
- * each `queued` or `read` throw a `CapabilityFault`; a `CapabilityFault` the engine throws reaches
+ * each `queued`, `read` or `interruptedBy` throw a `CapabilityFault`; a `CapabilityFault` the engine throws reaches
  * `onFault` before it is rethrown, so a node that catches it can't hide it.
  */
 function steerInboxCapability(
@@ -186,21 +185,10 @@ function steerInboxCapability(
       inbox: opened.inbox,
       queued: () => guarded(() => opened.queued()),
       read: () => guarded(() => opened.read()),
+      interrupt: opened.interrupt,
+      interruptedBy: () => guarded(() => opened.interruptedBy()),
     };
   };
-}
-
-/**
- * Return a host steering (the interrupt signal) after checking its shape, or `null`.
- *
- * @throws TypeError when `steering` isn't `null` and lacks the `interruptSignal` method.
- */
-export function requireSteering(steering: unknown): Steering | null {
-  const inbox = steering as Partial<Steering> | null | undefined;
-  if (steering !== null && typeof inbox?.interruptSignal !== "function") {
-    throw new TypeError("steering must provide interruptSignal(nodeId), or be null");
-  }
-  return steering as Steering | null;
 }
 
 /**
@@ -214,63 +202,6 @@ export function requireModels(models: unknown): ModelAccess | null {
     throw new TypeError("models must provide env(name) and createModel(config, options), or be null");
   }
   return models as ModelAccess | null;
-}
-
-/**
- * @internal The steering a node receives: it carries the host's faults and malformed answers out
- * of the node body as capability faults, so a failing host stays a host fault, never a node
- * failure. The evaluator wraps the run's steering in it.
- */
-export class SteeringCapability implements Steering {
-  readonly #inbox: Steering;
-  readonly #onFault: (fault: CapabilityFault) => void;
-  readonly #isClosed: () => boolean;
-
-  /**
-   * @param onFault Sees each capability fault before it is thrown.
-   * @param isClosed Whether the evaluation ended; once it has, each method throws without calling
-   *   the host or `onFault`.
-   */
-  constructor(inbox: Steering, onFault: (fault: CapabilityFault) => void, isClosed: () => boolean) {
-    this.#inbox = inbox;
-    this.#onFault = onFault;
-    this.#isClosed = isClosed;
-  }
-
-  /**
-   * Return the host's interrupt signal for `nodeId`.
-   *
-   * @throws CapabilityFault carrying the host's error, or a `TypeError` when the answer isn't an
-   *   `AbortSignal`, or an `Error` once the evaluation ended.
-   */
-  interruptSignal(nodeId: string): AbortSignal {
-    this.#refuseClosed();
-    let signal: unknown;
-    try {
-      signal = this.#inbox.interruptSignal(nodeId);
-    } catch (error) {
-      throw this.#fault(error);
-    }
-    if (!(signal instanceof AbortSignal)) {
-      throw this.#fault(new TypeError("steering.interruptSignal must return an AbortSignal"));
-    }
-    return signal;
-  }
-
-  /**
-   * Refuse a call once the evaluation ended: code a node left running must not reach the host's
-   * inbox, whose fault would end a run that has already settled or stop a later node's run.
-   */
-  #refuseClosed(): void {
-    if (this.#isClosed()) throw new CapabilityFault(new Error("steering capability is closed"));
-  }
-
-  /** Return `error` as a capability fault after reporting it. */
-  #fault(error: unknown): CapabilityFault {
-    const fault = capabilityFault(error);
-    this.#onFault(fault);
-    return fault;
-  }
 }
 
 /** The closed raw worker result the append-only dispatcher consumes. */
@@ -484,8 +415,6 @@ export interface EvalNodeOptions {
   sourceResolver?: SourceResolver | null;
   /** The run's tool set, delivered only to a node declaring `needsTools`. */
   tools?: ToolSet | null;
-  /** The host's interrupt signal, delivered only to a node declaring `readsSteerInbox`. */
-  steering?: Steering | null;
   /** The run's environment and model builder, delivered only to a node declaring `needsModels`. */
   models?: ModelAccess | null;
   /**
@@ -521,7 +450,7 @@ export interface EvalNodeOptions {
  * @returns The outcome, with captures when asked for.
  * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink,
- *   the host's interrupt signal, a repeated memory context open or a failing opener, a
+ *   a repeated memory context open or a failing opener, a
  *   `CapabilityFault` from `steps.record` or the steer inbox), whatever the node then returned or
  *   threw.
  * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
@@ -551,7 +480,6 @@ export async function evalNode(
     skills = null,
     sourceResolver = null,
     tools = null,
-    steering = null,
     models = null,
     steps = null,
     steerInbox = null,
@@ -560,7 +488,6 @@ export async function evalNode(
     random = null,
     runDir = null,
   } = options;
-  requireSteering(steering);
   requireModels(models);
   if (typeof captureBindings !== "boolean") throw new TypeError("capture_bindings must be a bool");
   if (emitStream !== null && typeof emitStream !== "function") {
@@ -621,7 +548,6 @@ export async function evalNode(
     emitEvent,
     skills,
     tools,
-    steering,
     models,
     steps,
     steerInbox,
@@ -653,7 +579,6 @@ async function evaluateNode(
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
     skills: ReadonlyMap<string, Skill> | null;
     tools: ToolSet | null;
-    steering: Steering | null;
     models: ModelAccess | null;
     steps: NodeSteps | null;
     steerInbox: ((inbox: string) => SteerInbox) | null;
@@ -663,7 +588,7 @@ async function evaluateNode(
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
   const { memoryScope, memoryContextOpener } = context;
-  const { emitStream, emitEvent, skills, tools, steering, models, steps, steerInbox, scheduler, random, runDir } = context;
+  const { emitStream, emitEvent, skills, tools, models, steps, steerInbox, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
@@ -796,7 +721,7 @@ async function evaluateNode(
   }
   if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
-  // Closed once the node settles, so a step, event or steering call the node's dropped code makes after
+  // Closed once the node settles, so a step, event or steer read the node's dropped code makes after
   // the outcome is decided is refused or dropped rather than reaching the run with no evaluation
   // left to fail.
   let closed = false;
@@ -807,9 +732,6 @@ async function evaluateNode(
   }
   if (skills !== null && node.needsSkills === true) caps.skills = skills;
   if (models !== null && node.needsModels === true) caps.models = models;
-  if (steering !== null && node.readsSteerInbox === true) {
-    caps.steering = new SteeringCapability(steering, onFault, isClosed);
-  }
   if (steps !== null && node.needsSteps === true) {
     // The engine's recorder throws its faults as capability faults; a node can catch one, so the
     // evaluator keeps it as it keeps the other capabilities' faults.
@@ -822,7 +744,9 @@ async function evaluateNode(
         throw error;
       }
     };
-    caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes, steps.durable);
+    caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes, steps.durable, () =>
+      steps.currentCalls(),
+    );
   }
   if (steerInbox !== null && node.readsSteerInbox === true) {
     caps.openSteerInbox = steerInboxCapability(steerInbox, onFault, isClosed);

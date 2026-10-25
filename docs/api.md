@@ -209,7 +209,8 @@ run before appending any record.
   concurrently running nodes interleave (runs are pooled by default); correlate
   them by `node_id` and `exchange_id` (TS yian: `n`, below). `usage` is the provider's own count
   (`None` when unreported) and `error` is an exception type name only, or
-  `"interrupted"` for a tool call a [steering](#steering) interrupt skipped.
+  `"interrupted"` for a tool call an interrupt skipped (Python yian: [steering](#steering-python-yian);
+  TS yian: [interrupt](#interrupting-an-agent-ts-yian)).
   Changed (TS yian): `conformance/schema/events.schema.json` describes each
   event's JSON form, with the snake_case keys hosts forward. The model call and
   tool events carry `n` in place of `exchange_id` and `attempt`: the AGENT's step
@@ -482,7 +483,7 @@ run before appending any record.
   not part of the flow fingerprint, so pass it again to `resume_flow`.
 
 Changed (TS yian): `runFlow(flow, inputs, { log, runId, numWorkers, onEvent, onStream,
-llmConfig, memory, learnable, tools, skills, steering, context, signal, env })` returns a Promise
+llmConfig, memory, learnable, tools, skills, context, signal, env })` returns a Promise
 of the `RunResult`; a failed flow resolves too, and the errors above are its rejections. `memory`
 and `skills` are `Map`s and `tools` a plain record. `signal` is the host's stop: aborting it stops
 the run, which rejects with the signal's reason, and an already-aborted signal rejects before
@@ -1344,6 +1345,7 @@ is for debugging only; don't branch on it.
 | `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply, or the provider's content filter rejected the request (an HTTP 4xx naming `content_filter`, `content_policy_violation` or `ResponsibleAIPolicyViolation`). | Read `failure.message`; change the input. | Rarely |
 | `condition.evaluate` (TS yian) | A LOOP `while:`/`until:`, a CASE `when:`, or an `asserts:` condition can't be evaluated (an error, as opposed to evaluating false). | Fix the flow or its inputs. | No |
 | `tool.timeout` (TS yian) | A TOOL `ask` timed out with no answer and its declared output doesn't allow null, or it declares no `output:` (which reads as `str`). | Route on null with `output: Optional(T)`, or extend the timeout. | Only if someone may answer next time |
+| `agent.interrupted` (TS yian) | An AGENT was [interrupted](#interrupting-an-agent-ts-yian) and its declared output doesn't allow null, or it declares no `output:` (which reads as `str`). | Declare `output: Optional(...)` and route on null. | Only if the user wants the reply |
 
 Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian
 reports these failures as `node.execute`, except that an `asserts:` condition that
@@ -1577,7 +1579,7 @@ Each `load_skill` result is capped at 256 KiB (`YIAN_MAX_SKILL_FILE_BYTES`; see
 [Defaults and limits](defaults.md)). There is no cumulative cap: every
 result stays in the loop's message history, the evidence, and any logs.
 
-## Steering
+## Steering (Python yian)
 
 An AGENT authored `steerable: true` (Python yian; TS yian reads a `steer_inbox:`, below) reads a
 host inbox while its tool loop runs. The inbox is any object with two methods:
@@ -1643,14 +1645,13 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   nodes replay without reading it.
 - `yian.run.Steering` is the matching `typing.Protocol`.
 
+## Steering a running agent (TS yian)
+
 Changed (TS yian): an AGENT reads steers from a declared inbox, `steer_inbox: ${input.<name>}`
 (see [Steering a running agent](syntax.md#steering-a-running-agent-steer_inbox)), and the
 host sends them like any event: `send(log, "<name>", event)`, through the live engine while the
-run moves, or under the log's lock while it is down. `steering` holds only the interrupt:
-`interruptSignal(nodeId)` returns an `AbortSignal` the host aborts to interrupt that node (an
-object without it is a `TypeError` before any record is written). Only the main thread reads
-it (CODE bodies run on worker threads but never see it), so it needs no lock. The `Steering`
-interface lives in `nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
+run moves, or under the log's lock while it is down. There is no `steering` option: a host
+interrupts through the same inbox with [`interrupt(log, inbox)`](#interrupting-an-agent-ts-yian).
 
 - **Steers.** Before each model call, after the previous reply's tool results, the agent reads
   everything queued in its inbox in one zero-wait read, through the engine. The read appends a
@@ -1660,7 +1661,9 @@ interface lives in `nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
   queue; the run reducer refuses any other. The consumed events leave the inbox's unread
   queue at the step, and their values stay in the run state until the agent settles.
 - **Late steers.** A reply with no tool call while steers are queued is followed by a read and
-  one more model call: in the log, `model_call` → `steer` → `model_call`. Every reply counts
+  one more model call: in the log, `model_call` → `steer` → `model_call`. An interrupt seen at
+  that point beats the late steer: the answer stands, no `steer` or `interrupted` step is
+  written, and the events stay unread. Every reply counts
   toward `max_tool_iterations`; at the cap the agent returns the answer it has, writes no `steer`
   step, and the events stay unread. A resumed agent that late-steered replays to the same point;
   one that crashed after its final reply, before any steer, reads what was sent while it was down.
@@ -1674,16 +1677,78 @@ interface lives in `nodes/base.ts`, and `yian/run` (`run.ts`) re-exports it.
   message, steers included. A send made while the run was down is read by the first live call.
 - **Run log.** A reader sees the `steer` step like any node step; `foldRunLog` gives each send
   in `from` as the `pool_commit` holding its value. Readers skip step kinds they don't know.
-- **Interrupts.** An interrupt is read at the top of each iteration, before the steer read, so
-  an honored interrupt leaves queued steers unread in the inbox. Every model call streams, so
-  the interrupt is read before each later text chunk of every chat call, and a host without
-  `onStream` can cut a reply too; a reply whose text had all arrived is kept whole. So an
-  interrupt during a reply's reasoning or tool-call stream takes effect at its next text
-  chunk, or once the reply is complete. An interrupt during the wait before retrying a failed
-  model call ends the wait at once, and the node succeeds with no new text (`""`, the cut
-  call's empty reply). A reply's tool calls are checked for an interrupt before each call's
-  check, before each group, and before the node fails at a call whose check failed (see
-  [Tool context](#tool-context)), and a group that is running finishes.
+- **A tool-free structured agent** makes one structured call; the steers queued before it join
+  that request the same way, and an interrupt before it is honored without the call.
+
+## Interrupting an agent (TS yian)
+
+New (TS yian): `interrupt(log, inbox, options?)` cuts the current reply of every AGENT, running
+or waiting, whose `steer_inbox:` is the flow's top-level `Inbox` input `inbox`:
+
+```ts
+import { interrupt } from "@ngocbh/yian";
+
+const closed = await interrupt("run.jsonl", "messages");   // the host calls it closed
+```
+
+It is a [host call](#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls), delivered
+as `send` is (live through the engine, or offline under the log's lock), and resolves to the open
+host calls it closed, as `pendingCalls` listed them.
+
+- **Who.** It appends one run record, `interrupted {inbox, nodes}`. `nodes` names the agents it
+  affects: the running ones that opened `inbox` as their steer inbox (from the live engine, in
+  the order they went in flight), then the waiting ones whose `node_waiting.steer_inbox` is
+  `inbox`. An agent already holding an interrupt it hasn't honored is left out. It resolves to
+  the open host calls the record closed: `[]` both when no agent reads `inbox` and when the agents
+  it names hold no open host call. With no agent to name it appends nothing and resolves to `[]`, so an interrupt before an agent opens its inbox,
+  or after it has answered, changes nothing. A closed inbox can still be interrupted.
+- **A crashed run.** Offline, the engine isn't there to say which agents were running, so an
+  interrupt names only the waiting ones. `advance` a crashed run first, then interrupt it.
+- **Calls close at once.** The record closes the named agents' open host calls with reason
+  `interrupted`: the engine publishes `CallClosed {reason: "interrupted"}` for each, they leave
+  `pendingCalls`, and a later `complete` of one is refused (`call_settled`). A call an agent
+  registers after the record (its tool's group was already running) is closed `interrupted` at
+  once; it isn't in what `interrupt` returned, so the host learns of it from its `CallClosed
+  {reason: "interrupted"}`.
+- **A running agent** honors the interrupt at its next safe point: before a model call, before
+  each later text chunk of a streamed reply (a cut reply is recorded with `finish:
+  "interrupted"` and the text that arrived), during the wait before retrying a failed model
+  call, and before each tool call's check, each group and the failure at a call whose check
+  failed. The calls not started are written as `closed: "skipped"` results; a tool that is
+  already running finishes and its result is recorded. Every model call streams, so a host
+  without `onStream` can cut a reply too; a reply whose text had all arrived is kept whole, and
+  an interrupt during a reply's reasoning or tool-call stream takes effect at the next text
+  chunk, or once the reply is complete.
+- **A waiting agent** is woken by the interrupt (`node_woken`) when the run next moves.
+- **Closers.** Each of the reply's pending calls the interrupt closed gets a closer result,
+  `closed: "interrupted"`, `output` `"The user interrupted this tool call; its outcome is unknown.
+  Check its effect before retrying."`, `is_error` true.
+- **The honor step.** The agent then writes the step `interrupted {by}`, `by` the seq of the
+  `interrupted` record, and ends. A crash after that step replays to the same end. A crash before
+  it honors the interrupt again on the resume, since the record still names the agent; its calls
+  were closed `interrupted` before the crash, so `run_resumed.closed_calls` doesn't list them and
+  their closers say `interrupted`, not `crashed`.
+- **The result.** The agent's output is null, and its `new_messages` end with the cut reply, the
+  results above and a user message `[interrupted by the user]`. The declared output decides:
+
+  | Declared output | An interrupted agent |
+  |---|---|
+  | `Optional(...)` | succeeds with null; route on it (`${chat.output :- "..."}`, a CASE) |
+  | anything else, no `output:` included (which reads as `str`) | fails with code `agent.interrupted` |
+
+- **Steers stay.** Steers queued in the inbox when the interrupt lands stay unread for the next
+  reader; an interrupt wins over a steer read in the same turn.
+- **Events.** A cut stream ends with its `final: true` chunk, and its `ModelCallFinished` has no
+  `error` and the usage of the chunks already received. Each skipped tool call gets a
+  `ToolCallStarted`, then a `ToolCallFinished` with `error: "interrupted"`. The agent's
+  `NodeSucceeded` says `interrupted: true` only when it honored the interrupt and succeeded with
+  null; when the interrupt landed after the reply was whole (a race the host can't see), the
+  agent answers as usual and `interrupted` is false. Every other `NodeSucceeded` has
+  `interrupted: false`. It is read from the recorded `interrupted` step, so a resumed run says
+  the same. A failed agent's `NodeFailed` says it with code `agent.interrupted`.
+
+`DeliveryRefused` reasons: `ended`, `not_started` and `unknown_inbox`, as for `send`; a
+`TypeError` when `inbox` isn't a string.
 
 ## Injecting agent memory
 
@@ -2516,7 +2581,8 @@ its reply; with no reply it is `[]`. The success puts the value in the pool unde
 trace gets a second current writer for it, sourced at the messages commit
 (`TraceOccurrence.messagesSource`); a prune drops both with the agent. A crash before the success
 leaves both commits as orphans, unread, and the agent reruns. Schema 22 also adds the run record
-kind `interrupted {inbox, nodes}`, which this version decodes but refuses to accept.
+kind `interrupted {inbox, nodes}` (an [interrupt](#interrupting-an-agent-ts-yian); rules below)
+and the AGENT step `interrupted {by}`.
 
 Changed (TS yian, schema 21): a `forward_capture` holds no `node_data`. Learning rebuilds the node
 data backward reads (`TraceOccurrence.nodeData`, the `nodeData` of a `BackwardContext`) from the
@@ -2630,15 +2696,24 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   since their last wake (a call a timeout wake left open stays pending; a TOOL node's re-run
   reuses its call). The reducer publishes `CallClosed` for each host call it
   closes: a timed-out `ask` in `node_woken`, a resume's closed calls, `run_cancelled`,
-  `run_failed` and a `node_failed`; takes and sleeps get none.
+  `run_failed`, `interrupted` and a `node_failed`; takes and sleeps get none.
+- `interrupted {inbox, nodes}` (TS yian, schema 22) names a declared inbox and a non-empty list of
+  distinct nodes, each either in flight and reading a steer inbox (the engine's word: the inbox
+  is bound at run time) or waiting with `steer_inbox` equal to `inbox`, none holding an interrupt
+  it hasn't honored; every waiting reader of the inbox without one is named. It marks each node's
+  interrupt pending (a waiting node becomes wakeable) and closes the node's open calls with
+  reason `interrupted`; a `pending` step a named node writes after it registers its call already
+  closed. A closed call takes one closer, `closed: "interrupted"`, on its running AGENT. The
+  node's step `{kind: "interrupted", by}` (exactly these keys; `by` the seq of the pending
+  `interrupted` record) honors it and clears it.
 
-A host delivery (a send, an answer to a pending call, a close or a cancel) that the run refuses
+A host delivery (a send, an answer to a pending call, a close, an interrupt or a cancel) that the run refuses
 appends nothing and throws `DeliveryRefused`, a `RangeError` whose `reason` says why, checked in
 this order: `ended` (the run has a terminal result, a second cancel among them), `not_started`
 (its run start is incomplete), then for a send `unknown_inbox`, `inbox_closed`, `invalid_value`
 (the `TypeCheckError` is its `cause`) and `too_large`; for an answer `unknown_call`,
 `not_host_call` (a take or sleep), `call_settled` (with the call's state in `callState`),
-`invalid_value` and `too_large`; for a close `unknown_inbox`. An identical repeat of an answer,
+`invalid_value` and `too_large`; for a close or an interrupt `unknown_inbox`. An identical repeat of an answer,
 and a second close, are no-ops.
 
 Changed (TS yian, schema 16): a derived commit holds no value, only `from`, `{node_id, key,
@@ -2787,10 +2862,15 @@ on replay. Each `step` is a JSON object with a string `kind`:
   next model call: `call_id` (the id of the reply's `tool_call` part), `started_at`, `output`
   and `is_error` (exactly the text and flag the model reads), and `closed: "skipped"` for a call
   a host interrupt skipped (`started_at` `null`, `output` `"Not run: interrupted by the user."`,
-  `is_error` true). A call that threw, or whose result has no text, writes no result. A resume
+  `is_error` true). A call that threw, or whose result has no text, writes no result. A call an
+  interrupt closed gets `closed: "interrupted"` (`output` `"The user interrupted this tool call;
+  its outcome is unknown. Check its effect before retrying."`, `is_error` true). A resume
   writes `closed: "crashed"` for a replayed call with no result (`started_at` `null`, `output`
   `"The tool call was interrupted; its outcome is unknown. Check its effect before retrying."`,
   `is_error` true); see [Durable recovery](#durable-recovery-with-resume_flow).
+- `interrupted` (TS yian): `{by}`, the AGENT's honor of an
+  [interrupt](#interrupting-an-agent-ts-yian), `by` the seq of the `interrupted` record. It is
+  the agent's last step; a resumed agent replays to it and ends there.
 
 A tool call's idempotency key (`ToolContext.callId`) is `<run id>/<node>/<n>/<index>`, `n` the
 reply's `model_call` step.
@@ -2932,19 +3012,20 @@ then reads the log again. A missing log rejects with code `ENOENT`, from resolvi
 inbox, and is empty while the run waits. `result.backward` needs a run that succeeded or failed;
 on a waiting or cancelled one it raises `RangeError`.
 
-### Host calls: `send`, `complete`, `close`, `cancel` and `pendingCalls`
+### Host calls: `send`, `complete`, `close`, `interrupt`, `cancel` and `pendingCalls`
 
 New (TS yian): a host reaches a run through its log path, whether this process is moving the run
 or nobody is:
 
 ```ts
-import { advance, cancel, close, complete, DeliveryRefused, pendingCalls, RunBusyError, send } from "@ngocbh/yian";
+import { advance, cancel, close, complete, DeliveryRefused, interrupt, pendingCalls, RunBusyError, send } from "@ngocbh/yian";
 
 await send("run.jsonl", "messages", "hello");          // the send's seq
 await advance({ log: "run.jsonl" });                     // a take reads it
 for (const call of pendingCalls("run.jsonl")) {          // open asks and host-tool calls
   await complete("run.jsonl", call.callId, { output: "approve" });
 }
+await interrupt("run.jsonl", "messages");                // cut the agents steered by it
 await close("run.jsonl", "messages");                    // a waiting take gets closed: true
 ```
 
@@ -2959,6 +3040,11 @@ await close("run.jsonl", "messages");                    // a waiting take gets 
 - `close(log, inbox, options?)` closes an inbox and returns its seq, or `null` when it is already
   closed. Takes still read what was sent; a take waiting on it with nothing to read gets
   `{events: [], closed: true}`.
+- `interrupt(log, inbox, options?)` interrupts the AGENTs whose `steer_inbox:` is `inbox`, running
+  or waiting, and returns the open host calls it closed, as `pendingCalls` listed them: `[]` when
+  no agent reads it (nothing is appended) and when the agents hold no open host call. A call an
+  agent registers after the record is closed at once and reported only by `CallClosed`; see
+  [Interrupting an agent](#interrupting-an-agent-ts-yian).
 - `cancel(log, options?)` writes `run_cancelled`, which ends the run with no output and no
   learning, and returns the open host calls it closed, as `pendingCalls` listed them.
 - `pendingCalls(log)` lists the open host calls (not takes or sleeps): `callId`, `node`, `tool`,
@@ -2975,7 +3061,8 @@ goes to the engine, which appends and applies the record between two of its awai
 are ignored then. A call made once the loop has ended (the run call is about to return) waits for
 that call to close the run, then appends offline, where the next `advance` reads it. A cancel aborts the
 run's running nodes, and the engine publishes `CallClosed {reason: "cancelled"}` for each open host
-call. Otherwise the call takes the log's lock without blocking, appends one record and releases it.
+call; an interrupt cuts its running agents' replies at once, and the engine publishes `CallClosed
+{reason: "interrupted"}` for each call it closed. Otherwise the call takes the log's lock without blocking, appends one record and releases it.
 It reuses the state of a waiting run this process left (the registry `advance` uses) while the log
 is the file it left; else it compiles the recorded flow and replays the log, as `advance` does. So
 `options` are `advance`'s `env` (the run's recorded `YIAN_*` values must match it), `codeRoot` (a
@@ -2992,7 +3079,7 @@ code). The state is kept after a refused call too, since a refusal appends nothi
   |---|---|
   | `ended` | the run has a terminal result (checked first; a complete after a cancel, a second cancel) |
   | `not_started` | the run start is incomplete |
-  | `unknown_inbox` | the flow has no such top-level `Inbox` input |
+  | `unknown_inbox` | the flow has no such top-level `Inbox` input (a send, a close or an interrupt) |
   | `inbox_closed` | a send to a closed inbox |
   | `invalid_value` | the event isn't a `T`, or the tool's output type (an `ask`'s answer can't be null) refuses the answer; the `TypeCheckError` is the `cause` |
   | `too_large` | the event or answer is over the run's `YIAN_MAX_EVENT_BYTES` |
@@ -3008,7 +3095,7 @@ A live engine whose `onEvent` throws on a delivery's observers rethrows from the
 record is durable; while the run is moving, the throw also stops it.
 
 Changed (TS yian): `advance({ log, numWorkers, onEvent, onStream, memory, tools, skills,
-steering, apiKey, headers, context, signal, env, codeRoot })` returns a Promise of the
+apiKey, headers, context, signal, env, codeRoot })` returns a Promise of the
 `RunResult`, and the
 errors are its rejections. `memory` and `skills` are `Map`s and `tools` a plain record, as for
 `runFlow`. `signal` is the host's stop: aborting it stops the resumed segment, which rejects with
@@ -3642,9 +3729,8 @@ handler runs and records it on the `pending` step. When it passes, the call clos
 (the host gets `CallClosed {reason: "timed_out"}` and a late `complete` is refused) and the model
 reads `timed out: no answer`, even while other calls of the reply are still open: the agent then
 waits again on those, and its next model call waits until every call of the reply is settled. A
-malformed `timeout` is the call's error result, and the handler isn't called. An agent given the
-host's interrupt signal (an agent with a `steer_inbox:` run with host steering) can't wait yet: its tool returning `pending()` fails
-it, so answer inline. A process lost after the `pending` step but before the agent waits closes
+malformed `timeout` is the call's error result, and the handler isn't called. A host
+[interrupt](#interrupting-an-agent-ts-yian) closes the agent's pending calls `interrupted`. A process lost after the `pending` step but before the agent waits closes
 the call as `crashed` on resume, and the model reads that the call's outcome is unknown. With
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as
 `extra`, so the handler's `AskTool` declares them.

@@ -318,17 +318,21 @@ A case can't hold code, so its host is declared under `host`.
   as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
   `ask` or `ask_user`.
 - **`sends`** (TS-only; a case using it has `python_skip`): a list of `{inbox: <name>, event:
-  <value>}`, `{close: <name>}` and `{complete: <call id>, output: <value>}` or `{complete: <call
-  id>, error: <text>}` items. While the run ends `waiting` and items are left, the runner delivers
-  the next one (`send`, `close` or `complete`) and moves the run on with `advance`, with the
-  same host, clock and observers, so `events` and `stream` cover the whole run. A run still
-  waiting when the items run out fails the case. A case with such items gets no crash sweep.
-  Two more forms of a send item:
+  <value>}`, `{close: <name>}`, `{interrupt: <name>}` and `{complete: <call id>, output:
+  <value>}` or `{complete: <call id>, error: <text>}` items. While the run ends `waiting` and
+  items are left, the runner delivers the next one (`send`, `close`, `interrupt` or `complete`)
+  and moves the run on with `advance`, with the same host, clock and observers, so `events` and
+  `stream` cover the whole run. A run still waiting when the items run out fails the case. A case
+  with such items gets no crash sweep. More forms of a send item:
   - `{inbox, event, after: {node: <node id>, <point>}}` is sent while the run is live, when it
-    reaches the point (`steering`'s points and counting), through the run's engine, as a host's
-    `send` does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it
-    joins the next model call after the reply's results. An item whose point is never reached
-    fails the case after the comparisons.
+    reaches the point (see [points](#points) below), through the run's engine, as a host's `send`
+    does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it joins
+    the next model call after the reply's results. An item whose point is never reached fails the
+    case after the comparisons.
+  - `{interrupt, after: {node: <node id>, <point>}}` calls `interrupt(log, inbox)` while the run
+    is live, when it reaches the point; the delivery lands in the same tick, through the run's
+    engine. It interrupts every AGENT reading that inbox as its `steer_inbox:`, running or
+    waiting (see [Interrupting an agent](../docs/api.md#interrupting-an-agent-ts-yian)).
   - `{inbox, event, down: true}`, `resume` cases only, is sent after the cut and before the
     resume, as a host does while the run is down.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
@@ -407,49 +411,12 @@ A case can't hold code, so its host is declared under `host`.
   In TS, the memories are `buildMemories(flow, {root, models, onEvent})` with the runner's
   scripted model access; the events `onEvent` gets (the learners' `ModelCallRetried` and
   `ReplayDegraded`, TS-only) are kept apart and never compared with `expect.events`.
-- **`steering`**: `{<node id>: [<action>, ...]}`, the host's interrupts of an AGENT with a
-  `steer_inbox:` (Python: the `steering` argument of `run_flow` and `resume_flow`, whose inbox
-  also takes steers). The node id is the occurrence id, as in `tool_calls`' `node`
-  (`loop#0/chat` inside a LOOP or MAP). An action is `{after: <point>, interrupt: true}`, which
-  sets the node's interrupt; one without `after` is set before the run. Steers are `sends` items
-  with `after:` (TS-only: a case still holding a `steer:` action fails to load). The points:
-  - `{model_call: n}`: once the node's `n`th `agent` model call has finished (its last chunk
-    taken); not when the call raises;
-  - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered; `k` counts the
-    entry's `chunks` list, text or not (a `reply` streams as one chunk);
-  - `{tool_call: i}`: once the node's `i`th tool call in call order has returned or raised,
-    counted as in `expect.tool_calls` (`ask_user` included). Stub tools return at once, so calls
-    finish in call order.
-
-  Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
-  scripts do. Steering acts in the main run (and its resume), never in a `host.memory` `before`
-  run, whose calls aren't counted. An interrupt stays set. An action whose point is never reached
-  fails the case after the comparisons, like a leftover entry. In a `resume` case the host is the
-  same object across the cut, so a set interrupt stays set. A resumed TS AGENT doesn't read it
-  while it replays its recorded calls (`resume/run_log__*`); recorded steers replay as steps.
-
-  The AGENT reads its steer inbox at the top of each loop iteration (just before a model call),
-  and the interrupt there, before each later chunk of a streamed reply and before each tool
-  call. A host can't act "before" a point, so:
-  - a steer before model call `n` is a `sends` item `after: {node, model_call: n-1}` (or
-    `{tool_call: i}` for a call of reply `n-1`);
-  - an interrupt before tool call `i` is `after: {tool_call: i-1}`, or `after: {model_call: n}`
-    for the first call of reply `n`. In TS this holds only when call `i` isn't in the same group
-    as call `i-1`: the calls of `concurrency_safe` stub tools run together, so a group's later
-    calls have already started when an earlier one returns, and they finish;
-  - an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.
-
-  TS reads the interrupt before each later **text** chunk, before each tool call's check,
-  before each group, and before failing at a call whose check failed. So a case that cuts mid-stream needs a text chunk after its point (an
-  interrupt before a `tool_call`, `usage` or `finish` chunk keeps the reply whole in TS, and its
-  calls are skipped with brackets), or a TS `expect`.
-
-  An interrupted AGENT succeeds with its text so far (`""` before any reply): mid-stream it keeps
-  the chunks shown and ends the stream with a final `""` chunk, and on the last chunk it keeps the
-  whole reply. The tool calls it skips finish with error `interrupted`. Only an AGENT with a
-  `steer_inbox:` (and `str` output) reads the interrupt.
+- **`steering`** (Python runner only; TS fails a case holding it with "unknown host key"):
+  `{<node id>: [{after: <point>, interrupt: true}, ...]}`, the `steering` argument of Python's
+  `run_flow` and `resume_flow`. No committed case uses it: TS yian interrupts through
+  `interrupt(run, inbox)`, a `sends` item.
 - **`stop`**: `{<node id>: {after: <point>}}`, a stop of the run (TS only; the Python runner
-  doesn't support it yet). The points and their counting are `steering`'s, and `after` is
+  doesn't support it yet). The [points](#points) and their counting are a `sends` item's, and `after` is
   required. When the run reaches the point, the runner aborts the run's `signal` with a
   `ConformanceStop` error, so the run rejects with it: a `run` case expects `raises: {class:
   ConformanceStop, message: conformance stop}`, and its trace ends with `run_stopped`. A stop
@@ -480,6 +447,49 @@ Not in the format yet (each comes as an addition when a case needs it): file val
 `values`/`item`, output schemas for stub tools, `files` for the `other` flow of a fingerprint
 case, a clock for `system.now`, and the content of a file after a `cli` command (such as
 which logins an auth file holds), so no case pins a removal or the token a refresh saves.
+
+### Points
+
+A `sends` item's or a `stop`'s `after: {node: <node id>, <point>}` names a point in an AGENT's
+run. The node id is the occurrence id, as in `tool_calls`' `node` (`loop#0/chat` inside a LOOP
+or MAP). The points:
+
+- `{model_call: n}`: once the node's `n`th `agent` model call has finished (its last chunk
+  taken); not when the call raises;
+- `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered; `k` counts the
+  entry's `chunks` list, text or not (a `reply` streams as one chunk);
+- `{tool_call: i}`: once the node's `i`th tool call in call order has returned or raised,
+  counted as in `expect.tool_calls` (`ask_user` included). Stub tools return at once, so calls
+  finish in call order.
+
+Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
+scripts do. Points count in the main run (and its resume), never in a `host.memory` `before`
+run, whose calls aren't counted. A resumed TS AGENT replays its recorded calls, steers and
+`interrupted` step (`resume/run_log__*`); an interrupt recorded before the cut and not yet
+honored is honored on the resume.
+
+The AGENT reads its steer inbox at the top of each loop iteration (just before a model call),
+and checks for an interrupt there, before each later chunk of a streamed reply and before each
+tool call. A host can't act "before" a point, so:
+
+- a steer before model call `n` is a `sends` item `after: {node, model_call: n-1}` (or
+  `{tool_call: i}` for a call of reply `n-1`);
+- an interrupt before tool call `i` is `after: {tool_call: i-1}`, or `after: {model_call: n}`
+  for the first call of reply `n`. This holds only when call `i` isn't in the same group as call
+  `i-1`: the calls of `concurrency_safe` stub tools run together, so a group's later calls have
+  already started when an earlier one returns, and they finish;
+- an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.
+
+TS checks for an interrupt before each later **text** chunk, before each tool call's check,
+before each group, and before failing at a call whose check failed. So a case that cuts
+mid-stream needs a text chunk after its point (an interrupt before a `tool_call`, `usage` or
+`finish` chunk keeps the reply whole, and its calls are skipped with brackets).
+
+An interrupted AGENT records the cut reply in its `model_call` step (finish `interrupted`; a cut
+stream ends with a final `""` chunk), writes each skipped tool call as a `skipped` result
+(ToolCallFinished error `interrupted`) and each pending call as an `interrupted` closer, then
+writes `interrupted {by}` and outputs null. An `Optional(...)` output succeeds null; any other
+output fails `agent.interrupted`.
 
 ## Forms
 
@@ -536,7 +546,8 @@ snake_case names, at every depth of yian's own structures (never inside a value 
 produced, such as an output or an answer); fields that are null are left out at the top level
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
-The `started_at` of `ModelCallStarted` is left out (a time). A model call event and an AGENT's
+The `started_at` of `ModelCallStarted` is left out (a time), and so is a `NodeSucceeded`'s
+`interrupted` when it is false (TS-only; Python's events have no such field). A model call event and an AGENT's
 stream chunk name the step their record becomes by `n` (with `node_id`), and a chunk's `index`
 counts that step's chunks from 0.
 
@@ -739,7 +750,7 @@ A case's group is its directory under `cases/`.
 | `run-core` | run | START and END, bindings, outputs, failures, events, stops |
 | `run-case`, `run-loop`, `run-map-call` | run | control flow and growth |
 | `run-leaves` | run | TOOL (retries, call ids), CODE, HUMAN_INPUT, WAIT |
-| `run-agent` | run | AGENT with scripted models: plain, structured, tool loop, steering, interrupts, retries |
+| `run-agent` | run | AGENT with scripted models: plain, structured, tool loop, steers, interrupts, retries |
 | `run-memory` | run | episodic, reflective and profile memories |
 | `resume` | resume | recovery, TOOL attempts across a resume, crashed-attempt counts, re-supplied keys |
 | `backward` | backward | explicit backward feedback and learning |
@@ -768,7 +779,7 @@ counts a failing `pending` case as expected, fails a case whose kind it doesn't 
 (in-flight nodes within `num_workers`, nothing but backward and memory records after the terminal
 outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only). `--crash-sweep`
 also cuts each serial `run` case that expects `output`, isn't `pending`, and has no
-`host.steering`, `host.memory` or `host.stop` after every record but the last, resumes it (passing
+`host.sends`, `host.memory` or `host.stop` after every record but the last, resumes it (passing
 the run's `context`, `llm_config.api_key` and `llm_config.headers` again), and checks the
 invariants, plus the output and node outcomes when the case has no `host.human` or `host.jitter`
 and its tool scripts only return. What a run took from the host scripts after the cut (tool

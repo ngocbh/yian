@@ -228,7 +228,8 @@ Changed (TS yian): a chunk names the step its call becomes in place of `exchange
 `node_id` + `n` is the `model_call` step's id, and `index` counts the step's chunks from 0.
 Each attempt is its own step, so a retried attempt streams under the next `n`.
 
-A [steering](api.md#steering) interrupt that cuts a streamed request still ends it
+An interrupt (Python yian: [steering](api.md#steering-python-yian); TS yian:
+[`interrupt`](api.md#interrupting-an-agent-ts-yian)) that cuts a streamed request still ends it
 with the `final=True` chunk; its `ModelCallFinished` has no `error` and carries
 the usage received so far. Each tool call the interrupt skipped is reported as a
 `ToolCallStarted` followed by `ToolCallFinished(error="interrupted")`.
@@ -291,7 +292,7 @@ after the wake reads the fresh recall. See
 | `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages; an AGENT with `tools:` or `skills:` runs the tool loop, and one without them makes one model call. A name may be a host-filled tool group, which expands to its tools. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` or `Optional(str)` remains free text. |
-| `steer_inbox: ${input.<name>}` plus host `send` and `steering=` | Before each model call, reads everything queued in that `Inbox(...)` input and sends it with the request as one user message per read (a `Message` event as itself); the read is a recorded `steer` step. A steer queued at the final answer gets one more model call, within `max_tool_iterations`; `steer_inbox: {from, render}` renders each event over `${event}` into one user message per read. A host interrupt stops the node (a streamed reply is cut); the node succeeds with its text so far. See [steering a running agent](syntax.md#steering-a-running-agent-steer_inbox). Python yian: `steerable: true`, whose host inbox's `drain` gives the steers. |
+| `steer_inbox: ${input.<name>}` plus host `send` and `interrupt(run, inbox)` | Before each model call, reads everything queued in that `Inbox(...)` input and sends it with the request as one user message per read (a `Message` event as itself); the read is a recorded `steer` step. A steer queued at the final answer gets one more model call, within `max_tool_iterations`; `steer_inbox: {from, render}` renders each event over `${event}` into one user message per read. A host `interrupt` stops the node (a streamed reply is cut); its output is null, which an `Optional(...)` output takes and any other fails `agent.interrupted`. See [steering a running agent](syntax.md#steering-a-running-agent-steer_inbox). Python yian: `steerable: true`, whose host inbox's `drain` gives the steers. |
 | `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
 The system instruction is the rendered `system_prompt:` when the node has one,

@@ -1203,13 +1203,19 @@ export class NodeSteps {
   readonly durable: boolean;
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
+  /** Reads the node's calls as the run state holds them now; `null` outside a run. */
+  readonly #current: (() => readonly CallView[]) | null;
 
   /**
    * Check the field types and that the current start is counted; `prior` and `calls` are
    * copied, each call frozen.
    *
+   * @param currentCalls Reads the node's calls as the run state holds them now (answers and
+   *   closes since the evaluation began); the engine passes it, and `currentCalls()` gives `calls`
+   *   without it.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, `record` isn't a function, or `calls` isn't an array.
+   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls` isn't a
+   *   function or `null`.
    * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
    *   integer.
    */
@@ -1220,6 +1226,7 @@ export class NodeSteps {
     calls: readonly CallView[] = [],
     maxEventBytes: number = MAX_EVENT_BYTES,
     durable: boolean = true,
+    currentCalls: (() => readonly CallView[]) | null = null,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
@@ -1228,6 +1235,7 @@ export class NodeSteps {
     }
     if (typeof record !== "function") throw new TypeError("record must be callable");
     if (!Array.isArray(calls)) throw new TypeError("calls must be an array");
+    if (currentCalls !== null && typeof currentCalls !== "function") throw new TypeError("currentCalls must be callable or null");
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new RangeError("maxEventBytes must be a positive int");
     }
@@ -1237,6 +1245,7 @@ export class NodeSteps {
     this.maxEventBytes = maxEventBytes;
     this.durable = durable === true;
     this.#next = prior.length + 1;
+    this.#current = currentCalls;
     this.record = (step, options) => {
       const n = record(step, options);
       this.#next = n + 1;
@@ -1252,6 +1261,27 @@ export class NodeSteps {
    */
   get next(): number {
     return this.#next;
+  }
+
+  /**
+   * The node's calls as the run state holds them now: answers and closes since the evaluation
+   * began, each a frozen copy. `calls` stays the view at the evaluation's start; outside a run
+   * this is `calls`.
+   */
+  currentCalls(): readonly CallView[] {
+    if (this.#current === null) return this.calls;
+    return Object.freeze(this.#current().map((call) => Object.freeze({ ...call })));
+  }
+}
+
+/** Whether a value of type `typ` may be null (`Optional(...)`, or a type that admits null). */
+export function acceptsNull(typ: Type): boolean {
+  try {
+    buildValueAs(typ, null);
+    return true;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return false;
+    throw error;
   }
 }
 

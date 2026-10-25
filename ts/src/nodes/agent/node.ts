@@ -63,19 +63,20 @@ import {
   Node,
   type NodeCaps,
   NodeKind,
-  type Output,
+  Output,
   type Pending,
   type SteerInbox,
 } from "../base.ts";
 import { applyDefaults, BindingError, copyValue, type ReservedBinder, resolveSource, sourceOrigin } from "../binding.ts";
 import {
+  acceptsNull,
   Binding,
   type CallView,
   isExactly,
   iterOriginCarrier,
   type NodeSteps,
   type OriginMapper,
-  type OutputContract,
+  outputContractType,
   Parameter,
   rewriteOriginCarrier,
   ValueContract,
@@ -84,6 +85,7 @@ import {
 } from "../contracts.ts";
 import { backwardAgent } from "./backward.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
+import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
 import {
   type CallTimeLLM,
@@ -124,16 +126,6 @@ const CONFIG_STEP_KIND = "llm_config";
 function openSteerInbox(caps: NodeCaps, inbox: string): SteerInbox {
   if (caps.openSteerInbox === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no steer inbox"));
   return caps.openSteerInbox(inbox);
-}
-
-/** Whether an AGENT output contract is plain text: none, or an untagged `str`, nullable or not (`Optional(str)`). */
-export function isTextOutput(contract: OutputContract | null): boolean {
-  return (
-    contract === null ||
-    (isExactly(contract, ValueContract) &&
-      contract.type.kind === ValueKind.STRING &&
-      (contract.type.tags === undefined || contract.type.tags.size === 0))
-  );
 }
 
 /** Whether `value` is a valid `max_tool_iterations`: a positive int, or `-1n` for no cap. */
@@ -344,6 +336,11 @@ function captureValue<T>(make: () => T): T {
   } catch (error) {
     throw error instanceof CapabilityFault ? error : new CapabilityFault(error);
   }
+}
+
+/** An AGENT a host interrupted whose declared output doesn't allow null; its failure is `agent.interrupted`. */
+export class AgentInterruptedError extends Error {
+  override name = "AgentInterruptedError";
 }
 
 /**
@@ -688,22 +685,6 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Reject an agent with a steer inbox whose output contract is not plain text (none, `str`, or
-   * `Optional(str)`). The contract is assigned after construction, so this is checked here as well
-   * as at YAML load.
-   *
-   * @throws RangeError when the agent reads a steer inbox and its output isn't an untagged `str`
-   *   or `Optional(str)`.
-   */
-  override validateExecutionSetup(): void {
-    super.validateExecutionSetup();
-    if (this.steerInbox && !isTextOutput(this.outputContract)) {
-      // An interrupted node returns its text so far; a structured value can't be partial.
-      throw new RangeError(`AGENT node ${reprText(this.id)}: a steer inbox needs \`str\` output`);
-    }
-  }
-
-  /**
    * Check the prompt and system prompt templates.
    *
    * @param options.path The static node path to name in the error instead of the node's id, used
@@ -891,7 +872,6 @@ export class AgentNode extends Node {
       emitEvent: caps.emitEvent,
       baseSystemPrompt: options.baseSystemPrompt,
       skills: options.skills,
-      steering: caps.steering,
       steerInbox: options.steerInbox,
       renderSteer: this.steerRenderer() ?? undefined,
       models: options.models,
@@ -923,15 +903,17 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Classify the tool-iteration cap, an exhausted structured reply and the agent's own model
-   * failures; defer the rest.
+   * Classify an interrupt the output can't take, the tool-iteration cap, an exhausted structured
+   * reply and the agent's own model failures; defer the rest.
    *
-   * The cap is `agent.max_tool_iterations` and a structured reply still invalid once `retries:`
-   * are spent is `agent.output_invalid`. An error the agent's own model build or model call
+   * An interrupted agent whose output doesn't allow null is `agent.interrupted`, the cap is
+   * `agent.max_tool_iterations` and a structured reply still invalid once `retries:` are spent is
+   * `agent.output_invalid`. An error the agent's own model build or model call
    * marked takes `modelFailureCode`'s code (`provider.auth` for refused credentials, a
    * `provider.*` code by provider error kind, else `node.execute`).
    */
   override exceptionCode(error: unknown): FailureCode {
+    if (error instanceof AgentInterruptedError) return "agent.interrupted";
     if (error instanceof ToolIterationLimitError) return "agent.max_tool_iterations";
     if (error instanceof OutputInvalidError) return "agent.output_invalid";
     return modelFailureCode(error) ?? super.exceptionCode(error);
@@ -955,9 +937,10 @@ export class AgentNode extends Node {
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param caps The node's signal, checked before recall and the model call, its scheduler and
    *   random draw for model-retry waits, and the capabilities its traits ask for: memory context,
-   *   tools, live sinks, skills, the steer inbox and the host's interrupt signal, model access and
+   *   tools, live sinks, skills, the steer inbox (with its interrupt signal), model access and
    *   steps.
-   * @returns The model's answer, or Pending when a tool call waits for a later answer.
+   * @returns The model's answer, or Pending when a tool call waits for a later answer; null after a
+   *   host interrupt when the declared output allows it (`Optional(...)`).
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError when the prompt or system prompt names a missing value or renders a
    *   null, a spliced value isn't a message (a `Message` or a `{role, text}` record) or holds a
@@ -967,6 +950,8 @@ export class AgentNode extends Node {
    * @throws CapabilityFault when memory access fails, the bound config differs from
    *   the one an earlier start recorded, or a recorded model call doesn't match the rebuilt
    *   request; the evaluator rethrows its original host error.
+   * @throws AgentInterruptedError after a host interrupt when the declared output doesn't allow
+   *   null (no `output:` means `str`).
    * @throws The signal's reason once the host stopped the node.
    */
   override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output | Pending> {
@@ -993,12 +978,22 @@ export class AgentNode extends Node {
       models,
       steerInbox,
     });
+    let result: Output | Pending | Interrupted;
     try {
-      return await runAgent(ctx);
+      result = await runAgent(ctx);
     } catch (error) {
       // Providers may echo any credential the call sent; the failure record must not carry it.
       throw scrubCallCredentials(error, config, { env, sent: sentCredentials(ctx) });
     }
+    if (!(result instanceof Interrupted)) return result;
+    // An interrupted reply has no answer: null, which only an output that allows it takes. No
+    // `output:` means `str`.
+    const typ = outputContractType(this.outputContract);
+    if (typ !== null && acceptsNull(typ)) return new Output(null);
+    throw new AgentInterruptedError(
+      `agent node ${reprText(this.id)} was interrupted and its output doesn't allow null; ` +
+        "declare output: Optional(...) to route on an interrupt",
+    );
   }
 
   /**

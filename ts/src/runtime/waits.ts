@@ -14,6 +14,7 @@ import { StartNode } from "../nodes/start/node.ts";
 import {
   formatRecordTime,
   InboxClosedRecord,
+  InterruptedRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -87,7 +88,7 @@ export interface WaitingNode {
   readonly seq: number;
   /** The calls it waits on. */
   readonly callIds: readonly string[];
-  /** Its steer inbox; always null until agents wait on one. */
+  /** The steer inbox it opened, which an interrupt of that inbox reaches; `null` for none. */
   readonly steerInbox: string | null;
 }
 
@@ -110,7 +111,7 @@ export class WaitsState {
   readonly calls = new Map<string, Call>();
   /** The inboxes, created on their first send, take wait or close. */
   readonly inboxes = new Map<string, InboxState>();
-  /** Pending interrupts by node; declared so the serialized form is stable before anything sets it. */
+  /** Pending interrupts by node: the seq of the `interrupted` record each named node hasn't honored yet. */
   readonly interrupts = new Map<string, number>();
   /**
    * The wire kind of the last frontier record (start, wake, wait, resume, stop, run_waiting,
@@ -123,6 +124,10 @@ export class WaitsState {
   readonly _lastWoken = new Map<string, number>();
   /** @internal Each in-flight node's take commit that no success has accepted yet. */
   readonly _pendingTakes = new Map<string, { readonly seq: number } & TakeCommit>();
+  /** @internal Each unsettled node's latest `model_call` step seq: the calls registered after it are its latest reply's. */
+  readonly _replies = new Map<string, number>();
+  /** @internal The unsettled nodes that wrote an `interrupted` step, honoring an interrupt; their success says `interrupted`. */
+  readonly _honored = new Set<string>();
 
   /** Return the plain JSON form, each map as its `[key, value]` entries in order (`fromJSON` reads it back). */
   toJSON(): WaitsJson {
@@ -135,6 +140,8 @@ export class WaitsState {
       inputsCommitted: this._inputsCommitted,
       lastWoken: [...this._lastWoken],
       pendingTakes: [...this._pendingTakes],
+      replies: [...this._replies],
+      honored: [...this._honored],
     };
   }
 
@@ -149,7 +156,7 @@ export class WaitsState {
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {
       throw new RangeError(
-        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken and pendingTakes",
+        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies and honored",
       );
     }
     const w = new WaitsState();
@@ -165,6 +172,12 @@ export class WaitsState {
     w._inputsCommitted = json.inputsCommitted;
     for (const [node, seq] of entries(json, "lastWoken")) w._lastWoken.set(node, int(seq, `lastWoken ${reprText(node)}`));
     for (const [node, take] of entries(json, "pendingTakes")) w._pendingTakes.set(node, takeFromJson(take, `pendingTakes ${reprText(node)}`));
+    for (const [node, seq] of entries(json, "replies")) w._replies.set(node, int(seq, `replies ${reprText(node)}`));
+    const honored = json.honored;
+    if (!Array.isArray(honored) || !honored.every((node) => typeof node === "string")) {
+      throw new RangeError("waits JSON honored must be an array of node ids");
+    }
+    for (const node of honored) w._honored.add(node);
     return w;
   }
 }
@@ -179,6 +192,8 @@ const WAITS_JSON_KEYS = [
   "inputsCommitted",
   "lastWoken",
   "pendingTakes",
+  "replies",
+  "honored",
 ] as const;
 
 /** The call states, for checking a stored call. */
@@ -302,6 +317,8 @@ export interface WaitsJson {
   readonly inputsCommitted: boolean;
   readonly lastWoken: readonly (readonly [string, number])[];
   readonly pendingTakes: readonly (readonly [string, { readonly seq: number } & TakeCommit])[];
+  readonly replies: readonly (readonly [string, number])[];
+  readonly honored: readonly string[];
 }
 
 /** The prefix of a send's pool key: the START's id and a dot, then the inbox's name. */
@@ -350,6 +367,7 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     for (const take of freed) reoffer(w, take.inbox);
     for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed");
   } else if (record instanceof InboxClosedRecord) applyClose(w, record.inbox);
+  else if (record instanceof InterruptedRecord) applyInterrupted(w, seq, record);
   else if (record instanceof RunCancelledRecord) closeOpenCalls(w, "cancelled");
   else if (record instanceof RunFailedRecord) closeOpenCalls(w, "failed");
   const frontier = FRONTIER_KINDS.get(record.constructor);
@@ -445,15 +463,23 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
       closedInbox: false,
       closedReason: null,
     });
+    // The interrupt closed the node's calls when it landed; a tool whose group was already
+    // running may pend after it, and its call is closed at once.
+    if (w.interrupts.has(record.nodeId)) close(w.calls.get(callId), "interrupted");
+  } else if (step["kind"] === "model_call") {
+    w._replies.set(record.nodeId, seq);
   } else if (step["kind"] === "tool_result") {
     const key = typeof toolCallId === "string" ? toolCallId : callId;
     const closed = step["closed"];
-    // An agent's closer for a call a record closed is its result; the call stays closed. Any
-    // other closer, or an agent result no pending step registered, answers nothing.
+    // An agent's closer for a call a record closed is its result; the call stays closed. Only a
+    // call of the node's latest reply takes it, as the reducer checks: provider ids repeat across
+    // replies. Any other closer, or an agent result no pending step registered, answers nothing.
     if (typeof closed === "string") {
+      const reply = w._replies.get(record.nodeId);
       for (const call of w.calls.values()) {
+        const latest = call.pendingSeq !== null && (reply === undefined || call.pendingSeq > reply);
         const closes = call.state === "closed" && call.closedReason === closed && call.resultSeq === null;
-        if (call.nodeId === record.nodeId && call.resultKey === key && closes) {
+        if (call.nodeId === record.nodeId && call.resultKey === key && latest && closes) {
           call.resultSeq = seq;
           return;
         }
@@ -470,6 +496,17 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
   } else if (step["kind"] === "steer") {
     const inbox = typeof step["inbox"] === "string" ? w.inboxes.get(step["inbox"]) : undefined;
     if (inbox !== undefined) for (const seq of seqList(step["from"]) ?? []) remove(inbox.unread, seq);
+  } else if (step["kind"] === "interrupted") {
+    w.interrupts.delete(record.nodeId);
+    w._honored.add(record.nodeId);
+  }
+}
+
+/** Apply `interrupted`: each named node holds a pending interrupt, and its open calls close `interrupted`. */
+function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
+  for (const nodeId of record.nodes) {
+    w.interrupts.set(nodeId, seq);
+    for (const call of nodeCalls(w, nodeId)) close(call, "interrupted");
   }
 }
 
@@ -562,6 +599,8 @@ function settle(w: WaitsState, nodeId: string): void {
   w._pendingTakes.delete(nodeId);
   if (take !== undefined) reoffer(w, take.inbox);
   w.interrupts.delete(nodeId);
+  w._replies.delete(nodeId);
+  w._honored.delete(nodeId);
 }
 
 /** Return `nodeId`'s registered calls, in registration order. */

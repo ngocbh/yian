@@ -38,10 +38,10 @@ import {
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
 import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/memory.ts";
-import { CapabilityFault, type Steering } from "../../src/nodes/base.ts";
+import { CapabilityFault } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
-import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { advance, runFlow } from "../../src/run.ts";
+import { decodeRecord, InterruptedRecord, NodeStepRecord, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
+import { advance, interrupt, runFlow } from "../../src/run.ts";
 import { virtualScheduler, withWarnings } from "../../src/platform.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
@@ -69,7 +69,7 @@ ${steerInbox ? "input:\n  notes: !Inbox(str)\n" : ""}nodes:
     kind: agent
     tools: [${tools.join(", ")}]
 ${steerInbox ? "    steer_inbox: ${input.notes}\n" : ""}    prompt: hi
-    output: str
+    output: ${steerInbox ? "Optional(str)" : "str"}
 output: \${writer.output}
 `;
 }
@@ -401,15 +401,6 @@ test("a failed call writes what arrived and the usage reported before it failed"
   });
 });
 
-/** A host inbox with no steers whose `interrupt()` interrupts every node. */
-function interruptible(): { steering: Steering; interrupt: () => void } {
-  const controller = new AbortController();
-  return {
-    steering: { interruptSignal: () => controller.signal },
-    interrupt: () => controller.abort(new Error("interrupted")),
-  };
-}
-
 /**
  * Return `model` with `hook(k)` run after the `k`-th event of each stream is read (from 1), and
  * after the last as `hook(Infinity)` when the stream ends.
@@ -433,15 +424,18 @@ function hooked(model: ChatModel, hook: (k: number) => void): ChatModel {
   };
 }
 
-test("a host interrupt that cuts a reply writes it with finish interrupted", async () => {
-  const { steering, interrupt } = interruptible();
+/** The seq of the log's `interrupted` record. */
+const interruptSeq = (log: string) => readRunLog(log).find(({ record }) => record instanceof InterruptedRecord)!.seq;
+
+test("a host interrupt that cuts a reply writes it with finish interrupted, then the honor step", async () => {
+  const log = runLog();
   const reply = [new TextDelta(0, "hel"), new TextDelta(0, "lo"), new Finish({ reason: "stop" })];
   const model = hooked(new ScriptedModel([reply], CONFIG), (k) => {
-    if (k === 1) interrupt();
+    if (k === 1) void interrupt(log, "notes");
   });
-  const { log, result } = await run(model, { steering, flow: flowText([], true) });
+  const { result } = await run(model, { log, flow: flowText([], true) });
   expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe("hel");
+  expect(result.output).toBeNull();
   expect(steps(log)).toEqual([
     expect.objectContaining({
       n: 1,
@@ -449,23 +443,25 @@ test("a host interrupt that cuts a reply writes it with finish interrupted", asy
       finish: "interrupted",
       output: new Message({ role: "assistant", parts: [new TextPart("hel")] }).toJSON(),
     }),
+    { n: 2, kind: "interrupted", by: BigInt(interruptSeq(log)) },
   ]);
 });
 
 test("calls a host interrupt skips each write a skipped result", async () => {
-  const { steering, interrupt } = interruptible();
+  const log = runLog();
   const ran: string[] = [];
   const model = hooked(new ScriptedModel([calls(["call-a", "save", "a"], ["call-b", "save", "b"])], CONFIG), (k) => {
-    if (k === Infinity) interrupt();
+    if (k === Infinity) void interrupt(log, "notes");
   });
   const tools = { save: topicTool("save", { log: ran }) };
-  const { log, result } = await run(model, { steering, tools, flow: flowText(["save"], true) });
+  const { result } = await run(model, { log, tools, flow: flowText(["save"], true) });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(ran).toEqual([]);
   const skipped = { kind: "tool_result", started_at: null, output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" };
   expect(steps(log).slice(1)).toEqual([
     { n: 2, call_id: "call-a", ...skipped },
     { n: 3, call_id: "call-b", ...skipped },
+    { n: 4, kind: "interrupted", by: BigInt(interruptSeq(log)) },
   ]);
 });
 

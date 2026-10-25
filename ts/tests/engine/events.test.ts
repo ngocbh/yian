@@ -103,11 +103,15 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   },
   {
     event: new NodeSucceeded({ nodeId: "n", output: "hi" }),
-    data: { node_id: "n", output: "hi", commit_as: null },
+    data: { node_id: "n", output: "hi", commit_as: null, interrupted: false },
   },
   {
     event: new NodeSucceeded({ nodeId: "n", output: { a: [1, null] }, commitAs: "t" }),
-    data: { node_id: "n", output: { a: [1, null] }, commit_as: "t" },
+    data: { node_id: "n", output: { a: [1, null] }, commit_as: "t", interrupted: false },
+  },
+  {
+    event: new NodeSucceeded({ nodeId: "n", output: null, interrupted: true }),
+    data: { node_id: "n", output: null, commit_as: null, interrupted: true },
   },
   {
     event: new NodeRouted({ nodeId: "c", handle: "#else" }),
@@ -697,15 +701,17 @@ describe("events schema", () => {
     }
   });
 
-  test("every object form requires each key it lists", () => {
+  test("every object form requires each key it lists, but NodeSucceeded's interrupted, which Python doesn't send", () => {
     const trace = (def("failure").properties as Record<string, Schema>).trace!;
     const retryError = (def("ModelCallRetried").properties as Record<string, Schema>).error!;
     const defs = Object.values(SCHEMA.$defs as Record<string, Schema>);
     const objects = [...defs.filter((schema) => "properties" in schema), trace.items as Schema, retryError];
     expect(objects).toHaveLength(EVENT_CLASS_NAMES.length + 5);
+    const succeeded = def("NodeSucceeded");
     for (const schema of objects) {
       expect(schema.type).toBe("object");
-      expect(schema.required).toEqual(Object.keys(schema.properties as Schema));
+      const keys = Object.keys(schema.properties as Schema);
+      expect(schema.required).toEqual(schema === succeeded ? keys.filter((key) => key !== "interrupted") : keys);
     }
   });
 

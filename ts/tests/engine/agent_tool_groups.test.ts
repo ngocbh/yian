@@ -43,7 +43,8 @@ import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
 import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
-import type { Output, Steering } from "../../src/nodes/base.ts";
+import type { Output, SteerInbox } from "../../src/nodes/base.ts";
+import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool } from "../../src/skills/tool.ts";
@@ -53,7 +54,7 @@ import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_to
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
-import { aborted, engine, graph, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { aborted, engine, graph, interruptible, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -172,7 +173,7 @@ function agent(
     skills?: readonly Skill[];
     nodeId?: string;
     onEvent?: (event: unknown) => void;
-    steering?: Steering;
+    steerInbox?: SteerInbox;
     maxToolIterations?: number;
   } = {},
 ) {
@@ -197,7 +198,7 @@ function agent(
     },
     baseSystemPrompt: DEFAULT_SYSTEM,
     skills: options.skills ?? [],
-    steering: options.steering,
+    steerInbox: options.steerInbox,
     models: serving(model),
     sent: () => [],
   };
@@ -252,14 +253,7 @@ function toolResults(model: ScriptedModel, index: number): ToolResultPart[] {
   );
 }
 
-/** A host inbox with no steers whose `interrupt()` interrupts the node. */
-function interruptible(): { steering: Steering; interrupt: () => void } {
-  const controller = new AbortController();
-  return {
-    steering: { interruptSignal: () => controller.signal },
-    interrupt: () => controller.abort(new Error("interrupted")),
-  };
-}
+
 
 /** A tool result part for call `c<index>`. */
 function result(index: number, name: string, content: string, isError = false): ToolResultPart {
@@ -736,10 +730,10 @@ test("an interrupt while a safe group runs lets every call of it finish and skip
   const log: string[] = [];
   const a = gated("a", log);
   const b = gated("b", log);
-  const { steering, interrupt } = interruptible();
+  const { steerInbox, interrupt } = interruptible();
   const model = new ScriptedModel([callsReply(["a"], ["b"], ["c"]), textReply("done")], CONFIG);
   const run = agent(model, new ToolSet({ a: a.tool, b: b.tool, c: instant("c", log, false) }), ["a", "b", "c"], {
-    steering,
+    steerInbox,
   });
 
   await a.entered;
@@ -750,7 +744,7 @@ test("an interrupt while a safe group runs lets every call of it finish and skip
   a.resolve("a result");
   b.resolve("b result");
 
-  expect(((await run.running) as Output).value).toBe("");
+  expect(await run.running).toEqual(new Interrupted(7));
   expect(log).toEqual(["a start", "b start", "a end", "b end"]);
   expect(model.requests).toHaveLength(1);
   expect(toolEvents(run.events)).toEqual([
@@ -774,17 +768,17 @@ test("an interrupt while a safe group runs lets every call of it finish and skip
 test("an interrupt seen at a later call's check skips it and the rest", async () => {
   const log: string[] = [];
   const a = gated("a", log, { safe: false });
-  const { steering, interrupt } = interruptible();
+  const { steerInbox, interrupt } = interruptible();
   const model = new ScriptedModel([callsReply(["a"], ["b"], ["c"]), textReply("done")], CONFIG);
   const run = agent(model, new ToolSet({ a: a.tool, b: instant("b", log), c: instant("c", log) }), ["a", "b", "c"], {
-    steering,
+    steerInbox,
   });
 
   await a.entered;
   interrupt();
   a.resolve("a result");
 
-  expect(((await run.running) as Output).value).toBe("");
+  expect(await run.running).toEqual(new Interrupted(7));
   expect(log).toEqual(["a start", "a end"]);
   expect(toolEvents(run.events)).toEqual([
     "started a",
@@ -801,15 +795,15 @@ test("an interrupt inside a group before a failed check commits the group and sk
   const log: string[] = [];
   const a = gated("a", log);
   const b = gated("b", log, { parametersValidator: refusing("b", log) });
-  const { steering, interrupt } = interruptible();
+  const { steerInbox, interrupt } = interruptible();
   const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
-  const run = agent(model, new ToolSet({ a: a.tool, b: b.tool }), ["a", "b"], { steering });
+  const run = agent(model, new ToolSet({ a: a.tool, b: b.tool }), ["a", "b"], { steerInbox });
 
   await a.entered;
   interrupt();
   a.resolve("a result");
 
-  expect(((await run.running) as Output).value).toBe("");
+  expect(await run.running).toEqual(new Interrupted(7));
   expect(log).toEqual(["b validate", "a start", "a end"]);
   expect(toolEvents(run.events)).toEqual(["started a", "finished a a result", "started b", "finished b interrupted"]);
   expect(await learned(run)).toEqual([called("a"), called("b"), returned("a", "a result")]);
@@ -824,7 +818,7 @@ test("a run stop inside a group before a failed check rejects with the stop, and
   const model = new ScriptedModel([callsReply(["a"], ["b"]), textReply("done")], CONFIG);
   const run = agent(model, new ToolSet({ a: a.tool, b: b.tool }), ["a", "b"], {
     signal: stop.signal,
-    steering: interruptible().steering,
+    steerInbox: interruptible().steerInbox,
   });
 
   await a.entered;

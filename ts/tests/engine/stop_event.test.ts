@@ -19,7 +19,7 @@
  * TS-only, the engine's stop (serial and pooled): a host abort records one `RunStopped` (`signal`)
  * listing the in-flight nodes in dispatch order before the drain; a synchronous `onEvent` throw, a
  * rejected `onEvent` promise, a throwing `onStream` the node catches, a rejected `onStream` promise,
- * a throwing steering method and a rejected steering `drain` promise record a `callback` stop; the
+ * record a `callback` stop; the
  * message is an `Error`'s message or a non-`Error` reason's text; an already-aborted signal rejects
  * before the first start with the log unchanged; nothing is recorded after a terminal result, after
  * an earlier stop in the segment (also one a previous engine recorded over the same state), for a
@@ -35,9 +35,8 @@
  * TS-only, steps and events after a stop (serial and pooled): after a host stop, a settled step
  * (`{ settled: true }`) is still appended after the `RunStopped` and a `ToolCallFinished` still
  * published; another step throws the node signal's reason and appends nothing, and another event or
- * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended, and a steering
- * it keeps throws a `CapabilityFault` without calling the inbox, during a later node and after
- * `run()` resolved, so the run neither stops nor aborts. Pooled only:
+ * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended, during a
+ * later node and after `run()` resolved, so the run neither stops nor aborts. Pooled only:
  * after a sibling's host fault, the settled step and the `ToolCallFinished` are still kept; after a
  * terminal `RunFailed`, they are refused.
  *
@@ -419,25 +418,6 @@ describe.each(MODES)("callback stops (%s)", (_, numWorkers) => {
     expect(logged(built, NodeSucceededRecord, "work")).toBe(false);
   });
 
-  test("a throwing steering method records a callback stop", async () => {
-    const error = new Error("inbox failed");
-    const node = new ScriptNode("work", (caps) => {
-      try {
-        caps.steering!.interruptSignal("work");
-      } catch {}
-      return "done";
-    });
-    const steering = {
-      interruptSignal: (): AbortSignal => {
-        throw error;
-      },
-    };
-    const built = fanEngine([node], { numWorkers, steering });
-
-    expect(await rejected(built.run())).toBe(error);
-    expect(stops(built)).toEqual([new RunStoppedRecord("callback", "inbox failed", ["work"])]);
-  });
-
   test("a rejected onStream promise records a callback stop", async () => {
     const error = new Error("stream callback rejected");
     const node = new ScriptNode("work", (caps) => {
@@ -783,51 +763,6 @@ describe.each(MODES)("steps and events after a stop (%s)", (_, numWorkers) => {
     expect(seen.filter((item) => item instanceof ToolCallFinished || item instanceof StreamChunk)).toEqual([]);
   });
 
-  test("a kept steering refuses calls once its evaluation ended, without reaching the inbox", async () => {
-    const calls: string[] = [];
-    const steering = {
-      interruptSignal: (): AbortSignal => {
-        calls.push("interruptSignal");
-        throw new Error("inbox failed");
-      },
-    };
-    let keptCaps!: NodeCaps;
-    const keeper = new ScriptNode("keeper", (caps) => {
-      keptCaps = caps;
-      return "kept";
-    });
-    const refusals: unknown[] = [];
-    const refuse = (): void => {
-      for (const call of [() => keptCaps.steering!.interruptSignal("keeper")]) {
-        try {
-          call();
-        } catch (error) {
-          refusals.push(error);
-        }
-      }
-    };
-    const later = new FuncNode("later", () => {
-      refuse();
-      return "done";
-    });
-    const flow = graph([keeper, later], [
-      [START_ID, "keeper"],
-      ["keeper", "later"],
-      ["later", END_ID],
-    ]);
-    const built = engine(flow, { numWorkers, steering });
-
-    expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
-    refuse();
-    expect(refusals.length).toBe(2);
-    for (const refusal of refusals) {
-      expect(refusal).toBeInstanceOf(CapabilityFault);
-      expect((refusal as CapabilityFault).original).toEqual(new Error("steering capability is closed"));
-    }
-    expect(calls).toEqual([]);
-    expect(stops(built)).toEqual([]);
-    expect(built.signal.aborted).toBe(false);
-  });
 });
 
 test("a settled step and a ToolCallFinished are refused after a terminal result", async () => {

@@ -66,7 +66,8 @@
             "provider.context_length",
             "provider.refused",
             "condition.evaluate",
-            "tool.timeout"
+            "tool.timeout",
+            "agent.interrupted"
           ]
         },
         "message": {"type": "string", "description": "Human-readable detail; it may be empty."},
@@ -140,7 +141,8 @@
       "properties": {
         "node_id": {"type": "string"},
         "output": {"$ref": "#/$defs/value"},
-        "commit_as": {"type": ["string", "null"], "description": "The target the value was committed under instead of node_id; null when it was committed under node_id."}
+        "commit_as": {"type": ["string", "null"], "description": "The target the value was committed under instead of node_id; null when it was committed under node_id."},
+        "interrupted": {"type": "boolean", "description": "TS yian, which always sends it (Python yian doesn't): true only for an AGENT that honored a host interrupt and succeeded with null because its output is Optional(...); false when an interrupt landed after the reply was whole. Read from the recorded interrupted step, so a resumed run says the same."}
       }
     },
     "NodeRouted": {
@@ -248,7 +250,7 @@
           "description": "The provider's own token count, or null when it reported none; a cut stream reports the usage received so far.",
           "oneOf": [{"$ref": "#/$defs/token_usage"}, {"type": "null"}]
         },
-        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or a steering interrupt cut its stream."}
+        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or an interrupt cut its stream."}
       }
     },
     "ToolCallStarted": {
@@ -275,7 +277,7 @@
         "tool_call_id": {"type": "string", "description": "The provider's id for the call."},
         "name": {"type": "string", "description": "The tool's name."},
         "result": {"type": ["string", "null"], "description": "The tool's result text; null when it raised or was skipped."},
-        "error": {"type": ["string", "null"], "description": "The error's type name when the tool raised, or \"interrupted\" for a call a steering interrupt skipped (the tool did not run); null when it returned."}
+        "error": {"type": ["string", "null"], "description": "The error's type name when the tool raised, or \"interrupted\" for a call an interrupt skipped (the tool did not run); null when it returned."}
       }
     },
     "ReplayDegraded": {

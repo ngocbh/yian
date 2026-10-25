@@ -448,7 +448,6 @@ describe("evalNode checks its arguments", () => {
     ["steer_inbox", { steerInbox: {} }, new TypeError("steer_inbox must be callable or null")],
     ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
     ["signal", { signal: new AbortController() }, new TypeError("signal must be an AbortSignal or null")],
-    ["steering", { steering: { drain: () => [] } }, new TypeError("steering must provide interruptSignal(nodeId), or be null")],
     [
       "models",
       { models: { env: NO_ENV } },
@@ -469,7 +468,6 @@ describe("evalNode checks its arguments", () => {
       tools: new ToolSet(),
       steps: new NodeSteps(1, [], () => 1),
       signal: new AbortController().signal,
-      steering: { interruptSignal: () => new AbortController().signal },
       models: MODELS,
       onFault: () => {},
     };
@@ -621,7 +619,12 @@ describe("the steer inbox capability", () => {
     const calls: string[] = [];
     const open = (inbox: string): SteerInbox => {
       calls.push(`open ${inbox}`);
-      return { inbox, queued: () => (calls.push("queued"), false), read: () => (calls.push("read"), read()) };
+      return {
+        inbox,
+        queued: () => (calls.push("queued"), false),
+        read: () => (calls.push("read"), read()),
+        interrupt: new AbortController().signal, interruptedBy: () => null,
+      };
     };
     return { open, calls };
   }

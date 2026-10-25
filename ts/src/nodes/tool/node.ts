@@ -51,7 +51,7 @@ import {
   Pending,
 } from "../base.ts";
 import { BindingError } from "../binding.ts";
-import { type CallView, HostToolCall, outputContractType } from "../contracts.ts";
+import { acceptsNull, type CallView, HostToolCall, outputContractType } from "../contracts.ts";
 import { parseQuestions } from "./questions.ts";
 
 /**
@@ -169,17 +169,6 @@ function durationSeconds(value: unknown, tool: string, name: string): number | n
   const seconds = typeof value === "bigint" ? Number(value) : value;
   if (typeof seconds === "number" && Number.isSafeInteger(seconds) && seconds >= 1) return seconds;
   throw inputError(`${tool} \`${name}\` must be a duration, got ${valueRepr(value)}`);
-}
-
-/** Whether a value of type `typ` may be null. */
-function acceptsNull(typ: Type): boolean {
-  try {
-    buildValueAs(typ, null);
-    return true;
-  } catch (error) {
-    if (error instanceof TypeCheckError) return false;
-    throw error;
-  }
 }
 
 /**

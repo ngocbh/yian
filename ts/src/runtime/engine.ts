@@ -45,7 +45,6 @@ import {
   Pending,
   Route,
   type SteerInbox,
-  type Steering,
 } from "../nodes/base.ts";
 import { copyValue, type SourceResolver } from "../nodes/binding.ts";
 import { type CallView, isExactly, NodeSteps } from "../nodes/contracts.ts";
@@ -62,10 +61,17 @@ import {
   evaluationFailure,
   type MemoryContextOpener,
   requireModels,
-  requireSteering,
 } from "./eval_node.ts";
 import { LiveChannel } from "./live.ts";
-import { type NodeStepRecord, type OutcomeCarriers, recordTimeMs, type RunLog, type RunResumedRecord, type RunStopReason } from "./log.ts";
+import {
+  InterruptedRecord,
+  type NodeStepRecord,
+  type OutcomeCarriers,
+  recordTimeMs,
+  type RunLog,
+  type RunResumedRecord,
+  type RunStopReason,
+} from "./log.ts";
 import {
   callResultStep,
   commitPrepared,
@@ -78,6 +84,7 @@ import {
   prepareExpansionCommit,
   prepareComplete,
   prepareInboxClosed,
+  prepareInterrupt,
   prepareNodeFailed,
   prepareNodeRouted,
   prepareNodeStarted,
@@ -123,11 +130,6 @@ export interface FlowEngineOptions {
   tools?: ToolSet | null;
   /** The run's host-supplied skills, passed to nodes declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
-  /**
-   * The host's interrupt signal, passed to nodes declaring `readsSteerInbox`; a method that
-   * throws stops the run with that error.
-   */
-  steering?: Steering | null;
   /** The run's environment and model builder, passed to nodes declaring `needsModels`. */
   models?: ModelAccess | null;
   /** The host's stop: aborting it stops the run with its reason. */
@@ -244,17 +246,23 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
   );
 }
 
-/** One host delivery: a send, a completed call, an inbox close or a cancel. */
+/**
+ * One host delivery: a send, a completed call, an inbox close, an interrupt or a cancel. An
+ * interrupt's `running` are the in-flight readers of its inbox, which only the engine knows; none
+ * when absent.
+ */
 export type DeliveryOp =
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "close"; readonly inbox: string }
+  | { readonly kind: "interrupt"; readonly inbox: string; readonly running?: readonly string[] }
   | { readonly kind: "cancel" };
 
 /**
  * @internal Prepare `op` on `state`; the engine and the run boundary share it.
  *
- * @returns null for a no-op (an identical repeat complete, or closing a closed inbox).
+ * @returns null for a no-op (an identical repeat complete, closing a closed inbox, or an interrupt
+ *   no node reads).
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
@@ -266,8 +274,12 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
     return prepareComplete(state, callId, result);
   }
   if (kind === "close") return prepareInboxClosed(state, (op as { inbox: string }).inbox);
+  if (kind === "interrupt") {
+    const { inbox, running = [] } = op as Extract<DeliveryOp, { kind: "interrupt" }>;
+    return prepareInterrupt(state, inbox, running);
+  }
   if (kind === "cancel") return prepareRunCancelled(state);
-  throw new TypeError(`a delivery's kind must be send, complete, close or cancel, got ${reprText(String(kind))}`);
+  throw new TypeError(`a delivery's kind must be send, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
 }
 
 /** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */
@@ -296,7 +308,8 @@ function callViews(state: RunState, nodeId: string): CallView[] {
  * node settles; the appended records reach it through the log the run boundary wraps. Evidence and
  * binding capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
  * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
- * before `record` returns, with no observer, and the capability closes once the evaluation's
+ * before `record` returns, with no observer but the `CallClosed` of a call a `pending` step registers
+ * already closed (its node holds an interrupt), and the capability closes once the evaluation's
  * outcome is decided, as do the node's event sinks. Once the run stops, `record` throws the node
  * signal's reason and appends nothing, and the sinks drop what they get, except a settled step
  * (`{ settled: true }`) and a `ToolCallFinished` while the run has no terminal result: the node
@@ -330,7 +343,6 @@ export class FlowEngine {
   /** The run's tool set bound to the state's run id and the run signal. */
   readonly tools: ToolSet;
   readonly skills: ReadonlyMap<string, Skill> | null;
-  readonly steering: Steering | null;
   readonly scheduler: Scheduler | null;
   readonly random: (() => number) | null;
   readonly models: ModelAccess | null;
@@ -342,8 +354,6 @@ export class FlowEngine {
   readonly #hostSignal: AbortSignal | null;
   /** Whether the run has a durable log a host can answer pending calls in. */
   readonly #durable: boolean;
-  /** The steering nodes receive: the host's interrupt signal, whose failures stop the run. */
-  readonly #steering: Steering | null;
   /** The error that ended the run, once one did; the first wins. */
   #failure: { readonly error: unknown } | null = null;
   /**
@@ -351,8 +361,8 @@ export class FlowEngine {
    * each: its commit's `from`. Taken when the node's outcome is committed.
    */
   readonly #reads = new Map<string, Map<string, number>>();
-  /** The steer inbox each running node opened, until its outcome commits. */
-  readonly #steerInboxes = new Map<string, string>();
+  /** The steer inbox each running node opened and the controller of its interrupt signal, until its outcome commits. */
+  readonly #steerInboxes = new Map<string, { readonly inbox: string; readonly controller: AbortController }>();
   #ran = false;
   /** Whether a loop is driving the run; a delivery made after it ended publishes without it. */
   #looping = false;
@@ -370,14 +380,14 @@ export class FlowEngine {
    *
    * @throws TypeError when `state` isn't exactly a `RunState`, `log` lacks `append`, `runId` or
    *   `nextSequence`, `growBuilder` or a given callback isn't a function, `numWorkers` isn't a safe
-   *   integer, `tools` isn't exactly a `ToolSet`, `skills` isn't a `Map`, `steering` or `models`
-   *   lacks its methods, `signal` isn't an `AbortSignal`, `scheduler` isn't an object whose `now`
+   *   integer, `tools` isn't exactly a `ToolSet`, `skills` isn't a `Map`, `models` lacks its
+   *   methods, `signal` isn't an `AbortSignal`, `scheduler` isn't an object whose `now`
    *   and `sleep` are functions, `random` isn't a function, or `runDir` isn't a string.
    * @throws RangeError when `numWorkers` is negative.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
     const { growBuilder, numWorkers, onEvent = null, onStream = null, memoryContextOpener = null } = options;
-    const { tools = null, skills = null, steering = null, models = null, signal = null, scheduler = null, random = null } =
+    const { tools = null, skills = null, models = null, signal = null, scheduler = null, random = null } =
       options;
     const { runDir = null, live = null } = options;
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
@@ -413,7 +423,6 @@ export class FlowEngine {
     this.memoryContextOpener = memoryContextOpener;
     this.tools = (tools ?? new ToolSet()).forRun(state.runId ?? "", { signal: this.#controller.signal });
     this.skills = skills;
-    this.steering = requireSteering(steering);
     this.scheduler = scheduler;
     this.random = random;
     this.models = requireModels(models);
@@ -421,13 +430,6 @@ export class FlowEngine {
     this.live = live;
     this.#hostSignal = signal;
     this.#durable = options.durable ?? true;
-    const inbox = this.steering;
-    this.#steering =
-      inbox === null
-        ? null
-        : {
-            interruptSignal: (nodeId) => this.#callHost((id: string) => inbox.interruptSignal(id), nodeId),
-          };
   }
 
   /**
@@ -445,8 +447,10 @@ export class FlowEngine {
 
   /**
    * Commit one host delivery synchronously, between two awaits of the loop. A cancel then aborts
-   * the run signal: `run()` resolves with the cancelled state once running nodes have drained.
-   * Then nudge the dispatcher and publish the observers.
+   * the run signal: `run()` resolves with the cancelled state once running nodes have drained. An
+   * interrupt names the running nodes that opened its inbox as their steer inbox, then the waiting
+   * ones, and aborts the running ones' interrupt signals. Then nudge the dispatcher and publish
+   * the observers.
    *
    * @returns The appended seq (null for a no-op) and the observers.
    * @throws DeliveryRefused when the run refuses it; nothing is appended.
@@ -458,11 +462,20 @@ export class FlowEngine {
   deliver(op: DeliveryOp): { readonly seq: number | null; readonly events: readonly RunEvent[] } {
     if (!this.#ran) throw new Error("FlowEngine.deliver needs run() first");
     const { state, log } = this;
-    const prepared = prepareDelivery(state, op);
+    // Which inbox a running node opened only the engine knows.
+    const delivery: DeliveryOp =
+      op?.kind === "interrupt"
+        ? { ...op, running: [...state.inFlight].filter((nodeId) => this.#steerInboxes.get(nodeId)?.inbox === op.inbox) }
+        : op;
+    const prepared = prepareDelivery(state, delivery);
     if (prepared === null) return { seq: null, events: [] };
     const seq = prepared.expectedSequence;
     const observers = commitPrepared(log, state, prepared);
     if (state.result instanceof RunCancelled) this.#controller.abort(this.#cancelled);
+    // In the same synchronous section as the record, so a running reader sees both at once.
+    if (prepared.record instanceof InterruptedRecord) {
+      for (const nodeId of prepared.record.nodes) this.#steerInboxes.get(nodeId)?.controller.abort();
+    }
     this.#queue?.nudge();
     if (this.#looping) {
       this.#publish(observers, this.#events);
@@ -494,8 +507,8 @@ export class FlowEngine {
    * @throws RangeError when the state is uninitialized, its run id, sequence or worker count
    *   differs from the log's or the engine's, or it has unfinished starts.
    * @throws The host signal's reason when it aborts (before any start when it is already aborted).
-   * @throws The error of a failing host callback (`onEvent`, `onStream` or a steering method
-   *   throwing, or a promise one returned rejecting), or of a host fault: a log or reducer refusal,
+   * @throws The error of a failing host callback (`onEvent` or `onStream` throwing, or a promise
+   *   one returned rejecting), or of a host fault: a log or reducer refusal,
    *   or a fault `evalNode` rejects with.
    */
   async run(): Promise<readonly RunEvent[]> {
@@ -693,25 +706,32 @@ export class FlowEngine {
       // A stopping run takes only a settled call's step, until it has a result; the stop is
       // control flow, not a host fault.
       if (signal.aborted && !(options?.settled === true && state.result === null)) throw signal.reason;
+      let prepared: PreparedTransition;
+      let observers: readonly RunEvent[];
       try {
-        const prepared = prepareNodeStep(state, nodeId, step);
-        commitPrepared(log, state, prepared);
-        return (prepared.record as NodeStepRecord).n;
+        prepared = prepareNodeStep(state, nodeId, step);
+        observers = commitPrepared(log, state, prepared);
       } catch (error) {
         // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);
       }
+      // A pending step on a node an interrupt names registers its call closed; the host withdraws it.
+      this.#publish(observers, this.#events);
+      return (prepared.record as NodeStepRecord).n;
     };
     // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
     // calling its handler again after a wake or a crash.
     const calls = callViews(state, nodeId);
-    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, calls, state.runDefaults.maxEventBytes, this.#durable);
+    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, calls, state.runDefaults.maxEventBytes, this.#durable, () =>
+      callViews(state, nodeId),
+    );
   }
 
   /**
    * Return the opener of a just-started node's steer inbox when the node declares
    * `readsSteerInbox`, else `null`. Opening registers the node as reading that inbox until its
-   * outcome commits. A read is zero-wait: in one synchronous section it takes every event a read
+   * outcome commits, with an interrupt signal that an interrupt of the inbox aborts (aborted at
+   * once when the node holds a pending interrupt). A read is zero-wait: in one synchronous section it takes every event a read
    * may take now, appends them as one `steer` step and returns their values, so no delivery lands
    * between reading the queue and the append.
    */
@@ -722,9 +742,14 @@ export class FlowEngine {
       if (typeof inbox !== "string" || inboxElementType(state, inbox) === null) {
         throw new CapabilityFault(new RangeError(`steer inbox ${reprText(String(inbox))} is no inbox the START declares`));
       }
-      this.#steerInboxes.set(nodeId, inbox);
+      const controller = new AbortController();
+      // An interrupt recorded before this evaluation (it waited, or crashed) still stands.
+      if (state.waits.interrupts.has(nodeId)) controller.abort();
+      this.#steerInboxes.set(nodeId, { inbox, controller });
       return {
         inbox,
+        interrupt: controller.signal,
+        interruptedBy: () => state.waits.interrupts.get(nodeId) ?? null,
         queued: () => availableUnread(state.waits, inbox).length > 0,
         read: () => {
           if (signal.aborted) throw signal.reason;
@@ -751,7 +776,7 @@ export class FlowEngine {
     if (!isExactly(evaluated, EvaluatedOutcome)) throw new TypeError("FlowEngine outcome must be an EvaluatedOutcome");
     const { state } = this;
     const { outcome } = evaluated;
-    const steerInbox = this.#steerInboxes.get(nodeId) ?? null;
+    const steerInbox = this.#steerInboxes.get(nodeId)?.inbox ?? null;
     this.#steerInboxes.delete(nodeId);
     const reads = this.#reads.get(nodeId) ?? new Map<string, number>();
     this.#reads.delete(nodeId);
@@ -976,7 +1001,6 @@ export class FlowEngine {
         memoryContextOpener: this.memoryContextOpener,
         tools: this.tools,
         skills: this.skills,
-        steering: this.#steering,
         scheduler: this.scheduler,
         random: this.random,
         runDir: this.runDir,

@@ -1,9 +1,10 @@
-# From tests/engine/test_agent_steering.py::test_interrupted_stream_reports_the_usage_received_so_far.
-# A text-free first chunk carries the input usage (as Anthropic streams it); an interrupt set
-# once chunk 3 (" big") is delivered keeps "hello big", and the one ModelCallFinished reports
-# the usage received so far (1000/1/1001) with no error.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupted_stream_reports_the_usage_received_so_far
+# (Python keeps the text as the output; TS yian's output is null). A text-free first chunk carries
+# the input usage; an interrupt delivered once chunk 3 (" big") is read cuts the stream, and the
+# one ModelCallFinished reports the usage received so far (1000/1/1001) with no error.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
 flow: |
   id: steer
@@ -17,18 +18,14 @@ flow: |
       steer_inbox: ${input.notes}
       system_prompt: Help.
       prompt: Help the user.
-      output: str
+      output: Optional(str)
   output: ${chat.output}
 run:
   run_id: r1
   num_workers: 0
 host:
-  steering:
-    chat:
-    - after:
-        model_call: 1
-        chunk: 3
-      interrupt: true
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1, chunk: 3}}
   models:
     chat:
       agent:
@@ -44,7 +41,7 @@ host:
 expect:
   output:
     status: succeeded
-    output: hello big
+    output: null
   trace:
   - - run_started
     - null
@@ -78,6 +75,10 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
   - - node_step
     - chat
     - n: 1
@@ -94,22 +95,24 @@ expect:
         request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
         response_id: null
         usage: {cache_read_tokens: null, input_tokens: 1000, output_tokens: 1, reasoning_tokens: null}
+  - - node_step
+    - chat
+    - n: 2
+      step: {by: 9, kind: interrupted}
   - - pool_commit
     - chat
-    - value: hello big
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [9]}
+    - {key: chat.new_messages, steps: [10, 11]}
   - - node_succeeded
     - chat
-    - {commit: 10, messages: 11}
+    - {commit: 12, messages: 13}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value: hello big
   - - node_succeeded
     - __end__
-    - {commit: 14}
+    - {commit: 16}
   events:
   - [RunStarted]
   - - NodeStarted
@@ -140,14 +143,12 @@ expect:
       n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: hello big
+      interrupted: true
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output: hello big
   - - RunSucceeded
-    - output: hello big
   stream:
   - chunk: hello
     final: false

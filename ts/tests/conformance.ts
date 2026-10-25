@@ -52,7 +52,7 @@ import {
   reprText,
 } from "../src/diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../src/events.ts";
-import type { CompleteResult, Steering } from "../src/nodes/base.ts";
+import type { CompleteResult } from "../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
 import {
   type ChatModel,
@@ -95,6 +95,7 @@ import {
   advance,
   close,
   complete,
+  interrupt,
   type RunInspection,
   type RunFlowOptions,
   type RunResult,
@@ -206,7 +207,7 @@ const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "hea
 // Host keys the format reserves and this runner doesn't support yet.
 const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "memory", "steering", "stop", "sends", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "memory", "stop", "sends", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -518,30 +519,6 @@ function checkModels(models: Value | undefined): void {
   }
 }
 
-/**
- * Throw unless `steering` is `host.steering`: node ids to lists of actions. An action is
- * `{after, interrupt: true}`, `after` optional and one of `{model_call: n, chunk: k}`,
- * `{model_call: n}` and `{tool_call: i}`, counted from 1. Steers are `host.sends` items.
- */
-function checkSteering(steering: Value | undefined): void {
-  for (const [node, actions] of Object.entries(mapping("host.steering", steering))) {
-    if (!Array.isArray(actions)) {
-      throw new Error("`host.steering` maps node ids to lists of actions");
-    }
-    actions.forEach((item, index) => {
-      const where = `host.steering.${node}[${index}]`;
-      if (isMapping(item) && Object.hasOwn(item, "steer")) {
-        throw new Error("`host.steering` steers moved to `host.sends` with `after:`");
-      }
-      const action = keys(where, item, new Set(["after", "interrupt"]), { required: ["interrupt"] });
-      if (action["interrupt"] !== true) {
-        throw new Error(`\`${where}.interrupt\` must be \`true\``);
-      }
-      if (Object.hasOwn(action, "after")) checkPoint(`${where}.after`, action["after"]);
-    });
-  }
-}
-
 /** Throw unless `value` is run or resume arguments with only `allowed` keys and the `required`. */
 function checkArguments(
   where: string,
@@ -616,8 +593,9 @@ function checkStop(stop: Value | undefined): void {
 /**
  * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` items, optionally with
  * `after: {node, <point>}` (sent live when the run reaches the point) or, in a `resume` case,
- * `down: true` (sent after the crash, before the resume), `{close}` items, and `{complete, output}`
- * or `{complete, error}` items.
+ * `down: true` (sent after the crash, before the resume), `{close}` items, `{interrupt}` items
+ * (TS-only: `interrupt(run, inbox)`), optionally with `after`, and `{complete, output}` or
+ * `{complete, error}` items.
  */
 function checkSends(value: Value | undefined, kind: Kind): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
@@ -625,15 +603,20 @@ function checkSends(value: Value | undefined, kind: Kind): void {
     const fields = isMapping(item) ? Object.keys(item).sort(compareCodeUnits).join(",") : null;
     const send = typeof (item as Case | null)?.["inbox"] === "string";
     const completes = typeof (item as Case | null)?.["complete"] === "string";
+    const interrupts = typeof (item as Case | null)?.["interrupt"] === "string";
     const valid =
       (fields === "event,inbox" && send) ||
       (fields === "after,event,inbox" && send && isMapping((item as Case)["after"])) ||
       (fields === "down,event,inbox" && send && (item as Case)["down"] === true && kind === "resume") ||
       (fields === "close" && typeof (item as Case)["close"] === "string") ||
+      (fields === "interrupt" && interrupts) ||
+      (fields === "after,interrupt" && interrupts && isMapping((item as Case)["after"])) ||
       (fields === "complete,output" && completes) ||
       (fields === "complete,error" && completes && typeof (item as Case)["error"] === "string");
-    if (!valid) throw new Error("`host.sends` items are {inbox, event, after?|down?}, {close} or {complete, output | error}");
-    if (fields === "after,event,inbox") {
+    if (!valid) {
+      throw new Error("`host.sends` items are {inbox, event, after?|down?}, {close}, {interrupt, after?} or {complete, output | error}");
+    }
+    if (fields === "after,event,inbox" || fields === "after,interrupt") {
       const { node, ...point } = (item as Case)["after"] as Case;
       if (typeof node !== "string") throw new Error(`\`host.sends[${index}].after.node\` must be a node id`);
       checkPoint(`host.sends[${index}].after`, point);
@@ -647,8 +630,7 @@ function completion(item: Case): CompleteResult {
 }
 
 /**
- * Throw unless `value`, the host, its tools, models and their scripts and its steering use only
- * the format's keys.
+ * Throw unless `value`, the host, its tools, models and their scripts use only the format's keys.
  */
 function checkHost(value: Value | undefined, kind: Kind): void {
   const allowed = kind === "resume" ? RESUME_HOST_KEYS : HOST_KEYS;
@@ -703,7 +685,6 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   }
   checkModels(get(host, "models", {}));
   if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
-  checkSteering(get(host, "steering", {}));
   checkStop(get(host, "stop", {}));
   checkSends(get(host, "sends", []), kind);
   const human = mapping("host.human", get(host, "human", {}));
@@ -1608,7 +1589,7 @@ function v1Request(request: Request): Case {
   return form;
 }
 
-/** A point of the run a `host.steering` action waits for: its `after`. */
+/** A point of the run a `host.stop` or `host.sends` item waits for: its `after`. */
 type Point = { model_call?: bigint; chunk?: bigint; tool_call?: bigint };
 
 /** The error the runner stops a run with at its `host.stop` point. */
@@ -1621,53 +1602,46 @@ class ConformanceStop extends Error {
 }
 
 /**
- * The host an AGENT reads at run points: the `host.steering` interrupts by node id (`Steering`),
- * the `host.stop` points, and the `host.sends` items sent at a point (`after`).
+ * The run points an AGENT reaches: the `host.stop` points, and the `host.sends` items delivered at
+ * a point (`after`), a send or an interrupt.
  *
- * An interrupt without `after` is set at once, the others when the run reaches their point; an
- * interrupt aborts the node's interrupt signal, which stays aborted. Reaching a stop calls
- * `onStop`; reaching a send calls `deliver`. Calls are counted, and points reached, only once
- * `armed`, so that runs before the main one neither count nor act.
+ * Reaching a stop calls `onStop`; reaching a send calls `deliver`, an interrupt `interrupt`. Calls
+ * are counted, and points reached, only once `armed`, so that runs before the main one neither
+ * count nor act.
  */
-class Inbox implements Steering {
+class Inbox {
   armed = false;
-  readonly #interrupts = new Map<string, AbortController>();
   readonly #counts = new Map<string, number>();
   readonly #pending: { label: string; node: string; action: Case }[] = [];
   readonly #onStop: () => void;
   readonly #deliver: (inbox: string, event: Value) => void;
+  readonly #interrupt: (inbox: string) => void;
 
   constructor(
-    steering: Case,
     stop: Case = {},
     onStop: () => void = () => {},
     sends: readonly Case[] = [],
     deliver: (inbox: string, event: Value) => void = () => {},
+    interrupt: (inbox: string) => void = () => {},
   ) {
     this.#onStop = onStop;
     this.#deliver = deliver;
+    this.#interrupt = interrupt;
     for (const [node, action] of Object.entries(stop)) {
       this.#pending.push({ label: `host.stop.${node}`, node, action: { ...(action as Case), stop: true } });
     }
     sends.forEach((item, index) => {
       if (!Object.hasOwn(item, "after")) return;
       const { node, ...point } = item["after"] as Case;
-      const action: Case = { after: point, send: { inbox: item["inbox"]!, event: item["event"]! } };
+      const action: Case = Object.hasOwn(item, "interrupt")
+        ? { after: point, interrupt: item["interrupt"]! }
+        : { after: point, send: { inbox: item["inbox"]!, event: item["event"]! } };
       this.#pending.push({ label: `host.sends[${index}]`, node: node as string, action });
     });
-    for (const [node, actions] of Object.entries(steering)) {
-      (actions as Case[]).forEach((action, index) => {
-        if (Object.hasOwn(action, "after")) {
-          this.#pending.push({ label: `host.steering.${node}[${index}]`, node, action });
-        } else {
-          this.#act(node, action);
-        }
-      });
-    }
   }
 
-  /** Send `action`'s event, abort `node`'s interrupt signal, or stop the run. */
-  #act(node: string, action: Case): void {
+  /** Send `action`'s event, interrupt its inbox's readers, or stop the run. */
+  #act(action: Case): void {
     if (action["stop"] === true) {
       this.#onStop();
       return;
@@ -1677,14 +1651,7 @@ class Inbox implements Steering {
       this.#deliver(inbox as string, event as Value);
       return;
     }
-    if (action["interrupt"] === true) this.#controller(node).abort();
-  }
-
-  /** Return `node`'s interrupt controller, made on first use. */
-  #controller(node: string): AbortController {
-    let controller = this.#interrupts.get(node);
-    if (controller === undefined) this.#interrupts.set(node, (controller = new AbortController()));
-    return controller;
+    this.#interrupt(action["interrupt"] as string);
   }
 
   /** Count a `model_call` or `tool_call` of `node`; return its number, `null` unarmed. */
@@ -1701,13 +1668,8 @@ class Inbox implements Steering {
     const due = this.#pending.filter((each) => each.node === node && same(each.action["after"], point));
     for (const item of due) {
       this.#pending.splice(this.#pending.indexOf(item), 1);
-      this.#act(node, item.action);
+      this.#act(item.action);
     }
-  }
-
-  /** The signal aborted once `nodeId`'s interrupt is set. */
-  interruptSignal(nodeId: string): AbortSignal {
-    return this.#controller(nodeId).signal;
   }
 
   /** Return a message per action whose point was never reached. */
@@ -1833,7 +1795,7 @@ interface Host {
   random: (() => number) | null;
   /** Builds every model the run calls; no call reaches a provider. */
   models: ModelAccess;
-  /** The `host.steering` interrupts, which also reach the `host.stop` points and the `host.sends` `after` points. */
+  /** The run points: the `host.stop` points and the `host.sends` `after` points. */
   inbox: Inbox;
   /** Wait for the `host.sends` items sent at run points; reject with the first refusal. */
   sent: () => Promise<void>;
@@ -1847,8 +1809,8 @@ interface Host {
   putBack: (last: number) => void;
   /**
    * Throw a `CaseFailure` when a script ran out or was missing or a model call's request differed
-   * from its entry's; return a message per script with entries left and per `host.steering`
-   * action never reached.
+   * from its entry's; return a message per script with entries left and per `host.stop` or
+   * `host.sends` point never reached.
    */
   check: () => string[];
 }
@@ -1859,7 +1821,7 @@ interface Host {
  * recorded under the name it was called by, and each backoff the next
  * `host.jitter` draw and each model call the next `host.models` entry of its node and consumer.
  * Every model the run builds is the scripted one, after its config is resolved and checked with
- * `env`. Each stub call reaches its `host.steering` point once it takes its entry. `log` is the
+ * `env`. Each stub call reaches its run points once it takes its entry. `log` is the
  * run's log file. The ask slot declares, as extras, every input the `flow`'s TOOL `ask` nodes pass
  * beyond yian's ask surface, such as an `adaptive_questions:` brief's context.
  */
@@ -1871,9 +1833,8 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
   const stopper = new AbortController();
   const stopError = new ConformanceStop();
   const stop = Object.hasOwn(spec, "stop") ? { signal: stopper.signal, error: stopError } : null;
-  const delivered: Promise<number>[] = [];
+  const delivered: Promise<unknown>[] = [];
   const inbox = new Inbox(
-    get(spec, "steering", {}) as Case,
     get(spec, "stop", {}) as Case,
     () => stopper.abort(stopError),
     get(spec, "sends", []) as Case[],
@@ -1882,6 +1843,11 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
       const sent = send(log, name, event, { env });
       sent.catch(() => {});
       delivered.push(sent);
+    },
+    (name) => {
+      const cut = interrupt(log, name, { env });
+      cut.catch(() => {});
+      delivered.push(cut);
     },
   );
   const scripts = new Map<string, Value[]>(
@@ -2011,14 +1977,16 @@ function failureForm(failure: Failure, flow: ComposedFlow): Case {
 }
 
 /**
- * Return the data form of an event or stream chunk, without its null fields and without a model
- * call's `started_at` (a time): its `toJSON()`, with a failure in failure form and every file as
+ * Return the data form of an event or stream chunk, without its null fields, without a model
+ * call's `started_at` (a time) and without a `NodeSucceeded`'s `interrupted` when false (TS-only;
+ * Python has no such field): its `toJSON()`, with a failure in failure form and every file as
  * `{uri, mime, name}`.
  */
 function fields(event: RunEvent, flow: ComposedFlow): Case {
   const data: Case = {};
   for (const [key, item] of Object.entries(event.toJSON())) {
     if (item === null || key === "started_at") continue;
+    if (event.type === "NodeSucceeded" && key === "interrupted" && item === false) continue;
     const failure = key === "failure" ? (event as { failure: Failure }).failure : null;
     data[key] = failure !== null ? failureForm(failure, flow) : dataForm(item as YianValue);
   }
@@ -2412,8 +2380,7 @@ async function cutFirstRun(
 }
 
 /**
- * Return the options every run of a case gets: its log, environment and host (`steering` only
- * with `host.steering`, as Python passes it), on a virtual clock that starts at `start`, with
+ * Return the options every run of a case gets: its log, environment and host, on a virtual clock that starts at `start`, with
  * `events` and `chunks` collecting what it publishes.
  */
 function runHooks(
@@ -2431,7 +2398,6 @@ function runHooks(
     tools,
     random,
     models,
-    ...(Object.hasOwn(get(case_, "host", {}) as Case, "steering") ? { steering: inbox } : {}),
     scheduler: virtualScheduler(start),
     onEvent: (event: RunEvent) => {
       events.push(event);
@@ -2590,7 +2556,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   // One clock for every run of the case. `env` scopes the case's YIAN_* values to each run, so
   // nothing is installed around it.
   const hooks = runHooks(case_, log, env, scripted, Date.now(), events, chunks);
-  // The `before` runs share the clock, but not the log, the steering or the observers.
+  // The `before` runs share the clock, but not the log, the run points or the observers.
   const { random, scheduler } = hooks;
   const shared: RunFlowOptions = { env, tools, random, models, scheduler };
   const { logs, traces } = await beforeRuns(case_, ctx, flow, shared, memories);
@@ -2649,6 +2615,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       while (result.status === "waiting" && sends.length > 0) {
         const item = sends.shift()!;
         if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
+        else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
         else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
         else await send(log, item["inbox"] as string, item["event"], { env });
         result = await advance({ ...advanceArguments, ...hooks, ...signal, memory });
@@ -3019,7 +2986,7 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.steering`, `host.memory`, `host.stop` or `host.sends`.
+ * `pending`, with no `host.memory`, `host.stop` or `host.sends` (an interrupt item among them).
  */
 export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
@@ -3028,7 +2995,7 @@ export function sweepable(case_: Case): boolean {
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["steering", "memory", "stop", "sends"].some((key) => Object.hasOwn(spec, key))
+    !["memory", "stop", "sends"].some((key) => Object.hasOwn(spec, key))
   );
 }
 

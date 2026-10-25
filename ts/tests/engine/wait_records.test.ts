@@ -352,16 +352,6 @@ test("interrupted names its inbox and the nodes it interrupts; frozen", () => {
   expectError(() => new InterruptedRecord("owner", [""]), RangeError, "nodes must contain only non-empty strings");
 });
 
-test("the reducer refuses an interrupted record in this version", () => {
-  const { state, log } = initializedAndStarted(flow());
-  commitStartSuccess(state, log);
-  expectError(
-    () => prepareRecord(state, new InterruptedRecord("owner", ["work"])),
-    RangeError,
-    "interrupted records are not accepted yet",
-  );
-});
-
 test("a state whose waits fold was replaced is refused", () => {
   const { state, log } = initializedAndStarted(flow());
   commitStartSuccess(state, log);

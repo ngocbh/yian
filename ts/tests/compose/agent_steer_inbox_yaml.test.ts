@@ -64,8 +64,6 @@ test.each([
       "`steer_inbox: ${input.<name>}`; the host sends steers with `send`",
   ],
   ["    steer_inbox: 3", "    output: str", "`steer_inbox:` must be `${input.<name>}` naming an Inbox input"],
-  ["    steer_inbox: ${input.notes}", "    output: int", "node 'chat': a steer inbox needs `str` output"],
-  ["    steer_inbox: ${input.notes}", "    output: {answer: str}", "node 'chat': a steer inbox needs `str` output"],
 ])("a bad steer inbox points at its line: %p %p", (line, output, message) => {
   const error = loadError(() => assembleText(steerFlow(line, output)));
 
@@ -126,6 +124,10 @@ test("a render's field reads are checked against the inbox's element type", () =
 test("a render over an Inbox(Message) reads its fields", () => {
   const chat = chatOf(renderFlow("${event.author}: ${event.parts}", "  notes: !Inbox(Message)"));
   expect(chat.steerRender).toBe("${event.author}: ${event.parts}");
+});
+
+test.each(["int", "{answer: str}"])("a steer inbox loads with any output, here %p", (output) => {
+  expect(() => assembleText(steerFlow("    steer_inbox: ${input.notes}", `    output: ${output}`))).not.toThrow();
 });
 
 test("an input named __steer_inbox is reserved", () => {
@@ -197,6 +199,6 @@ test.each<CaseRow>([{ id: "load-agent/compose_agent_steer_inbox__steerable_is_re
 
 test.each<CaseRow>([
   { id: "load-agent/compose_agent_steer_inbox__not_an_inbox", call: assembled },
-  { id: "load-agent/compose_agent_steer_inbox__needs_str_output", call: assembled },
+  { id: "load-agent/compose_agent_steer_inbox__any_output_type_loads", call: assembled },
   { id: "load-agent/compose_agent_steer_inbox__an_optional_str_agent_loads", call: assembled },
 ])("assemble: $id", runCase);

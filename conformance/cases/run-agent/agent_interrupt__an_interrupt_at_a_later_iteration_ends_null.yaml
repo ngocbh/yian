@@ -1,10 +1,12 @@
-# From tests/engine/test_agent_steering.py::test_non_steerable_agent_never_calls_the_inbox.
-# Changed (yian #1025): an AGENT without `steer_inbox:` never reads the inbox: a send during its
-# model call and a set interrupt change nothing, so the model gets the plain request and its
-# reply is the output. The take after it gets the event.
+# TS-only: interrupt(run, inbox) is TS yian's (#1025).
+# From tests/engine/test_agent_steering.py::test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply
+# (Python returns the latest reply's text; TS yian's output is null). A steer sent and an
+# interrupt delivered once tool call 1 returns are seen at the top of the next iteration: the
+# interrupt wins before the steer inbox is read, so there is no second model call and the steer
+# stays unread.
 kind: run
+python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 rules: [run-log]
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer
@@ -14,27 +16,30 @@ flow: |
   nodes:
     chat:
       kind: agent
+      steer_inbox: ${input.notes}
+      tools: [lookup]
       system_prompt: Help.
       prompt: Help the user.
-      output: str
-    heard:
-      kind: tool
-      tool_id: take
-      input:
-        from: ${input.notes}
-      depends_on: [chat]
-  output:
-    answer: ${chat.output}
-    heard: ${heard.output.events}
+      output: Optional(str)
+  output: ${chat.output}
 run:
   run_id: r1
   num_workers: 0
 host:
   sends:
-  - {inbox: notes, event: for the take, after: {node: chat, model_call: 1, chunk: 1}}
-  steering:
-    chat:
-    - interrupt: true
+  - {inbox: notes, event: too late, after: {node: chat, tool_call: 1}}
+  - {interrupt: notes, after: {node: chat, tool_call: 1}}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: found
   models:
     chat:
       agent:
@@ -43,23 +48,16 @@ host:
           role: assistant
           parts:
           - type: text
-            text: done
-        request:
-          messages:
-          - format: yian.message.v1
-            role: system
-            parts:
-            - type: text
-              text: Help.
-          - format: yian.message.v1
-            role: user
-            parts:
-            - type: text
-              text: Help the user.
+            text: Looking.
+          - type: tool_call
+            id: call-1
+            name: lookup
+            arguments:
+              topic: a
 expect:
   output:
     status: succeeded
-    output: {answer: done, heard: [for the take]}
+    output: null
   trace:
   - - run_started
     - null
@@ -93,9 +91,6 @@ expect:
     - __start__
     - {commit: 6}
   - [node_started, chat]
-  - - pool_commit
-    - __start__
-    - {key: __start__.notes, value: for the take}
   - - node_step
     - chat
     - n: 1
@@ -106,36 +101,42 @@ expect:
         output:
           format: yian.message.v1
           parts:
-          - {text: done, type: text}
+          - {text: Looking., type: text}
+          - arguments: {topic: a}
+            id: call-1
+            name: lookup
+            type: tool_call
           role: assistant
         purpose: chat
-        request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
+        request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
         response_id: null
         usage: null
   - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: too late}
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
+  - - node_step
     - chat
-    - value: done
+    - n: 2
+      step: {call_id: call-1, is_error: false, kind: tool_result, output: found}
+  - - node_step
+    - chat
+    - n: 3
+      step: {by: 11, kind: interrupted}
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [10]}
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages, steps: [9, 12, 13]}
   - - node_succeeded
     - chat
-    - {commit: 11, messages: 12}
-  - [node_started, heard]
-  - - pool_commit
-    - heard
-    - closed: false
-      events: [9]
-      inbox: notes
-  - - node_succeeded
-    - heard
-    - {commit: 15}
+    - {commit: 14, messages: 15}
   - [node_started, __end__]
   - - pool_commit
     - __end__
-    - value:
-        answer: done
-        heard: [for the take]
   - - node_succeeded
     - __end__
     - {commit: 18}
@@ -160,29 +161,31 @@ expect:
       provider: openai
       purpose: chat
       n: 1
+  - - ToolCallStarted
+    - arguments:
+        topic: a
+      call_index: 0
+      name: lookup
+      node_id: chat
+      tool_call_id: call-1
+      n: 1
+  - - ToolCallFinished
+    - call_index: 0
+      name: lookup
+      node_id: chat
+      result: found
+      tool_call_id: call-1
+      n: 1
   - - NodeSucceeded
     - node_id: chat
-      output: done
-  - - NodeStarted
-    - {node_id: heard}
-  - - NodeSucceeded
-    - node_id: heard
-      output:
-        closed: false
-        events: [for the take]
+      interrupted: true
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
-      output:
-        answer: done
-        heard: [for the take]
   - - RunSucceeded
-    - output:
-        answer: done
-        heard: [for the take]
   stream:
-  - chunk: done
+  - chunk: Looking.
     final: false
     key: text
     node_id: chat
@@ -194,3 +197,10 @@ expect:
     node_id: chat
     n: 1
     index: 1
+  tool_calls:
+    lookup:
+    - args:
+        topic: a
+      attempt: 1
+      call_id: r1/chat/1/0
+      node: chat

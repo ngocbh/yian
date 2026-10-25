@@ -650,7 +650,10 @@ function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
     call.state = "open";
     // A `take: all` never left absorbing; a `take: one` shifted out at its assignment.
     if (!inbox.absorbing.includes(call.callId)) {
-      const later = inbox.absorbing.findIndex((id) => (w.calls.get(id)?.seq ?? -1) > call.seq);
+      const later = inbox.absorbing.findIndex((id) => {
+        const other = w.calls.get(id);
+        return other !== undefined && other.seq > call.seq;
+      });
       inbox.absorbing.splice(later < 0 ? inbox.absorbing.length : later, 0, call.callId);
     }
   }

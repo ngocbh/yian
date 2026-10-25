@@ -176,6 +176,7 @@ test("the package root exports exactly its documented root list plus the memory 
     runFlow: run.runFlow,
     advance: run.advance,
     send: run.send,
+    withdraw: run.withdraw,
     complete: run.complete,
     close: run.close,
     interrupt: run.interrupt,

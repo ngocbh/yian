@@ -1714,7 +1714,7 @@ resolves to `{seq, nodes, calls}`, with those calls in `calls`.
 - **When it records nothing.** `seq` is `null` and nothing is appended when the run waits for the
   next message on `inbox` (a take of it waits with nothing unread and no reader is open), or when
   it is already stopping: a Stop on `inbox` stands (below), or every current reader of `inbox`
-  already holds an interrupt or has honored one. So a second Esc never carries a Stop into the
+  already holds an interrupt of it or has honored one. So a second Esc never carries a Stop into the
   next reply.
 - **Who.** Otherwise it appends one run record, `interrupted {inbox, nodes}`. `nodes` names the
   agents it affects: the running ones that opened `inbox` as their steer inbox (from the live
@@ -1735,8 +1735,9 @@ resolves to `{seq, nodes, calls}`, with those calls in `calls`.
 - **A crashed run.** Offline, the engine isn't there to say which agents were running, so an
   interrupt names only the waiting ones and records the Stop; the crashed readers stop when they
   reopen the inbox on the next `advance`. Every running agent with a `steer_inbox:` counts as a current
-  reader, so when each of them still holds an interrupt (or has honored one) and no waiting
-  reader lacks one, the run is already stopping and nothing is recorded.
+  reader, so when each of them still holds an interrupt of `inbox` (or has honored one) and no
+  waiting reader lacks one, the run is already stopping and nothing is recorded. One stopping by
+  another inbox may still open `inbox`, so it doesn't count as stopping.
 - **A message still queued.** An interrupt alone can't stop the reply to a message sent before it
   that no take has woken for: the take picks the message up, which ends the Stop, and the reply
   answers it in full. Take the message back with

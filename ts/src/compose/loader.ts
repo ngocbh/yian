@@ -874,6 +874,16 @@ async function realOr(path: string): Promise<string> {
   }
 }
 
+/** Say whether two frames sit in one file: the same label and the same text, since labels may repeat. */
+function sameFile(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
+  return a.label === b.label && a.text === b.text;
+}
+
+/** Say whether two frames start at one place in one file. */
+function sameLocation(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
+  return sameFile(a, b) && a.range.startLine === b.range.startLine && a.range.startCol === b.range.startCol;
+}
+
 /**
  * Locate one memory layout failure at its first declaration site.
  *
@@ -893,18 +903,14 @@ export function memorySetupLoadError(
 
   const primary = frame(error.origin);
   const notes = [...(error.notes ?? [])];
-  // Aliases of one file map distinct origins to one source location.
-  const seen = new Set<string>();
-  const locationOf = (other: DiagnosticFrame): string =>
-    `${other.label}:${other.range.startLine}:${other.range.startCol}`;
-  if (primary !== null) seen.add(locationOf(primary));
+  // Aliases of one file map distinct origins to one source location; two files may share a label,
+  // so a location is one file's only when the texts match too.
+  const seen: DiagnosticFrame[] = primary === null ? [] : [primary];
   for (const origin of error.related) {
     const other = frame(origin);
-    if (other === null) continue;
-    const location = locationOf(other);
-    if (seen.has(location)) continue;
-    seen.add(location);
-    notes.push(`related declaration at ${location}`);
+    if (other === null || seen.some((known) => sameLocation(known, other))) continue;
+    seen.push(other);
+    notes.push(`related declaration at ${other.label}:${other.range.startLine}:${other.range.startCol}`);
   }
   return UNLOCATED_DIAGNOSTICS.error(error.message, {
     frames: primary === null ? [] : [primary],
@@ -944,7 +950,7 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
     const called = `called by node ${reprText(found.owner.join("/"))}`;
     const callsiteFrame = frame(found.callsite.origin);
     if (valueFrame === null || callsiteFrame === null) subject = `${field} of the flow ${name} (${called})`;
-    else if (valueFrame.label !== callsiteFrame.label) {
+    else if (!sameFile(valueFrame, callsiteFrame)) {
       subject = `${field} of the flow imported through uses: ${name} (${called})`;
     } else subject = `defs entry ${name} ${field} (${called})`;
   }

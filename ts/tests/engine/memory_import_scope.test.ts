@@ -338,3 +338,18 @@ test("a related note repeating an earlier location is skipped", () => {
     "related declaration at f.yaml:3:1",
   ]);
 });
+
+test("a related note at the same place in another file with the same label is kept", () => {
+  const texts: Record<string, string> = { p: "x\n", a: "y\n", b: "x\n" };
+  const resolver: OriginResolver = {
+    resolve: (origin) =>
+      new DiagnosticFrame({ label: "f.yaml", text: texts[origin.key]!, range: new SourceRange(1, 1, 1, 2) }),
+  };
+  const error = new MemorySetupError("clash", {
+    origin: new OriginRef("p"),
+    related: [new OriginRef("a"), new OriginRef("b")],
+  });
+  expect(memorySetupLoadError({ originResolver: resolver }, error).diagnostic.notes).toEqual([
+    "related declaration at f.yaml:1:1",
+  ]);
+});

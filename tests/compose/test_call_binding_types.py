@@ -21,6 +21,8 @@ typedefs:
   R:
     a: int
   AB: Literal(a, b)
+  TY: Literal('true', yes)
+  FN: Literal('false', no)
 defs:
   child:
     input:
@@ -94,6 +96,7 @@ def _flow(child: str, binding: str, *, over: str | None = None) -> str:
         ("str", "2026-01-01", None, "child expects 'str', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),
         ("list(date)", "[2026-01-01]", None, "child expects 'list(date)', but the value [2026-01-01] does not fit (datetime.date(2026, 1, 1) does not match declared type date); quote each date to keep it as text"),
         ("str", "${input.m:-1.50}", None, "child expects 'str', but the default 1.50 does not fit; quote it to keep it as text: \"1.50\""),
+        ("FN", "false", None, "child expects 'Literal(false, no)', but the value false does not fit; quote it to keep it as text (YAML reads unquoted true/false as booleans)"),
     ],
 )
 def test_unprovable_fit_is_a_load_error(child, binding, over, message):
@@ -110,6 +113,7 @@ def test_unprovable_fit_is_a_load_error(child, binding, over, message):
         ("str", "${input.m:-true}", "child expects 'str', but the default true does not fit; quote it to keep it as text"),
         ("int", "yes", "child expects 'int', but the value \"yes\" does not fit"),
         ("AB", "no", "child expects 'Literal(a, b)', but the value \"no\" does not fit"),
+        ("TY", "false", "child expects 'Literal(true, yes)', but the value false does not fit"),
         ("list(bool)", "[true, no]", "child expects 'list(bool)', but the value [true, \"no\"] does not fit ('no' does not match declared type bool)"),
     ],
 )

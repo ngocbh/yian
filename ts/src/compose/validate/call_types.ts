@@ -565,7 +565,7 @@ function literalHint(value: unknown, decl: Parameter, text: string | null, optio
     return `text is not converted between flows, so write ${written} without quotes`;
   }
   if (typeof value === "boolean") {
-    if (!fits(childType, "true")) return null;
+    if (!fits(childType, value ? "true" : "false")) return null;
     if (!options.yaml) return "quote it to keep it as text";
     return "quote it to keep it as text (YAML reads unquoted true/false as booleans)";
   }

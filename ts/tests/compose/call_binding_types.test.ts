@@ -4,8 +4,8 @@
  * calls `load_flow`, its `child` def built by hand (`handChild`: an input `t` of the row's type, read
  * with the flow's typedefs, one `n: str` producer, returning `${n.output}`).
  *
- * Ported: `test_unprovable_fit_is_a_load_error` (31 of 35), asserted with `toContain` as Python
- * asserts `in`; `test_no_rewrite_hint_when_rewriting_cannot_help` (6), asserted on the first line's
+ * Ported: `test_unprovable_fit_is_a_load_error` (32 of 36), asserted with `toContain` as Python
+ * asserts `in`; `test_no_rewrite_hint_when_rewriting_cannot_help` (7), asserted on the first line's
  * end as Python asserts `endswith`;
  * `test_inline_call_with_a_former_boolean_word_names_the_boolean_to_write`; the load halves of
  * `test_bindings_that_fit_load_and_run` (16),
@@ -91,6 +91,8 @@ typedefs:
   R:
     a: int
   AB: Literal(a, b)
+  TY: Literal('true', yes)
+  FN: Literal('false', no)
 defs:
   child:
     input:
@@ -132,7 +134,7 @@ function def(
   });
 }
 
-/** The parent flow's typedefs (`R`, `AB`), which the `child` def's input type may name. */
+/** The parent flow's typedefs (`R`, `AB`, `TY`, `FN`), which the `child` def's input type may name. */
 const FLOW_TYPEDEFS = caseRegistry(SourceDocument.parse(flow("str", "null")));
 
 /** The `child` def built by hand: input `t: !<type>`, one `n: str` producer, returned. */
@@ -194,6 +196,12 @@ test.each<[string, string, string | null, string]>([
     "child expects 'str', but the value true does not fit; quote it to keep it as text (YAML reads unquoted true/false as booleans)",
   ],
   [
+    "FN",
+    "false",
+    null,
+    "child expects 'Literal(false, no)', but the value false does not fit; quote it to keep it as text (YAML reads unquoted true/false as booleans)",
+  ],
+  [
     "int",
     '${input.n:-"3"}',
     null,
@@ -252,6 +260,7 @@ test.each<[string, string, string]>([
   ["str", "${input.m:-true}", "child expects 'str', but the default true does not fit; quote it to keep it as text"],
   ["int", "yes", "child expects 'int', but the value \"yes\" does not fit"],
   ["AB", "no", "child expects 'Literal(a, b)', but the value \"no\" does not fit"],
+  ["TY", "false", "child expects 'Literal(true, yes)', but the value false does not fit"],
   // Changed: the text form shows [true,"no"] and "no" (Python: [true, "no"] and 'no').
   [
     "list(bool)",

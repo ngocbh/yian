@@ -561,7 +561,7 @@ def _literal_hint(
         written = shown_literal(build_value_as(child_type, candidate).to_object())
         return f"text is not converted between flows, so write {written} without quotes"
     if isinstance(value, bool):
-        if not _fits(child_type, "true"):
+        if not _fits(child_type, "true" if value else "false"):
             return None
         if not yaml:
             return "quote it to keep it as text"

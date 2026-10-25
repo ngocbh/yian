@@ -414,10 +414,20 @@ describe("deltas and parts", () => {
     ]);
     expect(partsDone(opened)).toEqual([new PartDone(1, CALL_PART), new PartDone(0, TEXT_PART)]);
     expect((await collect(opened)).message.parts).toEqual([TEXT_PART, CALL_PART]);
-    // With no opened item to match, the text is built from its deltas.
+    // The item id on a delta matches too.
     const unopened = await parse([textDelta(0, 0, "Hello there."), done(1, CALL), completed([CALL, MESSAGE])]);
-    expect(partsDone(unopened)).toEqual([new PartDone(1, CALL_PART)]);
-    expect((await collect(unopened)).message.parts).toEqual([new TextPart("Hello there."), CALL_PART]);
+    expect(partsDone(unopened)).toEqual([new PartDone(1, CALL_PART), new PartDone(0, TEXT_PART)]);
+  });
+
+  test("a terminal output item at a streamed index with ids nothing streamed is kept", async () => {
+    // A gateway that strips the reasoning events renumbers the message to output index 0.
+    const events = await parse([
+      added(0, started(MESSAGE)),
+      textDelta(0, 0, "Hello there."),
+      completed([REASONING, MESSAGE]),
+    ]);
+    expect(partsDone(events)).toEqual([new PartDone(0, TEXT_PART), new PartDone(1, REASONING_PART)]);
+    expect((await collect(events)).message.parts).toEqual([TEXT_PART, REASONING_PART]);
   });
 
   test("an added reasoning item takes its slot before any delta", async () => {

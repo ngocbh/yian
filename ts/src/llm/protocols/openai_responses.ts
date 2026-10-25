@@ -231,8 +231,17 @@ export class OpenAIResponses implements SseProtocol {
     };
     const opened = new Map<number, JsonObject>();
     const finished = new Set<number>();
-    // The item ids and call ids of the items the stream opened or finished.
+    // The item ids and call ids the stream gave, in all and by output index.
     const seenIds = new Set<string>();
+    const streamedIds = new Map<number, Set<string>>();
+    const sawIds = (outputIndex: number, ids: string[]): void => {
+      let known = streamedIds.get(outputIndex);
+      if (known === undefined) streamedIds.set(outputIndex, (known = new Set()));
+      for (const id of ids) {
+        known.add(id);
+        seenIds.add(id);
+      }
+    };
     const lastSummary = new Map<number, JsonValue | undefined>();
     // Refusal text by output index, then content index.
     const refusals = new Map<number, Map<number, string>>();
@@ -263,6 +272,7 @@ export class OpenAIResponses implements SseProtocol {
           throw new ProviderError("protocol", `openai stream event ${type} has no output_index`);
         }
         outputIndex = Number(raw);
+        if (typeof data["item_id"] === "string") sawIds(outputIndex, [data["item_id"]]);
       }
       const rawContentIndex = data["content_index"];
       const contentIndex = typeof rawContentIndex === "bigint" ? Number(rawContentIndex) : 0;
@@ -275,7 +285,7 @@ export class OpenAIResponses implements SseProtocol {
         const item = data["item"];
         if (!isPlainObject(item)) continue;
         opened.set(outputIndex, item);
-        for (const id of itemIds(item)) seenIds.add(id);
+        sawIds(outputIndex, itemIds(item));
         if (item["type"] === "function_call") {
           sawCalls = true;
           yield new ToolCallDelta({
@@ -317,7 +327,7 @@ export class OpenAIResponses implements SseProtocol {
         const item = data["item"];
         if (!isPlainObject(item)) continue;
         finished.add(outputIndex);
-        for (const id of itemIds(item)) seenIds.add(id);
+        sawIds(outputIndex, itemIds(item));
         if (item["type"] === "function_call") sawCalls = true;
         for (const [itemContentIndex, part] of itemParts(item, this.#key)) {
           yield new PartDone(index(outputIndex, itemContentIndex), part);
@@ -329,26 +339,26 @@ export class OpenAIResponses implements SseProtocol {
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
         const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
-        // Output items the stream never mentioned still belong to the reply, after the others. A
-        // gateway's output indexes may not be positions in `output`, so an item is matched by
-        // its ids too.
-        const unseen = [...output.keys()].filter(
-          (each) =>
-            !finished.has(each) && !started.has(each) && !itemIds(output[each]!).some((id) => seenIds.has(id)),
-        );
-        // An unfinished item is the output item with its opened item's ids, wherever it sits; one
-        // the stream never opened takes the item at its index only when no streamed item holds it.
+        // Positions in `output` an unfinished item took, so no item is used twice.
+        const claimed = new Set<number>();
+        // An unfinished item is the output item with the ids its events gave, wherever it sits; one
+        // whose events gave none takes the item at its index only when no streamed item holds it.
+        // An item no output item matches by id is built from its deltas, not taken by position: a
+        // gateway that renumbers output indexes would give it another item's parts.
         const terminalItem = (each: number): JsonValue | undefined => {
-          const ids = itemIds(opened.get(each) ?? null);
-          if (ids.length > 0) return output.find((item) => itemIds(item).some((id) => ids.includes(id)));
-          const item = output[each];
-          return item === undefined || itemIds(item).some((id) => seenIds.has(id)) ? undefined : item;
+          const ids = streamedIds.get(each) ?? new Set<string>();
+          const position =
+            ids.size > 0
+              ? output.findIndex((item) => itemIds(item).some((id) => ids.has(id)))
+              : each < output.length && !itemIds(output[each]!).some((id) => seenIds.has(id))
+                ? each
+                : -1;
+          if (position < 0 || claimed.has(position)) return undefined;
+          claimed.add(position);
+          return output[position];
         };
-        const filled = [
-          ...unfinished.map((each) => [each, terminalItem(each)] as const),
-          ...unseen.map((each) => [each, output[each]] as const),
-        ];
-        for (const [each, item] of filled) {
+        for (const each of unfinished) {
+          const item = terminalItem(each);
           if (item === undefined) {
             // Text, reasoning and calls are built from their deltas; a refusal streams none, so
             // its part is built here.
@@ -361,6 +371,21 @@ export class OpenAIResponses implements SseProtocol {
           for (const [itemContentIndex, part] of itemParts(item, this.#key)) {
             if (part instanceof ToolCallPart) sawCalls = true;
             yield new PartDone(index(each, itemContentIndex), part);
+          }
+        }
+        // Output items the stream never mentioned still belong to the reply, after the others. A
+        // gateway's output indexes may not be positions in `output`, so an item with ids is
+        // matched by them alone; only an item with none is matched by its position.
+        for (const [position, item] of output.entries()) {
+          if (claimed.has(position)) continue;
+          const ids = itemIds(item);
+          const mentioned =
+            ids.length > 0 ? ids.some((id) => seenIds.has(id)) : finished.has(position) || started.has(position);
+          if (mentioned) continue;
+          // A new slot each: the position may also be an output index the stream used.
+          for (const [, part] of itemParts(item, this.#key)) {
+            if (part instanceof ToolCallPart) sawCalls = true;
+            yield new PartDone(count++, part);
           }
         }
         yield* this.#finish(response, sawCalls, responseId, type);

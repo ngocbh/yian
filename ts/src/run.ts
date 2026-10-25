@@ -2204,8 +2204,10 @@ export function pendingCalls(log: string): readonly PendingCall[] {
         ? agentCallArguments(replies.get(record.nodeId), Number(step["index"]))
         : (step["arguments"] as JsonObject);
       args.set(String(step["call_id"]), value);
-    } else if (isOutcomeRecord(record)) {
-      replies.delete((record as { nodeId: string }).nodeId);
+    } else {
+      const settled = settledNodeId(record);
+      if (settled === null) continue;
+      replies.delete(settled);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
     }
   }
@@ -2213,14 +2215,15 @@ export function pendingCalls(log: string): readonly PendingCall[] {
   return openHostCalls(waits, (call) => args.get(call.callId) ?? null);
 }
 
-/** Whether `record` settles a node: its success, route, expansion or failure. */
-function isOutcomeRecord(record: RunRecord): boolean {
-  return (
-    record instanceof NodeSucceededRecord ||
-    record instanceof NodeRoutedRecord ||
-    record instanceof NodeExpandedRecord ||
-    record instanceof NodeFailedRecord
-  );
+/**
+ * The node `record` settles (its success, route, expansion or failure), or `null` for any other
+ * record. A failure record's node id is never `null`.
+ */
+function settledNodeId(record: RunRecord): string | null {
+  if (record instanceof NodeSucceededRecord || record instanceof NodeRoutedRecord) return record.nodeId;
+  if (record instanceof NodeExpandedRecord) return record.spawnerId;
+  if (record instanceof NodeFailedRecord) return record.failure.nodeId;
+  return null;
 }
 
 /** The open host calls of `waits`, in registration order, with the arguments `argumentsOf` reads. */

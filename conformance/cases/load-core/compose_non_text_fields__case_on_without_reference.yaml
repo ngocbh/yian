@@ -1,0 +1,31 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    proj: !str
+  nodes:
+    a:
+      kind: case
+      on: input.proj
+      cases:
+        - when: x
+          then: b
+      else: c
+    b:
+      kind: code
+      output: str
+      code: "return 'b'"
+    c:
+      kind: code
+      output: str
+      code: "return 'c'"
+  output: ${b.output | c.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' (kind=case): `on:` must be a reference, but has no `${...}`; write a reference such as `on: ${input.x}`'
+      frames:
+      - label: flow.yaml
+        range: [8, 9, 8, 19]

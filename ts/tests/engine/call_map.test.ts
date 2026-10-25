@@ -262,6 +262,17 @@ test("a call binding to an undeclared child input is loud", async () => {
   );
 });
 
+test("a map binding to an undeclared child input names the map node", async () => {
+  const text = CALL_BAD_NAME.replace("kind: call", "kind: map\n    over: ${[input.topic]}");
+
+  const error = await loadErrorAsync(loadFlow(text, { childResolver: await makeResolver() }));
+
+  expect(error.message).toBe(
+    "map node 'research': binding 'symbol' is not a declared input of callable 'research-one'\n" +
+      "  map node 'research': required callable input 'topic' is unbound",
+  );
+});
+
 const CHILD_NO_OUTPUT = `
 id: no-output
 name: no_output

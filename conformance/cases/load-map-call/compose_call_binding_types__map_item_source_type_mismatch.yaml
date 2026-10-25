@@ -39,7 +39,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'call node ''c'': binding ''t'' — child expects ''str'', source is ''int'''
+      message: 'map node ''c'': binding ''t'' — child expects ''str'', source is ''int'''
       frames:
       - label: flow.yaml
         range: [34, 7, 35, 1]

@@ -292,14 +292,14 @@ describe("resolveChild", () => {
 test.each([
   ["map", new MapDescriptor({ id: "m", call: "c", over: "${input.xs}" })],
   ["loop", new LoopDescriptor({ id: "m", call: "c", times: 1n })],
-])("a %s whose child already nests at the limit fails", (_kind, desc) => {
+])("a %s whose child already nests at the limit fails, named by its kind", (kind, desc) => {
   const ctx = new BuildContext({ registry: new Map(), resolver: () => resolved(50) });
 
   const error = thrown(() => desc.build(ctx));
 
   expect(error).toBeInstanceOf(LoadError);
   expect((error as LoadError).message).toBe(
-    "call node 'm': calling callable 'c' nests calls 51 levels deep, past the call nesting " +
+    `${kind} node 'm': calling callable 'c' nests calls 51 levels deep, past the call nesting ` +
       "limit of 50 (each call, map, or loop body is a level); flatten the chain",
   );
 });

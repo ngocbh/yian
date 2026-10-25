@@ -29,7 +29,7 @@ import {
 } from "../../typesys/values.ts";
 
 /** The scalar names `isinstance` accepts besides a `typedefs:` name. */
-export const BUILTIN_TYPE_NAMES: readonly string[] = [
+const ISINSTANCE_SCALAR_NAMES: readonly string[] = [
   "str",
   "int",
   "float",
@@ -130,10 +130,10 @@ function collect(
  * @throws {TypeCheckError} When `name` is neither a `typedefs:` name nor a builtin scalar name.
  */
 export function resolveIsinstanceType(name: string, registry: TypeRegistry): Type {
-  if (!registry.has(name) && !BUILTIN_TYPE_NAMES.includes(name)) {
+  if (!registry.has(name) && !ISINSTANCE_SCALAR_NAMES.includes(name)) {
     throw new TypeCheckError(
       `unknown type ${reprText(name)}; isinstance takes a typedefs: name or one of ` +
-        BUILTIN_TYPE_NAMES.join(", "),
+        ISINSTANCE_SCALAR_NAMES.join(", "),
     );
   }
   return typeFor(name, registry);
@@ -173,6 +173,15 @@ export function constructorTypeFn(registry: TypeRegistry): (name: string) => Typ
 }
 
 /**
+ * Return the members a check against `typ` names, ignoring its nullability: each member of a
+ * union, else `typ` itself.
+ */
+export function checkedMembers(typ: Type): readonly Type[] {
+  const strict = typ.replace({ nullable: false });
+  return strict.variants?.length ? strict.variants : [strict];
+}
+
+/**
  * Return the members of a union `baseType` that pass `isinstance(x, typ)`, if known.
  *
  * The answer is the base members equal to a member of `typ` (ignoring nullability), and only
@@ -192,7 +201,7 @@ export function isinstanceMembers(baseType: Type, typ: Type): Type[] | null {
   const members = baseType.variants;
   if (members === undefined) return null;
   const strict = typ.replace({ nullable: false });
-  const wanted = strict.variants?.length ? strict.variants : [strict];
+  const wanted = checkedMembers(typ);
   const shared = members.filter((member) => wanted.some((w) => typeEquals(member, w)));
   // The runtime check is the write-boundary check, so a base member that is not a member of
   // `typ` but overlaps it can still pass. Leaving it out would be unsound (the branch could see

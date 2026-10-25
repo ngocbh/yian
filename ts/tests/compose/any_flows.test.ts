@@ -297,14 +297,14 @@ test.each(MAP_ROWS)("a map over %s (runs)", async (_name, overOutput, childType,
 test("a map over a list of optional Any into a child Any input is a load error", () => {
   const error = loadError(() => assembleText(map("list(Optional(Any))", "Any", "[1]")));
 
-  expect(error.message).toBe("call node 'm': binding 'x' — child expects 'Any', source is 'Optional(Any)'");
+  expect(error.message).toBe("map node 'm': binding 'x' — child expects 'Any', source is 'Optional(Any)'");
 });
 
 test("a map over a mixed literal list still checks each element at load", () => {
   const error = loadError(() => assembleText(map(null, "str", "null", "['a', 1]")));
 
   expect(error.message).toBe(
-    "call node 'm': binding 'x' — child expects 'str', but the element 1 does not fit; " +
+    "map node 'm': binding 'x' — child expects 'str', but the element 1 does not fit; " +
       'quote it to keep it as text: "1"',
   );
 });

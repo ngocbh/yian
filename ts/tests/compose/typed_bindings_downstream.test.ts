@@ -158,7 +158,7 @@ output: \${each.output}
 
   const error = loadError(() => load(text));
 
-  expect(error.message).toBe("call node 'each': binding 'x' — child expects 'int', source is 'float'");
+  expect(error.message).toBe("map node 'each': binding 'x' — child expects 'int', source is 'float'");
 });
 
 // ---------- LOOP ----------

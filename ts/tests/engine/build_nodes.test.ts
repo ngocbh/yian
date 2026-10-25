@@ -200,8 +200,8 @@ test("a TOOL node is built with its argument bindings", () => {
 
 test.each([
   ["call", new CallDescriptor({ id: "c", call: "child" }), "call node 'c'", "child"],
-  ["map", new MapDescriptor({ id: "m", call: "child", over: "${input.xs}" }), "call node 'm'", "child"],
-  ["loop", new LoopDescriptor({ id: "p", call: "body", times: 3n }), "call node 'p'", "body"],
+  ["map", new MapDescriptor({ id: "m", call: "child", over: "${input.xs}" }), "map node 'm'", "child"],
+  ["loop", new LoopDescriptor({ id: "p", call: "body", times: 3n }), "loop node 'p'", "body"],
 ])("a %s descriptor needs a resolver", (_kind, desc, subject, callable) => {
   // A leaf-only context (no resolver) can't resolve the callable: a LoadError, not a TypeError.
   const error = loadError(() => desc.build(new BuildContext({ registry: new Map() })));

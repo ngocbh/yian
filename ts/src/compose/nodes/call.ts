@@ -18,7 +18,7 @@ import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { ContractOrigins, isExactly, type Parameter, ValueContract } from "../../nodes/contracts.ts";
 import { MapNode } from "../../nodes/map/node.ts";
-import { isInboxType, Type, ValueKind } from "../../typesys/values.ts";
+import { isInboxType, listKindForElement, Type } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import {
   type BuildContext,
@@ -29,15 +29,6 @@ import {
   siteKey,
 } from "./base.ts";
 import { callableDisplay, type ChildSignature, childSignature, resolveChild } from "./resolver.ts";
-
-// The list kind for a scalar or record element kind, as `resolveType` picks a list's storage.
-const LIST_KIND_FOR_ELEMENT: ReadonlyMap<ValueKind, ValueKind> = new Map([
-  [ValueKind.STRING, ValueKind.LIST_STRING],
-  [ValueKind.INTEGER, ValueKind.LIST_INTEGER],
-  [ValueKind.NUMBER, ValueKind.LIST_NUMBER],
-  [ValueKind.BOOLEAN, ValueKind.LIST_BOOLEAN],
-  [ValueKind.OBJECT, ValueKind.LIST_OBJECT],
-]);
 
 /** The fields `CallDescriptor`'s constructor takes: the common ones and the CALL's own. */
 export interface CallDescriptorFields extends NodeDescriptorFields {
@@ -164,6 +155,7 @@ export class CallDescriptor extends NodeDescriptor {
     const child = resolveChild(this.id, this.call, ctx.resolver, this.childLabel, {
       diagnostics: ctx.diagnostics,
       range: this.fieldRanges.get(siteKey("field", "call")) ?? this.range,
+      kind: this.kind,
     });
     const sig = childSignature(child);
     const errors: string[] = [];
@@ -211,23 +203,15 @@ export class CallDescriptor extends NodeDescriptor {
       node.outputContract = sig.output;
     }
     node.params = this.sinkParams();
-    checkChildBindings(this.id, this.call, node.params, sig, errors, this.childLabel, this.fieldLabels);
+    checkChildBindings(this.kind, this.id, this.call, node.params, sig, errors, this.childLabel, this.fieldLabels);
     if (errors.length > 0) throw ctx.diagnostics.error(errors.join("\n  "), { range: this.range });
     return this._finish(node, wiring);
   }
 }
 
-/**
- * Return the type `list(element)`, a MAP's output: a record or union element gives
- * `LIST_OBJECT`, a `Literal` element `LIST_STRING`, a scalar its own list kind, else `LIST_ANY`,
- * as `resolveType` picks a list's storage.
- */
+/** Return the type `list(element)`, a MAP's output, stored as `resolveType` stores a list. */
 function listOf(element: Type): Type {
-  let kind: ValueKind;
-  if (element.tags !== undefined) kind = ValueKind.LIST_STRING;
-  else if (element.fields !== undefined || element.variants !== undefined) kind = ValueKind.LIST_OBJECT;
-  else kind = LIST_KIND_FOR_ELEMENT.get(element.kind) ?? ValueKind.LIST_ANY;
-  return new Type({ kind, element });
+  return new Type({ kind: listKindForElement(element), element });
 }
 
 /**
@@ -235,10 +219,12 @@ function listOf(element: Type): Type {
  * one message per problem to `errors`: a parameter the child doesn't declare, and a required
  * child input left unbound. The binding types are checked later, over the flow's wiring.
  *
+ * @param kind The node's kind (`call` or `map`), named in messages.
  * @param labels The descriptor's `fieldLabels`: an inline call's `input '<p>'` entry names its
  *   argument and its `call` entry names the call, in place of the generated node.
  */
 function checkChildBindings(
+  kind: string,
   nodeId: string,
   flowId: string,
   params: readonly Parameter[],
@@ -254,11 +240,11 @@ function checkChildBindings(
     if (!declared.has(param.name)) {
       const subject =
         labels.get(`input ${reprText(param.name)}`) ||
-        `call node ${reprText(nodeId)}: binding ${reprText(param.name)}`;
+        `${kind} node ${reprText(nodeId)}: binding ${reprText(param.name)}`;
       errors.push(`${subject} is not a declared input of ${callableDisplay(flowId, childLabel)}`);
     }
   }
-  const callLabel = labels.get("call") || `call node ${reprText(nodeId)}`;
+  const callLabel = labels.get("call") || `${kind} node ${reprText(nodeId)}`;
   for (const input of sig.inputs) {
     if (input.required && !bound.has(input.name)) {
       errors.push(`${callLabel}: required callable input ${reprText(input.name)} is unbound`);

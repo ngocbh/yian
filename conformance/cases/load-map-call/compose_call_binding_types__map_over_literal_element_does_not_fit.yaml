@@ -39,7 +39,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'call node ''c'': binding ''t'' — child expects ''int'', but the element "1" does not fit; text is not converted between flows, so write 1 without quotes'
+      message: 'map node ''c'': binding ''t'' — child expects ''int'', but the element "1" does not fit; text is not converted between flows, so write 1 without quotes'
       frames:
       - label: flow.yaml
         range: [34, 7, 35, 1]

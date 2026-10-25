@@ -36,6 +36,19 @@ export function nth<T>(items: readonly T[], index: number): T | null {
 }
 
 /**
+ * Return the part of `text` a one-line range covers, as written; `null` when there is no text
+ * or range, the range spans more than one line, or it lies past the text.
+ */
+export function oneLineSlice(text: string | null, range: SourceRange | null): string | null {
+  if (text === null || range === null || range.startLine !== range.endLine) return null;
+  // Lines break as ranges count them (`rule: columns`); no empty line after a final break.
+  const lines = text.split(/\r\n|\r|\n/);
+  if (lines[lines.length - 1] === "") lines.pop();
+  if (!(1 <= range.startLine && range.startLine <= lines.length)) return null;
+  return lines[range.startLine - 1]!.slice(range.startCol - 1, range.endCol - 1);
+}
+
+/**
  * Return the authored text a one-line range covers, as written; `null` when there is no
  * document or range, the range spans more than one line, or it lies past the text.
  */
@@ -43,12 +56,7 @@ export function oneLineText(
   document: SourceDocument | null,
   range: SourceRange | null,
 ): string | null {
-  if (document === null || range === null || range.startLine !== range.endLine) return null;
-  // Lines break as ranges count them (`rule: columns`); no empty line after a final break.
-  const lines = document.text.split(/\r\n|\r|\n/);
-  if (lines[lines.length - 1] === "") lines.pop();
-  if (!(1 <= range.startLine && range.startLine <= lines.length)) return null;
-  return lines[range.startLine - 1]!.slice(range.startCol - 1, range.endCol - 1);
+  return oneLineSlice(document?.text ?? null, range);
 }
 
 /**

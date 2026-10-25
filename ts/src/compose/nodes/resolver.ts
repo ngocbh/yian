@@ -288,6 +288,8 @@ export function callNesting(flow: NestingFlow): number {
  * @param childLabel Author-facing name of the callable; `null` names it by `flowId`.
  * @param options.diagnostics The context errors are raised in; a fresh one when not given.
  * @param options.range Location of the call in the owning document.
+ * @param options.kind The calling node's kind (`call`, `map` or `loop`), named in messages;
+ *   `call` when not given.
  * @returns The resolved child flow.
  * @throws {LoadError} When the callable can't be resolved, or the call nests bodies deeper than
  *   `current().maxCallNesting` levels.
@@ -297,16 +299,17 @@ export function resolveChild(
   flowId: string,
   resolver: ChildResolver | null,
   childLabel: string | null = null,
-  options: { diagnostics?: LoadDiagnostics | null; range?: SourceRange | null } = {},
+  options: { diagnostics?: LoadDiagnostics | null; range?: SourceRange | null; kind?: string } = {},
 ): ResolvedChild {
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const range = options.range ?? null;
+  const subject = `${options.kind ?? "call"} node ${reprText(nodeId)}`;
   const display = callableDisplay(flowId, childLabel);
   const limit = current().maxCallNesting;
 
   const tooDeep = (levels: string): LoadError =>
     diagnostics.error(
-      `call node ${reprText(nodeId)}: calling ${display} nests calls ${levels} deep, past the ` +
+      `${subject}: calling ${display} nests calls ${levels} deep, past the ` +
         `call nesting limit of ${limit} (each call, map, or loop body is a ` +
         "level); flatten the chain",
       { range },
@@ -324,7 +327,7 @@ export function resolveChild(
     if (error instanceof LoadError) throw error;
     // Any other resolver failure means the callable is unknown.
     const text = error instanceof Error ? error.message : String(error);
-    throw diagnostics.error(`call node ${reprText(nodeId)}: could not resolve ${display}: ${text}`, {
+    throw diagnostics.error(`${subject}: could not resolve ${display}: ${text}`, {
       range,
       cause: error,
     });

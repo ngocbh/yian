@@ -536,6 +536,16 @@ function writableAsTag(text: string): boolean {
   return TAG_CHARACTERS.test(text);
 }
 
+/** Return the index of the `)` that closes the `(` at `text[0]`, or -1 when it isn't closed. */
+function closingParen(text: string): number {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "(") depth++;
+    else if (text[i] === ")" && --depth === 0) return i;
+  }
+  return -1;
+}
+
 /** One slot's authored value, read through its tags. Frozen. */
 export class TaggedSlot {
   /**
@@ -824,7 +834,7 @@ class TaggedValueReader {
     const value = cursor.value;
     if (typeof value !== "string" || !value.startsWith("(")) return;
     const tag = cursor.tag!;
-    const close = value.indexOf(")");
+    const close = closingParen(value);
     const joined = tag + (close < 0 ? value : value.slice(0, close + 1));
     const label = pathLabel(this.label, path);
     let message: string;

@@ -56,6 +56,7 @@ import { pythonTypeName } from "../../typesys/types.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
 import { type Guard, guardedRefs } from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import { hasSpan } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { ScalarStyle } from "../source/common.ts";
@@ -69,6 +70,8 @@ import {
   siteKey,
 } from "./base.ts";
 
+const ON_FIX = "write a reference such as `on: ${input.x}`";
+
 /** One authored `cases:` entry as YAML read it: `when:` and `then:` to their values. */
 export type CaseSpec = Readonly<Record<string, unknown>>;
 
@@ -78,7 +81,6 @@ export interface CaseDescriptorFields extends NodeDescriptorFields {
   else_?: unknown;
   hasElse?: boolean;
   on?: string | null;
-  asserts?: readonly string[];
   whenRanges?: readonly (SourceRange | null)[];
   thenRanges?: readonly (SourceRange | null)[];
   thenStyles?: readonly (ScalarStyle | null)[];
@@ -101,7 +103,6 @@ export interface CaseDescriptorFields extends NodeDescriptorFields {
  * unquoted node name from quoted text, and `else: null` from no `else:`; `thenTags` and `elseTag`
  * keep a tagged value's tag. A style is the YAML scalar style of the authored value (`null` for a
  * mapping, a list, a missing value or a source-free cursor); downstream reads `null` as plain.
- * `asserts` is a field the lowering may set, but not in `allowed`: a `case` never authors it.
  */
 export class CaseDescriptor extends NodeDescriptor {
   static override readonly kind = "case";
@@ -125,8 +126,6 @@ export class CaseDescriptor extends NodeDescriptor {
   readonly hasElse: boolean;
   /** The `on:` reference text; `null` in the searched form. */
   readonly on: string | null;
-  /** The node asserts the lowering may set; never authored. */
-  readonly asserts: readonly string[];
   /**
    * The range of each `cases[N].when` value, aligned with `cases` (`null` where none exists), so a
    * generated parameter (`__rN`) locates at its own line. Position, not text, is the identity.
@@ -165,7 +164,6 @@ export class CaseDescriptor extends NodeDescriptor {
     // A directly constructed `else_` implies the key was written.
     this.hasElse = (fields.hasElse ?? false) || this.else_ !== null;
     this.on = fields.on ?? null;
-    this.asserts = fields.asserts ?? [];
     this.whenRanges = fields.whenRanges ?? [];
     this.thenRanges = fields.thenRanges ?? [];
     this.thenStyles = fields.thenStyles ?? [];
@@ -199,8 +197,8 @@ export class CaseDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject an `on:` YAML read as non-text (`null` stays absent) or text holding a lone surrogate,
-   * then run the base checks.
+   * Reject an `on:` YAML read as non-text (`null` stays absent), text holding a lone surrogate or
+   * text with no `${...}` reference, then run the base checks.
    *
    * @throws LoadError at `on:` (else at the node).
    */
@@ -213,10 +211,18 @@ export class CaseDescriptor extends NodeDescriptor {
   ): void {
     const on = fields["on"] ?? null;
     const range = ranges.get(siteKey("field", "on")) ?? ownRange;
-    rejectNonText(this.kind, nodeId, "on", on, range, diagnostics, {
-      fix: "write a reference such as `on: ${input.x}`",
-    });
-    if (typeof on === "string") checkWrittenValue(on, `node ${reprText(nodeId)} field 'on'`, range, diagnostics);
+    rejectNonText(this.kind, nodeId, "on", on, range, diagnostics, { fix: ON_FIX });
+    if (typeof on === "string") {
+      checkWrittenValue(on, `node ${reprText(nodeId)} field 'on'`, range, diagnostics);
+      // Text with no span is a constant, so every run would route the same way.
+      if (!hasSpan(on)) {
+        throw diagnostics.error(
+          `node ${reprText(nodeId)} (kind=${this.kind}): \`on:\` must be a reference, ` +
+            `but has no \`\${...}\`; ${ON_FIX}`,
+          { range },
+        );
+      }
+    }
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
   }
 
@@ -642,7 +648,7 @@ function joinSources(reads: readonly ConditionRead[]): string[] {
  *
  * @param guardsOf Gives each occurrence's guard; by default what the checks before it prove
  *   through `and`, `or` and `not` (`guardedRefs`).
- * @throws LoadError at a `when:` that isn't text or doesn't parse.
+ * @throws LoadError at a `when:` that isn't text or doesn't parse (at `cases:` when it is missing).
  * @throws RangeError when `guardsOf` gives a different number of guards than there are reads.
  */
 function searchedParams(
@@ -668,10 +674,7 @@ function searchedParams(
 
   desc.cases.forEach((spec, caseIndex) => {
     const when = spec["when"];
-    const whenRange =
-      caseIndex < desc.whenRanges.length
-        ? (desc.whenRanges[caseIndex] ?? null)
-        : (desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range);
+    const whenRange = desc.whenRanges[caseIndex] ?? desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range;
     if (typeof when !== "string") {
       throw diagnostics.error(
         `case node ${reprText(desc.id)}: each searched case needs a string \`when:\` expression`,
@@ -740,8 +743,8 @@ export function searchedParamGuards(
  * Reads are as `searchedParams` defines them. Each `__rN` is located at the `cases[N].when` it
  * was first seen in and labelled `cases[N].when`.
  *
- * @throws LoadError when a `when:` isn't text or doesn't parse (at that `when:`), or a case lacks
- *   its `then:` (at the `then:`, else at `cases:`).
+ * @throws LoadError when a `when:` isn't text or doesn't parse (at that `when:`, else at `cases:`),
+ *   or a case lacks its `then:` (at the `then:`, else at `cases:`).
  */
 function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lowering {
   const params = searchedParams(desc, diagnostics);
@@ -757,10 +760,7 @@ function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lo
     const then = spec["then"] ?? null;
     if (then === null) {
       throw diagnostics.error(`case node ${reprText(desc.id)}: each searched case needs a \`then:\``, {
-        range:
-          index < desc.thenRanges.length
-            ? (desc.thenRanges[index] ?? null)
-            : (desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range),
+        range: desc.thenRanges[index] ?? desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range,
       });
     }
     // As in `desugarOn`: the branch check has made each `then:` and the `else:` a node name, and

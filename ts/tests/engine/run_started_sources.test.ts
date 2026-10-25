@@ -470,6 +470,16 @@ test("run_started records the flow files, the yian version and no parent", async
   expect(record.skills).toEqual({});
 });
 
+test.each(["", ".", "..", "/"])("a source label %p with no file name keys the root `<flow>`, and it runs", async (label) => {
+  const dir = freshDir("label");
+  const text = leafOut("x");
+
+  const loaded = await loadFlow(text, { baseDir: dir, sourceLabel: label });
+
+  expect(sourceOf(loaded)).toEqual({ root: "<flow>", dir: realpathSync(dir), files: { "<flow>": file(text) } });
+  await runInto(loaded, {}, {});
+});
+
 test("run_started records the parent the host names", async () => {
   const dir = freshDir("parent");
   writeTree(dir, SHAPES["one level"]!.files);

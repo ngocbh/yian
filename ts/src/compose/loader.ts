@@ -790,8 +790,11 @@ async function flowSource(
     }
     return node;
   };
+  // A label with no file name (`""`, `.`, `..`, `/`) would key the root at the folder itself.
+  const name = basename(sourceLabel);
+  const rootName = name === "" || name === "." || name === ".." ? "<flow>" : name;
   // Built apart from the disk files: a file on disk may share the root's path with other text.
-  const root: SourceNode = { path: join(dir, basename(sourceLabel)), text: rootFile.text, refs: new Map() };
+  const root: SourceNode = { path: join(dir, rootName), text: rootFile.text, refs: new Map() };
   for (const [ref, real] of rootFile.refs) root.refs.set(ref, diskNode(real, ctx.read.get(real)!));
   for (const [ref, child] of hosted) {
     if (!(child instanceof ComposedFlow) || child.source === null) return null;

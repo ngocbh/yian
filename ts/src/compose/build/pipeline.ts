@@ -57,7 +57,6 @@ import {
   isExactly,
   type OutputContract,
   Parameter,
-  PartialRecordContract,
   ValueContract,
   type ValuePath,
   type ValueTemplate,
@@ -65,10 +64,10 @@ import {
 import { ASK } from "../../tools/context.ts";
 import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
-import { isList, isListKind, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
+import { isList, isListKind, isRecord, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { resolveOutputBindingContract, type TypeFn } from "../helpers/output_contracts.ts";
+import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../helpers/output_contracts.ts";
 import {
   oldFormSuggestion,
   oldTypedText,
@@ -161,21 +160,6 @@ import type { FlowSource } from "../../runtime/log.ts";
 const SINGLE_OUTPUT_NAME = "result";
 
 const PRESENTATION_UNAVAILABLE_NOTE = "Source presentation was unavailable.";
-
-/**
- * Return a producer's output contract, checked to be one the reference walks read.
- *
- * @throws TypeError when it isn't a `ValueContract` or `PartialRecordContract`.
- */
-function producerContract(producerId: string, contract: OutputContract): ValueContract | PartialRecordContract {
-  if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-    throw new TypeError(
-      "output producer contracts must be ValueContract or PartialRecordContract values, " +
-        `got ${jsTypeName(contract)} for ${reprText(producerId)}`,
-    );
-  }
-  return contract;
-}
 
 /** Run `fn`, rethrowing a `SourceAccessError` from walking retained source as a located `LoadError`. */
 function locateSourceAccess<T>(diagnostics: LoadDiagnostics, fn: () => T): T {
@@ -671,15 +655,7 @@ export function stampNodeWiringOrigins(
 
         if (parameterOrigin !== null) {
           const parameter = parameters[parameterIndex]!;
-          parameters[parameterIndex] = new Parameter(parameter.name, {
-            contract: parameter.contract,
-            required: parameter.required,
-            hasDefault: parameter.hasDefault,
-            default: parameter.default,
-            coerceStrings: parameter.coerceStrings,
-            origin: parameterOrigin,
-            defaultOrigin: parameter.defaultOrigin,
-          });
+          parameters[parameterIndex] = parameter.replace({ origin: parameterOrigin });
           parametersChanged = true;
         }
         if (bindingOrigin !== null) wiring.set(name, withOrigin(wiring.get(name), bindingOrigin));
@@ -1777,18 +1753,11 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   } else {
     inputs = [...inputParameters!];
   }
-  const flowInputContracts = new Map<string, ValueContract>();
-  for (const parameter of inputs) {
-    const contract = parameter.contract;
-    if (contract === null) continue;
-    if (!isExactly(contract, ValueContract)) {
-      throw new TypeError(
-        "flow input contracts must be exact ValueContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(parameter.name)}`,
-      );
-    }
-    flowInputContracts.set(parameter.name, contract);
-  }
+  const authoredInputContracts = new Map(
+    inputs.flatMap((parameter) => (parameter.contract === null ? [] : [[parameter.name, parameter.contract] as const])),
+  );
+  assertExactContracts(new Map(), authoredInputContracts);
+  const flowInputContracts = authoredInputContracts as Map<string, ValueContract>;
   const flowInputTypes = new Map([...flowInputContracts].map(([inputName, contract]) => [inputName, contract.type]));
   // Static inference types a `T(...)` constructor by this flow's own typedefs.
   const constructorType = constructorTypeFn(registry);
@@ -1971,7 +1940,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
         );
       }
       if (node.outputContract === null) throw unavailableType();
-      return producerContract(producerId, node.outputContract);
+      assertExactContracts(new Map([[producerId, node.outputContract]]));
+      return node.outputContract;
     };
 
     let itemType: ItemType | null = null;
@@ -2108,8 +2078,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // contract, so it is naturally excluded.
   const producers = new Map<string, OutputContract>();
   for (const [nodeId, node] of nodesBuilt) {
-    if (node.outputContract !== null) producers.set(nodeId, producerContract(nodeId, node.outputContract));
+    if (node.outputContract !== null) producers.set(nodeId, node.outputContract);
   }
+  assertExactContracts(producers);
   for (const [nodeId, node] of nodesBuilt) {
     if (node.producesMessages) producers.set(messagesKey(nodeId), new ValueContract(newMessagesType()));
   }

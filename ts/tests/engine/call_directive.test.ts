@@ -658,6 +658,16 @@ test("flow call in outputs span is loud", () => {
   );
 });
 
+test.each([
+  ["a keyword argument", "call(f, v=${g(1)})", "use: call(f) argument 'v'", "g"],
+  ["a nested call's argument", "call(f, v=call(h, w=pre ${g(x=1)}))", "use: call(h) argument 'w'", "g"],
+])("flow call in %s span is loud", (_name, value, where, callee) => {
+  expect(topicError(value).message).toBe(
+    `${where}: a flow call '${callee}' inside \${...} is not supported — write it as the whole value ` +
+      `with the call(...) directive: call(${callee}, ...)`,
+  );
+});
+
 test("pure builtin in span still allowed", () => {
   // `upper` is a builtin: a call to it inside `${...}` is NOT a flow call, so it passes through.
   const [descriptors] = desugarInlineCalls(nodes(code("use", { topic: "${upper(input.t)}" })), null, {

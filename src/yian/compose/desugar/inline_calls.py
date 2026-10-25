@@ -482,25 +482,59 @@ def _desugar_value(
                 else ""
             )
             raise diagnostics.error(f"{host}: {exc}{hint}", range=range) from exc
+        # A keyword argument is a binding too, so it gets the same retired-form check
+        # (nested calls are in `found`, each with its own arguments). A malformed span
+        # is left for the binding parser, which names the argument.
+        for call in found:
+            for name, arg in call.args.items():
+                if isinstance(arg, str) and "${" in arg:
+                    _reject_span_flow_calls(
+                        arg,
+                        f"{host}: call({call.callee}) argument {name!r}",
+                        range=range,
+                        type_names=type_names,
+                        diagnostics=diagnostics,
+                        skip_malformed=True,
+                    )
         calls.extend(found)
         return new_value
+    _reject_span_flow_calls(
+        value, host, range=range, type_names=type_names, diagnostics=diagnostics
+    )
+    return value
+
+
+def _reject_span_flow_calls(
+    value: str,
+    where: str,
+    *,
+    range: Optional[SourceRange],
+    type_names: frozenset[str],
+    diagnostics: LoadDiagnostics,
+    skip_malformed: bool = False,
+) -> None:
+    """Raise a located `LoadError` (prefixed ``where:``) when a `${...}` span of
+    ``value`` calls a flow, the retired `${flow(args)}` form, or calls a builtin type
+    name like a function; also when a span doesn't parse, unless ``skip_malformed``.
+    A call to a name in ``type_names`` is a constructor and passes."""
     try:
         flow_callees = flow_call_callees_in_spans(value, type_names)
     except ExpressionError as exc:
+        if skip_malformed:
+            return
         raise diagnostics.error(
-            f"{host}: {exc}",
+            f"{where}: {exc}",
             range=range,
         ) from exc
     if flow_callees:
         callee = flow_callees[0]
         if callee in BUILTIN_TYPE_NAMES:
-            raise diagnostics.error(f"{host}: {unknown_function_message(callee)}", range=range)
+            raise diagnostics.error(f"{where}: {unknown_function_message(callee)}", range=range)
         raise diagnostics.error(
-            f"{host}: a flow call {callee!r} inside ${{...}} is not supported — write it "
+            f"{where}: a flow call {callee!r} inside ${{...}} is not supported — write it "
             f"as the whole value with the call(...) directive: call({callee}, ...)",
             range=range,
         )
-    return value
 
 
 def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:

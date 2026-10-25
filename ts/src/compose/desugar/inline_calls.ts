@@ -487,28 +487,63 @@ function desugarValue(
           : "";
       throw diagnostics.error(`${host}: ${error.message}${hint}`, { range, cause: error });
     }
+    // A keyword argument is a binding too, so it gets the same retired-form check (nested
+    // calls are in `found`, each with its own arguments). A malformed span is left for the
+    // binding parser, which names the argument.
+    for (const call of found) {
+      for (const [name, arg] of Object.entries(call.args)) {
+        if (typeof arg === "string" && arg.includes("${")) {
+          rejectSpanFlowCalls(arg, `${host}: call(${call.callee}) argument ${reprText(name)}`, {
+            range,
+            typeNames,
+            diagnostics,
+            skipMalformed: true,
+          });
+        }
+      }
+    }
     calls.push(...found);
     return newValue;
   }
+  rejectSpanFlowCalls(value, host, { range, typeNames, diagnostics });
+  return value;
+}
+
+/**
+ * Throw a located `LoadError` (prefixed `where:`) when a `${...}` span of `value` calls a flow,
+ * the retired `${flow(args)}` form, or calls a builtin type name like a function; also when a
+ * span doesn't parse, unless `skipMalformed`. A call to a name in `typeNames` is a constructor
+ * and passes.
+ */
+function rejectSpanFlowCalls(
+  value: string,
+  where: string,
+  options: {
+    range: SourceRange | null;
+    typeNames: ReadonlySet<string>;
+    diagnostics: LoadDiagnostics;
+    skipMalformed?: boolean;
+  },
+): void {
+  const { range, typeNames, diagnostics, skipMalformed = false } = options;
   let flowCallees: string[];
   try {
     flowCallees = flowCallCalleesInSpans(value, typeNames);
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
-    throw diagnostics.error(`${host}: ${error.message}`, { range, cause: error });
+    if (skipMalformed) return;
+    throw diagnostics.error(`${where}: ${error.message}`, { range, cause: error });
   }
-  if (flowCallees.length > 0) {
-    const callee = flowCallees[0]!;
-    if (BUILTIN_TYPE_NAMES.has(callee)) {
-      throw diagnostics.error(`${host}: ${unknownFunctionMessage(callee)}`, { range });
-    }
-    throw diagnostics.error(
-      `${host}: a flow call ${reprText(callee)} inside \${...} is not supported — write it ` +
-        `as the whole value with the call(...) directive: call(${callee}, ...)`,
-      { range },
-    );
+  if (flowCallees.length === 0) return;
+  const callee = flowCallees[0]!;
+  if (BUILTIN_TYPE_NAMES.has(callee)) {
+    throw diagnostics.error(`${where}: ${unknownFunctionMessage(callee)}`, { range });
   }
-  return value;
+  throw diagnostics.error(
+    `${where}: a flow call ${reprText(callee)} inside \${...} is not supported — write it ` +
+      `as the whole value with the call(...) directive: call(${callee}, ...)`,
+    { range },
+  );
 }
 
 /**

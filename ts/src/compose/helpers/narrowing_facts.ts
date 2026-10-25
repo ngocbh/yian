@@ -53,7 +53,7 @@ import {
   TagCheck,
   unknownCheck,
 } from "./condition_guards.ts";
-import { isinstanceMembers, resolveIsinstanceType } from "./isinstance_types.ts";
+import { checkedMembers, isinstanceMembers, resolveIsinstanceType } from "./isinstance_types.ts";
 import { projectOutputContract } from "./output_contracts.ts";
 import { CLOSE_MATCH_CUTOFF, namedTypeLabel } from "./tags.ts";
 
@@ -221,8 +221,7 @@ export function isinstanceFact(baseType: Type, typ: Type): Fact | null {
 export function notIsinstanceFact(baseType: Type, typ: Type): Fact | null {
   const members = baseType.variants;
   if (members === undefined) return null;
-  const strict = typ.replace({ nullable: false });
-  const wanted = strict.variants?.length ? strict.variants : [strict];
+  const wanted = checkedMembers(typ);
   const kept = members.filter((member) => !contains(wanted, member));
   const nullable = baseType.nullable && !typ.nullable;
   if (kept.length === members.length && nullable === baseType.nullable) return null;
@@ -914,10 +913,8 @@ export function declaredImpossible(
   }
   // A null base fails a non-nullable check, so its negation can hold.
   if (baseType.nullable && !typ.nullable) return null;
-  const [strict, strictBase] = [typ.replace({ nullable: false }), baseType.replace({ nullable: false })];
-  const wanted = strict.variants?.length ? strict.variants : [strict];
-  const members = strictBase.variants?.length ? strictBase.variants : [strictBase];
-  if (!members.every((member) => contains(wanted, member))) return null;
+  const wanted = checkedMembers(typ);
+  if (!checkedMembers(baseType).every((member) => contains(wanted, member))) return null;
   return new ImpossibleCheck(text, check.base, ImpossibleReason.ALWAYS, {
     baseLabel: label,
     declared,

@@ -404,6 +404,22 @@ describe("deltas and parts", () => {
     }
   });
 
+  test("an unfinished item is filled from the terminal output by id, not by position", async () => {
+    // The gateway's output holds the items in another order than their output indexes.
+    const opened = await parse([
+      added(0, started(MESSAGE)),
+      textDelta(0, 0, "Hello there."),
+      done(1, CALL),
+      completed([CALL, MESSAGE]),
+    ]);
+    expect(partsDone(opened)).toEqual([new PartDone(1, CALL_PART), new PartDone(0, TEXT_PART)]);
+    expect((await collect(opened)).message.parts).toEqual([TEXT_PART, CALL_PART]);
+    // With no opened item to match, the text is built from its deltas.
+    const unopened = await parse([textDelta(0, 0, "Hello there."), done(1, CALL), completed([CALL, MESSAGE])]);
+    expect(partsDone(unopened)).toEqual([new PartDone(1, CALL_PART)]);
+    expect((await collect(unopened)).message.parts).toEqual([new TextPart("Hello there."), CALL_PART]);
+  });
+
   test("an added reasoning item takes its slot before any delta", async () => {
     const events = await parse([
       added(0, { ...REASONING, summary: [] }),
@@ -742,7 +758,7 @@ describe("terminal output", () => {
 
 describe("item errors", () => {
   test("an output item that isn't an object", async () => {
-    const error = await failure([added(0, started(MESSAGE)), completed([3])]);
+    const error = await failure([completed([3])]);
     expect(error.kind).toBe("protocol");
     expect(error.message).toBe("openai response has an output item that is not an object");
   });

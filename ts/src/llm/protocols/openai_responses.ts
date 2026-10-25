@@ -335,19 +335,31 @@ export class OpenAIResponses implements SseProtocol {
           (each) =>
             !finished.has(each) && !started.has(each) && !itemIds(output[each]!).some((id) => seenIds.has(id)),
         );
-        for (const each of [...unfinished, ...unseen]) {
-          if (0 <= each && each < output.length) {
-            for (const [itemContentIndex, part] of itemParts(output[each]!, this.#key)) {
-              if (part instanceof ToolCallPart) sawCalls = true;
-              yield new PartDone(index(each, itemContentIndex), part);
+        // An unfinished item is the output item with its opened item's ids, wherever it sits; one
+        // the stream never opened takes the item at its index only when no streamed item holds it.
+        const terminalItem = (each: number): JsonValue | undefined => {
+          const ids = itemIds(opened.get(each) ?? null);
+          if (ids.length > 0) return output.find((item) => itemIds(item).some((id) => ids.includes(id)));
+          const item = output[each];
+          return item === undefined || itemIds(item).some((id) => seenIds.has(id)) ? undefined : item;
+        };
+        const filled = [
+          ...unfinished.map((each) => [each, terminalItem(each)] as const),
+          ...unseen.map((each) => [each, output[each]] as const),
+        ];
+        for (const [each, item] of filled) {
+          if (item === undefined) {
+            // Text, reasoning and calls are built from their deltas; a refusal streams none, so
+            // its part is built here.
+            const openedItem = opened.get(each) ?? {};
+            for (const [refusalIndex, text] of refusals.get(each) ?? []) {
+              yield new PartDone(index(each, refusalIndex), refusalPart(text, openedItem, this.#key));
             }
             continue;
           }
-          // Text, reasoning and calls are built from their deltas; a refusal streams none, so
-          // its part is built here.
-          const item = opened.get(each) ?? {};
-          for (const [refusalIndex, text] of refusals.get(each) ?? []) {
-            yield new PartDone(index(each, refusalIndex), refusalPart(text, item, this.#key));
+          for (const [itemContentIndex, part] of itemParts(item, this.#key)) {
+            if (part instanceof ToolCallPart) sawCalls = true;
+            yield new PartDone(index(each, itemContentIndex), part);
           }
         }
         yield* this.#finish(response, sawCalls, responseId, type);

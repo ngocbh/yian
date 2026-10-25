@@ -16,7 +16,7 @@ import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
-import { inspectRun } from "../../src/run.ts";
+import { cancel, inspectRun } from "../../src/run.ts";
 import {
   InboxClosedRecord,
   InterruptedRecord,
@@ -473,6 +473,27 @@ describe("yian chat", () => {
       expect(code).toBe(0);
       expect(stderr()).toContain("not sent: ");
       expect(stdout()).toBe("echo: hi\necho: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a run cancelled from outside ends the chat at the next line with the run's end",
+    async () => {
+      const { io, stdin, stdout, stderr } = chatIo();
+      stdin.write("hi\n");
+      const chatting = runChat(flowFile(ECHO), io);
+      await until(() => stdout().includes("echo: hi"));
+      // The second prompt is up once the turn's `advance` has returned, so the cancel lands offline.
+      await until(() => (io.stderrStream as FakeOutput).text === "> You: \n".repeat(2));
+      await cancel(join(tmp, "run.jsonl"), { env: io.env });
+      stdin.write("there\n/exit\n");
+      const { code, log } = await chatting;
+      expect(code).toBe(130);
+      expect(stderr()).toContain("chat cancelled");
+      expect(stderr()).not.toContain("not sent: ");
+      expect(stderr()).not.toContain("chat failed");
+      expect(records(log).at(-1)).toBeInstanceOf(RunCancelledRecord);
     },
     TIMEOUT,
   );

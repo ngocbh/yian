@@ -145,6 +145,12 @@ const config = { provider: "anthropic", model: "claude-test" };
 const opts = { env: NO_ENV, numWorkers: 0, llmConfig: config };
 const turn = (u: string, a: string) => [user(u), assistant(a)];
 
+test("compact_history reads its skipped fold with ?.", () => {
+  const text = readFileSync(join(EXAMPLES_DIR, "compact_history.yaml"), "utf8");
+  expect(text).toContain("${folded.output?.summary :- input.summary}");
+  expect(text).toContain("${folded.output?.history :- input.history}");
+});
+
 test("compact_history passes through under budget with no model call", async () => {
   const flow = await load("compact_history.yaml");
   const history = [turn("hi", "hello")];

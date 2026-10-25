@@ -475,3 +475,21 @@ test.each<CaseRow>([
     call: assembled,
   })),
 ])("assemble: $id", runCase);
+
+/** A flow whose `use` binds `${a.output.k}` from `a`, which runs only when `input.go` holds. */
+const FLOW_WITH_A =
+  "id: f\nname: f\n" +
+  "typedefs:\n  Rec: {k: str}\n" +
+  "input:\n  go: !bool\n" +
+  "nodes:\n" +
+  "  gate:\n    kind: case\n    cases:\n      - when: ${input.go}\n        then: a\n" +
+  "  a:\n    kind: code\n    output: Rec\n    code: \"return {'k': 'v'}\"\n" +
+  "  use:\n    kind: code\n    input:\n      v: ${a.output.k}\n    code: \"return inputs['v']\"\n" +
+  "output: ${use.output}\n";
+
+test("a ?. read keeps its edge, co-skip and field check", () => {
+  const text = FLOW_WITH_A.replace("${a.output.k}", "${a.output?.k}");
+  const { flow } = assembleText(text);
+  expect(flow.compiled.edges.some((edge) => edge.from === "a" && edge.to === "use" && !edge.optional)).toBe(true);
+  expect(failure(text.replace("a.output?.k", "a.output?.nope"))).toContain("nope");
+});

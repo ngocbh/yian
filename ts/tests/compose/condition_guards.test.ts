@@ -395,3 +395,8 @@ test("a comprehension proves nothing", () => {
   expect(p("[x for x in xs if x.type == 'a']")).toStrictEqual(NOTHING);
   expect(p("[x for x in xs if x.type == 'a']", false)).toStrictEqual(NOTHING);
 });
+
+test("a ?. read is a guarded read and a check subject", () => {
+  expect(guardedRefs(parseCondition("x?.k != null and x?.k.m")).map(([path]) => path)).toEqual(["x.k", "x.k.m"]);
+  expect(checkIn(parseCondition("x?.k != null"))).toStrictEqual([new NotNullCheck("x.k"), true]);
+});

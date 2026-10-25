@@ -37,7 +37,7 @@
  */
 
 import { isinstanceSubject, isinstanceTypeNames } from "../../expr/index.ts";
-import { ISINSTANCE, valueArgs } from "../../expr/expressions.ts";
+import { ISINSTANCE, referencePath, valueArgs } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, Token, Tree } from "../../expr/grammar.ts";
 import { directReferenceParts } from "./output_contracts.ts";
 
@@ -366,8 +366,7 @@ export function guardedRefs(tree: ExprNode): [string, Guard][] {
     if (node.data === "refcall") {
       const callSuffix = callSuffixOf(node);
       if (callSuffix === undefined) {
-        const segments = node.children.slice(1).map((child) => String((child as Tree).children[0]));
-        reads.push([[String(node.children[0]), ...segments].join("."), context]);
+        reads.push([referencePath(node), context]);
         return;
       }
       for (const arg of valueArgs(String(node.children[0]), callSuffix)) {

@@ -33,6 +33,7 @@ import {
   RunFailed,
   RunResumed,
   RunStarted,
+  type CloseReason,
   type RunEvent,
   RunSucceeded,
   RunWaiting,
@@ -1943,11 +1944,9 @@ export function prepareRecord(
   const envelope = decodeRecord(envelopeJson);
   const canonical = envelope.record;
   let delta: FrontierPlan["delta"];
-  let observers: RunEvent[];
   if (isExactly(canonical, NodeStartedRecord)) {
     validateNodeStarted(state, canonical);
     delta = { kind: "started", nodeId: canonical.nodeId };
-    observers = [new NodeStarted({ nodeId: canonical.nodeId })];
   } else if (isExactly(canonical, RunResumedRecord)) {
     validateRunResumed(state, canonical);
     delta = {
@@ -1956,47 +1955,36 @@ export function prepareRecord(
       numWorkers: canonical.numWorkers,
       closedCalls: canonical.closedCalls,
     };
-    observers = [new RunResumed(), ...canonical.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(canonical, NodeStepRecord)) {
     validateNodeStep(state, canonical);
-    const closedCalls = bornClosedCalls(state, canonical);
     // The decoded copy keeps the applied step apart from the returned record.
-    delta = { kind: "step", nodeId: canonical.nodeId, step: canonicalSeed(canonical.step)[1] as JsonObject, closedCalls };
-    // A step is node-owned detail; no observer event announces it, except that a host call
-    // registered closed is withdrawn.
-    observers = closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
+    delta = {
+      kind: "step",
+      nodeId: canonical.nodeId,
+      step: canonicalSeed(canonical.step)[1] as JsonObject,
+      closedCalls: bornClosedCalls(state, canonical),
+    };
   } else if (isExactly(canonical, RunStoppedRecord)) {
     validateRunStopped(state, canonical);
     delta = { kind: "stopped", nodeIds: canonical.nodeIds };
-    observers = [];
   } else if (isExactly(canonical, NodeWaitingRecord)) {
     validateNodeWaiting(state, canonical);
     delta = { kind: "waiting", nodeId: canonical.nodeId };
-    observers = [new NodeWaiting({ nodeId: canonical.nodeId, callIds: canonical.callIds })];
   } else if (isExactly(canonical, NodeWokenRecord)) {
     validateNodeWoken(state, canonical);
-    const closedCalls = hostCalls(state, canonical.timedOut);
-    delta = { kind: "woken", nodeId: canonical.nodeId, closedCalls };
-    observers = [
-      new NodeWoken({ nodeId: canonical.nodeId, timedOut: canonical.timedOut }),
-      ...closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
-    ];
+    delta = { kind: "woken", nodeId: canonical.nodeId, closedCalls: hostCalls(state, canonical.timedOut) };
   } else if (isExactly(canonical, RunWaitingRecord)) {
     validateRunWaiting(state, canonical);
     delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
-    observers = [new RunWaiting({ nodeIds: canonical.nodeIds })];
   } else if (isExactly(canonical, InboxClosedRecord)) {
     validateInboxClosed(state, canonical);
     delta = { kind: "inboxClosed", inbox: canonical.inbox };
-    observers = [];
   } else if (isExactly(canonical, InterruptedRecord)) {
     validateInterrupted(state, canonical);
     const open = canonical.nodes.flatMap((nodeId) =>
       nodeCalls(state.waits, nodeId).filter((call) => call.state === "open").map((call) => call.callId),
     );
-    const closedCalls = hostCalls(state, open);
-    delta = { kind: "interrupted", nodeIds: canonical.nodes, closedCalls };
-    observers = closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
+    delta = { kind: "interrupted", nodeIds: canonical.nodes, closedCalls: hostCalls(state, open) };
   } else {
     // An exhaustive codec invariant.
     throw new TypeError("frontier envelope decoded to a different record kind");
@@ -2016,7 +2004,41 @@ export function prepareRecord(
     traceDelta: prepareRecordTrace(state, envelope),
     delta: Object.freeze(delta),
   });
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, frontierObservers(canonical, delta));
+}
+
+/**
+ * The events one frontier record publishes. `record` is the canonical record `delta` was planned
+ * from, of the class its kind names.
+ */
+function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): RunEvent[] {
+  const closed = (reason: CloseReason) =>
+    "closedCalls" in delta ? delta.closedCalls.map((callId) => new CallClosed({ callId, reason })) : [];
+  switch (delta.kind) {
+    case "started":
+      return [new NodeStarted({ nodeId: delta.nodeId })];
+    case "resumed":
+      return [new RunResumed(), ...closed("crashed")];
+    case "step":
+      // A step is node-owned detail; no observer event announces it, except that a host call
+      // registered closed is withdrawn.
+      return closed("interrupted");
+    case "waiting": {
+      const { nodeId, callIds } = record as NodeWaitingRecord;
+      return [new NodeWaiting({ nodeId, callIds })];
+    }
+    case "woken": {
+      const { nodeId, timedOut } = record as NodeWokenRecord;
+      return [new NodeWoken({ nodeId, timedOut }), ...closed("timed_out")];
+    }
+    case "runWaiting":
+      return [new RunWaiting({ nodeIds: delta.nodeIds })];
+    case "interrupted":
+      return closed("interrupted");
+    case "stopped":
+    case "inboxClosed":
+      return [];
+  }
 }
 
 /**
@@ -3170,30 +3192,13 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   const plan = prepared._plan;
   if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
   const record = prepared.record;
-  if (
-    !(
-      isExactly(record, NodeStartedRecord) ||
-      isExactly(record, RunResumedRecord) ||
-      isExactly(record, NodeStepRecord) ||
-      isExactly(record, RunStoppedRecord) ||
-      isExactly(record, NodeWaitingRecord) ||
-      isExactly(record, NodeWokenRecord) ||
-      isExactly(record, RunWaitingRecord) ||
-      isExactly(record, InboxClosedRecord) ||
-      isExactly(record, InterruptedRecord)
-    )
-  ) {
-    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake, run-wait, close or interrupt record");
-  }
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
   const delta = plan.delta;
-  let observers: readonly RunEvent[];
   if (isExactly(record, NodeStartedRecord) && delta.kind === "started") {
     if (delta.nodeId !== record.nodeId) throw new RangeError("frontier start delta disagrees with its record");
-    observers = [new NodeStarted({ nodeId: delta.nodeId })];
   } else if (isExactly(record, RunResumedRecord) && delta.kind === "resumed") {
     if (
       !sameItems(delta.retryNodeIds, record.retryNodeIds) ||
@@ -3202,38 +3207,28 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     ) {
       throw new RangeError("frontier resume delta disagrees with its record");
     }
-    observers = [new RunResumed(), ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(record, NodeStepRecord) && delta.kind === "step") {
     if (delta.nodeId !== record.nodeId || logJson(delta.step) !== logJson(record.step)) {
       throw new RangeError("frontier step delta disagrees with its record");
     }
-    observers = delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else if (isExactly(record, RunStoppedRecord) && delta.kind === "stopped") {
     if (!sameItems(delta.nodeIds, record.nodeIds)) {
       throw new RangeError("frontier stop delta disagrees with its record");
     }
-    observers = [];
   } else if (isExactly(record, NodeWaitingRecord) && delta.kind === "waiting") {
     if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wait delta disagrees with its record");
-    observers = [new NodeWaiting({ nodeId: record.nodeId, callIds: record.callIds })];
   } else if (isExactly(record, NodeWokenRecord) && delta.kind === "woken") {
     if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wake delta disagrees with its record");
-    observers = [
-      new NodeWoken({ nodeId: record.nodeId, timedOut: record.timedOut }),
-      ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
-    ];
   } else if (isExactly(record, RunWaitingRecord) && delta.kind === "runWaiting") {
     if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
-    observers = [new RunWaiting({ nodeIds: record.nodeIds })];
   } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
     if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
-    observers = [];
   } else if (isExactly(record, InterruptedRecord) && delta.kind === "interrupted") {
     if (!sameItems(delta.nodeIds, record.nodes)) throw new RangeError("frontier interrupt delta disagrees with its record");
-    observers = delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else {
     throw new TypeError("frontier record and prevalidated delta disagree");
   }
+  const observers = frontierObservers(record, delta);
 
   appendAndVerify(log, prepared);
   switch (delta.kind) {

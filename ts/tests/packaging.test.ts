@@ -138,6 +138,8 @@ const NAMES: Record<string, string[]> = {
     "RunResult",
     "BackwardOutcome",
     "inspectRun",
+    "agentCalls",
+    "agentCall",
     "runFlow",
     "advance",
     "send",

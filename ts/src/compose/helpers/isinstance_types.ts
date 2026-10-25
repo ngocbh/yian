@@ -29,7 +29,7 @@ import {
 } from "../../typesys/values.ts";
 
 /** The scalar names `isinstance` accepts besides a `typedefs:` name. */
-export const BUILTIN_TYPE_NAMES: readonly string[] = [
+const ISINSTANCE_SCALAR_NAMES: readonly string[] = [
   "str",
   "int",
   "float",
@@ -130,10 +130,10 @@ function collect(
  * @throws {TypeCheckError} When `name` is neither a `typedefs:` name nor a builtin scalar name.
  */
 export function resolveIsinstanceType(name: string, registry: TypeRegistry): Type {
-  if (!registry.has(name) && !BUILTIN_TYPE_NAMES.includes(name)) {
+  if (!registry.has(name) && !ISINSTANCE_SCALAR_NAMES.includes(name)) {
     throw new TypeCheckError(
       `unknown type ${reprText(name)}; isinstance takes a typedefs: name or one of ` +
-        BUILTIN_TYPE_NAMES.join(", "),
+        ISINSTANCE_SCALAR_NAMES.join(", "),
     );
   }
   return typeFor(name, registry);

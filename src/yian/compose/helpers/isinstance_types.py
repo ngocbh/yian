@@ -22,7 +22,6 @@ from yian.typesys.types import TypeRegistry, type_for
 from yian.typesys.values import Type, canonical_union_order, types_overlap
 
 __all__ = [
-    "BUILTIN_TYPE_NAMES",
     "collect_constructor_names",
     "collect_isinstance_names",
     "constructor_type_fn",
@@ -34,7 +33,7 @@ __all__ = [
 
 
 # The scalar names `isinstance` accepts besides a `typedefs:` name.
-BUILTIN_TYPE_NAMES = ("str", "int", "float", "bool", "date", "datetime", "object")
+_ISINSTANCE_SCALAR_NAMES = ("str", "int", "float", "bool", "date", "datetime", "object")
 
 
 def collect_isinstance_names(source: Any, *, condition: bool = False) -> list[str]:
@@ -148,10 +147,10 @@ def resolve_isinstance_type(name: str, registry: TypeRegistry) -> Type:
         `TypeCheckError`:
             Raised when `name` is neither a `typedefs:` name nor a builtin scalar name.
     """
-    if name not in registry and name not in BUILTIN_TYPE_NAMES:
+    if name not in registry and name not in _ISINSTANCE_SCALAR_NAMES:
         raise TypeCheckError(
             f"unknown type {name!r}; isinstance takes a typedefs: name or one of "
-            + ", ".join(BUILTIN_TYPE_NAMES)
+            + ", ".join(_ISINSTANCE_SCALAR_NAMES)
         )
     return type_for(name, registry)
 

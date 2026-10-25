@@ -1734,7 +1734,7 @@ resolves to `{seq, nodes, calls}`, with those calls in `calls`.
   until then.
 - **A crashed run.** Offline, the engine isn't there to say which agents were running, so an
   interrupt names only the waiting ones and records the Stop; the crashed readers stop when they
-  reopen the inbox on the next `advance`. Every agent that was running counts as a current
+  reopen the inbox on the next `advance`. Every running agent with a `steer_inbox:` counts as a current
   reader, so when each of them still holds an interrupt (or has honored one) and no waiting
   reader lacks one, the run is already stopping and nothing is recorded.
 - **A message still queued.** An interrupt alone can't stop the reply to a message sent before it

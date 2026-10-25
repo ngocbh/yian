@@ -273,8 +273,17 @@ describe("repeatedKey", () => {
     expect(Object.isFrozen(repeatedKey!.first)).toBe(true);
   });
 
-  test("is not two pairs keyed by one alias target", () => {
-    expect(SourceDocument.parse("x: &k a\ny: {*k : 1, *k : 2}").repeatedKey).toBeNull();
+  test("counts a key repeated through an alias, located where each key is written", () => {
+    expect(SourceDocument.parse("x: &k a\ny: {*k : 1, *k : 2}").repeatedKey).toEqual({
+      key: "a",
+      first: new SourceRange(2, 5, 2, 7),
+      second: new SourceRange(2, 13, 2, 15),
+    });
+    expect(SourceDocument.parse("&k a: 1\n*k : 2\n").repeatedKey).toEqual({
+      key: "a",
+      first: new SourceRange(1, 1, 1, 5),
+      second: new SourceRange(2, 1, 2, 3),
+    });
   });
 });
 

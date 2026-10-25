@@ -124,6 +124,29 @@ output: \${a.output}
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(6);
 });
 
+test("a node id repeated through an alias fails at the alias", () => {
+  const text = `id: f
+name: f
+nodes:
+  &k a:
+    kind: code
+    code: return 1
+    output: int
+  *k :
+    kind: code
+    code: return 2
+    output: int
+output: \${a.output}
+`;
+
+  const error = loadError(() => parseSourceDocument(text, "<flow>"));
+
+  expect(error.message).toBe(
+    "duplicate key 'a' (first at line 4); a YAML mapping's keys must be unique, so remove or rename one",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(8);
+});
+
 test("keys that read as the same integer fail as non-text first", () => {
   const text = `id: f
 name: f

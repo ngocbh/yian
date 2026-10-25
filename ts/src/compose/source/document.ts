@@ -382,7 +382,7 @@ export class SourceDocument {
       text,
       label,
       definitions,
-      firstRepeatedKey(flow, ids, definitions),
+      firstRepeatedKey(flow, ids, definitions, starts),
       nonTextKey,
     );
   }
@@ -772,13 +772,14 @@ function concatSummary(sequence: ArcSequence, parts: readonly ArcRope[]): Summar
 }
 
 /**
- * Return the first key a mapping repeats among its own pairs, in a pre-order walk; two pairs
- * keyed by one alias target are not a repeat.
+ * Return the first key a mapping repeats among its own pairs, in a pre-order walk, by key
+ * text; an alias of an earlier key is a repeat too. Each key is located where it is written.
  */
 function firstRepeatedKey(
   flow: FlowDocument,
   ids: ReadonlyMap<Node, number>,
   definitions: readonly Definition[],
+  starts: readonly number[],
 ): RepeatedKey | null {
   const { document, aliasTargets } = flow;
   const stack: ParsedNode[] = document.contents === null ? [] : [document.contents];
@@ -793,19 +794,24 @@ function firstRepeatedKey(
       continue;
     }
     if (!isMap(node)) continue;
-    const firstKeys = new Map<string, Node>();
+    const firstKeys = new Map<string, SourceRange>();
     for (const pair of node.items) {
       const keyNode = target(aliasTargets, pair.key);
       // Keys a merge brings in override; only a mapping's own pairs count.
       if (isMergeKey(keyNode)) continue;
       const keyScalar = definitions[ids.get(keyNode)!] as ScalarDef;
       const key = keyText(keyScalar);
+      // An alias key is located where it is written, not at its anchor, so a key repeated
+      // through an alias of itself points at the repeat.
+      const written = pair.key as ParsedNode;
+      const range = isAlias(written)
+        ? toRange(starts, written.range![0], written.range![1])
+        : keyScalar.range!;
       const first = firstKeys.get(key);
       if (first === undefined) {
-        firstKeys.set(key, keyNode);
-      } else if (first !== keyNode) {
-        const firstScalar = definitions[ids.get(first)!]!;
-        return Object.freeze({ key, first: firstScalar.range!, second: keyScalar.range! });
+        firstKeys.set(key, range);
+      } else {
+        return Object.freeze({ key, first, second: range });
       }
     }
     for (let i = node.items.length - 1; i >= 0; i--) {

@@ -118,6 +118,28 @@ output: ${a.output}
     assert caught.value.diagnostic.frames[-1].range.start_line == 6
 
 
+def test_a_node_id_repeated_through_an_alias_fails_at_the_alias():
+    text = """id: f
+name: f
+nodes:
+  &k a:
+    kind: code
+    code: return 1
+    output: int
+  *k :
+    kind: code
+    code: return 2
+    output: int
+output: ${a.output}
+"""
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    assert "duplicate key 'a' (first at line 4)" in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range.start_line == 8
+
+
 def test_keys_that_read_as_the_same_integer_fail_as_non_text_first():
     text = """id: f
 name: f

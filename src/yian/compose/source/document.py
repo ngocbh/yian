@@ -147,7 +147,28 @@ class _DocumentLoader(_FlowLoader):
         self._forced_string_nodes: set[yaml.Node] = set()
         self._block_scalar_tokens: dict[int, ScalarToken] = {}
         self._local_tags: dict[int, str] = {}
+        self._alias_key_ranges: dict[tuple[int, int], SourceRange] = {}
         super().__init__(stream)
+
+    def compose_node(self, parent: yaml.Node | None, index: Any) -> yaml.Node:
+        """Compose one node, recording where an alias mapping key is written.
+
+        A composed alias is its anchor's node, so the alias's own place is kept
+        here, by its mapping's id and pair position.
+        """
+
+        event = self.peek_event()
+        node = super().compose_node(parent, index)
+        # A mapping key is composed with no index; its value gets the key node.
+        if (
+            index is None
+            and isinstance(parent, MappingNode)
+            and isinstance(event, yaml.AliasEvent)
+        ):
+            self._alias_key_ranges[(id(parent), len(parent.value))] = _marks_to_range(
+                event.start_mark, event.end_mark
+            )
+        return node
 
     def scan_block_scalar(self, style: str) -> ScalarToken:
         """Scan once while retaining the real block-indicator token.
@@ -440,11 +461,15 @@ def _mark_to_range(node: yaml.Node | None) -> SourceRange | None:
 def _first_repeated_key(
     root_node: yaml.Node | None,
     source_values: dict[int, Any],
+    alias_key_ranges: dict[tuple[int, int], SourceRange],
 ) -> tuple[Any, SourceRange, SourceRange] | None:
     """Find the first mapping that repeats one of its own keys, in document order.
 
     Keys a ``<<:`` merge brings in are YAML's override mechanism and never
-    count; only a mapping's own pairs are compared, by constructed key.
+    count; only a mapping's own pairs are compared, by constructed key, so an
+    alias of an earlier key is a repeat too. Each key is located where it is
+    written: an alias key by ``alias_key_ranges`` (mapping id and pair
+    position), not at its anchor.
     """
 
     stack = [root_node] if root_node is not None else []
@@ -459,16 +484,17 @@ def _first_repeated_key(
             continue
         if not isinstance(node, MappingNode):
             continue
-        first_keys: dict[Any, yaml.Node] = {}
-        for key_node, _value_node in node.value:
+        first_keys: dict[Any, SourceRange] = {}
+        for position, (key_node, _value_node) in enumerate(node.value):
             if key_node.tag == "tag:yaml.org,2002:merge":
                 continue
             key = source_values.get(id(key_node), _MISSING)
             if key is _MISSING:
                 continue
-            first = first_keys.setdefault(key, key_node)
-            if first is not key_node:
-                return key, _mark_to_range(first), _mark_to_range(key_node)
+            written = alias_key_ranges.get((id(node), position)) or _mark_to_range(key_node)
+            if key in first_keys:
+                return key, first_keys[key], written
+            first_keys[key] = written
         for key_node, value_node in reversed(node.value):
             stack.append(value_node)
             stack.append(key_node)
@@ -1146,7 +1172,9 @@ class SourceDocument:
                 },
                 local_tags=loader._local_tags,
             )
-            repeated_key = _first_repeated_key(root_node, loader._source_values)
+            repeated_key = _first_repeated_key(
+                root_node, loader._source_values, loader._alias_key_ranges
+            )
             non_text_key = _first_non_text_key(root_node, loader._source_values)
         except (yaml.YAMLError, yaml.reader.ReaderError) as exc:
             message = str(exc)
@@ -1163,6 +1191,7 @@ class SourceDocument:
                 loader._forced_string_nodes = set()
                 loader._block_scalar_tokens = {}
                 loader._local_tags = {}
+                loader._alias_key_ranges = {}
                 loader.dispose()
 
         return cls(

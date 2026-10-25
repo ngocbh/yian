@@ -78,13 +78,25 @@ export class McpConnectError extends McpError {
  *
  * For an error result the message is the result's content rendered as text, as a successful
  * call's text result is: text blocks, then one-line markers for media. For any other failure
- * while the server is up (for example structured content that fails the tool's output schema) it
- * names only the server, the tool and the error type. An AGENT's model reads it as the call's
+ * while the server is up (for example structured content that fails the tool's output schema,
+ * thrown as the subclass `McpOutputError`) it names only the server, the tool and the error type. An AGENT's model reads it as the call's
  * result.
  */
 export class McpToolError extends McpError {
   override name = "McpToolError";
   readonly [TOOL_ERROR]: readonly ToolErrorKind[] = REPORTED;
+}
+
+/**
+ * An MCP server's tool result broke the tool's `outputSchema`: it had no structured content, or
+ * the content isn't a yian value or doesn't fit the schema.
+ *
+ * It is permanent as well as reported, since yian ran the check and another attempt would call the
+ * tool again.
+ */
+export class McpOutputError extends McpToolError {
+  override name = "McpOutputError";
+  override readonly [TOOL_ERROR]: readonly ToolErrorKind[] = REPORTED_PERMANENT;
 }
 
 /**
@@ -735,8 +747,8 @@ export class McpServer {
    * @throws {ToolCheckError} An argument is `Infinity`, which JSON can't carry, or, for an HTTP
    *   server, an integer beyond ±(2^53-1); nothing is sent.
    * @throws {Error} The server was never opened.
-   * @throws {McpToolError} The server returned an error result, a result that breaks the tool's
-   *   `outputSchema`, or the call failed in a way no other error here covers.
+   * @throws {McpToolError} The server returned an error result, or the call failed in a way no
+   *   other error here covers; `McpOutputError` for a result that breaks the tool's `outputSchema`.
    * @throws {McpRequestError} The server answered with a JSON-RPC error; `McpInvalidRequestError`
    *   for a malformed or unknown request, or an HTTP server's redirect.
    * @throws {McpTimeoutError} The call outlasted the call timeout.
@@ -865,18 +877,18 @@ export class McpServer {
    * `type`, as the registry checks a declared output: its structured content must be there and fit
    * the type; a `null` type checks only that the content is a yian value.
    *
-   * @throws {McpToolError} The structured content is missing, or isn't a yian value or doesn't
+   * @throws {McpOutputError} The structured content is missing, or isn't a yian value or doesn't
    *   fit the type (the `TypeCheckError` is the `cause`).
    */
   private checkOutput(name: string, type: Type | null, result: CallResult): void {
     if (result.isError) return;
     const failed = `MCP server '${this.label}' tool '${name}' failed`;
-    if (result.structuredContent == null) throw new McpToolError(`${failed} (no structured content)`);
+    if (result.structuredContent == null) throw new McpOutputError(`${failed} (no structured content)`);
     try {
       const value = fromHost(result.structuredContent, `MCP server '${this.label}' tool '${name}' structured content`);
       if (type !== null) buildValueAs(type, value);
     } catch (error) {
-      if (error instanceof TypeCheckError) throw new McpToolError(`${failed} (TypeCheckError)`, { cause: error });
+      if (error instanceof TypeCheckError) throw new McpOutputError(`${failed} (TypeCheckError)`, { cause: error });
       throw error;
     }
   }

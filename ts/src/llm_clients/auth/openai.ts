@@ -8,6 +8,7 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import { realScheduler, type Scheduler, USER_AGENT } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { openaiIdHeaders, validateHeaders } from "../connection_settings.ts";
+import { OPENAI_API_ENDPOINT, SUBSCRIPTION_ENDPOINT } from "../endpoints.ts";
 import { type ApiKeyCredentials, AuthError, HttpResponse, isVisibleText, OAuthCredentials } from "./common.ts";
 import { request as httpRequest } from "./http.ts";
 
@@ -489,7 +490,7 @@ export class OpenAIAuth {
       throw error;
     }
     headers.Authorization = "Bearer " + credentials.apiKey;
-    const response = await this.#send("GET", "https://api.openai.com/v1/models", { signal: this.#signal, headers });
+    const response = await this.#send("GET", `${OPENAI_API_ENDPOINT}/models`, { signal: this.#signal, headers });
     const data = get(responseData(response), "data");
     if (
       !Array.isArray(data) ||
@@ -516,7 +517,7 @@ export class OpenAIAuth {
     };
     if (credentials.residency !== null) headers["x-openai-internal-codex-residency"] = credentials.residency;
     const query = new URLSearchParams({ client_version: clientVersion }).toString();
-    const response = await this.#send("GET", "https://chatgpt.com/backend-api/codex/models?" + query, {
+    const response = await this.#send("GET", `${SUBSCRIPTION_ENDPOINT}/models?${query}`, {
       signal: this.#signal,
       headers,
     });

@@ -48,7 +48,8 @@ import {
   LLMConfig,
   SUPPORTED_LLM_PROVIDERS,
 } from "../src/llm_clients/config.ts";
-import { chatModelFromConfig, DEDICATED_PROVIDERS, OPENAI_COMPATIBLE } from "../src/llm_clients/factory.ts";
+import { OPENAI_COMPATIBLE } from "../src/llm_clients/endpoints.ts";
+import { chatModelFromConfig, DEDICATED_PROVIDERS } from "../src/llm_clients/factory.ts";
 import { getKnownModels, getModelOptions, MODEL_OPTIONS } from "../src/llm_clients/model_catalog.ts";
 import { listModels, ModelListError } from "../src/llm_clients/model_list.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";

@@ -55,29 +55,19 @@ import {
   connectionCredentials,
   type ConnectionSnapshot,
   keyIdentity,
-  OPENAI_API_ENDPOINT,
   resolveModelConfig,
 } from "./connection.ts";
 import { openaiIdHeaders } from "./connection_settings.ts";
+import {
+  ANTHROPIC_ENDPOINT,
+  ANTHROPIC_VERSION,
+  GOOGLE_ENDPOINT,
+  OLLAMA_ENDPOINT,
+  OPENAI_API_ENDPOINT,
+  OPENAI_COMPATIBLE,
+  PROVIDER_BASE_URL,
+} from "./endpoints.ts";
 import { validateModel } from "./validators.ts";
-
-/**
- * Providers on an OpenAI-compatible API. Ollama is not one: it has its own native route, which
- * sends the `ollama` block to `/api/chat` as written.
- */
-export const OPENAI_COMPATIBLE: readonly string[] = Object.freeze([
-  "openai",
-  "xai",
-  "deepseek",
-  "qwen",
-  "qwen-cn",
-  "glm",
-  "glm-cn",
-  "minimax",
-  "minimax-cn",
-  "openrouter",
-  "vllm",
-]);
 
 /** Providers with a dedicated route. */
 export const DEDICATED_PROVIDERS: readonly string[] = Object.freeze([
@@ -86,24 +76,6 @@ export const DEDICATED_PROVIDERS: readonly string[] = Object.freeze([
   "google",
   "azure",
 ]);
-
-/**
- * The default base URL of each OpenAI-compatible provider other than `openai`, whose endpoint the
- * connection records. Dual-region providers keep separate endpoints because international and
- * China accounts cannot share credentials.
- */
-export const PROVIDER_BASE_URL: Readonly<Record<string, string>> = Object.freeze({
-  xai: "https://api.x.ai/v1",
-  deepseek: "https://api.deepseek.com",
-  qwen: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-  "qwen-cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  glm: "https://api.z.ai/api/paas/v4/",
-  "glm-cn": "https://open.bigmodel.cn/api/paas/v4/",
-  minimax: "https://api.minimax.io/v1",
-  "minimax-cn": "https://api.minimaxi.com/v1",
-  openrouter: "https://openrouter.ai/api/v1",
-  vllm: "http://localhost:8000/v1",
-});
 
 const ROUTED_PROVIDERS = [...OPENAI_COMPATIBLE, ...DEDICATED_PROVIDERS];
 {
@@ -386,10 +358,10 @@ function anthropicModel(resolved: Resolved, wiring: Wiring): RouteModel {
   if (key === null) throw missingKey("anthropic", "ANTHROPIC_API_KEY");
   const route = new Route({
     provider: "anthropic",
-    baseUrl: resolved.baseUrl ?? (env("ANTHROPIC_BASE_URL") || "https://api.anthropic.com"),
+    baseUrl: resolved.baseUrl ?? (env("ANTHROPIC_BASE_URL") || ANTHROPIC_ENDPOINT),
     path: "v1/messages",
     auth: withHeaders(new HeaderKeyAuth("x-api-key", key), resolved.secretHeaders),
-    headers: { "anthropic-version": "2023-06-01" },
+    headers: { "anthropic-version": ANTHROPIC_VERSION },
   });
   const protocol = new AnthropicMessages({
     model: resolved.model,
@@ -431,7 +403,7 @@ function googleModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const [path, id] = geminiPath(resolved.model);
   const route = new Route({
     provider: "google",
-    baseUrl: resolved.baseUrl ?? "https://generativelanguage.googleapis.com",
+    baseUrl: resolved.baseUrl ?? GOOGLE_ENDPOINT,
     path,
     query: { alt: "sse" },
     auth: withHeaders(new HeaderKeyAuth("x-goog-api-key", key), resolved.secretHeaders),
@@ -456,7 +428,7 @@ function ollamaModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const value = wiring.env("OLLAMA_BASE_URL");
   const [baseUrl, credentials] = value
     ? splitOllamaBaseUrl(value)
-    : ["http://localhost:11434", null];
+    : [OLLAMA_ENDPOINT, null];
   const route = new Route({
     provider: "ollama",
     baseUrl,

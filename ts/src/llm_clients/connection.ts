@@ -51,12 +51,10 @@ import {
   validateBaseUrl,
 } from "./config.ts";
 import { validateHeaderName, validateOrganization } from "./connection_settings.ts";
+import { OPENAI_API_ENDPOINT, SUBSCRIPTION_ENDPOINT } from "./endpoints.ts";
 import { blockSchema, checkBlock, type Issue } from "./provider_blocks.ts";
 import { redactKeys } from "./redact.ts";
 
-/** The OpenAI API endpoint used when nothing configures another. */
-export const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
-const SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex";
 const FIELDS: ReadonlySet<string> = new Set(["method", "source", "credential_id", "endpoint", "store_path"]);
 // Optional fields of a saved API-key login's connection: the connection settings saved with it,
 // header names only. Records made before them carry none.

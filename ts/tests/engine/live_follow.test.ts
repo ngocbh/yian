@@ -30,6 +30,7 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   type RunRecord,
+  RunCancelledRecord,
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
 import { runFlow } from "../../src/run.ts";
@@ -107,7 +108,7 @@ test("a follower that throws on the snapshot is dropped and reported, and gets n
 
 test("a record that ends the run drops every call, so a later follow's snapshot lists none", () => {
   const failed = new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "a" }));
-  for (const ending of [failed, new RunStoppedRecord("signal", "stopped", ["a", "b"])]) {
+  for (const ending of [failed, new RunStoppedRecord("signal", "stopped", ["a", "b"]), new RunCancelledRecord()]) {
     const channel = new LiveChannel();
     const log = channel.wrap(new MemoryRunLog("run-1", { clock: () => Date.parse(T0) }));
     channel.start("a", 1, null, "chat", T0);
@@ -225,9 +226,9 @@ test("a gap in records or chunks returns false and changes nothing", () => {
   expect(view.calls()).toEqual([{ node: "a", n: 1, text: "x", nextIndex: 1 }]);
 });
 
-test("a node's failure or a run stop drops every call", () => {
+test("a node's failure, a run stop or a cancel drops every call", () => {
   const failed = new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "a" }));
-  for (const ending of [failed, new RunStoppedRecord("signal", "stopped", ["a", "b"])]) {
+  for (const ending of [failed, new RunStoppedRecord("signal", "stopped", ["a", "b"]), new RunCancelledRecord()]) {
     const { frame } = recording();
     const view = LiveView.from([], { last_seq: -1, calls: [] });
     for (const next of [start("a", 1), start("a", 2), start("b", 1)]) view.apply(next);

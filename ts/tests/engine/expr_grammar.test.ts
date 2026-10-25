@@ -196,6 +196,34 @@ describe("references", () => {
       scanTemplate(`\${record.output.${field}}`);
     }
   });
+
+  const QDOT = () => new Token("QDOT", "?.");
+  /** A refcall whose steps are `[name, optional]`. */
+  const qref = (head: string, ...steps: [string, boolean][]) =>
+    new Tree("refcall", [
+      name(head),
+      ...steps.map(([step, optional]) => new Tree("trailer", optional ? [name(step), QDOT()] : [name(step)])),
+    ]);
+
+  test("?. is a trailer whose NAME comes first, then a QDOT", () => {
+    expect(parsed("a.output?.k.m")).toEqual(plain(qref("a", ["output", false], ["k", true], ["m", false])));
+    expect(parsed("a ?. b")).toEqual(plain(qref("a", ["b", true])));
+    expect(parsed("f(x)?.k")).toEqual(
+      plain(new Tree("refcall", [name("f"), new Tree("call_suffix", [arg(ref("x"))]), new Tree("trailer", [name("k"), QDOT()])])),
+    );
+  });
+
+  test("?. leaves :? and comprehension variables alone", () => {
+    expect(kinds(tree('a :? "m"')).has("required_expr")).toBe(true);
+    const comp = tree("[m?.t for m in ms]");
+    expect(plain(comp.children[0]!)).toEqual(plain(new Tree("comp_var", [name("m"), new Tree("trailer", [name("t"), QDOT()])])));
+  });
+
+  test("?. before a call is a dotted callee, and ?. needs a name", () => {
+    expectMessage("a?.b(x)", DOTTED_CALLEE);
+    expectParseError("a?.");
+    expectParseError("a?.1");
+  });
 });
 
 describe("builtin calls", () => {

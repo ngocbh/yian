@@ -7,8 +7,9 @@
  *
  * ## What it parses
  *
- * - References: bare `a`, dotted `a.b.c`, and, for the runtime graph-expansion separators,
- *   segments containing `#` / `/` (`node#0.output`, `def/child.output`).
+ * - References: bare `a`, dotted `a.b.c`, optional steps `a?.b` (null when `a` is null or
+ *   missing), and, for the runtime graph-expansion separators, segments containing `#` / `/`
+ *   (`node#0.output`, `def/child.output`).
  * - Arithmetic (`+ - * / %` and `**`), unary minus, comparisons (`== != < <= > >=`),
  *   `and` / `or` / `not`, `in` / `not in`. A chain of same-precedence operators is one flat
  *   node holding its operator tokens between the operands: `a + b - c` is one `sum`.
@@ -55,12 +56,13 @@
  * A chain of one level is one node, and author parentheses start a new one. A level with one
  * operand makes no node and parentheses make none, so a lone literal is a bare `Token`. The
  * operands: `list_lit[items]`, `refcall[NAME, trailer*, call_suffix?, trailer*]`,
- * `trailer[NAME]`, `call_suffix[arg*]`, and `arg[NAME?, expr]` (a keyword argument's label first).
+ * `trailer[NAME, QDOT?]` (a `?.` step adds the `QDOT`), `call_suffix[arg*]`, and `arg[NAME?, expr]`
+ * (a keyword argument's label first).
  *
  * Token types: `NAME`, `NUMBER` (text; no `.` is an int, with `.` a float), `STRING` (keeps its
  * quotes), `BOOL`, `NULL` (`null` / `none`), `INF`, `NOT`, `NOT_IN` (keeps its source gap), `IN`,
- * `AND`, `OR`, `COMP_OP`, `ADD_OP`, `MUL_OP`, `POW_OP`, and `SOURCE` (a comprehension iterable's
- * text). `startPos` / `endPos` are UTF-16 offsets.
+ * `AND`, `OR`, `COMP_OP`, `ADD_OP`, `MUL_OP`, `POW_OP`, `QDOT` (`?.`), and `SOURCE` (a
+ * comprehension iterable's text). `startPos` / `endPos` are UTF-16 offsets.
  *
  * ## Why `-` is not in `NAME` (and `#` / `/` are)
  *
@@ -230,6 +232,7 @@ const MUL_OP = terminal("MUL_OP", "[*/%]");
 const ADD_OP = terminal("ADD_OP", "[+-]");
 const COMP_OP = terminal("COMP_OP", "==|!=|<=|>=|<|>");
 const DOT = punctuation(".");
+const QDOT = punctuation("?.");
 const COMMA = punctuation(",");
 const LPAR = punctuation("(");
 const RPAR = punctuation(")");
@@ -254,7 +257,7 @@ const OPERATOR_IN_SLICE: readonly Terminal[] = [COLON, ...OPERATOR];
 // Every terminal, to name what a parse error met.
 const ALL: readonly Terminal[] = [
   NOT_IN, NOT, IN, AND, OR, FOR, IF, BOOL, NULL, INF, NAME, NUMBER, STRING, POW_OP, MUL_OP, ADD_OP, COMP_OP,
-  DOT, COMMA, LPAR, RPAR, LSQB, RSQB, EQUAL, VBAR, DEFAULT, REQUIRED, COLON,
+  DOT, QDOT, COMMA, LPAR, RPAR, LSQB, RSQB, EQUAL, VBAR, DEFAULT, REQUIRED, COLON,
 ];
 
 const WHITESPACE = /[ \t\f\r\n]+/y;
@@ -483,9 +486,23 @@ function chainTree({ level, operands, ops }: ChainFrame): Tree {
   return new Tree(CHAIN_RULE[level]!, children);
 }
 
-/** Read `.NAME` trailers into a refcall's `children`; any keyword is a plain name here. */
+/**
+ * Read `.NAME` and `?.NAME` trailers into a refcall's `children`; any keyword is a plain name here.
+ * A `?.` trailer is `trailer[NAME, QDOT]`, so `children[0]` stays the NAME for every walker.
+ */
 function readTrailers(cursor: Cursor, children: ExprNode[]): void {
-  while (cursor.accept(".")) children.push(new Tree("trailer", [cursor.next([NAME])]));
+  for (;;) {
+    cursor.skip();
+    const start = cursor.pos;
+    if (cursor.accept("?.")) {
+      const step = cursor.next([NAME]);
+      children.push(new Tree("trailer", [step, new Token("QDOT", "?.", start, start + 2)]));
+    } else if (cursor.accept(".")) {
+      children.push(new Tree("trailer", [cursor.next([NAME])]));
+    } else {
+      return;
+    }
+  }
 }
 
 /** Close `call`'s argument list, read the trailers after it, and return the refcall. */

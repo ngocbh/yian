@@ -4753,7 +4753,7 @@ function prepareGrowthTopology(
   }
   const derivedDepth = validatedGrowthDepth(state, record.spawnerId);
   const index = growthIndex(state);
-  validateGrowthPrune(state, record.spawnerId, record.pruneIds, new Set(newNodeIds));
+  validateGrowthPrune(state, record.spawnerId, record.pruneIds);
   const [retired, deferredPrune] = retiredIds(state, record.spawnerId, record.pruneIds, index.grown);
   validatePruneDependencies(state, fragment, retired, index);
 
@@ -5335,13 +5335,13 @@ function readIds(state: RunState, nodeId: string): Set<string> {
 /**
  * Reject requested prune ids that are not dynamic overlay or a self-prunable LOOP clone.
  *
- * Unsettled requested ids are not errors: `retiredIds` keeps them live.
+ * Unsettled requested ids are not errors: `retiredIds` keeps them live. A prune id must be live,
+ * so it can't name a new fragment node, whose id `validateGrowthFragment` refused if live.
  */
 function validateGrowthPrune(
   state: RunState,
   spawnerId: string,
   pruneIds: readonly string[],
-  newNodeIds: ReadonlySet<string>,
 ): void {
   const spawner = state.flow.nodes.get(spawnerId)!;
   for (const nodeId of pruneIds) {
@@ -5350,9 +5350,6 @@ function validateGrowthPrune(
     }
     if (nodeId === state.flow.startId || nodeId === state.flow.endId) {
       raiseGrowthRejected(new RangeError(`growth cannot prune top-level boundary ${reprText(nodeId)}`));
-    }
-    if (newNodeIds.has(nodeId)) {
-      raiseGrowthRejected(new RangeError(`growth cannot prune new fragment node ${reprText(nodeId)}`));
     }
     if (state.initialStaticIds.has(nodeId)) {
       raiseGrowthRejected(new RangeError(`growth cannot prune initial static node ${reprText(nodeId)}`));

@@ -14,6 +14,7 @@ import { StartNode } from "../nodes/start/node.ts";
 import {
   formatRecordTime,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -364,6 +365,7 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     for (const take of freed) reoffer(w, take.inbox);
     for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed");
   } else if (record instanceof InboxClosedRecord) applyClose(w, record.inbox);
+  else if (record instanceof InboxWithdrawnRecord) applyWithdrawn(w, record);
   else if (record instanceof InterruptedRecord) applyInterrupted(w, seq, record);
   else if (record instanceof RunCancelledRecord) closeOpenCalls(w, "cancelled");
   else if (record instanceof RunFailedRecord) closeOpenCalls(w, "failed");
@@ -572,6 +574,31 @@ function applyClose(w: WaitsState, name: string): void {
   inbox.absorbing.length = 0;
 }
 
+/**
+ * Apply `inbox_withdrawn`: its sends leave `unread`, and each take of a waiting node they were
+ * assigned to gives them up and waits again, absorbing in call order (or, on a closed inbox, is
+ * answered by the close).
+ */
+function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
+  const inbox = inboxOf(w, record.inbox);
+  for (const seq of record.events) remove(inbox.unread, seq);
+  for (const call of waitedTakes(w, record.inbox)) {
+    if (call.assigned.length === 0) continue;
+    call.assigned.length = 0;
+    if (inbox.closed) {
+      call.state = "answered";
+      call.closedInbox = true;
+      continue;
+    }
+    call.state = "open";
+    // A `take: all` never left absorbing; a `take: one` shifted out at its assignment.
+    if (!inbox.absorbing.includes(call.callId)) {
+      const later = inbox.absorbing.findIndex((id) => (w.calls.get(id)?.seq ?? -1) > call.seq);
+      inbox.absorbing.splice(later < 0 ? inbox.absorbing.length : later, 0, call.callId);
+    }
+  }
+}
+
 /** Close `call` with `reason` when it is open. */
 function close(call: Call | undefined, reason: CloseReason): void {
   if (call === undefined || call.state !== "open") return;
@@ -630,6 +657,22 @@ export function unreadEvents(w: WaitsState): ReadonlyMap<string, readonly number
 export function availableUnread(w: WaitsState, inbox: string): readonly number[] {
   const held = new Set([...w._pendingTakes.values()].flatMap((take) => take.events));
   return (w.inboxes.get(inbox)?.unread ?? []).filter((seq) => !held.has(seq));
+}
+
+/** Return the take calls on inbox `name` whose node waits (hasn't woken), in registration order. */
+function waitedTakes(w: WaitsState, name: string): Call[] {
+  return [...w.calls.values()].filter((call) => call.tool === "take" && call.inbox === name && w.waiting.has(call.nodeId));
+}
+
+/**
+ * Return the send seqs of inbox `name` a `withdraw` takes back, in seq order: its unread sends
+ * (an orphan inline take commit's among them) and those assigned to a take whose node hasn't
+ * woken. Not included: sends assigned to a woken take, taken by an accepted take, or read by a
+ * steer.
+ */
+export function withdrawableEvents(w: WaitsState, name: string): readonly number[] {
+  const unread = w.inboxes.get(name)?.unread ?? [];
+  return [...unread, ...waitedTakes(w, name).flatMap((call) => call.assigned)].sort((a, b) => a - b);
 }
 
 /** Return a call's deadline in epoch milliseconds, or `null` when it has none. */

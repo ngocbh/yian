@@ -144,8 +144,10 @@ import {
   commitPrepared,
   type GrowBuilder,
   growthIndex,
+  planExpansion,
   type PreparedTransition,
   prepareExpanded,
+  prepareExpandedFromPlan,
   prepareNodeStarted,
   prepareRecord,
   RunState,
@@ -318,6 +320,21 @@ test("growth canonicalizes the seed and isolates the builder, record and observe
   expect(state.depth.get("spawn/child/end")).toBe(1);
   // The child START's expansion commit, then the expansion.
   expect(state.nextSequence).toBe(9);
+});
+
+test("a planned expansion is refused on another state", () => {
+  const { state } = initializedSpawner();
+  const planned = planExpansion(state, "spawn", new Grow({}), fragmentBuilder);
+  const other = initializedSpawner();
+  const before = snapshot(other.state);
+
+  expectError(
+    () => prepareExpandedFromPlan(other.state, planned),
+    RangeError,
+    /^the planned expansion of 'spawn' belongs to another run state$/,
+  );
+
+  expectUnchanged(other.state, before);
 });
 
 test("growth rejects a cyclic seed before the builder", () => {

@@ -80,7 +80,7 @@ import {
   NodeDataError,
   type PreparedTransition,
   planExpansion,
-  prepareExpanded,
+  prepareExpandedFromPlan,
   prepareExpansionCommit,
   prepareComplete,
   prepareInboxClosed,
@@ -821,7 +821,7 @@ export class FlowEngine {
         for (const [key] of planned.commits) {
           commitPrepared(this.log, state, prepareExpansionCommit(state, nodeId, key, reads));
         }
-        prepared = prepareExpanded(state, nodeId, outcome, this.growBuilder, carriers, planned);
+        prepared = prepareExpandedFromPlan(state, planned);
       } catch (error) {
         if (!(error instanceof GrowthRejected)) throw error;
         prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);

@@ -2250,32 +2250,50 @@ export function prepareExpanded(
   grow: Grow,
   growBuilder: GrowBuilder,
   options: OutcomeCarriers = {},
-  planned: PlannedExpansion | null = null,
 ): PreparedTransition {
-  let expansion: Omit<PlannedExpansion, "commits"> & { commits: PlannedExpansion["commits"] | null };
-  let capture: ForwardCapture | null;
-  if (planned === null) {
-    const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
-    const pruneIds = [...grow.prune].sort(compareCodeUnits);
-    expansion = { spawnerId: nodeId, seed: seedWire, pruneIds, fragment, validatedFragment, digest: expansionDigest(fragment), commits: null };
+  const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
+  const pruneIds = [...grow.prune].sort(compareCodeUnits);
+  const digest = expansionDigest(fragment);
+  return prepareGrowthTransition(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, {
+    actualDigest: digest,
+    validatedFragment,
+    seed: seedWire,
+    commits: null,
     // Unplanned, the growth isn't checked against its rebuild, so it keeps the evaluated capture.
-    capture = options.forwardCapture ?? null;
-  } else {
-    if (planned.spawnerId !== nodeId) throw new RangeError(`the planned expansion is ${reprText(planned.spawnerId)}'s`);
-    capture = requireRebuiltGrowth(state, planned);
-    expansion = planned;
+    capture: options.forwardCapture ?? null,
+  });
+}
+
+/**
+ * Prepare a planned expansion (`planExpansion`) once its expansion commits are written: the growth
+ * must equal the one its commits' `from` rebuilds, and carries that rebuild's capture.
+ *
+ * @param state The state the plan was made against.
+ * @param planned The plan.
+ * @returns The canonical `NodeExpandedRecord` and its detached append-before-apply plan.
+ * @throws RangeError when `state` or its flow isn't the plan's, the growth differs from its rebuild,
+ *   or as `prepareExpanded`.
+ */
+export function prepareExpandedFromPlan(state: RunState, planned: PlannedExpansion): PreparedTransition {
+  if (state !== planned.state || state.flow !== planned.flow) {
+    throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} belongs to another run state`);
   }
-  const { seed, pruneIds, fragment, validatedFragment, digest, commits } = expansion;
-  return prepareGrowthTransition(
-    state,
-    new NodeExpandedRecord(nodeId, pruneIds, digest),
-    fragment,
-    { actualDigest: digest, validatedFragment, seed, commits, capture },
-  );
+  const capture = requireRebuiltGrowth(state, planned);
+  const { spawnerId, seed, pruneIds, fragment, validatedFragment, digest, commits } = planned;
+  return prepareGrowthTransition(state, new NodeExpandedRecord(spawnerId, pruneIds, digest), fragment, {
+    actualDigest: digest,
+    validatedFragment,
+    seed,
+    commits,
+    capture,
+  });
 }
 
 /** A live spawner's growth, validated and built once for its expansion commits and its `NodeExpanded`. */
 export interface PlannedExpansion {
+  /** The state the plan was made against, and its flow; the plan is refused on any other. */
+  readonly state: RunState;
+  readonly flow: CompiledFlow;
   readonly spawnerId: string;
   /** The canonical seed. */
   readonly seed: JsonValue;
@@ -2296,7 +2314,7 @@ export interface PlannedExpansion {
  * Validate and build a live spawner's growth once, running every check its `NodeExpanded` makes,
  * so a growth rejected after its commits are written can't leave the spawner with commits only its
  * expansion admits. Write `commits` (`prepareExpansionCommit`), then pass the plan to
- * `prepareExpanded`.
+ * `prepareExpandedFromPlan`.
  *
  * @param state An initialized nonterminal state with `nodeId` in flight.
  * @param options.forwardCapture The capture the expansion will carry, checked for its seed routes.
@@ -2315,6 +2333,8 @@ export function planExpansion(
   prepareGrowthTopology(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, validatedFragment);
   requireSeedRoutes(state, options.forwardCapture ?? null, fragment);
   return Object.freeze({
+    state,
+    flow: state.flow,
     spawnerId: nodeId,
     seed: seedWire,
     pruneIds: Object.freeze(pruneIds),

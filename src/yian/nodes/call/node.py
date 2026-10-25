@@ -39,7 +39,7 @@ class CallNode(Node):
             The node's unique id.
         flow_id (`str`):
             The id of the child flow to call.
-        flow_version (`int`, *optional*, defaults to `None`):
+        flow_version (`str`, *optional*, defaults to `None`):
             A pinned child flow version, if any.
         child (`Any`, *optional*, defaults to `None`):
             The baked child flow (stamped at load); a `None` child raises at run time.
@@ -53,7 +53,7 @@ class CallNode(Node):
     is_spawner: ClassVar[bool] = True  # grows the graph: run() returns a seed-first Grow
     grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper
 
-    def __init__(self, node_id: str, *, flow_id: str, flow_version: Optional[int] = None,
+    def __init__(self, node_id: str, *, flow_id: str, flow_version: Optional[str] = None,
                  child: Any = None, child_inputs: Optional[list[Parameter]] = None,
                  title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)

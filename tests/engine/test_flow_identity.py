@@ -2114,8 +2114,8 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         ),
         (
             CallNode,
-            {"flow_id": "child", "flow_version": 1, "child": _fragment()},
-            {"flow_id": "child", "flow_version": 2, "child": _fragment()},
+            {"flow_id": "child", "flow_version": "1", "child": _fragment()},
+            {"flow_id": "child", "flow_version": "2", "child": _fragment()},
         ),
         (
             CallNode,
@@ -2129,8 +2129,8 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         ),
         (
             MapNode,
-            {"flow_id": "child", "flow_version": 1, "child": _fragment()},
-            {"flow_id": "child", "flow_version": 2, "child": _fragment()},
+            {"flow_id": "child", "flow_version": "1", "child": _fragment()},
+            {"flow_id": "child", "flow_version": "2", "child": _fragment()},
         ),
         (
             MapNode,
@@ -2144,8 +2144,8 @@ def test_flow_fingerprint_preserves_start_parameter_order():
         ),
         (
             LoopNode,
-            {"flow_id": "child", "flow_version": 1, "child": _fragment()},
-            {"flow_id": "child", "flow_version": 2, "child": _fragment()},
+            {"flow_id": "child", "flow_version": "1", "child": _fragment()},
+            {"flow_id": "child", "flow_version": "2", "child": _fragment()},
         ),
         (
             LoopNode,

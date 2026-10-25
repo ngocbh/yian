@@ -1,7 +1,6 @@
 """Pinned connection metadata on every keyed provider, without network."""
 
 import json
-import time
 
 import pytest
 from pydantic import SecretStr
@@ -9,7 +8,7 @@ from pydantic import SecretStr
 from yian.compose.loader import load_flow
 from yian.llm_clients import connection as connection_module
 from yian.llm_clients import factory
-from yian.llm_clients.auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials
+from yian.llm_clients.auth import ApiKeyCredentials, AuthError, AuthStore
 from yian.llm_clients.config import HostConnection, LLMConfig, azure_resource_endpoint
 from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
@@ -197,22 +196,40 @@ def test_snapshot_connections_per_provider(monkeypatch):
     }
 
 
+_KEY = {"api_key": "k"}
+_OAUTH = {
+    "access_token": "a",
+    "refresh_token": "r",
+    "expires_at": 9999999999,
+    "account_id": "acct",
+    "residency": None,
+}
+
+
 @pytest.mark.parametrize(
-    ("provider", "credentials", "endpoint"),
+    ("provider", "method", "credentials", "endpoint"),
     [
-        ("openai", None, None),
-        ("openai", ApiKeyCredentials("k"), "https://api.example/v1"),
-        ("anthropic", OAuthCredentials("a", "r", time.time() + 3600, "acct"), None),
-        ("google", ApiKeyCredentials("k"), "https://example.com/"),
-        ("azure", ApiKeyCredentials("k"), None),
-        ("azure", None, "https://r.openai.azure.com/"),
-        ("azure", ApiKeyCredentials("k"), "http://r.openai.azure.com/"),
-        ("ollama", ApiKeyCredentials("k"), None),
-        ("anthropic", None, None),
+        ("openai", "none", None, None),
+        ("openai", "api_key", _KEY, "https://api.example/v1"),
+        ("anthropic", "subscription", _OAUTH, None),
+        ("google", "api_key", _KEY, "https://example.com/"),
+        ("azure", "api_key", _KEY, None),
+        ("azure", "none", None, "https://r.openai.azure.com/"),
+        ("azure", "api_key", _KEY, "http://r.openai.azure.com/"),
+        ("ollama", "api_key", _KEY, None),
+        ("anthropic", "none", None, None),
     ],
 )
-def test_snapshot_rejects_impossible_saved_logins(provider, credentials, endpoint):
-    AuthStore().save(provider, credentials, "m", endpoint=endpoint, make_default=False)
+def test_snapshot_rejects_impossible_saved_logins(provider, method, credentials, endpoint):
+    # `save` refuses these logins, so each is written to the store file as another writer could.
+    entry = {"method": method, "model": "m", "credential_id": "a" * 32, "credentials": credentials}
+    if endpoint is not None:
+        entry["endpoint"] = endpoint
+    path = AuthStore().path
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    store = {"version": 1, "default_provider": None, "providers": {provider: entry}}
+    path.write_text(json.dumps(store))
+    path.chmod(0o600)
     with pytest.raises(ValueError, match=f"The saved {provider} login is invalid; run 'yian auth {provider}' again"):
         connection_snapshot()
 

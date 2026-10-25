@@ -8,6 +8,7 @@ import sys
 from typing import ClassVar, Literal
 
 from yian.defaults import current
+from yian.llm_clients.config import validate_base_url
 from yian.llm_clients.connection_settings import (
     validate_header_name,
     validate_headers,
@@ -181,6 +182,41 @@ class ProviderSelection:
         except ValueError as error:
             raise AuthError(f"Invalid provider selection: {error}") from None
         object.__setattr__(self, "header_names", tuple(sorted(self.header_names)))
+
+
+# Providers whose saved login may hold no credential: Ollama sends none, and vLLM
+# runs keyless unless its server was started with a key.
+_KEYLESS_LOGINS = frozenset({"ollama", "vllm"})
+
+
+def is_usable_login(selection: ProviderSelection) -> bool:
+    """Whether a supported provider's login is a kind it can use.
+
+    Args:
+        selection (`ProviderSelection`): A login of a supported provider.
+
+    Returns:
+        `bool`: False if a provider other than Ollama or vLLM has no credential;
+            a provider other than OpenAI has a subscription; a provider other
+            than Azure has an endpoint; Azure has no valid endpoint; or Ollama
+            has a key. True otherwise.
+    """
+    provider, method, endpoint = selection.provider, selection.method, selection.endpoint
+    if (
+        (method == "none" and provider not in _KEYLESS_LOGINS)
+        or (provider != "openai" and method == "subscription")
+        or (provider != "azure" and endpoint is not None)
+        or (provider == "azure" and endpoint is None)
+        or (provider == "ollama" and method != "none")
+    ):
+        return False
+    if provider != "azure":
+        return True
+    try:
+        validate_base_url(endpoint)
+    except ValueError:
+        return False
+    return True
 
 
 @dataclass(frozen=True)

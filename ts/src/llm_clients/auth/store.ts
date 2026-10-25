@@ -12,11 +12,13 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import { FileLockError, type FileLock, realScheduler, type Scheduler, waitForLock } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { parseJson } from "../../typesys/json.ts";
+import { SUPPORTED_LLM_PROVIDERS } from "../config.ts";
 import {
   ApiKeyCredentials,
   AuthError,
   type AuthState,
   type Credentials,
+  isUsableLogin,
   OAuthCredentials,
   ProviderSelection,
 } from "./common.ts";
@@ -529,6 +531,11 @@ export class AuthStore {
       project,
       headerNames: credentials instanceof ApiKeyCredentials ? credentials.headers.map(([name]) => name) : [],
     });
+    // The snapshot refuses such a login, so saving it would make every run throw. A provider this
+    // version doesn't run is never read, so its login isn't checked.
+    if ((SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(provider) && !isUsableLogin(selection)) {
+      throw new AuthError(`A ${provider} login can't be saved with this credential or endpoint`);
+    }
     this.#signal?.throwIfAborted();
     const directory = this.#openDirectory(true)!;
     try {

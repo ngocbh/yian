@@ -454,6 +454,36 @@ def test_store_saves_connection_settings_with_a_login(tmp_path):
     assert entry["credentials"] == {"api_key": "sk-open"}
 
 
+@pytest.mark.parametrize(
+    ("provider", "credentials", "endpoint"),
+    [
+        ("anthropic", ApiKeyCredentials("k"), "https://r.openai.azure.com/"),
+        ("azure", ApiKeyCredentials("k"), None),
+        ("azure", ApiKeyCredentials("k"), "http://r.openai.azure.com/"),
+        ("ollama", ApiKeyCredentials("k"), None),
+        ("openai", None, None),
+        ("anthropic", None, None),
+        ("anthropic", OAuthCredentials("access", "refresh", 900, "acct"), None),
+    ],
+)
+def test_save_refuses_a_login_its_provider_cannot_use(tmp_path, provider, credentials, endpoint):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    store.save("openai", ApiKeyCredentials("k-open"), "gpt")
+    before = store.path.read_bytes()
+    with pytest.raises(
+        AuthError, match=f"^A {provider} login can't be saved with this credential or endpoint$"
+    ):
+        store.save(provider, credentials, "model", endpoint=endpoint)
+    assert store.path.read_bytes() == before
+
+
+def test_save_accepts_keyless_vllm_and_an_azure_endpoint(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    store.save("vllm", None, "m")
+    store.save("azure", ApiKeyCredentials("k-az"), "dep", endpoint="https://r.openai.azure.com/")
+    assert {item.provider for item in store.read().selections} == {"vllm", "azure"}
+
+
 def test_store_without_connection_settings_rewrites_byte_identically(tmp_path):
     path = tmp_path / "auth" / "auth.json"
     value = {

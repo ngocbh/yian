@@ -35,6 +35,7 @@ from .auth import (
     OpenAIAuth,
     ProviderSelection,
 )
+from .auth.common import is_usable_login
 from .config import (
     AZURE_NEEDS_BASE_URL,
     RETIRED_LLM_CONFIG_KEYS,
@@ -56,9 +57,6 @@ _FIELDS = {"method", "source", "credential_id", "endpoint", "store_path"}
 _SETTINGS_FIELDS = {"organization", "project", "header_names"}
 # Providers whose agents authenticate with a key and so carry a connection.
 _KEYED = frozenset(SUPPORTED_LLM_PROVIDERS) - {"ollama"}
-# Providers whose saved login may hold no credential: Ollama sends none, and vLLM
-# runs keyless unless its server was started with a key.
-_KEYLESS_LOGINS = frozenset({"ollama", "vllm"})
 _ENVIRONMENT_CONNECTION = {
     "method": "api_key",
     "source": "environment",
@@ -532,7 +530,11 @@ def connection_snapshot() -> ConnectionSnapshot:
                 )
             # A login for a provider this version no longer runs selects nothing.
             continue
-        _check_selection(selection)
+        if not is_usable_login(selection):
+            raise ValueError(
+                f"The saved {selection.provider} login is invalid; "
+                f"run 'yian auth {selection.provider}' again"
+            )
         models[selection.provider] = selection.model
         if selection.provider == "openai":
             connections[selection.provider] = {
@@ -608,35 +610,6 @@ def _selection_settings(selection: ProviderSelection) -> dict[str, Any]:
     if selection.header_names:
         settings["header_names"] = sorted(selection.header_names)
     return settings
-
-
-def _check_selection(selection: ProviderSelection) -> None:
-    """Check that a supported provider's saved login is a kind it can use.
-
-    Args:
-        selection (`ProviderSelection`): A saved login of a supported provider.
-
-    Raises:
-        `ValueError`: A provider other than Ollama or vLLM has no credential;
-            a provider other than OpenAI has a subscription; a provider other
-            than Azure has an endpoint; Azure has no valid endpoint; or Ollama
-            has a key.
-    """
-    provider, method, endpoint = selection.provider, selection.method, selection.endpoint
-    invalid = (
-        (method == "none" and provider not in _KEYLESS_LOGINS)
-        or (provider != "openai" and method == "subscription")
-        or (provider != "azure" and endpoint is not None)
-        or (provider == "azure" and endpoint is None)
-        or (provider == "ollama" and method != "none")
-    )
-    if not invalid and provider == "azure":
-        try:
-            validate_base_url(endpoint)
-        except ValueError:
-            invalid = True
-    if invalid:
-        raise ValueError(f"The saved {provider} login is invalid; run 'yian auth {provider}' again")
 
 
 def validate_connection(value: Any, provider: str | None = "openai") -> dict[str, Any]:

@@ -1383,6 +1383,29 @@ describe("AuthStore", () => {
     expect(entry.credentials).toEqual({ api_key: "sk-open" });
   });
 
+  test("save refuses a login its provider can't use and leaves the store unchanged", async () => {
+    const store = new AuthStore(file);
+    await store.save("openai", new ApiKeyCredentials("k-open"), "gpt");
+    const before = fs.readFileSync(file, "utf8");
+    const cases: [string, ApiKeyCredentials | OAuthCredentials | null, { endpoint?: string }][] = [
+      ["anthropic", new ApiKeyCredentials("k"), { endpoint: "https://r.openai.azure.com/" }],
+      ["azure", new ApiKeyCredentials("k"), {}],
+      ["azure", new ApiKeyCredentials("k"), { endpoint: "http://r.openai.azure.com/" }],
+      ["ollama", new ApiKeyCredentials("k"), {}],
+      ["openai", null, {}],
+      ["anthropic", null, {}],
+      ["anthropic", oauth("access", "refresh", 900), {}],
+    ];
+    for (const [provider, credentials, options] of cases) {
+      const error = await rejected(store.save(provider, credentials, "model", options));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(`A ${provider} login can't be saved with this credential or endpoint`);
+    }
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    await store.save("vllm", null, "m", { makeDefault: false });
+    await store.save("azure", new ApiKeyCredentials("k-az"), "dep", { endpoint: "https://r.openai.azure.com/" });
+  });
+
   test("a store without connection settings rewrites byte-identically", async () => {
     const raw =
       '{"default_provider": "openai", "providers": {"anthropic": {"credential_id": ' +

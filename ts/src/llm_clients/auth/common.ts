@@ -3,6 +3,7 @@
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import { isRecord } from "../../typesys/index.ts";
+import { validateBaseUrl } from "../config.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "../connection_settings.ts";
 
 /**
@@ -307,6 +308,38 @@ export class ProviderSelection {
     this.headerNames = Object.freeze(names.sort(compareCodeUnits));
     Object.freeze(this);
   }
+}
+
+// Providers whose saved login may hold no credential: Ollama sends none, and vLLM runs keyless
+// unless its server was started with a key.
+const KEYLESS_LOGINS: ReadonlySet<string> = new Set(["ollama", "vllm"]);
+
+/**
+ * Whether a supported provider's login is a kind it can use.
+ *
+ * It isn't if a provider other than Ollama or vLLM has no credential; a provider other than
+ * OpenAI has a subscription; a provider other than Azure has an endpoint; Azure has no valid
+ * endpoint; or Ollama has a key.
+ */
+export function isUsableLogin(selection: ProviderSelection): boolean {
+  const { provider, method, endpoint } = selection;
+  if (
+    (method === "none" && !KEYLESS_LOGINS.has(provider)) ||
+    (provider !== "openai" && method === "subscription") ||
+    (provider !== "azure" && endpoint !== null) ||
+    (provider === "azure" && endpoint === null) ||
+    (provider === "ollama" && method !== "none")
+  ) {
+    return false;
+  }
+  if (provider !== "azure") return true;
+  try {
+    validateBaseUrl(endpoint);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return false;
+  }
+  return true;
 }
 
 /** A detached, nonsecret snapshot of saved provider choices. */

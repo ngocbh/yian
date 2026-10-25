@@ -34,6 +34,7 @@ import {
   ApiKeyCredentials,
   AuthError,
   type Credentials,
+  isUsableLogin,
   type OAuthCredentials,
   type ProviderSelection,
 } from "./auth/common.ts";
@@ -62,9 +63,6 @@ const FIELDS: ReadonlySet<string> = new Set(["method", "source", "credential_id"
 const SETTINGS_FIELDS: ReadonlySet<string> = new Set(["organization", "project", "header_names"]);
 // Providers whose agents authenticate with a key and so carry a connection.
 const KEYED: ReadonlySet<string> = new Set(SUPPORTED_LLM_PROVIDERS.filter((name) => name !== "ollama"));
-// Providers whose saved login may hold no credential: Ollama sends none, and vLLM runs keyless
-// unless its server was started with a key.
-const KEYLESS_LOGINS: ReadonlySet<string> = new Set(["ollama", "vllm"]);
 const ENVIRONMENT_CONNECTION: Connection = {
   method: "api_key",
   source: "environment",
@@ -570,11 +568,14 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
       // A login for a provider this version no longer runs selects nothing.
       continue;
     }
-    checkSelection(selection);
+    if (!isUsableLogin(selection)) {
+      const name = selection.provider;
+      throw new RangeError(`The saved ${name} login is invalid; run 'yian auth ${name}' again`);
+    }
     models[selection.provider] = selection.model;
     if (selection.provider === "openai") {
       connections[selection.provider] = {
-        // `checkSelection` refuses an OpenAI login without a credential.
+        // `isUsableLogin` refuses an OpenAI login without a credential.
         method: selection.method as Connection["method"],
         source: "store",
         credential_id: selection.credentialId,
@@ -635,32 +636,6 @@ function selectionSettings(selection: ProviderSelection): Partial<Connection> {
   if (selection.project !== null) settings.project = selection.project;
   if (selection.headerNames.length > 0) settings.header_names = [...selection.headerNames].sort(compareCodeUnits);
   return settings;
-}
-
-/**
- * Check that a supported provider's saved login is a kind it can use.
- *
- * Throws `RangeError` if a provider other than Ollama or vLLM has no credential; a provider other
- * than OpenAI has a subscription; a provider other than Azure has an endpoint; Azure has no valid
- * endpoint; or Ollama has a key.
- */
-function checkSelection(selection: ProviderSelection): void {
-  const { provider, method, endpoint } = selection;
-  let invalid =
-    (method === "none" && !KEYLESS_LOGINS.has(provider)) ||
-    (provider !== "openai" && method === "subscription") ||
-    (provider !== "azure" && endpoint !== null) ||
-    (provider === "azure" && endpoint === null) ||
-    (provider === "ollama" && method !== "none");
-  if (!invalid && provider === "azure") {
-    try {
-      validateBaseUrl(endpoint);
-    } catch (error) {
-      if (!(error instanceof RangeError)) throw error;
-      invalid = true;
-    }
-  }
-  if (invalid) throw new RangeError(`The saved ${provider} login is invalid; run 'yian auth ${provider}' again`);
 }
 
 /**

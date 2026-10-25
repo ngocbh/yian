@@ -592,7 +592,7 @@ test("a frontier commit refuses a step record with a start delta", () => {
   expect(state.nodeSteps).toEqual(new Map());
 });
 
-test.each(["missing-start", "orphan-steps", "zero-count", "non-object-step"] as const)(
+test.each(["missing-start", "orphan-steps", "zero-count"] as const)(
   "broken step state is refused before append: %s",
   (corrupt) => {
     const { state, log } = firstInFlight();
@@ -600,8 +600,7 @@ test.each(["missing-start", "orphan-steps", "zero-count", "non-object-step"] as 
     const prepared = prepareOutput(log, state, "first", { done: true });
     if (corrupt === "missing-start") state.nodeStarts.delete("first");
     else if (corrupt === "orphan-steps") state.nodeSteps.set("second", [FAILED]);
-    else if (corrupt === "zero-count") state.nodeStarts.set("first", 0);
-    else state.nodeSteps.set("first", ["text" as never]);
+    else state.nodeStarts.set("first", 0);
     const before = log.nextSequence;
 
     expectError(

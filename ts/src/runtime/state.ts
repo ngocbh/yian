@@ -3698,14 +3698,13 @@ function requireInitialized(state: RunState): void {
     throw new RangeError("accepted starts must match the unfinished invocation inventory");
   }
   // Every apply path indexes these maps by node, so a broken map must fail here, before the
-  // append, rather than between append and apply.
+  // append, rather than between append and apply. The checks are per node, not per step: a step is
+  // checked once, when its record is validated, so a node's S steps don't cost O(S) per record.
   if (
     [...state.inFlight].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
     [...state.nodeStarts.values()].some((count) => !Number.isSafeInteger(count) || count < 1) ||
     [...state.nodeSteps.keys()].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
-    [...state.nodeSteps.values()].some(
-      (steps) => !Array.isArray(steps) || steps.length === 0 || steps.some((step) => !isRecord(step)),
-    ) ||
+    [...state.nodeSteps.values()].some((steps) => !Array.isArray(steps) || steps.length === 0) ||
     [...state.pendingCommits].some(([nodeId, pending]) =>
       pending.admitted ? state.nodeState.get(nodeId) !== NodeState.UNKNOWN : !state.inFlight.has(pending.spawner ?? nodeId),
     ) ||

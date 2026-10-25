@@ -2654,7 +2654,7 @@ function checkToolTypes(flow: CompiledFlow, tools: ToolSet): void {
     const call = node.hostToolCall();
     if (call === null || isEngineBuiltin(call.toolId)) continue;
     const declared = toolTypes(tools.resolve([call.toolId])[0]!);
-    if (declared.inputs !== null) checkToolInputs(nodeId, call, declared.inputs, declared.required);
+    if (declared.inputs !== null) checkToolInputs(nodeId, call, declared.inputs, declared.required, declared.extra);
     if (declared.output !== null) checkToolOutput(nodeId, call, declared.output);
   }
 }
@@ -2666,6 +2666,8 @@ function checkToolTypes(flow: CompiledFlow, tools: ToolSet): void {
  * @param call The node's tool call.
  * @param inputs The tool's declared input types by name; `null` leaves an input unchecked.
  * @param required The names of the inputs the tool requires.
+ * @param extra The type of an input not in `inputs`; `undefined` when the tool takes none, and
+ *   `null` leaves such inputs unchecked.
  * @throws RangeError when an input isn't one the tool takes, a required input is missing (all
  *   missing inputs are named at once), or an input's binding type is disjoint from the tool's.
  */
@@ -2674,9 +2676,10 @@ function checkToolInputs(
   call: HostToolCall,
   inputs: ReadonlyMap<string, Type | null>,
   required: ReadonlySet<string>,
+  extra: Type | null | undefined,
 ): void {
   for (const name of call.inputs) {
-    if (!inputs.has(name)) {
+    if (!inputs.has(name) && extra === undefined) {
       const taken = [...inputs.keys()].sort(compareCodeUnits);
       throw new RangeError(
         `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(call.toolId)} takes no such input; ` +
@@ -2692,7 +2695,7 @@ function checkToolInputs(
     );
   }
   for (const [name, inferred] of call.inputTypes) {
-    const expected = inputs.get(name) ?? null;
+    const expected = (inputs.has(name) ? inputs.get(name) : extra) ?? null;
     // Disjoint is yian's non-coercing relation, so a binding a tool's validator would coerce (a
     // string of digits into an int) is rejected too.
     if (expected !== null && typeRelation(inferred, expected) === "disjoint") {

@@ -51,6 +51,7 @@ export {
   McpConnectError,
   McpError,
   McpInvalidRequestError,
+  McpOutputError,
   McpRequestError,
   McpServer,
   McpServerClosed,

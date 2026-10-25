@@ -78,13 +78,25 @@ export class McpConnectError extends McpError {
  *
  * For an error result the message is the result's content rendered as text, as a successful
  * call's text result is: text blocks, then one-line markers for media. For any other failure
- * while the server is up (for example structured content that fails the tool's output schema) it
- * names only the server, the tool and the error type. An AGENT's model reads it as the call's
- * result.
+ * while the server is up (for example structured content that fails the tool's output schema,
+ * thrown as the subclass `McpOutputError`) it names only the server, the tool and the error
+ * type. An AGENT's model reads it as the call's result.
  */
 export class McpToolError extends McpError {
   override name = "McpToolError";
   readonly [TOOL_ERROR]: readonly ToolErrorKind[] = REPORTED;
+}
+
+/**
+ * An MCP server's tool result broke the tool's `outputSchema`: it had no structured content, or
+ * the content isn't a yian value or doesn't fit the schema.
+ *
+ * It is permanent as well as reported, since yian ran the check and another attempt would call the
+ * tool again.
+ */
+export class McpOutputError extends McpToolError {
+  override name = "McpOutputError";
+  override readonly [TOOL_ERROR]: readonly ToolErrorKind[] = REPORTED_PERMANENT;
 }
 
 /**
@@ -735,8 +747,8 @@ export class McpServer {
    * @throws {ToolCheckError} An argument is `Infinity`, which JSON can't carry, or, for an HTTP
    *   server, an integer beyond ±(2^53-1); nothing is sent.
    * @throws {Error} The server was never opened.
-   * @throws {McpToolError} The server returned an error result, a result that breaks the tool's
-   *   `outputSchema`, or the call failed in a way no other error here covers.
+   * @throws {McpToolError} The server returned an error result, or the call failed in a way no
+   *   other error here covers; `McpOutputError` for a result that breaks the tool's `outputSchema`.
    * @throws {McpRequestError} The server answered with a JSON-RPC error; `McpInvalidRequestError`
    *   for a malformed or unknown request, or an HTTP server's redirect.
    * @throws {McpTimeoutError} The call outlasted the call timeout.
@@ -865,18 +877,18 @@ export class McpServer {
    * `type`, as the registry checks a declared output: its structured content must be there and fit
    * the type; a `null` type checks only that the content is a yian value.
    *
-   * @throws {McpToolError} The structured content is missing, or isn't a yian value or doesn't
+   * @throws {McpOutputError} The structured content is missing, or isn't a yian value or doesn't
    *   fit the type (the `TypeCheckError` is the `cause`).
    */
   private checkOutput(name: string, type: Type | null, result: CallResult): void {
     if (result.isError) return;
     const failed = `MCP server '${this.label}' tool '${name}' failed`;
-    if (result.structuredContent == null) throw new McpToolError(`${failed} (no structured content)`);
+    if (result.structuredContent == null) throw new McpOutputError(`${failed} (no structured content)`);
     try {
       const value = fromHost(result.structuredContent, `MCP server '${this.label}' tool '${name}' structured content`);
       if (type !== null) buildValueAs(type, value);
     } catch (error) {
-      if (error instanceof TypeCheckError) throw new McpToolError(`${failed} (TypeCheckError)`, { cause: error });
+      if (error instanceof TypeCheckError) throw new McpOutputError(`${failed} (TypeCheckError)`, { cause: error });
       throw error;
     }
   }
@@ -959,26 +971,31 @@ function unsendable(args: unknown, http: boolean): { path: (string | number)[]; 
  * with `JSON.stringify`; `unsendable` has refused the unsafe ones. Copies only the arrays and
  * records on the way to a `bigint`, so the caller's arguments stay as they were.
  */
-function numbersForBigints(value: unknown, seen = new Set<object>()): unknown {
+function numbersForBigints(value: unknown, done = new Map<object, unknown>()): unknown {
   if (typeof value === "bigint") return Number(value);
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  // A cycle is left as is; `JSON.stringify` refuses it.
-  seen.add(value);
+  if (typeof value !== "object" || value === null) return value;
+  // A container met again gives its result, so one held twice is converted both times. Until its
+  // walk ends it maps to itself, so a cycle is left as is; `JSON.stringify` refuses it.
+  if (done.has(value)) return done.get(value);
+  done.set(value, value);
+  let result: unknown = value;
   if (Array.isArray(value)) {
     let copy: unknown[] | undefined;
     value.forEach((item, i) => {
-      const next = numbersForBigints(item, seen);
+      const next = numbersForBigints(item, done);
       if (next !== item) (copy ??= [...value])[i] = next;
     });
-    return copy ?? value;
+    result = copy ?? value;
+  } else if (isRecord(value)) {
+    let copy: Record<string, unknown> | undefined;
+    for (const [key, item] of Object.entries(value)) {
+      const next = numbersForBigints(item, done);
+      if (next !== item) (copy ??= { ...value })[key] = next;
+    }
+    result = copy ?? value;
   }
-  if (!isRecord(value)) return value;
-  let copy: Record<string, unknown> | undefined;
-  for (const [key, item] of Object.entries(value)) {
-    const next = numbersForBigints(item, seen);
-    if (next !== item) (copy ??= { ...value })[key] = next;
-  }
-  return copy ?? value;
+  done.set(value, result);
+  return result;
 }
 
 Object.defineProperty(McpServer.prototype, MCP_SERVER, { value: true });

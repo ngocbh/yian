@@ -44,7 +44,8 @@ function get(schema: ValueRecord, key: string): unknown {
  * for tool inputs, which accept extra keys, and `true` for tool outputs. An object with
  * `additionalProperties: false` is closed either way. `root` is the document `$ref` pointers
  * resolve against; absent, it is `schema`. Returns `null` when the schema has no yian
- * equivalent.
+ * equivalent or is too big to translate (`MAX_NODES` nodes, counting each path to a def that
+ * sits on a `$ref` cycle).
  *
  * @example
  * `{"anyOf": [{"type": "integer", "minimum": 1, "exclusiveMaximum": 10}, {"type": "null"}]}`
@@ -55,7 +56,20 @@ export function typeFromJsonSchema(
   schema: unknown,
   options: { closed: boolean; root?: unknown },
 ): Type | null {
-  const typ = translate(schema, options.closed, options.root ?? schema, []);
+  const walk: Walk = {
+    closed: options.closed,
+    root: options.root ?? schema,
+    refTypes: new Map(),
+    nodes: 0,
+    cycles: 0,
+  };
+  let typ: Type | null;
+  try {
+    typ = translate(schema, walk, []);
+  } catch (error) {
+    if (error === TOO_BIG) return null;
+    throw error;
+  }
   if (typ === null) return null;
   try {
     typ.validateShape();
@@ -67,39 +81,90 @@ export function typeFromJsonSchema(
   return typ;
 }
 
+/** Open translations of frozen schemas, by root and then by schema. */
+const INPUT_TYPES = new WeakMap<object, WeakMap<object, Type | null>>();
+
 /**
  * Translate one tool input's JSON Schema as an open schema, or return `null` when it nests
  * too deeply.
+ *
+ * The result for a frozen schema and root is kept and returned again, since a tool's schemas are
+ * read on every call.
  */
 export function inputTypeFromJsonSchema(schema: unknown, root?: unknown): Type | null {
+  const doc = root ?? schema;
+  // yian deep-freezes a tool's schemas, so a frozen one is read as one that won't change.
+  const kept = isRecord(schema) && isRecord(doc) && Object.isFrozen(schema) && Object.isFrozen(doc);
+  const byRoot = kept ? INPUT_TYPES.get(doc) : undefined;
+  if (byRoot?.has(schema as object)) return byRoot.get(schema as object)!;
+  let typ: Type | null;
   try {
-    return typeFromJsonSchema(schema, { closed: false, root });
+    typ = typeFromJsonSchema(schema, { closed: false, root });
   } catch (error) {
     // A host or MCP schema can nest deeper than the translator recurses. A RangeError (the
     // runtime's stack overflow, standing for Python's RecursionError, or a shape the IR refuses)
     // leaves the input unchecked rather than failing the run.
-    if (error instanceof RangeError) return null;
-    throw error;
+    if (!(error instanceof RangeError)) throw error;
+    // Kept like any other result: a stack overflow depends on the depth of the first call, but
+    // `null` only leaves the input unchecked, so keeping it can only widen the check.
+    typ = null;
   }
+  if (kept) {
+    let map = byRoot;
+    if (map === undefined) INPUT_TYPES.set(doc as object, (map = new WeakMap()));
+    map.set(schema as object, typ);
+  }
+  return typ;
 }
 
-/** Translate one schema node; `refs` holds the `$ref`s being resolved above it. */
-function translate(
-  schema: unknown,
-  closed: boolean,
-  root: unknown,
-  refs: readonly unknown[],
-): Type | null {
+/** The most schema nodes one translation visits; a bigger schema is not checked. */
+const MAX_NODES = 100_000;
+
+/** Thrown when a translation passes `MAX_NODES`. */
+const TOO_BIG = Symbol("too big");
+
+/** The state of one top-level translation. */
+interface Walk {
+  readonly closed: boolean;
+  /** The document `$ref` pointers resolve against. */
+  readonly root: unknown;
+  /** Each `$ref` translated so far whose translation met no cycle, with its type. */
+  readonly refTypes: Map<unknown, Type | null>;
+  /** The schema nodes visited so far. */
+  nodes: number;
+  /** The `$ref` cycles met so far. */
+  cycles: number;
+}
+
+/**
+ * Translate one schema node; `refs` holds the `$ref`s being resolved above it.
+ *
+ * @throws {typeof TOO_BIG} The translation passed `MAX_NODES`.
+ */
+function translate(schema: unknown, walk: Walk, refs: readonly unknown[]): Type | null {
   if (!isRecord(schema)) return null;
+  // Translating a cyclic schema that reaches a def many ways can't reuse those defs' types.
+  if (++walk.nodes > MAX_NODES) throw TOO_BIG;
+  const closed = walk.closed;
 
   const sub = (node: unknown, moreRefs: readonly unknown[] = []): Type | null =>
-    translate(node, closed, root, [...refs, ...moreRefs]);
+    translate(node, walk, [...refs, ...moreRefs]);
 
   if (Object.hasOwn(schema, "$ref")) {
     const ref = schema.$ref;
-    if (refs.includes(ref)) return null;
-    const target = resolveRef(ref, root);
-    return target === undefined ? null : sub(target, [ref]);
+    if (refs.includes(ref)) {
+      walk.cycles += 1;
+      return null;
+    }
+    if (walk.refTypes.has(ref)) return walk.refTypes.get(ref)!;
+    const target = resolveRef(ref, walk.root);
+    if (target === undefined) return null;
+    const cycles = walk.cycles;
+    const typ = sub(target, [ref]);
+    // A type that met no cycle doesn't depend on the refs above it, so another path reaching
+    // this def reuses it; without this a def held twice by each def before it costs 2^depth.
+    if (walk.cycles === cycles) walk.refTypes.set(ref, typ);
+    return typ;
   }
 
   if (Object.hasOwn(schema, "allOf")) {
@@ -349,6 +414,11 @@ export interface ToolTypes {
   /** The names of the inputs a call must pass. */
   readonly required: ReadonlySet<string>;
   /**
+   * The type of an input not in `inputs`, from `additionalProperties`: `undefined` when the tool
+   * takes no such input, and `null` when it takes any (`true`, or a schema yian can't translate).
+   */
+  readonly extra?: Type | null;
+  /**
    * The return type, read from `outputJsonSchema` as a closed schema, or `null` when it is not
    * checked: the tool has no output schema, or yian can't translate it.
    */
@@ -375,10 +445,15 @@ export function toolTypes(tool: FunctionTool): ToolTypes {
   }
   const required = get(schema, "required");
   const names = Array.isArray(required) ? required : [];
+  // As a call's argument check reads it: only `true` or a schema lets other keys in.
+  const additional = get(schema, "additionalProperties");
+  const extra =
+    additional === true ? null : isRecord(additional) ? inputTypeFromJsonSchema(additional, schema) : undefined;
   return {
     inputs,
     required: new Set(names.filter((name): name is string => typeof name === "string")),
     output,
+    ...(extra === undefined ? {} : { extra }),
   };
 }
 

@@ -26,7 +26,14 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunResult, runFlow } from "../../src/run.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isPermanentToolError, isReportedToolError, ToolCheckError } from "../../src/tools/errors.ts";
-import { isMcpError, type McpServer, mcpServer, McpToolError, resultValue } from "../../src/tools/mcp.ts";
+import {
+  isMcpError,
+  McpOutputError,
+  type McpServer,
+  mcpServer,
+  McpToolError,
+  resultValue,
+} from "../../src/tools/mcp.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 import { type HttpServer, PNG_BASE64, startHttpServer } from "../fixtures/mcp/fake_server.ts";
@@ -236,6 +243,13 @@ for (const mode of ["auto", "legacy"] as const) {
       expect(extra).toEqual([1n, [2n ** 53n - 1n]]);
     }, SLOW);
 
+    test("a bigint in a sub-object the arguments hold twice is sent as a number", async () => {
+      const slow = server.tools.find((tool) => tool.name === "slow")!;
+      const shared = { x: 1n };
+      expect(await slow.execute({ seconds: 0, extra: [shared, { again: shared }] }, context("slow"))).toBe("done");
+      expect(shared).toEqual({ x: 1n });
+    }, SLOW);
+
     test("an integer past 2^53 in the arguments is refused before the server is called", async () => {
       const before = await tools().invoke("calls", {});
       const slow = server.tools.find((tool) => tool.name === "slow")!;
@@ -265,18 +279,22 @@ describe("tools that break their output schema", () => {
 
   test("test_structured_content_failing_the_output_schema_is_a_tool_error", async () => {
     const error = await rejection(tools().invoke("bad_output", {}));
+    expect(error).toBeInstanceOf(McpOutputError);
     expect(error).toBeInstanceOf(McpToolError);
     expect(error.message).toBe("MCP server 'bad' tool 'bad_output' failed (TypeCheckError)");
     expect(error.cause).toBeInstanceOf(TypeCheckError);
     expect(isReportedToolError(error)).toBe(true);
-    expect(isPermanentToolError(error)).toBe(false);
+    // A check yian runs is never retried: another call would run the tool again.
+    expect(isPermanentToolError(error)).toBe(true);
   });
 
   test("a result without structured content fails, also after the tool list changed", async () => {
     const message = "MCP server 'bad' tool 'no_structured' failed (no structured content)";
     const error = await rejection(tools().invoke("no_structured", {}));
-    expect(error).toBeInstanceOf(McpToolError);
+    expect(error).toBeInstanceOf(McpOutputError);
     expect(error.message).toBe(message);
+    expect(isReportedToolError(error)).toBe(true);
+    expect(isPermanentToolError(error)).toBe(true);
     expect(await tools().invoke("add_tool", {})).toBe("added");
     // The notification arrived before the response; this gives the SDK's async cache eviction time
     // to finish, so the next call runs after it.

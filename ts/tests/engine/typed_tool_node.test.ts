@@ -94,7 +94,7 @@ beforeEach(() => {
 function placeOrder(
   properties: Record<string, JsonObject>,
   execute: (args: Record<string, unknown>) => unknown,
-  options: { required?: string[]; output?: JsonObject; additionalProperties?: boolean } = {},
+  options: { required?: string[]; output?: JsonObject; additionalProperties?: boolean | JsonObject } = {},
 ): FunctionTool {
   const parameters: JsonObject = { type: "object", properties, required: options.required ?? Object.keys(properties) };
   if (options.additionalProperties !== undefined) parameters.additionalProperties = options.additionalProperties;
@@ -747,6 +747,46 @@ test("a json schema tool with a disjoint binding fails at run start", async () =
   const message = await refused(run(source, { s: "x" }, { tools: { place_order: jsonSchemaTool } }));
 
   expect(message).toMatch(/input 'qty'.*takes int, but the binding is str$/);
+});
+
+/** Return a flow whose TOOL node `place` binds `qty` as 1 and `note` as `binding`. */
+function noteFlow(binding: string): string {
+  return `
+id: placing
+name: placing
+input:
+  s: !str
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: 1
+      note: ${binding}
+output: \${place.output}
+`;
+}
+
+test("an input additionalProperties allows runs", async () => {
+  const open = placeOrder({ qty: INT }, (args) => `placed ${args.qty} ${args.note}`, { additionalProperties: true });
+
+  const result = await run(noteFlow("${input.s}"), { s: "rush" }, { tools: { place_order: open } });
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("placed 1 rush");
+});
+
+test("an extra input is checked against the additionalProperties schema at run start", async () => {
+  const ints = placeOrder({ qty: INT }, (args) => `placed ${args.qty} ${args.note}`, {
+    additionalProperties: INT,
+  });
+
+  const message = await refused(run(noteFlow("${input.s}"), { s: "rush" }, { tools: { place_order: ints } }));
+  expect(message).toContain("TOOL node 'place' input 'note': tool 'place_order' takes int, but the binding is str");
+
+  const result = await run(noteFlow("2"), { s: "" }, { tools: { place_order: ints } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("placed 1 2");
 });
 
 /** `place_order(qty: Annotated[int, Field(ge=0)]) -> str`, recording each call. */

@@ -1,4 +1,5 @@
 kind: load
+rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -25,6 +26,14 @@ flow: |
   output:
     q: ${(order.output.qty :- null) + 1}
 expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "output 'q': ${(order.output.qty :- null) + 1} does arithmetic on (order.output.qty :- null), which is null when node 'order' is skipped; give it a default with :-, e.g. (order.output?.qty :- <default>)"
+        frames:
+          - label: flow.yaml
+            range: [24, 6, 24, 39]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

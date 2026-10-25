@@ -195,7 +195,7 @@ test("a value-mode output is null", async () => {
 test("a dotted output is null", async () => {
   const nodes = gate("order", "rejected") + code("order", '{"status": "filled"}', "\n      status: str") + code("rejected", '"no"');
   const text = flow(nodes, "\n  s: ${order.output.status}");
-  expect(sources(text)).toEqual(["${order.output.status:-null}"]);
+  expect(sources(text)).toEqual(["${order.output?.status:-null}"]);
   expect(await run(text, { approve: false })).toEqual({ s: null });
   expect(await run(text, { approve: true })).toEqual({ s: "filled" });
 });
@@ -626,8 +626,16 @@ test("a replay returns the same null", async () => {
 // then: order / else: rejected, where `order` returns `{qty: int}`
 const QTY = gate("order", "rejected") + code("order", '{"qty": 2}', "\n      qty: int") + code("rejected", '"no"');
 
-/** Return the text of the skipped-arithmetic error on `operand` (null when `producers` skip). */
-function arithmetic(source: string, operand: string, producers: string, hint = `(${operand} :- <default>)`): string {
+/**
+ * Return the text of the skipped-arithmetic error on `operand` (null when `producers` skip); the
+ * hint reads the operand through `?.` after its producer root.
+ */
+function arithmetic(
+  source: string,
+  operand: string,
+  producers: string,
+  hint = `(${operand.replace(/\.output\./g, ".output?.")} :- <default>)`,
+): string {
   return (
     `${source} does arithmetic on ${operand}, which is null when ${producers} skipped; ` +
     `give it a default with :-, e.g. ${hint}`
@@ -783,14 +791,14 @@ test("the rewritten output fingerprints as the explicit null default", () => {
 test("the hint names a placeholder default", () => {
   // The hint asks for a default without guessing its value.
   expect(loadError(() => assembleText(flow(QTY, "\n  q: ${order.output.qty + 1}"))).message).toEndWith(
-    "give it a default with :-, e.g. (order.output.qty :- <default>)",
+    "give it a default with :-, e.g. (order.output?.qty :- <default>)",
   );
 });
 
 test("the hint replaces a null default", () => {
   // An operand already defaulted to null gets the placeholder in place of `null`.
   expect(loadError(() => assembleText(flow(QTY, "\n  q: ${(order.output.qty :- null) + 1}"))).message).toEndWith(
-    "e.g. (order.output.qty :- <default>)",
+    "e.g. (order.output?.qty :- <default>)",
   );
 });
 
@@ -821,7 +829,7 @@ test("arithmetic on a null default in a searched when: is a load error", () => {
   // `(a.output.n :- null) + 1` in a searched `when:` asks for a real default.
   const when = "(a.output.n :- null) + 1 > 1";
   expect(loadError(() => assembleText(searchedGate(when))).message).toBe(
-    `node 'gate2' cases[0].when: ${arithmetic(when, "(a.output.n :- null)", "node 'a' is", "(a.output.n :- <default>)")}`,
+    `node 'gate2' cases[0].when: ${arithmetic(when, "(a.output.n :- null)", "node 'a' is", "(a.output?.n :- <default>)")}`,
   );
 });
 

@@ -30,7 +30,15 @@
 import { type Edge, FlowOutput } from "../../compile/model.ts";
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
-import { bindingCoSkips, ExpressionError, exprRefs, parseCondition, scanTemplate } from "../../expr/index.ts";
+import {
+  bindingCoSkips,
+  ExpressionError,
+  exprRefs,
+  optionalAfterRoots,
+  parseCondition,
+  referenceText,
+  scanTemplate,
+} from "../../expr/index.ts";
 import { type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { Span } from "../../expr/template.ts";
 import {
@@ -41,6 +49,7 @@ import {
   mapSourceStrings,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { poolRootLength } from "../../typesys/pool.ts";
 import { bindingProducers, refProducer } from "../edges/producers.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { directReferenceParts, directReferencePath } from "../../compile/output_contracts.ts";
@@ -310,21 +319,23 @@ export class SkipModel {
  * @param flowOutputs The flow level's declared outputs.
  * @param model The skip model of the same level.
  * @returns The outputs in order. A co-skipping source `${E}` whose producers may all be skipped
- *   becomes `${E:-null}` when `E` is one reference, else `${(E) :- null}`; its origin and declared
- *   contract are kept. Each string nested in a value template is rewritten on its own the same
+ *   becomes `${E:-null}` when `E` is one reference, else `${(E) :- null}`, with `?.` on the first
+ *   step after each producer root; its origin and declared contract are kept. Each string nested in a value template is rewritten on its own the same
  *   way. Every other source is kept as is.
  *
  * @example
  * const model = new SkipModel(["c", "a"], [new Edge("t", "c", "a", { sourceHandle: "then" })], new Set());
  * nullSkippedOutputs([new FlowOutput("v", "${a.output}")], model)[0].binding.source; // "${a.output:-null}"
+ * nullSkippedOutputs([new FlowOutput("v", "${a.output.qty}")], model)[0].binding.source; // "${a.output?.qty:-null}"
  */
 export function nullSkippedOutputs(flowOutputs: readonly FlowOutput[], model: SkipModel): FlowOutput[] {
   if (!model.hasCases) return [...flowOutputs];
 
   const nullDefault = (text: string): string => {
     if (!(bindingCoSkips(text) && model.mayAllSkip(bindingProducers(text)))) return text;
-    // A co-skipping source is exactly one whole `${...}` span.
-    const interior = text.slice(2, -1);
+    // A co-skipping source is exactly one whole `${...}` span. A field of a skipped producer reads
+    // null through `?.`, whatever the skip query's bound.
+    const interior = optionalAfterRoots(text.slice(2, -1), poolRootLength, isProducerRoot);
     if (directReferencePath(text) !== null) return "${" + interior + ":-null}";
     return "${(" + interior + ") :- null}";
   };
@@ -618,18 +629,25 @@ function arithmeticText(source: string, operand: ExprNode, producers: readonly s
 }
 
 /**
- * Return the operand with a `:- <default>` placeholder, replacing a trailing `:- null`.
+ * Return the operand with a `:- <default>` placeholder, replacing a trailing `:- null`; a field of a
+ * producer is read through `?.` after its root, since `:-` sees only a null root.
  *
  * @param operand The operand that may be null.
- * @returns Parenthesized text such as `(order.output.qty :- <default>)`.
+ * @returns Parenthesized text such as `(order.output?.qty :- <default>)`.
  */
 function defaultHint(operand: ExprNode): string {
+  const read = (part: ExprNode) => optionalAfterRoots(operandText(part), poolRootLength, isProducerRoot);
   const last = operand instanceof Tree ? operand.children.at(-1) : undefined;
   if (operand instanceof Tree && operand.data === "default_expr" && last instanceof Token && last.type === "NULL") {
-    const kept = operand.children.slice(0, -1).map(operandText);
+    const kept = operand.children.slice(0, -1).map(read);
     return "(" + [...kept, "<default>"].join(" :- ") + ")";
   }
-  return `(${operandText(operand)} :- <default>)`;
+  return `(${read(operand)} :- <default>)`;
+}
+
+/** Whether a reference root is a node's output or new messages, which a skip leaves null. */
+function isProducerRoot(root: string): boolean {
+  return /\.(output|new_messages)$/.test(root);
 }
 
 /**
@@ -637,14 +655,14 @@ function defaultHint(operand: ExprNode): string {
  *
  * @param operand A reference, a wrapped reference, `null`, a slice of one (printed as its base),
  *   or a coalesce or default of them.
- * @returns The operand's text; a group is parenthesized.
+ * @returns The operand's text, `?.` as written; a group is parenthesized.
  */
 function operandText(operand: ExprNode): string {
   if (operand instanceof Token) return String(operand);
   // A slice prints its base, the value that may be null.
   if (operand.data === "subscript") return operandText(operand.children[0]!);
   const parts = directReferenceParts(operand);
-  if (parts !== null) return parts.join(".");
+  if (parts !== null) return referenceText(operand as Tree);
   const joiner = operand.data === "coalesce" ? " | " : " :- ";
   return "(" + operand.children.map(operandText).join(joiner) + ")";
 }

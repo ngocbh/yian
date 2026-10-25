@@ -1730,6 +1730,35 @@ export function optionalInsideRoot(tree: ExprNode, rootLength: (names: readonly 
   return null;
 }
 
+/**
+ * Return `text` with `?.` on the first step after each reference root `isRoot` accepts; each such
+ * reference is re-printed from its steps, and everything else is kept verbatim.
+ *
+ * @param text An expression (a bare expression, or a span interior).
+ * @param rootLength How many names a reference's root takes, given all its names.
+ * @param isRoot Whether a root, as a flat dotted path, gets the `?.`.
+ */
+export function optionalAfterRoots(
+  text: string,
+  rootLength: (names: readonly string[]) => number,
+  isRoot: (root: string) => boolean,
+): string {
+  const edits: [start: number, end: number, replacement: string][] = [];
+  const tree = parseExpr(text);
+  for (const node of tree instanceof Tree ? iterSubtreesTopdown(tree) : []) {
+    if (node.data !== "refcall" || callSuffixOf(node) !== undefined) continue;
+    const { head, steps } = splitReference(node);
+    const used = rootLength([head, ...steps.map((step) => step.name)]);
+    const root = [head, ...steps.slice(0, used - 1).map((step) => step.name)].join(".");
+    if (steps.length < used || !isRoot(root)) continue;
+    const marked = steps.map((step, i) => (i === used - 1 ? { ...step, optional: true } : step));
+    edits.push([(node.children[0] as Token).startPos, namesEnd(node, 1 + steps.length), head + stepsText(marked)]);
+  }
+  edits.sort((a, b) => b[0] - a[0]);
+  for (const [start, end, replacement] of edits) text = text.slice(0, start) + replacement + text.slice(end);
+  return text;
+}
+
 /** Return steps as written: `.a?.b`. */
 export function stepsText(steps: readonly RefStep[]): string {
   return steps.map((step) => (step.optional ? "?." : ".") + step.name).join("");

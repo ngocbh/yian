@@ -12,7 +12,8 @@
  * describes its result; the reducer owns graph state and variable-pool writes.
  *
  * Run observers bracket a fresh or recovered execution segment with `RunStarted`
- * or `RunResumed`. `RunSucceeded` is derived at successful quiescence;
+ * or `RunResumed`; after `RunResumed`, a `NodeAttemptResumed` names each crashed node the resume
+ * restarts, before that node's `NodeStarted`. `RunSucceeded` is derived at successful quiescence;
  * `RunFailed` is derived from a durable node failure or from a reduced transition
  * that makes the terminal output unreachable. `NodeWaiting` and `NodeWoken` follow a
  * node's move out of and back into flight, `RunWaiting` a quiescence with nodes waiting,

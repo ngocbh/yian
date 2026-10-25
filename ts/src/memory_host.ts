@@ -68,12 +68,15 @@ function learnerOptions(key: string, { env, models, onEvent }: Learners) {
   return { env: models === null ? env : models.env, createModel, onRetry };
 }
 
-/** @internal Attach one cleanup failure, and the notes it carries, to `target`. */
+/**
+ * @internal Attach one cleanup failure to `target` as the note `<label> <name>: <message>`, then
+ * the notes the failure carries.
+ */
 export function noteCleanup(target: unknown, cleanup: unknown, label: string): void {
   addNote(target, () => {
     const [name, message] =
       cleanup instanceof Error ? [cleanup.name, cleanup.message] : [jsTypeName(cleanup), String(cleanup)];
-    return `${label}: ${name}: ${message}`;
+    return `${label} ${name}: ${message}`;
   });
   const notes = (cleanup as { notes?: unknown } | null | undefined)?.notes;
   if (Array.isArray(notes)) for (const note of notes) addNote(target, () => String(note));
@@ -95,7 +98,7 @@ async function closeAll(objects: Iterable<unknown>, failed?: unknown[]): Promise
     } catch (error) {
       failed?.push(item);
       if (first === null) first = { error };
-      else noteCleanup(first.error, error, "Additional memory cleanup failed");
+      else noteCleanup(first.error, error, "Additional memory cleanup failed:");
     }
   }
   return first;
@@ -344,7 +347,7 @@ export async function buildMemories(
   } catch (primary) {
     // Construction is effect-free, so this cleanup does no I/O.
     const cleanup = await closeAll([...owned].reverse());
-    if (cleanup !== null) noteCleanup(primary, cleanup.error, "Memory cleanup failed");
+    if (cleanup !== null) noteCleanup(primary, cleanup.error, "Memory cleanup failed:");
     throw primary;
   }
   return new MemoryRegistry(
@@ -404,7 +407,7 @@ async function buildOne(
       );
       // The factory built it, so this call owns it even though it is rejected.
       const cleanup = await closeAll([value]);
-      if (cleanup !== null) noteCleanup(error, cleanup.error, "Memory cleanup failed");
+      if (cleanup !== null) noteCleanup(error, cleanup.error, "Memory cleanup failed:");
       throw error;
     }
     owned.push(value);

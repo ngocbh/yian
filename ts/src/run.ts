@@ -32,8 +32,8 @@
  * `nodes/agent/messages.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
- *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
- *                typesys.
+ *                memory_host (the registry type check and the cleanup note), nodes, platform, runtime,
+ *                skills, tools, typesys.
  * Never imports: the CLI.
  */
 
@@ -70,7 +70,7 @@ import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
-import { addNote, compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
+import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
 import { CallClosed, RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import type { FeedbackValue } from "./expr/lineage.ts";
@@ -102,7 +102,7 @@ import {
   type MemoryStack,
   sameMemorySpec,
 } from "./memory/contracts.ts";
-import { MemoryRegistry } from "./memory_host.ts";
+import { MemoryRegistry, noteCleanup } from "./memory_host.ts";
 import type { BackwardOptions, CompleteResult, Node } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
@@ -182,7 +182,6 @@ import {
   fromHost,
   isInboxType,
   isRecord,
-  jsTypeName,
   rejectDeepNesting,
   setField,
   type Type,
@@ -656,7 +655,7 @@ async function closeAndRelease(parts: {
   let pending = primary;
   const note = (operation: string, error: unknown): void => {
     if (pending === null) pending = { error };
-    else noteCleanupError(pending.error, operation, error);
+    else noteCleanup(pending.error, error, `${operation} also raised`);
   };
   try {
     await closeRunServers(parts.servers);
@@ -670,9 +669,9 @@ async function closeAndRelease(parts: {
   }
   let next: IdleRun | null = null;
   try {
-    // A cleanup error noted on a refusal leaves `pending` as `primary`; the log close below drops
-    // the entry itself.
-    const keepable = pending === null || (primary !== null && pending === primary && parts.keepAfter?.(primary) === true);
+    // Cleanup errors after a refusal are only noted on it, so the entry is still kept; only a
+    // failed log close below drops it.
+    const keepable = pending === null || (primary !== null && parts.keepAfter?.(primary) === true);
     if (runHold !== null && keepable) next = parts.keep();
     if (parts.authority !== null) {
       try {
@@ -806,7 +805,7 @@ class BackwardHandle {
                 // With no error in flight, the refresh error is the call's error.
                 throw refreshError;
               }
-              noteCleanupError(primary.error, "backward prefix refresh", refreshError);
+              noteCleanup(primary.error, refreshError, "backward prefix refresh also raised");
             }
           }
         } finally {
@@ -1667,6 +1666,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const key = realpathSync(locator);
     const scheduler = options.scheduler ?? realScheduler;
     const clock = () => scheduler.now();
+    // Resolved before the hold is awaited, like the log, and used for both the compile and the entry.
     const root = codeRoot === null ? null : resolve(codeRoot);
     const runHold = await holdForAdvance(key, locator);
     let authority: JsonlRunLog | null = null;
@@ -1682,7 +1682,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecorded(start.defaults);
       const credentials = { apiKey, headers };
       const kept = reusable(runHold.idle, authority, key, { codeRoot: root, hostFlow, credentials });
-      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, codeRoot));
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, root));
       const state = kept?.state ?? replayRunLog(flow, authority, credentials);
       // The caller's credentials, which the replay used, before a flow that sends no host key
       // drops them below: a later call passing the same ones then reuses the entry.
@@ -1988,7 +1988,7 @@ async function deliverTo(
       const start = startRecord(authority[Symbol.iterator]().next().value);
       checkRecorded(start.defaults);
       const kept = reusable(runHold.idle, authority, key, want);
-      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, codeRoot));
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, want.codeRoot));
       const state = kept?.state ?? replayRunLog(flow, authority);
       // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
       const credentials = { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };
@@ -2204,8 +2204,10 @@ export function pendingCalls(log: string): readonly PendingCall[] {
         ? agentCallArguments(replies.get(record.nodeId), Number(step["index"]))
         : (step["arguments"] as JsonObject);
       args.set(String(step["call_id"]), value);
-    } else if (isOutcomeRecord(record)) {
-      replies.delete((record as { nodeId: string }).nodeId);
+    } else {
+      const settled = settledNodeId(record);
+      if (settled === null) continue;
+      replies.delete(settled);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
     }
   }
@@ -2213,14 +2215,15 @@ export function pendingCalls(log: string): readonly PendingCall[] {
   return openHostCalls(waits, (call) => args.get(call.callId) ?? null);
 }
 
-/** Whether `record` settles a node: its success, route, expansion or failure. */
-function isOutcomeRecord(record: RunRecord): boolean {
-  return (
-    record instanceof NodeSucceededRecord ||
-    record instanceof NodeRoutedRecord ||
-    record instanceof NodeExpandedRecord ||
-    record instanceof NodeFailedRecord
-  );
+/**
+ * The node `record` settles (its success, route, expansion or failure), or `null` for any other
+ * record. A failure record's node id is never `null`.
+ */
+function settledNodeId(record: RunRecord): string | null {
+  if (record instanceof NodeSucceededRecord || record instanceof NodeRoutedRecord) return record.nodeId;
+  if (record instanceof NodeExpandedRecord) return record.spawnerId;
+  if (record instanceof NodeFailedRecord) return record.failure.nodeId;
+  return null;
 }
 
 /** The open host calls of `waits`, in registration order, with the arguments `argumentsOf` reads. */
@@ -3297,7 +3300,7 @@ function closeOwnedLog(log: RunLog, primary: { error: unknown } | null): void {
     log.close();
   } catch (cleanupError) {
     if (primary === null) throw cleanupError;
-    noteCleanupError(primary.error, "run-log close", cleanupError);
+    noteCleanup(primary.error, cleanupError, "run-log close also raised");
   }
 }
 
@@ -3391,15 +3394,4 @@ async function openRunServers(
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
   for (const server of servers) await server.close();
-}
-
-/** Note a cleanup error on the initiating error, when it can take a note, without changing control. */
-function noteCleanupError(primaryError: unknown, operation: string, cleanupError: unknown): void {
-  addNote(primaryError, () => {
-    const [name, message] =
-      cleanupError instanceof Error
-        ? [cleanupError.name, cleanupError.message]
-        : [jsTypeName(cleanupError), String(cleanupError)];
-    return `${operation} also raised ${name}: ${message}`;
-  });
 }

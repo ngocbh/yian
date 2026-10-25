@@ -648,6 +648,34 @@ test("YAML codeRoot: send and close append once the CODE file is inside the root
   expect((await advance({ log, env, codeRoot: root })).output).toEqual({ up: "up", heard: { events: ["hi"], closed: true } });
 });
 
+test("a relative codeRoot resolves before a call waits on another holder, so a directory change can't widen it", async () => {
+  const cwd = process.cwd();
+  for (const call of [
+    (log: string) => send(log, "m", "late", { env, codeRoot: ".." }),
+    (log: string) => advance({ log, env, codeRoot: ".." }),
+  ]) {
+    const { dir, flow } = await codeTakeFlow();
+    // `out/..` is ROOT, which holds the moved file; `dir/..` doesn't.
+    const out = mkdtempSync(join(ROOT, "out-"));
+    const log = freshLog();
+    expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
+    renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
+    symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
+    process.chdir(dir);
+    try {
+      const first = send(log, "m", "hi", { env });
+      const second = call(log);
+      process.chdir(out);
+      expect(typeof (await first)).toBe("number");
+      const error = await rejected(second);
+      expect(error).toBeInstanceOf(LoadError);
+      expect((error as Error).message).toEndWith(`outside the code root '${realpathSync(join(dir, ".."))}'`);
+    } finally {
+      process.chdir(cwd);
+    }
+  }
+});
+
 for (const numWorkers of [0, 2]) {
   test(`numWorkers ${numWorkers}: a send as the run starts waiting lands, and is read live or by the next advance`, async () => {
     const log = freshLog();

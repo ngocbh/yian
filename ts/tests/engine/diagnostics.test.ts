@@ -561,8 +561,8 @@ describe("ResolverTable", () => {
     ]);
   });
 
-  test("merge is strict and preserves delegate behavior", () => {
-    // Merging uses exact disjoint routes and never adds fallback semantics.
+  test("routes each origin to its own delegate", () => {
+    // Each route resolves through its own delegate, with no fallback between them.
     class Resolver implements OriginResolver {
       readonly label: string;
 
@@ -580,19 +580,14 @@ describe("ResolverTable", () => {
       }
     }
 
-    const first = ResolverTable.fromEntries([
+    const table = ResolverTable.fromEntries([
       [new OriginRef("first"), new Resolver("first"), new OriginRef("old")],
-    ]);
-    const second = ResolverTable.fromEntries([
       [new OriginRef("second"), new Resolver("second"), new OriginRef("old")],
     ]);
 
-    const merged = ResolverTable.merge(first, second);
-
-    expect(merged.size).toBe(2);
-    expect(merged.resolve(new OriginRef("first"))?.label).toBe("first");
-    expect(merged.resolve(new OriginRef("second"))?.label).toBe("second");
-    expect(ResolverTable.merge().size).toBe(0);
+    expect(table.size).toBe(2);
+    expect(table.resolve(new OriginRef("first"))?.label).toBe("first");
+    expect(table.resolve(new OriginRef("second"))?.label).toBe("second");
     expect(new ResolverTable().size).toBe(0);
   });
 
@@ -613,12 +608,6 @@ describe("ResolverTable", () => {
     );
     expect(duplicate).toBeInstanceOf(RangeError);
     expect((duplicate as Error).message).toBe("duplicate resolver table origin 'same'");
-
-    const first = ResolverTable.fromEntries([[same, resolver, old]]);
-    const second = ResolverTable.fromEntries([[same, resolver, old]]);
-    const merged = thrown(() => ResolverTable.merge(first, second));
-    expect(merged).toBeInstanceOf(RangeError);
-    expect((merged as Error).message).toBe("duplicate resolver table origin 'same'");
   });
 
   test("snapshots its entries and propagates delegate failures", () => {
@@ -690,11 +679,6 @@ describe("ResolverTable", () => {
           [new OriginRef("new"), new ResolverTable()],
         ] as unknown as Entries),
       "resolver table entry must be a three-item tuple",
-    ],
-    [
-      "merging a non-table",
-      () => ResolverTable.merge(new ResolverTable(), {} as unknown as ResolverTable),
-      "resolver table merge requires ResolverTable values",
     ],
     [
       "resolving a string",

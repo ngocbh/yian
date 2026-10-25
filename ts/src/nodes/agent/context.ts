@@ -262,17 +262,15 @@ export function readAgentSteps(steps: readonly ValueRecord[]): ReadSteps {
  * for a tool call's result. Each write returns the step's `n`, as the engine committed it. Without
  * engine steps (direct loop tests) it records nothing and numbers the steps itself.
  *
- * It also replays what earlier starts recorded (`NodeSteps.prior`, read by `readAgentSteps`), in
- * order: each successful `model_call`, and each failed one that wasn't to be retried, ends one
- * logical call to take back (`takeRecorded`) in place of calling the model; the failed attempts before it belong to it, and
- * failed attempts after the last one are the next live call's (`priorAttempts`). Each
- * `tool_result` is found by its reply and its call id (`recordedResult`). The `steer` steps
- * before a logical call are handed back (`takeRecordedSteers`), in order, before it, with the
- * values the engine attached to each copy; those after the last call are handed back after it. An
- * `interrupted` step, the honor of a host interrupt, ends the replay where it was written
- * (`honored`).
- * Steps of any other kind (`llm_config`, or a kind this version doesn't know) are not the loop's
- * and are skipped.
+ * It also replays what earlier starts recorded (`NodeSteps.prior`), in order, grouped as
+ * `readAgentSteps` reads them: each logical call is taken back (`takeRecorded`) in place of
+ * calling the model, and the retried attempts after the last one are the next live call's
+ * (`priorAttempts`). Each `tool_result` is found by its reply and its call id (`recordedResult`).
+ * The `steer` steps before a logical call are handed back (`takeRecordedSteers`), in order, before
+ * it, with the values the engine attached to each copy; those after the last call are handed back
+ * after it. An `interrupted` step, the honor of a host interrupt, ends the replay where it was
+ * written (`honored`). Steps of any other kind (`llm_config`, or a kind this version doesn't know)
+ * are not the loop's and are skipped.
  */
 export class AgentSteps {
   /** The run's folder, where reply media is stored; `null` without a log. */

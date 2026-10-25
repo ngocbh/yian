@@ -39,9 +39,10 @@ import { CaseDescriptor } from "../nodes/case.ts";
 import { mapOutputsStrings } from "./inline_calls.ts";
 
 // A clean whole-span case-output ref INTERIOR. Singular only: `<id>.output[.<seg>…]` (group 1 =
-// id, group 2 = dotted rest). The id and each path segment are reference-path style — a
-// letter/underscore, then letters, digits, `_`, `#` or `/`; no `-`.
-const CASE_OUTPUT_INTERIOR = /^([A-Za-z_][A-Za-z0-9_#/]*)\.output((?:\.[A-Za-z_][A-Za-z0-9_#/]*)*)$/;
+// id, group 2 = the steps after `output`, each `.<seg>` or `?.<seg>`, kept as written). The id and
+// each path segment are reference-path style — a letter/underscore, then letters, digits, `_`, `#`
+// or `/`; no `-`.
+const CASE_OUTPUT_INTERIOR = /^([A-Za-z_][A-Za-z0-9_#/]*)\.output((?:\??\.[A-Za-z_][A-Za-z0-9_#/]*)*)$/;
 
 /**
  * Expand every `${<case>.output}` binding ref to a coalesce over its branch targets.

@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
@@ -45,6 +45,7 @@ import { decodeRecord, InterruptedRecord, NodeStepRecord, PoolCommitRecord, type
 import { advance, foldRunLog, inspectRun, interrupt, runFlow, send } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ToolSet } from "../../src/tools/registry.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
 import { crashAfter, NO_ENV, rejected, serving, textReply } from "./run_state_fixtures.ts";
@@ -399,6 +400,20 @@ test("a crash after a tool result replays the reply: the model and the tool run 
   // The live call read the replayed reply and its recorded result.
   expect(sentResults(model, 0).map((part) => [part.callId, part.content])).toEqual([["call-a", "save:a"]]);
   expect(comparable(log)).toEqual(comparable(uncut.log));
+});
+
+test("a replayed call with a recorded result keeps it without checking its arguments again", async () => {
+  const tools = { save: topicTool("save") };
+  const uncut = await run(saveModel(), { tools });
+  const log = await cutRun(seqOf(uncut.log, "tool_result") + 1, saveModel(), { tools });
+  const validate = spyOn(ToolSet.prototype, "validate");
+  try {
+    const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(validate).not.toHaveBeenCalled();
+  } finally {
+    validate.mockRestore();
+  }
 });
 
 test("a replayed reply whose arguments hold ints and floats matches its digest", async () => {

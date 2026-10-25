@@ -69,7 +69,6 @@ import {
   checkStopped,
   digestRequest,
   interruptRequested,
-  type RecordedResult,
   recordedResponse,
   requestSha256,
   sentCredentials,
@@ -536,26 +535,17 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
   return await runGroup(turn, group);
 }
 
-/** One replayed call and the result the model reads for it. */
-interface ReplayedCall {
-  readonly call: ToolCallPart;
-  readonly result: RecordedResult;
-}
-
 /**
  * Give a replayed reply's tool calls their results without running any, appending a tool message
- * per call in call order. A call keeps the result an earlier start recorded. A call with none is
- * checked as live: a failed check fails the node as live. Otherwise a call the run still holds
- * open (it pended and waits on, beside a sibling a deadline closed) is pended again, with no
- * closer and no handler call, and gets no tool message: the loop then returns `Pending`. Any other
- * call is closed with the word of the record that closed it (`closerResult`: `timed_out` for an
- * ask whose deadline passed, `interrupted` for a call a host interrupt closed), `crashed` when
- * none did (its run was cut off before its result),
- * the closer written as its `tool_result` step. Unparsed calls are not in `turn.calls`, so they get
- * nothing, as live.
- *
- * Every call is checked, so the calls form the groups they formed live and their results commit
- * in the same order; a call with a recorded result keeps it whatever its check says now.
+ * per call in call order, as live commits them. A call keeps the result an earlier start recorded,
+ * unchecked. A call with none is checked as live: a failed check fails the node as live. Otherwise
+ * a call the run still holds open (it pended and waits on, beside a sibling a deadline closed) is
+ * pended again, with no closer and no handler call, and gets no tool message: the loop then
+ * returns `Pending`. Any other call is closed with the word of the record that closed it
+ * (`closerResult`: `timed_out` for an ask whose deadline passed, `interrupted` for a call a host
+ * interrupt closed), `crashed` when none did (its run was cut off before its result), the closer
+ * written as its `tool_result` step. Unparsed calls are not in `turn.calls`, so they get nothing,
+ * as live.
  *
  * @returns Whether a host interrupt skipped calls of this reply when it was live (a recorded
  *   `skipped` result): the loop ends as it did then.
@@ -563,29 +553,14 @@ interface ReplayedCall {
  */
 async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   const { steps } = turn;
-  let group: ReplayedCall[] = [];
-  const commit = () => {
-    for (const { call, result } of group) {
-      const { id: callId, name } = call;
-      const part = new ToolResultPart({ callId, name, content: result.output, isError: result.isError });
-      turn.messages.push(new Message({ role: "tool", parts: [part] }));
-    }
-    group = [];
-  };
   for (const [index, call] of turn.calls.entries()) {
     checkNodeStopped(turn);
     let result = steps.recordedResult(turn.n, call.id);
     // Live, the interrupt skipped from this call's group on; the groups before it committed.
-    if (result?.closed === "skipped") {
-      commit();
-      return true;
-    }
-    const check = await checkCall(turn, call, index);
+    if (result?.closed === "skipped") return true;
     if (result === null) {
-      if ("error" in check) {
-        commit();
-        return await failCall(turn, call, index, check);
-      }
+      const check = await checkCall(turn, call, index);
+      if ("error" in check) return await failCall(turn, call, index, check);
       const callId = agentCallId(turn, index);
       const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
       if (callId !== undefined && view?.state === "open") {
@@ -596,15 +571,9 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       result = { output, isError: true, closed };
       steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     }
-    if ("planned" in check && check.safe) {
-      group.push({ call, result });
-      continue;
-    }
-    commit();
-    group = [{ call, result }];
-    commit();
+    const part = new ToolResultPart({ callId: call.id, name: call.name, content: result.output, isError: result.isError });
+    turn.messages.push(new Message({ role: "tool", parts: [part] }));
   }
-  commit();
   return false;
 }
 

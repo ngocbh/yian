@@ -440,10 +440,11 @@ async function buildOne(
     // casefold); `realStoragePath` reads links but opens nothing.
     const normal = realStoragePath(path).toLowerCase();
     const other = seen.get(normal);
-    if (other === undefined) seen.set(normal, memory.key);
-    else if (other !== memory.key) {
+    // memoryTable lists each key once, so a path already seen belongs to another key.
+    if (other !== undefined) {
       throw setupError(memory, `storage ${reprText(path)} is also used by memory ${reprText(other)}`);
     }
+    seen.set(normal, memory.key);
   }
   return value;
 }

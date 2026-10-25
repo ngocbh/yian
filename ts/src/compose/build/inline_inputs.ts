@@ -82,14 +82,6 @@ const SCALAR_TOKEN_KINDS: ReadonlyMap<string, ValueKind> = new Map([
   ["STRING", ValueKind.STRING],
 ]);
 
-const LIST_KINDS: ReadonlyMap<ValueKind, ValueKind> = new Map([
-  [ValueKind.STRING, ValueKind.LIST_STRING],
-  [ValueKind.INTEGER, ValueKind.LIST_INTEGER],
-  [ValueKind.NUMBER, ValueKind.LIST_NUMBER],
-  [ValueKind.BOOLEAN, ValueKind.LIST_BOOLEAN],
-  [ValueKind.OBJECT, ValueKind.LIST_OBJECT],
-]);
-
 /** The shared context of one binding's inference walk. */
 interface Walk {
   readonly parentInputTypes: ReadonlyMap<string, Type>;
@@ -496,7 +488,7 @@ function inferList(value: readonly unknown[], path: string, activeContainers: Se
       path,
       walk,
     );
-    return new Type({ kind: LIST_KINDS.get(element.kind) ?? ValueKind.LIST_ANY, element });
+    return new Type({ kind: listKindForElement(element), element });
   } finally {
     activeContainers.delete(value);
   }

@@ -28,10 +28,10 @@
  *
  * Knows about: `compile/validation` (the leaf namespace checker), `expr` (the binding and template
  * parsers), `nodes` (node behaviour, the AGENT and CASE nodes, and the binding
- * carriers), `typesys` (`Type`, for a list's element type), `compose/helpers` (closed-path
+ * carriers), `typesys` (`Type`), `compose/helpers` (closed-path
  * projection, binding-contract resolution, narrowed reads, and errors), and `compose/validate`
  * (`constructors` for the constructor and builtin checks, `narrowing` for each node's view, and
- * `typed_bindings` for the node-local contracts).
+ * `typed_bindings` for the node-local contracts and a MAP's item contract).
  * Never imports: the loader or the compose package facade; they import this back.
  */
 
@@ -70,10 +70,8 @@ import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
   isInboxType,
-  isListKind,
   isRecord,
   jsTypeName,
-  listElementKind,
   Type,
   typeEquals,
   ValueKind,
@@ -88,14 +86,12 @@ import {
   outputContractPathError,
   projectOutputContract,
   referenceContract,
-  resolveOutputBindingContract,
-  type TypeFn,
 } from "../helpers/output_contracts.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
+import { itemContract, LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /**
  * Return whether a value of `typ` can be a prompt message (the built-in `Message`, or a record with
@@ -214,33 +210,6 @@ function outputBindings(outputs: unknown): unknown[] {
   if (isRecord(outputs)) return Object.values(outputs);
   if (outputs === null) return [];
   return [outputs];
-}
-
-/**
- * Return the element contract of a MAP's `over:` binding when it is a proven list, else `null`.
- *
- * @param over The MAP's raw `over:` binding.
- * @param producers Exact or partial node output contracts keyed by producer id.
- * @param inputContracts Exact flow input contracts keyed by input name.
- * @param typeFn Resolves a constructor name to its type.
- * @returns The exact contract of one element, or `null` when `over:` is not a list or is an
- *   unproven one (whose items are unknown, labelled `list(Optional(Any))`).
- * @throws TypeError when a referenced producer is not an output contract, or a flow-input
- *   contract is not an exact `ValueContract`.
- */
-function itemContract(
-  over: unknown,
-  producers: ReadonlyMap<string, OutputContract>,
-  inputContracts: ReadonlyMap<string, ValueContract>,
-  typeFn: TypeFn | null,
-): ValueContract | null {
-  const contract = resolveOutputBindingContract(over, producers, inputContracts, { typeFn });
-  if (!isExactly(contract, ValueContract) || !isListKind(contract.type.kind)) return null;
-  const typ = contract.type;
-  if (typ.element !== undefined) return new ValueContract(typ.element);
-  const elementKind = listElementKind(typ.kind);
-  if (elementKind === null) return null;
-  return new ValueContract(Type.scalar(elementKind));
 }
 
 /**
@@ -717,7 +686,7 @@ export function validateReferences(
     // A per-item binder (MAP) reads its iteration source above, then validates each element
     // input with the body-local `${item}` scope enabled.
     if (node.bindsPerItem) {
-      const item = itemContract(nwiring.get("over"), nodeProducers, nodeInputs, typeFn);
+      const item = itemContract(result, nwiring, nodeProducers, nodeInputs, typeFn);
       for (const [param, src] of nwiring) {
         if (reserved.has(param)) continue;
         scan(

@@ -83,6 +83,7 @@ import {
   planExpansion,
   prepareExpandedFromPlan,
   prepareExpansionCommit,
+  prepareAppliedStop,
   prepareComplete,
   prepareInboxClosed,
   prepareInterrupt,
@@ -724,7 +725,8 @@ export class FlowEngine {
    * Return the opener of a just-started node's steer inbox when the node declares
    * `readsSteerInbox`, else `null`. Opening registers the node as reading that inbox until its
    * outcome commits, with an interrupt signal that an interrupt of the inbox aborts (aborted at
-   * once when the node holds a pending interrupt). A read is zero-wait: in one synchronous section it takes every event a read
+   * once when the node holds a pending interrupt). A node that opens an inbox while a Stop on it
+   * stands is interrupted at once by its own `interrupted` record. A read is zero-wait: in one synchronous section it takes every event a read
    * may take now, appends them as one `steer` step and returns their values, so no delivery lands
    * between reading the queue and the append.
    */
@@ -735,8 +737,10 @@ export class FlowEngine {
       if (typeof inbox !== "string" || inboxElementType(state, inbox) === null) {
         throw new CapabilityFault(new RangeError(`steer inbox ${reprText(String(inbox))} is no inbox the START declares`));
       }
+      this.#applyStop(nodeId, inbox);
       const controller = new AbortController();
-      // An interrupt recorded before this evaluation (it waited, or crashed) still stands.
+      // An interrupt recorded before this evaluation (it waited, or crashed), or the Stop just
+      // applied, stands.
       if (state.waits.interrupts.has(nodeId)) controller.abort();
       this.#steerInboxes.set(nodeId, { inbox, controller });
       return {
@@ -762,6 +766,29 @@ export class FlowEngine {
         },
       };
     };
+  }
+
+  /**
+   * Append the remembered Stop on `inbox` as an `interrupted` record naming `nodeId`, which has just
+   * opened it as its steer inbox, and publish what it closes. Nothing when no Stop stands, the run
+   * has a result or its signal is aborted (a stop or cancel drains; the window outlives a stop, so
+   * the rerun applies it), or the node already holds or honored an interrupt.
+   */
+  #applyStop(nodeId: string, inbox: string): void {
+    const { state, log } = this;
+    const w = state.waits;
+    if (!w.stops.has(inbox) || state.result !== null || this.#controller.signal.aborted) return;
+    if (w.interrupts.has(nodeId) || w._honored.has(nodeId)) return;
+    let observers: readonly RunEvent[];
+    try {
+      // Not prepareInterrupt: the host's rules record nothing while a Stop stands.
+      observers = commitPrepared(log, state, prepareAppliedStop(state, inbox, nodeId));
+    } catch (error) {
+      throw new CapabilityFault(error);
+    }
+    this.#publish(observers, this.#events);
+    // A waiting reader it named is wakeable now.
+    this.#queue?.nudge();
   }
 
   /** Prepare one outcome's record, append it and apply its plan, returning its observers. */

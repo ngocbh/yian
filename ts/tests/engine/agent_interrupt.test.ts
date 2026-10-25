@@ -81,7 +81,7 @@ import { MemoryContext } from "../../src/memory/contracts.ts";
 import type { Scheduler } from "../../src/platform.ts";
 import { interrupt, runFlow } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
-import { InterruptedRecord, NodeStepRecord, NodeWaitingRecord } from "../../src/runtime/log.ts";
+import { InterruptedRecord, NodeStepRecord, NodeWaitingRecord, readRunLog } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareSend } from "../../src/runtime/state.ts";
 import { unreadEvents } from "../../src/runtime/waits.ts";
 import { pending } from "../../src/tools/context.ts";
@@ -661,7 +661,7 @@ nodes:
 output: \${loop.output.transcript}
 `;
 
-test("an interrupt names only the running loop occurrence", async () => {
+test("an interrupt names only the running loop occurrence; the next one opens while the Stop stands and stops too", async () => {
   const log = `${process.env["TMPDIR"] ?? "/tmp"}/yian-agent-interrupt-loop-${process.pid}-${Date.now()}.jsonl`;
   let started = 0;
   // The first occurrence is interrupted during its model call, so its ping call is skipped.
@@ -677,7 +677,12 @@ test("an interrupt names only the running loop occurrence", async () => {
     log,
   });
   expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe("s|-|turn2");
+  // No take or wait ends the Stop between the occurrences, so the second is stopped before its
+  // model call by its own record.
+  expect(result.output).toBe("s|-|-");
+  expect(model.requests).toHaveLength(1);
+  const stops = readRunLog(log).flatMap(({ record }) => (record instanceof InterruptedRecord ? [[...record.nodes]] : []));
+  expect(stops).toEqual([["loop#0/reply"], ["loop#1/reply"]]);
 });
 
 // --- the stream is a safe point ----------------------------------------------------------- //

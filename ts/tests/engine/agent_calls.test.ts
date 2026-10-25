@@ -18,9 +18,12 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
 import { NamedTool, type Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { AuthError } from "../../src/llm_clients/auth/index.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { fromModelMessage } from "../../src/nodes/agent/messages.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import {
+  advance,
   type AgentCallView,
   agentCall,
   agentCalls,
@@ -33,10 +36,12 @@ import {
   send,
 } from "../../src/run.ts";
 import { pending } from "../../src/tools/context.ts";
+import { Skill } from "../../src/skills/catalog.ts";
+import { LOAD_SKILL } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { FakeMemory } from "./memory_fakes.ts";
-import { callReply, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-calls-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -370,9 +375,17 @@ test("a request that no longer matches its digest is returned flagged, not throw
   expect(requestOf(view)).toMatchObject(sentView(model.requests[0]!));
 });
 
+/** Fail when `view` holds the host's key or header value, or a credential field. */
+function expectNoSecrets(view: AgentCallView): void {
+  const json = logJson(JSON.parse(JSON.stringify(view)));
+  for (const secret of [KEY, HEADER, "api_key", "headers", "_host_key", "_header_names", "_connection"]) {
+    expect(json).not.toContain(secret);
+  }
+}
+
 test("the view holds the model config without the host's key, headers or connection", async () => {
-  const key = "sk-sentinel-agent-call-7f3a";
-  const header = "hdr-sentinel-agent-call-91c2";
+  const key = KEY;
+  const header = HEADER;
   const model = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
   const llmConfig = { provider: "anthropic", model: "claude-test", api_key: key, headers: { "x-trace": header } };
   const { log, result } = await run(TOOLS, model, { topic: "owls" }, {
@@ -383,10 +396,10 @@ test("the view holds the model config without the host's key, headers or connect
   const view = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
   expect(requestOf(view).model).toBe("claude-test");
   expect(requestOf(view).params).toEqual({ provider: "anthropic", model: "claude-test" });
-  const json = logJson(JSON.parse(JSON.stringify(view)));
-  for (const secret of [key, header, "api_key", "headers", "_host_key", "_header_names", "_connection"]) {
-    expect(json).not.toContain(secret);
-  }
+  expectNoSecrets(view);
+  const credentials = { apiKey: key, headers: { "x-trace": header } };
+  const keyed = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV, ...credentials });
+  expect(keyed).toEqual(view);
 });
 
 test("a learnable run and one that isn't give the same view", async () => {
@@ -433,6 +446,48 @@ test("a waiting run's call shows a pending tool call without a result, then the 
   ]);
 });
 
+const CALL_TIME = `
+id: call_time
+name: call_time
+llm_config: {provider: anthropic, model: claude-test}
+nodes:
+  pick:
+    kind: agent
+    prompt: Pick a model.
+    output: str
+  chat:
+    kind: agent
+    prompt: Go.
+    output: str
+    llm_config: {model: '\${pick.output}'}
+output: \${chat.output}
+`;
+
+const KEY = "sk-sentinel-agent-call-7f3a";
+const HEADER = "hdr-sentinel-agent-call-91c2";
+
+test("a call-time agent's params come from its llm_config step, with or without a host key", async () => {
+  for (const keyed of [false, true]) {
+    const model = new ScriptedModel([textReply("claude-other"), textReply("done")], {
+      provider: "anthropic",
+      model: "claude-test",
+    });
+    const llmConfig = keyed ? { provider: "anthropic", api_key: KEY, headers: { "x-trace": HEADER } } : undefined;
+    const { log, result } = await run(CALL_TIME, model, {}, llmConfig === undefined ? {} : { llmConfig });
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    const credentials = keyed ? { apiKey: KEY, headers: { "x-trace": HEADER } } : {};
+    const view = await agentCall(log, { nodeId: "chat", n: 2 }, { env: NO_ENV, ...credentials });
+    expect(view.digestMismatch).toBe(false);
+    expect(requestOf(view).params).toEqual({ provider: "anthropic", model: "claude-other" });
+    expect(requestOf(view)).toMatchObject(sentView(model.requests[1]!));
+    expectNoSecrets(view);
+    if (keyed) {
+      // Its config can't be bound again without the key the run used.
+      await expect(agentCall(log, { nodeId: "chat", n: 2 }, { env: NO_ENV })).rejects.toThrow(AuthError);
+    }
+  }
+});
+
 const STRUCTURED = `
 id: structured
 name: structured
@@ -454,6 +509,130 @@ test("a structured call's request is rebuilt with the model the host builds", as
   const view = await agentCall(log, entry!, { env: NO_ENV, models: serving(model) });
   expect(view.digestMismatch).toBe(false);
   expect(requestOf(view)).toMatchObject(sentView(model.requests[0]!));
+});
+
+test("a structured call in a host-key run is rebuilt with the key, and is null without it", async () => {
+  const model = new ScriptedModel([textReply('{"value": 3}')], { provider: "anthropic", model: "claude-test" });
+  // As a real model build does, it refuses a config marked for the host key that lacks the key.
+  const keyed: ModelAccess = {
+    env: NO_ENV,
+    createModel: (config) => {
+      if (config["_host_key"] === true && config["api_key"] !== KEY) throw new Error("the host key is missing");
+      return model;
+    },
+  };
+  const llmConfig = { provider: "anthropic", api_key: KEY };
+  const { log, result } = await run(STRUCTURED, model, {}, { llmConfig, models: keyed });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const [entry] = agentCalls(log);
+  const view = await agentCall(log, entry!, { env: NO_ENV, models: keyed, apiKey: KEY });
+  expect(view.digestMismatch).toBe(false);
+  expect(requestOf(view)).toMatchObject(sentView(model.requests[0]!));
+  expectNoSecrets(view);
+  const keyless = await agentCall(log, entry!, { env: NO_ENV, models: keyed });
+  expect(keyless.request).toBeNull();
+  expect(keyless.digestMismatch).toBe(false);
+});
+
+const CHAT_THEN_STRUCTURED = `
+id: chat_then_structured
+name: chat_then_structured
+llm_config: {provider: anthropic, model: claude-test}
+nodes:
+  count:
+    kind: agent
+    tools: [lookup]
+    prompt: How many?
+    output: int
+output: \${count.output}
+`;
+
+test("a chat loop then its final structured call: each request is the one sent", async () => {
+  const model = new ScriptedModel(
+    [callReply(["lookup", { topic: "a" }, "call-a"]), textReply("Three."), textReply('{"value": 3}')],
+    { provider: "anthropic", model: "claude-test" },
+  );
+  const { log, result } = await run(CHAT_THEN_STRUCTURED, model, {}, { tools: { lookup: topicTool("lookup") } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const calls = agentCalls(log);
+  expect(calls.map(({ n, purpose }) => [n, purpose === "chat"])).toEqual([
+    [1, true],
+    [3, true],
+    [4, false],
+  ]);
+  for (const [index, entry] of calls.entries()) {
+    const view = await agentCall(log, entry, { env: NO_ENV, models: serving(model) });
+    expect(view.digestMismatch).toBe(false);
+    expect(requestOf(view)).toMatchObject(sentView(model.requests[index]!));
+  }
+});
+
+test("a skill grant: the request lists the recorded skills and carries load_skill", async () => {
+  const text = `
+id: skilled
+name: skilled
+llm_config: {provider: anthropic, model: claude-test}
+nodes:
+  review:
+    kind: agent
+    skills: [style]
+    prompt: review it
+    output: str
+output: \${review.output}
+`;
+  const skill = new Skill({ name: "style", description: "House style.", instructions: "Prefer small diffs." });
+  const model = new ScriptedModel([callReply([LOAD_SKILL, { name: "style" }, "call-1"]), textReply("reviewed")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const { log, result } = await run(text, model, {}, { skills: new Map([["style", skill]]) });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const first = await agentCall(log, { nodeId: "review", n: 1 }, { env: NO_ENV });
+  expect(requestOf(first).tools.map((tool) => tool.name)).toEqual([LOAD_SKILL]);
+  expect(requestOf(first).system).toContain("House style.");
+  expect(first.toolResults.map(({ name, output }) => [name, output])).toEqual([[LOAD_SKILL, "Prefer small diffs."]]);
+  const second = await agentCall(log, { nodeId: "review", n: 3 }, { env: NO_ENV });
+  expect(second.digestMismatch).toBe(false);
+  expect(requestOf(second)).toMatchObject(sentView(model.requests[1]!));
+});
+
+test("a grant naming a tool group carries the group's recorded tools", async () => {
+  const text = TOOLS.replace("tools: [lookup, save]", "tools: [toolbox]");
+  const model = new ScriptedModel([callReply(["save", { topic: "b" }, "call-b"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const tools = { toolbox: [topicTool("lookup"), topicTool("save")] };
+  const { log, result } = await run(text, model, { topic: "owls" }, { tools });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const view = await agentCall(log, { nodeId: "writer", n: 3 }, { env: NO_ENV });
+  expect(view.digestMismatch).toBe(false);
+  expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["lookup", "save"]);
+  expect(requestOf(view)).toMatchObject(sentView(model.requests[1]!));
+});
+
+test("a run cut off mid-agent, then resumed: each start's calls are read", async () => {
+  const replies = () => [callReply(["lookup", { topic: "a" }, "call-a"]), textReply("done")];
+  const options = { tools: { lookup: topicTool("lookup"), save: topicTool("save") } };
+  const scripted = () => new ScriptedModel(replies(), { provider: "anthropic", model: "claude-test" });
+  const uncut = await run(TOOLS, scripted(), { topic: "owls" }, options);
+  // Cut right after the tool result, before the second model call.
+  const k = readFileSync(uncut.log, "utf8").split("\n").findIndex((line) => line.includes('"tool_result"')) + 1;
+  const log = runLog();
+  await crashAfter(k, () => run(TOOLS, scripted(), { topic: "owls" }, { ...options, log }));
+  expect(agentCalls(log).map(({ n }) => n)).toEqual([1]);
+  const cut = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
+  expect(cut.digestMismatch).toBe(false);
+  expect(cut.toolResults.map(({ output }) => output)).toEqual(["lookup:a"]);
+
+  const second = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
+  const resumed = await advance({ log, models: serving(second), env: NO_ENV, ...options });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(agentCalls(log).map(({ n }) => n)).toEqual([1, 3]);
+  const after = await agentCall(log, { nodeId: "writer", n: 3 }, { env: NO_ENV });
+  expect(after.digestMismatch).toBe(false);
+  expect(requestOf(after)).toMatchObject(sentView(second.requests[0]!));
+  expect(await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV })).toEqual(cut);
 });
 
 const RECALLED = `

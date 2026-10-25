@@ -107,6 +107,7 @@ import {
   sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry, noteCleanup } from "./memory_host.ts";
+import { type NumberedStep, type ReadSteps, readAgentSteps } from "./nodes/agent/context.ts";
 import { fromModelMessage, type Message as MessageValue } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
 import type { BackwardOptions, CompleteResult, MaterialCaps, Node } from "./nodes/base.ts";
@@ -1765,18 +1766,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
 
-      if (state.memories !== null) {
-        checkRegistryTypes(memory!, state.memories);
-        const authored = resolveAuthoredMemoryLayout(flow);
-        const { memories, stacks } = authored;
-        checkRecordedMemoryTable(state.memories, state.memoryStacks, memories, stacks, "supplied flow");
-        memoryRuntime = await MemoryRuntime.open({
-          memories: state.memories,
-          origins: authored.origins,
-          memory: memory!,
-          snapshots: state.memorySnapshots,
-        });
-      }
+      if (state.memories !== null) memoryRuntime = await openRecordedMemory(flow, state, memory!);
 
       const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
       // This segment's appends go through the live channel's wrapper.
@@ -2666,9 +2656,15 @@ export interface AgentCallView {
   /** The `n` of the call's last attempt. */
   readonly n: number;
   readonly purpose: string;
-  /** The request, or `null` when it can't be rebuilt (then `digestMismatch` is `true`). */
+  /**
+   * The request, or `null` when it couldn't be rebuilt: a structured call whose model can't be
+   * built to read its plan off, or a granted tool the recorded specs lack.
+   */
   readonly request: AgentCallRequest | null;
-  /** Whether a recorded `request_sha256` differs from the rebuilt request's, or it couldn't be rebuilt. */
+  /**
+   * Whether the request was rebuilt and an attempt's recorded purpose or `request_sha256` differs
+   * from it; `false` when `request` is `null`.
+   */
   readonly digestMismatch: boolean;
   /**
    * The memory sections recalled into the system message: `null` when the node recalls memory
@@ -2685,47 +2681,24 @@ export interface AgentCallView {
   readonly usage: AgentCallUsage | null;
   /** The last attempt's finish reason, `null` when it failed. */
   readonly finish: string | null;
-  /** Whether a host interrupt cut the reply or ended the node before it acted on all of it. */
+  /**
+   * Whether a host interrupt cut the reply (`finish: "interrupted"`), or the node's honor of one
+   * (its `interrupted` step) follows the call, so the node ended before acting on all of the reply.
+   */
   readonly interrupted: boolean;
 }
 
-/** One step of a node, numbered, with when its record was appended. */
-interface NumberedNodeStep {
-  readonly n: number;
-  readonly step: Readonly<JsonObject>;
-  readonly at: string;
-}
-
-/**
- * Whether `step`, a `model_call` step, is another attempt of the call `last` attempted: `last`
- * failed and was to be retried, with the same purpose and request digest.
- */
-function retries(last: Readonly<JsonObject>, step: Readonly<JsonObject>): boolean {
-  return (
-    Object.hasOwn(last, "error") &&
-    last["retry_in"] != null &&
-    last["purpose"] === step["purpose"] &&
-    last["request_sha256"] === step["request_sha256"]
-  );
-}
-
-/** Group `steps`' `model_call` steps, in order, into calls: each a list of its attempts. */
-function modelCalls(steps: readonly NumberedNodeStep[]): NumberedNodeStep[][] {
-  const calls: NumberedNodeStep[][] = [];
-  for (const each of steps) {
-    if (each.step["kind"] !== "model_call") continue;
-    const last = calls.at(-1)?.at(-1);
-    if (last !== undefined && retries(last.step, each.step)) calls.at(-1)!.push(each);
-    else calls.push([each]);
-  }
-  return calls;
+/** A node's logical model calls (`readAgentSteps`), a call not over yet (retried attempts only) last. */
+function agentStepCalls(steps: readonly ValueRecord[]): { calls: (readonly NumberedStep[])[]; read: ReadSteps } {
+  const read = readAgentSteps(steps);
+  return { calls: read.trailing.length > 0 ? [...read.calls, read.trailing] : [...read.calls], read };
 }
 
 /**
  * List the AGENT model calls the run log at `log` records, in the order their first attempts
- * were written. A call is one `model_call` step, with the failed attempts before it that were
- * retried (same purpose and request digest). Reads only the `node_step` records, with
- * `iterRunRecords`; no flow is loaded.
+ * were written. A call is one `model_call` step with the failed attempts before it that were
+ * retried, as a resumed AGENT groups them; retried attempts with no attempt after them yet are a
+ * call too. Reads only the `node_step` records, with `iterRunRecords`; no flow is loaded.
  *
  * @param log The JSONL run log.
  * @returns Each call's node, `n`, purpose, model, start, attempt count and finish.
@@ -2735,47 +2708,49 @@ function modelCalls(steps: readonly NumberedNodeStep[]): NumberedNodeStep[][] {
  * for (const call of agentCalls(log)) show(call.nodeId, call.n, call.model, call.finish);
  */
 export function agentCalls(log: string): AgentCallEntry[] {
-  const entries: { nodeId: string; attempts: NumberedNodeStep[] }[] = [];
-  // Each node's latest call, which a retried attempt joins.
-  const latest = new Map<string, NumberedNodeStep[]>();
-  for (const { envelope, at } of iterRunRecords(log, { kinds: ["node_step"] })) {
-    const { nodeId, n, step } = envelope!.record as NodeStepRecord;
-    if (step["kind"] !== "model_call") continue;
-    const open = latest.get(nodeId);
-    const last = open?.at(-1);
-    if (last !== undefined && retries(last.step, step)) {
-      open!.push({ n, step, at });
-      continue;
-    }
-    const attempts = [{ n, step, at }];
-    latest.set(nodeId, attempts);
-    entries.push({ nodeId, attempts });
+  // Each node's steps in order, and the seq of each.
+  const nodes = new Map<string, { steps: ValueRecord[]; seqs: number[] }>();
+  for (const { envelope, seq } of iterRunRecords(log, { kinds: ["node_step"] })) {
+    const { nodeId, step } = envelope!.record as NodeStepRecord;
+    let node = nodes.get(nodeId);
+    if (node === undefined) nodes.set(nodeId, (node = { steps: [], seqs: [] }));
+    node.steps.push(step as ValueRecord);
+    node.seqs.push(seq);
   }
-  return entries.map(({ nodeId, attempts }) => {
-    const last = attempts.at(-1)!.step;
-    return {
-      nodeId,
-      n: attempts.at(-1)!.n,
-      purpose: last["purpose"] as string,
-      model: last["model"] as string,
-      startedAt: attempts[0]!.step["started_at"] as string,
-      attempts: attempts.length,
-      finish: (last["finish"] as string | undefined) ?? null,
-    };
-  });
+  const listed: { seq: number; entry: AgentCallEntry }[] = [];
+  for (const [nodeId, { steps, seqs }] of nodes) {
+    for (const attempts of agentStepCalls(steps).calls) {
+      const last = attempts.at(-1)!;
+      const entry = {
+        nodeId,
+        n: last.n,
+        purpose: last.step["purpose"] as string,
+        model: last.step["model"] as string,
+        startedAt: attempts[0]!.step["started_at"] as string,
+        attempts: attempts.length,
+        finish: (last.step["finish"] as string | undefined) ?? null,
+      };
+      listed.push({ seq: seqs[attempts[0]!.n - 1]!, entry });
+    }
+  }
+  return listed.sort((a, b) => a.seq - b.seq).map(({ entry }) => entry);
 }
 
 /**
  * Rebuild one AGENT model call of the run log at `log`: the request it sent, and what it got back.
  *
- * The log is replayed as `foldRunLog` replays it, so the recorded flow is used whatever the files
- * on disk hold now. The node is bound from the replayed pool when it first starts, as the run
- * bound it, and rendered with the skills and tool specs the run recorded; the steps before the
- * call give the history, steers and tool results its request carried. The request is checked
- * against each attempt's `request_sha256`: a mismatch returns it with `digestMismatch: true`
- * rather than throwing. The model config comes from `run_started` (or the call's `llm_config`
- * step for a call-time agent), without the host's key, headers or connection. The reply, tool
- * results, attempts and usage are read from the steps as recorded.
+ * The log is replayed as `foldRunLog` replays it, up to the node's last step, so the recorded
+ * flow is used whatever the files on disk hold now. The node is bound from the replayed pool when
+ * it first starts, as the run bound it, and rendered with the skills and tool specs the run
+ * recorded; the steps before the call give the history, steers and tool results its request
+ * carried. The model config comes from `run_started` (or the call's `llm_config` step for a
+ * call-time agent), without the host's key, headers or connection. The reply, tool results,
+ * attempts and usage are read from the steps as recorded.
+ *
+ * A rebuilt request is checked against each attempt's purpose and `request_sha256`: a mismatch
+ * returns it with `digestMismatch: true` rather than throwing. A request that can't be rebuilt (a
+ * structured call whose model can't be built, a granted tool the recorded specs lack) is `null`,
+ * with `digestMismatch: false`.
  *
  * A request's digest leaves recalled memory out. With `memory`, the system message gets the
  * sections recalled against the snapshots the run recorded, as learning does; without it, a node
@@ -2787,11 +2762,17 @@ export function agentCalls(log: string): AgentCallEntry[] {
  *   they must be the ones the run recorded.
  * @param options.flow The flow, required when the run's flow was built in code, refused otherwise.
  * @param options.codeRoot As `foldRunLog`'s.
+ * @param options.apiKey As `advance`'s: the host key a run started with `llmConfig.api_key` used.
+ *   A call-time agent of such a run binds its config with it, and a structured call's model is
+ *   built with it; it never reaches the view.
+ * @param options.headers As `advance`'s: the header values sent with `apiKey`.
  * @param options.models Builds a structured call's model to read its plan off; never called
- *   (default `defaultModelAccess(env)`). A model that can't be built leaves the request `null`.
+ *   (default `defaultModelAccess(env)`).
  * @param options.memory The run's memory mapping, as `advance` takes it, to recall sections.
  * @returns The call's view.
  * @throws RangeError when the log has no model call `n` of `nodeId`; `foldRunLog`'s errors.
+ * @throws AuthError when a call-time agent's run used a host key and `apiKey` isn't given, or
+ *   `headers` lack the names it recorded.
  * @throws MemorySetupError, RangeError when `memory` doesn't match the run's memory table.
  *
  * @example
@@ -2806,11 +2787,14 @@ export async function agentCall(
     env?: Env | null;
     flow?: ComposedFlow | null;
     codeRoot?: string | null;
+    apiKey?: string | null;
+    headers?: Readonly<Record<string, string>> | null;
     models?: ModelAccess | null;
     memory?: ReadonlyMap<string, Memory> | null;
   } = {},
 ): Promise<AgentCallView> {
   const { nodeId, n } = call;
+  const missing = () => new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
   const env = options.env ?? processEnv;
   const entries = [...iterRunRecords(log)];
   const start = startRecord(entries[0]?.envelope);
@@ -2818,45 +2802,38 @@ export async function agentCall(
     checkRecorded(start.defaults);
     return resumedFlow(log, start, options.flow ?? null, options.codeRoot ?? null);
   });
+  const isStep = (record: RunRecord): record is NodeStepRecord =>
+    record instanceof NodeStepRecord && record.nodeId === nodeId;
+  // Replayed up to the node's last step, so the state still holds its steps (a settled node's
+  // are dropped) and the values its steer steps consumed.
+  const end = entries.findLastIndex(({ envelope }) => isStep(envelope.record));
+  if (end === -1) throw missing();
   let node: Node | null = null;
   let inputs: Record<string, unknown> | null = null;
-  // The node's steps, a steer step's values attached, kept as they were before the node settled.
-  let held: readonly Readonly<JsonObject>[] | undefined;
-  let steps: ValueRecord[] = [];
-  const keep = (state: RunState) => {
-    const current = state.nodeSteps.get(nodeId);
-    if (current === undefined || current === held) return;
-    held = current;
-    steps = stepsWithSteerValues(state, nodeId);
-  };
   const state = withEnv(env, () =>
-    replayRunLog(flow, MemoryRunLog.fromRecords(entries.map((entry) => entry.envelope)), {
-      onPrepared: (prepared, state) => {
-        const { record } = prepared;
-        if (record instanceof NodeStartedRecord && record.nodeId === nodeId && node === null) {
-          node = state.flow.nodes.get(nodeId)!;
+    replayRunLog(flow, MemoryRunLog.fromRecords(entries.slice(0, end + 1).map((entry) => entry.envelope)), {
+      apiKey: options.apiKey ?? null,
+      headers: options.headers ?? null,
+      onPrepared: ({ record }, state) => {
+        if (!(record instanceof NodeStartedRecord) || record.nodeId !== nodeId || node !== null) return;
+        node = state.flow.nodes.get(nodeId)!;
+        try {
           inputs = bindStarted(node, state.flow, state.pool, state.wiringOverrides.get(nodeId) ?? null);
+        } catch (error) {
+          // The node failed at binding, so it made no model call.
+          if (!(error instanceof BindingError)) throw error;
         }
-        keep(state);
       },
     }),
   );
-  keep(state);
-  const appended = new Map(
-    entries.flatMap(({ envelope, at }) =>
-      envelope.record instanceof NodeStepRecord && envelope.record.nodeId === nodeId ? [[envelope.record.n, at]] : [],
-    ),
-  );
-  const numbered = steps.map((step, index) => ({
-    n: index + 1,
-    step: step as JsonObject,
-    at: appended.get(index + 1)!,
-  }));
-  const attempts = modelCalls(numbered).find((each) => each.some((attempt) => attempt.n === n));
-  if (attempts === undefined || node === null) {
-    throw new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
-  }
+  const steps = stepsWithSteerValues(state, nodeId);
+  const { calls, read } = agentStepCalls(steps);
+  const attempts = calls.find((each) => each.some((attempt) => attempt.n === n));
+  if (attempts === undefined || node === null) throw missing();
   const agent: Node = node;
+  const appended = new Map(
+    entries.flatMap(({ envelope, at }) => (isStep(envelope.record) ? [[envelope.record.n, at]] : [])),
+  );
 
   // Recall needs the node's scope, and the visible inputs as the evaluator canonicalized them.
   const scope = agent.needsMemoryContext === true ? agent.memoryScope : null;
@@ -2864,17 +2841,7 @@ export async function agentCall(
   const memory = options.memory ?? null;
   let runtime: MemoryRuntime | null = null;
   try {
-    if (recalls && memory !== null && state.memories !== null) {
-      checkRegistryTypes(memory, state.memories);
-      const authored = resolveAuthoredMemoryLayout(flow);
-      checkRecordedMemoryTable(state.memories, state.memoryStacks, authored.memories, authored.stacks, "supplied flow");
-      runtime = await MemoryRuntime.open({
-        memories: state.memories,
-        origins: authored.origins,
-        memory,
-        snapshots: state.memorySnapshots,
-      });
-    }
+    if (recalls && memory !== null && state.memories !== null) runtime = await openRecordedMemory(flow, state, memory);
     const opened = runtime;
     const caps: MaterialCaps = {
       ...recordedGrants(state),
@@ -2888,52 +2855,42 @@ export async function agentCall(
       },
     };
     const material = await withEnv(env, () => agent.learningMaterial(inputs, steps, caps));
-    const rebuilt = (attempt: NumberedNodeStep) => material?.requests.get(attempt.n - 1) ?? null;
+    const rebuilt = (attempt: NumberedStep) => material?.requests.get(attempt.n - 1) ?? null;
     const last = attempts.at(-1)!;
     const request = rebuilt(last)?.request ?? null;
-    const params = callConfig(state, nodeId, numbered, attempts[0]!.n);
+    // A call-time agent's config is its latest `llm_config` step before the call.
+    const recorded = inFlightLlmConfigs(state.flow.nodes, new Map([[nodeId, steps.slice(0, attempts[0]!.n - 1)]]));
+    const config = recorded[nodeId] ?? state.effectiveLlmByStaticPath[staticPathOf(nodeId)] ?? {};
     const sections = recalls && runtime === null ? null : (material?.memorySections ?? []);
+    const output = last.step["output"];
     return {
       nodeId,
       n: last.n,
       purpose: last.step["purpose"] as string,
-      request: request === null ? null : requestView(request, last.step["model"] as string, params),
-      digestMismatch: attempts.some((attempt) => rebuilt(attempt)?.digestOk !== true),
+      request: request === null ? null : requestView(request, last.step["model"] as string, withoutCredentials(config)),
+      digestMismatch: request !== null && attempts.some((attempt) => rebuilt(attempt)?.digestOk !== true),
       memorySections: sections?.map(({ memory, text }) => ({ memory, text })) ?? null,
-      attempts: attempts.map(attemptView),
-      reply: last.step["output"] == null ? null : fromModelMessage(Message.fromJSON(last.step["output"])),
-      toolResults: toolResults(numbered, last),
+      attempts: attempts.map((attempt) => attemptView(attempt, appended.get(attempt.n)!)),
+      reply: output == null ? null : fromModelMessage(Message.fromJSON(output)),
+      toolResults: output == null ? [] : toolResults(Message.fromJSON(output), read.results.get(last.n)),
       usage: usageView(last.step["usage"]),
       finish: (last.step["finish"] as string | undefined) ?? null,
-      interrupted: last.step["finish"] === "interrupted" || honoredAfter(numbered, last.n),
+      // The honor is the node's last step, so it follows its last call.
+      interrupted: last.step["finish"] === "interrupted" || (read.honored !== null && attempts === calls.at(-1)),
     };
   } finally {
     await runtime?.close();
   }
 }
 
-/** Whether the node's honor of a host interrupt (an `interrupted` step) follows step `n` before any model call. */
-function honoredAfter(steps: readonly NumberedNodeStep[], n: number): boolean {
-  const later = steps.slice(n);
-  const next = later.findIndex((each) => each.step["kind"] === "model_call");
-  return later.slice(0, next === -1 ? undefined : next).some((each) => each.step["kind"] === "interrupted");
-}
-
 /**
- * The model config call-time agent `nodeId`'s `llm_config` step before step `before` recorded, else
- * the one `run_started` recorded for its static path, without the host's key, headers or
- * connection; `{}` when neither holds one.
+ * `config` without what says how the host authenticated: `api_key`, `headers`, and yian's
+ * `_`-prefixed `_host_key`, `_header_names` and `_connection`.
  */
-function callConfig(state: RunState, nodeId: string, steps: readonly NumberedNodeStep[], before: number): JsonObject {
-  const step = steps.slice(0, before - 1).findLast((each) => each.step["kind"] === "llm_config");
-  const config =
-    (step?.step["effective_llm_config"] as JsonObject | undefined) ??
-    state.effectiveLlmByStaticPath[staticPathOf(nodeId)] ??
-    {};
-  // `_host_key`, `_header_names` and `_connection` say how the host authenticated the call.
+function withoutCredentials(config: Readonly<Record<string, unknown>>): JsonObject {
   return Object.fromEntries(
     Object.entries(config).filter(([key]) => key !== "api_key" && key !== "headers" && !key.startsWith("_")),
-  );
+  ) as JsonObject;
 }
 
 /** `request` as an `AgentCallRequest` of `model` with `params`. */
@@ -2959,8 +2916,8 @@ function requestView(request: Request, model: string, params: JsonObject): Agent
   };
 }
 
-/** One attempt's `model_call` step as an `AgentCallAttempt`. */
-function attemptView({ n, step, at }: NumberedNodeStep): AgentCallAttempt {
+/** One attempt's `model_call` step, its record appended `at`, as an `AgentCallAttempt`. */
+function attemptView({ n, step }: NumberedStep, at: string): AgentCallAttempt {
   const error = step["error"] as { kind: string; message: string } | undefined;
   return {
     n,
@@ -2986,27 +2943,22 @@ function usageView(usage: unknown): AgentCallUsage | null {
   };
 }
 
-/**
- * Each tool call of the reply `call` recorded, with the `tool_result` written for it before the
- * node's next model call.
- */
-function toolResults(steps: readonly NumberedNodeStep[], call: NumberedNodeStep): AgentToolResult[] {
-  if (call.step["output"] == null) return [];
-  const next = steps.slice(call.n).findIndex((each) => each.step["kind"] === "model_call");
-  const after = steps.slice(call.n, next === -1 ? undefined : call.n + next);
-  const parts = Message.fromJSON(call.step["output"]).parts.filter((part) => part instanceof ToolCallPart);
-  return parts.map((part) => {
-    const result = after.find((each) => each.step["kind"] === "tool_result" && each.step["call_id"] === part.id)?.step;
-    return {
-      callId: part.id,
-      name: part.name,
-      arguments: (part.arguments as JsonObject | null) ?? null,
-      output: result === undefined ? null : (result["output"] as string),
-      isError: result === undefined ? null : result["is_error"] === true,
-      closed: (result?.["closed"] as string | undefined) ?? null,
-      startedAt: (result?.["started_at"] as string | null | undefined) ?? null,
-    };
-  });
+/** Each tool call of `reply`, in call order, with its `tool_result` step from `results` (by call id). */
+function toolResults(reply: Message, results: ReadonlyMap<string, ValueRecord> | undefined): AgentToolResult[] {
+  return reply.parts
+    .filter((part) => part instanceof ToolCallPart)
+    .map((part) => {
+      const result = results?.get(part.id);
+      return {
+        callId: part.id,
+        name: part.name,
+        arguments: (part.arguments as JsonObject | null) ?? null,
+        output: result === undefined ? null : (result["output"] as string),
+        isError: result === undefined ? null : result["is_error"] === true,
+        closed: (result?.["closed"] as string | undefined) ?? null,
+        startedAt: (result?.["started_at"] as string | null | undefined) ?? null,
+      };
+    });
 }
 
 /** Yield the envelope of each record of the log at `log`, read by `iterRunRecords`. */
@@ -3661,6 +3613,26 @@ function checkRegistryTypes(memory: ReadonlyMap<string, Memory>, specs: readonly
  */
 function resolveAuthoredMemoryLayout(flow: ComposedFlow): MemoryLayoutParts {
   return memoryLayoutParts(resolveMemoryLayout(flow.compiled));
+}
+
+/**
+ * Open `memory` on the memory table and snapshots the replayed run in `state` recorded, once the
+ * registry's types and `flow`'s authored layout match the table, as a resume opens it.
+ *
+ * @throws MemorySetupError when a registry type differs (`checkRegistryTypes`), or the layout
+ *   breaks a rule.
+ * @throws RangeError when the recorded table or stacks don't match `flow`'s.
+ */
+async function openRecordedMemory(
+  flow: ComposedFlow,
+  state: RunState,
+  memory: ReadonlyMap<string, Memory>,
+): Promise<MemoryRuntime> {
+  const memories = state.memories!;
+  checkRegistryTypes(memory, memories);
+  const authored = resolveAuthoredMemoryLayout(flow);
+  checkRecordedMemoryTable(memories, state.memoryStacks, authored.memories, authored.stacks, "supplied flow");
+  return await MemoryRuntime.open({ memories, origins: authored.origins, memory, snapshots: state.memorySnapshots });
 }
 
 /**

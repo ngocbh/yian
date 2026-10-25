@@ -509,8 +509,8 @@ export async function generateStructured(
 /**
  * Rebuild what `generateStructured(model, messages, typ)` showed a learner from its recorded
  * `model_call` steps, in order: each prompt-strategy reply's text, or the other strategies'
- * checked value. A failed attempt shows nothing; an invalid reply adds the correction the next
- * request carries.
+ * checked value. A failed attempt and a reply a host interrupt cut show nothing; an invalid reply
+ * adds the correction the next request carries.
  *
  * @param steps The structured calls' `model_call` steps.
  * @param baseSystemPrompt The system prompt without recalled memory, which each digest reads in
@@ -535,7 +535,8 @@ export function structuredMaterial(
     const request = plan.apply(new Request({ messages: conversation }));
     const digest = requestSha256(digestRequest(request, baseSystemPrompt));
     if (step["purpose"] !== purpose || step["request_sha256"] !== digest) digestOk = false;
-    if (Object.hasOwn(step, "error")) continue;
+    // A cut reply was never output: its text so far shows nothing, as in `stepsMaterial`.
+    if (Object.hasOwn(step, "error") || step["finish"] === "interrupted") continue;
     const response = recordedResponse(step);
     if (prompted) pushVisible(interactions, () => new ModelTextInteraction(response.message.text()));
     try {

@@ -424,6 +424,17 @@ describe("TS-only", () => {
       digestOk: true,
     });
   });
+
+  test("learning shows nothing of a structured reply a host interrupt cut", async () => {
+    for (const model of [scripted([text('{"value": 3}')]), scripted([text('{"value": 3}')], PROMPTED)]) {
+      const recorded: ValueRecord[] = [];
+      const steps = new AgentSteps(new NodeSteps(1, [], (step) => recorded.push(step)), () => 0, null, (error) => error, "agent");
+      await generateStructured(model, [], INT, { retries: 0, steps });
+      // The cut keeps the reply received so far, which the node never output.
+      const cut = recorded.map((step) => ({ ...step, finish: "interrupted" }));
+      expect(structuredMaterial(model, [], INT, cut)).toEqual({ interactions: [], digestOk: true });
+    }
+  });
 });
 
 // ---------- an AGENT whose reply skips the schema's tool, through the runner ----------

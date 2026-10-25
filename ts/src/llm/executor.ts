@@ -126,7 +126,10 @@ export class RouteModel implements ChatModel {
     if (exchange.status < 200 || exchange.status >= 300) {
       const credentials = route.auth.credentials();
       const text = scrub(await readErrorBody(exchange), credentials);
-      const error = errorFromResponse(exchange.status, exchange.headers, text, { provider: route.provider });
+      const error = errorFromResponse(exchange.status, exchange.headers, text, {
+        provider: route.provider,
+        credentials,
+      });
       throw scrubbed(error, credentials);
     }
     try {

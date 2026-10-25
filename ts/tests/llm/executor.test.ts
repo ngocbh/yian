@@ -443,6 +443,15 @@ describe("RouteModel status errors", () => {
     expect(error.provider).toBe("openai");
   });
 
+  test("a status error echoing the key in a mixed escape across the 2,000-code-point cap holds no part of it", async () => {
+    const key = "sk-SECRETKEY1234567890";
+    const body = `{"error": {"message": "${"x".repeat(1990)}sk-SECRETK\\u0045Y1234567890"}}`;
+    const error = await callError({ status: 400, body: [body] }, new BearerAuth(key));
+    expect(error.message).not.toContain(key.slice(0, 8));
+    expect(error.stack ?? "").not.toContain(key.slice(0, 8));
+    expect(error.message).toEndWith("x[REDACTED]");
+  });
+
   test("the longest credential is replaced first", async () => {
     const keys = ["abcdefgh", "abcdefgh-longer"].values();
     const { send } = fake(sseReply("1"), { status: 401, body: ["saw abcdefgh-longer"] });

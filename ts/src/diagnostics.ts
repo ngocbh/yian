@@ -493,7 +493,7 @@ export class OriginRef {
 export class Failure {
   /** Stable semantic category from `FAILURE_CODES`. */
   readonly code: FailureCode;
-  /** Human-readable failure detail; it may be empty. */
+  /** Human-readable failure detail; it may be empty, and holds no lone surrogate. */
   readonly message: string;
   /**
    * Runtime execution identity, or `null` when the failure is not attributable to one
@@ -507,16 +507,17 @@ export class Failure {
   readonly trace: readonly OriginRef[];
   /**
    * The thrown error's `name`, retained only for debugging, never for semantic
-   * classification.
+   * classification; it holds no lone surrogate.
    */
   readonly causeType: string | null;
-  /** The thrown error's `stack`, retained as opaque debugging text. */
+  /** The thrown error's `stack`, retained as opaque debugging text; it holds no lone surrogate. */
   readonly traceback: string | null;
 
   /**
    * Create a failure, rejecting values that cannot enter the canonical failure
    * pipeline. `trace` defaults to empty and is copied; `causeType` and `traceback`
-   * default to `null`.
+   * default to `null`. A lone surrogate in `message`, `causeType` or `traceback` becomes
+   * U+FFFD, so a thrown error's text can always be written to the run log.
    */
   constructor(options: {
     code: FailureCode;
@@ -546,11 +547,11 @@ export class Failure {
       throw new TypeError("failure traceback must be a string or null");
     }
     this.code = code;
-    this.message = message;
+    this.message = message.toWellFormed();
     this.nodeId = nodeId;
     this.trace = [...trace];
-    this.causeType = causeType;
-    this.traceback = traceback;
+    this.causeType = causeType?.toWellFormed() ?? null;
+    this.traceback = traceback?.toWellFormed() ?? null;
   }
 
   /** Return the JSON form: snake_case keys in field order, every key present. */

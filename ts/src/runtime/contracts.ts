@@ -544,7 +544,7 @@ export class BackwardFailure {
   readonly stage: string;
   /** The stable, non-empty semantic failure code, from the backward driver or a memory backend. */
   readonly code: string;
-  /** Human-readable detail; it may be empty. */
+  /** Human-readable detail; it may be empty, and holds no lone surrogate. */
   readonly message: string;
   /** The responsible authored owner and child position. */
   readonly scope: ExecutionScope | null;
@@ -561,14 +561,15 @@ export class BackwardFailure {
    * exists. A `Failure`'s origins keep only their keys.
    */
   readonly cause: Failure | MemoryOperationFailure | null;
-  /** The thrown error's class name, kept for debugging. */
+  /** The thrown error's class name, kept for debugging; it holds no lone surrogate. */
   readonly causeType: string | null;
-  /** Opaque debugging traceback text. */
+  /** Opaque debugging traceback text; it holds no lone surrogate. */
   readonly traceback: string | null;
 
   /**
    * Validate the attribution; a `Failure` cause is copied by `retainFailure`, and a scope or
-   * `MemoryOperationFailure` cause is kept by reference.
+   * `MemoryOperationFailure` cause is kept by reference. A lone surrogate in `message`,
+   * `causeType` or `traceback` becomes U+FFFD, so a thrown error's text can always be logged.
    *
    * @param options Each field defaults to `null`.
    * @throws TypeError when a field has the wrong type, or the scope or cause is of another class.
@@ -628,15 +629,15 @@ export class BackwardFailure {
     }
     this.stage = stage;
     this.code = code;
-    this.message = message;
+    this.message = message.toWellFormed();
     this.scope = scope;
     this.runId = runId;
     this.nodeId = nodeId;
     this.nodeStartedSeq = nodeStartedSeq;
     this.memory = memory;
     this.cause = isExactly(cause, Failure) ? retainFailure(cause) : cause;
-    this.causeType = causeType;
-    this.traceback = traceback;
+    this.causeType = causeType?.toWellFormed() ?? null;
+    this.traceback = traceback?.toWellFormed() ?? null;
     Object.freeze(this);
   }
 }

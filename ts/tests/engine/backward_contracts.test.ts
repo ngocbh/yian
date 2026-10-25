@@ -1119,3 +1119,19 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
 ])("a backward outcome rejects %s", (_name, factory, cls, message) => {
   expectError(factory, cls, message);
 });
+
+test("a failure's free text keeps no lone surrogate", () => {
+  const failure = new Failure({
+    code: "node.execute",
+    message: "m \uD83D",
+    nodeId: "a",
+    causeType: "E\uDC00",
+    traceback: "t \uD800",
+  });
+  expect([failure.message, failure.causeType, failure.traceback]).toEqual(["m \uFFFD", "E\uFFFD", "t \uFFFD"]);
+  const backward = new BackwardFailure("backward", "node.backward", "m \uD83D", {
+    causeType: "E\uDC00",
+    traceback: "t \uD800",
+  });
+  expect([backward.message, backward.causeType, backward.traceback]).toEqual(["m \uFFFD", "E\uFFFD", "t \uFFFD"]);
+});

@@ -368,6 +368,17 @@ function sourceFreeFailureFlow(): ComposedFlow {
   return new ComposedFlow(CompiledFlow.fromParts(nodes, edges));
 }
 
+/** One programmatic flow whose CODE node throws `code`'s error. */
+function throwingFlow(code: string): ComposedFlow {
+  const nodes = new Map<string, Node>([
+    [START_ID, new StartNode(START_ID)],
+    ["fail", new CodeNode("fail", { code })],
+    [END_ID, EndNode.value(END_ID, { outputName: null })],
+  ]);
+  const edges = [new Edge("start-fail", START_ID, "fail"), new Edge("fail-end", "fail", END_ID)];
+  return new ComposedFlow(CompiledFlow.fromParts(nodes, edges));
+}
+
 /** Count the CODE evaluations while `fn` runs. */
 async function codeCalls<T>(fn: () => Promise<T>): Promise<[T, number]> {
   const forward = spyOn(CodeNode.prototype, "forward");
@@ -624,6 +635,17 @@ test("test_terminal_resume_is_read_only_silent_and_unlocks[succeeded]", async ()
   expect(seen).toEqual([]);
   expect(readFileSync(path)).toEqual(before);
   durableRecords(path);
+});
+
+test("a node failure whose text holds a lone surrogate is recorded with U+FFFD in its place", async () => {
+  const path = join(dir, "lone-surrogate-failure.jsonl");
+  const fresh = await run(throwingFlow(String.raw`throw new Error("cut \uD83D")`), {}, { log: path, runId: RUN_ID });
+
+  expect(fresh.status).toBe("failed");
+  expect(fresh.failure!.message).toContain("cut \uFFFD");
+  expect(fresh.failure!.traceback!.isWellFormed()).toBe(true);
+  const failed = durableRecords(path).filter((record) => record instanceof NodeFailedRecord) as NodeFailedRecord[];
+  expect(failed.map((record) => record.failure)).toEqual([fresh.failure!]);
 });
 
 test("test_terminal_resume_preserves_source_free_failure", async () => {

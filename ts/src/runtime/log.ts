@@ -547,7 +547,7 @@ export class RunResumedRecord {
 export class RunStoppedRecord {
   /** Why the run stopped. */
   readonly reason: RunStopReason;
-  /** The reason's text, such as the callback's error message; any string. */
+  /** The reason's text, such as the callback's error message; any string, a lone surrogate replaced with U+FFFD. */
   readonly message: string;
   /** The in-flight node ids in dispatcher order; unique and non-empty, possibly none. */
   readonly nodeIds: readonly string[];
@@ -564,7 +564,8 @@ export class RunStoppedRecord {
     }
     if (typeof message !== "string") throw new TypeError("message must be a string");
     this.reason = reason;
-    this.message = message;
+    // The text often comes from a host's error, which may hold a lone surrogate the log can't write.
+    this.message = message.toWellFormed();
     this.nodeIds = validatedIdArray(nodeIds, "node_ids");
     Object.freeze(this);
   }

@@ -467,6 +467,12 @@ describe("RouteModel status errors", () => {
     expect(error.message).toBe('openai returned HTTP 400 (bad_request): {"error": "x [REDACTED]');
   });
 
+  test("a status error body of 64 KiB with no whitespace keeps its first 2,000 code points", async () => {
+    const body = '{"error":"' + "x".repeat(70000) + '"}';
+    const error = await callError({ status: 400, body: [body] }, new BearerAuth("sk-SECRETKEY1234567890"));
+    expect(error.message).toBe(`openai returned HTTP 400 (bad_request): {"error":"${"x".repeat(1990)}…`);
+  });
+
   test("a status error's JSON body with no message is scrubbed after its escapes are undone", async () => {
     const key = "sk-SECRETKEY1234567890";
     const body = `{"foo": "sk-SECRETK\\u0045Y1234567890", "bar": "caf\\u00e9"}`;

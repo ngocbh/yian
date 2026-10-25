@@ -332,32 +332,41 @@ export function secretForms(value: string): SecretForm[] {
 }
 
 /**
- * Return `text` without a trailing start of any form of any credential, such as a cut left.
+ * Return a text cut at a size cap without any part of a credential the cut split.
  *
- * Every proper prefix counts, down to one character, so a cut text may lose a little more than
- * a credential. Empty credentials are ignored.
+ * The cut can only split the last credential form, so the trailing run of non-whitespace is
+ * dropped, but at most as many characters as the longest form of any credential; that removes
+ * any escape mix. Then a trailing start of any form is dropped, for a credential with
+ * whitespace inside, and trailing whitespace. Every proper prefix counts, down to one character,
+ * so a little more than a credential may go. Empty credentials are ignored.
  *
  * @param text The cut text.
- * @param credentials The secrets whose starts are dropped.
- * @returns `text` with the longest such tail removed.
+ * @param credentials The secrets the cut may have split.
+ * @returns `text` without those tails.
  */
 export function dropCredentialTail(text: string, credentials: Iterable<string>): string {
+  const forms = [...new Set(credentials)].filter((value) => value).flatMap((value) => secretForms(value));
+  const longest = Math.max(0, ...forms.map((form) => form.text.length));
+  // A loop, not /\S*$/, which backtracks quadratically over a long run before whitespace.
+  let end = text.length;
+  while (end > 0 && text.length - end < longest && !/\s/.test(text[end - 1]!)) end--;
+  text = text.slice(0, end).trimEnd();
   let cut = text.length;
-  for (const value of new Set(credentials)) {
-    if (!value) continue;
-    for (const form of secretForms(value)) {
-      // Only a tail longer than the one already found can move the cut.
-      for (let length = Math.min(form.text.length - 1, text.length); length > text.length - cut; length--) {
-        const tail = text.slice(text.length - length);
-        const start = form.text.slice(0, length);
-        if (form.ignoreCase ? tail.toLowerCase() === start.toLowerCase() : tail === start) {
-          cut = text.length - length;
-          break;
-        }
+  for (const form of forms) {
+    const max = Math.min(form.text.length - 1, text.length);
+    // Lowered once per form, ASCII only so lengths stay; an ignoreCase form is all escapes.
+    const lower = (value: string): string => value.replace(/[A-Z]/g, (char) => char.toLowerCase());
+    const tail = form.ignoreCase ? lower(text.slice(text.length - max)) : text.slice(text.length - max);
+    const start = form.ignoreCase ? lower(form.text) : form.text;
+    // Only a tail longer than the one already found can move the cut.
+    for (let length = max; length > text.length - cut; length--) {
+      if (tail.endsWith(start.slice(0, length))) {
+        cut = text.length - length;
+        break;
       }
     }
   }
-  return text.slice(0, cut);
+  return text.slice(0, cut).trimEnd();
 }
 
 /**

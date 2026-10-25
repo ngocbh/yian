@@ -154,8 +154,8 @@ export class RouteModel implements ChatModel {
  * runs its own release. A `ProviderError` from a read keeps what arrived; any other error,
  * such as a caller abort, propagates.
  *
- * A body cut at the cap loses its last run of non-whitespace and any trailing start of a
- * credential: the cut may split one, and no scrub matches the part before it.
+ * A body cut at the cap loses what `dropCredentialTail` drops: the cut may split a credential,
+ * and no scrub matches the part before it.
  */
 async function readErrorBody(exchange: Exchange, credentials: readonly string[]): Promise<string> {
   const chunks: Uint8Array[] = [];
@@ -178,11 +178,7 @@ async function readErrorBody(exchange: Exchange, credentials: readonly string[])
     at += part.length;
   }
   const text = new TextDecoder().decode(bytes);
-  if (size < MAX_ERROR_BODY) return text;
-  // A loop, not /\S*$/, which backtracks quadratically over a long run before whitespace.
-  let end = text.length;
-  while (end > 0 && !/\s/.test(text[end - 1]!)) end--;
-  return dropCredentialTail(text.slice(0, end).trimEnd(), credentials);
+  return size < MAX_ERROR_BODY ? text : dropCredentialTail(text, credentials);
 }
 
 /**

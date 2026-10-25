@@ -27,6 +27,7 @@ import {
   ValueContract,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
+import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { pythonTypeName } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
@@ -62,11 +63,12 @@ export function explicitTypeHint(bindingLabel: string): string {
 }
 
 /**
- * Resolves a node id to its output type or canonical output contract; receives the requesting
- * binding label and range so lazy-build failures keep their source site.
+ * Resolves a producer key to its output type or canonical output contract: a node id for its
+ * output, or `messagesKey(id)` for an AGENT's new messages. It receives the requesting binding
+ * label and range so lazy-build failures keep their source site.
  */
 export type ProducerType = (
-  nodeId: string,
+  producerKey: string,
   bindingLabel: string,
   bindingRange: SourceRange | null,
 ) => Type | OutputContract;
@@ -117,7 +119,8 @@ interface Walk {
  * @param value The authored outer binding value.
  * @param options.parentInputTypes Parent flow input declarations available through
  *   `${input.<name>}`.
- * @param options.producerType Resolves a node id to its output type or canonical output contract.
+ * @param options.producerType Resolves a node id, or `messagesKey(id)` for an AGENT's new
+ *   messages, to its output type or canonical output contract.
  * @param options.itemType Lazily supplies a MAP element type for a direct `${item...}` read;
  *   `null` (the default) rejects item references outside an outer MAP input.
  * @param options.typeFn Resolves a constructor name to its type; `null` (the default) leaves
@@ -341,10 +344,11 @@ function inferDirectReference(parts: readonly string[], walk: Walk): Type {
   } else if (head === "system") {
     throw fail(`reference \${${path}} has no statically proven system type`);
   } else {
-    if (parts.length < 2 || parts[1] !== "output") {
-      throw fail(`reference \${${path}} must select ${head}.output[.field]`);
+    if (parts.length < 2 || (parts[1] !== "output" && parts[1] !== NEW_MESSAGES)) {
+      throw fail(`reference \${${path}} must select ${head}.output[.field] or an AGENT's ${head}.${NEW_MESSAGES}`);
     }
-    root = walk.producerType(head, walk.bindingLabel, walk.bindingRange);
+    const key = parts[1] === NEW_MESSAGES ? messagesKey(head) : head;
+    root = walk.producerType(key, walk.bindingLabel, walk.bindingRange);
     fields = parts.slice(2);
 
     if (isExactly(root, ValueContract) || isExactly(root, PartialRecordContract)) {

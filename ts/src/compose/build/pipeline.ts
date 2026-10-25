@@ -48,7 +48,7 @@ import {
   type ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { ASK } from "../../tools/context.ts";
-import { messagesKey } from "../../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, jsTypeName, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -1997,7 +1997,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   /** Assemble one retained body lazily in this file's callable scope. */
   const buildInlineChild = (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor): ComposedFlow => {
     /** Resolve one parent producer through this assembly's build cache. */
-    const producerType: ProducerType = (producerId, bindingLabel, bindingRange) => {
+    const producerType: ProducerType = (producerKey, bindingLabel, bindingRange) => {
+      // `messagesKey(id)` names an AGENT's new messages; node ids hold no `.`.
+      const [producerId, messages] = producerKey.split(".") as [string, string | undefined];
       const unavailableType = (): LoadError =>
         diagnostics.error(
           `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
@@ -2010,7 +2012,16 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 
       const cache = descriptorCache;
       if (cache === null) throw new Error("descriptor cache was not initialized before inline child resolution");
-      const outputContract = cache.buildOne(producerId, bindingLabel, bindingRange).node.outputContract;
+      const node = cache.buildOne(producerId, bindingLabel, bindingRange).node;
+      if (messages !== undefined) {
+        if (node.producesMessages) return new ValueContract(newMessagesType());
+        throw diagnostics.error(
+          `cannot infer type for inline binding ${reprText(bindingLabel)}: node ${reprText(producerId)} ` +
+            `has no ${NEW_MESSAGES}, which only an AGENT node has`,
+          { range: bindingRange },
+        );
+      }
+      const outputContract = node.outputContract;
       if (outputContract === null) throw unavailableType();
       if (!isExactly(outputContract, ValueContract) && !isExactly(outputContract, PartialRecordContract)) {
         throw new TypeError(

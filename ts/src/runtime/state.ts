@@ -1411,11 +1411,13 @@ export function prepareInterrupt(state: RunState, inbox: string, running: readon
   // Already stopping: a second Esc never carries a Stop into the next reply.
   if (w.stops.has(inbox)) return null;
   // Offline every in-flight node that reads a steer inbox may have opened this one, so each counts
-  // as a current reader (a crashed reader still holding its interrupt is being stopped), but none
-  // is named.
+  // as a current reader, but none is named. Only an interrupt of this inbox makes one stopping
+  // (a crashed reader of it still holding its interrupt); one of another inbox leaves it a
+  // possible reader of this one.
   const runningReaders = running ?? [...state.inFlight].filter((nodeId) => state.flow.nodes.get(nodeId)?.readsSteerInbox === true);
   const stopping = (nodeId: string): boolean =>
-    w.interrupts.has(nodeId) || (runningReaders.includes(nodeId) && w._honored.has(nodeId));
+    w._interruptInboxes.get(nodeId) === inbox &&
+    (w.interrupts.has(nodeId) || (runningReaders.includes(nodeId) && w._honored.has(nodeId)));
   const waiting = waitingReaders(state, inbox);
   const readers = [...runningReaders, ...waiting];
   if (readers.length > 0 && readers.every(stopping)) return null;

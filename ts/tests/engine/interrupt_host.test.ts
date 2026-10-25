@@ -682,3 +682,46 @@ test("offline, a crashed reader still holding its interrupt is being stopped: a 
   expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
   expect(readFileSync(log).equals(before)).toBe(true);
 });
+
+/** `noter` reads steer inbox `b` and calls `slow`; after it, `reply` reads steer inbox `a`. */
+const TWO_INBOXES = `
+id: two_inboxes
+name: two_inboxes
+llm_config: {provider: openai, model: test-model}
+input:
+  a: !Inbox(str)
+  b: !Inbox(str)
+nodes:
+  noter:
+    kind: agent
+    prompt: note
+    tools: [slow]
+    steer_inbox: \${input.b}
+    output: Optional(str)
+  reply:
+    kind: agent
+    prompt: answer
+    steer_inbox: \${input.a}
+    depends_on: [noter]
+    output: Optional(str)
+output: \${reply.output}
+`;
+
+/** Run TWO_INBOXES at `log`: while `noter` runs `slow`, a live interrupt of `b` names it. */
+async function stopNoter(log: string) {
+  const parameters = { type: "object", properties: {} };
+  const slow = tool({ name: "slow", description: "Slow.", parameters, execute: async () => (await interrupt(log, "b", { env }), "slow") });
+  const model = new ScriptedModel([callReply(["slow", {}, "c1"]), textReply("noted"), textReply("answer")], CONFIG);
+  return runFlow(await loadFlow(TWO_INBOXES), {}, { env, log, tools: { slow }, models: serving(model), runId: "r" });
+}
+
+test("offline, a crashed reader stopping by another inbox doesn't make an Esc a no-op", async () => {
+  const whole = freshLog();
+  await stopNoter(whole);
+  const stopped = readRunLog(whole).findIndex(({ record }) => record instanceof InterruptedRecord);
+  const log = freshLog();
+  await crashAfter(stopped + 1, () => stopNoter(log));
+  expect([...foldedWaits(log).interrupts.keys()]).toEqual(["noter"]);
+  const before = readRunLog(log).length;
+  expect(await interrupt(log, "a", { env })).toEqual({ seq: before, nodes: [], calls: [] });
+});

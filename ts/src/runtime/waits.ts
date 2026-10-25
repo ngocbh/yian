@@ -145,6 +145,8 @@ export class WaitsState {
   readonly _replies = new Map<string, number>();
   /** @internal The unsettled nodes that wrote an `interrupted` step, honoring an interrupt; their success says `interrupted`. */
   readonly _honored = new Set<string>();
+  /** @internal Each unsettled node an interrupt named: that interrupt's inbox, held through its honor. */
+  readonly _interruptInboxes = new Map<string, string>();
 
   /** Return the plain JSON form, each map as its `[key, value]` entries in order (`fromJSON` reads it back). */
   toJSON(): WaitsJson {
@@ -160,6 +162,7 @@ export class WaitsState {
       pendingTakes: [...this._pendingTakes],
       replies: [...this._replies],
       honored: [...this._honored],
+      interruptInboxes: [...this._interruptInboxes],
     };
   }
 
@@ -174,7 +177,7 @@ export class WaitsState {
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {
       throw new RangeError(
-        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, stops, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies and honored",
+        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, stops, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies, honored and interruptInboxes",
       );
     }
     const w = new WaitsState();
@@ -197,6 +200,10 @@ export class WaitsState {
       throw new RangeError("waits JSON honored must be an array of node ids");
     }
     for (const node of honored) w._honored.add(node);
+    for (const [node, inbox] of entries(json, "interruptInboxes")) {
+      if (typeof inbox !== "string") throw new RangeError(`waits JSON interruptInboxes ${reprText(node)} must be an inbox name`);
+      w._interruptInboxes.set(node, inbox);
+    }
     return w;
   }
 }
@@ -214,6 +221,7 @@ const WAITS_JSON_KEYS = [
   "pendingTakes",
   "replies",
   "honored",
+  "interruptInboxes",
 ] as const;
 
 /** The call states, for checking a stored call. */
@@ -345,6 +353,7 @@ export interface WaitsJson {
   readonly pendingTakes: readonly (readonly [string, { readonly seq: number } & TakeCommit])[];
   readonly replies: readonly (readonly [string, number])[];
   readonly honored: readonly string[];
+  readonly interruptInboxes: readonly (readonly [string, string])[];
 }
 
 /** The prefix of a send's pool key: the START's id and a dot, then the inbox's name. */
@@ -550,6 +559,7 @@ function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord)
   w.stops.set(record.inbox, { seq, stopped });
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
+    w._interruptInboxes.set(nodeId, record.inbox);
     for (const call of nodeCalls(w, nodeId)) close(call, "interrupted");
   }
 }
@@ -685,6 +695,7 @@ function settle(w: WaitsState, nodeId: string): void {
   w.interrupts.delete(nodeId);
   w._replies.delete(nodeId);
   w._honored.delete(nodeId);
+  w._interruptInboxes.delete(nodeId);
 }
 
 /** Return `nodeId`'s registered calls, in registration order. */

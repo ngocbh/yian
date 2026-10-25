@@ -224,6 +224,22 @@ export class ExecutionScope {
   }
 }
 
+/**
+ * Replay an existing scope's exact nested invariants, since a value can bypass the constructor.
+ *
+ * @param subject Names the value in the error when it isn't an exact `ExecutionScope`.
+ * @throws TypeError when `scope` isn't an exact `ExecutionScope`, or as its constructor does.
+ * @throws RangeError as its constructor does.
+ */
+export function revalidateScope(scope: unknown, subject = "execution scope"): asserts scope is ExecutionScope {
+  if (!isExactly(scope, ExecutionScope)) throw new TypeError(`${subject} must be an ExecutionScope`);
+  new ExecutionScope(scope.staticPath, {
+    flowPath: scope.flowPath,
+    occurrencePath: scope.occurrencePath,
+    boundary: scope.boundary,
+  });
+}
+
 /** Whether two positions have the same kind, index and static path. */
 export function sameExecutionPosition(a: ExecutionPosition, b: ExecutionPosition): boolean {
   return a.kind === b.kind && a.index === b.index && sameItems(a.staticPath, b.staticPath);

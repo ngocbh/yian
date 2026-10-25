@@ -22,7 +22,7 @@
  * Templates are copied with `copyGraph`, which shares arrays, records and carriers with the
  * original, so this module assigns fresh values and never changes a copied node's field in place.
  *
- * Knows about:   compile/model, compile/memory_layout, compile/execution_layout, expr, nodes,
+ * Knows about:   compile/model, compile/memory_layout, expr, nodes,
  *                memory contracts, diagnostics and typesys.
  * Never imports: compose, runtime, or the package-root run boundary.
  */
@@ -43,9 +43,9 @@ import {
   ChildFlowBoundary,
   ExecutionPosition,
   ExecutionScope,
-  isExactly,
   mapSourceStrings,
   Parameter,
+  revalidateScope,
   sameExecutionPosition,
   sameItems,
   SeedConnection,
@@ -58,7 +58,6 @@ import { StartNode } from "../nodes/start/node.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { NEW_MESSAGES } from "../typesys/pool.ts";
 import { isList, isRecord, jsTypeName, type Value } from "../typesys/values.ts";
-import { revalidateScope } from "./execution_layout.ts";
 import { revalidateMemoryOccurrencePath, revalidateMemoryScope } from "./memory_layout.ts";
 import { copyGraph, Edge, END_ID, Flow, GrowthRejected, START_ID, validateGrowthMetadata } from "./model.ts";
 
@@ -237,9 +236,8 @@ export function cloneChild(
     clone.originContext = [...originContext, ...clone.originContext];
     if (clone.executionScope !== null) {
       const scope: unknown = clone.executionScope;
-      if (!isExactly(scope, ExecutionScope)) throw new TypeError("child execution scope must be an ExecutionScope");
+      revalidateScope(scope, "child execution scope");
       const { staticPath, flowPath, boundary } = scope;
-      new ExecutionScope(staticPath, { flowPath, occurrencePath: scope.occurrencePath, boundary });
       const local = clone.isLoop ? [new ExecutionPosition("loop_driver", staticPath, 0)] : [];
       if (!sameItems(scope.occurrencePath, local, sameExecutionPosition)) {
         throw new RangeError("child execution template contains a dynamic occurrence");

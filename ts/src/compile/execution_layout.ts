@@ -16,6 +16,7 @@ import {
   ExecutionPosition,
   ExecutionScope,
   isExactly,
+  revalidateScope,
   sameExecutionPosition,
   sameExecutionScope,
   sameItems,
@@ -24,21 +25,6 @@ import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { writeAsText } from "../typesys/values.ts";
 import { CompiledFlow, Flow } from "./model.ts";
-
-/**
- * Replay exact nested invariants before accepting an existing frozen scope.
- *
- * @throws TypeError when `scope` isn't an exact `ExecutionScope`, or as its constructor does.
- * @throws RangeError as its constructor does.
- */
-export function revalidateScope(scope: unknown): asserts scope is ExecutionScope {
-  if (!isExactly(scope, ExecutionScope)) throw new TypeError("execution scope must be an exact ExecutionScope");
-  new ExecutionScope(scope.staticPath, {
-    flowPath: scope.flowPath,
-    occurrencePath: scope.occurrencePath,
-    boundary: scope.boundary,
-  });
-}
 
 /** One exact static node target and its root-relative execution scope. Frozen. */
 export class ResolvedExecutionTarget {

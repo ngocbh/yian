@@ -28,6 +28,7 @@ import {
   ExecutionScope,
   isExactly,
   Parameter,
+  revalidateScope,
   sameExecutionPosition,
   sameItems,
   SeedConnection,
@@ -277,13 +278,7 @@ export function validateGrowthMetadata(flow: Flow): void {
       if (!(node instanceof Node)) throw new TypeError("child boundaries must name Node values");
       const scope: unknown = node.executionScope;
       if (scope !== null) {
-        if (!isExactly(scope, ExecutionScope)) throw new TypeError("child boundary scope must be an ExecutionScope");
-        // Rebuilding checks a scope that may have bypassed the constructor.
-        new ExecutionScope(scope.staticPath, {
-          flowPath: scope.flowPath,
-          occurrencePath: scope.occurrencePath,
-          boundary: scope.boundary,
-        });
+        revalidateScope(scope, "child boundary scope");
         if (scope.boundary !== role) throw new RangeError("child boundary role disagrees with its execution scope");
         if (scope.staticPath.length === 0 || !sameItems(scope.staticPath.slice(0, -1), scope.flowPath)) {
           throw new RangeError("child boundary location must belong to its containing flow");

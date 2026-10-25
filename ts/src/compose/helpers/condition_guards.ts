@@ -37,7 +37,7 @@
  */
 
 import { isinstanceSubject, isinstanceTypeNames } from "../../expr/index.ts";
-import { ISINSTANCE } from "../../expr/expressions.ts";
+import { ISINSTANCE, valueArgs } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, Token, Tree } from "../../expr/grammar.ts";
 import { directReferenceParts } from "./output_contracts.ts";
 
@@ -329,15 +329,6 @@ export function proves(tree: ExprNode, value: boolean): Guard {
   return anyOf(...branches);
 }
 
-/** The `arg` subtrees whose values a call evaluates, or `null` for a reference. */
-function valueArgs(refcall: Tree): ExprNode[] | null {
-  const callSuffix = callSuffixOf(refcall);
-  if (callSuffix === undefined) return null;
-  const args = callSuffix.children;
-  // `isinstance(x, T)` evaluates only `x`; `T` is a type name.
-  return String(refcall.children[0]) === ISINSTANCE ? args.slice(0, 1) : args;
-}
-
 /** Each operand of an `and_expr`/`or_expr` with what holds whenever it is evaluated. */
 function operandContexts(node: Tree, context: Guard): [ExprNode, Guard][] {
   // The value an operand must have for the next one to run.
@@ -373,13 +364,13 @@ export function guardedRefs(tree: ExprNode): [string, Guard][] {
   const walk = (node: ExprNode, context: Guard): void => {
     if (node instanceof Token) return;
     if (node.data === "refcall") {
-      const args = valueArgs(node);
-      if (args === null) {
+      const callSuffix = callSuffixOf(node);
+      if (callSuffix === undefined) {
         const segments = node.children.slice(1).map((child) => String((child as Tree).children[0]));
         reads.push([[String(node.children[0]), ...segments].join("."), context]);
         return;
       }
-      for (const arg of args) {
+      for (const arg of valueArgs(String(node.children[0]), callSuffix)) {
         // A keyword argument's value is its last child.
         walk((arg as Tree).children.at(-1)!, context);
       }

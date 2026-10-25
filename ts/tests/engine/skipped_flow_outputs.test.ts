@@ -1059,3 +1059,48 @@ test("a reader that runs while an untyped producer may be skipped needs ?.", () 
   ).not.toThrow();
   expect(() => assembleText(flow(UNTYPED_ORDER + reader("${order.output.qty}"), " ${use.output :- null}"))).not.toThrow();
 });
+
+test("a lone co-skipping output reads with .", () => {
+  expect(() => assembleText(flow(ORDER, "\n  q: ${order.output.qty}"))).not.toThrow();
+});
+
+test("a | of two producers' fields needs ?. on each root", () => {
+  const two =
+    gate("order", "other") + code("order", '{"qty": 2}', "\n      qty: int") + code("other", '{"qty": 3}', "\n      qty: int");
+  expect(loadError(() => assembleText(flow(two, "\n  q: ${order.output.qty | other.output.qty}"))).message).toContain(
+    "write order.output?.qty",
+  );
+  expect(() => assembleText(flow(two, "\n  q: ${order.output?.qty | other.output?.qty}"))).not.toThrow();
+});
+
+test("an embedded or compared output field needs ?.", () => {
+  expect(loadError(() => assembleText(flow(ORDER, "\n  q: '${order.output.qty} and more'"))).message).toContain(
+    "may be null",
+  );
+  expect(loadError(() => assembleText(flow(ORDER, "\n  q: ${order.output.qty == 2}"))).message).toContain("may be null");
+});
+
+test("an embedded output field of an untyped producer that may be skipped needs ?.", () => {
+  // Design 2.6.6.
+  expect(
+    loadError(() => assembleText(flow(UNTYPED_ORDER, "\n  q: '${order.output.qty} and more'"))).message,
+  ).toContain("(node 'order' may be skipped); write order.output?.qty");
+  expect(() => assembleText(flow(UNTYPED_ORDER, "\n  q: ${order.output.qty}"))).not.toThrow();
+});
+
+/** A flow whose LOOP calls `body`, which holds the ORDER nodes and returns `n: <output>`. */
+function loopOver(output: string): string {
+  const nested = ORDER.replace(/^/gm, "    ").trimEnd();
+  const defs =
+    "defs:\n  body:\n    input:\n      approve: !bool\n      n: !str\n    nodes:\n" +
+    `${nested}\n` +
+    `    output:\n      approve: \${input.approve}\n      n: ${output}\n`;
+  const nodes =
+    "  loop:\n    kind: loop\n    times: 2\n    input:\n      approve: ${input.approve}\n      n: start\n    call: body\n";
+  return flow(nodes, " ${loop.output}", { defs });
+}
+
+test("a LOOP body's output is its body's flow output", () => {
+  expect(loadError(() => assembleText(loopOver("'${order.output.qty} left'"))).message).toContain("may be null");
+  expect(() => assembleText(loopOver("'${order.output?.qty} left'"))).not.toThrow();
+});

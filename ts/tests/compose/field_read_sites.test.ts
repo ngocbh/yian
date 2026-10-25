@@ -1306,3 +1306,17 @@ test("an untyped producer narrowed by isinstance in a binding needs ?. for an op
     loadError(() => load(typeBranch("${isinstance(mk.output, T) and mk.output.f == 'a'}", "other"))).message,
   ).toContain("only narrowed to T; write mk.output?.f");
 });
+
+/** A flow whose output is `${<text>}`. */
+const nullableOutput = (text: string) =>
+  NULLABLE_PREAMBLE + "nodes:\n" + STEP.replace("${input.s}", "${input.rec}") + `output: \${${text}}\n`;
+
+test.each(FORMS)("a flow output narrowed by %s loads", (_name, form) => {
+  load(nullableOutput(form("input.maybe")));
+});
+
+test("an unguarded Optional read in a flow output is a load error", () => {
+  const error = loadError(() => load(nullableOutput(UNGUARDED("input.maybe"))));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain("output: ${input.maybe.a} reads field 'a' of input.maybe, which may be null");
+});

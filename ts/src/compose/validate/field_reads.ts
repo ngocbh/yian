@@ -18,6 +18,7 @@ import {
   referenceContract,
   type TypeFn,
 } from "../../compile/output_contracts.ts";
+import { END_ID, type FlowOutput } from "../../compile/model.ts";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
 import { type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
@@ -55,11 +56,12 @@ import {
   type NotNarrowable,
   unresolvedType,
 } from "../helpers/narrowing_facts.ts";
-import { scanTemplate, Span } from "../../expr/template.ts";
+import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import { bindingSource } from "../../nodes/contracts.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
+import { bindingProducers } from "../edges/producers.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";
 import { ARITHMETIC, type SkipModel, stringSites } from "./skips.ts";
@@ -799,12 +801,23 @@ export interface FieldReadLevel {
   readonly registry: TypeRegistry;
   /** Resolves a constructor name to its type (default none). */
   readonly typeFn?: TypeFn | null;
+  /** The level's flow outputs, stamped with their origins (default none). */
+  readonly outputs?: readonly FlowOutput[];
+  /** Whether the outputs are one value, not named fields (default `false`). */
+  readonly valueMode?: boolean;
+  /** Where an output with no resolvable origin is reported (default unlocated). */
+  readonly outputsRange?: SourceRange | null;
 }
 
 /**
  * Check every nullable field read of one flow level at load (design 2.5, 2.6): node bindings
- * (CASE `on:` and reserved sources included). The first error throws with code
+ * (CASE `on:` and reserved sources included), then flow outputs. The first error throws with code
  * `expr.nullable_field_read`.
+ *
+ * A flow output is read by END. A co-skipping output (a lone reference, or a coalesce of them) is
+ * one required group of its producers: a producer may be null there only when it may be skipped
+ * while another producer of the group runs. Any other output runs whatever is skipped. A LOOP or
+ * `defs:` body's outputs are its own level's.
  *
  * @param level The assembled level.
  * @param options.resolveOrigin Resolves a binding's origin to its source frame (default none).
@@ -843,6 +856,44 @@ export function checkFieldReads(
       }
     }
   }
+  const { skips, valueMode = false, outputsRange = null } = level;
+  for (const output of level.outputs ?? []) {
+    for (const site of stringSites(output.binding)) {
+      const text = bindingSource(site);
+      const group = bindingCoSkips(text) ? bindingProducers(text) : null;
+      const endRoots = poolRoots(level, END_ID, new Map(), "END");
+      /** Whether `producer` may be skipped while END reads this output. */
+      const mayBeNull = (producer: string): boolean =>
+        group === null
+          ? skips.maySkipWhileRunning([producer], null)
+          : group.some((other) => other !== producer && skips.maySkipWhileRunning([producer], other));
+      const roots: ReadRoots = {
+        ...endRoots,
+        nullable: (root) => {
+          const producer = producerOfLevel(level, root);
+          return producer !== null && mayBeNull(producer);
+        },
+        why: (root) => {
+          const producer = producerOfLevel(level, root);
+          return producer !== null && mayBeNull(producer) ? `node ${reprText(producer)} may be skipped` : "it is Optional";
+        },
+      };
+      const message = firstNullableRead(text, roots, registry);
+      if (message === null) continue;
+      const label = valueMode ? "output" : `output ${reprText(output.name)}`;
+      throw locatedError(`${label}: ${message}`, site, outputsRange, resolveOrigin, diagnostics, {
+        code: NULLABLE_FIELD_READ,
+      });
+    }
+  }
+}
+
+/** Return the node a `<p>.output` or `<p>.new_messages` root reads, else `null`. */
+function producerOfLevel(level: FieldReadLevel, root: string): string | null {
+  const [head, field] = root.split(".");
+  if (field === "output" && level.buildResults.has(head!)) return head!;
+  if (field === NEW_MESSAGES && level.narrowing.producers.has(messagesKey(head!))) return head!;
+  return null;
 }
 
 /** Return the first nullable-read message of a template string, else `null`. */
@@ -879,13 +930,7 @@ function poolRoots(
   const typeFn = level.typeFn ?? null;
   const [producers, inputs] = narrowing.forNode(nodeId);
   const node = buildResults.get(nodeId)?.node ?? null;
-  /** The producer a `<p>.output` or `<p>.new_messages` root reads, else `null`. */
-  const producerOf = (root: string): string | null => {
-    const [head, field] = root.split(".");
-    if (field === "output" && buildResults.has(head!)) return head!;
-    if (field === NEW_MESSAGES && producers.has(messagesKey(head!))) return head!;
-    return null;
-  };
+  const producerOf = (root: string) => producerOfLevel(level, root);
   const isRoot = (root: string): boolean =>
     producerOf(root) !== null || (root.startsWith("input.") && inputs.has(root.slice("input.".length)));
   return {

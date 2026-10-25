@@ -2251,7 +2251,17 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // A `.` step through a value that may be null (an `Optional`, or a producer that may be skipped
   // while the reader runs) is a load error; it runs before the outputs get their null defaults.
   checkFieldReads(
-    { flowWiring, buildResults, narrowing, skips, registry, typeFn: constructorType },
+    {
+      flowWiring,
+      buildResults,
+      narrowing,
+      skips,
+      registry,
+      typeFn: constructorType,
+      outputs,
+      valueMode: outputsSection !== null && !isRecord(outputsSection),
+      outputsRange,
+    },
     { resolveOrigin, diagnostics },
   );
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the

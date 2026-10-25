@@ -798,6 +798,18 @@ export function markerMessage(original: unknown): string {
   }
 }
 
+/**
+ * @internal Return an `Error`'s stack followed by its string `notes`, one per line, else `null`;
+ * Python's traceback text prints `__notes__` the same way, so a cleanup note stays durable. The
+ * evaluator and the backward driver use it for a failure's traceback.
+ */
+export function tracebackText(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  const notes: unknown = (error as { notes?: unknown }).notes;
+  const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
 /** A stage marker retaining one value thrown by a node's body. Used by the evaluator. */
 export class NodeBodyError extends Error {
   override name = "NodeBodyError";

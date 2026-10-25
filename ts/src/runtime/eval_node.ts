@@ -46,6 +46,7 @@ import {
   Pending,
   Route,
   type SteerInbox,
+  tracebackText,
 } from "../nodes/base.ts";
 import {
   applyDefaults,
@@ -105,17 +106,6 @@ export function evaluationFailure(
       traceback: tracebackText(error),
     }),
   );
-}
-
-/**
- * Return an `Error`'s stack followed by its string `notes`, one per line, else `null`; Python's
- * traceback text prints `__notes__` the same way, so a cleanup note stays durable.
- */
-function tracebackText(error: unknown): string | null {
-  if (!(error instanceof Error)) return null;
-  const notes: unknown = (error as { notes?: unknown }).notes;
-  const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
-  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 /** Return `error` as a capability fault: a `CapabilityFault` as it is, anything else wrapped. */

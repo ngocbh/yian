@@ -1807,6 +1807,18 @@ export interface RunLog {
   [Symbol.dispose](): void;
 }
 
+/** Whether `log` has the `RunLog` members the engine and the backward driver read. */
+export function isRunLog(log: unknown): log is RunLog {
+  const candidate = log as Partial<RunLog> | null;
+  return (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    typeof candidate.append === "function" &&
+    typeof candidate.runId === "string" &&
+    typeof candidate.nextSequence === "number"
+  );
+}
+
 /** How a run log stamps its records. */
 export interface RunLogOptions {
   /**

@@ -289,15 +289,6 @@ function validateMemoryFlowBoundaries(flow: Flow, decl: MemoryDecl): void {
   if (!isExactly(flow.nodes, Map)) {
     throw setupError("a memory-owning flow requires an exact node dictionary", { origin });
   }
-  if (typeof flow.startId !== "string" || !flow.startId) {
-    throw setupError("a memory-owning flow start_id must be a non-empty exact string", { origin });
-  }
-  if (typeof flow.endId !== "string" || !flow.endId) {
-    throw setupError("a memory-owning flow end_id must be a non-empty exact string", { origin });
-  }
-  if (flow.startId === flow.endId) {
-    throw setupError("a memory-owning flow must have distinct START and END boundaries", { origin });
-  }
   if (flow.startId !== START_ID) {
     throw setupError(`a memory-owning flow start_id must be canonical ${reprText(START_ID)}`, { origin });
   }

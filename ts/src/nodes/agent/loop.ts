@@ -1,8 +1,8 @@
 /**
  * The AGENT loop: drive only newly returned model calls using current grants.
  *
- * Without tools or skills the loop makes a single model call (structured when the output type
- * needs it); with them it runs the tool loop until the model answers.
+ * A structured agent without tools or skills makes a single structured call; any other agent runs
+ * the chat loop until the model answers (without tools or skills, every reply is an answer).
  *
  * A reply's tool calls run in groups (design 6.9): consecutive calls that are safe to run together
  * start together, an unsafe call runs alone, and results commit in call order whatever order the
@@ -25,8 +25,9 @@
  * stops at a host interrupt of that inbox between effects or before a later chunk of a streamed
  * reply: the cut reply keeps its text so far, calls not started are skipped, the reply's pending
  * calls get `interrupted` closers, and the loop writes `interrupted {by}` and returns
- * `Interrupted`. An interrupt never aborts a running tool call. A steer queued when the model gives
- * its final answer gets one more model call, within `maxToolIterations`.
+ * `Interrupted`. An interrupt never aborts a running tool call. In the chat loop, a steer queued
+ * when the model gives its final answer gets one more model call, within `maxToolIterations`; a
+ * structured agent without tools or skills reads its steers once, before its single call.
  *
  * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
  *                tools, typesys, peer AGENT modules.
@@ -92,13 +93,14 @@ import { pushVisible, textOf } from "./text.ts";
 /**
  * Run one AGENT invocation.
  *
- * Makes one model call without tools or skills, otherwise runs the tool loop until the model
- * answers; either way, while the model answers with steers queued it reads them and calls again
- * (each reply, late steers included, counts toward `maxToolIterations`; at the cap the answer
- * stands and the steers stay queued). Sets `ctx.sent` to the built model's route credentials once the model is built. Each
- * reason the model gives for leaving out replay state reaches `ctx.emitEvent` once, as
- * `ReplayDegraded`. With `ctx.steps`, each model call and failed attempt is recorded as a
- * `model_call` step and each tool result as a `tool_result` step, a failed attempt's error
+ * A structured agent without tools or skills reads its queued steers once and makes one structured
+ * call. Any other agent runs the chat loop until the model answers; while the model answers with
+ * steers queued it reads them and calls again (each reply, late steers included, counts toward
+ * `maxToolIterations`; at the cap the answer stands and the steers stay queued). Sets `ctx.sent`
+ * to the built model's route credentials once the model is built. Each reason the model gives
+ * for leaving out replay state reaches `ctx.emitEvent` once, as `ReplayDegraded`. With
+ * `ctx.steps`, each model call and failed attempt is recorded as a `model_call` step and each
+ * tool result as a `tool_result` step, a failed attempt's error
  * scrubbed of every credential the call may have sent; the steps earlier starts recorded are
  * replayed first (`callModel`, `replayToolCalls`), and the host's interrupt is read only once they
  * end (a recorded honor step ends the loop there); recorded steers are fed back as replay reaches

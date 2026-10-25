@@ -2229,7 +2229,9 @@ function openHostCalls(state: RunState): string[] {
 }
 
 /**
- * Prepare one canonical flat graph expansion without mutating live state.
+ * Prepare one canonical flat graph expansion without mutating live state, unplanned: the engine
+ * plans every growth (`planExpansion`, then `prepareExpandedFromPlan`); this entry point serves
+ * direct reducer callers and tests.
  *
  * @param state An initialized nonterminal state with `nodeId` in flight.
  * @param nodeId The exact executing spawner id, including a dynamic LOOP driver clone id.

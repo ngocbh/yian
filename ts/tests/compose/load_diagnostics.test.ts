@@ -20,7 +20,9 @@ import {
   oneLineText,
 } from "../../src/compose/helpers/source.ts";
 import { SourceAccessError, SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { locatedError } from "../../src/compose/validate/typed_bindings.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
+import { Binding } from "../../src/nodes/contracts.ts";
 
 const broken = () => new Diagnostic({ code: "compose.load", message: "broken" });
 
@@ -314,4 +316,14 @@ describe("source helpers", () => {
   test("boundaryFieldRanges is empty for a virtual cursor", () => {
     expect(boundaryFieldRanges(SourceCursor.virtual({ input: { a: "int" } }))).toEqual(new Map());
   });
+});
+
+test("a load diagnostic keeps compose.load unless given a code", () => {
+  const d = new LoadDiagnostics("flow.yaml", "x: 1\n");
+  expect(d.diagnostic("m").code).toBe("compose.load");
+  expect(d.error("m", { code: "expr.nullable_field_read" }).diagnostic.code).toBe("expr.nullable_field_read");
+  expect(locatedError("m", new Binding("${x}"), null, null, d).diagnostic.code).toBe("compose.load");
+  expect(locatedError("m", new Binding("${x}"), null, null, d, { code: "expr.nullable_field_read" }).diagnostic.code).toBe(
+    "expr.nullable_field_read",
+  );
 });

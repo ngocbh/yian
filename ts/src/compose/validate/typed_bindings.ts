@@ -393,13 +393,15 @@ function bindingAlternatives(
 }
 
 /**
- * Build the load error, located at the binding's origin when it resolves.
+ * Build the load error, located at the binding's origin when it resolves, code `compose.load`
+ * unless `options.code` names a narrower one, such as `expr.nullable_field_read`.
  *
  * @param message The error message.
  * @param binding The rejected binding.
  * @param fallback The location used when the origin does not resolve.
  * @param resolveOrigin Resolves a registered origin to its source frame.
  * @param diagnostics Factory for located load errors.
+ * @param options.code The diagnostic code, when narrower than `compose.load`.
  * @returns The located error.
  */
 export function locatedError(
@@ -408,10 +410,12 @@ export function locatedError(
   fallback: SourceRange | null,
   resolveOrigin: ResolveOrigin | null,
   diagnostics: LoadDiagnostics,
+  options: { code?: string } = {},
 ): LoadError {
+  const { code } = options;
   const frame = resolveOrigin !== null && binding.origin !== null ? resolveOrigin(binding.origin) : null;
-  if (frame !== null) return diagnostics.error(message, { frames: [frame] });
-  return diagnostics.error(message, { range: fallback });
+  if (frame !== null) return diagnostics.error(message, { frames: [frame], code });
+  return diagnostics.error(message, { range: fallback, code });
 }
 
 /**

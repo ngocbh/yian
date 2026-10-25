@@ -610,9 +610,10 @@ export function validateAttributedBackward(
     ) {
       throw new RangeError("backward received feedback and attribution must match exact transfers");
     }
+    // An unreached occurrence's result is empty by its contract, so it needs no context.
+    if (messages.length === 0) continue;
     const context = trace.backwardContext(occurrence.source);
     validateBackwardResult(item.result, context);
-    if (messages.length === 0) continue;
     if (trace.rootStartSource !== null && sameSource(occurrence.source, trace.rootStartSource)) {
       rootInputs = item.result.inputFeedback;
     }
@@ -1390,8 +1391,10 @@ export function projectOwnerContexts(
     const occurrence = occurrences[index]!;
     const item = attributedResults[index]!;
     const messages = takeOccurrenceMessages(pending, occurrence);
-    const context = trace.backwardContext(occurrence.source);
     const key = sourceKey(occurrence.source);
+    // An unreached occurrence sends nothing; only a memory scope reads its context.
+    if (messages.length === 0 && !scopes.has(key)) continue;
+    const context = trace.backwardContext(occurrence.source);
     if (scopes.has(key)) {
       feedbackBySource.set(key, ownerFeedback(trace, occurrence, context, messages, item.result, cache));
     }

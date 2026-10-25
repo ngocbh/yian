@@ -642,9 +642,9 @@ output: \${outer.output}
     expect(inspected.backwardOutcome).toEqual(outcome);
     expect(inspected.events).toEqual([]);
     expect(readFileSync(path)).toEqual(before);
-    // The replay rebuilds the seed, and checks the recorded backward results against the rebuilt
-    // bound inputs, which rebinds the CALL once more.
-    expect(calls).toEqual([["same"], ["same"], ["same"], ["same"], ["same"], ["same"]]);
+    // The replay rebuilds the seed. Checking the recorded backward results doesn't rebind the CALL:
+    // its expansion got no feedback, so its bound inputs aren't read.
+    expect(calls).toEqual([["same"], ["same"], ["same"], ["same"], ["same"]]);
   } finally {
     if (saved === undefined) TEMPLATE_FNS.delete("composition_opaque");
     else TEMPLATE_FNS.set("composition_opaque", saved);

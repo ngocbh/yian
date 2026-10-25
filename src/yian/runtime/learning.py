@@ -409,10 +409,11 @@ def validate_attributed_backward(
                 or item.attribution != tuple(message.attribution for message in messages)
                 or item.invoked is not bool(messages)):
             raise ValueError("backward received feedback and attribution must match exact transfers")
-        context = trace.backward_context(occurrence.source)
-        validate_backward_result(item.result, context)
+        # An unreached occurrence's result is empty by its contract, so it needs no context.
         if not messages:
             continue
+        context = trace.backward_context(occurrence.source)
+        validate_backward_result(item.result, context)
         if occurrence.source == trace.root_start_source:
             root_inputs = item.result.input_feedback
         for source, transfer in _transfer_backward(trace, occurrence, context, messages, item.result):
@@ -996,6 +997,9 @@ def project_owner_contexts(
     feedback_by_source = {}
     for occurrence, item in reversed(tuple(zip(occurrences, attributed_results))):
         messages = sorted(pending.pop(occurrence.source, ()), key=lambda message: message.order)
+        # An unreached occurrence sends nothing; only a memory scope reads its context.
+        if not messages and occurrence.source not in scopes:
+            continue
         context = trace.backward_context(occurrence.source)
         if occurrence.source in scopes:
             feedback_by_source[occurrence.source] = _owner_feedback(

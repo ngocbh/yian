@@ -878,16 +878,15 @@ export function declaredImpossible(
     // Testing a value that is never null for null is ordinary defensive code.
     return null;
   }
-  const text = literalText(literal);
-  const label = namedTypeLabel(baseType, registry);
+  // The labels are built only for a report: a typedef's label parses and resolves its type.
   if (check instanceof TagCheck) {
     const members = baseType.variants;
     if (members === undefined || !unionTagFields(baseType).includes(check.field)) return null;
     // `unionTagFields` checked that every member has the field with tags.
     const tags = members.flatMap((member) => [...member.fields!.get(check.field)!.tags!]).sort(compareCodeUnits);
     if (tags.includes(check.value)) return null;
-    return new ImpossibleCheck(text, check.base, ImpossibleReason.NOT_A_TAG, {
-      baseLabel: label,
+    return new ImpossibleCheck(literalText(literal), check.base, ImpossibleReason.NOT_A_TAG, {
+      baseLabel: namedTypeLabel(baseType, registry),
       value: check.value,
       field: check.field,
       tags,
@@ -905,8 +904,8 @@ export function declaredImpossible(
   if (literal.value) {
     // A missing value is checked as null, which a nullable type admits.
     if (typ.nullable || typesOverlap(baseType, typ)) return null;
-    return new ImpossibleCheck(text, check.base, ImpossibleReason.NO_OVERLAP, {
-      baseLabel: label,
+    return new ImpossibleCheck(literalText(literal), check.base, ImpossibleReason.NO_OVERLAP, {
+      baseLabel: namedTypeLabel(baseType, registry),
       declared,
       typeLabel: namedTypeLabel(typ, registry),
     });
@@ -915,8 +914,8 @@ export function declaredImpossible(
   if (baseType.nullable && !typ.nullable) return null;
   const wanted = checkedMembers(typ);
   if (!checkedMembers(baseType).every((member) => contains(wanted, member))) return null;
-  return new ImpossibleCheck(text, check.base, ImpossibleReason.ALWAYS, {
-    baseLabel: label,
+  return new ImpossibleCheck(literalText(literal), check.base, ImpossibleReason.ALWAYS, {
+    baseLabel: namedTypeLabel(baseType, registry),
     declared,
     alwaysTrue: alwaysTrue(literal),
   });

@@ -46,6 +46,7 @@ import {
   ModelCallFinished,
   ModelCallStarted,
   NodeStarted,
+  NodeWoken,
   type RunEvent,
   RunFailed,
   RunSucceeded,
@@ -80,7 +81,7 @@ import { NodeSteps, Parameter, ValueContract } from "../../src/nodes/contracts.t
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import type { Scheduler } from "../../src/platform.ts";
-import { advance, interrupt, runFlow } from "../../src/run.ts";
+import { advance, interrupt, runFlow, send } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { InterruptedRecord, NodeStepRecord, NodeWaitingRecord, readRunLog } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareSend } from "../../src/runtime/state.ts";
@@ -1122,6 +1123,47 @@ test("an interrupt during a later model call's retry wait ends the loop null: no
   expect(shape()).toEqual(["model_call", "tool_result", "failed", "interrupted"]);
 });
 
+
+const TAKE_REPLY_FLOW = `
+id: t
+name: t
+input:
+  notes: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.notes}
+      take: one
+  reply:
+    kind: agent
+    prompt: "answer \${got}"
+    steer_inbox: \${input.notes}
+    input:
+      got: \${heard.output.events}
+    output: Optional(str)
+output: \${reply.output}
+`;
+
+test("an interrupt between a take's wake and its commit stops the reply before its model call", async () => {
+  const log = `${process.env["TMPDIR"] ?? "/tmp"}/yian-agent-stop-wake-${process.pid}-${Date.now()}.jsonl`;
+  const flow = await loadFlow(TAKE_REPLY_FLOW);
+  const model = new ScriptedModel([reply("full answer")], CONFIG);
+  const options = { llmConfig: CONFIG, models: serving(model), env: NO_ENV, log, runId: "r" };
+  expect((await runFlow(flow, {}, options)).status).toBe("waiting");
+  await send(log, "notes", "hi", { env: NO_ENV });
+  const onEvent = (event: unknown) => void (event instanceof NodeWoken && event.nodeId === "heard" && interrupt(log, "notes"));
+  const result = await advance({ ...options, onEvent });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBeNull();
+  expect(model.requests).toHaveLength(0);
+  const order = readRunLog(log).flatMap(({ kind, record }) =>
+    record instanceof InterruptedRecord ? [`interrupted ${record.nodes.join(",")}`] : ["node_woken", "pool_commit"].includes(kind) ? [kind] : [],
+  );
+  const woken = order.indexOf("node_woken");
+  expect(order.slice(woken, woken + 4)).toEqual(["node_woken", "interrupted ", "pool_commit", "interrupted reply"]);
+});
 
 // --- the remembered Stop across a crash ------------------------------------------------------ //
 

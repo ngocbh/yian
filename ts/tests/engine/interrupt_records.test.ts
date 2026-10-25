@@ -602,3 +602,18 @@ test.each<[string, RunRecord[], boolean]>([
   ["a take of another inbox waits", [takeWait("heard", "one", "other")], false],
   ["the take woke and hasn't committed", [takeWait("heard", "one"), new NodeWokenRecord("heard", ["r/heard"])], false],
 ])("awaitsNextMessage: %s", (_, records, idle) => expect(awaitsNextMessage(fold(...START, ...records), "msgs")).toBe(idle));
+
+test("a Stop between a take's wake and its commit stands through the commit", () => {
+  // 2 take waits, 3 x -> heard, 4 woken, 5 Stop, 6 the take's commit, 7 its success, 8 the reply starts
+  const w = fold(
+    ...START,
+    takeWait("heard", "one"),
+    send("msgs", "x"),
+    new NodeWokenRecord("heard"),
+    stop("msgs"),
+    takeCommit("heard", [3]),
+    new NodeSucceededRecord("heard", 6),
+    new NodeStartedRecord("reply"),
+  );
+  expect(w.stops.get("msgs")).toEqual({ seq: 5, stopped: false });
+});

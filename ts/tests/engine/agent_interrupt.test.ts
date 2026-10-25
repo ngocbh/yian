@@ -79,7 +79,7 @@ import { NodeSteps, Parameter, ValueContract } from "../../src/nodes/contracts.t
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import type { Scheduler } from "../../src/platform.ts";
-import { interrupt, runFlow } from "../../src/run.ts";
+import { advance, interrupt, runFlow } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { InterruptedRecord, NodeStepRecord, NodeWaitingRecord, readRunLog } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareSend } from "../../src/runtime/state.ts";
@@ -91,7 +91,7 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { inboxType, Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
 import { inboxEngine } from "./inbox_fixtures.ts";
-import { graph, interruptible, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
+import { crashAfter, graph, interruptible, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -1094,3 +1094,57 @@ test("an interrupt during a later model call's retry wait ends the loop null: no
   expect(shape()).toEqual(["model_call", "tool_result", "failed", "interrupted"]);
 });
 
+
+// --- the remembered Stop across a crash ------------------------------------------------------ //
+
+const REPLY_FLOW = `
+id: t
+name: t
+input:
+  notes: !Inbox(str)
+nodes:
+  reply:
+    kind: agent
+    prompt: go
+    tools: [ping]
+    steer_inbox: \${input.notes}
+    output: Optional(str)
+output: \${reply.output}
+`;
+
+/** The kinds of the records at `log`, a step as its own `kind`. */
+const recordKinds = (log: string) =>
+  readRunLog(log).map(({ kind, record }) => (record instanceof NodeStepRecord ? String(record.step["kind"]) : kind));
+
+test("a reader that honored the Stop before a crash gets no second record when it reopens", async () => {
+  const flow = await loadFlow(REPLY_FLOW);
+  const tmp = process.env["TMPDIR"] ?? "/tmp";
+  const ping = new FunctionTool({ name: "ping", description: "Ping.", parametersJsonSchema: { type: "object", properties: {} }, execute: () => "pong" });
+  const options = (log: string, model: ScriptedModel, onEvent?: (event: unknown) => void) => ({
+    tools: { ping },
+    onEvent,
+    llmConfig: CONFIG,
+    models: serving(model),
+    env: NO_ENV,
+    log,
+    runId: "r",
+  });
+  // The interrupt lands during the model call, so the reply's ping call is skipped and the agent honors it.
+  const stopAtCall = (log: string) => (event: unknown) => void (event instanceof ModelCallStarted && interrupt(log, "notes"));
+  const script = () => new ScriptedModel([reply("partial", ["ping", {}, "p-1"])], CONFIG);
+  const whole = `${tmp}/yian-agent-honor-whole-${process.pid}-${Date.now()}.jsonl`;
+  const done = await runFlow(flow, {}, options(whole, script(), stopAtCall(whole)));
+  expect(done.output).toBeNull();
+  const honored = recordKinds(whole).indexOf("interrupted", recordKinds(whole).indexOf("model_call"));
+  expect(honored).toBeGreaterThan(0);
+  const log = `${tmp}/yian-agent-honor-crash-${process.pid}-${Date.now()}.jsonl`;
+  await crashAfter(honored + 1, () => runFlow(flow, {}, options(log, script(), stopAtCall(log))));
+  expect(recordKinds(log).at(-1)).toBe("interrupted");
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await advance(options(log, model));
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(model.requests).toHaveLength(0);
+  const stops = readRunLog(log).flatMap(({ record }) => (record instanceof InterruptedRecord ? [[...record.nodes]] : []));
+  expect(stops).toEqual([["reply"]]);
+});

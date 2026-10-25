@@ -15,6 +15,7 @@ import { InterruptedRecord, NodeWokenRecord, RunStoppedRecord } from "../../src/
 import { typeFor } from "../../src/typesys/types.ts";
 import {
   commitPrepared,
+  prepareAppliedStop,
   prepareInterrupt,
   prepareNodeStarted,
   prepareNodeStep,
@@ -427,6 +428,51 @@ test("a host interrupt while the Stop stands appends nothing; a reader opening a
   ]);
   // The reader is being stopped: a third interrupt names no one.
   expect(engine.deliver({ kind: "interrupt", inbox: "m" }).seq).toBeNull();
+  probe.release();
+  await running;
+});
+
+/** A chain run of `probe` whose log, written by hand, recorded an empty Stop and then `probe`'s start, then crashed. */
+function crashedAfterStart(probe: Node) {
+  const engine = chain(probe);
+  const { log, state } = engine;
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  succeed(log, state, START_ID, { m: new InboxRef("m"), o: new InboxRef("o") });
+  commitPrepared(log, state, prepareInterrupt(state, "m", [])!);
+  commitPrepared(log, state, prepareNodeStarted(state, probe.id));
+  return engine;
+}
+
+test("a crash before the applied record: the resumed reader opens and gets it", async () => {
+  const probe = new InterruptProbe("p");
+  const engine = crashedAfterStart(probe);
+  commitPrepared(engine.log, engine.state, prepareRunResumed(engine.state, { numWorkers: 0 }));
+  const running = engine.run();
+  await probe.started;
+  expect(stopsOf(engine)).toEqual([
+    ["m", []],
+    ["m", ["p"]],
+  ]);
+  expect(probe.opened!.interrupt.aborted).toBe(true);
+  probe.release();
+  await running;
+});
+
+test("a crash after the applied record: the resumed reader holds the interrupt; no second record", async () => {
+  const probe = new InterruptProbe("p");
+  const engine = crashedAfterStart(probe);
+  const { log, state } = engine;
+  const applied = prepareAppliedStop(state, "m", "p");
+  commitPrepared(log, state, applied);
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  const running = engine.run();
+  await probe.started;
+  expect(stopsOf(engine)).toEqual([
+    ["m", []],
+    ["m", ["p"]],
+  ]);
+  expect(probe.opened!.interrupt.aborted).toBe(true);
+  expect(probe.opened!.interruptedBy()).toBe(applied.expectedSequence);
   probe.release();
   await running;
 });

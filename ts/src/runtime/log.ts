@@ -71,10 +71,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -717,25 +717,58 @@ export class InboxClosedRecord {
 }
 
 /**
+ * Withdraw unread sends from an inbox: they leave its queue, and a take they were assigned to that
+ * hasn't woken waits again. Frozen.
+ */
+export class InboxWithdrawnRecord {
+  /** The inbox the sends are withdrawn from; non-empty. */
+  readonly inbox: string;
+  /** The withdrawn sends' seqs; strictly increasing positive integers, at least one. */
+  readonly events: readonly number[];
+
+  /**
+   * @throws TypeError when `inbox` isn't a string.
+   * @throws RangeError when `inbox` is empty, or `events` is empty or isn't a list of strictly
+   *   increasing positive safe integers.
+   */
+  constructor(inbox: string, events: readonly number[]) {
+    this.inbox = requireName(inbox, "inbox");
+    if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
+      throw new RangeError("events must be positive integers");
+    }
+    const seqs = [...events] as number[];
+    if (seqs.length === 0) throw new RangeError("events must be non-empty");
+    if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {
+      throw new RangeError("events must be strictly increasing");
+    }
+    this.events = Object.freeze(seqs);
+    Object.freeze(this);
+  }
+}
+
+/**
  * Interrupt the agents reading an inbox as their steer inbox: each named node's open calls close
- * with reason `interrupted`, and it holds a pending interrupt until it honors it or settles.
+ * with reason `interrupted`, and it holds a pending interrupt until it honors it or settles. With
+ * no node named, it only records the Stop, which a reader opening the inbox later honors.
  * Frozen.
  */
 export class InterruptedRecord {
   /** The steer inbox the interrupt arrived on; non-empty. */
   readonly inbox: string;
-  /** The interrupted node ids; unique, non-empty, at least one. */
+  /**
+   * The interrupted node ids; unique non-empty strings; empty when no agent read the inbox as the
+   * Stop was recorded.
+   */
   readonly nodes: readonly string[];
 
   /**
    * @throws TypeError when `inbox` isn't a string.
-   * @throws RangeError when `inbox` is empty, or `nodes` is empty or isn't an array of unique
-   *   non-empty strings.
+   * @throws RangeError when `inbox` is empty, or `nodes` isn't an array of unique non-empty
+   *   strings.
    */
   constructor(inbox: string, nodes: readonly string[]) {
     this.inbox = requireName(inbox, "inbox");
     this.nodes = validatedIdArray(nodes, "nodes");
-    if (this.nodes.length === 0) throw new RangeError("nodes must be non-empty");
     Object.freeze(this);
   }
 }
@@ -1271,6 +1304,7 @@ export type RunRecord =
   | NodeWokenRecord
   | RunWaitingRecord
   | InboxClosedRecord
+  | InboxWithdrawnRecord
   | InterruptedRecord
   | RunCancelledRecord
   | RunFailedRecord
@@ -1300,6 +1334,7 @@ const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass
   [NodeWokenRecord, "node_woken"],
   [RunWaitingRecord, "run_waiting"],
   [InboxClosedRecord, "inbox_closed"],
+  [InboxWithdrawnRecord, "inbox_withdrawn"],
   [InterruptedRecord, "interrupted"],
   [RunCancelledRecord, "run_cancelled"],
   [RunFailedRecord, "run_failed"],
@@ -3190,6 +3225,7 @@ function payloadForRecord(record: RunRecord): JsonObject {
   if (record instanceof NodeWokenRecord) return { node_id: record.nodeId, timed_out: [...record.timedOut] };
   if (record instanceof RunWaitingRecord) return { node_ids: [...record.nodeIds] };
   if (record instanceof InboxClosedRecord) return { inbox: record.inbox };
+  if (record instanceof InboxWithdrawnRecord) return { inbox: record.inbox, events: record.events.map(BigInt) };
   if (record instanceof InterruptedRecord) return { inbox: record.inbox, nodes: [...record.nodes] };
   if (record instanceof RunCancelledRecord) return {};
   if (record instanceof RunFailedRecord) return { failure: failurePayload(record.failure) };
@@ -3348,6 +3384,12 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "inbox_closed":
       requireFields(payload, ["inbox"], label);
       return new InboxClosedRecord(requireName(payload["inbox"], `${label} inbox`));
+    case "inbox_withdrawn":
+      requireFields(payload, ["inbox", "events"], label);
+      return new InboxWithdrawnRecord(
+        requireName(payload["inbox"], `${label} inbox`),
+        wireItems(payload["events"], `${label} events`, wireInt),
+      );
     case "interrupted":
       requireFields(payload, ["inbox", "nodes"], label);
       return new InterruptedRecord(requireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`));

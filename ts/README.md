@@ -293,7 +293,7 @@ warning by default, and the frame still reaches the others. `snapshot()` returns
 and each call in flight with its chunks so far. The channel keeps one buffer per call, so calls of
 parallel nodes (a MAP's items) stay apart; a call leaves it when its step record is appended (a
 failed attempt's comes before its `end` frame), when its node settles (a stop), or when a
-`node_failed` or `run_stopped` record ends the run.
+`node_failed`, `run_stopped` or `run_cancelled` record ends the run.
 
 `follow(fn)` is how a late viewer joins: it calls `fn` with `{type: "snapshot", snapshot}`, then
 with every later frame (a `LiveFollowFrame`), and returns the function that stops it. The snapshot
@@ -323,8 +323,9 @@ records run from seq 0 to `last_seq`. Frames must arrive in the order they were 
 a record at or below `lastSeq`, the start of a call in flight, or a chunk below its call's
 `nextIndex` is a duplicate and changes nothing; a chunk of a call not in flight is a gap. A call
 goes when its step record arrives or when it ends with an error, and every call goes on
-`node_failed` or `run_stopped`, which end the run. A run that ends without either (a host fault,
-or its process gone) sends nothing more, so the host drops the view when the run ends. Each call
+`node_failed`, `run_stopped` or `run_cancelled`, which end the run. A run that ends without one
+(a host fault, or its process gone) sends nothing more, so the host drops the view when the run
+ends. Each call
 has its own buffer, keyed by `(node, n)`, so a MAP's parallel calls stay apart, and a late
 snapshot lists every call in flight.
 

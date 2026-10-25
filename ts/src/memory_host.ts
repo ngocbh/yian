@@ -9,7 +9,7 @@
 import { type ResolvedMemory, resolveMemoryLayout } from "./compile/memory_layout.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { type Env, processEnv } from "./defaults.ts";
-import { compareCodeUnits, reprText } from "./diagnostics.ts";
+import { addNote, compareCodeUnits, reprText } from "./diagnostics.ts";
 import { ModelCallRetried, ReplayDegraded } from "./events.ts";
 import type { RetryInfo } from "./llm/executor.ts";
 import type { ModelAccess } from "./llm_clients/factory.ts";
@@ -25,7 +25,6 @@ import { ProfileMemory } from "./memory/profile.ts";
 import { ReflectiveMemory } from "./memory/reflective.ts";
 import { FileMarkdownStore, InMemoryMarkdownStore } from "./memory/storage/markdown.ts";
 import { realStoragePath } from "./memory/storage/sqlite.ts";
-import { addNote } from "./runtime/eval_node.ts";
 import { jsTypeName, toHost, type Value, writeAsJson } from "./typesys/values.ts";
 
 /** A constructor for one custom memory type, called with the declared config. */

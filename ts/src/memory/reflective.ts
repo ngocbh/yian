@@ -5,7 +5,7 @@
  * tool-free structured model call to propose mutations for this memory. It deliberately knows
  * nothing about compiled graphs, nodes, or the scheduler.
  *
- * Knows about: `memory/contracts`, `memory/storage/sqlite`, `defaults`, `typesys/json`,
+ * Knows about: `memory/contracts`, `memory/storage/sqlite`, `defaults`, `diagnostics`, `typesys/json`,
  * `typesys/values`, `llm`, `llm_clients`.
  * Never imports: the `memory` facade, nodes, runtime.
  */
@@ -14,6 +14,7 @@
 import crypto from "node:crypto";
 
 import { current, type Env, processEnv } from "../defaults.ts";
+import { addNote, errorTypeName } from "../diagnostics.ts";
 import type { ChatModel } from "../llm/events.ts";
 import { callWithRetries, type RetryInfo, RouteModel } from "../llm/executor.ts";
 import { Message, Request, type Response, TextPart } from "../llm/messages.ts";
@@ -156,29 +157,6 @@ function operationError(
   const error = new MemoryOperationError(stage, code, message, options.retryable ?? false);
   if ("cause" in options) error.cause = options.cause;
   return error;
-}
-
-/**
- * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
- * `add_note`). A failure, such as a frozen error, a non-array `notes` or a primitive, loses the
- * note, as Python swallows a failing `add_note`.
- */
-function addNote(error: unknown, text: () => string): void {
-  try {
-    if (typeof error !== "object" || error === null) return;
-    const target = error as { notes?: unknown };
-    const note = text();
-    if (!Object.hasOwn(target, "notes")) target.notes = [];
-    if (Array.isArray(target.notes)) target.notes.push(note);
-  } catch {}
-}
-
-/** Python's `type(value).__name__`: the constructor's name, else a string `name`, else `Error`. */
-function typeName(value: unknown): string {
-  const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
-  if (typeof constructorName === "string" && constructorName) return constructorName;
-  const name = (value as { name?: unknown } | null | undefined)?.name;
-  return typeof name === "string" ? name : "Error";
 }
 
 /**
@@ -765,7 +743,7 @@ export class ReflectiveMemory implements Memory {
       try {
         this.storage.close();
       } catch (cleanup) {
-        addNote(primary, () => `ReflectiveMemory cleanup failed: ${typeName(cleanup)}`);
+        addNote(primary, () => `ReflectiveMemory cleanup failed: ${errorTypeName(cleanup)}`);
       }
       // Forget the failed handle so a later operation may retry the open.
       this.storage = null;

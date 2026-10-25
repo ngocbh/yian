@@ -8,7 +8,7 @@
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
  * `compareCodeUnits` is the one string order for sorting, `reprText` quotes text the
  * way Python's `repr` does, and `getCloseMatches` finds "did you mean" suggestions the
- * way Python's `difflib` does.
+ * way Python's `difflib` does. `addNote` and `errorTypeName` help report a thrown error.
  */
 
 /**
@@ -373,6 +373,32 @@ export function getCloseMatches(
   return result.slice(0, n).map(([, x]) => x);
 }
 
+/**
+ * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
+ * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
+ * `text`, loses the note, as Python swallows a failing `add_note`.
+ */
+export function addNote(error: unknown, text: () => string): void {
+  try {
+    if (typeof error !== "object" || error === null) return;
+    const target = error as { notes?: unknown };
+    const note = text();
+    if (!Object.hasOwn(target, "notes")) target.notes = [];
+    if (Array.isArray(target.notes)) target.notes.push(note);
+  } catch {}
+}
+
+/**
+ * Python's `type(value).__name__` for a thrown value: the constructor's name, else a string
+ * `name`, else `Error`.
+ */
+export function errorTypeName(value: unknown): string {
+  const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
+  if (typeof constructorName === "string" && constructorName) return constructorName;
+  const name = (value as { name?: unknown } | null | undefined)?.name;
+  return typeof name === "string" ? name : "Error";
+}
+
 const CODES = [
   "binding.evaluate",
   "binding.type",
@@ -493,7 +519,7 @@ export class OriginRef {
 export class Failure {
   /** Stable semantic category from `FAILURE_CODES`. */
   readonly code: FailureCode;
-  /** Human-readable failure detail; it may be empty. */
+  /** Human-readable failure detail; it may be empty, and holds no lone surrogate. */
   readonly message: string;
   /**
    * Runtime execution identity, or `null` when the failure is not attributable to one
@@ -507,16 +533,17 @@ export class Failure {
   readonly trace: readonly OriginRef[];
   /**
    * The thrown error's `name`, retained only for debugging, never for semantic
-   * classification.
+   * classification; it holds no lone surrogate.
    */
   readonly causeType: string | null;
-  /** The thrown error's `stack`, retained as opaque debugging text. */
+  /** The thrown error's `stack`, retained as opaque debugging text; it holds no lone surrogate. */
   readonly traceback: string | null;
 
   /**
    * Create a failure, rejecting values that cannot enter the canonical failure
    * pipeline. `trace` defaults to empty and is copied; `causeType` and `traceback`
-   * default to `null`.
+   * default to `null`. A lone surrogate in `message`, `causeType` or `traceback` becomes
+   * U+FFFD, so a thrown error's text can always be written to the run log.
    */
   constructor(options: {
     code: FailureCode;
@@ -546,11 +573,11 @@ export class Failure {
       throw new TypeError("failure traceback must be a string or null");
     }
     this.code = code;
-    this.message = message;
+    this.message = message.toWellFormed();
     this.nodeId = nodeId;
     this.trace = [...trace];
-    this.causeType = causeType;
-    this.traceback = traceback;
+    this.causeType = causeType?.toWellFormed() ?? null;
+    this.traceback = traceback?.toWellFormed() ?? null;
   }
 
   /** Return the JSON form: snake_case keys in field order, every key present. */

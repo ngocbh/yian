@@ -321,7 +321,7 @@ test.each([
     "an empty run id",
     (owned: CompiledFlow) => startData({ runId: "" }),
     RangeError,
-    /^run-record envelope run_id must be a non-empty string$/,
+    /^run log run_id must be a non-empty string$/,
   ],
   [
     "an agent configuration that isn't an object",

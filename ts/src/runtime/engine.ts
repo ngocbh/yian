@@ -24,7 +24,7 @@
 import { AsyncResource } from "node:async_hooks";
 
 import { GrowthRejected } from "../compile/model.ts";
-import { type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
+import { addNote, type Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import {
   ModelCallFinished,
   ModelCallStarted,
@@ -54,7 +54,6 @@ import { toolCallId } from "../tools/context.ts";
 import { ToolSet } from "../tools/registry.ts";
 import { jsTypeName, type ValueRecord } from "../typesys/values.ts";
 import {
-  addNote,
   EvaluatedOutcome,
   EvaluationFailure,
   evalNode,

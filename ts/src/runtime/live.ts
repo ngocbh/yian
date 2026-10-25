@@ -32,6 +32,8 @@ import {
   NodeStepRecord,
   type RecordEnvelope,
   type RunLog,
+  RunCancelledRecord,
+  type RunRecord,
   RunStoppedRecord,
 } from "./log.ts";
 
@@ -162,8 +164,8 @@ export class LiveChannel {
 
   /**
    * @internal Run boundary only: return a log that appends to `log` and sends each appended record to this
-   * channel once the append returns; a `node_step` drops its call, and a `node_failed` or
-   * `run_stopped`, which end the run, drop every call. The other members read `log`;
+   * channel once the append returns; a `node_step` drops its call, and a `node_failed`,
+   * `run_stopped` or `run_cancelled`, which end the run, drop every call. The other members read `log`;
    * closing it closes `log`. The records `log` already holds (a resumed run's) count as seen: the
    * snapshot's `last_seq` starts at the last.
    */
@@ -173,9 +175,9 @@ export class LiveChannel {
       const { seq, record } = envelope;
       this.#nextSeq = seq + 1;
       if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
-      // A node failure or a stop ends the run: its calls get no record, and their nodes settle only
+      // A node failure, a stop or a cancel ends the run: its calls get no record, and their nodes settle only
       // later, so a snapshot taken in between would list calls that nothing ever drops.
-      else if (record instanceof NodeFailedRecord || record instanceof RunStoppedRecord) this.#calls.clear();
+      else if (endsRun(record)) this.#calls.clear();
       this.#send({ type: "record", seq, line: encodeRecord(envelope) });
     };
     return {
@@ -248,7 +250,7 @@ export interface LiveViewCall {
  * and changes nothing; a record past the next seq, a chunk past its call's next index, or a chunk of
  * a call not in flight is a gap: `apply` returns false and changes nothing, and the host asks
  * `follow` again. A call goes when its step record arrives or when it ends with an error; a node
- * failure or a run stop ends the run and drops every call. A run that ends without either (a host fault, or its
+ * failure, a run stop or a cancel ends the run and drops every call. A run that ends without one (a host fault, or its
  * process gone) sends nothing more, so the host drops the view when the run ends.
  */
 export class LiveView {
@@ -314,7 +316,7 @@ export class LiveView {
         const { record } = decodeRecord(frame.line);
         this.#lastSeq = frame.seq;
         if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
-        else if (record instanceof NodeFailedRecord || record instanceof RunStoppedRecord) this.#calls.clear();
+        else if (endsRun(record)) this.#calls.clear();
         return true;
       }
       case "start":
@@ -346,6 +348,11 @@ function setCall<V>(calls: Map<string, Map<number, V>>, node: string, n: number,
   let byN = calls.get(node);
   if (byN === undefined) calls.set(node, (byN = new Map()));
   byN.set(n, value);
+}
+
+/** Whether `record` ends the run, so no call in flight gets a step record: a node failure, a stop or a cancel. */
+function endsRun(record: RunRecord): boolean {
+  return record instanceof NodeFailedRecord || record instanceof RunStoppedRecord || record instanceof RunCancelledRecord;
 }
 
 /** Delete the call of `node`'s step `n` from `calls`, and its node's map once empty. */

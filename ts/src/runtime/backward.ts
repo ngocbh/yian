@@ -349,7 +349,8 @@ async function driveOpenedBackward(
       let message = "memory learn context could not be constructed";
       // A trace's backward context always names its occurrence's node.
       if (context !== null) message += ` for node ${reprText(context.nodeId!)}`;
-      const text = `${message}: ${error.original.message}`;
+      // A MemoryOperationFailure refuses a lone surrogate, which the original's text may hold.
+      const text = `${message}: ${error.original.message}`.toWellFormed();
       cause = new MemoryOperationFailure("learn", "memory.invalid_context", text, false);
     } else if (error instanceof LearningProposalError) {
       key = error.memory;

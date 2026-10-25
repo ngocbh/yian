@@ -135,7 +135,7 @@ import {
   RecordEnvelope,
   RunLogChangedError,
   RunLogSchemaError,
-  type RunStoppedRecord,
+  RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 
@@ -414,6 +414,13 @@ test("a memory log orders records and retains a canonical copy", () => {
   expectError(() => log.append(new NodeStartedRecord("late")), Error, "run log is closed");
 });
 
+test("a stop message's lone surrogate becomes U+FFFD, so the record can be written", () => {
+  const log = new MemoryRunLog("run");
+  const envelope = log.append(new RunStoppedRecord("signal", "cut \uD83D", ["a"]));
+  expect((envelope.record as RunStoppedRecord).message).toBe("cut \uFFFD");
+  expect((decodeRecord(encodeRecord(envelope)).record as RunStoppedRecord).message).toBe("cut \uFFFD");
+});
+
 /** A clock that reads each of `times` in turn, in epoch milliseconds. */
 function clockOf(...times: number[]): () => number {
   return () => times.shift()!;
@@ -603,7 +610,7 @@ test.each<[string, (records: RecordEnvelope[]) => RecordEnvelope[], string]>([
 });
 
 test("memory log reopening revalidates exact envelope authority: record", () => {
-  expectError(() => new NodeStartedRecord(1 as never), TypeError, "node_id must be a string");
+  expectError(() => new NodeStartedRecord(1 as never), TypeError, "node_id must be a non-empty string");
 });
 
 test("memory log reopening revalidates exact envelope authority: envelope", () => {

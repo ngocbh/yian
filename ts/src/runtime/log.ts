@@ -376,8 +376,9 @@ function requireText(value: unknown, label: string): string {
  * @throws RangeError when it is empty.
  */
 function requireName(value: unknown, label: string): string {
-  if (requireText(value, label) === "") throw new RangeError(`${label} must be a non-empty string`);
-  return value as string;
+  if (typeof value !== "string") throw new TypeError(`${label} must be a non-empty string`);
+  if (value === "") throw new RangeError(`${label} must be a non-empty string`);
+  return value;
 }
 
 /**
@@ -547,7 +548,7 @@ export class RunResumedRecord {
 export class RunStoppedRecord {
   /** Why the run stopped. */
   readonly reason: RunStopReason;
-  /** The reason's text, such as the callback's error message; any string. */
+  /** The reason's text, such as the callback's error message; any string, a lone surrogate replaced with U+FFFD. */
   readonly message: string;
   /** The in-flight node ids in dispatcher order; unique and non-empty, possibly none. */
   readonly nodeIds: readonly string[];
@@ -564,7 +565,8 @@ export class RunStoppedRecord {
     }
     if (typeof message !== "string") throw new TypeError("message must be a string");
     this.reason = reason;
-    this.message = message;
+    // The text often comes from a host's error, which may hold a lone surrogate the log can't write.
+    this.message = message.toWellFormed();
     this.nodeIds = validatedIdArray(nodeIds, "node_ids");
     Object.freeze(this);
   }
@@ -599,12 +601,12 @@ export interface WaitEntry {
  */
 function validatedWaitEntry(entry: unknown): WaitEntry {
   if (!isRecord(entry)) throw new TypeError("wait entry must be an object");
-  const callId = requireNonemptyString(entry["callId"], "wait entry call_id");
+  const callId = requireName(entry["callId"], "wait entry call_id");
   const { tool, inbox, mode, deadline } = entry;
   if (typeof tool !== "string" || !WAIT_TOOLS.includes(tool)) throw new RangeError("wait entry tool must be take or sleep");
   if (tool === "take") {
     if (inbox == null || mode == null) throw new RangeError("a take wait entry needs inbox and mode");
-    requireNonemptyString(inbox, "wait entry inbox");
+    requireName(inbox, "wait entry inbox");
     if (typeof mode !== "string" || !TAKE_MODES.includes(mode)) throw new RangeError("wait entry mode must be one or all");
   } else {
     if (inbox != null || mode != null) throw new RangeError("a sleep wait entry takes no inbox or mode");
@@ -632,7 +634,10 @@ export class NodeWaitingRecord {
   readonly callIds: readonly string[];
   /** The take or sleep call this record registers, if any: at most one entry. */
   readonly waits: readonly WaitEntry[];
-  /** The agent's steer inbox; always null until agents wait on one. */
+  /**
+   * The steer inbox the waiting node opened, which an interrupt of that inbox reaches while it
+   * waits; `null` when it opened none.
+   */
   readonly steerInbox: string | null;
 
   /**
@@ -646,7 +651,7 @@ export class NodeWaitingRecord {
     callIds: readonly string[],
     options: { waits?: readonly WaitEntry[]; steerInbox?: string | null } = {},
   ) {
-    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.nodeId = requireName(nodeId, "node_id");
     this.callIds = validatedIdArray(callIds, "call_ids");
     if (this.callIds.length === 0) throw new RangeError("call_ids must be non-empty");
     const waits = (options.waits ?? []).map(validatedWaitEntry);
@@ -657,7 +662,7 @@ export class NodeWaitingRecord {
       }
     }
     this.waits = Object.freeze(waits);
-    this.steerInbox = options.steerInbox == null ? null : requireNonemptyString(options.steerInbox, "steer_inbox");
+    this.steerInbox = options.steerInbox == null ? null : requireName(options.steerInbox, "steer_inbox");
     Object.freeze(this);
   }
 }
@@ -674,7 +679,7 @@ export class NodeWokenRecord {
    * @throws RangeError when it is empty, or `timedOut` isn't an array of unique non-empty strings.
    */
   constructor(nodeId: string, timedOut: readonly string[] = []) {
-    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.nodeId = requireName(nodeId, "node_id");
     this.timedOut = validatedIdArray(timedOut, "timed_out");
     Object.freeze(this);
   }
@@ -703,7 +708,7 @@ export class InboxClosedRecord {
    * @throws RangeError when it is empty.
    */
   constructor(inbox: string) {
-    this.inbox = requireNonemptyString(inbox, "inbox");
+    this.inbox = requireName(inbox, "inbox");
     Object.freeze(this);
   }
 }
@@ -725,7 +730,7 @@ export class InterruptedRecord {
    *   non-empty strings.
    */
   constructor(inbox: string, nodes: readonly string[]) {
-    this.inbox = requireNonemptyString(inbox, "inbox");
+    this.inbox = requireName(inbox, "inbox");
     this.nodes = validatedIdArray(nodes, "nodes");
     if (this.nodes.length === 0) throw new RangeError("nodes must be non-empty");
     Object.freeze(this);
@@ -767,7 +772,7 @@ export class NodeStartedRecord {
    * @throws RangeError when it is empty.
    */
   constructor(nodeId: string) {
-    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.nodeId = requireName(nodeId, "node_id");
     Object.freeze(this);
   }
 }
@@ -797,7 +802,7 @@ export class NodeStepRecord {
    *   another non-JSON value (see `jsonPart`).
    */
   constructor(nodeId: string, n: number, step: Readonly<Record<string, unknown>>) {
-    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.nodeId = requireName(nodeId, "node_id");
     if (typeof n !== "number" || !Number.isSafeInteger(n)) throw new TypeError("node step n must be an int");
     if (n < 1) throw new RangeError("node step n must be at least 1");
     this.n = n;
@@ -862,8 +867,8 @@ export class PoolCommitRecord {
       steps?: readonly number[] | null;
     } = {},
   ) {
-    this.nodeId = requireNonemptyString(nodeId, "node_id");
-    this.key = requireNonemptyString(key, "key");
+    this.nodeId = requireName(nodeId, "node_id");
+    this.key = requireName(key, "key");
     this.value =
       value === null ? null : (freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire);
     this.from = validatedFrom(options.from ?? null);
@@ -896,7 +901,7 @@ export interface TakeCommit {
  */
 function validatedTake(take: unknown): TakeCommit {
   if (!isRecord(take)) throw new TypeError("take must be an object");
-  const inbox = requireNonemptyString(take["inbox"], "take inbox");
+  const inbox = requireName(take["inbox"], "take inbox");
   const events = take["events"];
   if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
     throw new RangeError("take events must be positive integers");
@@ -969,7 +974,7 @@ export class NodeSucceededRecord {
    */
   constructor(nodeId: string, commit: number, options: OutcomeCarriers & { messages?: number | null } = {}) {
     const { forwardCapture = null, messages = null } = options;
-    this.nodeId = requireNonemptyString(nodeId, "node_id");
+    this.nodeId = requireName(nodeId, "node_id");
     if (!Number.isSafeInteger(commit) || commit < 1) throw new RangeError("commit must be a positive integer");
     this.commit = commit;
     if (messages !== null && (!Number.isSafeInteger(messages) || messages < 1)) {
@@ -1004,8 +1009,8 @@ export class NodeRoutedRecord {
     options: OutcomeCarriers & { terminalFailure?: Failure | null } = {},
   ) {
     const { terminalFailure = null, forwardCapture = null } = options;
-    this.nodeId = requireNonemptyString(nodeId, "node_id");
-    this.handle = requireNonemptyString(handle, "handle");
+    this.nodeId = requireName(nodeId, "node_id");
+    this.handle = requireName(handle, "handle");
     this.terminalFailure = terminalFailure === null ? null : retainedFailure(terminalFailure, "NodeRoutedRecord");
     this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
@@ -1034,7 +1039,7 @@ export class NodeExpandedRecord {
    */
   constructor(spawnerId: string, pruneIds: readonly string[], topologyDigest: string, options: OutcomeCarriers = {}) {
     const { forwardCapture = null } = options;
-    this.spawnerId = requireNonemptyString(spawnerId, "spawner_id");
+    this.spawnerId = requireName(spawnerId, "spawner_id");
     this.pruneIds = validatedIdArray(pruneIds, "prune_ids", true);
     this.topologyDigest = requireSha256(topologyDigest, "topology_digest");
     this.forwardCapture = validatedCapture(forwardCapture);
@@ -1199,8 +1204,8 @@ export class MemoryCommitRequestedRecord {
    */
   constructor(memory: string, commitId: string, mutations: readonly MemoryMutation[], attemptId: number) {
     this.attemptId = validatedAttemptId(attemptId);
-    this.memory = requireNonemptyString(memory, "memory");
-    this.commitId = requireNonemptyString(commitId, "commit_id");
+    this.memory = requireName(memory, "memory");
+    this.commitId = requireName(commitId, "commit_id");
     this.mutations = validateMutations(mutations);
     Object.freeze(this);
   }
@@ -1222,8 +1227,8 @@ export class MemoryCommitSucceededRecord {
    */
   constructor(memory: string, commitId: string, attemptId: number) {
     this.attemptId = validatedAttemptId(attemptId);
-    this.memory = requireNonemptyString(memory, "memory");
-    this.commitId = requireNonemptyString(commitId, "commit_id");
+    this.memory = requireName(memory, "memory");
+    this.commitId = requireName(commitId, "commit_id");
     Object.freeze(this);
   }
 }
@@ -1246,8 +1251,8 @@ export class MemoryCommitFailedRecord {
    */
   constructor(memory: string, commitId: string, failure: MemoryOperationFailure, attemptId: number) {
     this.attemptId = validatedAttemptId(attemptId);
-    this.memory = requireNonemptyString(memory, "memory");
-    this.commitId = requireNonemptyString(commitId, "commit_id");
+    this.memory = requireName(memory, "memory");
+    this.commitId = requireName(commitId, "commit_id");
     if (!isExactly(failure, MemoryOperationFailure)) throw new TypeError("failure must be a MemoryOperationFailure");
     this.failure = failure;
     Object.freeze(this);
@@ -1315,18 +1320,6 @@ export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze([...REC
 
 /** The closed set of wire kinds this schema reads. */
 const WIRE_KINDS: ReadonlySet<string> = new Set(RECORD_KINDS.values());
-
-/**
- * Return `value` when it is a non-empty string.
- *
- * @throws TypeError when it isn't a string.
- * @throws RangeError when it is empty.
- */
-function requireNonemptyString(value: unknown, name: string): string {
-  if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
-  if (!value) throw new RangeError(`${name} must be non-empty`);
-  return value;
-}
 
 /**
  * Return `value` when it is a SHA-256 hex digest: 64 lowercase hex digits.
@@ -1555,7 +1548,7 @@ export function recordTimeMs(at: unknown, label = "run-record envelope at"): num
  * Check an envelope's schema version.
  *
  * @throws RunLogSchemaError when it isn't `SCHEMA_VERSION`, naming Python yian for schema 9 and
- *   a retired TS schema (10) as retired.
+ *   a retired TS schema (one of `RETIRED_SCHEMAS`) as retired.
  */
 function requireSchema(schema: unknown): void {
   if (schema === 9) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
@@ -1571,7 +1564,7 @@ function requireSchema(schema: unknown): void {
  * Check a decoded envelope's `schema` member.
  *
  * @throws RunLogSchemaError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9
- *   and a retired TS schema (10) as retired.
+ *   and a retired TS schema (one of `RETIRED_SCHEMAS`) as retired.
  */
 function requireWireSchema(schema: unknown): void {
   if (schema === BigInt(SCHEMA_VERSION)) return;
@@ -1631,10 +1624,7 @@ export class RecordEnvelope {
    */
   constructor(schema: number, runId: string, seq: number, record: RunRecord, at: string | null = null) {
     requireSchema(schema);
-    if (typeof runId !== "string" || !runId) {
-      throw new RangeError("run-record envelope run_id must be a non-empty string");
-    }
-    if (!runId.isWellFormed()) throw new RangeError("Unicode surrogate is not valid canonical JSON");
+    validatedRunId(runId);
     if (!Number.isSafeInteger(seq) || seq < 0) {
       throw new RangeError("run-record envelope seq must be a non-negative integer");
     }
@@ -1752,10 +1742,10 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
   if (Object.hasOwn(envelope, "schema")) requireWireSchema(envelope["schema"]);
   const timed = requireAt || Object.hasOwn(envelope, "at");
   requireFields(envelope, timed ? ENVELOPE_FIELDS : PREPARED_FIELDS, "run-record envelope");
-  const runId = wireName(envelope["run_id"], "run-record envelope run_id");
+  const runId = requireName(envelope["run_id"], "run-record envelope run_id");
   const seq = wireInt(envelope["seq"], "run-record envelope seq");
   const at = timed ? requireRecordTime(envelope["at"]) : null;
-  const kind = wireText(envelope["kind"], "run-record envelope kind");
+  const kind = requireText(envelope["kind"], "run-record envelope kind");
   if (!WIRE_KINDS.has(kind)) {
     throw new RangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
   }
@@ -1779,11 +1769,11 @@ function wireNodeId(kind: string, payload: JsonObject): string | null {
     case "node_routed":
     case "node_waiting":
     case "node_woken":
-      return wireName(payload["node_id"], `${label} node_id`);
+      return requireName(payload["node_id"], `${label} node_id`);
     case "node_expanded":
-      return wireName(payload["spawner_id"], `${label} spawner_id`);
+      return requireName(payload["spawner_id"], `${label} spawner_id`);
     case "node_failed":
-      return wireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`);
+      return requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`);
     default:
       return null;
   }
@@ -2154,9 +2144,9 @@ export interface RunLogEntry<E extends RecordEnvelope | null = RecordEnvelope> {
   /** The record's wire kind, such as `node_started`. */
   readonly kind: string;
   /**
-   * The node the record is about: the `node_id` of a node's start, step, pool commit, success or
-   * route, the spawner of a growth, the node of a failure; `null` for a run, stop, memory or
-   * backward record.
+   * The node the record is about: the `node_id` of a node's start, step, pool commit, success,
+   * route, wait or wake, the spawner of a growth, the node of a failure; `null` for a run, stop,
+   * memory or backward record, and for a `run_failed` even though its failure names a node.
    */
   readonly nodeId: string | null;
   /** The validated envelope; `null` when read with `payloads: false`. */
@@ -2404,13 +2394,13 @@ function failurePayload(failure: Failure): JsonObject {
  */
 function failureFromPayload(value: unknown, label: string, optionalNodeId = false): Failure {
   const wire = wireObject(value, label, ["code", "message", "node_id", "trace", "cause_type", "traceback"]);
-  const code = wireText(wire["code"], `${label} code`);
-  const message = wireText(wire["message"], `${label} message`);
+  const code = requireText(wire["code"], `${label} code`);
+  const message = requireText(wire["message"], `${label} message`);
   const nodeLabel = `${label} node_id`;
-  const nodeId = optionalNodeId ? wireNullableText(wire["node_id"], nodeLabel) : wireName(wire["node_id"], nodeLabel);
+  const nodeId = optionalNodeId ? wireNullableText(wire["node_id"], nodeLabel) : requireName(wire["node_id"], nodeLabel);
   const trace = wireArray(wire["trace"], `${label} trace`).map((item) => {
     const origin = wireObject(item, `${label} trace item`, ["key"]);
-    return new OriginRef(wireName(origin["key"], `${label} trace item key`));
+    return new OriginRef(requireName(origin["key"], `${label} trace item key`));
   });
   return new Failure({
     code: code as Failure["code"],
@@ -2445,7 +2435,7 @@ function snapshotPayload(snapshot: MemorySnapshotEnvelope): JsonObject {
 function snapshotFromPayload(value: unknown, label: string): MemorySnapshotEnvelope {
   const wire = wireObject(value, label, ["memory", "snapshot"]);
   return new MemorySnapshotEnvelope(
-    wireName(wire["memory"], `${label} memory`),
+    requireName(wire["memory"], `${label} memory`),
     wireObject(wire["snapshot"], `${label} snapshot`),
   );
 }
@@ -2479,8 +2469,8 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
     );
   });
   return new MemorySpec(
-    wireName(wire["key"], `${label} key`),
-    wireName(wire["type"], `${label} type`),
+    requireName(wire["key"], `${label} key`),
+    requireName(wire["type"], `${label} type`),
     wireObject(wire["config"], `${label} config`),
     owners,
   );
@@ -2500,8 +2490,8 @@ function flowPayload(flow: FlowSource): JsonObject {
 function flowFromPayload(value: unknown, label: string): FlowSource {
   const wire = wireObject(value, label, ["root", "dir", "files"]);
   return {
-    root: wireText(wire["root"], `${label} root`),
-    dir: wireText(wire["dir"], `${label} dir`),
+    root: requireText(wire["root"], `${label} root`),
+    dir: requireText(wire["dir"], `${label} dir`),
     files: wireEntries(wire["files"], `${label} files`, ["text", "refs"]) as never,
   };
 }
@@ -2527,7 +2517,7 @@ function wireEntries(value: unknown, label: string, fields: readonly string[]): 
  */
 function parentFromPayload(value: unknown, label: string): RunParent {
   const wire = wireObject(value, label, ["run_id", "node"]);
-  return { runId: wireText(wire["run_id"], `${label} run_id`), node: wireNullableText(wire["node"], `${label} node`) };
+  return { runId: requireText(wire["run_id"], `${label} run_id`), node: wireNullableText(wire["node"], `${label} node`) };
 }
 
 /** Encode one target's memory key stack. */
@@ -2583,7 +2573,7 @@ function sourcePayload(source: SourceRef): JsonObject {
 function sourceFromPayload(value: unknown, label: string): SourceRef {
   const wire = wireObject(value, label, ["run_id", "execution_seq", "path"]);
   const source = new SourceRef(
-    wireText(wire["run_id"], `${label} run_id`),
+    requireText(wire["run_id"], `${label} run_id`),
     wireInt(wire["execution_seq"], `${label} execution_seq`),
     routePathFromPayload(wire["path"], `${label} path`),
   );
@@ -2626,7 +2616,7 @@ function executionScopeFromPayload(value: unknown, label: string): ExecutionScop
     const position = wireObject(item, itemLabel, ["kind", "static_path", "index"]);
     const index = position["index"];
     return new ExecutionPosition(
-      wireText(position["kind"], `${itemLabel} kind`) as PositionKind,
+      requireText(position["kind"], `${itemLabel} kind`) as PositionKind,
       wireTextArray(position["static_path"], `${itemLabel} static_path`),
       index === null ? null : wireInt(index, `${itemLabel} index`),
     );
@@ -2820,7 +2810,7 @@ function mutationPayload(mutation: MemoryMutation): JsonObject {
  */
 function mutationFromPayload(value: unknown, label: string): MemoryMutation {
   const wire = wireObject(value, label, ["mutation_id", "payload"]);
-  return new MemoryMutation(wireName(wire["mutation_id"], `${label} mutation_id`), wire["payload"]);
+  return new MemoryMutation(requireName(wire["mutation_id"], `${label} mutation_id`), wire["payload"]);
 }
 
 /** Encode one sanitized memory-operation failure. */
@@ -2837,9 +2827,9 @@ function memoryFailurePayload(failure: MemoryOperationFailure): JsonObject {
 function memoryFailureFromPayload(value: unknown, label: string): MemoryOperationFailure {
   const wire = wireObject(value, label, ["stage", "code", "message", "retryable"]);
   return new MemoryOperationFailure(
-    wireName(wire["stage"], `${label} stage`),
-    wireName(wire["code"], `${label} code`),
-    wireName(wire["message"], `${label} message`),
+    requireName(wire["stage"], `${label} stage`),
+    requireName(wire["code"], `${label} code`),
+    requireName(wire["message"], `${label} message`),
     wireBool(wire["retryable"], `${label} retryable`),
   );
 }
@@ -2944,7 +2934,7 @@ function memoryProposalPayload(proposal: MemoryProposal): JsonObject {
 function memoryProposalFromPayload(value: unknown, label: string): MemoryProposal {
   const wire = wireObject(value, label, ["memory", "mutations"]);
   return new MemoryProposal(
-    wireName(wire["memory"], `${label} memory`),
+    requireName(wire["memory"], `${label} memory`),
     wireItems(wire["mutations"], `${label} mutations`, mutationFromPayload),
   );
 }
@@ -2981,8 +2971,8 @@ function learningResultFromPayload(value: unknown, label: string): LearningResul
     const itemLabel = `${label} failures item`;
     const failure = wireObject(item, itemLabel, ["memory", "operation", "failure"]);
     return new LearningFailure(
-      wireName(failure["memory"], `${itemLabel} memory`),
-      wireText(failure["operation"], `${itemLabel} operation`) as LearningOperation,
+      requireName(failure["memory"], `${itemLabel} memory`),
+      requireText(failure["operation"], `${itemLabel} operation`) as LearningOperation,
       memoryFailureFromPayload(failure["failure"], `${itemLabel} failure`),
     );
   });
@@ -2991,15 +2981,15 @@ function learningResultFromPayload(value: unknown, label: string): LearningResul
     const policy = wireObject(item, itemLabel, ["memory", "status", "commit_id", "failure"]);
     const failure = policy["failure"];
     return new PolicyCommitOutcome(
-      wireName(policy["memory"], `${itemLabel} memory`),
-      wireText(policy["status"], `${itemLabel} status`) as PolicyCommitStatus,
+      requireName(policy["memory"], `${itemLabel} memory`),
+      requireText(policy["status"], `${itemLabel} status`) as PolicyCommitStatus,
       {
         commitId: wireNullableText(policy["commit_id"], `${itemLabel} commit_id`),
         failure: failure === null ? null : memoryFailureFromPayload(failure, `${itemLabel} failure`),
       },
     );
   });
-  return new LearningResult(wireText(wire["status"], `${label} status`) as LearningStatus, { failures, policies });
+  return new LearningResult(requireText(wire["status"], `${label} status`) as LearningStatus, { failures, policies });
 }
 
 /** Encode one attributed backward diagnostic and its `Failure` or memory-operation cause. */
@@ -3056,9 +3046,9 @@ function backwardFailureFromPayload(value: unknown, label: string): BackwardFail
   }
   const seq = wire["node_started_seq"];
   return new BackwardFailure(
-    wireText(wire["stage"], `${label} stage`),
-    wireText(wire["code"], `${label} code`),
-    wireText(wire["message"], `${label} message`),
+    requireText(wire["stage"], `${label} stage`),
+    requireText(wire["code"], `${label} code`),
+    requireText(wire["message"], `${label} message`),
     {
       scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
       runId: wireNullableText(wire["run_id"], `${label} run_id`),
@@ -3092,7 +3082,7 @@ function backwardOutcomePayload(outcome: BackwardOutcome): JsonObject {
 function backwardOutcomeFromPayload(value: unknown, label: string): BackwardOutcome {
   const wire = wireObject(value, label, ["status", "feedback", "failure", "learning"]);
   const { feedback, failure, learning } = wire;
-  return new BackwardOutcome(wireText(wire["status"], `${label} status`) as BackwardStatus, {
+  return new BackwardOutcome(requireText(wire["status"], `${label} status`) as BackwardStatus, {
     feedback: feedback === null ? null : backwardResultFromPayload(feedback, `${label} feedback`),
     failure: failure === null ? null : backwardFailureFromPayload(failure, `${label} failure`),
     learning: learning === null ? null : learningResultFromPayload(learning, `${label} learning`),
@@ -3115,7 +3105,7 @@ function outcomeFromPayload(payload: JsonObject, label: string): OutcomeCarriers
   return { forwardCapture: capture === null ? null : captureFromPayload(capture, `${label} forward_capture`) };
 }
 
-/** The fields of a `run_started` payload; schema 13 writes every one. */
+/** The fields of a `run_started` payload; every `run_started` payload holds each one. */
 const RUN_STARTED_FIELDS = [
   "flow_fingerprint",
   "start_wiring_override",
@@ -3283,7 +3273,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       // The record's constructor checks the fields cast here (the pool, the agents' configs, the
       // defaults and the call-time agents), so a bad value is named by its entry.
       return new RunStartedRecord({
-        flowFingerprint: wireText(payload["flow_fingerprint"], `${label} flow_fingerprint`),
+        flowFingerprint: requireText(payload["flow_fingerprint"], `${label} flow_fingerprint`),
         startWiringOverride: wireObject(payload["start_wiring_override"], `${label} start_wiring_override`),
         effectiveLlmByStaticPath: wireObject(
           payload["effective_llm_by_static_path"],
@@ -3304,7 +3294,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         skills: wireEntries(payload["skills"], `${label} skills`, ["description", "instructions"]) as never,
         tools: wireEntries(payload["tools"], `${label} tools`, ["description", "parameters"]) as never,
         toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as never,
-        yianVersion: wireText(payload["yian_version"], `${label} yian_version`),
+        yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });
     case "run_resumed":
@@ -3317,14 +3307,14 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "run_stopped":
       requireFields(payload, ["reason", "message", "node_ids"], label);
       return new RunStoppedRecord(
-        wireText(payload["reason"], `${label} reason`) as RunStopReason,
-        wireText(payload["message"], `${label} message`),
+        requireText(payload["reason"], `${label} reason`) as RunStopReason,
+        requireText(payload["message"], `${label} message`),
         wireTextArray(payload["node_ids"], `${label} node_ids`),
       );
     case "node_waiting":
       requireFields(payload, ["node_id", "call_ids", "waits", "steer_inbox"], label);
       return new NodeWaitingRecord(
-        wireName(payload["node_id"], `${label} node_id`),
+        requireName(payload["node_id"], `${label} node_id`),
         wireTextArray(payload["call_ids"], `${label} call_ids`),
         {
           waits: wireItems(payload["waits"], `${label} waits`, waitEntryFromPayload),
@@ -3334,7 +3324,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "node_woken":
       requireFields(payload, ["node_id", "timed_out"], label);
       return new NodeWokenRecord(
-        wireName(payload["node_id"], `${label} node_id`),
+        requireName(payload["node_id"], `${label} node_id`),
         wireTextArray(payload["timed_out"], `${label} timed_out`),
       );
     case "run_waiting":
@@ -3342,10 +3332,10 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       return new RunWaitingRecord(wireTextArray(payload["node_ids"], `${label} node_ids`));
     case "inbox_closed":
       requireFields(payload, ["inbox"], label);
-      return new InboxClosedRecord(wireName(payload["inbox"], `${label} inbox`));
+      return new InboxClosedRecord(requireName(payload["inbox"], `${label} inbox`));
     case "interrupted":
       requireFields(payload, ["inbox", "nodes"], label);
-      return new InterruptedRecord(wireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`));
+      return new InterruptedRecord(requireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`));
     case "run_cancelled":
       requireFields(payload, [], label);
       return new RunCancelledRecord();
@@ -3354,11 +3344,11 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       return new RunFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
     case "node_started":
       requireFields(payload, ["node_id"], label);
-      return new NodeStartedRecord(wireName(payload["node_id"], `${label} node_id`));
+      return new NodeStartedRecord(requireName(payload["node_id"], `${label} node_id`));
     case "node_step":
       requireFields(payload, ["node_id", "n", "step"], label);
       return new NodeStepRecord(
-        wireName(payload["node_id"], `${label} node_id`),
+        requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["n"], `${label} n`),
         wireObject(payload["step"], `${label} step`),
       );
@@ -3373,8 +3363,8 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
             : "value";
       requireFields(payload, ["node_id", "key", ...POOL_COMMIT_FORM_FIELDS[form]], label);
       return new PoolCommitRecord(
-        wireName(payload["node_id"], `${label} node_id`),
-        wireName(payload["key"], `${label} key`),
+        requireName(payload["node_id"], `${label} node_id`),
+        requireName(payload["key"], `${label} key`),
         form === "value" ? ({ kind: payload["kind"], value: payload["value"] } as unknown as TypedWire) : null,
         {
           from: form === "from" ? fromFromPayload(payload["from"], `${label} from`) : null,
@@ -3386,7 +3376,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "node_succeeded":
       requireFields(payload, ["node_id", "commit", "messages", "forward_capture"], label);
       return new NodeSucceededRecord(
-        wireName(payload["node_id"], `${label} node_id`),
+        requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["commit"], `${label} commit`),
         { ...outcomeFromPayload(payload, label), messages: wireNullableInt(payload["messages"], `${label} messages`) },
       );
@@ -3394,8 +3384,8 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       requireFields(payload, ["node_id", "handle", "terminal_failure", "forward_capture"], label);
       const failure = payload["terminal_failure"];
       return new NodeRoutedRecord(
-        wireName(payload["node_id"], `${label} node_id`),
-        wireName(payload["handle"], `${label} handle`),
+        requireName(payload["node_id"], `${label} node_id`),
+        requireName(payload["handle"], `${label} handle`),
         {
           terminalFailure: failure === null ? null : failureFromPayload(failure, `${label} terminal_failure`),
           ...outcomeFromPayload(payload, label),
@@ -3405,9 +3395,9 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "node_expanded":
       requireFields(payload, ["spawner_id", "prune_ids", "topology_digest", "forward_capture"], label);
       return new NodeExpandedRecord(
-        wireName(payload["spawner_id"], `${label} spawner_id`),
+        requireName(payload["spawner_id"], `${label} spawner_id`),
         wireTextArray(payload["prune_ids"], `${label} prune_ids`),
-        wireText(payload["topology_digest"], `${label} topology_digest`),
+        requireText(payload["topology_digest"], `${label} topology_digest`),
         outcomeFromPayload(payload, label),
       );
     case "node_failed":
@@ -3419,23 +3409,23 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
     case "memory_commit_requested":
       requireFields(payload, ["memory", "commit_id", "attempt_id", "mutations"], label);
       return new MemoryCommitRequestedRecord(
-        wireName(payload["memory"], `${label} memory`),
-        wireName(payload["commit_id"], `${label} commit_id`),
+        requireName(payload["memory"], `${label} memory`),
+        requireName(payload["commit_id"], `${label} commit_id`),
         wireItems(payload["mutations"], `${label} mutations`, mutationFromPayload),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
     case "memory_commit_succeeded":
       requireFields(payload, ["memory", "commit_id", "attempt_id"], label);
       return new MemoryCommitSucceededRecord(
-        wireName(payload["memory"], `${label} memory`),
-        wireName(payload["commit_id"], `${label} commit_id`),
+        requireName(payload["memory"], `${label} memory`),
+        requireName(payload["commit_id"], `${label} commit_id`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
     case "memory_commit_failed":
       requireFields(payload, ["memory", "commit_id", "attempt_id", "failure"], label);
       return new MemoryCommitFailedRecord(
-        wireName(payload["memory"], `${label} memory`),
-        wireName(payload["commit_id"], `${label} commit_id`),
+        requireName(payload["memory"], `${label} memory`),
+        requireName(payload["commit_id"], `${label} commit_id`),
         memoryFailureFromPayload(payload["failure"], `${label} failure`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
@@ -3541,16 +3531,6 @@ function wireBool(value: unknown, label: string): boolean {
 }
 
 /**
- * Return `value` when it is a string.
- *
- * @throws TypeError otherwise.
- */
-function wireText(value: unknown, label: string): string {
-  if (typeof value !== "string") throw new TypeError(`${label} must be a string`);
-  return value;
-}
-
-/**
  * Return `value` when it is a string or `null`.
  *
  * @throws TypeError otherwise.
@@ -3567,18 +3547,6 @@ function wireNullableText(value: unknown, label: string): string | null {
  */
 function wireNullableInt(value: unknown, label: string): number | null {
   return value === null ? null : wireInt(value, label);
-}
-
-/**
- * Return `value` when it is a non-empty string.
- *
- * @throws TypeError when it isn't a string.
- * @throws RangeError when it is empty.
- */
-function wireName(value: unknown, label: string): string {
-  if (typeof value !== "string") throw new TypeError(`${label} must be a non-empty string`);
-  if (!value) throw new RangeError(`${label} must be a non-empty string`);
-  return value;
 }
 
 /**
@@ -3621,7 +3589,7 @@ const POOL_COMMIT_FORM_FIELDS = {
  */
 function takeFromPayload(payload: JsonObject, label: string): TakeCommit {
   return {
-    inbox: wireText(payload["inbox"], `${label} inbox`),
+    inbox: requireText(payload["inbox"], `${label} inbox`),
     events: wireItems(payload["events"], `${label} events`, wireInt),
     closed: wireBool(payload["closed"], `${label} closed`),
   };
@@ -3636,8 +3604,8 @@ function takeFromPayload(payload: JsonObject, label: string): TakeCommit {
 function waitEntryFromPayload(value: unknown, label: string): WaitEntry {
   const wire = wireObject(value, label, ["call_id", "tool", "inbox", "mode", "deadline"]);
   return {
-    callId: wireText(wire["call_id"], `${label} call_id`),
-    tool: wireText(wire["tool"], `${label} tool`) as WaitEntry["tool"],
+    callId: requireText(wire["call_id"], `${label} call_id`),
+    tool: requireText(wire["tool"], `${label} tool`) as WaitEntry["tool"],
     inbox: wireNullableText(wire["inbox"], `${label} inbox`),
     mode: wireNullableText(wire["mode"], `${label} mode`) as WaitEntry["mode"],
     deadline: wireNullableText(wire["deadline"], `${label} deadline`),

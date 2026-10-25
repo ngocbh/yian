@@ -106,6 +106,18 @@ describe("take and sleep", () => {
     await expectContractInput(take.forward({}, caps), "take `from` must be an inbox, got null");
   });
 
+  test("a take timeout or sleep for whose deadline is past the year 9999 is contract.input", async () => {
+    const { caps } = capsWith();
+    await expectContractInput(
+      take.forward({ from: new InboxRef("m"), timeout: "3000000d" }, caps),
+      'take `timeout` "3000000d": the deadline falls after the year 9999',
+    );
+    await expectContractInput(
+      sleep.forward({ for: "3000000d" }, caps),
+      'sleep `for` "3000000d": the deadline falls after the year 9999',
+    );
+  });
+
   test("take and sleep write no step and call no tool", async () => {
     const { recorded, caps } = capsWith();
     await take.forward({ from: new InboxRef("m") }, caps);

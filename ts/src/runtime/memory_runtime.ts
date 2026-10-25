@@ -11,7 +11,7 @@
  * Never imports: compile, compose, the engine, run or the CLI.
  */
 
-import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
+import { addNote, compareCodeUnits, errorTypeName, OriginRef, reprText } from "../diagnostics.ts";
 import {
   isMemory,
   type JsonObject,
@@ -175,31 +175,6 @@ function invalidResultFailure(operation: string): MemoryOperationFailure {
   );
 }
 
-// Local copy of runtime/eval_node.ts's addNote: this module doesn't import the evaluator.
-/**
- * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
- * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
- * `text`, loses the note, as Python swallows a failing `add_note`.
- */
-function addNote(error: unknown, text: () => string): void {
-  try {
-    if (typeof error !== "object" || error === null) return;
-    const target = error as { notes?: unknown };
-    const note = text();
-    if (!Object.hasOwn(target, "notes")) target.notes = [];
-    if (Array.isArray(target.notes)) target.notes.push(note);
-  } catch {}
-}
-
-// Local copy of memory/episodic.ts's typeName.
-/** Python's `type(value).__name__`: the constructor's name, else a string `name`, else `Error`. */
-function typeName(value: unknown): string {
-  const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
-  if (typeof constructorName === "string" && constructorName) return constructorName;
-  const name = (value as { name?: unknown } | null | undefined)?.name;
-  return typeof name === "string" ? name : "Error";
-}
-
 /**
  * Close `sessions` in reverse key order, each once, while preserving an initiating failure.
  *
@@ -223,7 +198,7 @@ async function closeSessions(
       }
       addNote(target.error, () => {
         const message = error instanceof Error ? error.message : String(error);
-        return `memory ${reprText(key)} session close also raised ${typeName(error)}: ${message}`;
+        return `memory ${reprText(key)} session close also raised ${errorTypeName(error)}: ${message}`;
       });
     }
   }

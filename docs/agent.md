@@ -210,7 +210,7 @@ and every granted tool by `ToolCallStarted`/`ToolCallFinished`. These are live
 callbacks only; the node value, the run log, and retained memory are unchanged.
 Changed (TS yian): consecutive concurrency-safe tool calls run together, and a group's
 `ToolCallFinished` events arrive in finish order (see [Tool context](api.md#tool-context)).
-With session memory, each call of a group is requested in the transcript just before it starts,
+With session memory (Python yian; TS yian has none), each call of a group is requested in the transcript just before it starts,
 and the group's started calls are observed in call order once the whole group has settled: a call
 that returned is `completed` with its result, even when a sibling failed and the node fails; a
 failed call is `failed` (`interrupted` when a stop is pending). A call's status is decided when the
@@ -288,7 +288,7 @@ after the wake reads the fresh recall. See
 | AGENT `variables:` | Supplies typed local defaults to prompt rendering. Each invocation receives a fresh copy; see [agent-owned variables](syntax.md#agent-owned-variables). |
 | `system_prompt:` | Renders local `${name}` values into the system instruction, replacing the framework instruction. See [system prompt](syntax.md#system-prompt-system_prompt). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
-| `long_term_memory:` plus host `memory=build_memories(flow)` | Supplies one memory context: recalled notes become labelled system sections (`{"index", "memory", "text"}`); a session memory contributes structured prior messages. |
+| `long_term_memory:` plus host `memory=build_memories(flow)` | Supplies one memory context: recalled notes become labelled system sections (`{"index", "memory", "text"}`); a session memory contributes structured prior messages. Changed (TS yian): no session memory; a chat's history is a LOOP field the prompt splices in. |
 | `tools: [name, ...]` | Resolves the granted ids from the run's tools (registered tools, or the host's `tools=` mapping) and binds their schemas beside the messages; an AGENT with `tools:` or `skills:` runs the tool loop, and one without them makes one model call. A name may be a host-filled tool group, which expands to its tools. |
 | `skills: [name, ...]` or `skills: all` plus host `skills=` | Lists each granted skill's name and description in the system message and binds the built-in `load_skill` tool, which returns a skill's instructions or a bundled file on demand. See [agent skills](syntax.md#agent-skills-skills). |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` or `Optional(str)` remains free text. |
@@ -302,7 +302,8 @@ follows it, then recalled memory sections. Every model request of the node start
 with this same instruction: the one model call, each tool-loop round, and
 structured generation. The memory context is opened with the instruction without
 the listing, so skill grants do not change recall. A session transcript keeps past `load_skill` calls and
-results, like any tool call, even if a later run grants no skills.
+results, like any tool call, even if a later run grants no skills (Python yian; TS yian has no
+session transcript).
 
 ### Memory is an outer-to-local stack
 
@@ -317,6 +318,7 @@ Each memory key contributes at most one labelled section; empty recalls are
 left out. A session memory contributes a structured transcript instead,
 preserving message roles and tool-result links. Only a key with exactly one
 declaring AGENT may supply a transcript, and one context holds at most one.
+Changed (TS yian): there is no session memory, so every key contributes notes only.
 Each memory is written only by its own learner. MAP items and LOOP iterations
 reuse the same memories rather than creating new ones per occurrence. A
 `ProfileMemory` is one key like any other: every AGENT whose stack holds it
@@ -351,7 +353,8 @@ output: ${run.output}
 ```
 
 For `investigate`, the stack is `notes` (root flow), then `lessons`
-(`research`), then `chat` (the AGENT). No `${memory}` reference is required. A
+(`research`), then `chat` (the AGENT). Changed (TS yian): `chat: session` is a load error, since
+`session` is not a memory type; drop it and the stack is `notes`, then `lessons`. No `${memory}` reference is required. A
 Python host passes `memory=build_memories(flow)` to `run_flow`. `learnable=True`
 independently retains accepted execution; forward returns before memory learning
 or learned-mutation commits. The host calls `result.backward(feedback)`
@@ -370,6 +373,15 @@ during forward without learning. Repeated invocations take turns in admission
 order, including LOOP iterations and MAP items; MAP does not fork
 conversations. Each new call applies current instructions and tool grants, and
 restoring historical tool calls never executes them.
+
+Changed (TS yian): no session memory; carry history as a LOOP field. A `session` memory is a
+load error, and an AGENT's model reads only its own start's messages. A chat's history is a
+`list(Message)` (or a record list) its LOOP carries from turn to turn, sent as real turns with a
+list `prompt:` and kept under a budget by a compaction CALL, as
+[`examples/chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat) does with
+[`compact_history.yaml`](examples.md#compact_historyyaml-a-rolling-summary). Across runs, facts
+go in a `profile` memory and experiences in `episodic`; a host's steers reach a running AGENT
+through `steer_inbox:` (see [steering a running agent](syntax.md#steering-a-running-agent-steer_inbox)).
 
 ### AGENT backward uses the recorded invocation
 

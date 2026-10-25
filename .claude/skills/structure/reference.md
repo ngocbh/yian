@@ -59,7 +59,7 @@ it adapts provider messages to lower memory contracts without storing history.
 `memory/summary.py` owns pure whole-turn selection and cache-prefix proofs. The
 API adapter injects projection and current-model callbacks, never stores summaries.
 Session admission is per memory key: one conversation per session key, owned by
-its single declaring AGENT.
+its single declaring AGENT. (Python yian; TS yian has no session memory.)
 Likewise `nodes/agent/live.py`, not `runtime/`, owns AGENT streaming and in-loop observers;
 runtime only forwards opaque sinks by trait.
 Runtime only binds authored scope and accepted invocation identity and manages

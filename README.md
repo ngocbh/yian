@@ -284,7 +284,15 @@ soft 32,000-character context budget and preserves the latest four whole turns;
 older context can be summarized without deleting raw history. Configure these
 defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`, or
 process-wide with `YIAN_SESSION_HISTORY_BUDGET_CHARS` and `YIAN_SESSION_RECENT_TURNS`.
-Run logs do not reconstruct history. The episodic, reflective, and session
+Run logs do not reconstruct history.
+
+TS yian has no session memory: `long_term_memory: {chat: session}` is a load error
+("session memory was removed; carry the history as a loop field"). A chat carries its history as a LOOP field,
+compacted by a CALL, as [`examples/chat.yaml`](docs/examples.md#chatyaml-a-turn-by-turn-chat)
+does with [`compact_history.yaml`](docs/examples.md#compact_historyyaml-a-rolling-summary);
+across runs, facts go in a `profile` memory and experiences in `episodic`.
+
+The episodic, reflective, and session
 backends optionally retain their state across restarts in a SQLite file.
 `build_memories` places one memory with `storage={key: path}`, or every memory
 under `root=` (the flow `id:` must be usable as one directory name):

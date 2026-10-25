@@ -110,7 +110,7 @@ depth. The first boundary that sees one rejects it and names where it sits:
   provider metadata included, can't be stored: that model call is recorded `failed`
   and the reply is not kept, so a text or tool AGENT fails with `node.execute` and a
   structured AGENT retries, spending `retries:` even on a metadata NaN the model
-  can't fix.
+  can't fix. (Python yian; TS yian has no session memory.)
 
 Changed (TS yian): infinity and minus infinity are float values; an open range end admits its
 infinity (`float(0.0..)` takes infinity), and a range closed at that end refuses it. NaN is
@@ -266,7 +266,7 @@ The first boundary that sees a deeper value rejects it:
   deeper tool-call arguments fail the AGENT with `node.execute` before any call of that
   reply runs (`tool call 'lookup' arguments at x.a...`). With session memory that
   model call is recorded `failed` and the reply is not kept (a JSON-text structured
-  reply is kept, since it is text).
+  reply is kept, since it is text). (Python yian; TS yian has no session memory.)
 
 START's input record holds the input values, so it alone may sit one level over the
 limit. Replaying or resuming a recorded log does not re-check the limit, so logs

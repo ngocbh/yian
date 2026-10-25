@@ -49,6 +49,10 @@ The run-loop primitives live in `yian.run`.
 
 ## Session memory foundation
 
+Changed (TS yian): no session memory; carry history as a LOOP field. See
+[SessionMemory foundation](api.md#sessionmemory-foundation). The rest of this section is
+Python yian's.
+
 The optional turn contracts and backend support API-backed AGENT
 message conversation history through host injection into `run_flow`. Run logs
 do not rebuild history. Explicit API backward self-feedback can be committed as

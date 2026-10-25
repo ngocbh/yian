@@ -408,6 +408,11 @@ all forward fields unchanged.
 
 ## Session conversation foundation
 
+Changed (TS yian): no session memory; carry history as a LOOP field. A `session` memory is a
+load error ("session memory was removed; carry the history as a loop field"), an AGENT's model reads only its own
+start's messages, and steers are recorded `steer` steps of an AGENT with `steer_inbox:`. The
+rest of this section, and the session-memory cases elsewhere in this file, are Python yian's.
+
 `SessionMemory` in `yian.memory.session` implements
 conversation state and direct turn updates for AGENT execution.
 The host supplies the backend to `run_flow` under the session memory's key,

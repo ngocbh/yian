@@ -61,6 +61,11 @@ API context summaries are separate from learning: forward execution may summariz
 older turns with the current model while preserving raw history and recent whole
 turns. The history budget does not include learned-note recall.
 
+Changed (TS yian): there is no `SessionMemory`, so `memory={...}` opens no session history and
+backward makes no session notes. A chat's history is a LOOP field (see
+[SessionMemory foundation](api.md#sessionmemory-foundation)); across runs, facts go in a
+[profile memory](#profile-memory) and experiences in an [episodic one](#episodic-memory).
+
 ## Start an explicit backward attempt
 
 Call `backward()` only after the forward run is terminal. Feedback may be a string,

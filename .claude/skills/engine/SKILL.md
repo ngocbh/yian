@@ -636,6 +636,10 @@ Most are just the functional model (above) made enforceable:
   with a normal `Output`, so no run-log record kind changes. The host sees it
   only through live observers: a cut stream's `ModelCallFinished` has no error,
   and each skipped call emits `ToolCallFinished(error="interrupted")`.
+  Changed (TS yian): no `steering` option or `steerable:`; an AGENT authored
+  `steer_inbox: ${input.<name>}` reads an `Inbox(...)` input before each model call, each
+  read a recorded `steer {inbox, from}` step that resume replays, and `interrupt(run, inbox)`
+  ends it with a null output (`agent.interrupted` unless the output is `Optional`).
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.
@@ -847,7 +851,9 @@ Most are just the functional model (above) made enforceable:
   invalidates them. Run-handle close never releases active callback protection.
   Check process identity before locks, including cleanup, and preserve primary
   exceptions. No runtime storage branch or new log field is needed.
-- **SessionMemory owns conversation state and FIFO admission** — import
+- **SessionMemory owns conversation state and FIFO admission** (Python yian; TS
+  yian has no session memory: `session` is a load error, and a chat's history is a LOOP
+  field the run log records, compacted by a CALL as in `examples/compact_history.yaml`) — import
   `SessionMemory` from `yian.memory.session`, not the contracts-only
   facade. `MemorySession.recall()` returns text or `MemoryContent(text, transcript)`;
   SessionMemory supplies its notes and `TranscriptSource` through this same path. API-backed AGENT execution through

@@ -243,7 +243,7 @@ inbox input is never asked for: its events come through the host's `send`.
 
 An eligible unfinished log appends a resume segment and retries nodes with a durable
 start but no durable outcome. Requests and tool actions may repeat; the run log neither reconstructs
-session memory nor provides exactly-once execution. An interrupted TOOL node is re-run
+session memory (TS yian has none) nor provides exactly-once execution. An interrupted TOOL node is re-run
 with the same call id and the next attempt number, and a TOOL with `retries:` keeps the
 retries it had left (see [TOOL retries](api.md#tool-retries)). A log that recorded a
 TOOL retry can't be read by a yian version from before such records existed. See the
@@ -333,11 +333,16 @@ with a fresh file (a `.md` profile carries over).
 Session history advances automatically during execution. This does not enable
 learning: `yian run` neither sets `learnable=True` nor calls `backward()`.
 
+Changed (TS yian): there is no session memory, so `yian run` keeps no conversation; a `session`
+memory is a load error. A chat's history is a LOOP field, recorded in the run log as node
+outputs, so `--resume` restores it (see [Agent memory](syntax.md#agent-memory-long_term_memory)).
+`yian run` still never runs backward.
+
 Both flags are accepted with `--resume`, and must name the storage the run
 used. A terminal resume only prints the recorded result and opens no memory
 (the registry is still built, so flag and custom-type errors still apply).
 Run logs do not reconstruct session history; an interrupted request can be
-repeated against the latest stored history.
+repeated against the latest stored history. (Python yian; TS yian has no session history.)
 
 ## Skills
 

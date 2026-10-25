@@ -596,13 +596,20 @@ reserved: never list it in `tools:`. When a flow grants skills, `yian run` suppl
 (personal wins). A library host
 passes `skills=` (`{}` for none); without it, or with a listed skill missing, the run
 fails before it starts.
-To let a watching human steer or interrupt the agent, add `steerable: true` (requires
-`str` output or no `output:`; anything else is a load error). Without tools, an interrupt
-cuts the streaming text reply.
-The host passes `run_flow(..., steering=inbox)`. Queued steers join as user messages at
-the top of the next iteration; an interrupt ends the loop at the next safe point and the
-node **succeeds** with its text so far, so downstream nodes and loops continue. Leave it
-off for checks and graders that must not be talked out of their job.
+To let a watching human steer or interrupt the agent, give it an inbox input:
+`steer_inbox: ${input.notes}` (the lone `${input.<name>}` of an `Inbox(...)` input, e.g.
+`notes: !Inbox(str)`; the mapping form with `from:` and a `render:` template over
+`${event}` renders each event). Before each model call the node reads everything the host
+`send`s to that inbox and sends it with the request as one user message; each read is recorded
+as a `steer` step, so a resumed run replays it. The host's `interrupt(run, "notes")` stops the
+node at its next safe point (a streamed reply is cut) and its output is **null**: declare
+`output: Optional(...)` to succeed and route on it (`${worker.output :- "(interrupted)"}`);
+any other output fails `agent.interrupted`. See [Steering a running
+agent](../../../docs/syntax.md#steering-a-running-agent-steer_inbox). Leave it off for checks
+and graders that must not be talked out of their job.
+Python yian instead uses `steerable: true` (requires `str` output or no `output:`) with
+`run_flow(..., steering=inbox)`; there an interrupted node **succeeds** with its text so far.
+`steerable:` is a load error in TS yian.
 A node may pin its model via `llm_config:`; otherwise the process defaults captured
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
@@ -730,16 +737,16 @@ holds public behavior config only, never storage paths, credentials, or Python
 imports. Three forms:
 
 - `long_term_memory: episodic` — one memory named after its type;
-- `long_term_memory: {notes: episodic, chat: session}` — one memory per `name: type`;
+- `long_term_memory: {notes: episodic, lessons: reflective}` — one memory per `name: type`;
 - `long_term_memory: {notes: {type: episodic, config: {max_episodes: 50}}}` — long
   form; only `type` and `config` are allowed.
 
 `null` is the same as leaving the key out. `{}` and the retired
 `{name: X, config: ...}` form are errors; `name`, `type`, and `config` cannot be
 memory names. Built-in types and their config keys: `episodic` (`max_episodes`,
-`recall_limit`), `reflective` (`max_items`, `recall_limit`), `session`
-(`history_budget_chars`, `recent_turns`), `profile` (`max_chars`,
-`input_budget_chars`). Values are integers of at least 1 (`recent_turns` at least
+`recall_limit`), `reflective` (`max_items`, `recall_limit`), `profile` (`max_chars`,
+`input_budget_chars`), and, in Python yian only, `session` (`history_budget_chars`,
+`recent_turns`). Values are integers of at least 1 (`recent_turns` at least
 0); episodic and reflective limits may also be `null`. A bad key or value fails at
 load. Any other type is custom and needs a Python host. `storage`,
 `store`, `path`, and `api_key` are rejected in config.
@@ -756,17 +763,27 @@ Each declaration's form and config are checked for every def and import; the rul
 that compare declarations (one type and config per key, session placement, case
 collisions, alias names) apply only to declarations reachable from the root.
 
-A `session` memory is declared on exactly one AGENT, never on a flow, and an AGENT
-declares at most one. It supplies a structured transcript, while other memories
-supply notes; preserve transcript roles and tool results, and do not flatten
-history into a note. Every call site of that AGENT shares one conversation:
-repeated calls, LOOP iterations, and MAP items queue in admission order, not MAP
-input order, so use non-session memory for independent items. History updates
-automatically during forward, without learning. Explicit API backward
-self-feedback can become committed session notes for later calls, without another
-model call; recall is pinned when the run opens. `history_budget_chars` (default
-32_000) and `recent_turns` (default 4) control API summaries of older context; raw
-history and recent whole turns stay intact, even above the soft budget.
+**Conversation history.** TS yian has no session memory: a `session` memory, on a flow
+or an AGENT, is a load error ("session memory was removed; carry the history as a loop field"), and an
+AGENT's model reads only its own start's messages. Keep a chat's history in the flow instead:
+
+- **Within a run**, carry it as a LOOP field (`list(Message)`, or a record list like the
+  templates' `Msg`). Each turn outputs only its new messages and the body's output binding
+  appends them; a list `prompt:` sends the history as real turns; a CALL of
+  [`templates/compact_history.yaml`](templates/compact_history.yaml) folds older turns into a
+  rolling summary once the text passes a budget. See the chat pattern under `loop`
+  ([`templates/chat.yaml`](templates/chat.yaml)). The run log records the history as node
+  outputs, so a resumed run restores it.
+- **Across runs**, keep facts in a `profile` memory and experiences in `episodic`.
+- **Steers** a host sends while an AGENT runs reach it through `steer_inbox:` and are recorded
+  as `steer` steps (see "steer or interrupt" above).
+
+Python yian only: a `session` memory is declared on exactly one AGENT, never on a flow, and an
+AGENT declares at most one. It supplies a structured transcript shared by every call site of
+that AGENT (calls queue in admission order, so use non-session memory for independent MAP
+items); history updates automatically during forward, without learning, and
+`history_budget_chars` (default 32_000) and `recent_turns` (default 4) control API summaries
+of older context.
 
 `yian run` builds every built-in memory in RAM, or on disk with
 `--memory-root DIR` (key `lib.notes` lives at `DIR/<flow id>/lib/notes.sqlite`) and
@@ -1289,7 +1306,8 @@ any fold is done; in `yian chat` a fold delays the next prompt.
 A routing-only `case` sends a non-empty `events` to `answered`, a CALL of `respond`; a take
 that returns no events (the inbox closed with nothing left) skips it. `closed` comes from the
 take. Ending is the host's `close` (`/exit` in `yian chat`), so no text is special. See
-[`templates/chat.yaml`](templates/chat.yaml).
+[`templates/chat.yaml`](templates/chat.yaml). This carried history is how a chat remembers in
+TS yian, which has no session memory.
 
 TS yian only: send the history as real turns with a list `prompt:` (see
 [A list prompt](../../../docs/syntax.md#a-list-prompt)), so a user can't forge an `Assistant:`
@@ -1471,7 +1489,7 @@ There is no authored `entry:`/`controls:` field on an AGENT node.
   `Literal(...)`/other supported shape for structured generation.
 - [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
 - [ ] Every variable has a tagged default (`n: !int 4`) and a name distinct from local inputs.
-- [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
+- [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and declares no `session` memory in TS yian (carry chat history as a LOOP field, compacted by a CALL of `compact_history`); in Python yian each `session` is on exactly one AGENT.
 - [ ] Each `case` whose result is used has an `else:`, lists every tag of a non-nullable `Literal` `on:`, or is a non-nullable `bool` `on:` with `when: true` and `when: false`; its result is read with `${case.output}` and tagged where read; every branch names a node (a value entry for a fixed result) or calls a flow.
 - [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group or an MCP server's key); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.

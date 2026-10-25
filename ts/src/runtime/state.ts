@@ -1848,6 +1848,19 @@ const BACKWARD_RECORDS = [
   MemoryCommitFailedRecord,
 ] as const;
 
+/** The frontier records `prepareRecord` validates and plans itself. */
+const FRONTIER_RECORDS = [
+  NodeStartedRecord,
+  RunResumedRecord,
+  NodeStepRecord,
+  RunStoppedRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
+  RunWaitingRecord,
+  InboxClosedRecord,
+  InterruptedRecord,
+] as const;
+
 /**
  * Validate one supported authoritative record against the current frontier.
  *
@@ -1918,25 +1931,7 @@ export function prepareRecord(
     return prepareGrowthRecord(state, record, options.growBuilder);
   }
   if (isExactly(record, NodeFailedRecord)) return prepareFailureTransition(state, record);
-  if (isExactly(record, NodeStartedRecord)) {
-    validateNodeStarted(state, record);
-  } else if (isExactly(record, RunResumedRecord)) {
-    validateRunResumed(state, record);
-  } else if (isExactly(record, NodeStepRecord)) {
-    validateNodeStep(state, record);
-  } else if (isExactly(record, RunStoppedRecord)) {
-    validateRunStopped(state, record);
-  } else if (isExactly(record, NodeWaitingRecord)) {
-    validateNodeWaiting(state, record);
-  } else if (isExactly(record, NodeWokenRecord)) {
-    validateNodeWoken(state, record);
-  } else if (isExactly(record, RunWaitingRecord)) {
-    validateRunWaiting(state, record);
-  } else if (isExactly(record, InboxClosedRecord)) {
-    validateInboxClosed(state, record);
-  } else if (isExactly(record, InterruptedRecord)) {
-    validateInterrupted(state, record);
-  } else {
+  if (!FRONTIER_RECORDS.some((cls) => isExactly<RunRecord>(record, cls))) {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
   }

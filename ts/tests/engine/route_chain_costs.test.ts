@@ -150,9 +150,9 @@ test.each([
   [
     "bad spans and a bad child snapshot",
     badSpansAndBadChildSnapshot,
-    [RangeError, "partial snapshot cannot contain source routes"],
-    [RangeError, "partial snapshot cannot contain source routes"],
-    [RangeError, "partial snapshot cannot contain source routes"],
+    [RangeError, "partial snapshot may contain only literal, list and record routes"],
+    [RangeError, "partial snapshot may contain only literal, list and record routes"],
+    [RangeError, "partial snapshot may contain only literal, list and record routes"],
   ],
   [
     "a snapshot with an invalid source",
@@ -323,7 +323,7 @@ test.each([
     "a source inside a snapshot",
     new ValueRoute("literal", { resultType: "Thing", snapshot: SOURCE }),
     RangeError,
-    "partial snapshot cannot contain source routes",
+    "partial snapshot may contain only literal, list and record routes",
   ],
   [
     "a non-string interpolation result",
@@ -416,7 +416,7 @@ test("a shallow check skips children and the snapshot's own fields but not a sou
   });
   expect(raised(() => validateRoute(sourceSnapshot, { deep: false }))).toEqual([
     RangeError,
-    "partial snapshot cannot contain source routes",
+    "partial snapshot may contain only literal, list and record routes",
   ]);
 });
 

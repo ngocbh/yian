@@ -228,7 +228,7 @@ def _validate_route(route: ValueRoute, *, _deep: bool = True) -> None:
         while pending:
             current = pending.pop()
             if current.kind not in ("literal", "list", "record"):
-                raise ValueError("partial snapshot cannot contain source routes")
+                raise ValueError("partial snapshot may contain only literal, list and record routes")
             pending.extend(current.children)
     if route.kind == "interpolation":
         if type(result) is not str or not route.children or len(route.spans) != len(route.children):

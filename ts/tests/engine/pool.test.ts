@@ -15,6 +15,8 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { optionalInsideRoot } from "../../src/expr/expressions.ts";
+import { parseExpr } from "../../src/expr/grammar.ts";
 import { JSONDecodeError } from "../../src/typesys/json.ts";
 import { poolRootLength, VariablePool } from "../../src/typesys/pool.ts";
 import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/values.ts";
@@ -297,4 +299,9 @@ test("a pool root takes two names under a namespace, else one", () => {
   expect(poolRootLength(["item", "output"])).toBe(1);
   expect(poolRootLength(["x", "k"])).toBe(1);
   expect(poolRootLength(["a"])).toBe(1);
+});
+
+test("a comprehension variable is a one-name root, so ?. after it is never inside its root", () => {
+  expect(optionalInsideRoot(parseExpr("[m?.output for m in xs]"), poolRootLength)).toBeNull();
+  expect(optionalInsideRoot(parseExpr("[m.output for m in a?.output]"), poolRootLength)).toContain("${a.output}");
 });

@@ -100,11 +100,10 @@ import { pushVisible, textOf } from "./text.ts";
  * to the built model's route credentials once the model is built. Each reason the model gives
  * for leaving out replay state reaches `ctx.emitEvent` once, as `ReplayDegraded`. With
  * `ctx.steps`, each model call and failed attempt is recorded as a `model_call` step and each
- * tool result as a `tool_result` step, a failed attempt's error
- * scrubbed of every credential the call may have sent; the steps earlier starts recorded are
- * replayed first (`callModel`, `replayToolCalls`), and the host's interrupt is read only once they
- * end (a recorded honor step ends the loop there); recorded steers are fed back as replay reaches
- * them.
+ * tool result as a `tool_result` step, a failed attempt's error scrubbed of every credential the
+ * call may have sent; the steps earlier starts recorded are replayed first (`callModel`,
+ * `replayToolCalls`), and the host's interrupt is read only once they end (a recorded honor step
+ * ends the loop there); recorded steers are fed back as replay reaches them.
  *
  * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
  * then each iteration's steers, replies and tool results; a final structured call after tools

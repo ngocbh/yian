@@ -232,7 +232,8 @@ reply:
 - **Interrupts.** `interrupt(run, "owner_messages")` (Ctrl-C in `yian chat`) cuts the reply: its
   output is null, which `Optional(str)` allows, so the turn ends normally and the chat waits for
   the next message (see [API → Interrupting an agent](api.md#interrupting-an-agent-ts-yian)). A reply
-  declared `str` would fail with `agent.interrupted` instead.
+  declared `str` would fail with `agent.interrupted` instead. Esc in `yian chat` withdraws unread
+  messages, then interrupts.
 - **The history.** `respond` returns the turn as `[input.said + reply.new_messages]`:
   what was said, then the reply's
   [new messages](syntax.md#an-agents-new-messages) (each reply, its tool calls and their

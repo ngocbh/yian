@@ -29,7 +29,7 @@ import { expect, test } from "bun:test";
 
 import { NodeSucceeded } from "../../src/events.ts";
 import { type RunResult, runFlow } from "../../src/run.ts";
-import { assembled, type CaseRow, loadConformanceFlow, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../compose/declarations.ts";
 
 const FNS = "./fixtures/compose_codefns.ts";
 
@@ -158,3 +158,12 @@ test.each<CaseRow>([
   { id: "load-core/engine_depends_on_e2e__unknown_depends_on_target", call: assembled },
   { id: "load-core/engine_depends_on_e2e__ordering_cycle_is_loud", call: assembled, full: true },
 ])("assemble: $id", runCase);
+
+test("an unknown depends_on target is reported before an unknown reference", () => {
+  const text =
+    "id: f\nname: f\nnodes:\n" +
+    "  a:\n    kind: code\n    output: int\n    depends_on: [ghost]\n    code: return 1\n" +
+    "  b:\n    kind: code\n    output: int\n    input:\n      v: ${nope.output}\n    code: return 1\n" +
+    "output: ${a.output}\n";
+  expect(loadError(() => assembleText(text)).message).toContain("`depends_on` references unknown node 'ghost'");
+});

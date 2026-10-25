@@ -2172,6 +2172,21 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     typeFn: constructorType,
   });
 
+  // Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in BEFORE root
+  // synthesis so an ordering-only dependent is demoted from root, and into the cycle check below
+  // so an ordering cycle is loud.
+  const nodeIds = new Set(descriptors.keys());
+  const orderingEdges = inferOrderingEdges(descriptors, nodeIds, { diagnostics });
+
+  // Which nodes may be skipped while a reader runs: the field-read checks need it, so it is built
+  // before them, over the structural edges (data, case, host and ordering).
+  const structural = [...reconciled, ...orderingEdges];
+  const skips = new SkipModel(
+    new Set(descriptors.keys()),
+    structural,
+    exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
+  );
+
   // Reference + assert validation over the built flow. Errors locate at the node's line (a bad
   // node-input ref) or the `output:` section line (a dangling flow-output ref).
   validateReferences(buildResults, flowInputs, producers, outputsSection, flowWiring, {
@@ -2211,12 +2226,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     { inputContracts: flowInputContracts, registry, diagnostics },
   );
 
-  // Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in BEFORE root
-  // synthesis so an ordering-only dependent is demoted from root, and into the cycle check below
-  // so an ordering cycle is loud.
-  const nodeIds = new Set(descriptors.keys());
-  const orderingEdges = inferOrderingEdges(descriptors, nodeIds, { diagnostics });
-
   // DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the FULL
   // reconciled body-edge set (the __start__/__end__ sentinels retire; the strings persist as the
   // boundary node ids). synthesizeBoundaryGraph mints the END_ID producer edges (one per producer
@@ -2240,12 +2249,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   });
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
-  const structural = [...reconciled, ...orderingEdges];
-  const skips = new SkipModel(
-    new Set(descriptors.keys()),
-    structural,
-    exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
-  );
   outputs = nullSkippedOutputs(outputs, skips);
   const valueMode = outputsSection !== null && !isRecord(outputsSection);
   // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default. A

@@ -62,8 +62,9 @@
  * flows are loaded from YAML.
  * Changed: `test_run_flow_accepts_any_mapping` becomes "a plain object is refused; a Map runs":
  * `memory` must be a `Map`, as `skills` must.
- * TS-only, through `runFlow`: a run error gets one `memory-session close also raised` note when
- * memory sessions fail to close (Python's `_close_run_resources`, which no Python test pins).
+ * TS-only, through `runFlow`: a run error gets one `memory-session close also raised` note, and
+ * the notes that close error carries, when memory sessions fail to close (Python's
+ * `_close_run_resources`, which no Python test pins).
  *
  * Ported: `test_package_exports_the_host_builder`, on `index.ts`.
  *
@@ -1057,8 +1058,12 @@ test("a run error gets one note for the memory sessions that fail to close", asy
   fs.writeFileSync(log, "keep\n");
   const error = (await caught(() => run(flow, memory, { log }))) as Error & { code?: string; notes?: string[] };
   expect(error.code).toBe("EEXIST");
-  // Sessions close in reverse key order; the first close error stands for them all.
-  expect(error.notes).toEqual(["memory-session close also raised Error: b failed"]);
+  // Sessions close in reverse key order; the first close error stands for them all, with the
+  // notes it carries.
+  expect(error.notes).toEqual([
+    "memory-session close also raised Error: b failed",
+    "memory 'a' session close also raised Error: a failed",
+  ]);
 });
 
 test("registry for this flow runs", async () => {

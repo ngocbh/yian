@@ -32,8 +32,8 @@
  * `nodes/agent/messages.ts`).
  *
  * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
- *                memory_host (the registry type check only), nodes, platform, runtime, skills, tools,
- *                typesys.
+ *                memory_host (the registry type check and the cleanup note), nodes, platform, runtime,
+ *                skills, tools, typesys.
  * Never imports: the CLI.
  */
 
@@ -70,7 +70,7 @@ import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
-import { addNote, compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
+import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
 import { CallClosed, RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import type { FeedbackValue } from "./expr/lineage.ts";
@@ -102,7 +102,7 @@ import {
   type MemoryStack,
   sameMemorySpec,
 } from "./memory/contracts.ts";
-import { MemoryRegistry } from "./memory_host.ts";
+import { MemoryRegistry, noteCleanup } from "./memory_host.ts";
 import type { BackwardOptions, CompleteResult, Node } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
@@ -182,7 +182,6 @@ import {
   fromHost,
   isInboxType,
   isRecord,
-  jsTypeName,
   rejectDeepNesting,
   setField,
   type Type,
@@ -656,7 +655,7 @@ async function closeAndRelease(parts: {
   let pending = primary;
   const note = (operation: string, error: unknown): void => {
     if (pending === null) pending = { error };
-    else noteCleanupError(pending.error, operation, error);
+    else noteCleanup(pending.error, error, `${operation} also raised`);
   };
   try {
     await closeRunServers(parts.servers);
@@ -806,7 +805,7 @@ class BackwardHandle {
                 // With no error in flight, the refresh error is the call's error.
                 throw refreshError;
               }
-              noteCleanupError(primary.error, "backward prefix refresh", refreshError);
+              noteCleanup(primary.error, refreshError, "backward prefix refresh also raised");
             }
           }
         } finally {
@@ -3301,7 +3300,7 @@ function closeOwnedLog(log: RunLog, primary: { error: unknown } | null): void {
     log.close();
   } catch (cleanupError) {
     if (primary === null) throw cleanupError;
-    noteCleanupError(primary.error, "run-log close", cleanupError);
+    noteCleanup(primary.error, cleanupError, "run-log close also raised");
   }
 }
 
@@ -3395,15 +3394,4 @@ async function openRunServers(
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
   for (const server of servers) await server.close();
-}
-
-/** Note a cleanup error on the initiating error, when it can take a note, without changing control. */
-function noteCleanupError(primaryError: unknown, operation: string, cleanupError: unknown): void {
-  addNote(primaryError, () => {
-    const [name, message] =
-      cleanupError instanceof Error
-        ? [cleanupError.name, cleanupError.message]
-        : [jsTypeName(cleanupError), String(cleanupError)];
-    return `${operation} also raised ${name}: ${message}`;
-  });
 }

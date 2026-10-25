@@ -1205,7 +1205,7 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
     try {
       await registry.close();
     } catch (cleanup) {
-      noteCleanup(error, cleanup, "Memory cleanup failed");
+      noteCleanup(error, cleanup, "Memory cleanup failed:");
     }
     throw error;
   }

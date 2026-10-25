@@ -1703,6 +1703,33 @@ export function splitReference(node: Tree): { head: string; steps: RefStep[] } {
   return { head: String(node.children[0]), steps };
 }
 
+/**
+ * Return the load error for the first reference in `tree` with a `?.` inside its root, else `null`.
+ *
+ * A comprehension variable is a one-name root, so its reads never have one.
+ *
+ * @param rootLength How many names a reference's root takes in this scope, given all its names.
+ */
+export function optionalInsideRoot(tree: ExprNode, rootLength: (names: readonly string[]) => number): string | null {
+  if (!(tree instanceof Tree)) return null;
+  for (const node of iterSubtreesTopdown(tree)) {
+    if (node.data !== "refcall" || callSuffixOf(node) !== undefined) continue;
+    const { head, steps } = splitReference(node);
+    const used = rootLength([head, ...steps.map((step) => step.name)]);
+    if (!steps.slice(0, used - 1).some((step) => step.optional)) continue;
+    // The fix: no `?.` inside the root, and `?.` on the first step after it.
+    const fixed = steps.map((step, i) => ({
+      name: step.name,
+      optional: i < used - 1 ? false : i === used - 1 ? true : step.optional,
+    }));
+    return (
+      `reference \${${referenceText(node)}} puts ?. inside its root; ` +
+      `?. goes after the root, as in \${${head + stepsText(fixed)}}`
+    );
+  }
+  return null;
+}
+
 /** Return steps as written: `.a?.b`. */
 export function stepsText(steps: readonly RefStep[]): string {
   return steps.map((step) => (step.optional ? "?." : ".") + step.name).join("");

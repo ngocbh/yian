@@ -55,6 +55,7 @@ import {
   conditionRefs,
   ExpressionError,
   exprRefs,
+  optionalInsideRoot,
   parseCondition,
   type RefRenamed,
   rewriteConditionRefs,
@@ -70,7 +71,7 @@ import {
   sameOutputContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
-import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isInboxType, jsTypeName, Type, unionTagFields, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
@@ -299,6 +300,11 @@ export function lowerFlowAsserts(
         `assert ${reprText(assertion.display)} is not a valid boolean expression: ${error.message}`,
         { range: rng, cause: error },
       );
+    }
+    // An unqualified input `X` reads as `input.X`, a two-name root.
+    const insideRoot = optionalInsideRoot(parseCondition(rewriteConditionRefs(expr, qualifiedOrNull)), poolRootLength);
+    if (insideRoot !== null) {
+      throw diagnostics.error(`assert ${reprText(assertion.display)}: ${insideRoot}`, { range: rng });
     }
     const refs = exprRefs(authored).map(qualifyFlowInput);
 

@@ -44,6 +44,7 @@ export {
   isinstanceSubject,
   isinstanceTypeNames,
   namesEnd,
+  optionalInsideRoot,
   parseCondition,
   RequiredError,
   referencePath,

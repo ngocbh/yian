@@ -315,3 +315,10 @@ test("flow-assert lowering keeps ?. after the synth root", () => {
   ]);
   expect(expressions(lower(["input.age?.y > 1"]).startPre)).toEqual(["output.age?.y > 1"]);
 });
+
+test("?. inside a flow assert's root is a load error", () => {
+  expect(loadError(() => lower(["input?.age > 1"])).message).toContain(
+    "reference ${input?.age} puts ?. inside its root; ?. goes after the root, as in ${input.age}",
+  );
+  expect(loadError(() => lower(["emit?.output.n >= 1"])).message).toContain("as in ${emit.output?.n}");
+});

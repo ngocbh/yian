@@ -493,3 +493,18 @@ test("a ?. read keeps its edge, co-skip and field check", () => {
   expect(flow.compiled.edges.some((edge) => edge.from === "a" && edge.to === "use" && !edge.optional)).toBe(true);
   expect(failure(text.replace("a.output?.k", "a.output?.nope"))).toContain("nope");
 });
+
+test.each([
+  ["${a?.output.k}", "a?.output.k", "a.output?.k"],
+  ["${a?.output?.k}", "a?.output?.k", "a.output?.k"],
+  ["${input?.go}", "input?.go", "input.go"],
+])("?. inside a root is a load error (%s)", (source, read, fix) => {
+  expect(failure(FLOW_WITH_A.replace("${a.output.k}", source))).toContain(
+    `reference \${${read}} puts ?. inside its root; ?. goes after the root, as in \${${fix}}`,
+  );
+});
+
+test("?. after a root loads, and a comprehension variable is a one-name root", () => {
+  assembleText(FLOW_WITH_A.replace("${a.output.k}", "${a.output?.k}"));
+  assembleText(FLOW_WITH_A.replace("${a.output.k}", "${[x?.output for x in [a.output]]}"));
+});

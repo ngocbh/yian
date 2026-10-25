@@ -448,6 +448,18 @@ async function aPlainTerminalWritesNoEscapesAndSetsNoRawMode(): Promise<void> {
   assert.equal(output.text, "> You: \n? Pick (Use arrow keys)\n » a\n   b\n");
 }
 
+async function aPlainTerminalSetsRawModeForASecretPrompt(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const terminal = new Terminal({ input, output, plain: true });
+  const key = terminal.askText("Key:", { secret: true });
+  input.write("sk-typed" + ENTER);
+  assert.equal(await key, "sk-typed");
+  // The tty doesn't echo the key, and the plain output draws none of it.
+  assert.deepEqual(input.rawCalls, [true, false]);
+  assert.equal(output.text, "? Key: \n");
+}
+
 async function aNonTtyReadLineReadsOneLinePerCall(): Promise<void> {
   const { input, terminal } = setup({ tty: false });
   input.write("a\nb\n");
@@ -2181,6 +2193,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
   "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
+  "a plain terminal sets raw mode for a secret prompt": aPlainTerminalSetsRawModeForASecretPrompt,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,

@@ -472,8 +472,11 @@ export class Terminal {
     label: string,
     options: { initial?: string; secret?: boolean; signal?: AbortSignal } = {},
   ): Promise<string | null> {
-    const ended = await this.#runTurn(options.signal, (run) =>
-      run(textWidget({ label, initial: options.initial, mask: options.secret })),
+    const ended = await this.#runTurn(
+      options.signal,
+      (run) => run(textWidget({ label, initial: options.initial, mask: options.secret })),
+      // A plain terminal leaves the tty cooked, which would echo the secret as it is typed.
+      { raw: options.secret === true },
     );
     return "value" in ended ? ended.value : null;
   }
@@ -649,13 +652,14 @@ export class Terminal {
   /**
    * Run `fn` as one turn of the FIFO: wait for the turns before it, take the terminal (raw mode,
    * listeners, input flowing), let `fn` run widgets, then restore the terminal on every outcome.
+   * A plain terminal sets raw mode only with `raw`.
    * Returns `fn`'s value, or the stop that ended the turn (Ctrl-C, end of input, a closed
    * terminal); throws `signal`'s reason when it aborted first, else `fn`'s error.
    */
   async #runTurn<R>(
     signal: AbortSignal | undefined,
     fn: (run: RunWidget) => Promise<R>,
-    { keepOpen = false }: { keepOpen?: boolean } = {},
+    { keepOpen = false, raw = false }: { keepOpen?: boolean; raw?: boolean } = {},
   ): Promise<{ value: R } | { stop: StopReason }> {
     if (this.#closed) return { stop: "closed" };
     signal?.throwIfAborted();
@@ -674,7 +678,7 @@ export class Terminal {
     signal?.addEventListener("abort", onAbort, { once: true });
     const input = this.#input;
     const output = this.#output;
-    const setsRaw = !this.#plain && input.isTTY === true && typeof input.setRawMode === "function";
+    const setsRaw = (!this.#plain || raw) && input.isTTY === true && typeof input.setRawMode === "function";
     // Read at turn start: while queued, the turn ahead may still hold the terminal raw.
     let wasRaw = false;
     // A `process.exit()` elsewhere skips the `finally` below.

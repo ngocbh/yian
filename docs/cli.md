@@ -652,10 +652,12 @@ yian chat examples/chat.yaml
   supplied.
 - **Turns.** The chat starts the run, and each time it waits, shows a `> You:` prompt on stderr.
   A line is sent to the inbox and the run is advanced; lines typed while the run moves wait for
-  the next prompt (on a terminal the input is raw while the run moves, so Esc and Ctrl-C reach the
-  chat at once and other keys are kept for the next prompt). The output of every node named `reply`, at any depth, prints on stdout as it
-  finishes (an interrupted one prints `(interrupted)` on stderr instead); the flow's final output
-  isn't printed. A line the inbox refuses (too large for
+  the next prompt. On a terminal the input is raw while the run moves, as it is at the prompt:
+  Ctrl-C reaches the chat as a key; Esc reaches it once readline's escape timeout (about half a
+  second) passes, so an Esc pressed just as a turn ends applies at the next prompt; `Ctrl-Z` and
+  `Ctrl-\` raise no signal; other keys are kept for the next prompt. The output of every node
+  named `reply`, at any depth, prints on stdout as it finishes (an interrupted one prints
+  `(interrupted)` on stderr instead); the flow's final output isn't printed. A line the inbox refuses (too large for
   `YIAN_MAX_EVENT_BYTES`, say) prints `not sent: <reason>` and the chat goes on. Off a terminal
   (stdin or stderr isn't a TTY), each prompt is written once, with no escape codes, and the input
   stays in cooked mode.
@@ -678,7 +680,8 @@ yian chat examples/chat.yaml
   stops the run the same way.
 - **Esc.** On a terminal, Esc, while a turn runs or at the prompt, first takes back the lines the
   run hasn't read yet ([`withdraw`](api.md#withdrawing-unread-messages-ts-yian)) and puts their
-  text back in the prompt, `(withdrew N messages; back in the prompt)`, then stops the turn
+  text back in the prompt, `(withdrew N messages; back in the prompt)` (after `/exit`, when no
+  prompt comes back, it prints the text instead: `(withdrew N messages: <text>)`), then stops the turn
   (`interrupt`), printing `(stopping the reply)` when it records a Stop. A running reply is cut as
   with Ctrl-C; during an approval or a sleep, the reply after it stops before its first model
   call. At the take, with nothing queued, Esc does nothing. Esc never cancels the run and doesn't

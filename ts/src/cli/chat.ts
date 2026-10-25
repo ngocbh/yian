@@ -164,11 +164,12 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * the chat waits for the next line. A second Ctrl-C within 2 s, or one at the prompt, cancels the
  * run (`chat cancelled`, exit 130). On a terminal, Esc, during a turn or at the prompt, takes back
  * the lines the run hasn't read yet (`withdraw`) and puts their text back in the prompt
- * (`(withdrew N messages; back in the prompt)`), then stops the turn (`interrupt`; `(stopping the
- * reply)` when a Stop is recorded): a running reply is cut, and during a sleep or an approval the
- * reply after it stops before its first model call. At the take Esc does nothing; it never
- * cancels. While a turn runs on a terminal, the input is raw, so Ctrl-C arrives as a key with the
- * same rule, and other keys are kept for the next prompt. SIGTERM, SIGHUP or
+ * (`(withdrew N messages; back in the prompt)`; after `/exit` it prints them), then stops the
+ * turn (`interrupt`; `(stopping the reply)` when a Stop is recorded): a running reply is cut, and
+ * during a sleep or an approval the reply after it stops before its first model call. At the take
+ * Esc does nothing; it never cancels. While a turn runs on a terminal, the input is raw, so Ctrl-C
+ * arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal, and other keys are kept
+ * for the next prompt. SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>`, exit 130), as
  * does Ctrl-C at an `ask` prompt, which ignores Esc. While the prompt is up, the run is advanced
  * at its `wakeAt`; what was typed so far comes back at the next prompt. Off a terminal (stdin or

@@ -1487,14 +1487,9 @@ function callView(state: RunState, call: Call): CallView {
 export function callResultStep(state: RunState, callId: string): Readonly<JsonObject> | null {
   const call = state.waits.calls.get(callId);
   if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
-  const steps = state.nodeSteps.get(call.nodeId) ?? [];
-  // An agent's provider id may name a later reply's call too; its answer is the first after its registration.
-  const from = steps.findIndex((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
-  const at = steps.findIndex(
-    (step, index) =>
-      index > from && step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey,
-  );
-  return at < 0 ? null : steps[at]!;
+  // The waits fold recorded the answering step's seq; `nodeStepSeqs` is index-aligned with `nodeSteps`.
+  const at = state.nodeStepSeqs.get(call.nodeId)?.indexOf(call.resultSeq);
+  return at === undefined || at < 0 ? null : state.nodeSteps.get(call.nodeId)![at]!;
 }
 
 /**

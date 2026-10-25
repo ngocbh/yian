@@ -367,7 +367,9 @@ describe("models --provider", () => {
     ["timed out", "models.timeout", null],
     ["can't reach host", "models.failed", null],
   ])("a listing failing with %s is %s", async (reason, code, status) => {
-    const fake = fakeListModels(new ModelListError(reason));
+    // As `listModels` throws them: an HTTP refusal carries its status.
+    const failure = new ModelListError(reason, status === null ? {} : { status: Number(status) });
+    const fake = fakeListModels(failure);
     const result = await run(models, modelsArgs({ provider: "openrouter", json: true }), fakeIo({ stdin: "k" }), fake);
     expect(result.code).toBe(1);
     const message = `Couldn't list the openrouter models: ${reason}`;
@@ -380,7 +382,7 @@ describe("models --provider", () => {
   });
 
   test("the JSON status is an int", async () => {
-    const fake = fakeListModels(new ModelListError("HTTP 403"));
+    const fake = fakeListModels(new ModelListError("HTTP 403", { status: 403 }));
     const result = await run(models, modelsArgs({ provider: "openrouter", json: true }), fakeIo({ stdin: "k" }), fake);
     expect(result.out).toContain('"status":403}');
   });
@@ -485,8 +487,9 @@ describe("models --auth-file", () => {
     ["OpenAI returned an invalid model catalog", null],
   ])("a refused listing (%s) is models.failed", async (message, status) => {
     const path = await savedLogin();
+    // As `OpenAIAuth` throws them: an HTTP refusal carries its status.
     const fake = fakeServices(async () => {
-      throw new AuthError(message);
+      throw new AuthError(message, status === null ? {} : { status });
     });
     const { code, document } = await listJson(path, fake);
     expect(code).toBe(1);

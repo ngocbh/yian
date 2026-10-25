@@ -1093,11 +1093,10 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
     } catch (failure) {
       if (!(failure instanceof ModelListError)) throw failure;
       const reason = failure.message;
-      const status = /^HTTP (\d{3})$/.exec(reason);
       error = {
         code: reason === "timed out" ? "models.timeout" : "models.failed",
         message: `Couldn't list the ${provider} models: ${reason}`,
-        status: status ? BigInt(status[1]!) : null,
+        status: failure.status === null ? null : BigInt(failure.status),
       };
     }
   } else {
@@ -1113,11 +1112,10 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
           status: null,
         };
       } else if (failure instanceof AuthError) {
-        const status = /\(HTTP (\d{3})\)$/.exec(failure.message);
         error = {
           code: "models.failed",
           message: `Couldn't list the openai subscription models: ${failure.message}`,
-          status: status ? BigInt(status[1]!) : null,
+          status: failure.status === null ? null : BigInt(failure.status),
         };
       } else {
         throw failure;

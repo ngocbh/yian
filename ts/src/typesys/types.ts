@@ -1717,9 +1717,11 @@ export function readTypedefs(
       );
     } else if (Array.isArray(value)) {
       if (value.every((member): member is string => typeof member === "string")) {
+        // `Literal()` doesn't parse, so an empty sequence gets no example.
+        const example = value.length > 0 ? ` (e.g. ${name}: ${literalLabel(value)})` : "";
         throw new TypeCheckError(
           `typedef ${reprText(name)}: a tag-only union must be a Literal(...) enum, not a ` +
-            `sequence (e.g. ${name}: ${literalLabel(value)})`,
+            `sequence${example}`,
           { path: [name] },
         );
       }

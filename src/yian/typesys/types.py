@@ -1374,9 +1374,11 @@ def read_typedefs(raw: dict) -> TypeRegistry:
                 registry[name] = AliasDef(target=parsed)
         elif isinstance(value, (list, tuple)):
             if all(isinstance(m, str) for m in value):
+                # `Literal()` doesn't parse, so an empty sequence gets no example.
+                example = f" (e.g. {name}: {literal_label(value)})" if value else ""
                 raise TypeCheckError(
                     f"typedef {name!r}: a tag-only union must be a Literal(...) enum, not a "
-                    f"sequence (e.g. {name}: {literal_label(value)})",
+                    f"sequence{example}",
                     path=(name,),
                 )
             raise TypeCheckError(

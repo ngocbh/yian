@@ -72,6 +72,15 @@ def test_all_bare_tags_sequence_rejected_e05():
     assert "Literal" in str(ei.value)
 
 
+def test_empty_sequence_hint_has_no_example():
+    with pytest.raises(TypeCheckError) as ei:
+        read_typedefs({"X": []})
+    assert str(ei.value) == (
+        "typedef 'X': a tag-only union must be a Literal(...) enum, not a sequence"
+    )
+    assert ei.value.path == ("X",)
+
+
 def test_payload_union_sequence_rejected():
     with pytest.raises(TypeCheckError) as ei:
         read_typedefs({"Choice": ["defer", {"approve": {"count": "int"}}]})

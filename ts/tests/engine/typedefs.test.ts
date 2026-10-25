@@ -119,11 +119,10 @@ describe("rejected definitions", () => {
     );
   });
 
-  test("an empty sequence hints an empty Literal", () => {
+  test("an empty sequence gets the hint without an example", () => {
     expectRejected(
       { X: [] },
-      "typedef 'X': a tag-only union must be a Literal(...) enum, not a sequence " +
-        "(e.g. X: Literal())",
+      "typedef 'X': a tag-only union must be a Literal(...) enum, not a sequence",
       ["X"],
     );
   });

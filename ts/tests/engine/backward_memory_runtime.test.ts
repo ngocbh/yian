@@ -55,7 +55,7 @@
  * - `test_backward_and_memory_replay_calls_no_callbacks_or_materialization`: the module-private
  *   `materializeContext` can't be patched, so only the node hooks and
  *   `spyOn(MemoryRuntime.prototype, "proposeLearning"/"commitLearning")` fail if called, and the
- *   replayed backward state is compared with `sameRuntimeBackwardState`.
+ *   replayed backward state is compared with `toEqual`.
  * - `test_prepare_failure_is_not_sanitized_as_a_learner_failure`: `prepareRecord` is a module
  *   function that can't be patched, so the log's `append` throws the `MemoryOperationError` for the
  *   Ready record instead.
@@ -131,7 +131,7 @@ import { type BackwardContext, type BackwardOptions, BackwardResult, CapabilityF
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
 import { BackwardFailure, BackwardOutcome, MemoryProposal } from "../../src/runtime/contracts.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
-import { memoryCommitId, prefixLearning, sameRuntimeBackwardState } from "../../src/runtime/learning.ts";
+import { memoryCommitId, prefixLearning } from "../../src/runtime/learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -1008,7 +1008,7 @@ test("backward and memory replay call no callbacks or materialization", async ()
     propose.mockRestore();
     commit.mockRestore();
   }
-  expect(sameRuntimeBackwardState(replayed.backwardState, built.state.backwardState)).toBe(true);
+  expect(replayed.backwardState).toEqual(built.state.backwardState);
   expect(replayed.trace!.occurrences).toEqual(built.state.trace!.occurrences);
   expect(replayed.nextSequence).toBe(replayed.trace!.nextSequence);
   expect(replayed.nextSequence).toBe(built.state.nextSequence);

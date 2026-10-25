@@ -1467,8 +1467,8 @@ START is ready after the START inputs' commit; a success walks its
   read-only `HistoricalLogCursor` that matches each record byte for byte instead of writing it, so
   the replayed state, crashed counts included, is exactly the live one; a corrupt record throws
   the underlying `RangeError` or `TypeError`, never `NodeDataError`. After the terminal, the
-  backward and memory-commit records reduce through `reduceBackwardRecord`
-  (`sameRuntimeBackwardState` compares the prepared and recomputed attempt state at commit).
+  backward and memory-commit records reduce through `reduceBackwardRecord` at prepare; commit
+  installs that attempt state once the plan's origin and backward state check out.
 - `src/runtime/eval_node.ts` holds the evaluator. `evalNode(node, flow, pool, options)` binds the
   node's inputs from the pool through the flow's wiring (or a per-run override), builds the
   capabilities the node's traits ask for, runs it, and resolves to an `EvaluatedOutcome`: one
@@ -1561,10 +1561,10 @@ START is ready after the START inputs' commit; a success walks its
 - Value equality: each carrier class has one `same*` helper in the module that owns it
   (`sameFailure` in `diagnostics.ts`, `sameFeedback` and `sameSource` in `expr/lineage.ts`,
   `sameBackwardResult` in `nodes/base.ts`, the backward carriers' in `runtime/contracts.ts`, the
-  memory carriers' in `memory/contracts.ts`, `sameSourceEntry` in `runtime/trace.ts`,
-  `sameRuntimeBackwardState` in `runtime/learning.ts`). Every `same*` takes non-null values; compare
-  a nullable pair with `sameOptional(a, b, same)` from `nodes/contracts.ts`. `memory/contracts.ts`
-  writes its null checks inline, since it imports only `diagnostics` and `defaults`. A
+  memory carriers' in `memory/contracts.ts`, `sameSourceEntry` in `runtime/trace.ts`). Every
+  `same*` takes non-null values; compare a nullable pair with `sameOptional(a, b, same)` from
+  `nodes/contracts.ts`. `memory/contracts.ts` writes its null checks inline, since it imports only
+  `diagnostics` and `defaults`. A
   `BackwardFailure`'s cause compares by value, never `===`.
 
 ### Compile

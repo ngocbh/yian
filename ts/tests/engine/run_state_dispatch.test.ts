@@ -901,13 +901,9 @@ test("a frontier plan holding an outcome record is refused", () => {
   const { state, log } = initialized();
   const prepared = prepareNodeStarted(state, START_ID);
   const failure = new Failure({ code: "node.execute", message: "done", nodeId: START_ID });
-  const forged = new PreparedTransition(new NodeFailedRecord(failure), RUN_ID, 1, prepared._plan, []);
+  const forged = new PreparedTransition(new NodeFailedRecord(failure), RUN_ID, prepared.expectedSequence, prepared._plan, []);
 
-  expectError(
-    () => commitPrepared(log, state, forged),
-    TypeError,
-    /^frontier plan requires a dispatch, resume, step, stop, wait, wake, run-wait, close or interrupt record$/,
-  );
+  expectError(() => commitPrepared(log, state, forged), RangeError, /^prepared record changed after validation$/);
 
   expect(log.nextSequence).toBe(3);
 });

@@ -33,6 +33,7 @@ import {
   RunFailed,
   RunResumed,
   RunStarted,
+  type CloseReason,
   type RunEvent,
   RunSucceeded,
   RunWaiting,
@@ -85,12 +86,7 @@ import {
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
 import { nodeBackwardCapture, rebind, rebuildDerived, rebuildNodeData } from "./eval_node.ts";
-import {
-  type BackwardRecord,
-  reduceBackwardRecord,
-  RuntimeBackwardState,
-  sameRuntimeBackwardState,
-} from "./learning.ts";
+import { reduceBackwardRecord, RuntimeBackwardState } from "./learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -148,6 +144,7 @@ import {
   SYSTEM_PREFIX,
   resolvePoolPath,
   TraceDelta,
+  type TraceDeltaFields,
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
@@ -210,35 +207,20 @@ function fileReadingType(node: Node): Type | null {
   return outputContractFileType(node.outputContract);
 }
 
-/** @internal Immutable identity roots established by canonical RunStarted decoding. Frozen. */
-export class MemoryAuthority {
+/** The memory configuration `RunStarted` recorded. */
+interface RunMemory {
   /** The recorded snapshots, or `null` when memory is disabled. */
   readonly snapshots: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether the run retains what learning reads (forward capture and steps). */
-  readonly learnable: boolean;
   /** The recorded memory key table, or `null` when memory is disabled. */
   readonly memories: readonly MemorySpec[] | null;
   /** The recorded key stacks, or `null` when memory is disabled. */
   readonly memoryStacks: readonly MemoryStack[] | null;
-  /** The backward state's own memory order array. */
-  readonly memoryOrder: readonly string[];
-
-  /** Hold the roots by reference. */
-  constructor(
-    snapshots: readonly MemorySnapshotEnvelope[] | null,
-    learnable: boolean,
-    memories: readonly MemorySpec[] | null,
-    memoryStacks: readonly MemoryStack[] | null,
-    memoryOrder: readonly string[],
-  ) {
-    this.snapshots = snapshots;
-    this.learnable = learnable;
-    this.memories = memories;
-    this.memoryStacks = memoryStacks;
-    this.memoryOrder = memoryOrder;
-    Object.freeze(this);
-  }
+  /** Whether the run retains what learning reads (forward capture and steps). */
+  readonly learnable: boolean;
 }
+
+/** A pristine state's memory configuration: memory and learning off. */
+const NO_MEMORY: RunMemory = Object.freeze({ snapshots: null, memories: null, memoryStacks: null, learnable: false });
 
 /**
  * @internal An outcome-owned value rejected before durability: it fails the node, not the run.
@@ -440,20 +422,15 @@ export class RunState {
    * bind from (`RunStartedRecord.callTimeLlm`); `null` when there are none.
    */
   callTimeLlm: JsonObject | null = null;
-  /** The canonical recorded snapshots, one per memory key. */
-  memorySnapshots: readonly MemorySnapshotEnvelope[] | null = null;
-  /** The recorded memory key table. */
-  memories: readonly MemorySpec[] | null = null;
-  /** The recorded key stacks. */
-  memoryStacks: readonly MemoryStack[] | null = null;
+  // The memory roots, in one frozen object `RunStarted` installs once (`installMemory`) and the
+  // getters read, so no root can be reassigned apart from the others.
+  #memory: RunMemory = NO_MEMORY;
   /** The skills `RunStarted` recorded, by name, which learning renders prompts with. */
   recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
   /** The tool specs `RunStarted` recorded, by name, which learning rebuilds requests with. */
   recordedTools: Readonly<Record<string, RecordedTool>> = {};
   /** The tool groups `RunStarted` recorded, by name, which learning expands grants with. */
   recordedToolGroups: Readonly<Record<string, readonly string[]>> = {};
-  /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
-  learnable = false;
   /**
    * The `yian.defaults` values `RunStarted` recorded, the built-in values overlaid with the
    * recorded ones; the reducer reads its limits here, never from the process.
@@ -466,8 +443,6 @@ export class RunState {
   trace: RetainedTrace | null = null;
   /** Immutable accepted backward attempts and irreversible commit facts. */
   backwardState = new RuntimeBackwardState();
-  /** @internal The memory identity roots `RunStarted` recorded. */
-  memoryAuthority: MemoryAuthority;
   /**
    * The node ids adopted before any runtime expansion. Safe pruning may retire only later
    * dynamic-overlay nodes.
@@ -495,8 +470,37 @@ export class RunState {
     this.nodeState = new Map([...flow.nodes.keys()].map((id) => [id, NodeState.UNKNOWN]));
     this.edgeState = new Map(flow.edges.map((edge) => [edge.id, NodeState.UNKNOWN]));
     for (const edge of flow.edges) addUnknownIncoming(this, edge.to);
-    this.memoryAuthority = new MemoryAuthority(null, false, null, null, this.backwardState.memoryOrder);
     this.initialStaticIds = new Set(flow.nodes.keys());
+  }
+
+  /** The canonical recorded snapshots, one per memory key. */
+  get memorySnapshots(): readonly MemorySnapshotEnvelope[] | null {
+    return this.#memory.snapshots;
+  }
+
+  /** The recorded memory key table. */
+  get memories(): readonly MemorySpec[] | null {
+    return this.#memory.memories;
+  }
+
+  /** The recorded key stacks. */
+  get memoryStacks(): readonly MemoryStack[] | null {
+    return this.#memory.memoryStacks;
+  }
+
+  /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
+  get learnable(): boolean {
+    return this.#memory.learnable;
+  }
+
+  /**
+   * @internal Install the memory configuration `RunStarted` recorded, frozen.
+   *
+   * @throws RangeError when one is already installed.
+   */
+  installMemory(memory: RunMemory): void {
+    if (this.#memory !== NO_MEMORY) throw new RangeError("the run's memory configuration is already installed");
+    this.#memory = Object.freeze({ ...memory });
   }
 }
 
@@ -688,7 +692,7 @@ export function rebuildGrowth(
 export function acceptedCommits(prepared: PreparedTransition): readonly { seq: number; value: TypedValue }[] {
   const plan = prepared._plan;
   // A run-start commit and a send always hold their values, and apply at once.
-  if (plan.kind === "commit" && (plan.initial || plan.send)) {
+  if (plan.kind === "commit" && (plan.commitKind === "initial" || plan.commitKind === "send")) {
     return [{ seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) }];
   }
   if (plan.kind !== "success") return [];
@@ -863,9 +867,14 @@ interface InterruptedDelta {
 }
 
 /**
- * One pool commit. A run-start commit (`initial`) applies at once; a node's waits for its success.
- * `valueJson` is the value's canonical typed wire text.
+ * What a pool commit is: a run-start commit (`initial`), which applies at once; a node's own output
+ * commit (`node`), which waits for its success; a spawner's commit for a child START (`expansion`),
+ * which waits under the START's key; a send to a START inbox (`send`), which applies at once to the
+ * inbox store; or a node's messages commit (`messages`), which waits for its success.
  */
+type CommitKind = "initial" | "node" | "expansion" | "send" | "messages";
+
+/** One pool commit; `valueJson` is the value's canonical typed wire text. */
 interface CommitPlan extends PlanAnchors {
   readonly kind: "commit";
   readonly nodeId: string;
@@ -874,11 +883,7 @@ interface CommitPlan extends PlanAnchors {
   readonly valueJson: string | null;
   readonly from: ReadonlyMap<string, number> | null;
   readonly take: TakeCommit | null;
-  readonly initial: boolean;
-  /** Whether this is an expansion's commit for a child START, which waits under its key. */
-  readonly expansion: boolean;
-  /** Whether this is a send to a START inbox, which applies at once to the inbox store. */
-  readonly send: boolean;
+  readonly commitKind: CommitKind;
   /** A messages commit's rebuilt value, as canonical typed wire text; `null` for any other commit. */
   readonly messagesJson: string | null;
 }
@@ -1167,28 +1172,9 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     yianVersion: data.yianVersion,
     parent: data.parent ?? null,
   });
-  // The public envelope codec is the sole payload authority. Decode its canonical text at once,
-  // so the prepared record is exactly what either log will retain.
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, data.runId, state.nextSequence, candidate));
-  const envelope = decodeRecord(envelopeJson);
-  const record = envelope.record;
-  // An exhaustive codec invariant.
-  if (!isExactly(record, RunStartedRecord)) {
-    throw new TypeError("run-start envelope decoded to a different record kind");
-  }
-
-  const plan: RunStartedPlan = Object.freeze({
-    kind: "runStarted",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId: state.flow.endId,
-    endNode: state.flow.nodes.get(state.flow.endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
-  });
-  return new PreparedTransition(record, envelope.runId, envelope.seq, plan, [new RunStarted()]);
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, candidate, [RunStartedRecord], "run-start", data.runId);
+  const plan: RunStartedPlan = Object.freeze({ kind: "runStarted", ...planAnchors(state, envelopeJson, envelope) });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [new RunStarted()]);
 }
 
 /**
@@ -1487,14 +1473,9 @@ function callView(state: RunState, call: Call): CallView {
 export function callResultStep(state: RunState, callId: string): Readonly<JsonObject> | null {
   const call = state.waits.calls.get(callId);
   if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
-  const steps = state.nodeSteps.get(call.nodeId) ?? [];
-  // An agent's provider id may name a later reply's call too; its answer is the first after its registration.
-  const from = steps.findIndex((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
-  const at = steps.findIndex(
-    (step, index) =>
-      index > from && step["kind"] === "tool_result" && (step["tool_call_id"] ?? step["call_id"]) === call.resultKey,
-  );
-  return at < 0 ? null : steps[at]!;
+  // The waits fold recorded the answering step's seq; `nodeStepSeqs` is index-aligned with `nodeSteps`.
+  const at = state.nodeStepSeqs.get(call.nodeId)?.indexOf(call.resultSeq);
+  return at === undefined || at < 0 ? null : state.nodeSteps.get(call.nodeId)![at]!;
 }
 
 /**
@@ -1533,8 +1514,9 @@ export function commitInitialPool(log: RunLog, state: RunState, pool: VariablePo
  *   observers.
  * @throws TypeError when `state` or `nodeId` has the wrong type, or the target's contract is
  *   malformed.
- * @throws RangeError when the state, the executing node or its baked target is invalid, or the
- *   node already has a pending commit.
+ * @throws RangeError when the state, the executing node or its baked target is invalid, the node
+ *   already has a pending commit, or `options.from` is set when the node isn't derived or missing
+ *   when it is.
  * @throws NodeDataError when `commitAs` or `output` is rejected: the output nests too deep,
  *   violates its target's type, or isn't a yian value. `original` holds the value layer's error.
  */
@@ -1554,6 +1536,8 @@ export function preparePoolCommit(
   requireInitializedNonterminal(state);
   requireCommittingNode(state, nodeId);
   requireValueCommitNode(state, nodeId);
+  const from = options.from ?? null;
+  requireCommitFrom(state, nodeId, from);
 
   const node = state.flow.nodes.get(nodeId)!;
   const nodeTarget: unknown = node.commitAs;
@@ -1579,10 +1563,9 @@ export function preparePoolCommit(
     const path = error instanceof TypeCheckError ? error.path : [];
     throw new NodeDataError(error, outputContractOrigin(outputContract, path));
   }
-  const from = options.from ?? null;
   // A derived commit records only its sources; its success rebuilds the value, live as on replay.
   const record = from === null ? new PoolCommitRecord(nodeId, target, valueWire) : new PoolCommitRecord(nodeId, target, null, { from });
-  return prepareCommitTransition(state, record, false);
+  return prepareCommitTransition(state, record, "node");
 }
 
 /**
@@ -1631,7 +1614,7 @@ export function prepareNodeSucceeded(
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeSucceeded expects a RunState");
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
   requireInitializedNonterminal(state);
-  requireSucceedingNode(state, nodeId);
+  requireOutcomeNode(state, nodeId, "NodeSucceeded");
   const pending = state.pendingCommits.get(nodeId);
   if (pending === undefined) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} has no pending pool_commit`);
   if (pending.valueJson === null && pending.take === null && !Object.hasOwn(options, "output")) {
@@ -1698,7 +1681,6 @@ export function prepareNodeRouted(
   if (typeof handle !== "string") throw new NodeDataError(new TypeError("handle must be a string"));
   if (!handle) throw new NodeDataError(new RangeError("handle must be non-empty"));
   requireInitializedNonterminal(state);
-  requireRoutingNode(state, nodeId);
   return prepareRouteTransition(
     state,
     new NodeRoutedRecord(nodeId, handle, {
@@ -1852,6 +1834,19 @@ const BACKWARD_RECORDS = [
   MemoryCommitFailedRecord,
 ] as const;
 
+/** The frontier records `prepareRecord` validates and plans itself. */
+const FRONTIER_RECORDS = [
+  NodeStartedRecord,
+  RunResumedRecord,
+  NodeStepRecord,
+  RunStoppedRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
+  RunWaitingRecord,
+  InboxClosedRecord,
+  InterruptedRecord,
+] as const;
+
 /**
  * Validate one supported authoritative record against the current frontier.
  *
@@ -1882,25 +1877,25 @@ export function prepareRecord(
   if (isExactly(record, PoolCommitRecord)) {
     if (!state.inputsCommitted) {
       validateInitialCommit(state, record);
-      return prepareCommitTransition(state, record, true);
+      return prepareCommitTransition(state, record, "initial");
     }
     if (record.steps !== null) {
-      return prepareCommitTransition(state, record, false, false, false, validateMessagesCommit(state, record));
+      return prepareCommitTransition(state, record, "messages", validateMessagesCommit(state, record));
     }
     if (record.take !== null) {
       validateTakeCommit(state, record);
-      return prepareCommitTransition(state, record, false);
+      return prepareCommitTransition(state, record, "node");
     }
     // `<START>.<name>` can't be a node id (ids hold no dot), so the prefix alone picks a send.
     if (record.key.startsWith(sendKey(state, ""))) {
       validateSend(state, record);
-      return prepareCommitTransition(state, record, false, false, true);
+      return prepareCommitTransition(state, record, "send");
     }
     // A key the flow doesn't hold yet is a child START the spawner's expansion is about to add.
     const expansion = !state.flow.nodes.has(record.key) && state.flow.nodes.get(record.nodeId)?.isSpawner === true;
     if (expansion) validateExpansionCommit(state, record);
     else validateNodeCommit(state, record);
-    return prepareCommitTransition(state, record, false, expansion);
+    return prepareCommitTransition(state, record, expansion ? "expansion" : "node");
   }
   if (!state.inputsCommitted) {
     throw new RangeError("the run start is incomplete: only its pool_commit records may follow RunStarted");
@@ -1913,7 +1908,6 @@ export function prepareRecord(
     return prepareSuccessTransition(state, record);
   }
   if (isExactly(record, NodeRoutedRecord)) {
-    validateRouteRecord(state, record);
     return prepareRouteTransition(state, record, false);
   }
   if (isExactly(record, NodeExpandedRecord)) {
@@ -1923,41 +1917,16 @@ export function prepareRecord(
     return prepareGrowthRecord(state, record, options.growBuilder);
   }
   if (isExactly(record, NodeFailedRecord)) return prepareFailureTransition(state, record);
-  if (isExactly(record, NodeStartedRecord)) {
-    validateNodeStarted(state, record);
-  } else if (isExactly(record, RunResumedRecord)) {
-    validateRunResumed(state, record);
-  } else if (isExactly(record, NodeStepRecord)) {
-    validateNodeStep(state, record);
-  } else if (isExactly(record, RunStoppedRecord)) {
-    validateRunStopped(state, record);
-  } else if (isExactly(record, NodeWaitingRecord)) {
-    validateNodeWaiting(state, record);
-  } else if (isExactly(record, NodeWokenRecord)) {
-    validateNodeWoken(state, record);
-  } else if (isExactly(record, RunWaitingRecord)) {
-    validateRunWaiting(state, record);
-  } else if (isExactly(record, InboxClosedRecord)) {
-    validateInboxClosed(state, record);
-  } else if (isExactly(record, InterruptedRecord)) {
-    validateInterrupted(state, record);
-  } else {
+  if (!FRONTIER_RECORDS.some((cls) => isExactly<RunRecord>(record, cls))) {
     const name = (record as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
   }
 
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, FRONTIER_RECORDS, "frontier");
   let delta: FrontierPlan["delta"];
-  let observers: RunEvent[];
   if (isExactly(canonical, NodeStartedRecord)) {
     validateNodeStarted(state, canonical);
     delta = { kind: "started", nodeId: canonical.nodeId };
-    observers = [new NodeStarted({ nodeId: canonical.nodeId })];
   } else if (isExactly(canonical, RunResumedRecord)) {
     validateRunResumed(state, canonical);
     delta = {
@@ -1966,92 +1935,120 @@ export function prepareRecord(
       numWorkers: canonical.numWorkers,
       closedCalls: canonical.closedCalls,
     };
-    observers = [new RunResumed(), ...canonical.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(canonical, NodeStepRecord)) {
     validateNodeStep(state, canonical);
-    const closedCalls = bornClosedCalls(state, canonical);
     // The decoded copy keeps the applied step apart from the returned record.
-    delta = { kind: "step", nodeId: canonical.nodeId, step: canonicalSeed(canonical.step)[1] as JsonObject, closedCalls };
-    // A step is node-owned detail; no observer event announces it, except that a host call
-    // registered closed is withdrawn.
-    observers = closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
+    delta = {
+      kind: "step",
+      nodeId: canonical.nodeId,
+      step: canonicalSeed(canonical.step)[1] as JsonObject,
+      closedCalls: bornClosedCalls(state, canonical),
+    };
   } else if (isExactly(canonical, RunStoppedRecord)) {
     validateRunStopped(state, canonical);
     delta = { kind: "stopped", nodeIds: canonical.nodeIds };
-    observers = [];
   } else if (isExactly(canonical, NodeWaitingRecord)) {
     validateNodeWaiting(state, canonical);
     delta = { kind: "waiting", nodeId: canonical.nodeId };
-    observers = [new NodeWaiting({ nodeId: canonical.nodeId, callIds: canonical.callIds })];
   } else if (isExactly(canonical, NodeWokenRecord)) {
     validateNodeWoken(state, canonical);
-    const closedCalls = hostCalls(state, canonical.timedOut);
-    delta = { kind: "woken", nodeId: canonical.nodeId, closedCalls };
-    observers = [
-      new NodeWoken({ nodeId: canonical.nodeId, timedOut: canonical.timedOut }),
-      ...closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
-    ];
+    delta = { kind: "woken", nodeId: canonical.nodeId, closedCalls: hostCalls(state, canonical.timedOut) };
   } else if (isExactly(canonical, RunWaitingRecord)) {
     validateRunWaiting(state, canonical);
     delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
-    observers = [new RunWaiting({ nodeIds: canonical.nodeIds })];
-  } else if (isExactly(canonical, InboxClosedRecord)) {
-    validateInboxClosed(state, canonical);
-    delta = { kind: "inboxClosed", inbox: canonical.inbox };
-    observers = [];
   } else if (isExactly(canonical, InterruptedRecord)) {
+    // Before the close: an interrupt has every field a close has, so the close's guard would narrow it away.
     validateInterrupted(state, canonical);
     const open = canonical.nodes.flatMap((nodeId) =>
       nodeCalls(state.waits, nodeId).filter((call) => call.state === "open").map((call) => call.callId),
     );
-    const closedCalls = hostCalls(state, open);
-    delta = { kind: "interrupted", nodeIds: canonical.nodes, closedCalls };
-    observers = closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
+    delta = { kind: "interrupted", nodeIds: canonical.nodes, closedCalls: hostCalls(state, open) };
+  } else if (isExactly(canonical, InboxClosedRecord)) {
+    validateInboxClosed(state, canonical);
+    delta = { kind: "inboxClosed", inbox: canonical.inbox };
   } else {
-    // An exhaustive codec invariant.
+    // `canonicalEnvelope` refused every other class.
     throw new TypeError("frontier envelope decoded to a different record kind");
   }
 
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: FrontierPlan = Object.freeze({
     kind: "frontier",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
+    ...planAnchors(state, envelopeJson, envelope),
     delta: Object.freeze(delta),
   });
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, frontierObservers(canonical, delta));
 }
 
 /**
- * Freeze one commit's plan and its canonical public record; `initial` for a run-start commit,
- * `expansion` for a spawner's commit for a child START, `send` for a send to an inbox.
+ * The events one frontier record publishes. `record` is the canonical record `delta` was planned
+ * from, of the class its kind names.
  */
-function prepareCommitTransition(
+function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): RunEvent[] {
+  const closed = (reason: CloseReason) =>
+    "closedCalls" in delta ? delta.closedCalls.map((callId) => new CallClosed({ callId, reason })) : [];
+  switch (delta.kind) {
+    case "started":
+      return [new NodeStarted({ nodeId: delta.nodeId })];
+    case "resumed":
+      return [new RunResumed(), ...closed("crashed")];
+    case "step":
+      // A step is node-owned detail; no observer event announces it, except that a host call
+      // registered closed is withdrawn.
+      return closed("interrupted");
+    case "waiting": {
+      const { nodeId, callIds } = record as NodeWaitingRecord;
+      return [new NodeWaiting({ nodeId, callIds })];
+    }
+    case "woken": {
+      const { nodeId, timedOut } = record as NodeWokenRecord;
+      return [new NodeWoken({ nodeId, timedOut }), ...closed("timed_out")];
+    }
+    case "runWaiting":
+      return [new RunWaiting({ nodeIds: delta.nodeIds })];
+    case "interrupted":
+      return closed("interrupted");
+    case "stopped":
+    case "inboxClosed":
+      return [];
+  }
+}
+
+/**
+ * Encode `record` as `state`'s next envelope under `runId` (the state's own by default) and decode
+ * it back, so the prepared record is exactly what either log will retain. The public envelope
+ * codec is the sole payload authority.
+ *
+ * @param classes The record classes the caller plans; `what` names them in the error.
+ * @returns The canonical envelope text, the decoded envelope and its record.
+ * @throws RangeError when the state has no run id.
+ */
+function canonicalEnvelope<C extends abstract new (...args: never[]) => RunRecord>(
   state: RunState,
-  record: PoolCommitRecord,
-  initial: boolean,
-  expansion = false,
-  send = false,
-  messagesJson: string | null = null,
-): PreparedTransition {
-  const runId = state.runId;
-  // Established by the initialized-state check.
+  record: RunRecord,
+  classes: readonly C[],
+  what: string,
+  runId: string | null = state.runId,
+): { envelopeJson: string; envelope: RecordEnvelope; canonical: InstanceType<C> } {
+  // Established by the initialized-state check, or by `prepareRunStarted`'s data.
   if (typeof runId !== "string") throw new RangeError("run state is not initialized");
   const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
   const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, PoolCommitRecord)) throw new TypeError("pool-commit envelope decoded to a different record kind");
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
-  const plan: CommitPlan = Object.freeze({
-    kind: "commit",
+  // An exhaustive codec invariant.
+  if (!classes.some((cls) => isExactly(envelope.record, cls))) {
+    throw new TypeError(`${what} envelope decoded to a different record kind`);
+  }
+  return { envelopeJson, envelope, canonical: envelope.record as InstanceType<C> };
+}
+
+/** The anchors of a plan prepared against `state` for `envelope`, with its trace change. */
+function planAnchors(
+  state: RunState,
+  envelopeJson: string,
+  envelope: RecordEnvelope,
+  traceOptions: Parameters<typeof prepareRecordTrace>[2] = {},
+): PlanAnchors {
+  const { startId, endId } = state.flow;
+  return {
     originatingState: state,
     originatingFlow: state.flow,
     envelopeJson,
@@ -2059,15 +2056,27 @@ function prepareCommitTransition(
     startNode: state.flow.nodes.get(startId)!,
     endId,
     endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, { initialCommit: initial }),
+    traceDelta: prepareRecordTrace(state, envelope, traceOptions),
+  };
+}
+
+/** Freeze one commit's plan and its canonical public record; `messagesJson` is a messages commit's value. */
+function prepareCommitTransition(
+  state: RunState,
+  record: PoolCommitRecord,
+  commitKind: CommitKind,
+  messagesJson: string | null = null,
+): PreparedTransition {
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [PoolCommitRecord], "pool-commit");
+  const plan: CommitPlan = Object.freeze({
+    kind: "commit",
+    ...planAnchors(state, envelopeJson, envelope, { initialCommit: commitKind === "initial" }),
     nodeId: canonical.nodeId,
     key: canonical.key,
     valueJson: canonical.value === null ? null : logJson(canonical.value),
     from: canonical.from,
     take: canonical.take,
-    initial,
-    expansion,
-    send,
+    commitKind,
     messagesJson,
   });
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
@@ -2109,32 +2118,11 @@ function prepareSuccessTransition(
     pendingValueJson: delta.valueJson,
     terminalUnreachableFailure: state.terminalUnreachableFailure,
   });
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeSucceededRecord)) {
-    throw new TypeError("node-success envelope decoded to a different record kind");
-  }
-  // An exhaustive codec invariant: the record was decoded from this very text.
-  if (encodeRecord(envelope) !== envelopeJson) {
-    throw new RangeError("NodeSucceededRecord is not in canonical wire form");
-  }
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeSucceededRecord], "node-success");
   const files = fileReadingType(state.flow.nodes.get(delta.commitTarget)!);
   const plan: SuccessPlan = Object.freeze({
     kind: "success",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, {
+    ...planAnchors(state, envelopeJson, envelope, {
       terminalSucceeded: terminal?.succeeded ?? null,
       terminalOutputJson: terminal?.outputJson ?? null,
       terminalFailure: terminal?.failure ?? null,
@@ -2147,16 +2135,7 @@ function prepareSuccessTransition(
     terminal,
     files,
   });
-  const observers: RunEvent[] = [
-    new NodeSucceeded({
-      nodeId: delta.nodeId,
-      output: normalizeTypedFiles(files, decodeTyped(delta.valueJson)).toObject(),
-      commitAs: delta.observerCommitAs,
-      interrupted: delta.interrupted,
-    }),
-  ];
-  if (terminal !== null) observers.push(terminalObserver(terminal));
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, materializeSuccess(plan).observers);
 }
 
 /**
@@ -2170,6 +2149,7 @@ function prepareRouteTransition(
   record: NodeRoutedRecord,
   deriveTerminalFailure: boolean,
 ): PreparedTransition {
+  validateRouteRecord(state, record);
   validateLearnedScope(state, record.nodeId);
   const route = prepareRouteDelta(state, record, deriveTerminalFailure);
   const causalFailure = route.causalFailure;
@@ -2180,17 +2160,7 @@ function prepareRouteTransition(
     terminalFailure: causalFailure,
     forwardCapture: record.forwardCapture,
   });
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, recordForWire));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeRoutedRecord)) {
-    throw new TypeError("node-route envelope decoded to a different record kind");
-  }
-  // An exhaustive codec invariant: the record was decoded from this very text.
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeRoutedRecord is not in canonical wire form");
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, recordForWire, [NodeRoutedRecord], "node-route");
   if (causalFailure !== null) {
     if (canonical.terminalFailure === null) throw new RangeError("causal route lost its terminal failure");
     delta = Object.freeze({ ...delta, terminalUnreachableFailure: canonical.terminalFailure });
@@ -2202,19 +2172,9 @@ function prepareRouteTransition(
     pendingValueJson: null,
     terminalUnreachableFailure: delta.terminalUnreachableFailure,
   });
-
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: RoutePlan = Object.freeze({
     kind: "route",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, {
+    ...planAnchors(state, envelopeJson, envelope, {
       terminalSucceeded: terminal?.succeeded ?? null,
       terminalOutputJson: terminal?.outputJson ?? null,
       terminalFailure: terminal?.failure ?? null,
@@ -2222,45 +2182,20 @@ function prepareRouteTransition(
     delta,
     terminal,
   });
-  const observers: RunEvent[] = [
-    new NodeRouted({ nodeId: delta.nodeId, handle: delta.handle }),
-    ...delta.skippedNodeIds.map((nodeId) => new NodeSkipped({ nodeId })),
-  ];
-  if (terminal !== null) observers.push(terminalObserver(terminal));
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, materializeRoute(plan).observers);
 }
 
 /** Freeze one validated terminal failure and its canonical public record. */
 function prepareFailureTransition(state: RunState, record: NodeFailedRecord): PreparedTransition {
   validateFailureRecord(state, record);
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
   // The record already holds its failure through `retainFailure`, which rebuilds each origin as a
   // plain `OriginRef`: the wire's single-key identity shape.
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeFailedRecord)) {
-    throw new TypeError("node-failure envelope decoded to a different record kind");
-  }
-  // An exhaustive codec invariant: the record was decoded from this very text.
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeFailedRecord is not in canonical wire form");
-
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeFailedRecord], "node-failure");
   const failure = canonical.failure;
   const closedCalls = openHostCalls(state);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: FailurePlan = Object.freeze({
     kind: "failure",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, { terminalSucceeded: false, terminalFailure: failure }),
+    ...planAnchors(state, envelopeJson, envelope, { terminalSucceeded: false, terminalFailure: failure }),
     failure,
     closedCalls,
   });
@@ -2273,29 +2208,12 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
  */
 function prepareEndingTransition(state: RunState, record: RunCancelledRecord | RunFailedRecord): PreparedTransition {
   if (isExactly(record, RunFailedRecord)) validateRunFailed(state, record);
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, RunCancelledRecord) && !isExactly(canonical, RunFailedRecord)) {
-    throw new TypeError("ending envelope decoded to a different record kind");
-  }
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [RunCancelledRecord, RunFailedRecord], "ending");
   const failure = isExactly(canonical, RunFailedRecord) ? canonical.failure : null;
   const closedCalls = openHostCalls(state);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: EndingPlan = Object.freeze({
     kind: "ending",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
+    ...planAnchors(state, envelopeJson, envelope),
     failure,
     closedCalls,
   });
@@ -2311,7 +2229,9 @@ function openHostCalls(state: RunState): string[] {
 }
 
 /**
- * Prepare one canonical flat graph expansion without mutating live state.
+ * Prepare one canonical flat graph expansion without mutating live state, unplanned: the engine
+ * plans every growth (`planExpansion`, then `prepareExpandedFromPlan`); this entry point serves
+ * direct reducer callers and tests.
  *
  * @param state An initialized nonterminal state with `nodeId` in flight.
  * @param nodeId The exact executing spawner id, including a dynamic LOOP driver clone id.
@@ -2334,32 +2254,62 @@ export function prepareExpanded(
   grow: Grow,
   growBuilder: GrowBuilder,
   options: OutcomeCarriers = {},
-  planned: PlannedExpansion | null = null,
 ): PreparedTransition {
-  let expansion: Omit<PlannedExpansion, "commits"> & { commits: PlannedExpansion["commits"] | null };
-  let capture: ForwardCapture | null;
-  if (planned === null) {
-    const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
-    const pruneIds = [...grow.prune].sort(compareCodeUnits);
-    expansion = { spawnerId: nodeId, seed: seedWire, pruneIds, fragment, validatedFragment, digest: expansionDigest(fragment), commits: null };
+  const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
+  // `liveGrowth` checked the spawner, and the record's constructor its carriers.
+  validateLearnedScope(state, nodeId);
+  const pruneIds = [...grow.prune].sort(compareCodeUnits);
+  const digest = expansionDigest(fragment);
+  return prepareGrowthTransition(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, {
+    actualDigest: digest,
+    validatedFragment,
+    grown: null,
+    seed: seedWire,
+    commits: null,
     // Unplanned, the growth isn't checked against its rebuild, so it keeps the evaluated capture.
-    capture = options.forwardCapture ?? null;
-  } else {
-    if (planned.spawnerId !== nodeId) throw new RangeError(`the planned expansion is ${reprText(planned.spawnerId)}'s`);
-    capture = requireRebuiltGrowth(state, planned);
-    expansion = planned;
+    capture: options.forwardCapture ?? null,
+  });
+}
+
+/**
+ * Prepare a planned expansion (`planExpansion`) once its expansion commits are written: the growth
+ * must equal the one its commits' `from` rebuilds, and carries that rebuild's capture.
+ *
+ * @param state The state the plan was made against.
+ * @param planned The plan.
+ * @returns The canonical `NodeExpandedRecord` and its detached append-before-apply plan.
+ * @throws RangeError when `state` or its flow isn't the plan's, records other than its expansion
+ *   commits followed the plan, the growth differs from its rebuild, or as `prepareExpanded`.
+ */
+export function prepareExpandedFromPlan(state: RunState, planned: PlannedExpansion): PreparedTransition {
+  if (state !== planned.state || state.flow !== planned.flow) {
+    throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} belongs to another run state`);
   }
-  const { seed, pruneIds, fragment, validatedFragment, digest, commits } = expansion;
-  return prepareGrowthTransition(
-    state,
-    new NodeExpandedRecord(nodeId, pruneIds, digest),
-    fragment,
-    { actualDigest: digest, validatedFragment, seed, commits, capture },
-  );
+  // Only its expansion commits may follow the plan, so the spawner and the topology it checked
+  // still hold: they change neither.
+  if (state.nextSequence !== planned.sequence + planned.commits.length) {
+    throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} is stale`);
+  }
+  validateLearnedScope(state, planned.spawnerId);
+  const capture = requireRebuiltGrowth(state, planned);
+  const { spawnerId, seed, pruneIds, fragment, validatedFragment, grown, digest, commits } = planned;
+  return prepareGrowthTransition(state, new NodeExpandedRecord(spawnerId, pruneIds, digest), fragment, {
+    actualDigest: digest,
+    validatedFragment,
+    grown,
+    seed,
+    commits,
+    capture,
+  });
 }
 
 /** A live spawner's growth, validated and built once for its expansion commits and its `NodeExpanded`. */
 export interface PlannedExpansion {
+  /** The state the plan was made against, and its flow; the plan is refused on any other. */
+  readonly state: RunState;
+  readonly flow: CompiledFlow;
+  /** The state's next sequence when planned; only the expansion commits may follow. */
+  readonly sequence: number;
   readonly spawnerId: string;
   /** The canonical seed. */
   readonly seed: JsonValue;
@@ -2367,6 +2317,8 @@ export interface PlannedExpansion {
   readonly pruneIds: readonly string[];
   readonly fragment: Flow;
   readonly validatedFragment: ValidatedFragment;
+  /** The topology change the plan checked, which the expansion applies. */
+  readonly grown: GrownTopology;
   readonly digest: string;
   /**
    * The commits the expansion writes before its `NodeExpanded`: each START of the fragment (its
@@ -2380,7 +2332,7 @@ export interface PlannedExpansion {
  * Validate and build a live spawner's growth once, running every check its `NodeExpanded` makes,
  * so a growth rejected after its commits are written can't leave the spawner with commits only its
  * expansion admits. Write `commits` (`prepareExpansionCommit`), then pass the plan to
- * `prepareExpanded`.
+ * `prepareExpandedFromPlan`.
  *
  * @param state An initialized nonterminal state with `nodeId` in flight.
  * @param options.forwardCapture The capture the expansion will carry, checked for its seed routes.
@@ -2396,9 +2348,13 @@ export function planExpansion(
   const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
   const pruneIds = [...grow.prune].sort(compareCodeUnits);
   const digest = expansionDigest(fragment);
-  prepareGrowthTopology(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, validatedFragment);
+  const grown = prepareGrowthTopology(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, validatedFragment);
   requireSeedRoutes(state, options.forwardCapture ?? null, fragment);
   return Object.freeze({
+    state,
+    flow: state.flow,
+    sequence: state.nextSequence,
+    grown,
     spawnerId: nodeId,
     seed: seedWire,
     pruneIds: Object.freeze(pruneIds),
@@ -2601,6 +2557,7 @@ function prepareGrowthRecord(
     return prepareGrowthTransition(state, record, fragment, {
       actualDigest,
       validatedFragment,
+      grown: null,
       seed: seedWire,
       commits: null,
       capture,
@@ -2612,7 +2569,10 @@ function prepareGrowthRecord(
   }
 }
 
-/** Freeze one validated fragment, its final topology and the canonical public record. */
+/**
+ * Freeze one validated fragment, its final topology and the canonical public record. The caller
+ * validated the record and its spawner.
+ */
 function prepareGrowthTransition(
   state: RunState,
   record: NodeExpandedRecord,
@@ -2620,6 +2580,8 @@ function prepareGrowthTransition(
   options: {
     actualDigest: string;
     validatedFragment: ValidatedFragment;
+    /** A live plan's checked topology change; `null` checks and builds it here. */
+    grown: GrownTopology | null;
     seed: JsonValue;
     /** A live plan's child START values, so they aren't bound again; `null` binds them here. */
     commits: PlannedExpansion["commits"] | null;
@@ -2627,37 +2589,18 @@ function prepareGrowthTransition(
     capture: ForwardCapture | null;
   },
 ): PreparedTransition {
-  validateGrowthRecord(state, record);
   const { actualDigest: digest, validatedFragment: validated, seed, commits, capture } = options;
   if (digest !== record.topologyDigest) {
     throw new RangeError("NodeExpandedRecord topology digest disagrees with its fragment");
   }
-  const { delta: grown, topology } = prepareGrowthTopology(state, record, fragment, validated);
+  const { delta: grown, topology } = options.grown ?? prepareGrowthTopology(state, record, fragment, validated);
   const delta: GrowthDelta = Object.freeze({ ...grown, admitted: admitExpansion(state, record.spawnerId, fragment, commits) });
 
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeExpandedRecord)) {
-    throw new TypeError("node-expansion envelope decoded to a different record kind");
-  }
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeExpandedRecord is not in canonical wire form");
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeExpandedRecord], "node-expansion");
   requireSeedRoutes(state, capture, fragment);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: GrowthPlan = Object.freeze({
     kind: "growth",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, {
+    ...planAnchors(state, envelopeJson, envelope, {
       inputConnections: fragment.inputConnections,
       childBoundaries: fragment.childBoundaries,
       retiredIds: delta.retiredIds,
@@ -2674,27 +2617,15 @@ function prepareGrowthTransition(
 /** Validate all backward data and prepare its detached state before append. */
 function prepareBackwardTransition(state: RunState, record: RunRecord): PreparedTransition {
   requireInitializedTerminalBackward(state);
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, state.runId!, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("backward record is not in canonical wire form");
-  // `prepareRecord` routes only the exact backward record classes here.
-  const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, BACKWARD_RECORDS, "backward");
+  const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, canonical);
   const plan: BackwardPlan = Object.freeze({
     kind: "backward",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
+    ...planAnchors(state, envelopeJson, envelope),
     originatingBackwardState: state.backwardState,
     nextBackwardState,
   });
-  return new PreparedTransition(envelope.record, envelope.runId, envelope.seq, plan, []);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
 }
 
 /** Every plan kind `commitPrepared` dispatches. */
@@ -3133,33 +3064,35 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
-  if (plan.initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
+  const initial = plan.commitKind === "initial";
+  if (initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
   if ((state.trace === null) !== (plan.traceDelta === null)) {
     throw new RangeError("pool-commit trace delta disagrees with recorded learning");
   }
   // A run-start commit always holds its value.
-  const value = plan.initial ? decodeTyped(plan.valueJson!) : null;
-  const startInputs = plan.initial && plan.key === plan.startId;
+  const value = initial ? decodeTyped(plan.valueJson!) : null;
+  const startInputs = initial && plan.key === plan.startId;
   const input = startInputs ? (canonicalSeed(value!.toObject())[1] as JsonObject) : null;
 
   appendAndVerify(log, prepared);
-  if (plan.send) {
+  if (plan.commitKind === "send") {
     state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
-  } else if (plan.messagesJson !== null) {
-    const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson };
+  } else if (plan.commitKind === "messages") {
+    const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson! };
     state.pendingMessages.set(plan.nodeId, Object.freeze(pending));
-  } else if (!plan.initial) {
+  } else if (!initial) {
+    const expansion = plan.commitKind === "expansion";
     const pending: PendingCommit = {
       seq: prepared.expectedSequence,
       key: plan.key,
       valueJson: plan.valueJson,
       from: plan.from,
       take: plan.take,
-      spawner: plan.expansion ? plan.nodeId : null,
+      spawner: expansion ? plan.nodeId : null,
       admitted: false,
     };
     // An expansion commit waits under the child START it fills, whose success accepts it.
-    state.pendingCommits.set(plan.expansion ? plan.key : plan.nodeId, Object.freeze(pending));
+    state.pendingCommits.set(expansion ? plan.key : plan.nodeId, Object.freeze(pending));
   } else if (input === null) {
     state.pool.system.set(plan.key.slice(SYSTEM_PREFIX.length), value!);
     state.producers.set(plan.key, prepared.expectedSequence);
@@ -3179,30 +3112,13 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   const plan = prepared._plan;
   if (plan.kind !== "frontier") throw new TypeError("frontier commit requires a frontier plan");
   const record = prepared.record;
-  if (
-    !(
-      isExactly(record, NodeStartedRecord) ||
-      isExactly(record, RunResumedRecord) ||
-      isExactly(record, NodeStepRecord) ||
-      isExactly(record, RunStoppedRecord) ||
-      isExactly(record, NodeWaitingRecord) ||
-      isExactly(record, NodeWokenRecord) ||
-      isExactly(record, RunWaitingRecord) ||
-      isExactly(record, InboxClosedRecord) ||
-      isExactly(record, InterruptedRecord)
-    )
-  ) {
-    throw new TypeError("frontier plan requires a dispatch, resume, step, stop, wait, wake, run-wait, close or interrupt record");
-  }
   requirePreparedOrigin(state, plan);
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
   const delta = plan.delta;
-  let observers: readonly RunEvent[];
   if (isExactly(record, NodeStartedRecord) && delta.kind === "started") {
     if (delta.nodeId !== record.nodeId) throw new RangeError("frontier start delta disagrees with its record");
-    observers = [new NodeStarted({ nodeId: delta.nodeId })];
   } else if (isExactly(record, RunResumedRecord) && delta.kind === "resumed") {
     if (
       !sameItems(delta.retryNodeIds, record.retryNodeIds) ||
@@ -3211,38 +3127,28 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     ) {
       throw new RangeError("frontier resume delta disagrees with its record");
     }
-    observers = [new RunResumed(), ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "crashed" }))];
   } else if (isExactly(record, NodeStepRecord) && delta.kind === "step") {
     if (delta.nodeId !== record.nodeId || logJson(delta.step) !== logJson(record.step)) {
       throw new RangeError("frontier step delta disagrees with its record");
     }
-    observers = delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else if (isExactly(record, RunStoppedRecord) && delta.kind === "stopped") {
     if (!sameItems(delta.nodeIds, record.nodeIds)) {
       throw new RangeError("frontier stop delta disagrees with its record");
     }
-    observers = [];
   } else if (isExactly(record, NodeWaitingRecord) && delta.kind === "waiting") {
     if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wait delta disagrees with its record");
-    observers = [new NodeWaiting({ nodeId: record.nodeId, callIds: record.callIds })];
   } else if (isExactly(record, NodeWokenRecord) && delta.kind === "woken") {
     if (delta.nodeId !== record.nodeId) throw new RangeError("frontier wake delta disagrees with its record");
-    observers = [
-      new NodeWoken({ nodeId: record.nodeId, timedOut: record.timedOut }),
-      ...delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "timed_out" })),
-    ];
   } else if (isExactly(record, RunWaitingRecord) && delta.kind === "runWaiting") {
     if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
-    observers = [new RunWaiting({ nodeIds: record.nodeIds })];
   } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
     if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
-    observers = [];
   } else if (isExactly(record, InterruptedRecord) && delta.kind === "interrupted") {
     if (!sameItems(delta.nodeIds, record.nodes)) throw new RangeError("frontier interrupt delta disagrees with its record");
-    observers = delta.closedCalls.map((callId) => new CallClosed({ callId, reason: "interrupted" }));
   } else {
     throw new TypeError("frontier record and prevalidated delta disagree");
   }
+  const observers = frontierObservers(record, delta);
 
   appendAndVerify(log, prepared);
   switch (delta.kind) {
@@ -3475,42 +3381,63 @@ function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition
   return apply.observers;
 }
 
+/** Every `TraceDelta` field that changes the trace: all but its origin and sequence. */
+const TRACE_CHANGES = [
+  "initialized",
+  "started",
+  "resumed",
+  "parked",
+  "unparked",
+  "occurrence",
+  "handler",
+  "material",
+  "writer",
+  "messagesWriter",
+  "systemValue",
+  "pruneIds",
+  "connections",
+  "consumedConnection",
+  "boundaries",
+  "boundaryUpdate",
+  "rootStartSource",
+  "rootWriter",
+  "causalRouteSource",
+  "terminal",
+] as const satisfies readonly (keyof TraceDeltaFields)[];
+
+type TraceChange = (typeof TRACE_CHANGES)[number];
+
+// Fails to compile when `TraceDeltaFields` gains a field `TRACE_CHANGES` doesn't list.
+const TRACE_CHANGES_COVER_FIELDS: Exclude<keyof TraceDeltaFields, TraceChange> extends never ? true : never = true;
+void TRACE_CHANGES_COVER_FIELDS;
+
+/** The `TraceDelta` change fields that hold lists; empty means unchanged. */
+const TRACE_LIST_CHANGES: ReadonlySet<TraceChange> = new Set(["pruneIds", "connections", "boundaries"]);
+
+/**
+ * Whether `delta` leaves every change field but `allowed` unchanged: `resumed` false, a list
+ * empty, any other field `null`.
+ */
+function changesOnly(delta: TraceDelta, allowed: readonly TraceChange[] = []): boolean {
+  return TRACE_CHANGES.every((field) => {
+    if (allowed.includes(field)) return true;
+    const value: unknown = delta[field];
+    if (field === "resumed") return value === false;
+    if (TRACE_LIST_CHANGES.has(field)) return Array.isArray(value) && value.length === 0;
+    return value === null;
+  });
+}
+
 /** Require the exact sequence-only trace change before accepting a post-terminal record. */
 function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null): void {
-  const message = "postterminal trace delta must only advance the accepted sequence";
   if (
     !isExactly(delta, TraceDelta) ||
     delta.originatingTrace !== state.trace ||
     !Number.isSafeInteger(delta.sequence) ||
     delta.sequence !== state.nextSequence ||
-    delta.resumed !== false ||
-    delta.parked !== null ||
-    delta.unparked !== null
+    !changesOnly(delta)
   ) {
-    throw new RangeError(message);
-  }
-  const singles = [
-    delta.initialized,
-    delta.started,
-    delta.occurrence,
-    delta.handler,
-    delta.material,
-    delta.writer,
-    delta.messagesWriter,
-    delta.systemValue,
-    delta.consumedConnection,
-    delta.boundaryUpdate,
-    delta.rootStartSource,
-    delta.rootWriter,
-    delta.causalRouteSource,
-    delta.terminal,
-  ];
-  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
-  if (
-    singles.some((value) => value !== null) ||
-    lists.some((values) => !Array.isArray(values) || values.length !== 0)
-  ) {
-    throw new RangeError(message);
+    throw new RangeError("postterminal trace delta must only advance the accepted sequence");
   }
 }
 
@@ -3575,26 +3502,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
   if (!isExactly(record, NodeWokenRecord) && delta.unparked !== null) {
     throw new RangeError("only a wake can bring back a parked start");
   }
-  const singles = [
-    delta.initialized,
-    delta.occurrence,
-    delta.handler,
-    delta.material,
-    delta.writer,
-    delta.messagesWriter,
-    delta.systemValue,
-    delta.consumedConnection,
-    delta.boundaryUpdate,
-    delta.rootStartSource,
-    delta.rootWriter,
-    delta.causalRouteSource,
-    delta.terminal,
-  ];
-  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
-  if (
-    singles.some((value) => value !== null) ||
-    lists.some((values) => !Array.isArray(values) || values.length !== 0)
-  ) {
+  if (!changesOnly(delta, ["started", "resumed", "parked", "unparked"])) {
     throw new RangeError("frontier trace cannot change outcome or terminal history");
   }
 }
@@ -3613,31 +3521,7 @@ function requireEndingTraceDelta(state: RunState, prepared: PreparedTransition):
   if (!isExactly(delta, TraceDelta) || delta.originatingTrace !== trace || delta.sequence !== state.nextSequence) {
     throw new RangeError("ending trace delta requires its exact accepted sequence");
   }
-  const singles = [
-    delta.initialized,
-    delta.started,
-    delta.parked,
-    delta.unparked,
-    delta.occurrence,
-    delta.handler,
-    delta.material,
-    delta.writer,
-    delta.messagesWriter,
-    delta.systemValue,
-    delta.consumedConnection,
-    delta.boundaryUpdate,
-    delta.rootStartSource,
-    delta.rootWriter,
-    delta.causalRouteSource,
-  ];
-  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
-  if (
-    delta.resumed !== false ||
-    singles.some((value) => value !== null) ||
-    lists.some((values) => !Array.isArray(values) || values.length !== 0)
-  ) {
-    throw new RangeError("ending trace can only install its terminal");
-  }
+  if (!changesOnly(delta, ["terminal"])) throw new RangeError("ending trace can only install its terminal");
   const record = prepared.record;
   if (!isExactly(record, RunFailedRecord)) {
     if (delta.terminal !== null) throw new RangeError("a cancel installs no terminal trace");
@@ -3666,19 +3550,12 @@ function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransiti
   requireInitializedTerminalBackward(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
-  const envelope = decodeRecord(plan.envelopeJson);
-  // The text is the plan's own backward record, and the reducer refuses any other class.
-  const expected = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
+  // The plan reduced this record from this very backward state, as the identity check above shows.
   if (!isExactly(plan.nextBackwardState, RuntimeBackwardState)) {
     throw new TypeError("backward plan requires an exact next state");
   }
-  // The reducer just validated `expected`, and only `expected` is kept, so equality is enough;
-  // checking all history here would cost O(N) per record.
-  if (!sameRuntimeBackwardState(expected, plan.nextBackwardState)) {
-    throw new RangeError("backward plan state disagrees with its canonical record");
-  }
   appendAndVerify(log, prepared);
-  state.backwardState = expected;
+  state.backwardState = plan.nextBackwardState;
   state.nextSequence = prepared.expectedSequence + 1;
   return [];
 }
@@ -3780,7 +3657,7 @@ function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
   }
 }
 
-/** Check the initialized reducer roots and the recorded memory authority. */
+/** Check the initialized reducer roots. */
 function requireInitialized(state: RunState): void {
   const exactContainers =
     isExactly(state.pool, VariablePool) &&
@@ -3805,7 +3682,6 @@ function requireInitialized(state: RunState): void {
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.backwardState, RuntimeBackwardState) &&
-    isExactly(state.memoryAuthority, MemoryAuthority) &&
     isExactly(state.initialStaticIds, Set);
   if (!exactContainers) throw new RangeError("transition requires initialized reducer containers");
   if (typeof state.runId !== "string" || !state.runId) throw new RangeError("run state is not initialized");
@@ -3824,14 +3700,13 @@ function requireInitialized(state: RunState): void {
     throw new RangeError("accepted starts must match the unfinished invocation inventory");
   }
   // Every apply path indexes these maps by node, so a broken map must fail here, before the
-  // append, rather than between append and apply.
+  // append, rather than between append and apply. The checks are per node, not per step: a step is
+  // checked once, when its record is validated, so a node's S steps don't cost O(S) per record.
   if (
     [...state.inFlight].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
     [...state.nodeStarts.values()].some((count) => !Number.isSafeInteger(count) || count < 1) ||
     [...state.nodeSteps.keys()].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
-    [...state.nodeSteps.values()].some(
-      (steps) => !Array.isArray(steps) || steps.length === 0 || steps.some((step) => !isRecord(step)),
-    ) ||
+    [...state.nodeSteps.values()].some((steps) => !Array.isArray(steps) || steps.length === 0) ||
     [...state.pendingCommits].some(([nodeId, pending]) =>
       pending.admitted ? state.nodeState.get(nodeId) !== NodeState.UNKNOWN : !state.inFlight.has(pending.spawner ?? nodeId),
     ) ||
@@ -3895,7 +3770,6 @@ function requireInitialized(state: RunState): void {
   } else if (state.trace !== null) {
     throw new RangeError("trace requires recorded learning");
   }
-  validateRuntimeMemoryConfiguration(state);
 }
 
 /** Require an initialized graph state before its primary terminal outcome. */
@@ -3912,24 +3786,6 @@ function requireInitializedTerminalBackward(state: RunState): void {
   }
   if (state.learnable !== true || state.trace === null || state.trace.terminal === null) {
     throw new RangeError("backward records require recorded learning and terminal trace authority");
-  }
-}
-
-/** Require the identity roots of canonical RunStarted decoding. */
-function validateRuntimeMemoryConfiguration(state: RunState): void {
-  const authority = state.memoryAuthority;
-  if (!isExactly(authority, MemoryAuthority)) throw new TypeError("run-state memory authority has the wrong type");
-  if (
-    !(
-      state.memorySnapshots === authority.snapshots &&
-      state.memories === authority.memories &&
-      state.memoryStacks === authority.memoryStacks &&
-      typeof state.learnable === "boolean" &&
-      state.learnable === authority.learnable &&
-      state.backwardState.memoryOrder === authority.memoryOrder
-    )
-  ) {
-    throw new RangeError("run-state memory roots disagree with RunStarted authority");
   }
 }
 
@@ -4523,18 +4379,21 @@ function forgetNodeSteps(state: RunState, nodeId: string): void {
  * @throws RangeError when a consumed send's value is gone (the log and the state disagree).
  */
 export function stepsWithSteerValues(state: RunState, nodeId: string): ValueRecord[] {
-  return (state.nodeSteps.get(nodeId) ?? []).map((step) => {
-    const copy = structuredClone(step) as ValueRecord;
-    if (step["kind"] !== "steer") return copy;
-    copy["values"] = (seqList(step["from"]) ?? []).map((seq) => {
-      const value = state.inboxEvents.get(seq);
-      if (value === undefined) {
-        throw new RangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
-      }
-      return copyValue(value.toObject());
-    });
-    return copy;
+  return (state.nodeSteps.get(nodeId) ?? []).map((step) => stepWithSteerValues(state, nodeId, step));
+}
+
+/** A copy of one of `nodeId`'s recorded steps, a `steer` step's given its values (`stepsWithSteerValues`). */
+function stepWithSteerValues(state: RunState, nodeId: string, step: Readonly<JsonObject>): ValueRecord {
+  const copy = structuredClone(step) as ValueRecord;
+  if (step["kind"] !== "steer") return copy;
+  copy["values"] = (seqList(step["from"]) ?? []).map((seq) => {
+    const value = state.inboxEvents.get(seq);
+    if (value === undefined) {
+      throw new RangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
+    }
+    return copyValue(value.toObject());
   });
+  return copy;
 }
 
 /** Require an existing unknown node in the in-flight frontier, with no pending commit. */
@@ -4657,52 +4516,26 @@ function requireNoPendingCommit(state: RunState, nodeId: string, kind: string): 
   }
 }
 
-/** Require an existing unknown node in the in-flight frontier. */
-function requireSucceedingNode(state: RunState, nodeId: string): void {
-  if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} does not exist in the flow`);
-  }
-  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} must have UNKNOWN disposition`);
-  }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} is not in-flight`);
-}
-
-/** Require an existing unknown router in the ordered in-flight frontier. */
-function requireRoutingNode(state: RunState, nodeId: string): void {
-  if (!nodeId) throw new RangeError("NodeRouted node_id must be non-empty");
-  if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeRouted node ${reprText(nodeId)} does not exist in the flow`);
-  }
-  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeRouted node ${reprText(nodeId)} must have UNKNOWN disposition`);
-  }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeRouted node ${reprText(nodeId)} is not in-flight`);
-  requireNoPendingCommit(state, nodeId, "NodeRouted");
-}
-
-/** Require an existing unknown node in the ordered in-flight frontier. */
-function requireFailingNode(state: RunState, nodeId: string): void {
-  if (!nodeId) throw new RangeError("NodeFailed node_id must be non-empty");
-  if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeFailed node ${reprText(nodeId)} does not exist in the flow`);
-  }
-  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeFailed node ${reprText(nodeId)} must have UNKNOWN disposition`);
-  }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeFailed node ${reprText(nodeId)} is not in-flight`);
-  requireNoPendingCommit(state, nodeId, "NodeFailed");
-}
-
-/** Require an existing unknown spawner in the ordered in-flight frontier. */
-function requireExpandingNode(state: RunState, nodeId: string): void {
-  if (!nodeId) throw new RangeError("NodeExpanded node_id must be non-empty");
+/**
+ * Require `nodeId` to name an existing node of `UNKNOWN` disposition in the in-flight frontier, as
+ * a `kind` outcome (`NodeSucceeded`, `NodeRouted`, `NodeFailed` or `NodeExpanded`) needs.
+ *
+ * @returns The node.
+ */
+function requireOutcomeNode(state: RunState, nodeId: string, kind: string): Node {
+  if (!nodeId) throw new RangeError(`${kind} node_id must be non-empty`);
   const node = state.flow.nodes.get(nodeId);
-  if (node === undefined) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} does not exist in the flow`);
+  if (node === undefined) throw new RangeError(`${kind} node ${reprText(nodeId)} does not exist in the flow`);
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeExpanded node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    throw new RangeError(`${kind} node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not in-flight`);
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`${kind} node ${reprText(nodeId)} is not in-flight`);
+  return node;
+}
+
+/** Require an existing unknown spawner in the in-flight frontier, with no commit pending. */
+function requireExpandingNode(state: RunState, nodeId: string): void {
+  const node = requireOutcomeNode(state, nodeId, "NodeExpanded");
   if (node.isSpawner !== true) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not a graph spawner`);
   requireNoPendingCommit(state, nodeId, "NodeExpanded");
 }
@@ -4737,13 +4570,16 @@ function buildGrowthFragment(spawner: Node, builderSeed: JsonValue, growBuilder:
   return copyGraph(built);
 }
 
+/** A checked growth's delta, short of its admitted commits, and its topology change. */
+type GrownTopology = { readonly delta: Omit<GrowthDelta, "admitted">; readonly topology: GrowthTopology };
+
 /** Validate one growth and build the detached change commit applies in place. */
 function prepareGrowthTopology(
   state: RunState,
   record: NodeExpandedRecord,
   fragment: Flow,
   validatedFragment: ValidatedFragment,
-): { delta: Omit<GrowthDelta, "admitted">; topology: GrowthTopology } {
+): GrownTopology {
   const [newNodeIds, newEdgeIds] = validatedFragment;
   const budget = state.runDefaults.maxTotalNodes;
   if (state.flow.nodes.size + newNodeIds.length > budget) {
@@ -4753,8 +4589,8 @@ function prepareGrowthTopology(
   }
   const derivedDepth = validatedGrowthDepth(state, record.spawnerId);
   const index = growthIndex(state);
-  validateGrowthPrune(state, record.spawnerId, record.pruneIds, new Set(newNodeIds));
-  const [retired, deferredPrune] = retiredIds(state, record.spawnerId, record.pruneIds, index.grown);
+  validateGrowthPrune(state, record.spawnerId, record.pruneIds);
+  const [retired, deferredPrune] = retiredIds(state, record.spawnerId, record.pruneIds, index);
   validatePruneDependencies(state, fragment, retired, index);
 
   const sortedRetiredIds = [...retired].sort(compareCodeUnits);
@@ -5083,33 +4919,34 @@ function validateGrowthReachability(fragment: Flow): void {
   }
 }
 
-/** Apply the closed reference rules to raw or carrier-wrapped fragment wiring. */
+/**
+ * Apply the closed reference rules to raw or carrier-wrapped fragment wiring. `readableNames` holds
+ * the fragment and live node ids, plus `<id>.new_messages` for each AGENT that produces messages.
+ */
 function validateGrowthWiringRefs(
   nodeId: string,
   node: Node,
   wiring: ReadonlyMap<string, unknown>,
-  combinedNodeIds: { has(id: string): boolean },
+  readableNames: { has(name: string): boolean },
   producerContract: (nodeId: string) => OutputContract | null,
   reserved: ReadonlySet<string>,
 ): void {
   for (const [param, source] of wiring) {
-    const paths: string[] = [];
-    for (const [, text] of iterSourceStrings(source)) {
-      try {
-        for (const path of exprRefsOf(text)) paths.push(path);
-      } catch (error) {
-        if (!(error instanceof ExpressionError)) throw error;
-        raiseGrowthRejected(
-          new RangeError(
-            `growth fragment node ${reprText(nodeId)} wiring ${reprText(param)} is invalid: ${error.message}`,
-            { cause: error },
-          ),
-        );
-      }
+    let paths: string[];
+    try {
+      paths = [...sourceRefs(source)];
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      raiseGrowthRejected(
+        new RangeError(
+          `growth fragment node ${reprText(nodeId)} wiring ${reprText(param)} is invalid: ${error.message}`,
+          { cause: error },
+        ),
+      );
     }
     for (const path of paths) {
       const extraHeads = node.bindsPerItem === true && !reserved.has(param) ? ["item"] : [];
-      let error = classifyPath(path, combinedNodeIds, new Set(), extraHeads);
+      let error = classifyPath(path, readableNames, new Set(), extraHeads);
       const parts = path.split(".");
       const contract =
         error === null && parts.length >= 2 && parts[1] === "output" ? producerContract(parts[0]!) : null;
@@ -5177,18 +5014,28 @@ function nodeNames(nodeId: string, node: Node, wiring: ReadonlyMap<string, unkno
     if (typeof target === "string" && target !== nodeId) names.add(target);
   }
   for (const source of wiring.values()) {
-    for (const [, text] of iterSourceStrings(source)) {
-      let paths: string[];
-      try {
-        paths = exprRefsOf(text);
-      } catch (error) {
-        if (!(error instanceof ExpressionError)) throw error;
-        throw new RangeError(`node ${reprText(nodeId)} has invalid wiring: ${error.message}`, { cause: error });
-      }
-      for (const path of paths) names.add(path.split(".", 1)[0]!);
+    try {
+      for (const path of sourceRefs(source)) names.add(refHead(path));
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      throw new RangeError(`node ${reprText(nodeId)} has invalid wiring: ${error.message}`, { cause: error });
     }
   }
   return Object.freeze([...names]);
+}
+
+/**
+ * Yield each reference path the expressions in one raw or carrier-wrapped wiring source read.
+ *
+ * @throws ExpressionError when an expression doesn't parse.
+ */
+function* sourceRefs(source: unknown): Generator<string> {
+  for (const [, text] of iterSourceStrings(source)) yield* exprRefsOf(text);
+}
+
+/** The name a reference path starts with: a node id, or a reserved head such as `item`. */
+function refHead(path: string): string {
+  return path.split(".", 1)[0]!;
 }
 
 /**
@@ -5239,7 +5086,7 @@ function setDefault<V>(map: Map<string, V>, key: string, make: () => V): V {
  * @param state The pre-transition state whose `deferredPrune` names earlier deferred ids.
  * @param spawnerId The spawner whose growth record asks for `pruneIds`.
  * @param pruneIds The node ids the growth record asks to prune.
- * @param grown Each owner's directly grown live nodes.
+ * @param index The growth index: each owner's directly grown live nodes, and what each node names.
  * @returns The node ids retired by this growth, and the candidates kept live and deferred to a
  *   later growth.
  */
@@ -5247,8 +5094,9 @@ function retiredIds(
   state: RunState,
   spawnerId: string,
   pruneIds: readonly string[],
-  grown: ReadonlyMap<string, ReadonlySet<string>>,
+  index: GrowthIndex,
 ): readonly [ReadonlySet<string>, ReadonlySet<string>] {
+  const { grown } = index;
   if (pruneIds.length === 0 && state.deferredPrune.size === 0) return [new Set(), new Set()];
   const settled: ReadonlySet<NodeState | undefined> = new Set([
     NodeState.TAKEN,
@@ -5292,7 +5140,7 @@ function retiredIds(
   const pending: string[] = [];
   for (const candidate of kept) for (const nodeId of units.get(candidate)!) pending.push(nodeId);
   while (pending.length > 0) {
-    for (const read of readIds(state, pending.pop()!)) {
+    for (const read of readIds(state, index, pending.pop()!)) {
       for (const candidate of unitsOf.get(read) ?? []) {
         if (!kept.has(candidate)) {
           kept.add(candidate);
@@ -5307,38 +5155,26 @@ function retiredIds(
   return [retired, new Set([...kept].filter((candidate) => !retired.has(candidate)))];
 }
 
-/** Return the node ids a live node reads through edges, wiring, or output targets. */
-function readIds(state: RunState, nodeId: string): Set<string> {
-  const node = state.flow.nodes.get(nodeId)!;
+/**
+ * Return the node ids a live node reads: its incoming edges' sources, plus the names it names
+ * through its wiring or output targets (`GrowthIndex.names`).
+ */
+function readIds(state: RunState, index: GrowthIndex, nodeId: string): Set<string> {
   const reads = new Set(state.flow.incoming(nodeId).map((edge) => edge.from));
-  for (const target of [node.commitAs, node.originId, node.skippedOutputTarget()] as unknown[]) {
-    if (typeof target === "string") reads.add(target);
-  }
-  for (const source of (state.flow.wiring.get(nodeId) ?? new Map<string, unknown>()).values()) {
-    for (const [, text] of iterSourceStrings(source)) {
-      let paths: string[];
-      try {
-        paths = exprRefsOf(text);
-      } catch (error) {
-        if (!(error instanceof ExpressionError)) throw error;
-        continue; // the prune dependency check reports invalid wiring
-      }
-      for (const path of paths) reads.add(path.split(".", 1)[0]!);
-    }
-  }
+  for (const name of index.names.get(nodeId) ?? []) reads.add(name);
   return reads;
 }
 
 /**
  * Reject requested prune ids that are not dynamic overlay or a self-prunable LOOP clone.
  *
- * Unsettled requested ids are not errors: `retiredIds` keeps them live.
+ * Unsettled requested ids are not errors: `retiredIds` keeps them live. A prune id must be live,
+ * so it can't name a new fragment node, whose id `validateGrowthFragment` refused if live.
  */
 function validateGrowthPrune(
   state: RunState,
   spawnerId: string,
   pruneIds: readonly string[],
-  newNodeIds: ReadonlySet<string>,
 ): void {
   const spawner = state.flow.nodes.get(spawnerId)!;
   for (const nodeId of pruneIds) {
@@ -5347,9 +5183,6 @@ function validateGrowthPrune(
     }
     if (nodeId === state.flow.startId || nodeId === state.flow.endId) {
       raiseGrowthRejected(new RangeError(`growth cannot prune top-level boundary ${reprText(nodeId)}`));
-    }
-    if (newNodeIds.has(nodeId)) {
-      raiseGrowthRejected(new RangeError(`growth cannot prune new fragment node ${reprText(nodeId)}`));
     }
     if (state.initialStaticIds.has(nodeId)) {
       raiseGrowthRejected(new RangeError(`growth cannot prune initial static node ${reprText(nodeId)}`));
@@ -5438,27 +5271,23 @@ function validatePruneDependencies(
     }
     const wiring = fragment.wiring.get(nodeId) ?? state.flow.wiring.get(nodeId) ?? new Map<string, unknown>();
     for (const source of wiring.values()) {
-      for (const [, text] of iterSourceStrings(source)) {
-        let paths: string[];
-        try {
-          paths = exprRefsOf(text);
-        } catch (error) {
-          if (!(error instanceof ExpressionError)) throw error;
-          throw new RangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
-            cause: error,
-          });
-        }
-        for (const path of paths) {
-          if (pruneIds.has(path.split(".", 1)[0]!)) {
-            raiseGrowthRejected(new RangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
-          }
-        }
+      let paths: string[];
+      try {
+        paths = [...sourceRefs(source)];
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        throw new RangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
+          cause: error,
+        });
+      }
+      if (paths.some((path) => pruneIds.has(refHead(path)))) {
+        raiseGrowthRejected(new RangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
       }
     }
   }
 }
 
-/** Validate a replayed route's exact scalar carriers and its executing router. */
+/** Validate a route's exact scalar carriers and its executing router. */
 function validateRouteRecord(state: RunState, record: NodeRoutedRecord): void {
   const nodeId: unknown = record.nodeId;
   const handle: unknown = record.handle;
@@ -5469,7 +5298,8 @@ function validateRouteRecord(state: RunState, record: NodeRoutedRecord): void {
   if (record.terminalFailure !== null && !isExactly(record.terminalFailure, Failure)) {
     throw new TypeError("NodeRoutedRecord terminal failure must be a Failure or null");
   }
-  requireRoutingNode(state, nodeId);
+  requireOutcomeNode(state, nodeId, "NodeRouted");
+  requireNoPendingCommit(state, nodeId, "NodeRouted");
 }
 
 /** Whether two sets of ids hold the same ids, in any order. */
@@ -5527,7 +5357,8 @@ function validateFailureRecord(state: RunState, record: NodeFailedRecord): void 
   const nodeId: unknown = record.failure.nodeId;
   if (typeof nodeId !== "string") throw new TypeError("NodeFailedRecord failure node_id must be a string");
   if (!nodeId) throw new RangeError("NodeFailedRecord failure node_id must be non-empty");
-  requireFailingNode(state, nodeId);
+  requireOutcomeNode(state, nodeId, "NodeFailed");
+  requireNoPendingCommit(state, nodeId, "NodeFailed");
   validateLearnedScope(state, nodeId);
 }
 
@@ -5577,13 +5408,7 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   if (targetNode === undefined) {
     throw new RangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
   }
-  const derived = isDerivedCommit(state, record.nodeId);
-  if (derived && record.from === null) {
-    throw new RangeError(`pool_commit of ${reprText(record.nodeId)} must hold from: its node is derived`);
-  }
-  if (!derived && record.from !== null) {
-    throw new RangeError(`pool_commit of ${reprText(record.nodeId)} holds from, but its node isn't derived`);
-  }
+  requireCommitFrom(state, record.nodeId, record.from);
   // A derived commit's value is rebuilt, and checked, when its success accepts it.
   if (record.value === null) return;
   const typed = TypedValue.fromWire(record.value);
@@ -5594,18 +5419,40 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
 }
 
 /**
- * The seqs of the steps `nodeId`'s new messages are made of: the `n`s its node picks from its
- * recorded steps (`Node.messageSteps`), each mapped to its record's seq.
+ * Require a node's own commit to hold `from` exactly when its node is derived (`isDerivedCommit`).
+ *
+ * @throws RangeError otherwise.
+ */
+function requireCommitFrom(state: RunState, nodeId: string, from: ReadonlyMap<string, number> | null): void {
+  const derived = isDerivedCommit(state, nodeId);
+  if (derived && from === null) {
+    throw new RangeError(`pool_commit of ${reprText(nodeId)} must hold from: its node is derived`);
+  }
+  if (!derived && from !== null) {
+    throw new RangeError(`pool_commit of ${reprText(nodeId)} holds from, but its node isn't derived`);
+  }
+}
+
+/**
+ * The `n`s of the steps `nodeId`'s new messages are made of, as its node picks them from its
+ * recorded steps (`Node.messageSteps`).
  *
  * @throws RangeError when the node picks a step it didn't record.
  */
+function messageStepNumbers(state: RunState, nodeId: string): number[] {
+  const steps = state.nodeSteps.get(nodeId) ?? [];
+  return state.flow.nodes.get(nodeId)!.messageSteps(steps).map((n) => {
+    if (!(Number.isSafeInteger(n) && 1 <= n && n <= steps.length)) {
+      throw new RangeError(`node ${reprText(nodeId)} picked step ${n}, which it didn't record`);
+    }
+    return n;
+  });
+}
+
+/** The seqs of the steps `nodeId`'s new messages are made of (`messageStepNumbers`). */
 function messageStepSeqs(state: RunState, nodeId: string): number[] {
   const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
-  return state.flow.nodes.get(nodeId)!.messageSteps(state.nodeSteps.get(nodeId) ?? []).map((n) => {
-    const seq = Number.isSafeInteger(n) ? seqs[n - 1] : undefined;
-    if (seq === undefined) throw new RangeError(`node ${reprText(nodeId)} picked step ${n}, which it didn't record`);
-    return seq;
-  });
+  return messageStepNumbers(state, nodeId).map((n) => seqs[n - 1]!);
 }
 
 /**
@@ -5639,16 +5486,17 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
   if (pending !== undefined) {
     throw new RangeError(`node ${reprText(nodeId)} already has a pending messages commit at seq ${pending.seq}`);
   }
-  const expected = messageStepSeqs(state, nodeId);
+  const numbers = messageStepNumbers(state, nodeId);
+  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  const expected = numbers.map((n) => seqs[n - 1]!);
   if (!sameItems(record.steps!, expected)) {
     throw new RangeError(
       `the messages commit of ${reprText(nodeId)} must name steps [${expected.join(", ")}], found [${record.steps!.join(", ")}]`,
     );
   }
-  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  const steps = state.nodeSteps.get(nodeId) ?? [];
   // A steer step's events are rebuilt into messages, so it needs its values.
-  const bodies = stepsWithSteerValues(state, nodeId) as unknown as readonly Readonly<JsonObject>[];
-  const picked = record.steps!.map((seq) => bodies[seqs.indexOf(seq)]!);
+  const picked = numbers.map((n) => stepWithSteerValues(state, nodeId, steps[n - 1]!) as unknown as Readonly<JsonObject>);
   try {
     const [wire] = canonicalTyped(node.rebuildMessages(picked, decodeTyped(output.valueJson)), newMessagesType());
     return logJson(wire);
@@ -5711,7 +5559,7 @@ function validateSend(state: RunState, record: PoolCommitRecord): void {
  *   commit.
  */
 function validateSuccessCommit(state: RunState, record: NodeSucceededRecord): void {
-  requireSucceedingNode(state, record.nodeId);
+  requireOutcomeNode(state, record.nodeId, "NodeSucceeded");
   const pending = state.pendingCommits.get(record.nodeId);
   if (pending?.seq !== record.commit) {
     throw new RangeError(
@@ -5945,7 +5793,7 @@ interface JoinScratch {
 }
 
 /**
- * Validate one route and return its frozen skip closure, plus the terminal failure it first
+ * Return one validated route's frozen skip closure, plus the terminal failure it first
  * proves (`causalFailure`), if any.
  */
 function prepareRouteDelta(
@@ -5953,7 +5801,6 @@ function prepareRouteDelta(
   record: NodeRoutedRecord,
   deriveTerminalFailure: boolean,
 ): { delta: RouteDelta; causalFailure: Failure | null } {
-  validateRouteRecord(state, record);
   const edgeUpdates = new Map<string, NodeState>();
   const edgeHeads: string[] = [];
   const skippedNodeIds: string[] = [];
@@ -6463,11 +6310,9 @@ function requirePristine(state: RunState): void {
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.backwardState, RuntimeBackwardState) &&
-    isExactly(state.memoryAuthority, MemoryAuthority) &&
     isExactly(state.initialStaticIds, Set);
   if (!exactContainers) throw new RangeError("RunStarted requires pristine reducer container types");
   const flow = state.flow;
-  const authority = state.memoryAuthority;
   const pristine =
     state.pool.startId === flow.startId &&
     state.pool.store.size === 0 &&
@@ -6518,11 +6363,6 @@ function requirePristine(state: RunState): void {
     // An empty backward state: no attempt and no memory order.
     state.backwardState.attempts.length === 0 &&
     state.backwardState.memoryOrder.length === 0 &&
-    authority.snapshots === null &&
-    authority.memories === null &&
-    authority.memoryStacks === null &&
-    authority.learnable === false &&
-    authority.memoryOrder === state.backwardState.memoryOrder &&
     sameIds(state.initialStaticIds, flow.nodes.keys());
   if (!pristine) throw new RangeError("RunStarted requires a pristine RunState at sequence 0");
 }
@@ -6567,16 +6407,12 @@ interface RunStartedApply {
   numWorkers: number;
   effectiveLlmByStaticPath: Record<string, JsonObject>;
   callTimeLlm: JsonObject | null;
-  memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
-  memories: readonly MemorySpec[] | null;
-  memoryStacks: readonly MemoryStack[] | null;
+  memory: RunMemory;
   recordedSkills: Readonly<Record<string, RecordedSkill>>;
   recordedTools: Readonly<Record<string, RecordedTool>>;
   recordedToolGroups: Readonly<Record<string, readonly string[]>>;
-  learnable: boolean;
   runDefaults: Defaults;
   backwardState: RuntimeBackwardState;
-  memoryAuthority: MemoryAuthority;
   observers: readonly RunEvent[];
 }
 
@@ -6620,22 +6456,17 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     numWorkers: record.numWorkers,
     effectiveLlmByStaticPath: effective as Record<string, JsonObject>,
     callTimeLlm: record.callTimeLlm === null ? null : (canonicalSeed(record.callTimeLlm)[1] as JsonObject),
-    memorySnapshots: record.memorySnapshots,
-    memories: record.memories,
-    memoryStacks: record.memoryStacks,
+    memory: {
+      snapshots: record.memorySnapshots,
+      memories: record.memories,
+      memoryStacks: record.memoryStacks,
+      learnable: record.learnable,
+    },
     recordedSkills: record.skills,
     recordedTools: record.tools,
     recordedToolGroups: record.toolGroups,
-    learnable: record.learnable,
     runDefaults: fromRecorded(record.defaults),
     backwardState,
-    memoryAuthority: new MemoryAuthority(
-      record.memorySnapshots,
-      record.learnable,
-      record.memories,
-      record.memoryStacks,
-      backwardState.memoryOrder,
-    ),
     observers: [new RunStarted()],
   };
 }
@@ -6659,16 +6490,12 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.numWorkers = apply.numWorkers;
   state.effectiveLlmByStaticPath = apply.effectiveLlmByStaticPath;
   state.callTimeLlm = apply.callTimeLlm;
-  state.memorySnapshots = apply.memorySnapshots;
-  state.memories = apply.memories;
-  state.memoryStacks = apply.memoryStacks;
+  state.installMemory(apply.memory);
   state.recordedSkills = apply.recordedSkills;
   state.recordedTools = apply.recordedTools;
   state.recordedToolGroups = apply.recordedToolGroups;
-  state.learnable = apply.learnable;
   state.runDefaults = apply.runDefaults;
   state.backwardState = apply.backwardState;
-  state.memoryAuthority = apply.memoryAuthority;
   state.nextSequence = apply.nextSequence;
 }
 

@@ -73,7 +73,6 @@ import {
   BackwardReadyRecord,
   BackwardStartedRecord,
   canonicalSeed,
-  encodeRecord,
   executionScopePayload,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
@@ -82,10 +81,7 @@ import {
   NodeFailedRecord,
   NodeRoutedRecord,
   NodeSucceededRecord,
-  RecordEnvelope,
   routePayload,
-  type RunRecord,
-  SCHEMA_VERSION,
 } from "./log.ts";
 import { type OutcomeRecord, RetainedTrace, type TraceOccurrence, TraceTerminal, visibleInputs } from "./trace.ts";
 
@@ -863,36 +859,6 @@ export class RuntimeBackwardState {
       learning: prefixLearning(this),
     });
   }
-}
-
-/** Whether two records have the same canonical text, the class included. */
-function sameRecord(a: RunRecord, b: RunRecord): boolean {
-  const text = (record: RunRecord) => encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r", 0, record));
-  return text(a) === text(b);
-}
-
-/**
- * Whether two backward states have the same memory order and attempts, each attempt the same
- * object or with the same records by canonical text; Python's dataclass `==`.
- *
- * The reducer keeps earlier attempts by reference, so the identity check leaves only the changed
- * attempt to compare by text.
- */
-export function sameRuntimeBackwardState(a: RuntimeBackwardState, b: RuntimeBackwardState): boolean {
-  return (
-    sameItems(a.memoryOrder, b.memoryOrder) &&
-    sameItems(
-      a.attempts,
-      b.attempts,
-      (x, y) =>
-        x === y ||
-        (sameRecord(x.started, y.started) &&
-          sameOptional<RunRecord>(x.ready, y.ready, sameRecord) &&
-          sameOptional<RunRecord>(x.finished, y.finished, sameRecord) &&
-          sameItems<RunRecord>(x.requests, y.requests, sameRecord) &&
-          sameItems<RunRecord>(x.observations, y.observations, sameRecord)),
-    )
-  );
 }
 
 /**

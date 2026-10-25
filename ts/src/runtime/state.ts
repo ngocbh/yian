@@ -4377,18 +4377,21 @@ function forgetNodeSteps(state: RunState, nodeId: string): void {
  * @throws RangeError when a consumed send's value is gone (the log and the state disagree).
  */
 export function stepsWithSteerValues(state: RunState, nodeId: string): ValueRecord[] {
-  return (state.nodeSteps.get(nodeId) ?? []).map((step) => {
-    const copy = structuredClone(step) as ValueRecord;
-    if (step["kind"] !== "steer") return copy;
-    copy["values"] = (seqList(step["from"]) ?? []).map((seq) => {
-      const value = state.inboxEvents.get(seq);
-      if (value === undefined) {
-        throw new RangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
-      }
-      return copyValue(value.toObject());
-    });
-    return copy;
+  return (state.nodeSteps.get(nodeId) ?? []).map((step) => stepWithSteerValues(state, nodeId, step));
+}
+
+/** A copy of one of `nodeId`'s recorded steps, a `steer` step's given its values (`stepsWithSteerValues`). */
+function stepWithSteerValues(state: RunState, nodeId: string, step: Readonly<JsonObject>): ValueRecord {
+  const copy = structuredClone(step) as ValueRecord;
+  if (step["kind"] !== "steer") return copy;
+  copy["values"] = (seqList(step["from"]) ?? []).map((seq) => {
+    const value = state.inboxEvents.get(seq);
+    if (value === undefined) {
+      throw new RangeError(`node ${reprText(nodeId)}'s steer step names send ${seq}, which the run doesn't hold`);
+    }
+    return copyValue(value.toObject());
   });
+  return copy;
 }
 
 /** Require an existing unknown node in the in-flight frontier, with no pending commit. */
@@ -5429,18 +5432,25 @@ function requireCommitFrom(state: RunState, nodeId: string, from: ReadonlyMap<st
 }
 
 /**
- * The seqs of the steps `nodeId`'s new messages are made of: the `n`s its node picks from its
- * recorded steps (`Node.messageSteps`), each mapped to its record's seq.
+ * The `n`s of the steps `nodeId`'s new messages are made of, as its node picks them from its
+ * recorded steps (`Node.messageSteps`).
  *
  * @throws RangeError when the node picks a step it didn't record.
  */
+function messageStepNumbers(state: RunState, nodeId: string): number[] {
+  const steps = state.nodeSteps.get(nodeId) ?? [];
+  return state.flow.nodes.get(nodeId)!.messageSteps(steps).map((n) => {
+    if (!(Number.isSafeInteger(n) && 1 <= n && n <= steps.length)) {
+      throw new RangeError(`node ${reprText(nodeId)} picked step ${n}, which it didn't record`);
+    }
+    return n;
+  });
+}
+
+/** The seqs of the steps `nodeId`'s new messages are made of (`messageStepNumbers`). */
 function messageStepSeqs(state: RunState, nodeId: string): number[] {
   const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
-  return state.flow.nodes.get(nodeId)!.messageSteps(state.nodeSteps.get(nodeId) ?? []).map((n) => {
-    const seq = Number.isSafeInteger(n) ? seqs[n - 1] : undefined;
-    if (seq === undefined) throw new RangeError(`node ${reprText(nodeId)} picked step ${n}, which it didn't record`);
-    return seq;
-  });
+  return messageStepNumbers(state, nodeId).map((n) => seqs[n - 1]!);
 }
 
 /**
@@ -5474,16 +5484,17 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
   if (pending !== undefined) {
     throw new RangeError(`node ${reprText(nodeId)} already has a pending messages commit at seq ${pending.seq}`);
   }
-  const expected = messageStepSeqs(state, nodeId);
+  const numbers = messageStepNumbers(state, nodeId);
+  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  const expected = numbers.map((n) => seqs[n - 1]!);
   if (!sameItems(record.steps!, expected)) {
     throw new RangeError(
       `the messages commit of ${reprText(nodeId)} must name steps [${expected.join(", ")}], found [${record.steps!.join(", ")}]`,
     );
   }
-  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  const steps = state.nodeSteps.get(nodeId) ?? [];
   // A steer step's events are rebuilt into messages, so it needs its values.
-  const bodies = stepsWithSteerValues(state, nodeId) as unknown as readonly Readonly<JsonObject>[];
-  const picked = record.steps!.map((seq) => bodies[seqs.indexOf(seq)]!);
+  const picked = numbers.map((n) => stepWithSteerValues(state, nodeId, steps[n - 1]!) as unknown as Readonly<JsonObject>);
   try {
     const [wire] = canonicalTyped(node.rebuildMessages(picked, decodeTyped(output.valueJson)), newMessagesType());
     return logJson(wire);

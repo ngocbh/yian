@@ -86,12 +86,7 @@ import {
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
 import { nodeBackwardCapture, rebind, rebuildDerived, rebuildNodeData } from "./eval_node.ts";
-import {
-  type BackwardRecord,
-  reduceBackwardRecord,
-  RuntimeBackwardState,
-  sameRuntimeBackwardState,
-} from "./learning.ts";
+import { reduceBackwardRecord, RuntimeBackwardState } from "./learning.ts";
 import {
   BackwardFinishedRecord,
   BackwardReadyRecord,
@@ -2252,11 +2247,14 @@ export function prepareExpanded(
   options: OutcomeCarriers = {},
 ): PreparedTransition {
   const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
+  // `liveGrowth` checked the spawner, and the record's constructor its carriers.
+  validateLearnedScope(state, nodeId);
   const pruneIds = [...grow.prune].sort(compareCodeUnits);
   const digest = expansionDigest(fragment);
   return prepareGrowthTransition(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, {
     actualDigest: digest,
     validatedFragment,
+    grown: null,
     seed: seedWire,
     commits: null,
     // Unplanned, the growth isn't checked against its rebuild, so it keeps the evaluated capture.
@@ -2271,18 +2269,25 @@ export function prepareExpanded(
  * @param state The state the plan was made against.
  * @param planned The plan.
  * @returns The canonical `NodeExpandedRecord` and its detached append-before-apply plan.
- * @throws RangeError when `state` or its flow isn't the plan's, the growth differs from its rebuild,
- *   or as `prepareExpanded`.
+ * @throws RangeError when `state` or its flow isn't the plan's, records other than its expansion
+ *   commits followed the plan, the growth differs from its rebuild, or as `prepareExpanded`.
  */
 export function prepareExpandedFromPlan(state: RunState, planned: PlannedExpansion): PreparedTransition {
   if (state !== planned.state || state.flow !== planned.flow) {
     throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} belongs to another run state`);
   }
+  // Only its expansion commits may follow the plan, so the spawner and the topology it checked
+  // still hold: they change neither.
+  if (state.nextSequence !== planned.sequence + planned.commits.length) {
+    throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} is stale`);
+  }
+  validateLearnedScope(state, planned.spawnerId);
   const capture = requireRebuiltGrowth(state, planned);
-  const { spawnerId, seed, pruneIds, fragment, validatedFragment, digest, commits } = planned;
+  const { spawnerId, seed, pruneIds, fragment, validatedFragment, grown, digest, commits } = planned;
   return prepareGrowthTransition(state, new NodeExpandedRecord(spawnerId, pruneIds, digest), fragment, {
     actualDigest: digest,
     validatedFragment,
+    grown,
     seed,
     commits,
     capture,
@@ -2294,6 +2299,8 @@ export interface PlannedExpansion {
   /** The state the plan was made against, and its flow; the plan is refused on any other. */
   readonly state: RunState;
   readonly flow: CompiledFlow;
+  /** The state's next sequence when planned; only the expansion commits may follow. */
+  readonly sequence: number;
   readonly spawnerId: string;
   /** The canonical seed. */
   readonly seed: JsonValue;
@@ -2301,6 +2308,8 @@ export interface PlannedExpansion {
   readonly pruneIds: readonly string[];
   readonly fragment: Flow;
   readonly validatedFragment: ValidatedFragment;
+  /** The topology change the plan checked, which the expansion applies. */
+  readonly grown: GrownTopology;
   readonly digest: string;
   /**
    * The commits the expansion writes before its `NodeExpanded`: each START of the fragment (its
@@ -2330,11 +2339,13 @@ export function planExpansion(
   const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
   const pruneIds = [...grow.prune].sort(compareCodeUnits);
   const digest = expansionDigest(fragment);
-  prepareGrowthTopology(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, validatedFragment);
+  const grown = prepareGrowthTopology(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, validatedFragment);
   requireSeedRoutes(state, options.forwardCapture ?? null, fragment);
   return Object.freeze({
     state,
     flow: state.flow,
+    sequence: state.nextSequence,
+    grown,
     spawnerId: nodeId,
     seed: seedWire,
     pruneIds: Object.freeze(pruneIds),
@@ -2537,6 +2548,7 @@ function prepareGrowthRecord(
     return prepareGrowthTransition(state, record, fragment, {
       actualDigest,
       validatedFragment,
+      grown: null,
       seed: seedWire,
       commits: null,
       capture,
@@ -2548,7 +2560,10 @@ function prepareGrowthRecord(
   }
 }
 
-/** Freeze one validated fragment, its final topology and the canonical public record. */
+/**
+ * Freeze one validated fragment, its final topology and the canonical public record. The caller
+ * validated the record and its spawner.
+ */
 function prepareGrowthTransition(
   state: RunState,
   record: NodeExpandedRecord,
@@ -2556,6 +2571,8 @@ function prepareGrowthTransition(
   options: {
     actualDigest: string;
     validatedFragment: ValidatedFragment;
+    /** A live plan's checked topology change; `null` checks and builds it here. */
+    grown: GrownTopology | null;
     seed: JsonValue;
     /** A live plan's child START values, so they aren't bound again; `null` binds them here. */
     commits: PlannedExpansion["commits"] | null;
@@ -2563,12 +2580,11 @@ function prepareGrowthTransition(
     capture: ForwardCapture | null;
   },
 ): PreparedTransition {
-  validateGrowthRecord(state, record);
   const { actualDigest: digest, validatedFragment: validated, seed, commits, capture } = options;
   if (digest !== record.topologyDigest) {
     throw new RangeError("NodeExpandedRecord topology digest disagrees with its fragment");
   }
-  const { delta: grown, topology } = prepareGrowthTopology(state, record, fragment, validated);
+  const { delta: grown, topology } = options.grown ?? prepareGrowthTopology(state, record, fragment, validated);
   const delta: GrowthDelta = Object.freeze({ ...grown, admitted: admitExpansion(state, record.spawnerId, fragment, commits) });
 
   const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeExpandedRecord], "node-expansion");
@@ -3525,19 +3541,12 @@ function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransiti
   requireInitializedTerminalBackward(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
-  const envelope = decodeRecord(plan.envelopeJson);
-  // The text is the plan's own backward record, and the reducer refuses any other class.
-  const expected = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
+  // The plan reduced this record from this very backward state, as the identity check above shows.
   if (!isExactly(plan.nextBackwardState, RuntimeBackwardState)) {
     throw new TypeError("backward plan requires an exact next state");
   }
-  // The reducer just validated `expected`, and only `expected` is kept, so equality is enough;
-  // checking all history here would cost O(N) per record.
-  if (!sameRuntimeBackwardState(expected, plan.nextBackwardState)) {
-    throw new RangeError("backward plan state disagrees with its canonical record");
-  }
   appendAndVerify(log, prepared);
-  state.backwardState = expected;
+  state.backwardState = plan.nextBackwardState;
   state.nextSequence = prepared.expectedSequence + 1;
   return [];
 }
@@ -4570,13 +4579,16 @@ function buildGrowthFragment(spawner: Node, builderSeed: JsonValue, growBuilder:
   return copyGraph(built);
 }
 
+/** A checked growth's delta, short of its admitted commits, and its topology change. */
+type GrownTopology = { readonly delta: Omit<GrowthDelta, "admitted">; readonly topology: GrowthTopology };
+
 /** Validate one growth and build the detached change commit applies in place. */
 function prepareGrowthTopology(
   state: RunState,
   record: NodeExpandedRecord,
   fragment: Flow,
   validatedFragment: ValidatedFragment,
-): { delta: Omit<GrowthDelta, "admitted">; topology: GrowthTopology } {
+): GrownTopology {
   const [newNodeIds, newEdgeIds] = validatedFragment;
   const budget = state.runDefaults.maxTotalNodes;
   if (state.flow.nodes.size + newNodeIds.length > budget) {

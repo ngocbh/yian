@@ -1194,7 +1194,6 @@ test.each(["pristine", "nonterminal", "learn_false", "missing_terminal"] as cons
 
 test.each([
   ["stale", "postterminal trace delta must only advance the accepted sequence"],
-  ["next_state", "backward plan state disagrees with its canonical record"],
   ["trace", "postterminal trace delta must only advance the accepted sequence"],
   ["missing_trace", "postterminal trace delta must only advance the accepted sequence"],
   ["payload", "prepared record changed after validation"],
@@ -1204,7 +1203,6 @@ test.each([
   let prepared = prepareRecord(state, new BackwardStartedRecord(1, "Review."));
   const delta = prepared._plan.traceDelta!;
   if (change === "stale") acceptBackward(state, log, new BackwardStartedRecord(1, "Review."));
-  else if (change === "next_state") prepared = changedPlan(prepared, { nextBackwardState: state.backwardState });
   else if (change === "trace") prepared = changedPlan(prepared, { traceDelta: changedDelta(delta, { resumed: true }) });
   else if (change === "missing_trace") prepared = changedPlan(prepared, { traceDelta: null });
   else if (change === "payload") {

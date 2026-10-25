@@ -148,7 +148,9 @@ import {
   type PreparedTransition,
   prepareExpanded,
   prepareExpandedFromPlan,
+  prepareExpansionCommit,
   prepareNodeStarted,
+  prepareNodeStep,
   prepareRecord,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -335,6 +337,15 @@ test("a planned expansion is refused on another state", () => {
   );
 
   expectUnchanged(other.state, before);
+});
+
+test("a planned expansion is refused once another record follows its plan", () => {
+  const { state, log } = initializedSpawner();
+  const planned = planExpansion(state, "spawn", new Grow({}), fragmentBuilder);
+  for (const [key] of planned.commits) commitPrepared(log, state, prepareExpansionCommit(state, "spawn", key, new Map()));
+  commitPrepared(log, state, prepareNodeStep(state, "spawn", { kind: "test" }));
+
+  expectError(() => prepareExpandedFromPlan(state, planned), RangeError, /^the planned expansion of 'spawn' is stale$/);
 });
 
 test("growth rejects a cyclic seed before the builder", () => {

@@ -1,0 +1,36 @@
+# The same read through ?. loads.
+kind: load
+rules: [null-field-read]
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: code
+      output:
+        qty: int
+      code: |
+        return {"qty": 2}
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    use:
+      kind: code
+      input:
+        v: '${order.output?.qty} items'
+      output: str
+      code: |
+        return "x"
+  output: ${use.output}
+expect:
+  load: ok

@@ -1,0 +1,42 @@
+# A producer that may be skipped is null whatever its type, so an untyped one needs ?. too.
+kind: load
+rules: [null-field-read]
+flow: |
+  id: f
+  name: f
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: order
+      else: rejected
+    order:
+      kind: code
+      code: |
+        return {"qty": 2}
+    rejected:
+      kind: code
+      output: str
+      code: |
+        return "no"
+    use:
+      kind: code
+      input:
+        v: '${order.output.qty} items'
+      output: str
+      code: |
+        return "x"
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+      - code: expr.nullable_field_read
+        message: "node 'use' input 'v': ${order.output.qty} reads field 'qty' of order.output, which may be null (node 'order' may be skipped while 'use' runs); write order.output?.qty, or check order.output != null first"
+        frames:
+          - label: flow.yaml
+            range: [24, 10, 24, 37]
+python_expect:
+  load: ok

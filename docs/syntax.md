@@ -3262,6 +3262,9 @@ output over the branches may be null. Arithmetic in such a `when:` on a value th
 be a skipped null is now a load error. A `case` whose searched `when:` reads a node
 under `:-`, `:?` or `|` gets a new fingerprint; others keep theirs.
 
+Changed: an `on:` with no `${...}`, such as `on: input.v`, used to load and route on that
+constant text; it is now a load error at `on:`.
+
 Simple form — match a value:
 
 ```yaml
@@ -3278,6 +3281,8 @@ route:
 
 Matching:
 
+- `on:` holds a reference such as `${synth.output}`; text with no `${...}` would compare
+  the same constant on every run, so it is a load error.
 - Each `when:` is a value of the `on:` type: text, a number, or a bool. An unquoted date
   is its ISO text; quote a datetime.
 - Changed (TS yian): an unquoted date or timestamp `when:` is text and matches that text as
@@ -3293,6 +3298,7 @@ Matching:
   a child flow's inputs), a `when:` it can't hold is a load error, even with an `else:`:
 
 ```text
+node 'route' (kind=case): `on:` must be a reference, but has no `${...}`; write a reference such as `on: ${input.x}`
 case node 'route': `when: 1` is an int but `on: ${input.n}` is `str`; quote it: `when: "1"`
 case node 'route': `when: nogo` is not a tag of `on: ${synth.output}` (`Literal(go, no_go)`); use one of: go, no_go
 case node 'route': `when: 1.0` duplicates `when: 1` (first at line 7), so it never matches; remove one

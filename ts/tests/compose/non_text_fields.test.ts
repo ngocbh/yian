@@ -560,6 +560,7 @@ describe("parseNodes", () => {
     "load-core/compose_non_text_fields__non_text_call_on_a_call_node",
     "load-core/compose_non_text_fields__non_text_call_on_a_loop_node",
     "load-core/compose_non_text_fields__non_text_call_on_a_map_node",
+    "load-core/compose_non_text_fields__case_on_without_reference",
     "load-core/compose_non_text_fields__non_text_case_on",
     "load-core/compose_non_text_fields__non_text_code",
     "load-core/compose_non_text_fields__non_text_loop_while",

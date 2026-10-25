@@ -1681,12 +1681,14 @@ export function readTypedefs(
           throw new TypeCheckError(
             `typedef ${reprText(name)} field ${reprText(fname)}: field names must be ` +
               "non-empty strings",
+            { path: [name, fname] },
           );
         }
         if (!encodesAsUtf8(fname)) {
           throw new TypeCheckError(
             `typedef ${reprText(name)} field ${reprText(fname)}: field names must not ` +
               "contain a Unicode surrogate",
+            { path: [name, fname] },
           );
         }
         if (typeof ftype !== "string") {

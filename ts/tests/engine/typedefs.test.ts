@@ -294,7 +294,7 @@ describe("record fields", () => {
     ["", "typedef 'R' field '': field names must be non-empty strings"],
     ["\ud800", "typedef 'R' field '\\ud800': field names must not contain a Unicode surrogate"],
   ])("field name %p is rejected", (field, message) => {
-    expectRejected({ R: { [field]: "int" } }, message, []);
+    expectRejected({ R: { [field]: "int" } }, message, ["R", field]);
   });
 
   test("__proto__ and constructor are ordinary fields", () => {

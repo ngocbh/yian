@@ -162,17 +162,18 @@ def test_record_field_must_be_string():
 
 
 @pytest.mark.parametrize(
-    ("fields", "message"),
+    ("fields", "message", "path"),
     [
-        ({"": "int"}, "typedef 'R' field '': field names must be non-empty strings"),
-        ({1: "int"}, "typedef 'R' field 1: field names must be non-empty strings"),
-        ({"\ud800": "int"}, "field names must not contain a Unicode surrogate"),
+        ({"": "int"}, "typedef 'R' field '': field names must be non-empty strings", ("R", "")),
+        ({1: "int"}, "typedef 'R' field 1: field names must be non-empty strings", ("R",)),
+        ({"\ud800": "int"}, "field names must not contain a Unicode surrogate", ("R", "\ud800")),
     ],
 )
-def test_record_field_name_rejected(fields, message):
+def test_record_field_name_rejected(fields, message, path):
     with pytest.raises(TypeCheckError) as ei:
         read_typedefs({"R": fields})
     assert message in str(ei.value)
+    assert ei.value.path == path
 
 
 @pytest.mark.parametrize(

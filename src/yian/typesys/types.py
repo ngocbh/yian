@@ -1347,12 +1347,14 @@ def read_typedefs(raw: dict) -> TypeRegistry:
             for fname, ftype in value.items():
                 if type(fname) is not str or not fname:
                     raise TypeCheckError(
-                        f"typedef {name!r} field {fname!r}: field names must be non-empty strings"
+                        f"typedef {name!r} field {fname!r}: field names must be non-empty strings",
+                        path=(name, fname) if isinstance(fname, str) else (name,),
                     )
                 if not encodes_as_utf8(fname):
                     raise TypeCheckError(
                         f"typedef {name!r} field {fname!r}: field names must not contain a "
-                        f"Unicode surrogate"
+                        f"Unicode surrogate",
+                        path=(name, fname),
                     )
                 if not isinstance(ftype, str):
                     raise TypeCheckError(

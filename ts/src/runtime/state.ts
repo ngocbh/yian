@@ -5083,12 +5083,15 @@ function validateGrowthReachability(fragment: Flow): void {
   }
 }
 
-/** Apply the closed reference rules to raw or carrier-wrapped fragment wiring. */
+/**
+ * Apply the closed reference rules to raw or carrier-wrapped fragment wiring. `readableNames` holds
+ * the fragment and live node ids, plus `<id>.new_messages` for each AGENT that produces messages.
+ */
 function validateGrowthWiringRefs(
   nodeId: string,
   node: Node,
   wiring: ReadonlyMap<string, unknown>,
-  combinedNodeIds: { has(id: string): boolean },
+  readableNames: { has(name: string): boolean },
   producerContract: (nodeId: string) => OutputContract | null,
   reserved: ReadonlySet<string>,
 ): void {
@@ -5109,7 +5112,7 @@ function validateGrowthWiringRefs(
     }
     for (const path of paths) {
       const extraHeads = node.bindsPerItem === true && !reserved.has(param) ? ["item"] : [];
-      let error = classifyPath(path, combinedNodeIds, new Set(), extraHeads);
+      let error = classifyPath(path, readableNames, new Set(), extraHeads);
       const parts = path.split(".");
       const contract =
         error === null && parts.length >= 2 && parts[1] === "output" ? producerContract(parts[0]!) : null;

@@ -552,6 +552,19 @@ def _writable_as_tag(text: str) -> bool:
     return bool(text) and all(char in _TAG_CHARACTERS for char in text)
 
 
+def _closing_paren(text: str) -> int:
+    """Return the index of the `)` that closes the `(` at `text[0]`, or -1 when it isn't closed."""
+    depth = 0
+    for index, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
 @dataclass(frozen=True)
 class TaggedSlot:
     """One slot's authored value, read through its tags.
@@ -813,7 +826,7 @@ class _TaggedValueReader:
             return
         tag = cursor.tag
         assert tag is not None
-        close = value.find(")")
+        close = _closing_paren(value)
         joined = tag + (value if close < 0 else value[: close + 1])
         label = path_label(self.label, path)
         if _writable_as_tag(joined) and _resolves(joined, self.registry):

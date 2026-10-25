@@ -404,6 +404,8 @@ describe("readTaggedValue", () => {
     ["x: !int (1..12) 5\n", "`!int(1..12)`"],
     ["x: !Optional (str)\n", "`!Optional(str)`"],
     ["x: [!int (1..12) 5]\n", "`!int(1..12)`"],
+    ["x: !Optional (list(int))\n", "`!Optional(list(int))`"],
+    ["x: !list (Optional(int))\n", "`!list(Optional(int))`"],
   ])("a space after a tag is an error: %p", (text, spelled) => {
     fails(text, `a YAML tag ends at the first space; write ${spelled} without spaces`);
   });

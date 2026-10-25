@@ -200,6 +200,8 @@ def test_nested_empty_tag_is_an_error(text):
         ("x: !int (1..12) 5\n", "`!int(1..12)`"),
         ("x: !Optional (str)\n", "`!Optional(str)`"),
         ("x: [!int (1..12) 5]\n", "`!int(1..12)`"),
+        ("x: !Optional (list(int))\n", "`!Optional(list(int))`"),
+        ("x: !list (Optional(int))\n", "`!list(Optional(int))`"),
     ],
 )
 def test_space_after_a_tag_is_an_error(text, spelled):

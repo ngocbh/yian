@@ -432,6 +432,37 @@ async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void>
   assert.deepEqual(await early, { aborted: true, draft: "kept" });
 }
 
+async function escapeAtReadLineReturnsTheDraft(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, view, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const line = terminal.readLine("You:", { escape: true, initial: "half" });
+  input.write("x");
+  await tick();
+  // A lone Escape: readline sends it once its escape timeout passes with no key after it.
+  input.write(ESCAPE);
+  assert.deepEqual(await line, { escape: true, draft: "halfx" });
+  // The prompt is erased, as an aborted one is, and the terminal is given back.
+  assert.deepEqual(view().rows, []);
+  assertRestored(input, output, exitHooks);
+  assert.deepEqual(stops, []);
+  // The terminal stays open for the next prompt.
+  const next = terminal.readLine("You:", { escape: true, initial: "halfx" });
+  input.write(ENTER);
+  assert.deepEqual(await next, { value: "halfx" });
+}
+
+async function escapeAtReadLineWithoutTheOptionIsIgnored(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const line = terminal.readLine("You:", { initial: "half" });
+  input.write(ESCAPE);
+  // Past readline's escape timeout, so the Escape reaches the prompt on its own.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await tick();
+  assert.deepEqual(view().rows, ["> You: half"]);
+  input.write("a" + ENTER);
+  assert.deepEqual(await line, { value: "halfa" });
+}
+
 async function aPlainTerminalWritesNoEscapesAndSetsNoRawMode(): Promise<void> {
   const input = new FakeInput();
   const output = new FakeOutput();
@@ -2231,6 +2262,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
+  "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
+  "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,
   "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
   "a plain terminal sets raw mode for a secret prompt": aPlainTerminalSetsRawModeForASecretPrompt,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,

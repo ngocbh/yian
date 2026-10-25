@@ -95,8 +95,8 @@ interface Widget<T> {
   cursor(): { row: number; before: string } | null;
   /** Apply one key; an outcome ends the widget. */
   key(key: Key): { value: T } | { stop: "interrupt" | "eof" } | undefined;
-  /** The one line the frame collapses to once the widget has ended. */
-  done(outcome: Outcome<T>): string;
+  /** The one line the frame collapses to once the widget has ended; null erases it and leaves none. */
+  done(outcome: Outcome<T>): string | null;
 }
 
 const ESC = "\x1b[";
@@ -295,6 +295,12 @@ function textWidget(options: {
   };
 }
 
+/** What a `readLine` prompt answers when Escape ends it. */
+const ESCAPED: unique symbol = Symbol("escaped");
+
+/** How `readLine` with `escape` ends on Escape: the text typed so far. */
+type Escaped = { escape: true; draft: string };
+
 /**
  * A picker over `titles`, answering the chosen index, so equal titles stay apart. `indicator`
  * draws `●`/`○` before each title.
@@ -484,25 +490,44 @@ export class Terminal {
   /**
    * Read one line at a `> <label>` prompt, starting from `initial`: `{value}` when it is entered,
    * `{interrupt}` for Ctrl-C, `{eof}` for the end of input or a closed terminal, `{aborted}` with
-   * the text typed so far (`draft`) when `signal` aborts first, which erases the prompt. Ctrl-C
-   * leaves the terminal open, so the next `readLine` works; keys typed after the prompt ends wait
-   * for the next one.
+   * the text typed so far (`draft`) when `signal` aborts first, which erases the prompt. With
+   * `escape`, Escape ends the prompt as `{escape}` with the draft, erasing it the same way;
+   * elsewhere Escape is ignored, as before. Ctrl-C and Escape leave the terminal open, so the next
+   * `readLine` works; keys typed after the prompt ends wait for the next one.
    */
-  async readLine(
+  async readLine<E extends boolean = false>(
     label: string,
-    options: { signal?: AbortSignal; initial?: string } = {},
-  ): Promise<{ value: string } | { eof: true } | { interrupt: true } | { aborted: true; draft: string }> {
+    options: { signal?: AbortSignal; initial?: string; escape?: E } = {},
+  ): Promise<
+    | { value: string }
+    | { eof: true }
+    | { interrupt: true }
+    | { aborted: true; draft: string }
+    | (E extends true ? Escaped : never)
+  > {
     const { signal, initial = "" } = options;
-    const widget = textWidget({ label, mark: ">", initial });
+    const text = textWidget({ label, mark: ">", initial });
+    const widget: Widget<string | typeof ESCAPED> = options.escape
+      ? {
+          ...text,
+          key: (key) => (key.name === "escape" ? { value: ESCAPED } : text.key(key)),
+          done: (outcome) =>
+            "value" in outcome && outcome.value === ESCAPED ? null : text.done(outcome as Outcome<string>),
+        }
+      : text;
     if (signal?.aborted) return { aborted: true, draft: initial };
-    let ended: { value: string } | { stop: StopReason };
+    let ended: { value: string | typeof ESCAPED } | { stop: StopReason };
     try {
       ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true });
     } catch (error) {
-      if (signal?.aborted && error === signal.reason) return { aborted: true, draft: widget.text() };
+      if (signal?.aborted && error === signal.reason) return { aborted: true, draft: text.text() };
       throw error;
     }
-    if ("value" in ended) return { value: ended.value };
+    if ("value" in ended) {
+      // Only an `escape` prompt answers ESCAPED, so E is true here.
+      if (ended.value === ESCAPED) return { escape: true, draft: text.text() } as E extends true ? Escaped : never;
+      return { value: ended.value };
+    }
     return ended.stop === "interrupt" ? { interrupt: true } : { eof: true };
   }
 
@@ -804,8 +829,9 @@ export class Terminal {
       const ended = outcome!;
       // A `readLine` a deadline took down leaves no line: the prompt comes back after the reply.
       const vanish = turn.keepOpen && "stop" in ended && ended.stop === "aborted";
-      if (vanish) output.write(erase());
-      else if (!this.#plain) output.write(erase() + crlf(widget.done(ended)) + "\r\n");
+      const line = vanish ? null : widget.done(ended);
+      if (line === null) output.write(erase());
+      else if (!this.#plain) output.write(erase() + crlf(line) + "\r\n");
     } catch (error) {
       finish({ error });
     } finally {

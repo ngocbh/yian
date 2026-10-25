@@ -610,7 +610,7 @@ test.each<[string, (records: RecordEnvelope[]) => RecordEnvelope[], string]>([
 });
 
 test("memory log reopening revalidates exact envelope authority: record", () => {
-  expectError(() => new NodeStartedRecord(1 as never), TypeError, "node_id must be a string");
+  expectError(() => new NodeStartedRecord(1 as never), TypeError, "node_id must be a non-empty string");
 });
 
 test("memory log reopening revalidates exact envelope authority: envelope", () => {

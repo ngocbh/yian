@@ -660,7 +660,7 @@ test.each<[string, string, string]>([
 });
 
 test("record constructors validate programmatically constructed values", () => {
-  expectError(() => new NodeStartedRecord(3 as never), TypeError, "node_id must be a string");
+  expectError(() => new NodeStartedRecord(3 as never), TypeError, "node_id must be a non-empty string");
   expectError(() => new NodeFailedRecord({} as never), TypeError, "NodeFailedRecord failure must be a Failure");
 });
 
@@ -706,14 +706,14 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     "an empty commit key",
     () => new PoolCommitRecord("a", "", { kind: "int", value: 1n }),
     RangeError,
-    "key must be non-empty",
+    "key must be a non-empty string",
   ],
-  ["an empty handle", () => new NodeRoutedRecord("a", ""), RangeError, "handle must be non-empty"],
+  ["an empty handle", () => new NodeRoutedRecord("a", ""), RangeError, "handle must be a non-empty string"],
   [
     "an empty spawner id",
     () => new NodeExpandedRecord("", [], TOPOLOGY_DIGEST),
     RangeError,
-    "spawner_id must be non-empty",
+    "spawner_id must be a non-empty string",
   ],
   [
     "a bad typed-value wire",
@@ -781,13 +781,13 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     "an empty commit memory",
     () => new MemoryCommitSucceededRecord("", "commit", 1),
     RangeError,
-    "memory must be non-empty",
+    "memory must be a non-empty string",
   ],
   [
     "a non-text commit id",
     () => new MemoryCommitRequestedRecord("notes", 3 as never, [], 1),
     TypeError,
-    "commit_id must be a string",
+    "commit_id must be a non-empty string",
   ],
   [
     "commit mutations that aren't an array",
@@ -901,7 +901,7 @@ test("the envelope checks its schema before any other field", () => {
 });
 
 test.each<[string, string, string]>([
-  ["empty", "", "run-record envelope run_id must be a non-empty string"],
+  ["empty", "", "run log run_id must be a non-empty string"],
   ["a lone surrogate", "run-\ud800", "Unicode surrogate is not valid canonical JSON"],
 ])("the envelope refuses a run id: %s", (_name, runId, message) => {
   expectError(() => new RecordEnvelope(SCHEMA_VERSION, runId, 0, new NodeStartedRecord("work")), RangeError, message);

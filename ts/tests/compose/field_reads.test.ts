@@ -597,3 +597,10 @@ test("an untyped root that can't be skipped is never flagged", () => {
   expect(errors("x.k.m", optionalAny)).toEqual([]);
   expect(errors("u.k.m", roots(Rec))).toEqual([]);
 });
+
+test("an arithmetic operand gets the whole fix in one message", () => {
+  const message = errors("x.k + 1 > 1", roots(Rec, true))[0]!;
+  expect(message).toEndWith("write (x?.k :- <default>)");
+  expect(message).not.toContain("check x != null");
+  expect(errors("-(x.k) > 1", roots(Rec, true))[0]).toEndWith("write (x?.k :- <default>)");
+});

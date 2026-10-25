@@ -9,7 +9,7 @@
  */
 
 import { contractType } from "../../compile/output_contracts.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import { type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
 import { type RefStep, splitReference, stepsText } from "../../expr/expressions.ts";
 import { type OutputContract, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
@@ -17,6 +17,7 @@ import { fileFieldType, Type, typeEquals, unionField, ValueKind } from "../../ty
 import { guardedReads } from "../helpers/condition_guards.ts";
 import { type Env, guardedReadTypes, type NarrowedRead } from "../helpers/narrowing_facts.ts";
 import { rootBaseType } from "./asserts.ts";
+import { ARITHMETIC } from "./skips.ts";
 
 /** What a site knows of its reference roots. */
 export interface ReadRoots {
@@ -55,7 +56,8 @@ export function isUntyped(typ: Type | null): boolean {
  * step's receiver when the previous field is `Optional` or not required. Nullability an earlier
  * `?.` introduced doesn't count (TypeScript optional chains). A guard's narrowing lifts it.
  * Untyped receivers are never flagged, except a root that may be skipped: a `.` right after it is
- * flagged whatever the producer's type (design 2.6.6).
+ * flagged whatever the producer's type (design 2.6.6). An operand of arithmetic names the whole
+ * fix, `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message.
  *
  * @param tree A parsed expression.
  * @param roots What the site knows of its roots.
@@ -64,6 +66,7 @@ export function isUntyped(typ: Type | null): boolean {
  */
 export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: TypeRegistry): string[] {
   const messages: string[] = [];
+  const operands = arithmeticOperands(tree);
   for (const { node, path, guard } of guardedReads(tree)) {
     const { head, steps } = splitReference(node);
     const used = roots.rootLength([head, ...steps.map((step) => step.name)]);
@@ -72,7 +75,12 @@ export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: T
     const root = [head, ...steps.slice(0, used - 1).map((step) => step.name)].join(".");
     const alternatives = roots.contracts(root);
     if (alternatives === undefined) continue;
-    const read: Read = { root, rootText: head + stepsText(steps.slice(0, used - 1)), rest };
+    const read: Read = {
+      root,
+      rootText: head + stepsText(steps.slice(0, used - 1)),
+      rest,
+      arithmetic: operands.has(node),
+    };
     let first: string | null = null;
     let accepted = alternatives.length === 0;
     for (const contract of alternatives) {
@@ -102,6 +110,21 @@ interface Read {
   readonly root: string;
   readonly rootText: string;
   readonly rest: readonly RefStep[];
+  /** Whether the read is a direct operand of arithmetic. */
+  readonly arithmetic: boolean;
+}
+
+/** Return the refcalls that are direct operands of arithmetic; parentheses make no node. */
+function arithmeticOperands(tree: ExprNode): Set<ExprNode> {
+  const operands = new Set<ExprNode>();
+  if (!(tree instanceof Tree)) return operands;
+  for (const node of iterSubtreesTopdown(tree)) {
+    if (!ARITHMETIC.has(node.data)) continue;
+    for (const child of node.children) {
+      if (child instanceof Tree && child.data === "refcall") operands.add(child);
+    }
+  }
+  return operands;
 }
 
 /**
@@ -135,11 +158,11 @@ function walk(read: Read, contract: OutputContract, candidate: NarrowedRead | nu
   // A root that may be skipped is a missing root at run time, whatever its type: check its step
   // before the untyped stop.
   if (nullable && (typ === null || typ.nullable) && !read.rest[0]!.optional) {
-    return nullableMessage(prefix, read.rest[0]!.name, why);
+    return nullableMessage(prefix, read.rest[0]!.name, why, read.arithmetic);
   }
   for (const step of read.rest) {
     if (typ === null || isUntyped(typ)) return null;
-    if (typ.nullable && !step.optional) return nullableMessage(prefix, step.name, why);
+    if (typ.nullable && !step.optional) return nullableMessage(prefix, step.name, why, read.arithmetic);
     const field = fieldRead(typ, step.name);
     if (field === null) return null; // the name checks report it
     typ = field.type?.replace({ nullable: field.nullable }) ?? null;
@@ -178,10 +201,13 @@ function fieldRead(typ: Type, name: string): { type: Type | null; nullable: bool
   return { type: field, nullable: optional || !(typ.required?.has(name) ?? false), optional };
 }
 
-/** Return the message for `.name` read on `prefix`, which may be null because of `why`. */
-function nullableMessage(prefix: string, name: string, why: string): string {
-  return (
-    `\${${prefix}.${name}} reads field '${name}' of ${prefix}, which may be null (${why}); ` +
-    `write ${prefix}?.${name}, or check ${prefix} != null first`
-  );
+/**
+ * Return the message for `.name` read on `prefix`, which may be null because of `why`; an
+ * `arithmetic` operand's fix gives the default too.
+ */
+function nullableMessage(prefix: string, name: string, why: string, arithmetic: boolean): string {
+  const fix = arithmetic
+    ? `write (${prefix}?.${name} :- <default>)`
+    : `write ${prefix}?.${name}, or check ${prefix} != null first`;
+  return `\${${prefix}.${name}} reads field '${name}' of ${prefix}, which may be null (${why}); ${fix}`;
 }

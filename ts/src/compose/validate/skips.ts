@@ -48,7 +48,7 @@ import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
 
 // The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus.
-const ARITHMETIC: ReadonlySet<string> = new Set(["sum", "product", "power", "neg"]);
+export const ARITHMETIC: ReadonlySet<string> = new Set(["sum", "product", "power", "neg"]);
 
 /** One searched CASE's authored `when:`: its case index, text, origin and range. */
 export type SearchedWhen = readonly [index: number, when: unknown, origin: OriginRef | null, range: SourceRange | null];

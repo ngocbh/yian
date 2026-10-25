@@ -132,7 +132,8 @@ auto-learning driver or per-key attempt state remains.
 validates them through the shared growth boundary before `runtime.trace` joins
 them to accepted binding routes. Runtime never dispatches on spawner kind.
 
-Memory conversation ownership follows the same lower-layer boundary.
+Memory conversation ownership follows the same lower-layer boundary (Python yian; TS yian
+has no session memory or conversation contracts, and a chat's history is a LOOP field).
 `memory/contracts.py` owns immutable conversation carriers, `MemoryContent`,
 `MemoryContextRequest`, `MemoryContext`, and `TranscriptSource`/`ConversationTurn`.
 Memory recall returns text or a rich content contribution; session transcripts and

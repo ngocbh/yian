@@ -1735,6 +1735,9 @@ nodes:
 output: ${answer.output}
 ```
 
+Changed (TS yian): `session` is not a memory type, so `chat: session` here is a load error
+("session memory was removed; carry the history as a loop field"); see **Session** below for what replaces it.
+
 Three forms are accepted:
 
 | Form | Meaning |
@@ -1793,6 +1796,19 @@ Each session key has exactly one declaring AGENT, and an AGENT declares at most
 one session. Every call site of that AGENT shares one conversation; repeated
 calls, LOOP iterations, and MAP items take turns in admission order. History
 updates automatically during forward, without enabling learning.
+
+Changed (TS yian): no session memory; carry history as a LOOP field. A `session` memory, on
+a flow or an AGENT, is a load error ("session memory was removed; carry the history as a loop field"), and an
+AGENT's model reads only its own start's messages. Within a run, a chat's history is a
+`list(Message)` (or a record list like the examples' `Msg`) that its LOOP carries from turn to
+turn: each turn outputs only its new messages and the body's output binding appends them (see
+[Growing a carried value](#growing-a-carried-value-output-what-is-new-append-in-a-binding)),
+a [list prompt](#a-list-prompt) sends the history as real turns, and a CALL of a compaction
+flow keeps it under a budget ([Examples → `chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat)
+calls [`compact_history.yaml`](examples.md#compact_historyyaml-a-rolling-summary)). Across
+runs, keep facts in a `profile` memory and experiences in `episodic`. A host's steers reach a
+running AGENT through `steer_inbox:` and are recorded as `steer` steps (see
+[Steering a running agent](#steering-a-running-agent-steer_inbox)).
 
 Each declaration's form and config are checked for every def and import. The
 rules that compare declarations (one type and config per key, session
@@ -2558,6 +2574,9 @@ The retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools` settings
 must be removed when migrating. Native thread references cannot be resumed as
 message histories; use fresh SessionMemory. Yian tools execute on the host.
 See [Saved logins](installation.md#saved-logins-yian-auth).
+
+Changed (TS yian): there is no SessionMemory; a chat carries its history as a LOOP field (see
+[Agent memory](#agent-memory-long_term_memory)).
 
 #### Agent-owned variables
 

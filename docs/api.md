@@ -442,7 +442,9 @@ run before appending any record.
   constructs memory. A mapping opens one run-scoped session per memory key,
   enables recall and optional conversation history for AGENT nodes, and records
   exact opening snapshots for recovery. Those snapshots stay pinned;
-  SessionMemory reads latest live history after turn admission.
+  SessionMemory reads latest live history after turn admission. Changed (TS yian): there is
+  no SessionMemory and no conversation history in memory; see
+  [SessionMemory foundation](#sessionmemory-foundation).
 - `learnable` — retain accepted inputs, outputs, routes, and invocation context for
   a later explicit `result.backward(feedback)` call. It defaults to `False` and
   needs no memory. Forward execution never calls backward hooks, memory
@@ -1643,6 +1645,9 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   that fails or crashes before it finishes is not delivered again when the node
   is retried. Pass the same inbox to `resume_flow(..., steering=inbox)`; finished
   nodes replay without reading it.
+  Changed (TS yian): there is no session memory; each read of an AGENT's `steer_inbox:` is
+  recorded as a `steer {inbox, from}` step, so a resumed run replays the steers the node
+  already read (see [Steering a running agent](#steering-a-running-agent-ts-yian)).
 - `yian.run.Steering` is the matching `typing.Protocol`.
 
 ## Steering a running agent (TS yian)
@@ -2038,7 +2043,7 @@ replayed commits cannot resurrect cleared content. It does not remove the file o
 external provider resources.
 
 Private storage retains state omitted from public snapshots: commit deduplication,
-pristine/adoption flags, and SessionMemory's derived summary cache. It never saves
+pristine/adoption flags, and SessionMemory's derived summary cache (Python yian). It never saves
 live handles, queues, callbacks, or provider clients. Public run-opening snapshots
 stay pinned, and reopening an older snapshot does not rewind newer live history.
 The run log is not a substitute for this store, and repeating an interrupted
@@ -2048,7 +2053,7 @@ Episodic and reflective limits are stored with the file. A limit left unset
 adopts the stored value; a different explicit value, from YAML `config` or the
 constructor, fails with `<type>.config_conflict`. Only removing the file or
 using the stored limits clears it; `reset()` keeps the stored limits. Recorded run snapshots remain unchanged, and future reflective learning
-uses the current host `llm_config`. SessionMemory uses the current history
+uses the current host `llm_config`. SessionMemory (Python yian) uses the current history
 budget and recent-turn count. Increasing the recent-turn count restores raw
 context for newly protected turns instead of hiding them behind an older
 summary. Storage ownership belongs to the host. `yian run` places files with
@@ -2076,7 +2081,8 @@ SessionMemory returns this richer carrier; it never flattens history into a note
 Each key in the AGENT's stack is recalled once, outermost first, and contributes
 one notes section. Only a session memory, whose one owner is the AGENT itself,
 may contribute a transcript. A notes memory beside a session adds context
-without hiding the session.
+without hiding the session. Changed (TS yian): recall contributes notes only; there is no
+transcript source (see [SessionMemory foundation](#sessionmemory-foundation)).
 
 Changed (TS yian): every host memory method (`Memory.openRun({ snapshot })` and
 `reset()`, the session's `recall`, `learn`, `commit` and `close`) may return a value or a
@@ -2239,11 +2245,6 @@ the original opening snapshot, even after turns advance live
 history. Without `storage`, the backend writes no files or database. See
 [optional durable memory](#optional-durable-memory) for restart persistence.
 
-Changed (TS yian): `new SessionMemory({ historyBudgetChars, recentTurns, storage,
-createParent })` takes an options object whose settings are integral `number`s or
-`bigint`s; snapshots are deep-frozen rather than detached copies; there is no `with`
-form (call `close()` in `finally`) and no fork check.
-
 ### Conversation ownership and updates
 
 A session memory key holds exactly one conversation, owned by the single AGENT
@@ -2288,14 +2289,6 @@ uses current instructions (the node's rendered `system_prompt:` or the framework
 instruction), recall, and tool grants. Historical system/developer
 instructions are not reinstated as current instructions.
 
-Changed (TS yian): the message format is `yian.message.v1`, and each stored item's payload is
-`{exchange_id, message}` with `message` in that format; TS yian never reads Python memory
-stores. `await source.openTurn(request, { signal })` waits for the lease and resolves to the
-admitted turn; an aborted `signal` is the cooperative stop, and a waiter learns of a poisoned
-store at its next wake-up. `request`, `observe` and `view` are synchronous. `turn.close(error?)`
-replaces `__exit__`: it never rethrows `error`, and appends a stop or cleanup failure to
-`error.notes`. `-0` equals `0` in a compatibility descriptor.
-
 ### API history summaries
 
 ```python
@@ -2329,10 +2322,6 @@ backend's condition lock. Other session memories proceed independently.
 A failed, malformed, empty, or tool-request summary response fails that invocation
 without deleting history or making the normal answer request. Summary work does
 not run backward learning or enter structured-output correction retries.
-
-Changed (TS yian): `await turn.prepareHistory({ projectionVersion, project, summarize })`
-is async and awaits `project` and `summarize`, which may return promises; the budget
-counts code points, as Python's `len()` does.
 
 ### Learned notes
 
@@ -3298,6 +3287,7 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
     An eligible durable `NodeStarted` with no durable outcome is run again.
     Callers using the optional SessionMemory turn capability consume the backend's
     latest saved history, but may resend requests or repeat external effects.
+    (TS yian has no SessionMemory; a chat's history is a LOOP field the log restores.)
     The log makes engine state deterministic, but cannot make an interrupted
     external effect exactly-once.
 

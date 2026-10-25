@@ -763,7 +763,7 @@ long_term_memory:                  # on a flow
 nodes:
   answer:
     kind: agent
-    long_term_memory: {chat: session}
+    long_term_memory: {chat: session}   # Python yian only; a load error in TS yian
 ```
 
 `long_term_memory: episodic` is sugar for `{episodic: episodic}`. `null` equals
@@ -805,6 +805,10 @@ kept. Use the same storage on unfinished resume; paths
 never belong in YAML or run logs, and terminal inspection opens no backend. A
 library host passes `memory=build_memories(flow, root=, storage=, supplied=,
 factories=)` to `run_flow`; Python's `memory=None` remains dormant.
+TS yian has no session memory: `session` is a load error ("session memory was removed; carry the history as a loop field"). Carry a chat's history as a LOOP field, compacted by a CALL of
+`templates/compact_history.yaml` (see `templates/chat.yaml`); keep facts across runs in
+`profile` and experiences in `episodic`; steers arrive through `steer_inbox:` as recorded
+`steer` steps. The rest of this paragraph is Python yian's.
 For API session history, declare one `session` memory on the AGENT. Its key has
 exactly one declaring AGENT, whose call sites all share the conversation.
 Repeated MAP/LOOP executions share it and queue in admission order, not guaranteed

@@ -32,7 +32,6 @@ import { Edge } from "../../compile/model.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
 import { ExpressionError, parseCondition } from "../../expr/index.ts";
-import { Span, scanTemplate } from "../../expr/template.ts";
 import { ELSE_HANDLE } from "../../nodes/base.ts";
 import { isExactly, type OutputContract, PartialRecordContract, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
@@ -57,7 +56,7 @@ import {
 } from "../helpers/narrowing_facts.ts";
 import {
   combineOutputContracts,
-  directReferenceParts,
+  directReferencePathParts,
   projectOutputContract,
   recordFieldOrigins,
 } from "../helpers/output_contracts.ts";
@@ -352,21 +351,6 @@ function buildViews(
 // CASE facts
 // --------------------------------------------------------------------------- //
 
-/** The dotted path of a template that is one plain `${a.b.c}` reference. */
-function directRef(text: unknown): string[] | null {
-  if (typeof text !== "string") return null;
-  let segments;
-  try {
-    segments = scanTemplate(text);
-  } catch (error) {
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
-  const [segment] = segments;
-  if (segments.length !== 1 || !(segment instanceof Span)) return null;
-  return directReferenceParts(segment.tree);
-}
-
 /** The union type of an exact contract, else `null`. */
 function unionType(contract: OutputContract | null): Type | null {
   if (isExactly(contract, ValueContract) && contract.type.variants !== undefined) return contract.type;
@@ -399,7 +383,7 @@ function onCaseFacts(
   producers: ReadonlyMap<string, OutputContract>,
   inputs: ReadonlyMap<string, ValueContract>,
 ): Map<string, Env> {
-  const parts = directRef(desc.on);
+  const parts = directReferencePathParts(desc.on);
   if (parts === null || parts.length < 3) return new Map();
   const base = parts.slice(0, -1).join(".");
   const tagField = parts.at(-1)!;

@@ -2,7 +2,7 @@
  * Graph stage: reference-wiring validation over the built flow.
  *
  * A cross-node assembly pass, the analogue of `compile/validation`'s reference collector, walking
- * the BUILT flow (not a `FlowSpec`): it calls the leaf checker (`classifyPath`) directly,
+ * the BUILT flow: it calls the leaf checker (`classifyPath`) directly,
  * supplying the valid-target and flow-input sets and the producer contracts, and only
  * reimplements the per-node walk glue. Every located problem accumulates; one `LoadError` carries
  * them all. Builtin calls are checked at every binding and prompt site.
@@ -28,10 +28,10 @@
  *
  * Knows about: `compile/validation` (the leaf namespace checker), `expr` (the binding and template
  * parsers), `nodes` (node behaviour, the AGENT and CASE nodes, and the binding
- * carriers), `typesys` (`Type`, for a list's element type), `compose/helpers` (closed-path
+ * carriers), `typesys` (`Type`), `compose/helpers` (closed-path
  * projection, binding-contract resolution, narrowed reads, and errors), and `compose/validate`
  * (`constructors` for the constructor and builtin checks, `narrowing` for each node's view, and
- * `typed_bindings` for the node-local contracts).
+ * `typed_bindings` for the node-local contracts and a MAP's item contract).
  * Never imports: the loader or the compose package facade; they import this back.
  */
 
@@ -70,10 +70,8 @@ import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
   isInboxType,
-  isListKind,
   isRecord,
   jsTypeName,
-  listElementKind,
   Type,
   typeEquals,
   ValueKind,
@@ -83,19 +81,17 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { type Env, envReadType, narrowedReadError } from "../helpers/narrowing_facts.ts";
 import {
-  directReferenceParts,
+  directReferencePathParts,
   localFieldError,
   outputContractPathError,
   projectOutputContract,
   referenceContract,
-  resolveOutputBindingContract,
-  type TypeFn,
 } from "../helpers/output_contracts.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
+import { itemContract, LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /**
  * Return whether a value of `typ` can be a prompt message (the built-in `Message`, or a record with
@@ -190,19 +186,6 @@ function inboxSiteTail(nodeId: string, node: Node, param: string): string | null
   return `(the child's \`${param}\` isn't an Inbox input)`;
 }
 
-/** Return the reference parts of `text` when it is one whole `${...}` direct reference, else `null`. */
-function loneReferenceParts(text: string): string[] | null {
-  let segments;
-  try {
-    segments = scanTemplate(text);
-  } catch (error) {
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
-  const only = segments.length === 1 ? segments[0] : undefined;
-  return only instanceof Span ? directReferenceParts(only.tree) : null;
-}
-
 /**
  * Return the flow `output:` section as a flat list of binding values (the sites to check).
  *
@@ -214,33 +197,6 @@ function outputBindings(outputs: unknown): unknown[] {
   if (isRecord(outputs)) return Object.values(outputs);
   if (outputs === null) return [];
   return [outputs];
-}
-
-/**
- * Return the element contract of a MAP's `over:` binding when it is a proven list, else `null`.
- *
- * @param over The MAP's raw `over:` binding.
- * @param producers Exact or partial node output contracts keyed by producer id.
- * @param inputContracts Exact flow input contracts keyed by input name.
- * @param typeFn Resolves a constructor name to its type.
- * @returns The exact contract of one element, or `null` when `over:` is not a list or is an
- *   unproven one (whose items are unknown, labelled `list(Optional(Any))`).
- * @throws TypeError when a referenced producer is not an output contract, or a flow-input
- *   contract is not an exact `ValueContract`.
- */
-function itemContract(
-  over: unknown,
-  producers: ReadonlyMap<string, OutputContract>,
-  inputContracts: ReadonlyMap<string, ValueContract>,
-  typeFn: TypeFn | null,
-): ValueContract | null {
-  const contract = resolveOutputBindingContract(over, producers, inputContracts, { typeFn });
-  if (!isExactly(contract, ValueContract) || !isListKind(contract.type.kind)) return null;
-  const typ = contract.type;
-  if (typ.element !== undefined) return new ValueContract(typ.element);
-  const elementKind = listElementKind(typ.kind);
-  if (elementKind === null) return null;
-  return new ValueContract(Type.scalar(elementKind));
 }
 
 /**
@@ -438,8 +394,10 @@ export function validateReferences(
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
         err = outputContractPathError(producer, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[1] === NEW_MESSAGES) {
-        const messages = siteProducers.get(messagesKey(parts[0]!));
-        if (messages !== undefined) err = outputContractPathError(messages, parts.slice(2), path, { partialUnionFields });
+        const messagesContract = siteProducers.get(messagesKey(parts[0]!));
+        if (messagesContract !== undefined) {
+          err = outputContractPathError(messagesContract, parts.slice(2), path, { partialUnionFields });
+        }
       } else if (err === null && input !== undefined) {
         err = outputContractPathError(input, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[0] === "item" && elementContract !== null) {
@@ -474,7 +432,7 @@ export function validateReferences(
     rng: SourceRange | null,
     inboxTail: string | null,
   ): void {
-    const lone = loneReferenceParts(text);
+    const lone = directReferencePathParts(text);
     let tail = inboxTail;
     if (parts.length > 2) tail = "(an inbox has no fields)";
     else if (lone === null || lone.length !== 2) tail = EXPRESSION_TAIL;
@@ -501,7 +459,7 @@ export function validateReferences(
   ): string | null {
     const source = bindingSource(fromValue);
     const text = typeof source === "string" ? source : null;
-    const lone = text !== null ? loneReferenceParts(text) : null;
+    const lone = directReferencePathParts(fromValue);
     if (lone !== null && lone.length === 2 && lone[0] === "input" && inboxInputs.has(lone[1]!)) {
       scan(fromValue, where, rng, { ...site, constructors: false, inboxTail: null });
       return lone[1]!;
@@ -717,7 +675,7 @@ export function validateReferences(
     // A per-item binder (MAP) reads its iteration source above, then validates each element
     // input with the body-local `${item}` scope enabled.
     if (node.bindsPerItem) {
-      const item = itemContract(nwiring.get("over"), nodeProducers, nodeInputs, typeFn);
+      const item = itemContract(result, nwiring, nodeProducers, nodeInputs, typeFn);
       for (const [param, src] of nwiring) {
         if (reserved.has(param)) continue;
         scan(

@@ -285,6 +285,15 @@ def suggested_literal(text: str, typ: Type) -> tuple[str, str | None]:
     return text, None
 
 
+def value_fits(typ: Type, value: Any) -> bool:
+    """Return whether `value` passes the write-boundary check for `typ`."""
+    try:
+        build_value_as(typ, value)
+    except TypeCheckError:
+        return False
+    return True
+
+
 def old_form_suggestion(
     name: str,
     typ: Type | None,

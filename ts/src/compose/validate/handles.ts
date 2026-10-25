@@ -2,8 +2,7 @@
  * Validate: a `CaseNode`'s handles align with its outgoing control edges.
  *
  * Checks that each desugared `CaseNode`'s declared cases and its outgoing control edges' handles
- * agree (the Compose path has no `FlowSpec`). Runs in the validate phase over the built node map
- * and the derived edges.
+ * agree. Runs in the validate phase over the built node map and the derived edges.
  *
  * Knows about: the compile model (`Edge`), nodes (`CaseNode`, `ELSE_HANDLE`), and load
  * diagnostics.

@@ -14,8 +14,8 @@
  * field.
  *
  * TS-only: `SeedConnection` (a name, an index and name, a negative index, an empty name, a
- * three-part path), `ChildFlowBoundary` (equal or empty ids) and a frozen `HostToolCall`, which
- * no Python unit test covers; `outputContractType` (each arm and a non-contract),
+ * three-part path), `ChildFlowBoundary` (equal or empty ids), a frozen `HostToolCall` and
+ * `Parameter.replace`, which no Python unit test covers; `outputContractType` (each arm and a non-contract),
  * `outputContractFileType` and `fileFieldsType`, `fileFieldError`'s text, `outputContractOrigin`
  * (a partial record field, a non-string head), and `validateOutputContract` keeping an int in a
  * `float` field, a `__proto__` field as data, its missing and unknown field messages, and a
@@ -234,6 +234,33 @@ test.each<[string, ConstructorParameters<typeof Parameter>[1], RegExp]>([
 ])("parameter rejects %s", (_name, options, message) => {
   expect(() => new Parameter("value", options)).toThrow(RangeError);
   expect(() => new Parameter("value", options)).toThrow(message);
+});
+
+// TS-only: `Parameter.replace` stands in for Python's `dataclasses.replace`.
+test("parameter replace keeps every field it isn't given and rechecks the result", () => {
+  const contract = new ValueContract(Type.scalar(ValueKind.STRING));
+  const parameter = new Parameter("value", {
+    contract,
+    hasDefault: true,
+    default: "x",
+    coerceStrings: true,
+    origin: origin("parameter"),
+    defaultOrigin: origin("default"),
+  });
+
+  const replaced = parameter.replace({ coerceStrings: false });
+
+  expect(replaced).toEqual(
+    new Parameter("value", {
+      contract,
+      hasDefault: true,
+      default: "x",
+      origin: origin("parameter"),
+      defaultOrigin: origin("default"),
+    }),
+  );
+  expect(Object.isFrozen(replaced)).toBe(true);
+  expect(() => parameter.replace({ required: true })).toThrow(/^a required parameter cannot have a default$/);
 });
 
 test("value contract uses a fresh empty origin index", () => {

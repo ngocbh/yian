@@ -41,19 +41,16 @@ import math
 from typing import Any, Optional
 
 from yian.compose.helpers.output_contracts import (
+    assert_exact_contracts,
     resolve_output_binding_contract,
 )
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, expr_refs_of
-from yian.nodes.contracts import (
-    OutputContract,
-    PartialRecordContract,
-    ValueContract,
-)
+from yian.nodes.contracts import OutputContract, ValueContract
 from yian.typesys import TypeCheckError, build_value_as
 from yian.typesys.values import Type, ValueKind, canonical_type_label
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
-from yian.compose.helpers.tags import yaml_quoted
+from yian.compose.helpers.tags import value_fits, yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.case import on_match_key, on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
@@ -95,13 +92,7 @@ def check_case_exhaustive(
             `PartialRecordContract`.
     """
     diagnostics = diagnostics or LoadDiagnostics()
-    for producer_id, contract in producers.items():
-        if type(contract) not in (ValueContract, PartialRecordContract):
-            raise TypeError(
-                "output producer contracts must be ValueContract or "
-                "PartialRecordContract values, "
-                f"got {type(contract).__name__} for {producer_id!r}"
-            )
+    assert_exact_contracts(producers)
     for desc in descriptors.values():
         if not isinstance(desc, CaseDescriptor):
             continue
@@ -349,9 +340,9 @@ def _when_fix(value: Any, typ: Type, src: str | None) -> str:
         # An anchor, alias, or tag is not part of the value's spelling, so quoting the
         # source would change the text; the value's own spelling is quoted instead.
         written = _authored_or_spelling(value, src)
-        if _fits(typ, written):
+        if value_fits(typ, written):
             return f"; quote it: `when: {yaml_quoted(written)}`"
-        if isinstance(value, float) and value.is_integer() and _fits(typ, int(value)):
+        if isinstance(value, float) and value.is_integer() and value_fits(typ, int(value)):
             return f"; write it as an int: `when: {int(value)}`"
         return ""
     former = former_boolean_fix(value, typ)
@@ -362,18 +353,9 @@ def _when_fix(value: Any, typ: Type, src: str | None) -> str:
         return ""
     text = value.strip()
     reading = _yaml_reading(text)
-    if reading is not None and _fits(typ, reading):
+    if reading is not None and value_fits(typ, reading):
         return f"; drop the quotes: `when: {text}`"
     return ""
-
-
-def _fits(typ: Type, value: Any) -> bool:
-    """Return whether `typ` accepts `value` as is."""
-    try:
-        build_value_as(typ, value)
-    except TypeCheckError:
-        return False
-    return True
 
 
 def _yaml_reading(text: str) -> bool | int | float | None:

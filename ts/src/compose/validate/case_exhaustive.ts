@@ -39,15 +39,14 @@ import { isExactly, type OutputContract, PartialRecordContract, ValueContract } 
 import {
   buildValueAs,
   canonicalTypeLabel,
-  jsTypeName,
   type Type,
   TypeCheckError,
   ValueKind,
   writeAsText,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, sourceText } from "../helpers/errors.ts";
-import { resolveOutputBindingContract } from "../helpers/output_contracts.ts";
-import { yamlQuoted } from "../helpers/tags.ts";
+import { assertExactContracts, resolveOutputBindingContract } from "../helpers/output_contracts.ts";
+import { valueFits, yamlQuoted } from "../helpers/tags.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
 import { CaseDescriptor, onMatchKey } from "../nodes/case.ts";
@@ -95,14 +94,7 @@ export function checkCaseExhaustive(
   const narrowing = options.narrowing ?? null;
   const valueCases = options.valueCases ?? new Set<string>();
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
-  for (const [producerId, contract] of producers) {
-    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
-        "output producer contracts must be ValueContract or PartialRecordContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(producerId)}`,
-      );
-    }
-  }
+  assertExactContracts(producers);
   for (const desc of descriptors.values()) {
     if (!(desc instanceof CaseDescriptor)) continue;
     const [caseProducers, caseInputs] =
@@ -303,8 +295,8 @@ function whenFix(value: WhenValue, typ: Type, src: string | null): string {
     // An anchor, alias or tag is not part of the value's spelling, so quoting the source would
     // change the text; the value's own spelling is quoted instead.
     const written = authoredOrSpelling(value, src);
-    if (fits(typ, written)) return `; quote it: \`when: ${yamlQuoted(written)}\``;
-    if (typeof value === "number" && Number.isInteger(value) && fits(typ, BigInt(value))) {
+    if (valueFits(typ, written)) return `; quote it: \`when: ${yamlQuoted(written)}\``;
+    if (typeof value === "number" && Number.isInteger(value) && valueFits(typ, BigInt(value))) {
       return `; write it as an int: \`when: ${BigInt(value)}\``;
     }
     return "";
@@ -315,19 +307,8 @@ function whenFix(value: WhenValue, typ: Type, src: string | null): string {
   if (src !== null && !(src.startsWith("'") || src.startsWith('"'))) return "";
   const text = value.trim();
   const reading = yamlReading(text);
-  if (reading !== null && fits(typ, reading)) return `; drop the quotes: \`when: ${text}\``;
+  if (reading !== null && valueFits(typ, reading)) return `; drop the quotes: \`when: ${text}\``;
   return "";
-}
-
-/** Return whether `typ` accepts `value` as is. */
-function fits(typ: Type, value: unknown): boolean {
-  try {
-    buildValueAs(typ, value);
-  } catch (error) {
-    if (error instanceof TypeCheckError) return false;
-    throw error;
-  }
-  return true;
 }
 
 /**

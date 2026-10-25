@@ -1,7 +1,7 @@
 """Graph-stage: reference-wiring validation over the built flow.
 
 Cross-node assembly pass. The analogue of `compile.validation._collect_reference_errors`,
-walking the BUILT flow (not a `FlowSpec`): it CALLS the leaf checkers (`_classify_path`)
+walking the BUILT flow: it CALLS the leaf checkers (`_classify_path`)
 directly — supplying the `valid_targets`/`flow_inputs` sets and a semantic-Type
 projection of the producer contracts — only reimplementing the per-node walk glue.
 Every located problem accumulates; one `LoadError` is raised carrying them all. Builtin
@@ -32,8 +32,8 @@ range were already scanned is skipped, so such a copied binding is reported once
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
 binding parser), `nodes` (Node/AgentNode/HumanInputNode behavior and the output-contract
-sum), `typesys` (`Type`, for a list's element type), and `compose.helpers` (closed-path
-projection, binding-contract resolution, and errors).
+sum), `typesys` (`Type`), and `compose.helpers` (closed-path projection,
+binding-contract resolution, and errors).
 Only the loader (and the compose package facade) import this back.
 """
 
@@ -46,17 +46,15 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.isinstance_types import constructor_type_fn
 from yian.compose.helpers.narrowing_facts import Env, env_read_type, narrowed_read_error
 from yian.compose.helpers.output_contracts import (
-    TypeFn,
     local_field_error,
     output_contract_path_error,
     project_output_contract,
     reference_contract,
-    resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.constructors import builtin_field_errors, constructor_errors
 from yian.compose.validate.narrowing import Narrowing
-from yian.compose.validate.typed_bindings import LocalInput, ResolveOrigin
+from yian.compose.validate.typed_bindings import LocalInput, ResolveOrigin, item_contract
 from yian.diagnostics import SourceRange
 from yian.expr import (
     ExpressionError,
@@ -101,48 +99,6 @@ def _output_bindings(outputs: Any) -> list[Any]:
     if outputs is None:
         return []
     return [outputs]
-
-
-def _item_contract(
-    over: Any,
-    producers: dict[str, OutputContract],
-    input_contracts: dict[str, ValueContract],
-    type_fn: TypeFn | None = None,
-) -> ValueContract | None:
-    """The element contract of a MAP's `over:` binding when it is a proven list, else `None`.
-
-    Args:
-        over (`Any`):
-            The MAP's raw `over:` binding.
-        producers (`dict[str, OutputContract]`):
-            Exact or partial node output contracts keyed by producer id.
-        input_contracts (`dict[str, ValueContract]`):
-            Exact flow input contracts keyed by input name.
-        type_fn (`TypeFn | None`, *optional*, defaults to `None`):
-            Resolves a constructor name to its type.
-
-    Returns:
-        `ValueContract | None`:
-            The exact contract of one element, or `None` when `over:` is not a list or
-            is an unproven one (whose items are unknown, labelled `list(Optional(Any))`).
-
-    Raises:
-        `TypeError`:
-            A referenced producer is not an `OutputContract`, or a flow-input contract is
-            not an exact `ValueContract`.
-    """
-    contract = resolve_output_binding_contract(
-        over, producers, input_contracts, type_fn=type_fn
-    )
-    if type(contract) is not ValueContract or not contract.type.kind.is_list():
-        return None
-    typ = contract.type
-    if typ.element is not None:
-        return ValueContract(typ.element)
-    element_kind = typ.kind.element_kind
-    if element_kind is None:
-        return None
-    return ValueContract(Type.scalar(element_kind))
 
 
 def validate_references(
@@ -534,9 +490,7 @@ def validate_references(
         # A per-item binder (MAP) reads its iteration source above, then validates each
         # element input with the body-local `${item}` scope enabled.
         if node.binds_per_item:
-            item_contract = _item_contract(
-                nwiring.get("over"), node_producers, node_inputs, type_fn
-            )
+            item = item_contract(result, nwiring, node_producers, node_inputs, type_fn)
             for param, src in nwiring.items():
                 if param in reserved:
                     continue
@@ -546,7 +500,7 @@ def validate_references(
                     franges.get(("input", param)) or input_rng,
                     site_producers=node_producers,
                     site_inputs=node_inputs,
-                    item_contract=item_contract,
+                    item_contract=item,
                     extra_heads=("item",),
                     partial_union_fields=partial_union_fields,
                 )

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import isfinite
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from lark import Token, Tree
 
@@ -122,6 +122,36 @@ def project_output_contract(
             entries=entries,
         ),
     )
+
+
+def assert_exact_contracts(
+    producers: Mapping[str, Any], flow_inputs: Mapping[str, Any] | None = None
+) -> None:
+    """Check the contract maps a validation pass reads from.
+
+    Args:
+        producers (`Mapping[str, Any]`): Node output contracts by producer id.
+        flow_inputs (`Mapping[str, Any] | None`, *optional*, defaults to `None`): Flow
+            input contracts by name.
+
+    Raises:
+        `TypeError`: A producer contract is not a `ValueContract` or
+            `PartialRecordContract`, or a flow input contract is not an exact
+            `ValueContract`; names the first one.
+    """
+    for name, contract in producers.items():
+        if type(contract) not in (ValueContract, PartialRecordContract):
+            raise TypeError(
+                "output producer contracts must be ValueContract or "
+                "PartialRecordContract values, "
+                f"got {type(contract).__name__} for {name!r}"
+            )
+    for name, contract in (flow_inputs or {}).items():
+        if type(contract) is not ValueContract:
+            raise TypeError(
+                "flow input contracts must be exact ValueContract values, "
+                f"got {type(contract).__name__} for {name!r}"
+            )
 
 
 def reference_contract(
@@ -604,6 +634,42 @@ def _direct_value_contract(
     return contract if type(contract) is ValueContract else None
 
 
+def lone_span_tree(binding: Any) -> Tree | Token | None:
+    """Return the parsed tree of a binding that is one whole-value `${...}` span.
+
+    Args:
+        binding (`Any`): A raw binding value or semantic ``Binding`` carrier.
+
+    Returns:
+        `Tree | Token | None`: The span's expression tree, or ``None`` for a non-text
+            value, a literal, embedded text, or malformed text.
+    """
+    source = binding_source(binding)
+    if not isinstance(source, str):
+        return None
+    try:
+        segments = scan_template(source)
+    except ExpressionError:
+        return None
+    if not (len(segments) == 1 and isinstance(segments[0], Span)):
+        return None
+    return segments[0].tree
+
+
+def direct_reference_path_parts(binding: Any) -> tuple[str, ...] | None:
+    """Return the names of the path a binding reads when it is one lone whole-value reference.
+
+    Args:
+        binding (`Any`): A raw binding value or semantic ``Binding`` carrier.
+
+    Returns:
+        `tuple[str, ...] | None`: The path's names (``("item", "name")``), or ``None``
+            for a literal, an embedded or computed template, a call, or malformed text.
+    """
+    tree = lone_span_tree(binding)
+    return direct_reference_parts(tree) if tree is not None else None
+
+
 def direct_reference_path(binding: Any) -> str | None:
     """Return the path a binding reads when it is one lone whole-value reference.
 
@@ -615,19 +681,8 @@ def direct_reference_path(binding: Any) -> str | None:
             ``a.output``), or ``None`` for a literal, an embedded or computed
             template, a call, or malformed text.
     """
-    source = binding_source(binding)
-    if not isinstance(source, str):
-        return None
-    try:
-        segments = scan_template(source)
-    except ExpressionError:
-        return None
-    if not (len(segments) == 1 and isinstance(segments[0], Span)):
-        return None
-    if not _is_direct_reference(segments[0].tree):
-        return None
-    refs = template_refs(segments)
-    return refs[0] if len(refs) == 1 else None
+    parts = direct_reference_path_parts(binding)
+    return ".".join(parts) if parts is not None else None
 
 
 def _is_direct_reference(expression: Any) -> bool:

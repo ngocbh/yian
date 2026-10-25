@@ -1,6 +1,6 @@
 """Representation-neutral graph + reference leaf checkers.
 
-These operate on bare `Type`/`Edge`/path-set inputs (never a `FlowSpec`), so the
+These operate on bare `Type`/`Edge`/path-set inputs, not a built flow, so the
 Compose loader (`yian.compose`) reuses them directly:
 
 - `_reject_cycles` — Kahn's-algorithm cycle check over a bare edge list + node-id set.

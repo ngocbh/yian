@@ -106,6 +106,36 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
 }
 
 /**
+ * Check the contract maps a validation pass reads from.
+ *
+ * @param producers Node output contracts by producer id.
+ * @param flowInputs Flow input contracts by name (default none).
+ * @throws TypeError naming the first producer contract that is not a `ValueContract` or
+ *   `PartialRecordContract`, or the first flow input contract that is not an exact
+ *   `ValueContract`.
+ */
+export function assertExactContracts(
+  producers: ReadonlyMap<string, unknown>,
+  flowInputs: ReadonlyMap<string, unknown> = new Map(),
+): void {
+  for (const [name, contract] of producers) {
+    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+      throw new TypeError(
+        "output producer contracts must be ValueContract or PartialRecordContract values, " +
+          `got ${jsTypeName(contract)} for ${reprText(name)}`,
+      );
+    }
+  }
+  for (const [name, contract] of flowInputs) {
+    if (!isExactly(contract, ValueContract)) {
+      throw new TypeError(
+        `flow input contracts must be exact ValueContract values, got ${jsTypeName(contract)} for ${reprText(name)}`,
+      );
+    }
+  }
+}
+
+/**
  * Resolve one `input.X...`, `<id>.output...` or an AGENT's `<id>.new_messages...` path to its
  * exact or projected contract.
  *
@@ -507,13 +537,13 @@ function directValueContract(
 }
 
 /**
- * Return the path a binding reads when it is one lone whole-value reference.
+ * Return the parsed tree of a binding that is one whole-value `${...}` span.
  *
  * @param binding A raw binding value or semantic `Binding` carrier.
- * @returns The dotted reference path (`item`, `item.name`, `a.output`), or `null` for a literal,
- *   an embedded or computed template, a call, or malformed text.
+ * @returns The span's expression tree, or `null` for a non-text value, a literal, embedded text,
+ *   or malformed text.
  */
-export function directReferencePath(binding: unknown): string | null {
+export function loneSpanTree(binding: unknown): ExprNode | null {
   const source = bindingSource(binding);
   if (typeof source !== "string") return null;
   let segments;
@@ -524,10 +554,30 @@ export function directReferencePath(binding: unknown): string | null {
     throw error;
   }
   const only = segments.length === 1 ? segments[0] : undefined;
-  if (!(only instanceof Span)) return null;
-  if (!isDirectReference(only.tree)) return null;
-  const refs = templateRefs(segments);
-  return refs.length === 1 ? refs[0]! : null;
+  return only instanceof Span ? only.tree : null;
+}
+
+/**
+ * Return the names of the path a binding reads when it is one lone whole-value reference.
+ *
+ * @param binding A raw binding value or semantic `Binding` carrier.
+ * @returns The path's names (`["item", "name"]`), or `null` for a literal, an embedded or
+ *   computed template, a call, or malformed text.
+ */
+export function directReferencePathParts(binding: unknown): string[] | null {
+  const tree = loneSpanTree(binding);
+  return tree !== null ? directReferenceParts(tree) : null;
+}
+
+/**
+ * Return the path a binding reads when it is one lone whole-value reference.
+ *
+ * @param binding A raw binding value or semantic `Binding` carrier.
+ * @returns The dotted reference path (`item`, `item.name`, `a.output`), or `null` for a literal,
+ *   an embedded or computed template, a call, or malformed text.
+ */
+export function directReferencePath(binding: unknown): string | null {
+  return directReferencePathParts(binding)?.join(".") ?? null;
 }
 
 /**

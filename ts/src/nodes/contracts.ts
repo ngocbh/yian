@@ -1379,19 +1379,29 @@ export class Parameter {
     Object.freeze(this);
   }
 
-  /** Transform parameter, default, and nested contract origins without copying data. */
-  mapOrigins(mapper: OriginMapper): Parameter {
-    const contract = this.contract !== null ? this.contract.mapOrigins(mapper) : null;
-    const origin = mapOrigin(this.origin, mapper);
-    const defaultOrigin = mapOrigin(this.defaultOrigin, mapper);
+  /**
+   * Return a new `Parameter` with the options in `changes` replaced, checked as the constructor
+   * checks them.
+   */
+  replace(changes: ParameterOptions): Parameter {
     return new Parameter(this.name, {
-      contract,
+      contract: this.contract,
       required: this.required,
       hasDefault: this.hasDefault,
       default: this.default,
       coerceStrings: this.coerceStrings,
-      origin,
-      defaultOrigin,
+      origin: this.origin,
+      defaultOrigin: this.defaultOrigin,
+      ...changes,
+    });
+  }
+
+  /** Transform parameter, default, and nested contract origins without copying data. */
+  mapOrigins(mapper: OriginMapper): Parameter {
+    return this.replace({
+      contract: this.contract !== null ? this.contract.mapOrigins(mapper) : null,
+      origin: mapOrigin(this.origin, mapper),
+      defaultOrigin: mapOrigin(this.defaultOrigin, mapper),
     });
   }
 
@@ -1508,13 +1518,8 @@ export function rewriteOriginCarrier<C extends OriginCarrier>(
       ),
     );
   } else if (carrier instanceof Parameter) {
-    const contract = carrier.contract === null ? null : rewriteOriginCarrier(carrier.contract, mapper, seen);
-    rebuilt = new Parameter(carrier.name, {
-      contract,
-      required: carrier.required,
-      hasDefault: carrier.hasDefault,
-      default: carrier.default,
-      coerceStrings: carrier.coerceStrings,
+    rebuilt = carrier.replace({
+      contract: carrier.contract === null ? null : rewriteOriginCarrier(carrier.contract, mapper, seen),
       origin: mapOrigin(carrier.origin, mapper),
       defaultOrigin: mapOrigin(carrier.defaultOrigin, mapper),
     });

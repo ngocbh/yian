@@ -43,8 +43,6 @@ import type { FlowOutput } from "../../compile/model.ts";
 import { typeRelation } from "../../compile/validation.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { Tree } from "../../expr/grammar.ts";
-import { ExpressionError } from "../../expr/index.ts";
-import { scanTemplate, Span, type TemplateSegment } from "../../expr/template.ts";
 import { LLM_CONFIG_KEY } from "../../nodes/agent/llm_values.ts";
 import {
   Binding,
@@ -76,6 +74,7 @@ import {
   literalContract,
   literalType,
   literalValue,
+  loneSpanTree,
   NOT_LITERAL,
   projectOutputContract,
   resolveOutputBindingContract,
@@ -336,21 +335,10 @@ export function localInputContracts(
  *   operator), whose value isn't the referenced one.
  */
 function boundSource(binding: unknown): string | null {
-  const source = bindingSource(binding);
-  if (typeof source !== "string") return null;
-  let segments: TemplateSegment[];
-  try {
-    segments = scanTemplate(source);
-  } catch (error) {
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
-  const only = segments.length === 1 ? segments[0] : undefined;
-  if (!(only instanceof Span)) return null;
-  let tree = only.tree;
+  let tree = loneSpanTree(binding);
+  if (tree === null) return null;
   if (tree instanceof Tree && (tree.data === "default_expr" || tree.data === "required_expr")) tree = tree.children[0]!;
-  const parts = directReferenceParts(tree);
-  return parts !== null ? parts.join(".") : null;
+  return directReferenceParts(tree)?.join(".") ?? null;
 }
 
 /**

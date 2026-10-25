@@ -45,12 +45,11 @@ import {
   isInboxType,
   isList,
   isRecord,
-  jsTypeName,
-  type Type,
   TypeCheckError,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import {
+  assertExactContracts,
   directReferenceParts,
   literalValue,
   NOT_LITERAL,
@@ -59,7 +58,7 @@ import {
   resolveOutputBindingContract,
   type TypeFn,
 } from "../helpers/output_contracts.ts";
-import { anySourceHint, yamlQuoted } from "../helpers/tags.ts";
+import { anySourceHint, valueFits, yamlQuoted } from "../helpers/tags.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
@@ -110,21 +109,7 @@ export function checkCallMapTypes(
 ): void {
   const { narrowing = null, typeFn = null, registry = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
-  for (const [name, contract] of producers) {
-    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
-        "output producer contracts must be ValueContract or PartialRecordContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
-  }
-  for (const [name, contract] of flowInputs) {
-    if (!isExactly(contract, ValueContract)) {
-      throw new TypeError(
-        `flow input contracts must be exact ValueContract values, got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
-  }
+  assertExactContracts(producers, flowInputs);
   for (const [nodeId, result] of buildResults) {
     const node = result.node;
     // CALL/MAP/LOOP carry `childInputs` to type-check against. A LOOP's seeds fill its body's
@@ -219,15 +204,7 @@ function breaksZeroIterationOutput(
     // fails; the seed error would blame the body input the `while:` guards.
     return false;
   }
-  const carriedDecl = new Parameter(decl.name, {
-    contract: new ValueContract(carried, decl.contract!.origins),
-    required: decl.required,
-    hasDefault: decl.hasDefault,
-    default: decl.default,
-    coerceStrings: decl.coerceStrings,
-    origin: decl.origin,
-    defaultOrigin: decl.defaultOrigin,
-  });
+  const carriedDecl = decl.replace({ contract: new ValueContract(carried, decl.contract!.origins) });
   return bindingMismatch(src, carriedDecl, scope) !== null;
 }
 
@@ -540,50 +517,29 @@ function literalHint(value: unknown, decl: Parameter, text: string | null, optio
   if (typeof value === "string") {
     let candidate: unknown;
     try {
-      candidate = coerceParam(
-        new Parameter(decl.name, {
-          contract: decl.contract,
-          required: decl.required,
-          hasDefault: decl.hasDefault,
-          default: decl.default,
-          coerceStrings: true,
-          origin: decl.origin,
-          defaultOrigin: decl.defaultOrigin,
-        }),
-        value,
-      );
+      candidate = coerceParam(decl.replace({ coerceStrings: true }), value);
     } catch (error) {
       // Text spelling a float past the double range, or an int the runtime refuses, fits no
       // number however it's written.
       if (error instanceof TypeCheckError) return null;
       throw error;
     }
-    if (typeof candidate === "string" || !fits(childType, candidate)) return null;
+    if (typeof candidate === "string" || !valueFits(childType, candidate)) return null;
     // The hint would spell infinity `Infinity`, which YAML reads as text; Python gives none here either.
     if (typeof candidate === "number" && !Number.isFinite(candidate)) return null;
     const written = shownLiteral(buildValueAs(childType, candidate).toObject());
     return `text is not converted between flows, so write ${written} without quotes`;
   }
   if (typeof value === "boolean") {
-    if (!fits(childType, "true")) return null;
+    if (!valueFits(childType, value ? "true" : "false")) return null;
     if (!options.yaml) return "quote it to keep it as text";
     return "quote it to keep it as text (YAML reads unquoted true/false as booleans)";
   }
   if (typeof value === "bigint" || typeof value === "number") {
     const written = text || shownLiteral(value);
-    if (!fits(childType, written)) return null;
+    if (!valueFits(childType, written)) return null;
     return `quote it to keep it as text: ${yamlQuoted(written)}`;
   }
   return null;
 }
 
-/** Return whether `value` validates against `childType`. */
-function fits(childType: Type, value: unknown): boolean {
-  try {
-    buildValueAs(childType, value);
-  } catch (error) {
-    if (error instanceof TypeCheckError) return false;
-    throw error;
-  }
-  return true;
-}

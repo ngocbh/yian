@@ -33,12 +33,13 @@ from yian.compile.validation import types_compatible
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import (
     TypeFn,
+    assert_exact_contracts,
     direct_reference_parts,
     project_output_contract,
     reference_contract,
     resolve_output_binding_contract,
 )
-from yian.compose.helpers.tags import any_source_hint, yaml_quoted
+from yian.compose.helpers.tags import any_source_hint, value_fits, yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import BuildResult
 from yian.compose.nodes.loop import carried_field_types, loop_entry_inputs
@@ -101,26 +102,7 @@ def check_call_map_types(
     admits must also fit the loop's output, which the seeds are when the body never
     runs (see `_breaks_zero_iteration_output`)."""
     diagnostics = diagnostics or LoadDiagnostics()
-    for label, contracts in (
-        ("output producer", producers),
-        ("flow input", flow_inputs),
-    ):
-        for name, contract in contracts.items():
-            allowed = (
-                (ValueContract, PartialRecordContract)
-                if label == "output producer"
-                else (ValueContract,)
-            )
-            if type(contract) not in allowed:
-                required = (
-                    "ValueContract or PartialRecordContract"
-                    if label == "output producer"
-                    else "exact ValueContract"
-                )
-                raise TypeError(
-                    f"{label} contracts must be {required} values, "
-                    f"got {type(contract).__name__} for {name!r}"
-                )
+    assert_exact_contracts(producers, flow_inputs)
     for nid, result in build_results.items():
         node = result.node
         # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
@@ -553,7 +535,7 @@ def _literal_hint(
         except TypeCheckError:
             # Text spelling an int past the digit limit fits no int however it's written.
             return None
-        if isinstance(candidate, str) or not _fits(child_type, candidate):
+        if isinstance(candidate, str) or not value_fits(child_type, candidate):
             return None
         # YAML reads an unquoted `nan` or `inf` as text, so writing it doesn't help.
         if isinstance(candidate, float) and not isfinite(candidate):
@@ -561,7 +543,7 @@ def _literal_hint(
         written = shown_literal(build_value_as(child_type, candidate).to_object())
         return f"text is not converted between flows, so write {written} without quotes"
     if isinstance(value, bool):
-        if not _fits(child_type, "true"):
+        if not value_fits(child_type, "true" if value else "false"):
             return None
         if not yaml:
             return "quote it to keep it as text"
@@ -571,12 +553,12 @@ def _literal_hint(
         )
     if isinstance(value, (int, float, date)):
         written = text or shown_literal(value)
-        if not _fits(child_type, written):
+        if not value_fits(child_type, written):
             return None
         return f"quote it to keep it as text: {yaml_quoted(written)}"
     if isinstance(value, (list, dict)):
         quoted = _dates_as_text(value)
-        if quoted == value or not _fits(child_type, quoted):
+        if quoted == value or not value_fits(child_type, quoted):
             return None
         return "quote each date to keep it as text"
     return None
@@ -591,12 +573,3 @@ def _dates_as_text(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _dates_as_text(item) for key, item in value.items()}
     return value
-
-
-def _fits(child_type: Type, value: Any) -> bool:
-    """Return whether `value` validates against `child_type`."""
-    try:
-        build_value_as(child_type, value)
-    except TypeCheckError:
-        return False
-    return True

@@ -61,6 +61,7 @@ from yian.compose.helpers.output_contracts import (
     literal_contract,
     literal_type,
     literal_value,
+    lone_span_tree,
     project_output_contract,
     resolve_output_binding_contract,
     template_contract,
@@ -69,8 +70,6 @@ from yian.compose.helpers.tags import named_type_label, path_label
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
-from yian.expr import ExpressionError
-from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import (
     Binding,
     OutputContract,
@@ -420,16 +419,9 @@ def _bound_source(binding: Any) -> str | None:
             embedded text, malformed text, or any other expression (a call, a
             coalesce, an operator), whose value isn't the referenced one.
     """
-    source = binding_source(binding)
-    if not isinstance(source, str):
+    tree = lone_span_tree(binding)
+    if tree is None:
         return None
-    try:
-        segments = scan_template(source)
-    except ExpressionError:
-        return None
-    if not (len(segments) == 1 and isinstance(segments[0], Span)):
-        return None
-    tree = segments[0].tree
     if isinstance(tree, Tree) and tree.data in ("default_expr", "required_expr"):
         tree = tree.children[0]
     parts = direct_reference_parts(tree)

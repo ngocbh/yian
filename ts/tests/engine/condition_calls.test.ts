@@ -339,6 +339,15 @@ test("a whole-span unknown call in an assert keeps the inline call message", () 
   );
 });
 
+test.each<[string, string]>([
+  ["dangling operator", "${n >}"],
+  ["unclosed paren", "${n > (1}"],
+])("a malformed span in a node assert reports the parse error: %s", (_case, cond) => {
+  const message = loadErrorOf(NODE_ASSERT.replace("<cond>", cond)).message;
+  expect(message).toContain("not a valid boolean expression");
+  expect(message).not.toContain("inline call");
+});
+
 /** Run the loaded `flow` on `inputs`, returning its output; the run must succeed. */
 async function outputOf(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>): Promise<unknown> {
   const result = await runFlow(flow, inputs);

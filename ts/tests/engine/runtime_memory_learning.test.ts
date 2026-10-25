@@ -255,6 +255,7 @@ function materialsFor(trace: RetainedTrace, ...nodeIds: string[]): Map<string, L
     prompt: "prompt",
     memorySections: [],
     digestOk: true,
+    requests: new Map(),
   };
   return new Map(
     trace.occurrences.filter((item) => nodeIds.includes(item.nodeId)).map((item) => [sourceKey(item.source), material]),

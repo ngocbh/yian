@@ -37,8 +37,8 @@
  * corrected under `retries:`; once they are spent the node fails with `OutputInvalidError`, whose
  * `path` locates the last error inside the output when it can.
  *
- * Knows about:   defaults, diagnostics, llm, memory contracts, nodes/contracts, typesys, peer
- *                AGENT modules.
+ * Knows about:   defaults, diagnostics, llm, memory contracts, nodes/base (types), nodes/contracts,
+ *                typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
@@ -70,6 +70,7 @@ import {
   type ValueRecord,
   ValueKind,
 } from "../../typesys/values.ts";
+import type { RebuiltRequest } from "../base.ts";
 import type { ValuePath } from "../contracts.ts";
 import {
   type AgentSteps,
@@ -526,8 +527,8 @@ export async function generateStructured(
  * @param steps The structured calls' `model_call` steps.
  * @param baseSystemPrompt The system prompt without recalled memory, which each digest reads in
  *   place of the system message (`digestRequest`); `null` hashes each request as it is.
- * @returns The interactions, and whether each step recorded the purpose and the digest of the
- *   request rebuilt for it.
+ * @returns The interactions; each step's rebuilt request and whether the step recorded its
+ *   purpose and digest, index for index; and whether every step did.
  */
 export function structuredMaterial(
   model: ChatModel,
@@ -535,17 +536,17 @@ export function structuredMaterial(
   typ: Type,
   steps: readonly ValueRecord[],
   baseSystemPrompt: string | null = null,
-): { interactions: VisibleInteraction[]; digestOk: boolean } {
+): { interactions: VisibleInteraction[]; requests: RebuiltRequest[]; digestOk: boolean } {
   const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
   const prompted = plan.strategy === "prompt";
   const purpose = prompted ? "structured_fallback" : "structured_native";
   let conversation = [...messages, ...(prompted ? [userMessage(plan.instruction())] : [])];
   const interactions: VisibleInteraction[] = [];
-  let digestOk = true;
+  const requests: RebuiltRequest[] = [];
   for (const step of steps) {
     const request = plan.apply(new Request({ messages: conversation }));
     const digest = requestSha256(digestRequest(request, baseSystemPrompt));
-    if (step["purpose"] !== purpose || step["request_sha256"] !== digest) digestOk = false;
+    requests.push({ request, digestOk: step["purpose"] === purpose && step["request_sha256"] === digest });
     // A cut reply was never output: its text so far shows nothing, as in `stepsMaterial`.
     if (Object.hasOwn(step, "error") || step["finish"] === "interrupted") continue;
     const response = recordedResponse(step);
@@ -558,7 +559,7 @@ export function structuredMaterial(
       conversation = [...conversation, userMessage(plan.correction(error.message))];
     }
   }
-  return { interactions, digestOk };
+  return { interactions, requests, digestOk: requests.every((each) => each.digestOk) };
 }
 
 /** Whether `typ` is a non-nullable record, whose schema is not wrapped. */

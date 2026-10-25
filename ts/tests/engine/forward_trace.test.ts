@@ -1372,6 +1372,7 @@ test("backwardContext adds the evaluation evidence from the material and reads a
     prompt: "Prompt.",
     memorySections: [],
     digestOk: true,
+    requests: new Map(),
   };
   const source = new SourceRef(RUN, 1);
   const context = trace.backwardContext(source, { downstreamContext: [{ index: 0n }], material });

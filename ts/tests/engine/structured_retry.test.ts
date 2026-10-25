@@ -98,7 +98,7 @@ import {
   OutputInvalidError,
   structuredMaterial,
 } from "../../src/nodes/agent/structured.ts";
-import { AgentSteps } from "../../src/nodes/agent/context.ts";
+import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
 import type { LiveSinks } from "../../src/nodes/agent/live.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { virtualScheduler } from "../../src/platform.ts";
@@ -413,7 +413,10 @@ describe("TS-only", () => {
       const record = (step: ValueRecord) => recorded.push(step);
       const steps = new AgentSteps(new NodeSteps(1, [], record), () => 0, null, (error) => error, "agent");
       await generateStructured(model, [], INT, { retries, steps });
-      return structuredMaterial(model, [], INT, recorded);
+      const { requests, ...material } = structuredMaterial(model, [], INT, recorded);
+      // Each step's rebuilt request is the one the model received.
+      expect(requests.map(({ request }) => requestSha256(request!))).toEqual(model.requests.map(requestSha256));
+      return material;
     };
     expect(await rebuild(scripted([text('{"value": 3}')]), 0)).toEqual({
       interactions: [new ModelValueInteraction(3n)],
@@ -432,7 +435,7 @@ describe("TS-only", () => {
       await generateStructured(model, [], INT, { retries: 0, steps });
       // The cut keeps the reply received so far, which the node never output.
       const cut = recorded.map((step) => ({ ...step, finish: "interrupted" }));
-      expect(structuredMaterial(model, [], INT, cut)).toEqual({ interactions: [], digestOk: true });
+      expect(structuredMaterial(model, [], INT, cut)).toMatchObject({ interactions: [], digestOk: true });
     }
   });
 });

@@ -604,6 +604,42 @@ def _direct_value_contract(
     return contract if type(contract) is ValueContract else None
 
 
+def lone_span_tree(binding: Any) -> Tree | Token | None:
+    """Return the parsed tree of a binding that is one whole-value `${...}` span.
+
+    Args:
+        binding (`Any`): A raw binding value or semantic ``Binding`` carrier.
+
+    Returns:
+        `Tree | Token | None`: The span's expression tree, or ``None`` for a non-text
+            value, a literal, embedded text, or malformed text.
+    """
+    source = binding_source(binding)
+    if not isinstance(source, str):
+        return None
+    try:
+        segments = scan_template(source)
+    except ExpressionError:
+        return None
+    if not (len(segments) == 1 and isinstance(segments[0], Span)):
+        return None
+    return segments[0].tree
+
+
+def direct_reference_path_parts(binding: Any) -> tuple[str, ...] | None:
+    """Return the names of the path a binding reads when it is one lone whole-value reference.
+
+    Args:
+        binding (`Any`): A raw binding value or semantic ``Binding`` carrier.
+
+    Returns:
+        `tuple[str, ...] | None`: The path's names (``("item", "name")``), or ``None``
+            for a literal, an embedded or computed template, a call, or malformed text.
+    """
+    tree = lone_span_tree(binding)
+    return direct_reference_parts(tree) if tree is not None else None
+
+
 def direct_reference_path(binding: Any) -> str | None:
     """Return the path a binding reads when it is one lone whole-value reference.
 
@@ -615,19 +651,8 @@ def direct_reference_path(binding: Any) -> str | None:
             ``a.output``), or ``None`` for a literal, an embedded or computed
             template, a call, or malformed text.
     """
-    source = binding_source(binding)
-    if not isinstance(source, str):
-        return None
-    try:
-        segments = scan_template(source)
-    except ExpressionError:
-        return None
-    if not (len(segments) == 1 and isinstance(segments[0], Span)):
-        return None
-    if not _is_direct_reference(segments[0].tree):
-        return None
-    refs = template_refs(segments)
-    return refs[0] if len(refs) == 1 else None
+    parts = direct_reference_path_parts(binding)
+    return ".".join(parts) if parts is not None else None
 
 
 def _is_direct_reference(expression: Any) -> bool:

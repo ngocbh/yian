@@ -507,13 +507,13 @@ function directValueContract(
 }
 
 /**
- * Return the path a binding reads when it is one lone whole-value reference.
+ * Return the parsed tree of a binding that is one whole-value `${...}` span.
  *
  * @param binding A raw binding value or semantic `Binding` carrier.
- * @returns The dotted reference path (`item`, `item.name`, `a.output`), or `null` for a literal,
- *   an embedded or computed template, a call, or malformed text.
+ * @returns The span's expression tree, or `null` for a non-text value, a literal, embedded text,
+ *   or malformed text.
  */
-export function directReferencePath(binding: unknown): string | null {
+export function loneSpanTree(binding: unknown): ExprNode | null {
   const source = bindingSource(binding);
   if (typeof source !== "string") return null;
   let segments;
@@ -524,10 +524,30 @@ export function directReferencePath(binding: unknown): string | null {
     throw error;
   }
   const only = segments.length === 1 ? segments[0] : undefined;
-  if (!(only instanceof Span)) return null;
-  if (!isDirectReference(only.tree)) return null;
-  const refs = templateRefs(segments);
-  return refs.length === 1 ? refs[0]! : null;
+  return only instanceof Span ? only.tree : null;
+}
+
+/**
+ * Return the names of the path a binding reads when it is one lone whole-value reference.
+ *
+ * @param binding A raw binding value or semantic `Binding` carrier.
+ * @returns The path's names (`["item", "name"]`), or `null` for a literal, an embedded or
+ *   computed template, a call, or malformed text.
+ */
+export function directReferencePathParts(binding: unknown): string[] | null {
+  const tree = loneSpanTree(binding);
+  return tree !== null ? directReferenceParts(tree) : null;
+}
+
+/**
+ * Return the path a binding reads when it is one lone whole-value reference.
+ *
+ * @param binding A raw binding value or semantic `Binding` carrier.
+ * @returns The dotted reference path (`item`, `item.name`, `a.output`), or `null` for a literal,
+ *   an embedded or computed template, a call, or malformed text.
+ */
+export function directReferencePath(binding: unknown): string | null {
+  return directReferencePathParts(binding)?.join(".") ?? null;
 }
 
 /**

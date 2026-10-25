@@ -81,7 +81,7 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { type Env, envReadType, narrowedReadError } from "../helpers/narrowing_facts.ts";
 import {
-  directReferenceParts,
+  directReferencePathParts,
   localFieldError,
   outputContractPathError,
   projectOutputContract,
@@ -184,19 +184,6 @@ function inboxSiteTail(nodeId: string, node: Node, param: string): string | null
   const childInputs = (node as { childInputs?: readonly Parameter[] }).childInputs ?? [];
   if (childInputs.some((input) => input.name === param && isInboxType(input.contract?.type))) return null;
   return `(the child's \`${param}\` isn't an Inbox input)`;
-}
-
-/** Return the reference parts of `text` when it is one whole `${...}` direct reference, else `null`. */
-function loneReferenceParts(text: string): string[] | null {
-  let segments;
-  try {
-    segments = scanTemplate(text);
-  } catch (error) {
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
-  const only = segments.length === 1 ? segments[0] : undefined;
-  return only instanceof Span ? directReferenceParts(only.tree) : null;
 }
 
 /**
@@ -445,7 +432,7 @@ export function validateReferences(
     rng: SourceRange | null,
     inboxTail: string | null,
   ): void {
-    const lone = loneReferenceParts(text);
+    const lone = directReferencePathParts(text);
     let tail = inboxTail;
     if (parts.length > 2) tail = "(an inbox has no fields)";
     else if (lone === null || lone.length !== 2) tail = EXPRESSION_TAIL;
@@ -472,7 +459,7 @@ export function validateReferences(
   ): string | null {
     const source = bindingSource(fromValue);
     const text = typeof source === "string" ? source : null;
-    const lone = text !== null ? loneReferenceParts(text) : null;
+    const lone = directReferencePathParts(fromValue);
     if (lone !== null && lone.length === 2 && lone[0] === "input" && inboxInputs.has(lone[1]!)) {
       scan(fromValue, where, rng, { ...site, constructors: false, inboxTail: null });
       return lone[1]!;

@@ -60,7 +60,7 @@ from yian.compose.helpers.narrowing_facts import (
 )
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
-    direct_reference_parts,
+    direct_reference_path_parts,
     project_output_contract,
     record_field_origins,
 )
@@ -73,7 +73,6 @@ from yian.compose.nodes.case import (
     searched_param_guards,
 )
 from yian.expr import ExpressionError, parse_condition
-from yian.expr.template import Span, scan_template
 from yian.nodes.case import ELSE_HANDLE
 from yian.nodes.contracts import (
     OutputContract,
@@ -261,19 +260,6 @@ def _build_views(
 # --------------------------------------------------------------------------- #
 
 
-def _direct_ref(text: object) -> Optional[tuple[str, ...]]:
-    """The dotted path of a template that is one plain `${a.b.c}` reference."""
-    if not isinstance(text, str):
-        return None
-    try:
-        segments = scan_template(text)
-    except ExpressionError:
-        return None
-    if len(segments) != 1 or not isinstance(segments[0], Span):
-        return None
-    return direct_reference_parts(segments[0].tree)
-
-
 def _union_type(contract: Optional[OutputContract]) -> Optional[Type]:
     """The union type of an exact contract, else `None`."""
     if type(contract) is ValueContract and contract.type.variants is not None:
@@ -312,7 +298,7 @@ def _on_case_facts(
     A `when:` value that is not a tag gives its handle an empty member set;
     `check_case_when_values` reports it.
     """
-    parts = _direct_ref(desc.on)
+    parts = direct_reference_path_parts(desc.on)
     if parts is None or len(parts) < 3:
         return {}
     base, tag_field = ".".join(parts[:-1]), parts[-1]

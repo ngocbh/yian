@@ -238,6 +238,8 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
   // What was typed at a prompt a deadline or Esc took down, plus what Esc withdrew, shown again at
   // the next prompt.
   let draft = "";
+  // Set once the inbox is closed (`/exit`, `/quit`, the end of input): no prompt comes back.
+  let closed = false;
   const cancelRun = async (path: string): Promise<boolean> => {
     try {
       await cancel(path, { env: env.read });
@@ -281,11 +283,19 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     const path = log;
     const done = (async () => {
       const back = await withdraw(path, inbox.name, { env: env.read });
-      const stopped = await interruptReply(path, inbox.name, { env: env.read });
+      // Kept before the interrupt, which may be refused.
       if (back.length > 0) {
-        draft = [draft, ...back.map((event) => valueText(event.value, inbox.message))].filter(Boolean).join(" ");
-        await io.stderr.write(`(withdrew ${back.length} message${back.length === 1 ? "" : "s"}; back in the prompt)\n`);
+        const texts = back.map((event) => valueText(event.value, inbox.message)).filter(Boolean);
+        const count = `${back.length} message${back.length === 1 ? "" : "s"}`;
+        // After /exit no prompt comes back, so the text is printed rather than lost.
+        if (closed) await io.stderr.write(`(withdrew ${count}: ${texts.join(" ")})\n`);
+        else {
+          // Sent before the draft was typed, so it goes first.
+          draft = [...texts, draft].filter(Boolean).join(" ");
+          await io.stderr.write(`(withdrew ${count}; back in the prompt)\n`);
+        }
       }
+      const stopped = await interruptReply(path, inbox.name, { env: env.read });
       if (stopped.seq !== null) await io.stderr.write("(stopping the reply)\n");
     })().catch((error: unknown) => {
       if (!(error instanceof DeliveryRefused)) stop.abort(error);
@@ -392,7 +402,6 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         ...shared,
       }),
     );
-    let closed = false;
     let cancelled = false;
     // The deadline the run was last moved at. A node is due once any of its calls passes its
     // deadline, so that move times it out and `wakeAt` comes later; were it to stay, a timer for

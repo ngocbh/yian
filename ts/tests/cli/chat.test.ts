@@ -31,7 +31,7 @@ import {
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../engine/run_state_fixtures.ts";
-import { CTRL_C, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
+import { CTRL_C, CTRL_U, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -555,6 +555,19 @@ const HOLD_IN_TURN = HOLD.replace(
   "said: ${input.said + heard.output.events + [reply.output]}",
 );
 
+/** `HOLD_IN_TURN` with a 60 s sleep before the reply. */
+const NAP_HOLD = turnFlow(
+  `      reply:
+        kind: tool
+        tool_id: hold
+        input:
+          events: \${heard.output.events}
+          napped: \${nap.output}
+        output: str
+`,
+  { nodes: NAP_NODES },
+).replace("said: ${input.said + heard.output.events}", "said: ${input.said + heard.output.events + [reply.output]}");
+
 /**
  * The `hold` tool: it resolves `started` when called, then waits until the test's `release` (in
  * `afterEach`) or its signal aborts, rejecting with the abort's reason.
@@ -564,7 +577,10 @@ function holdTool() {
   const hold = new FunctionTool({
     name: "hold",
     description: "waits for the test",
-    parametersJsonSchema: { type: "object", properties: { events: { type: "array", items: { type: "string" } } } },
+    parametersJsonSchema: {
+      type: "object",
+      properties: { events: { type: "array", items: { type: "string" } }, napped: {} },
+    },
     execute: (_args, ctx: ToolContext) =>
       new Promise<string>((resolve, reject) => {
         release = () => resolve("released");
@@ -574,6 +590,36 @@ function holdTool() {
   });
   return { started, tools: { hold } };
 }
+
+test(
+  "Esc after /exit prints the withdrawn text, since no prompt comes back",
+  async () => {
+    const { started, tools } = holdTool();
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    const { scheduler, open } = heldScheduler();
+    stdin.write("hi" + ENTER);
+    const chatting = runChat(flowFile(NAP_HOLD), io, {}, { tools, scheduler });
+    const log = join(tmp, "run.jsonl");
+    const waits = () => records(log).filter((record) => record instanceof RunWaitingRecord).length;
+    await until(() => existsSync(log) && waits() === 2);
+    await send(log, "messages", "second", { env: io.env });
+    stdin.write("/exit" + ENTER);
+    await until(() => records(log).some((record) => record instanceof InboxClosedRecord));
+    open();
+    await started;
+    stdin.write(ESCAPE);
+    await until(() => stderr().includes(STOPPING));
+    const first = release!;
+    first();
+    await until(() => release !== first);
+    release!();
+    expect((await chatting).code).toBe(0);
+    expect(stderr()).toContain("(withdrew 1 message: second)\n");
+    expect(stderr()).not.toContain("back in the prompt");
+    expect(stdout()).toBe("released\nreleased\n");
+  },
+  TIMEOUT,
+);
 
 describe("yian chat's inbox and inputs", () => {
   /** Run `yian chat <args>` through `main` on a stdin that has ended. */
@@ -1096,6 +1142,8 @@ for (const message of [false, true]) {
       expect(code).toBe(0);
       expect(stdout()).toBe("got: hi\ngot: second\ngot: \n");
       expect(stderr()).toContain("(withdrew 1 message; back in the prompt)\n");
+      // The text is back before the interrupt, so a refused interrupt can't lose it.
+      expect(stderr().indexOf("(withdrew")).toBeLessThan(stderr().indexOf(STOPPING));
       const all = readRunLog(log);
       const sends = all.filter(
         (envelope) => envelope.record instanceof PoolCommitRecord && envelope.record.key === "__start__.messages",
@@ -1109,6 +1157,39 @@ for (const message of [false, true]) {
     TIMEOUT,
   );
 }
+
+test(
+  "Esc at the prompt puts the withdrawn text before the draft",
+  async () => {
+    const { io, stdin, stderr } = chatIo({ tty: true, env: XAI });
+    const { scheduler, open } = heldScheduler();
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(SEVEN, { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+    try {
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(flowFile(NAP_AGENT), io, {}, { scheduler });
+      const log = join(tmp, "run.jsonl");
+      const waits = () => records(log).filter((record) => record instanceof RunWaitingRecord).length;
+      await until(() => existsSync(log) && waits() === 2);
+      // Sent while the turn sleeps: nothing reads it before Esc.
+      await send(log, "messages", "second", { env: io.env });
+      stdin.write("draft");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      stdin.write(ESCAPE);
+      await until(() => stderr().includes("(withdrew 1 message; back in the prompt)"));
+      await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You: second draft");
+      stdin.write(CTRL_U);
+      open();
+      await until(() => stderr().includes("(interrupted)"));
+      stdin.write("/exit" + ENTER);
+      expect((await chatting).code).toBe(0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  },
+  TIMEOUT,
+);
 
 test(
   "the summary a fold writes is never printed",

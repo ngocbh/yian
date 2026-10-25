@@ -1073,6 +1073,25 @@ describe("projections", () => {
     expect(sequence.child(0).child("a").value).toBe(2n);
   });
 
+  test("virtual and projected children share the parent's frozen value", () => {
+    const virtual = SourceCursor.virtual({ a: { b: [1n] }, l: [{ c: 2n }] });
+    const root = SourceDocument.parse("m:\n  a: 1\nl:\n  - c: 1\n").root;
+    const mapping = root.child("m").withValue({ a: { b: [1n] }, extra: { d: 3n } });
+    const sequence = root.child("l").withValue([{ c: [2n] }, { e: 4n }]);
+    const parts = (cursor: SourceCursor) => cursor._value as ValueRecord & Value[];
+
+    expect(virtual.child("a")._value).toBe(parts(virtual)["a"]!);
+    expect(virtual.children()[1]!._value).toBe(parts(virtual)["l"]!);
+    expect(virtual.mappingOccurrences("a")[0]!._value).toBe(parts(virtual)["a"]!);
+    expect(virtual.child("l").child(0)._value).toBe((parts(virtual)["l"] as Value[])[0]!);
+    expect(mapping.child("a")._value).toBe(parts(mapping)["a"]!);
+    expect(mapping.child("extra")._value).toBe(parts(mapping)["extra"]!);
+    expect(sequence.child(0)._value).toBe(parts(sequence)[0]!);
+    expect(sequence.child(1)._value).toBe(parts(sequence)[1]!);
+    expect(mapping.keyRangeOf("a")).toEqual(root.child("m").keyRangeOf("a"));
+    expect(mapping.keyRangeOf("extra")).toBeNull();
+  });
+
   test("a projected child keeps the source's document, path and range", () => {
     const base = SourceDocument.parse("original:\n  nested: old\n").root;
     const source = base.child("original");

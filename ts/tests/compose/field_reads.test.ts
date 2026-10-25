@@ -643,3 +643,22 @@ test("a root a CASE branch narrowed is untyped by its base, not its routed view"
   );
   expect(nullableReadErrors(parseCondition("m.output.g == 'a'"), r, types)).toEqual([]);
 });
+
+test("a read under a check that can never hold is not checked", () => {
+  const registry: TypeRegistry = new Map([
+    ["Inner", { kind: "record", fields: new Map([["y", "str"]]) }],
+    [
+      "Text",
+      {
+        kind: "record",
+        fields: new Map([
+          ["body", "str"],
+          ["t", "Optional(Inner)"],
+        ]),
+      },
+    ],
+  ]);
+  const Plain = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str]]), required: new Set(["k"]) });
+  // No Plain value fits Text (it lacks the required body), so the isinstance is never true.
+  expect(nullableReadErrors(parseCondition("isinstance(x, Text) and x.t.y == 'a'"), roots(Plain), registry)).toEqual([]);
+});

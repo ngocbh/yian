@@ -14,8 +14,8 @@ import { type RefStep, splitReference, stepsText } from "../../expr/expressions.
 import { type OutputContract, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { fileFieldType, Type, typeEquals, unionField, ValueKind } from "../../typesys/values.ts";
-import { guardedReads } from "../helpers/condition_guards.ts";
-import { type Env, guardedReadTypes, type NarrowedRead } from "../helpers/narrowing_facts.ts";
+import { type Guard, guardedReads } from "../helpers/condition_guards.ts";
+import { checkedRefs, type Env, guardedReadTypes, type NarrowedRead } from "../helpers/narrowing_facts.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { rootBaseType } from "./asserts.ts";
 import { ARITHMETIC } from "./skips.ts";
@@ -60,7 +60,8 @@ export function isUntyped(typ: Type | null): boolean {
  * flagged whatever the producer's type (design 2.6.6). An operand of arithmetic names the whole
  * fix, `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message. An
  * untyped root narrowed to `T` (by a guard or the CASE branch routing the site) needs `?.` for
- * each field `T` doesn't require (owner ruling, 2026-10-25).
+ * each field `T` doesn't require (owner ruling, 2026-10-25). A read no value reaches (its guard
+ * can never hold) is not checked; `checkImpossibleWhens` or the asserts' check reports the guard.
  *
  * @param tree A parsed expression.
  * @param roots What the site knows of its roots.
@@ -70,7 +71,9 @@ export function isUntyped(typ: Type | null): boolean {
 export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: TypeRegistry): string[] {
   const messages: string[] = [];
   const operands = arithmeticOperands(tree);
-  for (const { node, path, guard } of guardedReads(tree)) {
+  // What `checkedRefs` gives under each root's alternative, index-aligned with `guardedReads`.
+  const checkedOf = new Map<string, (readonly [string, Guard | null][])[]>();
+  for (const [index, { node, path }] of guardedReads(tree).entries()) {
     const { head, steps } = splitReference(node);
     const used = roots.rootLength([head, ...steps.map((step) => step.name)]);
     const rest = steps.slice(used - 1);
@@ -86,11 +89,21 @@ export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: T
     };
     let first: string | null = null;
     let accepted = alternatives.length === 0;
-    for (const contract of alternatives) {
+    if (!checkedOf.has(root)) checkedOf.set(root, []);
+    for (const [which, contract] of alternatives.entries()) {
       const nullable = roots.nullable(root);
       // An opaque root walks as `Any`: untyped, unless a guard narrows it or it may be skipped.
       const chosen = contract ?? new ValueContract(Type.scalar(ValueKind.ANY));
       const baseTypeOf = rootBaseType(new Map([[root, chosen]]), nullable ? new Set([root]) : new Set());
+      const checked = (checkedOf.get(root)![which] ??= checkedRefs(tree, baseTypeOf, registry, {
+        routing: roots.routing(),
+      }));
+      const guard = checked[index]![1];
+      if (guard === null) {
+        // Reached by no value under this alternative: the impossible-check report explains it.
+        accepted = true;
+        break;
+      }
       const candidates = guardedReadTypes(path, guard, baseTypeOf, registry);
       const error = alternativeError(read, chosen, candidates, roots, registry);
       if (error === null) {

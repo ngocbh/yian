@@ -689,7 +689,7 @@ export function rebuildGrowth(
 export function acceptedCommits(prepared: PreparedTransition): readonly { seq: number; value: TypedValue }[] {
   const plan = prepared._plan;
   // A run-start commit and a send always hold their values, and apply at once.
-  if (plan.kind === "commit" && (plan.initial || plan.send)) {
+  if (plan.kind === "commit" && (plan.commitKind === "initial" || plan.commitKind === "send")) {
     return [{ seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) }];
   }
   if (plan.kind !== "success") return [];
@@ -864,9 +864,14 @@ interface InterruptedDelta {
 }
 
 /**
- * One pool commit. A run-start commit (`initial`) applies at once; a node's waits for its success.
- * `valueJson` is the value's canonical typed wire text.
+ * What a pool commit is: a run-start commit (`initial`), which applies at once; a node's own output
+ * commit (`node`), which waits for its success; a spawner's commit for a child START (`expansion`),
+ * which waits under the START's key; a send to a START inbox (`send`), which applies at once to the
+ * inbox store; or a node's messages commit (`messages`), which waits for its success.
  */
+type CommitKind = "initial" | "node" | "expansion" | "send" | "messages";
+
+/** One pool commit; `valueJson` is the value's canonical typed wire text. */
 interface CommitPlan extends PlanAnchors {
   readonly kind: "commit";
   readonly nodeId: string;
@@ -875,11 +880,7 @@ interface CommitPlan extends PlanAnchors {
   readonly valueJson: string | null;
   readonly from: ReadonlyMap<string, number> | null;
   readonly take: TakeCommit | null;
-  readonly initial: boolean;
-  /** Whether this is an expansion's commit for a child START, which waits under its key. */
-  readonly expansion: boolean;
-  /** Whether this is a send to a START inbox, which applies at once to the inbox store. */
-  readonly send: boolean;
+  readonly commitKind: CommitKind;
   /** A messages commit's rebuilt value, as canonical typed wire text; `null` for any other commit. */
   readonly messagesJson: string | null;
 }
@@ -1168,28 +1169,9 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     yianVersion: data.yianVersion,
     parent: data.parent ?? null,
   });
-  // The public envelope codec is the sole payload authority. Decode its canonical text at once,
-  // so the prepared record is exactly what either log will retain.
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, data.runId, state.nextSequence, candidate));
-  const envelope = decodeRecord(envelopeJson);
-  const record = envelope.record;
-  // An exhaustive codec invariant.
-  if (!isExactly(record, RunStartedRecord)) {
-    throw new TypeError("run-start envelope decoded to a different record kind");
-  }
-
-  const plan: RunStartedPlan = Object.freeze({
-    kind: "runStarted",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId: state.flow.endId,
-    endNode: state.flow.nodes.get(state.flow.endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
-  });
-  return new PreparedTransition(record, envelope.runId, envelope.seq, plan, [new RunStarted()]);
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, candidate, [RunStartedRecord], "run-start", data.runId);
+  const plan: RunStartedPlan = Object.freeze({ kind: "runStarted", ...planAnchors(state, envelopeJson, envelope) });
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [new RunStarted()]);
 }
 
 /**
@@ -1580,7 +1562,7 @@ export function preparePoolCommit(
   }
   // A derived commit records only its sources; its success rebuilds the value, live as on replay.
   const record = from === null ? new PoolCommitRecord(nodeId, target, valueWire) : new PoolCommitRecord(nodeId, target, null, { from });
-  return prepareCommitTransition(state, record, false);
+  return prepareCommitTransition(state, record, "node");
 }
 
 /**
@@ -1892,25 +1874,25 @@ export function prepareRecord(
   if (isExactly(record, PoolCommitRecord)) {
     if (!state.inputsCommitted) {
       validateInitialCommit(state, record);
-      return prepareCommitTransition(state, record, true);
+      return prepareCommitTransition(state, record, "initial");
     }
     if (record.steps !== null) {
-      return prepareCommitTransition(state, record, false, false, false, validateMessagesCommit(state, record));
+      return prepareCommitTransition(state, record, "messages", validateMessagesCommit(state, record));
     }
     if (record.take !== null) {
       validateTakeCommit(state, record);
-      return prepareCommitTransition(state, record, false);
+      return prepareCommitTransition(state, record, "node");
     }
     // `<START>.<name>` can't be a node id (ids hold no dot), so the prefix alone picks a send.
     if (record.key.startsWith(sendKey(state, ""))) {
       validateSend(state, record);
-      return prepareCommitTransition(state, record, false, false, true);
+      return prepareCommitTransition(state, record, "send");
     }
     // A key the flow doesn't hold yet is a child START the spawner's expansion is about to add.
     const expansion = !state.flow.nodes.has(record.key) && state.flow.nodes.get(record.nodeId)?.isSpawner === true;
     if (expansion) validateExpansionCommit(state, record);
     else validateNodeCommit(state, record);
-    return prepareCommitTransition(state, record, false, expansion);
+    return prepareCommitTransition(state, record, expansion ? "expansion" : "node");
   }
   if (!state.inputsCommitted) {
     throw new RangeError("the run start is incomplete: only its pool_commit records may follow RunStarted");
@@ -1937,12 +1919,7 @@ export function prepareRecord(
     throw new TypeError(`unsupported run record for state preparation: ${String(name)}`);
   }
 
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, FRONTIER_RECORDS, "frontier");
   let delta: FrontierPlan["delta"];
   if (isExactly(canonical, NodeStartedRecord)) {
     validateNodeStarted(state, canonical);
@@ -1976,32 +1953,24 @@ export function prepareRecord(
   } else if (isExactly(canonical, RunWaitingRecord)) {
     validateRunWaiting(state, canonical);
     delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
-  } else if (isExactly(canonical, InboxClosedRecord)) {
-    validateInboxClosed(state, canonical);
-    delta = { kind: "inboxClosed", inbox: canonical.inbox };
   } else if (isExactly(canonical, InterruptedRecord)) {
+    // Before the close: an interrupt has every field a close has, so the close's guard would narrow it away.
     validateInterrupted(state, canonical);
     const open = canonical.nodes.flatMap((nodeId) =>
       nodeCalls(state.waits, nodeId).filter((call) => call.state === "open").map((call) => call.callId),
     );
     delta = { kind: "interrupted", nodeIds: canonical.nodes, closedCalls: hostCalls(state, open) };
+  } else if (isExactly(canonical, InboxClosedRecord)) {
+    validateInboxClosed(state, canonical);
+    delta = { kind: "inboxClosed", inbox: canonical.inbox };
   } else {
-    // An exhaustive codec invariant.
+    // `canonicalEnvelope` refused every other class.
     throw new TypeError("frontier envelope decoded to a different record kind");
   }
 
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: FrontierPlan = Object.freeze({
     kind: "frontier",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
+    ...planAnchors(state, envelopeJson, envelope),
     delta: Object.freeze(delta),
   });
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, frontierObservers(canonical, delta));
@@ -2042,28 +2011,41 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
 }
 
 /**
- * Freeze one commit's plan and its canonical public record; `initial` for a run-start commit,
- * `expansion` for a spawner's commit for a child START, `send` for a send to an inbox.
+ * Encode `record` as `state`'s next envelope under `runId` (the state's own by default) and decode
+ * it back, so the prepared record is exactly what either log will retain. The public envelope
+ * codec is the sole payload authority.
+ *
+ * @param classes The record classes the caller plans; `what` names them in the error.
+ * @returns The canonical envelope text, the decoded envelope and its record.
+ * @throws RangeError when the state has no run id.
  */
-function prepareCommitTransition(
+function canonicalEnvelope<C extends abstract new (...args: never[]) => RunRecord>(
   state: RunState,
-  record: PoolCommitRecord,
-  initial: boolean,
-  expansion = false,
-  send = false,
-  messagesJson: string | null = null,
-): PreparedTransition {
-  const runId = state.runId;
-  // Established by the initialized-state check.
+  record: RunRecord,
+  classes: readonly C[],
+  what: string,
+  runId: string | null = state.runId,
+): { envelopeJson: string; envelope: RecordEnvelope; canonical: InstanceType<C> } {
+  // Established by the initialized-state check, or by `prepareRunStarted`'s data.
   if (typeof runId !== "string") throw new RangeError("run state is not initialized");
   const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
   const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, PoolCommitRecord)) throw new TypeError("pool-commit envelope decoded to a different record kind");
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
-  const plan: CommitPlan = Object.freeze({
-    kind: "commit",
+  // An exhaustive codec invariant.
+  if (!classes.some((cls) => isExactly(envelope.record, cls))) {
+    throw new TypeError(`${what} envelope decoded to a different record kind`);
+  }
+  return { envelopeJson, envelope, canonical: envelope.record as InstanceType<C> };
+}
+
+/** The anchors of a plan prepared against `state` for `envelope`, with its trace change. */
+function planAnchors(
+  state: RunState,
+  envelopeJson: string,
+  envelope: RecordEnvelope,
+  traceOptions: Parameters<typeof prepareRecordTrace>[2] = {},
+): PlanAnchors {
+  const { startId, endId } = state.flow;
+  return {
     originatingState: state,
     originatingFlow: state.flow,
     envelopeJson,
@@ -2071,15 +2053,27 @@ function prepareCommitTransition(
     startNode: state.flow.nodes.get(startId)!,
     endId,
     endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, { initialCommit: initial }),
+    traceDelta: prepareRecordTrace(state, envelope, traceOptions),
+  };
+}
+
+/** Freeze one commit's plan and its canonical public record; `messagesJson` is a messages commit's value. */
+function prepareCommitTransition(
+  state: RunState,
+  record: PoolCommitRecord,
+  commitKind: CommitKind,
+  messagesJson: string | null = null,
+): PreparedTransition {
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [PoolCommitRecord], "pool-commit");
+  const plan: CommitPlan = Object.freeze({
+    kind: "commit",
+    ...planAnchors(state, envelopeJson, envelope, { initialCommit: commitKind === "initial" }),
     nodeId: canonical.nodeId,
     key: canonical.key,
     valueJson: canonical.value === null ? null : logJson(canonical.value),
     from: canonical.from,
     take: canonical.take,
-    initial,
-    expansion,
-    send,
+    commitKind,
     messagesJson,
   });
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
@@ -2121,32 +2115,11 @@ function prepareSuccessTransition(
     pendingValueJson: delta.valueJson,
     terminalUnreachableFailure: state.terminalUnreachableFailure,
   });
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeSucceededRecord)) {
-    throw new TypeError("node-success envelope decoded to a different record kind");
-  }
-  // An exhaustive codec invariant: the record was decoded from this very text.
-  if (encodeRecord(envelope) !== envelopeJson) {
-    throw new RangeError("NodeSucceededRecord is not in canonical wire form");
-  }
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeSucceededRecord], "node-success");
   const files = fileReadingType(state.flow.nodes.get(delta.commitTarget)!);
   const plan: SuccessPlan = Object.freeze({
     kind: "success",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, {
+    ...planAnchors(state, envelopeJson, envelope, {
       terminalSucceeded: terminal?.succeeded ?? null,
       terminalOutputJson: terminal?.outputJson ?? null,
       terminalFailure: terminal?.failure ?? null,
@@ -2193,17 +2166,7 @@ function prepareRouteTransition(
     terminalFailure: causalFailure,
     forwardCapture: record.forwardCapture,
   });
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, recordForWire));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeRoutedRecord)) {
-    throw new TypeError("node-route envelope decoded to a different record kind");
-  }
-  // An exhaustive codec invariant: the record was decoded from this very text.
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeRoutedRecord is not in canonical wire form");
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, recordForWire, [NodeRoutedRecord], "node-route");
   if (causalFailure !== null) {
     if (canonical.terminalFailure === null) throw new RangeError("causal route lost its terminal failure");
     delta = Object.freeze({ ...delta, terminalUnreachableFailure: canonical.terminalFailure });
@@ -2215,19 +2178,9 @@ function prepareRouteTransition(
     pendingValueJson: null,
     terminalUnreachableFailure: delta.terminalUnreachableFailure,
   });
-
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: RoutePlan = Object.freeze({
     kind: "route",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, {
+    ...planAnchors(state, envelopeJson, envelope, {
       terminalSucceeded: terminal?.succeeded ?? null,
       terminalOutputJson: terminal?.outputJson ?? null,
       terminalFailure: terminal?.failure ?? null,
@@ -2246,34 +2199,14 @@ function prepareRouteTransition(
 /** Freeze one validated terminal failure and its canonical public record. */
 function prepareFailureTransition(state: RunState, record: NodeFailedRecord): PreparedTransition {
   validateFailureRecord(state, record);
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
   // The record already holds its failure through `retainFailure`, which rebuilds each origin as a
   // plain `OriginRef`: the wire's single-key identity shape.
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeFailedRecord)) {
-    throw new TypeError("node-failure envelope decoded to a different record kind");
-  }
-  // An exhaustive codec invariant: the record was decoded from this very text.
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeFailedRecord is not in canonical wire form");
-
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeFailedRecord], "node-failure");
   const failure = canonical.failure;
   const closedCalls = openHostCalls(state);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: FailurePlan = Object.freeze({
     kind: "failure",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, { terminalSucceeded: false, terminalFailure: failure }),
+    ...planAnchors(state, envelopeJson, envelope, { terminalSucceeded: false, terminalFailure: failure }),
     failure,
     closedCalls,
   });
@@ -2286,29 +2219,12 @@ function prepareFailureTransition(state: RunState, record: NodeFailedRecord): Pr
  */
 function prepareEndingTransition(state: RunState, record: RunCancelledRecord | RunFailedRecord): PreparedTransition {
   if (isExactly(record, RunFailedRecord)) validateRunFailed(state, record);
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, RunCancelledRecord) && !isExactly(canonical, RunFailedRecord)) {
-    throw new TypeError("ending envelope decoded to a different record kind");
-  }
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [RunCancelledRecord, RunFailedRecord], "ending");
   const failure = isExactly(canonical, RunFailedRecord) ? canonical.failure : null;
   const closedCalls = openHostCalls(state);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: EndingPlan = Object.freeze({
     kind: "ending",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
+    ...planAnchors(state, envelopeJson, envelope),
     failure,
     closedCalls,
   });
@@ -2648,29 +2564,11 @@ function prepareGrowthTransition(
   const { delta: grown, topology } = prepareGrowthTopology(state, record, fragment, validated);
   const delta: GrowthDelta = Object.freeze({ ...grown, admitted: admitExpansion(state, record.spawnerId, fragment, commits) });
 
-  const runId = state.runId;
-  // Established by the initialized-state check.
-  if (typeof runId !== "string") throw new RangeError("run state is not initialized");
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  const canonical = envelope.record;
-  if (!isExactly(canonical, NodeExpandedRecord)) {
-    throw new TypeError("node-expansion envelope decoded to a different record kind");
-  }
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("NodeExpandedRecord is not in canonical wire form");
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, [NodeExpandedRecord], "node-expansion");
   requireSeedRoutes(state, capture, fragment);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
   const plan: GrowthPlan = Object.freeze({
     kind: "growth",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, {
+    ...planAnchors(state, envelopeJson, envelope, {
       inputConnections: fragment.inputConnections,
       childBoundaries: fragment.childBoundaries,
       retiredIds: delta.retiredIds,
@@ -2687,27 +2585,15 @@ function prepareGrowthTransition(
 /** Validate all backward data and prepare its detached state before append. */
 function prepareBackwardTransition(state: RunState, record: RunRecord): PreparedTransition {
   requireInitializedTerminalBackward(state);
-  const envelopeJson = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, state.runId!, state.nextSequence, record));
-  const envelope = decodeRecord(envelopeJson);
-  if (encodeRecord(envelope) !== envelopeJson) throw new RangeError("backward record is not in canonical wire form");
-  // `prepareRecord` routes only the exact backward record classes here.
-  const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, envelope.record as BackwardRecord);
-  const startId = state.flow.startId;
-  const endId = state.flow.endId;
+  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, BACKWARD_RECORDS, "backward");
+  const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, canonical);
   const plan: BackwardPlan = Object.freeze({
     kind: "backward",
-    originatingState: state,
-    originatingFlow: state.flow,
-    envelopeJson,
-    startId,
-    startNode: state.flow.nodes.get(startId)!,
-    endId,
-    endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope),
+    ...planAnchors(state, envelopeJson, envelope),
     originatingBackwardState: state.backwardState,
     nextBackwardState,
   });
-  return new PreparedTransition(envelope.record, envelope.runId, envelope.seq, plan, []);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
 }
 
 /** Every plan kind `commitPrepared` dispatches. */
@@ -3146,33 +3032,35 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   requireInitializedNonterminal(state);
   requireAuthorityCoordinates(log, state, prepared, true);
   requireUnchangedRecord(prepared, plan.envelopeJson);
-  if (plan.initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
+  const initial = plan.commitKind === "initial";
+  if (initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
   if ((state.trace === null) !== (plan.traceDelta === null)) {
     throw new RangeError("pool-commit trace delta disagrees with recorded learning");
   }
   // A run-start commit always holds its value.
-  const value = plan.initial ? decodeTyped(plan.valueJson!) : null;
-  const startInputs = plan.initial && plan.key === plan.startId;
+  const value = initial ? decodeTyped(plan.valueJson!) : null;
+  const startInputs = initial && plan.key === plan.startId;
   const input = startInputs ? (canonicalSeed(value!.toObject())[1] as JsonObject) : null;
 
   appendAndVerify(log, prepared);
-  if (plan.send) {
+  if (plan.commitKind === "send") {
     state.inboxEvents.set(prepared.expectedSequence, decodeTyped(plan.valueJson!));
-  } else if (plan.messagesJson !== null) {
-    const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson };
+  } else if (plan.commitKind === "messages") {
+    const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson! };
     state.pendingMessages.set(plan.nodeId, Object.freeze(pending));
-  } else if (!plan.initial) {
+  } else if (!initial) {
+    const expansion = plan.commitKind === "expansion";
     const pending: PendingCommit = {
       seq: prepared.expectedSequence,
       key: plan.key,
       valueJson: plan.valueJson,
       from: plan.from,
       take: plan.take,
-      spawner: plan.expansion ? plan.nodeId : null,
+      spawner: expansion ? plan.nodeId : null,
       admitted: false,
     };
     // An expansion commit waits under the child START it fills, whose success accepts it.
-    state.pendingCommits.set(plan.expansion ? plan.key : plan.nodeId, Object.freeze(pending));
+    state.pendingCommits.set(expansion ? plan.key : plan.nodeId, Object.freeze(pending));
   } else if (input === null) {
     state.pool.system.set(plan.key.slice(SYSTEM_PREFIX.length), value!);
     state.producers.set(plan.key, prepared.expectedSequence);

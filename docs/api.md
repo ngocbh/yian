@@ -2875,8 +2875,8 @@ AGENT model call attempt, named by the step its record becomes, its chunks numbe
 `on_event`, and frames never enter the log. `snapshot()` gives `{last_seq, calls: [{node, n,
 chunks, next_index}]}`: the last record's seq and each call in flight, one per `(node, n)`, so
 parallel calls stay apart; a call leaves it when its step record is appended (a failed attempt's
-comes before its `end` frame), when its node settles, or when a `node_failed` or `run_stopped`
-record ends the run. A late viewer calls `follow(fn)`, which
+comes before its `end` frame), when its node settles, or when a `node_failed`, `run_stopped` or
+`run_cancelled` record ends the run. A late viewer calls `follow(fn)`, which
 sends `{type: "snapshot", snapshot}`, then every later frame, the two taken in one synchronous
 turn; it reads the log up to `last_seq` (possibly async), then applies the frames that came
 meanwhile and follows. Every frame after the snapshot is new to it, so it skips nothing. The
@@ -2888,8 +2888,8 @@ folds a run: `LiveView.from(records, snapshot)` takes the log's records up to th
 giving `lastSeq` and `calls()` (`{node, n, text, nextIndex}` per call in flight, one buffer per
 `(node, n)`). Frames must arrive in the order they were sent. A duplicate (a record at or below
 `lastSeq`, the start of a call in flight, a chunk below its call's `nextIndex`) changes nothing; a
-call goes with its step record or an error `end`, and every call goes on `node_failed` or
-`run_stopped`. `apply`
+call goes with its step record or an error `end`, and every call goes on `node_failed`,
+`run_stopped` or `run_cancelled`. `apply`
 returns `false` on a gap (a skipped seq, a skipped chunk index, or a chunk of a call not in
 flight), and the host asks `follow` again. It never reads files; a host drops the view when the
 run ends.

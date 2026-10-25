@@ -32,8 +32,8 @@ import {
   NodeStepRecord,
   type RecordEnvelope,
   type RunLog,
-  type RunRecord,
   RunCancelledRecord,
+  type RunRecord,
   RunStoppedRecord,
 } from "./log.ts";
 

@@ -29,8 +29,8 @@ import {
   NodeFailedRecord,
   NodeStartedRecord,
   NodeStepRecord,
-  type RunRecord,
   RunCancelledRecord,
+  type RunRecord,
   RunStoppedRecord,
 } from "../../src/runtime/log.ts";
 import { runFlow } from "../../src/run.ts";

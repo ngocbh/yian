@@ -207,35 +207,20 @@ function fileReadingType(node: Node): Type | null {
   return outputContractFileType(node.outputContract);
 }
 
-/** @internal Immutable identity roots established by canonical RunStarted decoding. Frozen. */
-export class MemoryAuthority {
+/** The memory configuration `RunStarted` recorded. */
+interface RunMemory {
   /** The recorded snapshots, or `null` when memory is disabled. */
   readonly snapshots: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether the run retains what learning reads (forward capture and steps). */
-  readonly learnable: boolean;
   /** The recorded memory key table, or `null` when memory is disabled. */
   readonly memories: readonly MemorySpec[] | null;
   /** The recorded key stacks, or `null` when memory is disabled. */
   readonly memoryStacks: readonly MemoryStack[] | null;
-  /** The backward state's own memory order array. */
-  readonly memoryOrder: readonly string[];
-
-  /** Hold the roots by reference. */
-  constructor(
-    snapshots: readonly MemorySnapshotEnvelope[] | null,
-    learnable: boolean,
-    memories: readonly MemorySpec[] | null,
-    memoryStacks: readonly MemoryStack[] | null,
-    memoryOrder: readonly string[],
-  ) {
-    this.snapshots = snapshots;
-    this.learnable = learnable;
-    this.memories = memories;
-    this.memoryStacks = memoryStacks;
-    this.memoryOrder = memoryOrder;
-    Object.freeze(this);
-  }
+  /** Whether the run retains what learning reads (forward capture and steps). */
+  readonly learnable: boolean;
 }
+
+/** A pristine state's memory configuration: memory and learning off. */
+const NO_MEMORY: RunMemory = Object.freeze({ snapshots: null, memories: null, memoryStacks: null, learnable: false });
 
 /**
  * @internal An outcome-owned value rejected before durability: it fails the node, not the run.
@@ -437,20 +422,15 @@ export class RunState {
    * bind from (`RunStartedRecord.callTimeLlm`); `null` when there are none.
    */
   callTimeLlm: JsonObject | null = null;
-  /** The canonical recorded snapshots, one per memory key. */
-  memorySnapshots: readonly MemorySnapshotEnvelope[] | null = null;
-  /** The recorded memory key table. */
-  memories: readonly MemorySpec[] | null = null;
-  /** The recorded key stacks. */
-  memoryStacks: readonly MemoryStack[] | null = null;
+  // The memory roots, in one frozen object `RunStarted` installs once (`installMemory`) and the
+  // getters read, so no root can be reassigned apart from the others.
+  #memory: RunMemory = NO_MEMORY;
   /** The skills `RunStarted` recorded, by name, which learning renders prompts with. */
   recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
   /** The tool specs `RunStarted` recorded, by name, which learning rebuilds requests with. */
   recordedTools: Readonly<Record<string, RecordedTool>> = {};
   /** The tool groups `RunStarted` recorded, by name, which learning expands grants with. */
   recordedToolGroups: Readonly<Record<string, readonly string[]>> = {};
-  /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
-  learnable = false;
   /**
    * The `yian.defaults` values `RunStarted` recorded, the built-in values overlaid with the
    * recorded ones; the reducer reads its limits here, never from the process.
@@ -463,8 +443,6 @@ export class RunState {
   trace: RetainedTrace | null = null;
   /** Immutable accepted backward attempts and irreversible commit facts. */
   backwardState = new RuntimeBackwardState();
-  /** @internal The memory identity roots `RunStarted` recorded. */
-  memoryAuthority: MemoryAuthority;
   /**
    * The node ids adopted before any runtime expansion. Safe pruning may retire only later
    * dynamic-overlay nodes.
@@ -492,8 +470,37 @@ export class RunState {
     this.nodeState = new Map([...flow.nodes.keys()].map((id) => [id, NodeState.UNKNOWN]));
     this.edgeState = new Map(flow.edges.map((edge) => [edge.id, NodeState.UNKNOWN]));
     for (const edge of flow.edges) addUnknownIncoming(this, edge.to);
-    this.memoryAuthority = new MemoryAuthority(null, false, null, null, this.backwardState.memoryOrder);
     this.initialStaticIds = new Set(flow.nodes.keys());
+  }
+
+  /** The canonical recorded snapshots, one per memory key. */
+  get memorySnapshots(): readonly MemorySnapshotEnvelope[] | null {
+    return this.#memory.snapshots;
+  }
+
+  /** The recorded memory key table. */
+  get memories(): readonly MemorySpec[] | null {
+    return this.#memory.memories;
+  }
+
+  /** The recorded key stacks. */
+  get memoryStacks(): readonly MemoryStack[] | null {
+    return this.#memory.memoryStacks;
+  }
+
+  /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
+  get learnable(): boolean {
+    return this.#memory.learnable;
+  }
+
+  /**
+   * @internal Install the memory configuration `RunStarted` recorded, frozen.
+   *
+   * @throws RangeError when one is already installed.
+   */
+  installMemory(memory: RunMemory): void {
+    if (this.#memory !== NO_MEMORY) throw new RangeError("the run's memory configuration is already installed");
+    this.#memory = Object.freeze({ ...memory });
   }
 }
 
@@ -3648,7 +3655,7 @@ function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
   }
 }
 
-/** Check the initialized reducer roots and the recorded memory authority. */
+/** Check the initialized reducer roots. */
 function requireInitialized(state: RunState): void {
   const exactContainers =
     isExactly(state.pool, VariablePool) &&
@@ -3673,7 +3680,6 @@ function requireInitialized(state: RunState): void {
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.backwardState, RuntimeBackwardState) &&
-    isExactly(state.memoryAuthority, MemoryAuthority) &&
     isExactly(state.initialStaticIds, Set);
   if (!exactContainers) throw new RangeError("transition requires initialized reducer containers");
   if (typeof state.runId !== "string" || !state.runId) throw new RangeError("run state is not initialized");
@@ -3763,7 +3769,6 @@ function requireInitialized(state: RunState): void {
   } else if (state.trace !== null) {
     throw new RangeError("trace requires recorded learning");
   }
-  validateRuntimeMemoryConfiguration(state);
 }
 
 /** Require an initialized graph state before its primary terminal outcome. */
@@ -3780,24 +3785,6 @@ function requireInitializedTerminalBackward(state: RunState): void {
   }
   if (state.learnable !== true || state.trace === null || state.trace.terminal === null) {
     throw new RangeError("backward records require recorded learning and terminal trace authority");
-  }
-}
-
-/** Require the identity roots of canonical RunStarted decoding. */
-function validateRuntimeMemoryConfiguration(state: RunState): void {
-  const authority = state.memoryAuthority;
-  if (!isExactly(authority, MemoryAuthority)) throw new TypeError("run-state memory authority has the wrong type");
-  if (
-    !(
-      state.memorySnapshots === authority.snapshots &&
-      state.memories === authority.memories &&
-      state.memoryStacks === authority.memoryStacks &&
-      typeof state.learnable === "boolean" &&
-      state.learnable === authority.learnable &&
-      state.backwardState.memoryOrder === authority.memoryOrder
-    )
-  ) {
-    throw new RangeError("run-state memory roots disagree with RunStarted authority");
   }
 }
 
@@ -6318,11 +6305,9 @@ function requirePristine(state: RunState): void {
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.backwardState, RuntimeBackwardState) &&
-    isExactly(state.memoryAuthority, MemoryAuthority) &&
     isExactly(state.initialStaticIds, Set);
   if (!exactContainers) throw new RangeError("RunStarted requires pristine reducer container types");
   const flow = state.flow;
-  const authority = state.memoryAuthority;
   const pristine =
     state.pool.startId === flow.startId &&
     state.pool.store.size === 0 &&
@@ -6373,11 +6358,6 @@ function requirePristine(state: RunState): void {
     // An empty backward state: no attempt and no memory order.
     state.backwardState.attempts.length === 0 &&
     state.backwardState.memoryOrder.length === 0 &&
-    authority.snapshots === null &&
-    authority.memories === null &&
-    authority.memoryStacks === null &&
-    authority.learnable === false &&
-    authority.memoryOrder === state.backwardState.memoryOrder &&
     sameIds(state.initialStaticIds, flow.nodes.keys());
   if (!pristine) throw new RangeError("RunStarted requires a pristine RunState at sequence 0");
 }
@@ -6422,16 +6402,12 @@ interface RunStartedApply {
   numWorkers: number;
   effectiveLlmByStaticPath: Record<string, JsonObject>;
   callTimeLlm: JsonObject | null;
-  memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
-  memories: readonly MemorySpec[] | null;
-  memoryStacks: readonly MemoryStack[] | null;
+  memory: RunMemory;
   recordedSkills: Readonly<Record<string, RecordedSkill>>;
   recordedTools: Readonly<Record<string, RecordedTool>>;
   recordedToolGroups: Readonly<Record<string, readonly string[]>>;
-  learnable: boolean;
   runDefaults: Defaults;
   backwardState: RuntimeBackwardState;
-  memoryAuthority: MemoryAuthority;
   observers: readonly RunEvent[];
 }
 
@@ -6475,22 +6451,17 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     numWorkers: record.numWorkers,
     effectiveLlmByStaticPath: effective as Record<string, JsonObject>,
     callTimeLlm: record.callTimeLlm === null ? null : (canonicalSeed(record.callTimeLlm)[1] as JsonObject),
-    memorySnapshots: record.memorySnapshots,
-    memories: record.memories,
-    memoryStacks: record.memoryStacks,
+    memory: {
+      snapshots: record.memorySnapshots,
+      memories: record.memories,
+      memoryStacks: record.memoryStacks,
+      learnable: record.learnable,
+    },
     recordedSkills: record.skills,
     recordedTools: record.tools,
     recordedToolGroups: record.toolGroups,
-    learnable: record.learnable,
     runDefaults: fromRecorded(record.defaults),
     backwardState,
-    memoryAuthority: new MemoryAuthority(
-      record.memorySnapshots,
-      record.learnable,
-      record.memories,
-      record.memoryStacks,
-      backwardState.memoryOrder,
-    ),
     observers: [new RunStarted()],
   };
 }
@@ -6514,16 +6485,12 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.numWorkers = apply.numWorkers;
   state.effectiveLlmByStaticPath = apply.effectiveLlmByStaticPath;
   state.callTimeLlm = apply.callTimeLlm;
-  state.memorySnapshots = apply.memorySnapshots;
-  state.memories = apply.memories;
-  state.memoryStacks = apply.memoryStacks;
+  state.installMemory(apply.memory);
   state.recordedSkills = apply.recordedSkills;
   state.recordedTools = apply.recordedTools;
   state.recordedToolGroups = apply.recordedToolGroups;
-  state.learnable = apply.learnable;
   state.runDefaults = apply.runDefaults;
   state.backwardState = apply.backwardState;
-  state.memoryAuthority = apply.memoryAuthority;
   state.nextSequence = apply.nextSequence;
 }
 

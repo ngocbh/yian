@@ -1763,7 +1763,7 @@ function loadDef(
     const asserts = field("asserts");
     return assemble({
       inputsSection: (isEmptyValue(inputs) ? {} : inputs) as ValueRecord,
-      inputsCursor: sourceChild(defCursor, "input") ?? sourceChild(defCursor, "inputs"),
+      inputsCursor: sourceChild(defCursor, "input"),
       nodesCursor,
       outputsSection: field("outputs"),
       // Enforced at the child seam.
@@ -1775,7 +1775,7 @@ function loadDef(
       flowEnv: defEnv ?? {},
       boundaryFieldRanges: defCursor !== null ? boundaryFieldRanges(defCursor) : null,
       assertsCursor: sourceChild(defCursor, "asserts"),
-      outputsCursor: sourceChild(defCursor, "output") ?? sourceChild(defCursor, "outputs"),
+      outputsCursor: sourceChild(defCursor, "output"),
       flowId: name,
       memories,
       memoriesCursor: sourceChild(defCursor, "long_term_memory"),
@@ -1821,7 +1821,7 @@ function loadSingleNodeDef(
   const diagnostics = scope.diagnostics;
   const where = `defs entry ${reprText(name)}`;
   const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : null;
-  const inputCursor = sourceChild(defCursor, "input") ?? sourceChild(defCursor, "inputs");
+  const inputCursor = sourceChild(defCursor, "input");
   if (!isRecord(inputs) && !isEmptyValue(inputs)) {
     throw diagnostics.error(
       `${where}: single-node \`input:\` must be a param map (\`name: !TYPE\`, e.g. \`topic: !str\`)`,

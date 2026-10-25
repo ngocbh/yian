@@ -149,6 +149,7 @@ import {
   SYSTEM_PREFIX,
   resolvePoolPath,
   TraceDelta,
+  type TraceDeltaFields,
   TraceOccurrence,
   TraceTerminal,
 } from "./trace.ts";
@@ -3335,42 +3336,63 @@ function commitGrowth(log: RunLog, state: RunState, prepared: PreparedTransition
   return apply.observers;
 }
 
+/** Every `TraceDelta` field that changes the trace: all but its origin and sequence. */
+const TRACE_CHANGES = [
+  "initialized",
+  "started",
+  "resumed",
+  "parked",
+  "unparked",
+  "occurrence",
+  "handler",
+  "material",
+  "writer",
+  "messagesWriter",
+  "systemValue",
+  "pruneIds",
+  "connections",
+  "consumedConnection",
+  "boundaries",
+  "boundaryUpdate",
+  "rootStartSource",
+  "rootWriter",
+  "causalRouteSource",
+  "terminal",
+] as const satisfies readonly (keyof TraceDeltaFields)[];
+
+type TraceChange = (typeof TRACE_CHANGES)[number];
+
+// Fails to compile when `TraceDeltaFields` gains a field `TRACE_CHANGES` doesn't list.
+const TRACE_CHANGES_COVER_FIELDS: Exclude<keyof TraceDeltaFields, TraceChange> extends never ? true : never = true;
+void TRACE_CHANGES_COVER_FIELDS;
+
+/** The `TraceDelta` change fields that hold lists; empty means unchanged. */
+const TRACE_LIST_CHANGES: ReadonlySet<TraceChange> = new Set(["pruneIds", "connections", "boundaries"]);
+
+/**
+ * Whether `delta` leaves every change field but `allowed` unchanged: `resumed` false, a list
+ * empty, any other field `null`.
+ */
+function changesOnly(delta: TraceDelta, allowed: readonly TraceChange[] = []): boolean {
+  return TRACE_CHANGES.every((field) => {
+    if (allowed.includes(field)) return true;
+    const value: unknown = delta[field];
+    if (field === "resumed") return value === false;
+    if (TRACE_LIST_CHANGES.has(field)) return Array.isArray(value) && value.length === 0;
+    return value === null;
+  });
+}
+
 /** Require the exact sequence-only trace change before accepting a post-terminal record. */
 function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null): void {
-  const message = "postterminal trace delta must only advance the accepted sequence";
   if (
     !isExactly(delta, TraceDelta) ||
     delta.originatingTrace !== state.trace ||
     !Number.isSafeInteger(delta.sequence) ||
     delta.sequence !== state.nextSequence ||
-    delta.resumed !== false ||
-    delta.parked !== null ||
-    delta.unparked !== null
+    !changesOnly(delta)
   ) {
-    throw new RangeError(message);
-  }
-  const singles = [
-    delta.initialized,
-    delta.started,
-    delta.occurrence,
-    delta.handler,
-    delta.material,
-    delta.writer,
-    delta.messagesWriter,
-    delta.systemValue,
-    delta.consumedConnection,
-    delta.boundaryUpdate,
-    delta.rootStartSource,
-    delta.rootWriter,
-    delta.causalRouteSource,
-    delta.terminal,
-  ];
-  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
-  if (
-    singles.some((value) => value !== null) ||
-    lists.some((values) => !Array.isArray(values) || values.length !== 0)
-  ) {
-    throw new RangeError(message);
+    throw new RangeError("postterminal trace delta must only advance the accepted sequence");
   }
 }
 
@@ -3435,26 +3457,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
   if (!isExactly(record, NodeWokenRecord) && delta.unparked !== null) {
     throw new RangeError("only a wake can bring back a parked start");
   }
-  const singles = [
-    delta.initialized,
-    delta.occurrence,
-    delta.handler,
-    delta.material,
-    delta.writer,
-    delta.messagesWriter,
-    delta.systemValue,
-    delta.consumedConnection,
-    delta.boundaryUpdate,
-    delta.rootStartSource,
-    delta.rootWriter,
-    delta.causalRouteSource,
-    delta.terminal,
-  ];
-  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
-  if (
-    singles.some((value) => value !== null) ||
-    lists.some((values) => !Array.isArray(values) || values.length !== 0)
-  ) {
+  if (!changesOnly(delta, ["started", "resumed", "parked", "unparked"])) {
     throw new RangeError("frontier trace cannot change outcome or terminal history");
   }
 }
@@ -3473,31 +3476,7 @@ function requireEndingTraceDelta(state: RunState, prepared: PreparedTransition):
   if (!isExactly(delta, TraceDelta) || delta.originatingTrace !== trace || delta.sequence !== state.nextSequence) {
     throw new RangeError("ending trace delta requires its exact accepted sequence");
   }
-  const singles = [
-    delta.initialized,
-    delta.started,
-    delta.parked,
-    delta.unparked,
-    delta.occurrence,
-    delta.handler,
-    delta.material,
-    delta.writer,
-    delta.messagesWriter,
-    delta.systemValue,
-    delta.consumedConnection,
-    delta.boundaryUpdate,
-    delta.rootStartSource,
-    delta.rootWriter,
-    delta.causalRouteSource,
-  ];
-  const lists: unknown[] = [delta.pruneIds, delta.connections, delta.boundaries];
-  if (
-    delta.resumed !== false ||
-    singles.some((value) => value !== null) ||
-    lists.some((values) => !Array.isArray(values) || values.length !== 0)
-  ) {
-    throw new RangeError("ending trace can only install its terminal");
-  }
+  if (!changesOnly(delta, ["terminal"])) throw new RangeError("ending trace can only install its terminal");
   const record = prepared.record;
   if (!isExactly(record, RunFailedRecord)) {
     if (delta.terminal !== null) throw new RangeError("a cancel installs no terminal trace");

@@ -48,7 +48,8 @@ import {
   LLMConfig,
   SUPPORTED_LLM_PROVIDERS,
 } from "../src/llm_clients/config.ts";
-import { chatModelFromConfig, DEDICATED_PROVIDERS, OPENAI_COMPATIBLE } from "../src/llm_clients/factory.ts";
+import { OPENAI_COMPATIBLE } from "../src/llm_clients/endpoints.ts";
+import { chatModelFromConfig, DEDICATED_PROVIDERS } from "../src/llm_clients/factory.ts";
 import { getKnownModels, getModelOptions, MODEL_OPTIONS } from "../src/llm_clients/model_catalog.ts";
 import { listModels, ModelListError } from "../src/llm_clients/model_list.ts";
 import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
@@ -150,9 +151,10 @@ test("validateModel lowercases the provider but not the model", () => {
   expect(validateModel("VLLM", "anything")).toBe(true);
 });
 
-test("custom counts as known where the catalog lists it", () => {
-  expect(validateModel("deepseek", "custom")).toBe(true);
-  expect(validateModel("glm-cn", "custom")).toBe(true);
+test("the picker's custom sentinel is not a known model", () => {
+  expect(validateModel("glm", "custom")).toBe(false);
+  expect(validateModel("deepseek", "custom")).toBe(false);
+  expect(validateModel("glm-cn", "custom")).toBe(false);
   expect(validateModel("openai", "custom")).toBe(false);
   expect(validateModel("anthropic", "custom")).toBe(false);
 });
@@ -175,7 +177,7 @@ test("getKnownModels gives each provider's sorted distinct values", () => {
     "claude-sonnet-4-5",
     "claude-sonnet-4-6",
   ]);
-  // MiniMax-M2.7-highspeed and custom are in both quick and deep but listed once.
+  // MiniMax-M2.7-highspeed is in both quick and deep but listed once; the custom sentinel isn't a model.
   expect(known["minimax"]!).toEqual([
     "MiniMax-M2",
     "MiniMax-M2.1",
@@ -184,7 +186,6 @@ test("getKnownModels gives each provider's sorted distinct values", () => {
     "MiniMax-M2.5-highspeed",
     "MiniMax-M2.7",
     "MiniMax-M2.7-highspeed",
-    "custom",
   ]);
 });
 

@@ -10,7 +10,7 @@
  * so the factory's reads are held to the same table.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -605,24 +605,24 @@ test("snapshot connections per provider", async () => {
 });
 
 describe("snapshot rejects impossible saved logins", () => {
-  const key = new ApiKeyCredentials("k");
-  const rows: [string, Credentials | null, string | null][] = [
-    ["openai", null, null],
-    ["openai", key, "https://api.example/v1"],
-    [
-      "anthropic",
-      new OAuthCredentials({ accessToken: "a", refreshToken: "r", expiresAt: Date.now() / 1000 + 3600, accountId: "acct" }),
-      null,
-    ],
-    ["google", key, "https://example.com/"],
-    ["azure", key, null],
-    ["azure", null, "https://r.openai.azure.com/"],
-    ["azure", key, "http://r.openai.azure.com/"],
-    ["ollama", key, null],
-    ["anthropic", null, null],
+  const key = { api_key: "k" };
+  const oauth = { access_token: "a", refresh_token: "r", expires_at: 9999999999, account_id: "acct", residency: null };
+  // `save` refuses these logins, so each is written to the store file as another writer could.
+  const rows: [string, string, object | null, string | null][] = [
+    ["openai", "none", null, null],
+    ["openai", "api_key", key, "https://api.example/v1"],
+    ["anthropic", "subscription", oauth, null],
+    ["google", "api_key", key, "https://example.com/"],
+    ["azure", "api_key", key, null],
+    ["azure", "none", null, "https://r.openai.azure.com/"],
+    ["azure", "api_key", key, "http://r.openai.azure.com/"],
+    ["ollama", "api_key", key, null],
+    ["anthropic", "none", null, null],
   ];
-  test.each(rows)("%s %#", async (provider, credentials, endpoint) => {
-    await authStore().save(provider, credentials, "m", { endpoint, makeDefault: false });
+  test.each(rows)("%s %#", (provider, method, credentials, endpoint) => {
+    const entry = { method, model: "m", credential_id: "a".repeat(32), credentials, ...(endpoint ? { endpoint } : {}) };
+    const store = { version: 1, default_provider: null, providers: { [provider]: entry } };
+    writeFileSync(join(home, "auth.json"), JSON.stringify(store), { mode: 0o600 });
     expect(rangeError(() => connectionSnapshot({ env })).message).toBe(
       `The saved ${provider} login is invalid; run 'yian auth ${provider}' again`,
     );

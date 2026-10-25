@@ -185,13 +185,18 @@ def get_model_options(provider: str, mode: str) -> List[ModelOption]:
 
 
 def get_known_models() -> Dict[str, List[str]]:
-    """Build known model names from the shared CLI catalog."""
+    """Build known model names from the shared CLI catalog.
+
+    Leaves out the picker's ``"custom"`` entry, which asks for a model id rather
+    than naming one.
+    """
     return {
         provider: sorted(
             {
                 value
                 for options in mode_options.values()
                 for _, value in options
+                if value != "custom"
             }
         )
         for provider, mode_options in MODEL_OPTIONS.items()

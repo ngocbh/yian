@@ -60,9 +60,9 @@ import {
   type Connection,
   keyIdentity,
   legacyConnectionConfig,
-  OPENAI_API_ENDPOINT,
   resolveModelConfig,
 } from "../../src/llm_clients/connection.ts";
+import { OPENAI_API_ENDPOINT } from "../../src/llm_clients/endpoints.ts";
 import { accountHash, chatModelFromConfig, prefersResponses, warnOnce } from "../../src/llm_clients/factory.ts";
 import { AnthropicMessagesBlock } from "../../src/llm_clients/provider_blocks.ts";
 import { virtualScheduler } from "../../src/platform.ts";

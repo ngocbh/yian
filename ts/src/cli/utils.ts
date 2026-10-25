@@ -28,14 +28,12 @@ import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { ApiKeyCredentials } from "../llm_clients/auth/index.ts";
 import { connectionCredentials, connectionSnapshot } from "../llm_clients/connection.ts";
+import { OLLAMA_ENDPOINT } from "../llm_clients/endpoints.ts";
 import { logJson } from "../typesys/json.ts";
 import type { Terminal } from "./terminal.ts";
 
 /** The `format` of every document a `--json` command prints. */
 export const JSON_FORMAT = "yian.cli.v1";
-
-// Mirror of the Ollama client's default base URL.
-const OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434";
 
 /** An output stream: `write` resolves once the stream has taken the text. */
 export interface Writer {
@@ -538,7 +536,7 @@ export async function ensureEnvKey(provider: string, { env, terminal }: PromptCo
  * Without one the current value is returned.
  */
 export async function confirmOllamaEndpoint({ env, terminal }: PromptContext): Promise<string> {
-  const endpoint = env.read("OLLAMA_BASE_URL") || OLLAMA_DEFAULT_BASE_URL;
+  const endpoint = env.read("OLLAMA_BASE_URL") || OLLAMA_ENDPOINT;
   if (terminal === null) return endpoint;
   const answer = await terminal.askText("Ollama endpoint:", { initial: endpoint });
   const confirmed = (answer || endpoint).trim();

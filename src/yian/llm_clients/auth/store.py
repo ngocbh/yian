@@ -14,6 +14,7 @@ import sys
 import time
 
 from yian.defaults import current
+from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS
 
 from .common import (
     ApiKeyCredentials,
@@ -22,6 +23,7 @@ from .common import (
     Credentials,
     OAuthCredentials,
     ProviderSelection,
+    is_usable_login,
 )
 
 
@@ -378,6 +380,10 @@ class AuthStore:
             project,
             _header_names(credentials),
         )
+        # The snapshot refuses such a login, so saving it would make every run fail.
+        # A provider this version doesn't run is never read, so its login isn't checked.
+        if provider in SUPPORTED_LLM_PROVIDERS and not is_usable_login(selection):
+            raise AuthError(f"A {provider} login can't be saved with this credential or endpoint")
         self._check_stopped()
         with self._directory(create=True) as directory:
             with self._locked(directory):

@@ -15,14 +15,16 @@ import { isRecord } from "../typesys/index.ts";
 import { HttpResponse, isVisibleText } from "./auth/common.ts";
 import { request as httpRequest } from "./auth/http.ts";
 import { validateBaseUrl } from "./config.ts";
-import { OPENAI_API_ENDPOINT } from "./connection.ts";
 import { openaiIdHeaders, validateHeaders } from "./connection_settings.ts";
-import { OPENAI_COMPATIBLE, PROVIDER_BASE_URL } from "./factory.ts";
-
-const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
-const ANTHROPIC_VERSION = "2023-06-01";
-const GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com";
-const OLLAMA_BASE_URL = "http://localhost:11434";
+import {
+  ANTHROPIC_ENDPOINT,
+  ANTHROPIC_VERSION,
+  GOOGLE_ENDPOINT,
+  OLLAMA_ENDPOINT,
+  OPENAI_API_ENDPOINT,
+  OPENAI_COMPATIBLE,
+  PROVIDER_BASE_URL,
+} from "./endpoints.ts";
 // The largest page Anthropic and Google serve, so most listings take one request.
 const PAGE_SIZE = "1000";
 
@@ -109,16 +111,16 @@ export async function listModels(
   const protocol: Record<string, string> = {};
   let auth: ((key: string) => Record<string, string>) | null;
   if (name === "anthropic") {
-    base = baseUrl || ANTHROPIC_BASE_URL;
+    base = baseUrl || ANTHROPIC_ENDPOINT;
     pages = anthropicIds;
     protocol["anthropic-version"] = ANTHROPIC_VERSION;
     auth = (key) => ({ "x-api-key": key });
   } else if (name === "google") {
-    base = baseUrl || GOOGLE_BASE_URL;
+    base = baseUrl || GOOGLE_ENDPOINT;
     pages = googleIds;
     auth = (key) => ({ "x-goog-api-key": key });
   } else if (name === "ollama") {
-    base = baseUrl || OLLAMA_BASE_URL;
+    base = baseUrl || OLLAMA_ENDPOINT;
     pages = ollamaIds;
     auth = null;
   } else if (OPENAI_COMPATIBLE.includes(name)) {

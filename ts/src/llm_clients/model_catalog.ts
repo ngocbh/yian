@@ -201,11 +201,15 @@ export function getModelOptions(provider: string, mode: string): readonly ModelO
   return modes[mode]!;
 }
 
-/** Build each catalog provider's known model ids: its distinct option values, sorted. */
+/**
+ * Build each catalog provider's known model ids: its distinct option values, sorted, without the
+ * picker's `"custom"` entry, which asks for a model id rather than naming one.
+ */
 export function getKnownModels(): Record<string, string[]> {
   const known = Object.create(null) as Record<string, string[]>;
   for (const [provider, modes] of Object.entries(MODEL_OPTIONS)) {
     const values = new Set(Object.values(modes).flatMap((entries) => entries.map(([, value]) => value)));
+    values.delete("custom");
     known[provider] = [...values].sort(compareCodeUnits);
   }
   return known;

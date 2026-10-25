@@ -7,14 +7,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
-import type { CliIo, Writer } from "../../src/cli/utils.ts";
+import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
 import { cancel, inspectRun } from "../../src/run.ts";
 import {
@@ -498,6 +498,35 @@ describe("yian chat", () => {
     TIMEOUT,
   );
 });
+
+test(
+  "a chat on the default log path stopped before its run starts leaves no run folder",
+  async () => {
+    const home = join(tmp, "home");
+    mkdirSync(home);
+    const { io, stderr } = chatIo({ env: { HOME: home } });
+    const stop = new AbortController();
+    // The stop lands as the log path is printed: after the run folder is made, before the log.
+    const write = io.stderr.write;
+    const stderrOut: Writer = {
+      write: async (text) => {
+        await write(text);
+        if (text.startsWith("Run log: ")) stop.abort(new HostStop("SIGTERM"));
+      },
+    };
+    const code = await chat(
+      flowFile(ECHO),
+      { inputValues: [], engineTrace: false },
+      { ...io, stderr: stderrOut, stop: stop.signal },
+      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals },
+    );
+    expect(code).toBe(130);
+    expect(stderr()).toContain("Run log: ");
+    const runsDir = join(home, ".yian", "runs");
+    expect(readdirSync(runsDir).filter((name) => !name.startsWith("index.sqlite"))).toEqual([]);
+  },
+  TIMEOUT,
+);
 
 /** A turn whose reply is the host tool `hold`, which waits until the test releases it. */
 const HOLD = turnFlow(`      reply:

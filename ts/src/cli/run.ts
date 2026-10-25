@@ -719,7 +719,7 @@ export function defaultRunLogPath(runId: string, env: Env): string {
 }
 
 /** Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
-function removeEmptyDir(dir: string): void {
+export function removeEmptyDir(dir: string): void {
   try {
     rmdirSync(dir);
   } catch {

@@ -267,3 +267,40 @@ test("a flow assert's comprehension over reply.new_messages renames only the ite
     "len([m for m in __assert_reply_new_messages if m.role == 'assistant']) > 0",
   ]);
 });
+
+/** An inline CALL `reader` whose input `h` binds `value` and whose body returns `h`'s length. */
+const INLINE_READER = (value: string) => `  reader:
+    kind: call
+    input:
+      h: ${value}
+    nodes:
+      count:
+        kind: code
+        input:
+          h: \${input.h}
+        output: int
+        code: return inputs['h'].length
+    output: \${count.output}`;
+
+test("an untagged inline call input reading reply.new_messages loads, typed list(Message)", async () => {
+  const flow = await loadFlow(FLOW(INLINE_READER("${reply.new_messages}")));
+  expect(flow.compiled.edges.some((edge) => edge.from === "reply" && edge.to === "reader")).toBe(true);
+});
+
+test("an untagged inline call input's field read into reply.new_messages is checked", async () => {
+  const error = await loadErrorAsync(loadFlow(FLOW(INLINE_READER("${reply.new_messages.role}"))));
+  expect(error.message).toContain("role");
+});
+
+test("an untagged inline call input reading a CODE node's new_messages names both forms", async () => {
+  const flow = FLOW(`${CODE_READER("      history: ${reply.new_messages}")}
+${INLINE_READER("${reader.new_messages}").replace("  reader:", "  second:")}`, "${second.output}");
+  const message = (await loadErrorAsync(loadFlow(flow))).message;
+  expect(message).toContain("new_messages");
+  expect(message).toContain("AGENT");
+});
+
+test("an untagged inline call input reading another field names both forms", async () => {
+  const message = (await loadErrorAsync(loadFlow(FLOW(INLINE_READER("${reply.nope}"))))).message;
+  expect(message).toContain("must select reply.output[.field] or an AGENT's reply.new_messages");
+});

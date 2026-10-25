@@ -78,15 +78,22 @@ import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "./b
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
 import { parseMemoryDeclarations } from "./helpers/memory.ts";
-import { boundaryFieldRanges } from "./helpers/source.ts";
+import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
-import { notTextDetail, notTextError, rejectInfinityName } from "./nodes/base.ts";
+import { notTextDetail, notTextError } from "./nodes/base.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
-import { flowNodesCursor, isEmptyValue, parseFile, parseSourceDocument } from "./parse/file.ts";
+import {
+  flowNodesCursor,
+  isEmptyValue,
+  parseFile,
+  parseSourceDocument,
+  signatureNodeBody,
+  signatureParams,
+} from "./parse/file.ts";
 import { scopeOrigin, SourceCatalog, SourceCatalogBuilder } from "./source/catalog.ts";
 import { SourceAccessError, SourceCursor, type SourceDocument } from "./source/index.ts";
 
@@ -191,14 +198,8 @@ function sourceChild(cursor: SourceCursor | null, key: string): SourceCursor | n
  */
 export function singleNodeDefCursor(name: string, body: ValueRecord, defCursor: SourceCursor | null): SourceCursor {
   const paramTypes = isRecord(body["inputs"]) ? body["inputs"] : {};
-  const generatedInputs: ValueRecord = Object.fromEntries(
-    Object.keys(paramTypes).map((param) => [param, `\${input.${param}}`]),
-  );
-  const nodeBody: ValueRecord = Object.fromEntries(
-    Object.entries(body).filter(([key]) => key !== "inputs" && key !== "outputs"),
-  );
-  nodeBody["input"] = generatedInputs;
-  if (Object.hasOwn(body, "outputs")) nodeBody["output"] = body["outputs"]!;
+  const nodeBody = signatureNodeBody(body, paramTypes, { input: "inputs", output: "outputs" });
+  const generatedInputs = nodeBody["input"] as ValueRecord;
 
   if (defCursor === null) return SourceCursor.virtual(Object.fromEntries([[name, nodeBody]]));
 
@@ -333,15 +334,6 @@ async function newLoadCtx(codeRoot: string | null): Promise<LoadCtx> {
 // it, so a custom `childResolver` that calls `loadFlow` is bounded too. Each import runs in its
 // own store (`run`, never `enterWith`), so concurrent loads keep separate counts.
 const ACTIVE_IMPORTS = new AsyncLocalStorage<number>();
-
-/**
- * Return `path` spelled as Python's `PurePosixPath` spells it: repeated slashes merged, `.`
- * segments and a trailing slash dropped, `..` kept.
- */
-function pathText(path: string): string {
-  const root = path.startsWith("/") ? "/" : "";
-  return root + path.split("/").filter((part) => part !== "" && part !== ".").join("/") || ".";
-}
 
 /** Return a `system.paths` entry: a relative one joined onto the file's own directory. */
 function joinPath(base: string, path: string): string {
@@ -768,7 +760,8 @@ interface SourceNode {
 /**
  * Return the source of a loaded root: `rootFile`, every file the disk resolver read, and each host
  * child's own source, each keyed by its real path relative to the real `ownDir` (see `FlowSource`).
- * The root's path is `<real ownDir>/<file name of sourceLabel>`, as is any source's root.
+ * The root's path is `<real ownDir>/<file name of sourceLabel>`, as is any source's root; a label
+ * with no file name (`""`, `.`, `..`, `/`) gives `<flow>`.
  *
  * @returns The source, or `null` when a host child has none (it was built in code).
  */
@@ -790,8 +783,11 @@ async function flowSource(
     }
     return node;
   };
+  // A label with no file name (`""`, `.`, `..`, `/`) would key the root at the folder itself.
+  const name = basename(sourceLabel);
+  const rootName = name === "" || name === "." || name === ".." ? "<flow>" : name;
   // Built apart from the disk files: a file on disk may share the root's path with other text.
-  const root: SourceNode = { path: join(dir, basename(sourceLabel)), text: rootFile.text, refs: new Map() };
+  const root: SourceNode = { path: join(dir, rootName), text: rootFile.text, refs: new Map() };
   for (const [ref, real] of rootFile.refs) root.refs.set(ref, diskNode(real, ctx.read.get(real)!));
   for (const [ref, child] of hosted) {
     if (!(child instanceof ComposedFlow) || child.source === null) return null;
@@ -871,6 +867,16 @@ async function realOr(path: string): Promise<string> {
   }
 }
 
+/** Say whether two frames sit in one file: the same label and the same text, since labels may repeat. */
+function sameFile(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
+  return a.label === b.label && a.text === b.text;
+}
+
+/** Say whether two frames start at one place in one file. */
+function sameLocation(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
+  return sameFile(a, b) && a.range.startLine === b.range.startLine && a.range.startCol === b.range.startCol;
+}
+
 /**
  * Locate one memory layout failure at its first declaration site.
  *
@@ -890,18 +896,14 @@ export function memorySetupLoadError(
 
   const primary = frame(error.origin);
   const notes = [...(error.notes ?? [])];
-  // Aliases of one file map distinct origins to one source location.
-  const seen = new Set<string>();
-  const locationOf = (other: DiagnosticFrame): string =>
-    `${other.label}:${other.range.startLine}:${other.range.startCol}`;
-  if (primary !== null) seen.add(locationOf(primary));
+  // Aliases of one file map distinct origins to one source location; two files may share a label,
+  // so a location is one file's only when the texts match too.
+  const seen: DiagnosticFrame[] = primary === null ? [] : [primary];
   for (const origin of error.related) {
     const other = frame(origin);
-    if (other === null) continue;
-    const location = locationOf(other);
-    if (seen.has(location)) continue;
-    seen.add(location);
-    notes.push(`related declaration at ${location}`);
+    if (other === null || seen.some((known) => sameLocation(known, other))) continue;
+    seen.push(other);
+    notes.push(`related declaration at ${other.label}:${other.range.startLine}:${other.range.startCol}`);
   }
   return UNLOCATED_DIAGNOSTICS.error(error.message, {
     frames: primary === null ? [] : [primary],
@@ -941,7 +943,7 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
     const called = `called by node ${reprText(found.owner.join("/"))}`;
     const callsiteFrame = frame(found.callsite.origin);
     if (valueFrame === null || callsiteFrame === null) subject = `${field} of the flow ${name} (${called})`;
-    else if (valueFrame.label !== callsiteFrame.label) {
+    else if (!sameFile(valueFrame, callsiteFrame)) {
       subject = `${field} of the flow imported through uses: ${name} (${called})`;
     } else subject = `defs entry ${name} ${field} (${called})`;
   }
@@ -1032,21 +1034,30 @@ function readAuthoredLlmConfig(
 }
 
 /**
- * Refuse a flow `env:` value too deep or holding itself, or an invalid `max_tool_iterations`.
+ * Refuse a flow or `defs:` entry `env:` value too deep or holding itself, or an invalid
+ * `max_tool_iterations`.
  *
  * The nesting and recursive alias checks run first, so a deep `max_tool_iterations` isn't shown in
  * full; a `max_tool_iterations` default must be one every AGENT node would accept when it runs.
  *
+ * @param env The `env:` mapping.
+ * @param prefix The message prefix: `flow ` or `defs entry '<name>': `.
+ * @param envCursor The authored `env:` mapping, or `null` when there is none.
+ * @param diagnostics The file's diagnostics.
  * @throws LoadError at the offending entry.
  */
-function validateFlowEnv(env: ValueRecord, options: { diagnostics: LoadDiagnostics; cursor: SourceCursor }): void {
-  const { diagnostics, cursor } = options;
-  checkEnvValues(env, "flow ", cursor.has("env") ? cursor.child("env") : null, diagnostics);
+function validateEnv(
+  env: ValueRecord,
+  prefix: string,
+  envCursor: SourceCursor | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  checkEnvValues(env, prefix, envCursor, diagnostics);
   if (Object.hasOwn(env, "max_tool_iterations") && !isMaxToolIterations(env["max_tool_iterations"])) {
     throw diagnostics.error(
-      "flow `env.max_tool_iterations` must be a positive int or -1 (no cap), " +
+      `${prefix}\`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
         `got ${valueRepr(env["max_tool_iterations"])}`,
-      { range: cursor.child("env").rangeOf("max_tool_iterations") },
+      { range: envCursor?.rangeOf("max_tool_iterations") ?? null },
     );
   }
 }
@@ -1099,7 +1110,7 @@ export async function loadFlowFile(
   const diagnostics = LoadDiagnostics.fromDocument(document);
   const f = parseFile(document);
   rejectAuthoredPrivateCallableNames(root, f.defs, f.uses);
-  validateFlowEnv(f.env, { diagnostics, cursor: root });
+  validateEnv(f.env, "flow ", root.has("env") ? root.child("env") : null, diagnostics);
   validateSystem(f.system, root.has("system") ? root.child("system") : null);
 
   // Typedefs are read as plain values, so a tag in them is rejected before they are.
@@ -1729,7 +1740,7 @@ function loadDef(
       range: defCursor?.rangeOf("env") ?? null,
     });
   }
-  if (defEnv !== null) checkEnvValues(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
+  if (defEnv !== null) validateEnv(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
   checkDefAsserts(name, field("asserts"), defCursor, diagnostics);
   const nodesCursor = defAssemblyCursor(defCursor, body["nodes"]!);
   try {
@@ -1745,7 +1756,7 @@ function loadDef(
     const asserts = field("asserts");
     return assemble({
       inputsSection: (isEmptyValue(inputs) ? {} : inputs) as ValueRecord,
-      inputsCursor: sourceChild(defCursor, "input") ?? sourceChild(defCursor, "inputs"),
+      inputsCursor: sourceChild(defCursor, "input"),
       nodesCursor,
       outputsSection: field("outputs"),
       // Enforced at the child seam.
@@ -1757,7 +1768,7 @@ function loadDef(
       flowEnv: defEnv ?? {},
       boundaryFieldRanges: defCursor !== null ? boundaryFieldRanges(defCursor) : null,
       assertsCursor: sourceChild(defCursor, "asserts"),
-      outputsCursor: sourceChild(defCursor, "output") ?? sourceChild(defCursor, "outputs"),
+      outputsCursor: sourceChild(defCursor, "output"),
       flowId: name,
       memories,
       memoriesCursor: sourceChild(defCursor, "long_term_memory"),
@@ -1802,19 +1813,14 @@ function loadSingleNodeDef(
 ): ComposedFlow {
   const diagnostics = scope.diagnostics;
   const where = `defs entry ${reprText(name)}`;
-  const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : null;
-  const inputCursor = sourceChild(defCursor, "input") ?? sourceChild(defCursor, "inputs");
-  if (!isRecord(inputs) && !isEmptyValue(inputs)) {
-    throw diagnostics.error(
-      `${where}: single-node \`input:\` must be a param map (\`name: !TYPE\`, e.g. \`topic: !str\`)`,
-      { range: inputCursor?.range ?? defCursor?.range ?? null },
-    );
-  }
-  const paramTypes: ValueRecord = isRecord(inputs) ? inputs : {};
-  // The node reads each parameter by bare name, so `inf` would read infinity instead.
-  if (Object.hasOwn(paramTypes, "inf")) {
-    rejectInfinityName(`${where}: input 'inf'`, "inf", inputCursor?.keyRangeOf("inf") ?? null, diagnostics);
-  }
+  const inputCursor = sourceChild(defCursor, "input");
+  const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : null, {
+    where,
+    inputLabel: "single-node `input:`",
+    inputCursor,
+    fallbackRange: defCursor?.range ?? null,
+    diagnostics,
+  });
   const nodesCursor = singleNodeDefCursor(name, body, defCursor);
   try {
     return assemble({

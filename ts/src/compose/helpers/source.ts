@@ -2,7 +2,8 @@
  * Parse-free source helpers for the Compose front end.
  *
  * This module projects synthesized boundary-input ranges from an existing source cursor,
- * slices authored text out of a document, and reads positional metadata. It never parses,
+ * slices authored text out of a document, reads positional metadata, and spells a file path
+ * as Python does. It never parses,
  * keeping the helper layer below parsing. Assertion origins and temporary ranges are
  * deliberately absent: the build conductor derives both from one retained item cursor.
  */
@@ -14,6 +15,15 @@ import { SourceAccessError, type SourceCursor, type SourceDocument } from "../so
 /** Return whether a top-level key is an `x-*` extension key, which a load ignores. */
 export function isExtensionKey(key: string): boolean {
   return key.startsWith("x-");
+}
+
+/**
+ * Return `path` spelled as Python's `PurePosixPath` spells it: repeated slashes merged, `.`
+ * segments and a trailing slash dropped, `..` kept, and `.` for an empty path.
+ */
+export function pathText(path: string): string {
+  const root = path.startsWith("/") ? "/" : "";
+  return root + path.split("/").filter((part) => part !== "" && part !== ".").join("/") || ".";
 }
 
 /**

@@ -53,7 +53,7 @@ function defCall(options: { rootModel?: string; childLlm?: string } = {}): strin
 }
 
 /** Return the `LoadError` loading `text` as `f.yaml` rejects with. */
-function error(text: string, options: { searchPaths?: string[] } = {}): Promise<LoadError> {
+function error(text: string, options: { searchPaths?: string[]; sourceLabel?: string } = {}): Promise<LoadError> {
   return loadErrorAsync(loadFlow(text, { sourceLabel: "f.yaml", ...options }));
 }
 
@@ -219,6 +219,15 @@ test("an imported flow's input value above its nested call fails at the import",
   expect(frame.range.startLine).toBe(lineOf(LIB, "${input.m}"));
   // Loaded alone, the file is the run's root, so its input is known at run start.
   await loadFlow(LIB, { sourceLabel: "lib.yaml" });
+});
+
+test("an imported file whose label matches the importer's is still named an import", async () => {
+  writeFileSync(join(tmp, "lib.yaml"), LIB);
+  const caught = await error(IMPORTER, { searchPaths: [tmp], sourceLabel: "lib.yaml" });
+  expect(caught.diagnostic.message).toStartWith(
+    "llm_config.model of the flow imported through uses: 'mylib' (called by node 'n'): ",
+  );
+  expect(caught.diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(LIB, "${input.m}"));
 });
 
 test("an inline call body inherits like a named child", async () => {

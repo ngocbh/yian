@@ -278,6 +278,67 @@ export function isEmptyValue(value: Value): boolean {
 }
 
 /**
+ * Return the parameters of a one-node signature (a compact flow or a single-node def): its
+ * `input:`, which must be a param map, with no parameter named `inf`.
+ *
+ * @param input The authored `input:`; an empty value declares no parameters.
+ * @param options.where The form in messages, such as `compact (single-node) flow`.
+ * @param options.inputLabel How the param-map message names `input:`.
+ * @param options.inputCursor The authored `input:`, or `null`.
+ * @param options.fallbackRange Where a malformed `input:` without a range of its own points.
+ * @param options.diagnostics The file's diagnostics.
+ * @throws LoadError when `input:` isn't a param map or a parameter is named `inf`.
+ */
+export function signatureParams(
+  input: Value,
+  options: {
+    where: string;
+    inputLabel: string;
+    inputCursor: SourceCursor | null;
+    fallbackRange: SourceRange | null;
+    diagnostics: LoadDiagnostics;
+  },
+): ValueRecord {
+  const { where, inputLabel, inputCursor, fallbackRange, diagnostics } = options;
+  if (!isRecord(input) && !isEmptyValue(input)) {
+    throw diagnostics.error(
+      `${where}: ${inputLabel} must be a param map (\`name: !TYPE\`, e.g. \`topic: !str\`)`,
+      { range: inputCursor?.range ?? fallbackRange },
+    );
+  }
+  const params: ValueRecord = isRecord(input) ? input : {};
+  // The node reads each parameter by bare name, so `inf` would read infinity instead.
+  if (Object.hasOwn(params, "inf")) {
+    rejectInfinityName(`${where}: input 'inf'`, "inf", inputCursor?.keyRangeOf("inf") ?? null, diagnostics);
+  }
+  return params;
+}
+
+/**
+ * Return the node body of a one-node signature: `body` without its signature and `drop` keys,
+ * one generated `p: ${input.p}` binding per parameter, and the signature's output type as the
+ * node's `output:`.
+ *
+ * @param body The signature's body.
+ * @param params The parameters `signatureParams` returned.
+ * @param keys The body's spelling of the signature's `input`/`output` keys, and other keys that
+ *   aren't the node's.
+ */
+export function signatureNodeBody(
+  body: ValueRecord,
+  params: ValueRecord,
+  keys: { input: string; output: string; drop?: readonly string[] },
+): ValueRecord {
+  const { input, output, drop = [] } = keys;
+  const nodeBody: ValueRecord = Object.fromEntries(
+    Object.entries(body).filter(([key]) => key !== input && key !== output && !drop.includes(key)),
+  );
+  nodeBody["input"] = Object.fromEntries(Object.keys(params).map((p) => [p, `\${input.${p}}`]));
+  if (Object.hasOwn(body, output)) nodeBody["output"] = body[output]!;
+  return nodeBody;
+}
+
+/**
  * Desugar a compact single-node flow into the canonical one-node form.
  *
  * - The flow `id:` names the single node, so it must be an identifier.
@@ -338,34 +399,16 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
       { range: root.rangeOf("id") },
     );
   }
-  const input = Object.hasOwn(body, "input") ? body["input"]! : null;
-  if (!isRecord(input) && !isEmptyValue(input)) {
-    throw diagnostics.error(
-      "compact (single-node) flow: `input:` must be a param map (`name: !TYPE`, e.g. " +
-        "`topic: !str`)",
-      { range: root.rangeOf("input") },
-    );
-  }
-  const params: ValueRecord = isRecord(input) ? input : {};
-  // The node reads each flow input by bare name, so `inf` would read infinity instead.
-  if (Object.hasOwn(params, "inf")) {
-    rejectInfinityName(
-      "compact (single-node) flow: input 'inf'",
-      "inf",
-      root.child("input").keyRangeOf("inf"),
-      diagnostics,
-    );
-  }
-
+  const params = signatureParams(Object.hasOwn(body, "input") ? body["input"]! : null, {
+    where: "compact (single-node) flow",
+    inputLabel: "`input:`",
+    inputCursor: root.has("input") ? root.child("input") : null,
+    fallbackRange: root.range,
+    diagnostics,
+  });
   // The node body is the kind and its logic fields. The flow inputs are auto-wired by name, and
   // the flow `output:` is carried through as the node's output type.
-  const nodeBody: ValueRecord = Object.fromEntries(
-    Object.entries(body).filter(
-      ([key]) => !COMPACT_FLOW_KEYS.includes(key) && key !== "input" && key !== "output",
-    ),
-  );
-  nodeBody["input"] = Object.fromEntries(Object.keys(params).map((p) => [p, `\${input.${p}}`]));
-  if (Object.hasOwn(body, "output")) nodeBody["output"] = body["output"]!;
+  const nodeBody = signatureNodeBody(body, params, { input: "input", output: "output", drop: COMPACT_FLOW_KEYS });
 
   const canonical: ValueRecord = Object.fromEntries(
     COMPACT_FLOW_KEYS.filter((key) => Object.hasOwn(body, key)).map((key) => [key, body[key]!]),

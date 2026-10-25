@@ -172,7 +172,10 @@ export interface FlowSourceFile {
  * and reads no flow file from disk.
  */
 export interface FlowSource {
-  /** The root file's key in `files`: the file name of the label it was loaded under. */
+  /**
+   * The root file's key in `files`: the file name of the label it was loaded under, or `<flow>`
+   * when that label has none (`""`, `.`, `..`, `/`).
+   */
   readonly root: string;
   /** The real path of the folder the root was loaded from. */
   readonly dir: string;

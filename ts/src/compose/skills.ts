@@ -5,7 +5,7 @@
  * the Compose safe YAML literal parser; only `name` and `description` are read and every other
  * field is ignored.
  *
- * Knows about:   skills, compose/source, defaults, diagnostics, typesys.
+ * Knows about:   skills, compose/source, compose/helpers/source, defaults, diagnostics, typesys.
  * Never imports: other Compose phases, compile, runtime, the run boundary, or CLI.
  */
 
@@ -27,6 +27,7 @@ import {
   statOrNull,
 } from "../skills/catalog.ts";
 import { isRecord, type ValueRecord } from "../typesys/index.ts";
+import { pathText } from "./helpers/source.ts";
 import { parseYamlLiteral, SourceSyntaxError } from "./source/index.ts";
 
 // The `yian/skills` entry point is this module, so it carries the skill types too, as Python's
@@ -180,11 +181,6 @@ function splitFrontmatter(text: string, path: string): [ValueRecord, string] {
 /** The parts of `directory` Python's `Path` keeps: empty and `.` segments drop out. */
 function pathParts(directory: string): string[] {
   return directory.split("/").filter((part) => part !== "" && part !== ".");
-}
-
-/** `directory` as Python's `str(Path(directory))` writes it. */
-function pathText(directory: string): string {
-  return (directory.startsWith("/") ? "/" : "") + pathParts(directory).join("/") || ".";
 }
 
 /** `directory`'s last part, as Python's `Path(directory).name`. */

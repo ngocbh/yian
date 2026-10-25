@@ -6,16 +6,16 @@
  * stamping any node. LOOP templates begin at driver zero; all other dynamic occurrence paths
  * belong to growth preparation.
  *
- * Knows about:   compile/model, nodes/base, nodes/contracts, nodes/start, nodes/end, diagnostics and typesys.
+ * Knows about:   compile/model, nodes/base, nodes/contracts, nodes/start, nodes/end and typesys.
  * Never imports: memory, compose, runtime, or the package-root run boundary.
  */
 
-import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { Node } from "../nodes/base.ts";
 import {
   ExecutionPosition,
   ExecutionScope,
   isExactly,
+  revalidateScope,
   sameExecutionPosition,
   sameExecutionScope,
   sameItems,
@@ -23,22 +23,7 @@ import {
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { writeAsText } from "../typesys/values.ts";
-import { CompiledFlow, Flow } from "./model.ts";
-
-/**
- * Replay exact nested invariants before accepting an existing frozen scope.
- *
- * @throws TypeError when `scope` isn't an exact `ExecutionScope`, or as its constructor does.
- * @throws RangeError as its constructor does.
- */
-export function revalidateScope(scope: unknown): asserts scope is ExecutionScope {
-  if (!isExactly(scope, ExecutionScope)) throw new TypeError("execution scope must be an exact ExecutionScope");
-  new ExecutionScope(scope.staticPath, {
-    flowPath: scope.flowPath,
-    occurrencePath: scope.occurrencePath,
-    boundary: scope.boundary,
-  });
-}
+import { Flow, flowNodes, nodeChild, validateUniqueTargets } from "./model.ts";
 
 /** One exact static node target and its root-relative execution scope. Frozen. */
 export class ResolvedExecutionTarget {
@@ -112,42 +97,6 @@ function sameLayout(a: ResolvedExecutionLayout, b: ResolvedExecutionLayout): boo
   );
 }
 
-/** Return a validated deterministic view of one flow's direct nodes. */
-function flowNodes(flow: Flow): [string, Node][] {
-  if (!isExactly(flow, Flow) && !isExactly(flow, CompiledFlow)) {
-    throw new TypeError("execution layout expects an exact Flow or CompiledFlow");
-  }
-  if (!isExactly(flow.nodes, Map)) throw new TypeError("flow nodes must be an exact Map");
-  for (const [name, value] of [["start_id", flow.startId], ["end_id", flow.endId]] as const) {
-    if (typeof value !== "string" || !value) throw new RangeError(`flow ${name} must be a non-empty exact string`);
-  }
-  const ids = [...flow.nodes.keys()];
-  for (const nodeId of ids) {
-    if (typeof nodeId !== "string" || !nodeId) throw new RangeError("flow node ids must be non-empty exact strings");
-  }
-  return ids.sort(compareCodeUnits).map((nodeId) => {
-    const node = flow.nodes.get(nodeId);
-    if (!(node instanceof Node)) throw new TypeError(`flow node ${reprText(nodeId)} must be a Node`);
-    if (typeof node.id !== "string" || node.id !== nodeId) {
-      throw new RangeError(`flow node key ${reprText(nodeId)} must match its exact node id`);
-    }
-    return [nodeId, node];
-  });
-}
-
-/** Read the existing node-owned static-child hook without kind dispatch. */
-function nodeChild(node: Node): Flow | null {
-  const children: unknown = node.originChildren();
-  if (!Array.isArray(children)) throw new TypeError(`node ${reprText(node.id)} static children must be an exact array`);
-  if (children.length > 1) throw new RangeError(`node ${reprText(node.id)} exposes more than one static child`);
-  if (children.length === 0) return null;
-  const child: unknown = children[0];
-  if (!isExactly(child, Flow) && !isExactly(child, CompiledFlow)) {
-    throw new TypeError(`node ${reprText(node.id)} static child must be an exact Flow`);
-  }
-  return child;
-}
-
 /** Traverse every callsite while detecting recursive child-flow cycles. */
 function* walkTargets(
   flow: Flow,
@@ -157,7 +106,11 @@ function* walkTargets(
   if (activeFlows.has(flow)) throw new RangeError("recursive child-flow cycle is not execution-layout resolvable");
   activeFlows.add(flow);
   try {
-    for (const [nodeId, node] of flowNodes(flow)) {
+    const nodes = flowNodes(flow);
+    for (const [name, value] of [["start_id", flow.startId], ["end_id", flow.endId]] as const) {
+      if (typeof value !== "string" || !value) throw new RangeError(`flow ${name} must be a non-empty exact string`);
+    }
+    for (const [nodeId, node] of nodes) {
       const locator = [...flowPath, nodeId];
       let boundary: "start" | "end" | null = null;
       if (nodeId === flow.startId && isExactly(node, StartNode)) boundary = "start";
@@ -192,27 +145,6 @@ export function resolveExecutionLayout(flow: Flow): ResolvedExecutionLayout {
   return new ResolvedExecutionLayout([...walkTargets(flow, [], new Set())]);
 }
 
-/** Reject duplicate paths or one node object reached through several paths. */
-function validateUniqueTargets(layout: ResolvedExecutionLayout): void {
-  // Keyed by the JSON of the locator, which no two distinct string paths share; never shown.
-  const locators = new Set<string>();
-  const nodes = new Set<Node>();
-  for (const target of layout.targets) {
-    const key = JSON.stringify(target.locator);
-    if (locators.has(key)) {
-      throw new RangeError(`execution layout has duplicate target path ${writeAsText([...target.locator])}`);
-    }
-    locators.add(key);
-    if (nodes.has(target.node)) {
-      throw new RangeError(
-        "execution layout reaches one node object through multiple static paths; " +
-          "use private child templates before applying it",
-      );
-    }
-    nodes.add(target.node);
-  }
-}
-
 /**
  * Apply one validated static layout to its exact graph, all or nothing.
  *
@@ -227,9 +159,9 @@ export function applyExecutionLayout(flow: Flow, layout: ResolvedExecutionLayout
   }
   // Replaying the constructor checks a layout that may have bypassed it.
   new ResolvedExecutionLayout(layout.targets);
-  validateUniqueTargets(layout);
+  validateUniqueTargets(layout.targets, "execution layout");
   const current = resolveExecutionLayout(flow);
-  validateUniqueTargets(current);
+  validateUniqueTargets(current.targets, "execution layout");
   if (!sameLayout(current, layout)) throw new RangeError("execution layout no longer matches the compiled flow");
 
   for (const [i, target] of layout.targets.entries()) {

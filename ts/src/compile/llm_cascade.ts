@@ -448,7 +448,8 @@ export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, call
     agents = callTime["agents"];
   }
 
-  const expected = new Set(staticAgentPaths(flow));
+  const statics = staticAgents(flow);
+  const expected = new Set(statics.map(([path]) => path));
   const supplied = new Set([...Object.keys(effective), ...Object.keys(agents)]);
   const missing = [...expected].filter((path) => !supplied.has(path)).sort(compareCodeUnits);
   const extra = [...supplied].filter((path) => !expected.has(path)).sort(compareCodeUnits);
@@ -463,7 +464,7 @@ export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, call
     throw new RangeError("effective LLM map path mismatch; " + details.join("; "));
   }
 
-  const labels = staticAgentLabels(flow);
+  const labels = agentLabels(statics);
   for (const path of Object.keys(effective).sort(compareCodeUnits)) {
     const config = effective[path];
     if (!isRecord(config)) {
@@ -471,7 +472,7 @@ export function applyEffectiveLlmMap(flow: CascadeFlow, effective: unknown, call
     }
     requireConcreteSelection(config, { path, label: labels.get(path) ?? null });
   }
-  const carrying = carryingAgentPaths(flow);
+  const carrying = carryingAgentPaths(statics);
   for (const path of Object.keys(agents).sort(compareCodeUnits)) {
     const subject = labels.get(path) || reprText(path);
     if (!carrying.has(path)) {
@@ -802,11 +803,6 @@ function resolved<T>(resolve: () => T): T {
   }
 }
 
-/** Return all agent paths without mutating or de-aliasing the graph. */
-function staticAgentPaths(flow: CascadeFlow): string[] {
-  return staticAgents(flow).map(([path]) => path);
-}
-
 /** Return each static agent's path, node and the flow it is in, without mutating. */
 function staticAgents(flow: CascadeFlow, path: readonly string[] = []): [string, AgentNode, CascadeFlow][] {
   const agents: [string, AgentNode, CascadeFlow][] = [];
@@ -819,10 +815,10 @@ function staticAgents(flow: CascadeFlow, path: readonly string[] = []): [string,
   return agents;
 }
 
-/** Return the static paths of the agents whose layers ride `__llm_config`. */
-function carryingAgentPaths(flow: CascadeFlow): Set<string> {
+/** Return the static paths of the `staticAgents` entries whose layers ride `__llm_config`. */
+function carryingAgentPaths(statics: readonly [string, AgentNode, CascadeFlow][]): Set<string> {
   const paths = new Set<string>();
-  for (const [path, , owner] of staticAgents(flow)) {
+  for (const [path, , owner] of statics) {
     if (owner.wiring.get(path.split("/").at(-1)!)?.has(LLM_CONFIG_KEY)) paths.add(path);
   }
   return paths;
@@ -838,22 +834,17 @@ function carryingAgentPaths(flow: CascadeFlow): Set<string> {
  * @returns The label of each labelled agent, keyed by static agent path.
  */
 export function staticAgentLabels(flow: CascadeFlow): Map<string, string> {
-  const labels = new Map<string, string>();
-  collectAgentLabels(flow, [], labels);
-  return labels;
+  return agentLabels(staticAgents(flow));
 }
 
-/** Add the labels of `flow`'s static agents, at callsite `path`, to `labels`. */
-function collectAgentLabels(flow: CascadeFlow, path: readonly string[], labels: Map<string, string>): void {
-  for (const [nodeId, node] of flow.nodes) {
-    const nodePath = [...path, nodeId];
-    if (node instanceof AgentNode) {
-      const label = agentLabel(node.llmConfigLabel, pathKey(path));
-      if (label !== null) labels.set(pathKey(nodePath), label);
-    }
-    const child = childOf(node);
-    if (child !== null) collectAgentLabels(child, nodePath, labels);
+/** Map each labelled `staticAgents` entry's path to its label, at the callsite holding it. */
+function agentLabels(statics: readonly [string, AgentNode, CascadeFlow][]): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const [path, node] of statics) {
+    const label = agentLabel(node.llmConfigLabel, path.split("/").slice(0, -1).join("/"));
+    if (label !== null) labels.set(path, label);
   }
+  return labels;
 }
 
 /** Apply already-validated configs and bases, and de-alias children recursively. */

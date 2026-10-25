@@ -30,10 +30,10 @@ import {
   Assertion,
   Binding,
   ContractOrigins,
-  ExecutionScope,
   isExactly,
   Parameter,
   PartialRecordContract,
+  revalidateScope,
   ValueContract,
   ValueTemplate,
 } from "../nodes/contracts.ts";
@@ -702,13 +702,7 @@ function memoryScopeTopology(value: unknown, path: string): JsonObject {
  *   it fails its constructor's checks.
  */
 function executionScopeTopology(value: unknown, path: string): JsonObject {
-  if (!isExactly(value, ExecutionScope)) throw new TypeError(`${path} must be an ExecutionScope`);
-  // Rebuilding replays the frozen carrier's checks on a forged scope.
-  new ExecutionScope(value.staticPath, {
-    flowPath: value.flowPath,
-    occurrencePath: value.occurrencePath,
-    boundary: value.boundary,
-  });
+  revalidateScope(value, path);
   return {
     static_path: [...value.staticPath],
     flow_path: [...value.flowPath],

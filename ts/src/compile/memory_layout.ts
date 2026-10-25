@@ -32,13 +32,17 @@ import { comparePaths, isExactly, sameItems, sameOptional } from "../nodes/contr
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { logJson } from "../typesys/json.ts";
-import { isList, jsTypeName, writeAsText } from "../typesys/values.ts";
-import { CompiledFlow, END_ID, Flow, START_ID } from "./model.ts";
-
-/** Return a key no two distinct locators share; never shown. */
-function locatorKey(locator: readonly string[]): string {
-  return JSON.stringify(locator);
-}
+import { isList, writeAsText } from "../typesys/values.ts";
+import {
+  CompiledFlow,
+  END_ID,
+  Flow,
+  flowNodes,
+  type GraphWalkError,
+  nodeChild,
+  START_ID,
+  validateUniqueTargets,
+} from "./model.ts";
 
 /** Return a key no two unequal sites share (Python hashes a `DeclSite` by value); never shown. */
 function siteKey(site: DeclSite): string {
@@ -289,15 +293,6 @@ function validateMemoryFlowBoundaries(flow: Flow, decl: MemoryDecl): void {
   if (!isExactly(flow.nodes, Map)) {
     throw setupError("a memory-owning flow requires an exact node dictionary", { origin });
   }
-  if (typeof flow.startId !== "string" || !flow.startId) {
-    throw setupError("a memory-owning flow start_id must be a non-empty exact string", { origin });
-  }
-  if (typeof flow.endId !== "string" || !flow.endId) {
-    throw setupError("a memory-owning flow end_id must be a non-empty exact string", { origin });
-  }
-  if (flow.startId === flow.endId) {
-    throw setupError("a memory-owning flow must have distinct START and END boundaries", { origin });
-  }
   if (flow.startId !== START_ID) {
     throw setupError(`a memory-owning flow start_id must be canonical ${reprText(START_ID)}`, { origin });
   }
@@ -372,49 +367,8 @@ function extendStack(stack: readonly string[], decls: readonly MemoryDecl[]): re
   return keys;
 }
 
-/** Return a validated deterministic view of one flow's direct nodes. */
-function flowNodes(flow: Flow, origin: OriginRef | null = null): [string, Node][] {
-  if (!isExactly(flow, Flow) && !isExactly(flow, CompiledFlow)) {
-    throw setupError(`memory layout expected an exact Flow, got ${jsTypeName(flow)}`, { origin });
-  }
-  if (!isExactly(flow.nodes, Map)) throw setupError("flow nodes must be an exact dictionary", { origin });
-  const ids: unknown[] = [...flow.nodes.keys()];
-  for (const nodeId of ids) {
-    if (typeof nodeId !== "string" || !nodeId) {
-      throw setupError("flow node ids must be non-empty exact strings", { origin });
-    }
-  }
-  return (ids as string[]).sort(compareCodeUnits).map((nodeId) => {
-    const node: unknown = flow.nodes.get(nodeId);
-    if (!(node instanceof Node)) throw setupError(`flow node ${reprText(nodeId)} must be a Node`, { origin });
-    if (typeof node.id !== "string" || !node.id) {
-      throw setupError(`flow node ${reprText(nodeId)} has an invalid node id`, { origin: node.origin });
-    }
-    if (node.id !== nodeId) {
-      throw setupError(`flow node key ${reprText(nodeId)} does not match node id ${reprText(node.id)}`, {
-        origin: node.origin,
-      });
-    }
-    return [nodeId, node];
-  });
-}
-
-/** Return the node's single exact static child, if present. */
-function nodeChild(node: Node): Flow | null {
-  const children: unknown = node.originChildren();
-  if (!isList(children)) {
-    throw setupError(`node ${reprText(node.id)} static children must be an exact array`, { origin: node.origin });
-  }
-  if (children.length > 1) {
-    throw setupError(`node ${reprText(node.id)} exposes more than one static child`, { origin: node.origin });
-  }
-  if (children.length === 0) return null;
-  const child: unknown = children[0];
-  if (!isExactly(child, Flow) && !isExactly(child, CompiledFlow)) {
-    throw setupError(`node ${reprText(node.id)} static child must be an exact Flow`, { origin: node.origin });
-  }
-  return child;
-}
+/** Build a graph walk failure as a `MemorySetupError` naming the site at fault. */
+const memoryWalkError: GraphWalkError = (_kind, message, origin) => setupError(message, { origin });
 
 /**
  * Prefix `alias` to the scope of every reachable memory declaration, in place.
@@ -437,11 +391,11 @@ export function scopeMemoryDeclarations(flow: Flow, alias: string): Flow {
     if (seenFlows.has(current)) continue;
     seenFlows.add(current);
     if (current instanceof CompiledFlow) current.memories = scoped(current.memories, alias);
-    for (const [, node] of flowNodes(current)) {
+    for (const [, node] of flowNodes(current, memoryWalkError)) {
       if (seenNodes.has(node)) continue;
       seenNodes.add(node);
       if (node instanceof AgentNode) node.memories = scoped(node.memories, alias);
-      const child = nodeChild(node);
+      const child = nodeChild(node, memoryWalkError);
       if (child !== null) pending.push(child);
     }
   }
@@ -601,7 +555,7 @@ function resolveFlow(
     }
     const stack = extendStack(inherited, decls);
 
-    for (const [nodeId, node] of flowNodes(flow, ownerOrigin)) {
+    for (const [nodeId, node] of flowNodes(flow, memoryWalkError, ownerOrigin)) {
       const nodeLocator = [...locator, nodeId];
       const ownDecls = agentDecls(node);
       declared.push(...ownDecls);
@@ -612,7 +566,7 @@ function resolveFlow(
           node,
         ),
       );
-      const child = nodeChild(node);
+      const child = nodeChild(node, memoryWalkError);
       if (child !== null) resolveFlow(child, nodeLocator, stack, targets, declared, activeFlows, node.origin);
     }
   } finally {
@@ -648,29 +602,6 @@ export function resolveMemoryLayout(flow: CompiledFlow): ResolvedMemoryLayout {
   return new ResolvedMemoryLayout(true, targets, memories);
 }
 
-/** Reject duplicate locators or aliased node objects before any mutation. */
-function validateUniqueTargets(layout: ResolvedMemoryLayout): void {
-  const locators = new Set<string>();
-  const nodes = new Set<object>();
-  for (const target of layout.targets) {
-    const key = locatorKey(target.locator);
-    if (locators.has(key)) {
-      throw setupError(`memory layout contains duplicate target path ${writeAsText([...target.locator])}`, {
-        origin: target.node.origin,
-      });
-    }
-    locators.add(key);
-    if (nodes.has(target.node)) {
-      throw setupError(
-        "memory layout reaches one node object through multiple static paths; " +
-          "the run setup must de-alias child flows before applying it",
-        { origin: target.node.origin },
-      );
-    }
-    nodes.add(target.node);
-  }
-}
-
 /**
  * Atomically apply one previously resolved layout to its exact graph.
  *
@@ -687,9 +618,9 @@ export function applyMemoryLayout(flow: CompiledFlow, layout: ResolvedMemoryLayo
   if (!isExactly(flow, CompiledFlow)) throw new TypeError("applyMemoryLayout expects an exact CompiledFlow");
   revalidateResolvedLayout(layout);
 
-  validateUniqueTargets(layout);
+  validateUniqueTargets(layout.targets, "memory layout", memoryWalkError);
   const current = resolveMemoryLayout(flow);
-  validateUniqueTargets(current);
+  validateUniqueTargets(current.targets, "memory layout", memoryWalkError);
   if (!sameLayout(current, layout)) throw setupError("memory layout no longer matches the compiled flow");
 
   // Equal layouts list the same locators in the same order.

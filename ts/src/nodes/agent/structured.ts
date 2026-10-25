@@ -71,7 +71,14 @@ import {
   ValueKind,
 } from "../../typesys/values.ts";
 import type { ValuePath } from "../contracts.ts";
-import { type AgentSteps, digestRequest, recordedResponse, requestSha256, type RetrySettings } from "./context.ts";
+import {
+  type AgentSteps,
+  digestRequest,
+  interruptRequested,
+  recordedResponse,
+  requestSha256,
+  type RetrySettings,
+} from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 import { callModel, type LiveSinks } from "./live.ts";
 import { pushVisible } from "./text.ts";
@@ -445,12 +452,14 @@ export function userMessage(text: string): Message {
  * @param options `retries` defaults to `YIAN_AGENT_RETRIES`; `live` gets the call events;
  *   `signal` stops the run before each call and wins over the reply of a call it stopped during;
  *   `interrupt` is the host's interrupt signal, which cuts a call as `callModel` does and, once
- *   replay is over, ends the calls before the next one starts; `retry` is each call's retry settings; with `steps`, each call is written as a `model_call`
- *   step (`callModel`), its digest taken with the system message reduced to `baseSystemPrompt`
- *   (`digestRequest`; absent or `null` hashes the request as it is).
+ *   replay is over, ends the calls before the next one starts, as an honor step an earlier start
+ *   recorded in `steps` does; `retry` is each call's retry settings; with `steps`, each call is
+ *   written as a `model_call` step (`callModel`), its digest taken with the system message
+ *   reduced to `baseSystemPrompt` (`digestRequest`; absent or `null` hashes the request as it is).
  * @returns The checked value, unwrapped.
  * @throws OutputInvalidError once `retries + 1` replies were invalid.
- * @throws ReplyInterrupted when a host interrupt cut a call, or was set before one (an empty reply).
+ * @throws ReplyInterrupted when a host interrupt cut a call, or was set or recorded honored before
+ *   one (an empty reply).
  * @throws Whatever a model call throws (a provider error, a stop's reason), unchanged.
  */
 export async function generateStructured(
@@ -476,8 +485,10 @@ export async function generateStructured(
   let conversation = [...messages, ...instruction];
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
-    // No model call starts after an interrupt; a replaying call already happened.
-    if (interrupt?.aborted && steps?.replaying() !== true) throw new ReplyInterrupted(new Message({ role: "assistant", parts: [] }));
+    // No model call starts after an interrupt, or once replay passed an earlier start's honor; a
+    // replaying call already happened.
+    const interrupted = steps === undefined ? interrupt?.aborted === true : interruptRequested(interrupt, steps);
+    if (interrupted) throw new ReplyInterrupted(new Message({ role: "assistant", parts: [] }));
     const request = plan.apply(new Request({ messages: conversation }));
     const { response } = await callModel(live, model, request, {
       purpose,
@@ -509,8 +520,8 @@ export async function generateStructured(
 /**
  * Rebuild what `generateStructured(model, messages, typ)` showed a learner from its recorded
  * `model_call` steps, in order: each prompt-strategy reply's text, or the other strategies'
- * checked value. A failed attempt shows nothing; an invalid reply adds the correction the next
- * request carries.
+ * checked value. A failed attempt and a reply a host interrupt cut show nothing; an invalid reply
+ * adds the correction the next request carries.
  *
  * @param steps The structured calls' `model_call` steps.
  * @param baseSystemPrompt The system prompt without recalled memory, which each digest reads in
@@ -535,7 +546,8 @@ export function structuredMaterial(
     const request = plan.apply(new Request({ messages: conversation }));
     const digest = requestSha256(digestRequest(request, baseSystemPrompt));
     if (step["purpose"] !== purpose || step["request_sha256"] !== digest) digestOk = false;
-    if (Object.hasOwn(step, "error")) continue;
+    // A cut reply was never output: its text so far shows nothing, as in `stepsMaterial`.
+    if (Object.hasOwn(step, "error") || step["finish"] === "interrupted") continue;
     const response = recordedResponse(step);
     if (prompted) pushVisible(interactions, () => new ModelTextInteraction(response.message.text()));
     try {

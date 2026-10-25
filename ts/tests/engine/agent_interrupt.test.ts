@@ -437,6 +437,59 @@ test("the trailing structured call after tools is cut, or never starts once an i
   expect(written.map((step) => step["kind"])).toEqual(["model_call", "tool_result", "model_call", "interrupted"]);
 });
 
+test("a resumed start past the honor before the trailing structured call honors it again: no live call", async () => {
+  const outputType = recordA(true);
+  const toolset = () => new ToolSet({ lookup: lookupTool((topic) => `found ${topic}`) });
+  const host = interruptible();
+  const { steps: first, written } = recorded();
+  const emitEvent = (event: unknown) => void (event instanceof ModelCallFinished && event.n === 3 && host.interrupt());
+  const live = new ScriptedModel([reply("", ["lookup", { topic: "a" }, "call-1"]), reply("answer"), reply('{"a": 1}')], CONFIG);
+  const tools = ["lookup"];
+  await runAgent(agentContext(live, { steerInbox: host.steerInbox, steps: first, outputType, toolset: toolset(), tools, emitEvent }));
+  expect(written.map((step) => step["kind"])).toEqual(["model_call", "tool_result", "model_call", "interrupted"]);
+
+  // A crash before the commit: the honor step deleted the pending interrupt, so the signal is unset.
+  const resumed: ValueRecord[] = [];
+  const steps = new NodeSteps(2, written, (step) => resumed.push(step));
+  const model = new ScriptedModel([reply('{"a": 1}')], CONFIG);
+  const ctx = agentContext(model, { steerInbox: interruptible().steerInbox, steps, outputType, toolset: toolset(), tools });
+  expect(await runAgent(ctx)).toEqual(new Interrupted(7));
+  expect(model.requests).toEqual([]);
+  expect(resumed).toEqual([]);
+});
+
+/**
+ * Run `chat` live over `replies`, interrupted once model call `cutAt` finished, then resume it
+ * from the steps it wrote with nothing pending; return what each start wrote and the resume's
+ * result and requests.
+ */
+async function resumedAfterHonor(replies: Response[], cutAt: number, extra: Partial<AgentRunContext>) {
+  const host = interruptible();
+  const { steps: first, written } = recorded();
+  const emitEvent = (event: unknown) => void (event instanceof ModelCallFinished && event.n === cutAt && host.interrupt());
+  const live = await runAgent(agentContext(new ScriptedModel(replies, CONFIG), { ...extra, steerInbox: host.steerInbox, steps: first, emitEvent }));
+  // A crash before the commit: the honor step deleted the pending interrupt, so the signal is unset.
+  const resumed: ValueRecord[] = [];
+  const steps = new NodeSteps(2, written, (step) => resumed.push(step));
+  const model = new ScriptedModel(replies.slice(cutAt), CONFIG);
+  const result = await runAgent(agentContext(model, { ...extra, steerInbox: interruptible().steerInbox, steps }));
+  return { live, written: written.map((step) => step["kind"]), result, requests: model.requests.length, resumed };
+}
+
+test("a resumed start past the honor after an invalid structured reply makes no correction call", async () => {
+  const run = await resumedAfterHonor([reply("not json"), reply("still not"), reply("nope")], 1, { outputType: recordA(true), retries: 2 });
+  expect([run.live, run.written]).toEqual([new Interrupted(7), ["model_call", "interrupted"]]);
+  expect([run.result, run.requests, run.resumed]).toEqual([new Interrupted(7), 0, []]);
+});
+
+test("a resumed start past the honor after a trailing structured attempt makes no correction call", async () => {
+  const toolset = new ToolSet({ lookup: lookupTool((topic) => `found ${topic}`) });
+  const replies = [reply("", ["lookup", { topic: "a" }, "call-1"]), reply("answer"), reply("not json"), reply("nope"), reply("nope")];
+  const run = await resumedAfterHonor(replies, 4, { outputType: recordA(true), retries: 2, toolset, tools: ["lookup"] });
+  expect([run.live, run.written]).toEqual([new Interrupted(7), ["model_call", "tool_result", "model_call", "model_call", "interrupted"]]);
+  expect([run.result, run.requests, run.resumed]).toEqual([new Interrupted(7), 0, []]);
+});
+
 test("generateStructured doesn't retry a cut call", async () => {
   const interruptSignal = new AbortController();
   const model = new Paced(words('{"a"', ": x", "}", new Finish({ reason: "stop" })), (index) => {

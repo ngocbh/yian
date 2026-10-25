@@ -670,9 +670,9 @@ async function closeAndRelease(parts: {
   }
   let next: IdleRun | null = null;
   try {
-    // A cleanup error noted on a refusal leaves `pending` as `primary`; the log close below drops
-    // the entry itself.
-    const keepable = pending === null || (primary !== null && pending === primary && parts.keepAfter?.(primary) === true);
+    // Cleanup errors after a refusal are only noted on it, so the entry is still kept; only a
+    // failed log close below drops it.
+    const keepable = pending === null || (primary !== null && parts.keepAfter?.(primary) === true);
     if (runHold !== null && keepable) next = parts.keep();
     if (parts.authority !== null) {
       try {

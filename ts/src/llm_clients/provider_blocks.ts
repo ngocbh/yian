@@ -1352,12 +1352,20 @@ function partialField(
         // Several variants and no literal tag: only the tag itself can be checked.
         const tag = Object.hasOwn(value, "type") ? value["type"] : undefined;
         if (!isValue(tag)) checkLiteral(walk, model, name, tag === undefined ? {} : { type: tag }, path, keys);
+      } else if (!members(field).some((member) => member.kind === "object" || member.kind === "json")) {
+        // A field that takes no mapping: an empty one gives its own type's message, whatever the
+        // values resolve to.
+        checkLiteral(walk, model, name, {}, path, keys);
       }
       return;
     }
   } else if (isList(value) && holdsValue(value, isValue)) {
     const item = listItem(field);
-    if (item === null) return;
+    if (item === null) {
+      // A field that takes no list, as for a mapping above.
+      if (!members(field).some((member) => member.kind === "json")) checkLiteral(walk, model, name, [], path, keys);
+      return;
+    }
     value.forEach((entry, index) => {
       if (!isRecord(entry) || isValue(entry)) return;
       const part = nestedSchema(item, entry);

@@ -166,6 +166,18 @@ describe("partialBlockProblems", () => {
       "`openai.metadata.a`: Input should be a valid string",
     ]);
   });
+
+  test("a mapping or list holding a value is reported for a scalar field", () => {
+    expect(problems("anthropic", { temperature: { a: new Value() } })).toEqual(
+      problems("anthropic", { temperature: { a: 1n } }),
+    );
+    expect(problems("anthropic", { temperature: { a: new Value() } })).toEqual([
+      "`anthropic.temperature`: Input should be a valid number",
+    ]);
+    expect(problems("anthropic", { temperature: [new Value()] })).toEqual([
+      "`anthropic.temperature`: Input should be a valid number",
+    ]);
+  });
 });
 
 describe("blockFieldAnnotation", () => {

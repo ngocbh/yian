@@ -215,3 +215,15 @@ def test_literal_items_of_a_mapping_holding_a_value_are_checked():
     problems = _problems("openai", {"metadata": {"a": 5, "b": _Value()}})
 
     assert problems == ["`openai.metadata.a`: Input should be a valid string"]
+
+
+def test_a_mapping_or_list_holding_a_value_is_reported_for_a_scalar_field():
+    assert _problems("anthropic", {"temperature": {"a": _Value()}}) == _problems(
+        "anthropic", {"temperature": {"a": 1}}
+    )
+    assert _problems("anthropic", {"temperature": {"a": _Value()}}) == [
+        "`anthropic.temperature`: Input should be a valid number"
+    ]
+    assert _problems("anthropic", {"temperature": [_Value()]}) == [
+        "`anthropic.temperature`: Input should be a valid number"
+    ]

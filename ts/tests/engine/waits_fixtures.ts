@@ -24,6 +24,7 @@ import {
   commitInitialPool,
   commitPrepared,
   prepareInboxClosed,
+  prepareInterrupt,
   prepareNodeStarted,
   prepareNodeStep,
   prepareNodeSucceeded,
@@ -38,6 +39,7 @@ import {
   prepareRunWaiting,
   prepareSend,
   prepareTakeCommit,
+  prepareWithdraw,
   RunState,
 } from "../../src/runtime/state.ts";
 import type { RetainedTrace } from "../../src/runtime/trace.ts";
@@ -263,6 +265,13 @@ class Scenario {
   close(mark?: string): this {
     return this.commit(prepareInboxClosed(this.state, "msgs")!, mark);
   }
+  withdraw(mark?: string): this {
+    return this.commit(prepareWithdraw(this.state, "msgs")!, mark);
+  }
+  /** An offline interrupt of `msgs`. */
+  interrupt(mark?: string): this {
+    return this.commit(prepareInterrupt(this.state, "msgs")!, mark);
+  }
   woken(node: string, timedOut: readonly string[] = [], mark?: string): this {
     return this.commit(prepareNodeWoken(this.state, node, timedOut), mark);
   }
@@ -330,6 +339,9 @@ export const askAnswer = (node: string, answer: string) => ({
  * - `e`: the inbox closes while a take waits with the host down; the take commits closed.
  * - `f`: an AGENT reads two sends as one steer step, a third send arrives, then a crash; the
  *   restarted agent succeeds and the third send stays unread.
+ * - `g`: a send to a waiting take is withdrawn, so the take waits again and takes a later send.
+ * - `h`: an empty Stop is recorded while a node that reads no inbox works; the take that then
+ *   waits ends it, and takes a later send.
  */
 export function scenarioLogs(): ScenarioLog[] {
   return [false, true].flatMap((learnable) => [
@@ -343,6 +355,8 @@ export function scenarioLogs(): ScenarioLog[] {
     scenarioD(learnable),
     scenarioE(learnable),
     scenarioF(learnable),
+    scenarioG(learnable),
+    scenarioH(learnable),
   ]);
 }
 
@@ -427,5 +441,22 @@ function scenarioF(learnable: boolean): ScenarioLog {
   const from = [BigInt(seqOf(run, "sa")), BigInt(seqOf(run, "sb"))];
   run.step("chat", { kind: "steer", inbox: "msgs", from }, "steer").send("c", "sc");
   run.reopen().resume("resumed").start("chat", "restarted").succeed("chat", "ok");
+  return run.end().done();
+}
+
+function scenarioG(learnable: boolean): ScenarioLog {
+  const run = new Scenario("g", waitFlow(tool("heard", "take")), learnable);
+  run.start("heard").wait("heard", takeEntry("heard"), "waiting").runWaiting();
+  run.reopen().send("x", "sx").withdraw("withdrawn");
+  run.reopen().send("y", "sy");
+  run.reopen().woken("heard").take("heard", { inbox: "msgs", events: [seqOf(run, "sy")], closed: false }, "take");
+  return run.end().done();
+}
+
+function scenarioH(learnable: boolean): ScenarioLog {
+  const run = new Scenario("h", waitFlow(work(), tool("heard", "take")), learnable);
+  run.start("work").interrupt("stop").succeed("work", 1n).start("heard").wait("heard", takeEntry("heard"), "waiting").runWaiting();
+  run.reopen().send("x", "sx");
+  run.reopen().woken("heard").take("heard", { inbox: "msgs", events: [seqOf(run, "sx")], closed: false }, "take");
   return run.end().done();
 }

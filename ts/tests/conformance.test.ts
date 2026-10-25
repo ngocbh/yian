@@ -52,6 +52,7 @@ import {
   decodeRecord,
   encodeRecord,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   NodeStepRecord,
   NodeWaitingRecord,
   NodeWokenRecord,
@@ -166,7 +167,9 @@ const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: te
 /** A `run` case whose `host.models.n.agent` script is the one `entry`. */
 const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
 const AT = "host.models.n.agent[0]";
-const SENDS = "`host.sends` items are {inbox, event, after?|down?}, {close}, {interrupt, after?} or {complete, output | error}";
+const SENDS =
+  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?} or {complete, output | error}; " +
+  "`hold: true` marks an item sent while the run waits that isn't followed by an advance";
 const COUNTS = "`host.sends[0].after` counts must be ints from 1";
 const USAGE = "{input_tokens: 1, output_tokens: 2, total_tokens: 3}";
 const CONSUMER_LIST = "agent, structured_retry, compose, backward, summary";
@@ -323,7 +326,16 @@ describe("checkCase", () => {
       "[{interrupt: m, after: 1}]",
       "[{interrupt: m, inbox: m}]",
       "[{interrupt: m, down: true}]",
+      "[{withdraw: 1}]",
+      "[{withdraw: m, down: true}]",
+      "[{withdraw: m, after: 1}]",
+      "[{withdraw: m, inbox: m}]",
+      "[{inbox: m, event: a, hold: false}]",
+      "[{inbox: m, event: a, after: {node: chat, model_call: 1}, hold: true}]",
+      "[{interrupt: m, after: {node: chat, model_call: 1}, hold: true}]",
+      "[{inbox: m, event: a, down: true, hold: true}]",
     ].map((items) => [`${RUN}host: {sends: ${items}}`, SENDS]),
+    [`${RUN}host: {sends: [{withdraw: m, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{inbox: m, event: a, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{interrupt: m, after: {tool_call: 1}}]}`, "`host.sends[0].after.node` must be a node id"],
     [`${RUN}host: {sends: [{interrupt: m, after: {node: chat, tool_call: 0}}]}`, COUNTS],
@@ -1022,6 +1034,10 @@ describe("run", () => {
 
   test("`host.sends` delivers each item while the run waits", async () => {
     await runCase(SENDS_CASE("[{inbox: m, event: a}, {inbox: m, event: b}, {close: m}]", "[a, b]"));
+  });
+
+  test("a `{withdraw}` item takes unread sends back; `hold: true` delivers the next item to the same wait", async () => {
+    await runCase(SENDS_CASE("[{inbox: m, event: a, hold: true}, {withdraw: m, hold: true}, {inbox: m, event: b}, {close: m}]", "[b]"));
   });
 
   /**
@@ -2219,6 +2235,7 @@ describe("the trace and golden form of the wait records", () => {
     new NodeWokenRecord("heard"),
     new PoolCommitRecord("heard", "heard", null, { take: { inbox: "msgs", events: [3], closed: false } }),
     new InboxClosedRecord("msgs"),
+    new InboxWithdrawnRecord("msgs", [3]),
     new RunCancelledRecord(),
     new RunFailedRecord(new Failure({ code: "graph.terminal_unreachable", message: "END is unreachable", nodeId: "ask" })),
   ];
@@ -2251,6 +2268,7 @@ output: \${greet.output}
       ["node_woken", "heard"],
       ["pool_commit", "heard", { inbox: "msgs", events: [3n], closed: false }],
       ["inbox_closed", null, { inbox: "msgs" }],
+      ["inbox_withdrawn", null, { inbox: "msgs", events: [3n] }],
       ["run_cancelled", null],
     ]);
     const [kind, node, payload] = entries.at(-1)!;

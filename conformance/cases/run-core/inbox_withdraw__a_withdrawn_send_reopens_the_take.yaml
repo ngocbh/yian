@@ -1,0 +1,136 @@
+# TS-only: withdraw and the remembered Stop (#1106).
+# A message sent to the waiting take is withdrawn before the take wakes: `inbox_withdrawn` names
+# it, and the take waits again. The next message is the one it takes.
+kind: run
+python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
+rules: [run-log]
+flow: |
+  id: f
+  name: f
+  input:
+    notes: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.notes}
+    reply:
+      kind: code
+      input: {got: "${heard.output.events}"}
+      output: str
+      code: |
+        return inputs.got[0]
+  output: ${reply.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: notes, event: first, hold: true}
+  - {withdraw: notes}
+  - {inbox: notes, event: second}
+expect:
+  output:
+    status: succeeded
+    output: second
+  trace:
+  - - run_started
+    - null
+    - {learnable: false, num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - {call_id: r1/heard, inbox: notes, mode: one, tool: take}
+  - - run_waiting
+    - null
+    - node_ids: [heard]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: first}
+  - - inbox_withdrawn
+    - null
+    - events: [11]
+      inbox: notes
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: second}
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - closed: false
+      events: [13]
+      inbox: notes
+  - - node_succeeded
+    - heard
+    - {commit: 15}
+  - [node_started, reply]
+  - - pool_commit
+    - reply
+    - {value: second}
+  - - node_succeeded
+    - reply
+    - {commit: 18}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: second}
+  - - node_succeeded
+    - __end__
+    - {commit: 21}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - node_id: heard
+      call_ids: [r1/heard]
+  - - RunWaiting
+    - node_ids: [heard]
+  - - NodeWoken
+    - node_id: heard
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        events: [second]
+  - - NodeStarted
+    - {node_id: reply}
+  - - NodeSucceeded
+    - {node_id: reply, output: second}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__, output: second}
+  - - RunSucceeded
+    - {output: second}
+  stream: []

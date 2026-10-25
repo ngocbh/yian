@@ -1,0 +1,182 @@
+# TS-only: withdraw and the remembered Stop (#1106).
+# While the reply streams, the host sends a steer, withdraws it and interrupts, all at chunk 1:
+# `inbox_withdrawn` names the steer, so no `steer` step reads it; the interrupt cuts the reply
+# and it honors it: output null.
+kind: run
+python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
+rules: [run-log]
+flow: |
+  id: stop
+  name: stop
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.notes}
+    reply:
+      kind: agent
+      steer_inbox: ${input.notes}
+      input: {got: "${heard.output.events}"}
+      system_prompt: Help.
+      prompt: "answer ${got}"
+      output: Optional(str)
+  output: ${reply.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: notes, event: hi}
+  - {inbox: notes, event: more, after: {node: reply, model_call: 1, chunk: 1}}
+  - {withdraw: notes, after: {node: reply, model_call: 1, chunk: 1}}
+  - {interrupt: notes, after: {node: reply, model_call: 1, chunk: 1}}
+  models:
+    reply:
+      agent:
+      - chunks:
+        - text: hello
+        - text: ' world'
+        - finish: stop
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        reply:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - {call_id: r1/heard, inbox: notes, mode: one, tool: take}
+  - - run_waiting
+    - null
+    - node_ids: [heard]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: hi}
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - closed: false
+      events: [11]
+      inbox: notes
+  - - node_succeeded
+    - heard
+    - {commit: 13}
+  - [node_started, reply]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: more}
+  - - inbox_withdrawn
+    - null
+    - events: [16]
+      inbox: notes
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [reply]
+  - - node_step
+    - reply
+    - n: 1
+      step:
+        finish: interrupted
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: hello, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: c41a4f9f4d41bdc8dbc3e620b17d312127ea22a2b478af21f5896ee3e96aa7e6
+        response_id: null
+        usage: null
+  - - node_step
+    - reply
+    - n: 2
+      step: {by: 18, kind: interrupted}
+  - [pool_commit, reply]
+  - - pool_commit
+    - reply
+    - key: reply.new_messages
+      steps: [19, 20]
+  - - node_succeeded
+    - reply
+    - {commit: 21, messages: 22}
+  - [node_started, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 25}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - node_id: heard
+      call_ids: [r1/heard]
+  - - RunWaiting
+    - node_ids: [heard]
+  - - NodeWoken
+    - node_id: heard
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        events: [hi]
+  - - NodeStarted
+    - {node_id: reply}
+  - - ModelCallStarted
+    - {node_id: reply, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - ModelCallFinished
+    - {node_id: reply, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
+  - - NodeSucceeded
+    - {node_id: reply, interrupted: true}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__}
+  - [RunSucceeded]
+  stream:
+  - {node_id: reply, key: text, chunk: hello, final: false, n: 1, index: 0}
+  - {node_id: reply, key: text, chunk: '', final: true, n: 1, index: 1}

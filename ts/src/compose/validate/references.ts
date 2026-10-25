@@ -407,8 +407,10 @@ export function validateReferences(
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
         err = outputContractPathError(producer, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[1] === NEW_MESSAGES) {
-        const messages = siteProducers.get(messagesKey(parts[0]!));
-        if (messages !== undefined) err = outputContractPathError(messages, parts.slice(2), path, { partialUnionFields });
+        const messagesContract = siteProducers.get(messagesKey(parts[0]!));
+        if (messagesContract !== undefined) {
+          err = outputContractPathError(messagesContract, parts.slice(2), path, { partialUnionFields });
+        }
       } else if (err === null && input !== undefined) {
         err = outputContractPathError(input, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[0] === "item" && elementContract !== null) {

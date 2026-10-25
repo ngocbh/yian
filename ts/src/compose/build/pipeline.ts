@@ -1,19 +1,34 @@
 /**
  * The post-parse conductor: assembled sections to a runnable `ComposedFlow`.
  *
- * `assemble` is the pipeline shared by the top-level flow and every in-file `defs:` callable:
+ * `assemble` is the pipeline shared by the top-level flow and every in-file `defs:` callable. Its
+ * passes, in order:
  *
- *   flow parameters + authored parameter/contract/default origins -> parse nodes, lowering each
- *   tagged `nodes:` entry to a CODE node -> build every node kind-blind (`desc.build(ctx)`;
- *   physical node-output contracts compile at their existing leaf-owned build position; a case
- *   lowers in its own build) -> cross-flow type check + case exhaustiveness -> infer data edges +
- *   append each case's own edges + copy each host's route/ordering edges and data gates onto the
- *   nodes lifted out of it -> validate references + classify asserts -> attach authored
- *   assertion/flow-output binding origins -> synthesize the START_ID/END_ID boundary over all
- *   edges -> resolve each node's `isinstance` type table -> reject cycles + check if/else
- *   handles -> `CompiledFlow.fromParts`. One retained assertion item cursor supplies its carrier
- *   origin and Compose-only validation range; only the origin crosses into the semantic
- *   assertion.
+ *   1. Read: extract inline bodies; stamp memory and flow-assert origins; read the flow
+ *      parameters; parse nodes (a tagged `nodes:` entry lowers to a CODE node returning its
+ *      value) and stamp their origins; refuse a `uses:` alias that collides with a node id;
+ *      bound written-value nesting; refuse a tagged node `output:`; split tagged inputs,
+ *      `llm_config` and flow outputs into value + declared contract; check case branches.
+ *   2. Desugar: inline calls, adaptive questions, case call targets, then `${case.output}` to a
+ *      coalesce over the case's branch targets; register inline bodies as private callables.
+ *   3. Build every node kind-blind (`desc.build(ctx)`; physical node-output contracts compile at
+ *      their leaf-owned build position; a case lowers in its own build); stamp binding labels,
+ *      wiring origins, input contracts and each node's merged `env`; collect the producers and
+ *      wire each AGENT's `llm_config` values.
+ *   4. Edges and narrowing: infer data edges, append each case's own edges, copy each host's
+ *      route/ordering edges and data gates onto the nodes lifted out of it, compute CASE
+ *      narrowing.
+ *   5. Type checks: case `when:` values and impossible `when:`s, typed inputs (and TOOL input
+ *      types), CALL/MAP types, the LOOP contract, case exhaustiveness, wiring parity.
+ *   6. References and asserts: validate references, check node asserts, lower flow asserts.
+ *   7. Ordering edges; attach flow-output origins, inline call origins and declared output
+ *      contracts; null outputs CASE routing may skip; check skipped arithmetic and typed outputs.
+ *   8. Synthesize the START_ID/END_ID boundary over all edges; check `llm_config` sources; fill
+ *      each node's `isinstance` type table; check reserved sources (`over:`, `until:`).
+ *   9. Reject cycles, check if/else handles, then `CompiledFlow.fromParts`.
+ *
+ * One retained assertion item cursor supplies its carrier origin and Compose-only validation
+ * range; only the origin crosses into the semantic assertion.
  *
  * Holds `ComposedFlow` (the compiled and validated flow the engine runs) plus the flow `output:`
  * parser and source-origin attachment. Ladder position: the last phase before the loader; it may
@@ -1597,20 +1612,7 @@ export interface AssembleOptions {
 
 /**
  * Assemble parsed sections into a `ComposedFlow`: the post-parse pipeline shared by the top-level
- * flow and every in-file def.
- *
- *   flow parameters -> parse nodes (a tagged entry lowers to a CODE node returning its value) ->
- *   split tagged node inputs and flow outputs into value + declared contract -> check case
- *   branches (a node or a call; a value or a case `output:` is a load error showing the value
- *   entry) -> desugar (inline calls, adaptive questions, case call targets, `${case.output}` to a
- *   coalesce over the case's branch targets) -> build every node kind-blind (`desc.build(ctx)`;
- *   physical node-output contracts compile at their existing leaf-owned position; a case lowers
- *   in its own build) -> attach declared input contracts to the node wiring -> cross-flow type
- *   check + case exhaustiveness -> infer data edges + append each case's own edges + copy each
- *   host's route/ordering edges and data gates onto the nodes lifted out of it -> validate
- *   references + classify asserts -> attach authored flow-output binding origins + declared
- *   output contracts -> synthesize roots/terminals -> resolve `isinstance` type tables -> reject
- *   cycles + check if/else handles -> `CompiledFlow.fromParts`.
+ * flow and every in-file def. The module docstring lists its passes in order.
  *
  * Exactly one input representation is required: `inputsSection` is the authored mapping that
  * still needs parsing, while `inputParameters` carries parameters already resolved by an earlier

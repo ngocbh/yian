@@ -1,25 +1,36 @@
-# From examples/chat.yaml, with examples/compact_history.yaml beside it.
-# One turn: the host sends "Hi" to the `messages` inbox; beside the turn's `take`, `compacted`
-# calls compact_history, which passes the empty history through (`over` takes no branch, `folded`
-# is skipped, no model call); the take reads "Hi", `answered` calls `respond`, whose AGENT replies,
-# and the turn's output appends the turn. Closing the inbox makes the next take return no events
-# with `closed: true`, so `answered` is skipped and the loop ends.
+# From examples/chat.yaml, with `tools: [hold]` on `reply`, and examples/compact_history.yaml
+# beside it. Two turns over the `owner_messages` inbox of messages; beside each turn's `take`,
+# `compacted` passes the short history through (`folded` is skipped, no model call).
+# Turn 1: the host sends "Hi"; after the reply's first model call it sends "Short, please", which
+# the reply reads as a late steer (a `steer` step) and answers with one more model call.
+# Turn 2: the host sends "Ask the owner"; the reply calls `hold`, a host tool that pends, so the
+# run waits until the host's complete answers it; the woken reply answers.
+# Each turn appends what was said and the reply's new_messages (the steer, the tool call and its
+# result included). Closing the inbox makes the next take return no events with `closed: true`,
+# so `answered` is skipped and the loop ends.
 kind: run
 rules: [run-log]
 python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
 flow: |
-  # chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary
-  # (agent without tools; deterministic history).
+  # chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary.
   #
-  # The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
-  # them and takes everything sent since the last turn. Beside that take, `compacted` calls
-  # compact_history.yaml on the history so far: under its budget (32,000 characters of message
-  # text) it passes it through with no model call; over it, one model call folds the older turns
-  # into the summary and keeps the last 4 turns. `answered` calls `respond` with the summary and
-  # the kept turns flattened into one list of messages; the reply's system prompt carries the
-  # summary. Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are
-  # answered. The run log grows linearly (see "Growing a carried value" in docs/syntax.md).
-  # Comprehensions, len(), slices, the `prompt:` list style, `Inbox(str)` and `take` are TS-only.
+  # The host sends each owner message to the `owner_messages` inbox (`yian chat` sends each line you
+  # type as a user message). Each turn's `take` waits for them and takes everything sent since the
+  # last turn. Beside that take, `compacted` calls compact_history.yaml on the history so far: under
+  # its budget (32,000 characters of message text) it passes it through with no model call; over it,
+  # one model call folds the older turns into the summary and keeps the last 4 turns. `answered`
+  # calls `respond` with the summary, the kept turns flattened into one list of messages, and what
+  # was just said; the reply's system prompt carries the summary.
+  #
+  # Messages sent while `reply` runs steer it: they join its next model call (`steer_inbox`).
+  # `interrupt(run, "owner_messages")` (Ctrl-C in `yian chat`) cuts the reply: its output is null,
+  # which `Optional(str)` allows, and its `new_messages` end with the user message
+  # "[interrupted by the user]". Each turn adds one list to the history: what was said, then the
+  # reply's `new_messages` (its tool calls and results, the steers it read, and its final reply).
+  # Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are answered.
+  # The flow grants no tools; see docs/examples.md to add some. The run log grows linearly (see
+  # "Growing a carried value" in docs/syntax.md).
+  # TS yian only. Run it with:  yian chat examples/chat.yaml
   id: chat
   name: chat
   description: A turn-by-turn conversational assistant that folds older turns into a rolling summary.
@@ -28,43 +39,46 @@ flow: |
     compact_history: compact_history        # examples/compact_history.yaml
 
   input:
-    messages: !Inbox(str)
+    owner_messages: !Inbox(Message)
 
   typedefs:
-    Msg:                    # one message of the history the AGENT sends
-      role: Literal(user, assistant)
-      text: str
-    State: {summary: str, history: list(list(Msg)), closed: bool}   # the carried record
-    Transcript: {summary: str, history: list(Msg)}                  # the flow's output
+    State: {summary: str, history: list(list(Message)), closed: bool}   # the carried record
+    Transcript: {summary: str, history: list(Message)}                  # the flow's output
 
   defs:
     respond:                # a def, so its CALL flattens the history in a derived binding
-      input: {summary: !str, history: !list(Msg), message: !str}
+      input:
+        summary: !str
+        history: !list(Message)
+        said: !list(Message)
+        owner_messages: !Inbox(Message)
       nodes:
         reply:
           kind: agent
           input:
             summary: ${input.summary}
             history: ${input.history}      # a plain reference: one route in a learnable capture
-            message: ${input.message}
-          output: str                      # only this turn's reply is recorded
+            said: ${input.said}
+          steer_inbox: ${input.owner_messages}
+          tools: [hold]
+          output: Optional(str)            # text; null only after an interrupt
           system_prompt: |-
             You are a helpful conversational assistant.
 
             Conversation so far: ${summary}
           prompt:
             - ${history}
-            - user: ${message}
-      # A one-turn list (hence the double brackets), so the body appends it with `+`, or `[]` when
+            - ${said}
+      # A one-turn list (hence the brackets), so the body appends it with `+`, or `[]` when
       # `answered` is skipped.
-      output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
+      output: !list(list(Message)) ${[input.said + reply.new_messages]}
 
-    turn:                   # body: 'a -> 'a over {summary, history, closed, messages}
+    turn:                   # body: 'a -> 'a over {summary, history, closed, owner_messages}
       input:
         summary: !str
-        history: !list(list(Msg))
+        history: !list(list(Message))
         closed: !bool
-        messages: !Inbox(str)
+        owner_messages: !Inbox(Message)
       nodes:
         compacted:          # beside `heard`: compacts the history so far
           kind: call
@@ -74,7 +88,7 @@ flow: |
           kind: tool
           tool_id: take                    # waits until a message arrives or the inbox closes
           input:
-            from: ${input.messages}
+            from: ${input.owner_messages}
             take: all
         route:
           kind: case
@@ -87,7 +101,8 @@ flow: |
           input:
             summary: ${compacted.output.summary}
             history: ${[m for t in compacted.output.history for m in t]}
-            message: ${join(heard.output.events)}  # one line per send
+            said: ${heard.output.events}
+            owner_messages: ${input.owner_messages}
       output: !State
         summary: ${compacted.output.summary}
         history: ${compacted.output.history + (answered.output :- [])}
@@ -97,7 +112,7 @@ flow: |
     chat:
       kind: loop
       call: turn
-      input: {summary: "", history: [], closed: false, messages: "${input.messages}"}
+      input: {summary: "", history: [], closed: false, owner_messages: "${input.owner_messages}"}
       while: not closed
   output: !Transcript
     summary: ${chat.output.summary}
@@ -105,29 +120,27 @@ flow: |
 files:
   compact_history.yaml: |
     # compact_history — keep a chat history's text under a budget by folding older turns into a
-    # rolling summary. The history is a list of turns, each a list of messages; `keep` counts turns.
-    # Msg is text-only for now; when chats carry tools, Msg becomes the built-in Message and the
-    # budget and prompt read text parts, so this flow's interface changes then.
-    # Comprehensions, len() and slices are TS-only.
+    # rolling summary. The history is a list of turns, each a list of built-in `Message`s; `keep`
+    # counts turns, so a tool call and its result never part. The budget counts the characters of
+    # the messages' text parts; the summarizer reads those text parts too (tool calls, their results
+    # and reasoning are left out of the summary).
+    # Comprehensions, len(), slices and the built-in `Message` are TS-only.
     id: compact_history
     name: compact_history
     description: Keep a chat history's text under a budget by folding older turns into a rolling summary.
 
     typedefs:
-      Msg:
-        role: Literal(user, assistant)
-        text: str
-      Compacted: {summary: str, history: list(list(Msg))}   # history: one list of messages per turn
+      Compacted: {summary: str, history: list(list(Message))}   # history: one list of messages per turn
 
     input:
       summary: !str
-      history: !list(list(Msg))
+      history: !list(list(Message))
       budget: !int 32000      # characters of message text before compacting
       keep: !int 4            # whole turns kept verbatim; 0 (or less) folds every turn
 
     defs:
       fold:                   # one model call: the old summary and the older turns give a new summary
-        input: {summary: !str, older: !list(list(Msg)), recent: !list(list(Msg))}
+        input: {summary: !str, older: !list(list(Message)), recent: !list(list(Message))}
         nodes:
           summarize:          # never `reply`: `yian chat` prints any node named `reply`
             kind: agent
@@ -147,7 +160,7 @@ files:
               ${summary}
 
               New messages to fold in (context only), oldest first:
-              ${join([m.role + ": " + m.text for t in older for m in t])}
+              ${join([m.role + ": " + p.text for t in older for m in t for p in m.parts if p.type == "text"])}
         output: !Compacted
           summary: ${summarize.output}
           history: ${input.recent}
@@ -156,7 +169,7 @@ files:
       over:
         kind: case
         cases:
-          - when: len(input.history) > input.keep and len(join([m.text for t in input.history for m in t], "")) > input.budget
+          - when: len(input.history) > input.keep and len(join([p.text for t in input.history for m in t for p in m.parts if p.type == "text"], "")) > input.budget
             then: folded
       folded:                 # skipped when under budget: no model call
         kind: call
@@ -171,10 +184,22 @@ files:
 env: {OPENAI_API_KEY: "<key:1>"}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
-  # Each line the user types, sent to the `messages` inbox; closing it ends the chat.
+  tools:
+    hold:
+      description: Ask the owner; they answer later.
+      parameters: {type: object, properties: {}}
+      pending: true
+  # What the owner says, sent to the `owner_messages` inbox; closing it ends the chat.
   sends:
-    - {inbox: messages, event: Hi}
-    - {close: messages}
+    - inbox: owner_messages
+      event: {role: user, parts: [{type: text, text: Hi}]}
+    - inbox: owner_messages
+      event: {role: user, parts: [{type: text, text: "Short, please"}]}
+      after: {node: "chat#0/answered/reply", model_call: 1}
+    - inbox: owner_messages
+      event: {role: user, parts: [{type: text, text: Ask the owner}]}
+    - {complete: "r1/chat#1/answered/reply/1/0", output: "yes"}
+    - {close: owner_messages}
   models:
     "chat#0/answered/reply":
       agent:
@@ -182,14 +207,42 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: "Hello! How can I help?"}]
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Hi!"}]
+    "chat#1/answered/reply":
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: call-1, name: hold, arguments: {}}]
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "The owner said yes."}]
 expect:
   output:
     status: succeeded
     output:
       summary: ""
       history:
-        - {role: user, text: Hi}
-        - {role: assistant, text: "Hello! How can I help?"}
+        - role: user
+          parts: [{type: text, text: Hi}]
+        - role: assistant
+          parts: [{type: text, text: "Hello! How can I help?"}]
+        - role: user
+          parts: [{type: text, text: "Short, please"}]
+        - role: assistant
+          parts: [{type: text, text: "Hi!"}]
+        - role: user
+          parts: [{type: text, text: Ask the owner}]
+        - role: assistant
+          parts: [{type: tool_call, id: call-1, name: hold, arguments: {}}]
+        - role: tool
+          parts: [{type: tool_result, call_id: call-1, name: hold, content: "yes"}]
+        - role: assistant
+          parts: [{type: text, text: The owner said yes.}]
   trace:
     - [run_started, null, {effective_llm_by_static_path: {chat/answered/reply: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: environment, endpoint: https://api.openai.com/v1}}, chat/compacted/folded/summarize: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: environment, endpoint: https://api.openai.com/v1}}}, learnable: false, num_workers: 0}]
     - - pool_commit
@@ -207,7 +260,7 @@ expect:
     - [node_started, __start__]
     - - pool_commit
       - __start__
-      - value: {messages: {inbox: messages}}
+      - value: {owner_messages: {inbox: owner_messages}}
     - - node_succeeded
       - __start__
       - {commit: 6}
@@ -229,7 +282,7 @@ expect:
     - [node_started, chat#0/heard]
     - - node_waiting
       - chat#0/heard
-      - {call_ids: [r1/chat#0/heard], waits: [{call_id: r1/chat#0/heard, inbox: messages, mode: all, tool: take}]}
+      - {call_ids: [r1/chat#0/heard], waits: [{call_id: r1/chat#0/heard, inbox: owner_messages, mode: all, tool: take}]}
     - [node_started, chat#0/compacted/__start__]
     - [node_succeeded, chat#0/compacted/__start__, {commit: 14}]
     - [node_started, chat#0/compacted/over]
@@ -240,9 +293,9 @@ expect:
     - - run_waiting
       - null
       - {node_ids: [chat#0/heard]}
-    - [pool_commit, __start__, {key: __start__.messages, value: Hi}]
+    - [pool_commit, __start__, {key: __start__.owner_messages, value: {parts: [{text: Hi, type: text}], role: user}}]
     - [node_woken, chat#0/heard]
-    - [pool_commit, chat#0/heard, {closed: false, events: [26], inbox: messages}]
+    - [pool_commit, chat#0/heard, {closed: false, events: [26], inbox: owner_messages}]
     - [node_succeeded, chat#0/heard, {commit: 28}]
     - [node_started, chat#0/route]
     - - node_routed
@@ -251,7 +304,7 @@ expect:
     - [node_started, chat#0/answered]
     - - pool_commit
       - chat#0/answered
-      - from: {chat#0/heard: 28, chat#0/compacted: 23}
+      - from: {chat#0/heard: 28, chat#0/compacted: 23, chat#0/__start__: 9}
         key: chat#0/answered/__start__
     - - node_expanded
       - chat#0/answered
@@ -261,48 +314,42 @@ expect:
       - chat#0/answered/__start__
       - {commit: 33}
     - [node_started, chat#0/answered/reply]
+    - - pool_commit
+      - __start__
+      - key: __start__.owner_messages
+        value:
+          parts:
+            - {text: 'Short, please', type: text}
+          role: user
     - - node_step
       - chat#0/answered/reply
-      - n: 1
-        step:
-          finish: null
-          kind: model_call
-          model: gpt-5.5
-          output:
-            format: yian.message.v1
-            parts:
-              - {text: "Hello! How can I help?", type: text}
-            role: assistant
-          purpose: chat
-          request_sha256: b355d9e497691d335d6e4f14350c5ed990e4ee11c229730db90a74864d077144
-          response_id: null
-          usage: null
-    - - pool_commit
+      - {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: "Hello! How can I help?", type: text}], role: assistant}, purpose: chat, request_sha256: df97b336f61935c37bc1b487c7bc6789a5faa27043141362d86d0b69515692ea, response_id: null, usage: null}}
+    - - node_step
       - chat#0/answered/reply
-      - {value: "Hello! How can I help?"}
-    - - pool_commit
-      - chat#0/answered/reply
-      - {key: chat#0/answered/reply.new_messages, steps: [38]}
-    - [node_succeeded, chat#0/answered/reply, {commit: 39, messages: 40}]
+      - {n: 2, step: {from: [38], inbox: owner_messages, kind: steer}}
+    - [node_step, chat#0/answered/reply, {n: 3, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Hi!, type: text}], role: assistant}, purpose: chat, request_sha256: dec90f1714e43453e67c0f9f7f5f48125c37df10840fd4aae3af1f6b3244651f, response_id: null, usage: null}}]
+    - [pool_commit, chat#0/answered/reply, {value: Hi!}]
+    - [pool_commit, chat#0/answered/reply, {key: chat#0/answered/reply.new_messages, steps: [39, 40, 41]}]
+    - [node_succeeded, chat#0/answered/reply, {commit: 42, messages: 43}]
     - [node_started, chat#0/answered/__end__]
     - - pool_commit
       - chat#0/answered/__end__
-      - from: {chat#0/answered/__start__: 33, chat#0/answered/reply: 39}
+      - from: {chat#0/answered/__start__: 33, chat#0/answered/reply.new_messages: 43}
         key: chat#0/answered
     - - node_succeeded
       - chat#0/answered/__end__
-      - {commit: 43}
+      - {commit: 46}
     - [node_started, chat#0/__end__]
     - - pool_commit
       - chat#0/__end__
-      - from: {chat#0/answered: 43, chat#0/compacted: 23, chat#0/heard: 28}
+      - from: {chat#0/answered: 46, chat#0/compacted: 23, chat#0/heard: 28}
     - - node_succeeded
       - chat#0/__end__
-      - {commit: 46}
+      - {commit: 49}
     - [node_started, chat~1]
     - - pool_commit
       - chat~1
-      - from: {chat#0/__end__: 46}
+      - from: {chat#0/__end__: 49}
         key: chat#1/__start__
     - - node_expanded
       - chat~1
@@ -310,55 +357,122 @@ expect:
     - [node_started, chat#1/__start__]
     - - node_succeeded
       - chat#1/__start__
-      - {commit: 49}
+      - {commit: 52}
     - [node_started, chat#1/compacted]
-    - [pool_commit, chat#1/compacted, {from: {chat#1/__start__: 49}, key: chat#1/compacted/__start__}]
+    - [pool_commit, chat#1/compacted, {from: {chat#1/__start__: 52}, key: chat#1/compacted/__start__}]
     - [node_expanded, chat#1/compacted, {prune_ids: []}]
     - [node_started, chat#1/heard]
     - - node_waiting
       - chat#1/heard
-      - {call_ids: [r1/chat#1/heard], waits: [{call_id: r1/chat#1/heard, inbox: messages, mode: all, tool: take}]}
+      - {call_ids: [r1/chat#1/heard], waits: [{call_id: r1/chat#1/heard, inbox: owner_messages, mode: all, tool: take}]}
     - [node_started, chat#1/compacted/__start__]
-    - [node_succeeded, chat#1/compacted/__start__, {commit: 54}]
+    - [node_succeeded, chat#1/compacted/__start__, {commit: 57}]
     - [node_started, chat#1/compacted/over]
     - [node_routed, chat#1/compacted/over, {handle: '#else'}]
     - [node_started, chat#1/compacted/__end__]
-    - [pool_commit, chat#1/compacted/__end__, {from: {chat#1/compacted/__start__: 54}, key: chat#1/compacted}]
-    - [node_succeeded, chat#1/compacted/__end__, {commit: 63}]
+    - [pool_commit, chat#1/compacted/__end__, {from: {chat#1/compacted/__start__: 57}, key: chat#1/compacted}]
+    - [node_succeeded, chat#1/compacted/__end__, {commit: 66}]
     - - run_waiting
       - null
       - {node_ids: [chat#1/heard]}
-    - [inbox_closed, null, {inbox: messages}]
+    - [pool_commit, __start__, {key: __start__.owner_messages, value: {parts: [{text: Ask the owner, type: text}], role: user}}]
     - [node_woken, chat#1/heard]
-    - [pool_commit, chat#1/heard, {closed: true, events: [], inbox: messages}]
-    - [node_succeeded, chat#1/heard, {commit: 68}]
+    - [pool_commit, chat#1/heard, {closed: false, events: [69], inbox: owner_messages}]
+    - [node_succeeded, chat#1/heard, {commit: 71}]
     - [node_started, chat#1/route]
     - - node_routed
       - chat#1/route
-      - {handle: '#else'}
+      - {handle: answered}
+    - [node_started, chat#1/answered]
+    - [pool_commit, chat#1/answered, {from: {chat#1/__start__: 52, chat#1/compacted: 66, chat#1/heard: 71}, key: chat#1/answered/__start__}]
+    - [node_expanded, chat#1/answered, {prune_ids: []}]
+    - [node_started, chat#1/answered/__start__]
+    - [node_succeeded, chat#1/answered/__start__, {commit: 76}]
+    - [node_started, chat#1/answered/reply]
+    - [node_step, chat#1/answered/reply, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {}, id: call-1, name: hold, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 252ec52fe7f3ae8d7c6e559c711ff7e4e96b8dd7142fbf9f07e6643a22284913, response_id: null, usage: null}}]
+    - [node_step, chat#1/answered/reply, {n: 2, step: {call_id: r1/chat#1/answered/reply/1/0, index: 0, kind: pending, reply: 1, tool: hold, tool_call_id: call-1}}]
+    - [node_waiting, chat#1/answered/reply, {call_ids: [r1/chat#1/answered/reply/1/0], steer_inbox: owner_messages}]
+    - [run_waiting, null, {node_ids: [chat#1/answered/reply]}]
+    - [node_step, chat#1/answered/reply, {n: 3, step: {call_id: call-1, is_error: false, kind: tool_result, output: yes}}]
+    - [node_woken, chat#1/answered/reply]
+    - [node_step, chat#1/answered/reply, {n: 4, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: The owner said yes., type: text}], role: assistant}, purpose: chat, request_sha256: 885011c3f8c158f16577d410322ddb57f71b99a69638d52d24c272aebcdc989d, response_id: null, usage: null}}]
+    - [pool_commit, chat#1/answered/reply, {value: The owner said yes.}]
+    - [pool_commit, chat#1/answered/reply, {key: chat#1/answered/reply.new_messages, steps: [81, 85, 87]}]
+    - [node_succeeded, chat#1/answered/reply, {commit: 88, messages: 89}]
+    - [node_started, chat#1/answered/__end__]
+    - [pool_commit, chat#1/answered/__end__, {from: {chat#1/answered/__start__: 76, chat#1/answered/reply.new_messages: 89}, key: chat#1/answered}]
+    - [node_succeeded, chat#1/answered/__end__, {commit: 92}]
     - [node_started, chat#1/__end__]
     - - pool_commit
       - chat#1/__end__
-      - from: {chat#1/compacted: 63, chat#1/heard: 68}
+      - from: {chat#1/compacted: 66, chat#1/heard: 71, chat#1/answered: 92}
     - - node_succeeded
       - chat#1/__end__
-      - {commit: 73}
+      - {commit: 95}
     - [node_started, chat~2]
     - - pool_commit
       - chat~2
-      - from: {chat#1/__end__: 73}
-        key: chat
-    - - node_succeeded
+      - from: {chat#1/__end__: 95}
+        key: chat#2/__start__
+    - - node_expanded
       - chat~2
-      - {commit: 76}
+      - {prune_ids: [chat#1/__end__, chat#1/__start__, chat#1/answered, chat#1/compacted, chat#1/heard, chat#1/route, chat~2]}
+    - [node_started, chat#2/__start__]
+    - [node_succeeded, chat#2/__start__, {commit: 98}]
+    - [node_started, chat#2/compacted]
+    - [pool_commit, chat#2/compacted, {from: {chat#2/__start__: 98}, key: chat#2/compacted/__start__}]
+    - [node_expanded, chat#2/compacted, {prune_ids: []}]
+    - [node_started, chat#2/heard]
+    - [node_waiting, chat#2/heard, {call_ids: [r1/chat#2/heard], waits: [{call_id: r1/chat#2/heard, inbox: owner_messages, mode: all, tool: take}]}]
+    - [node_started, chat#2/compacted/__start__]
+    - [node_succeeded, chat#2/compacted/__start__, {commit: 103}]
+    - [node_started, chat#2/compacted/over]
+    - [node_routed, chat#2/compacted/over, {handle: '#else'}]
+    - [node_started, chat#2/compacted/__end__]
+    - [pool_commit, chat#2/compacted/__end__, {from: {chat#2/compacted/__start__: 103}, key: chat#2/compacted}]
+    - [node_succeeded, chat#2/compacted/__end__, {commit: 112}]
+    - [run_waiting, null, {node_ids: [chat#2/heard]}]
+    - [inbox_closed, null, {inbox: owner_messages}]
+    - [node_woken, chat#2/heard]
+    - [pool_commit, chat#2/heard, {closed: true, events: [], inbox: owner_messages}]
+    - [node_succeeded, chat#2/heard, {commit: 117}]
+    - [node_started, chat#2/route]
+    - [node_routed, chat#2/route, {handle: '#else'}]
+    - [node_started, chat#2/__end__]
+    - [pool_commit, chat#2/__end__, {from: {chat#2/compacted: 112, chat#2/heard: 117}}]
+    - [node_succeeded, chat#2/__end__, {commit: 122}]
+    - [node_started, chat~3]
+    - [pool_commit, chat~3, {from: {chat#2/__end__: 122}, key: chat}]
+    - [node_succeeded, chat~3, {commit: 125}]
     - [node_started, __end__]
     - - pool_commit
       - __end__
       - value:
           history:
-            - {role: user, text: Hi}
-            - {role: assistant, text: "Hello! How can I help?"}
+            - {role: user, parts: [{text: Hi, type: text}]}
+            - {role: assistant, parts: [{text: "Hello! How can I help?", type: text}]}
+            - parts:
+                - {text: 'Short, please', type: text}
+              role: user
+            - parts:
+                - {text: Hi!, type: text}
+              role: assistant
+            - parts:
+                - {text: Ask the owner, type: text}
+              role: user
+            - parts:
+                - arguments: {}
+                  id: call-1
+                  name: hold
+                  type: tool_call
+              role: assistant
+            - parts:
+                - {call_id: call-1, content: yes, name: hold, type: tool_result}
+              role: tool
+            - parts:
+                - {text: The owner said yes., type: text}
+              role: assistant
           summary: ''
     - - node_succeeded
       - __end__
-      - {commit: 79}
+      - {commit: 128}

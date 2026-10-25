@@ -535,6 +535,12 @@ nodes:
 output: ${chat.output.history}
 ```
 
+`examples/chat.yaml` grows its history the same way, one list per turn: its reply reads the chat's
+`Inbox(Message)` as its [`steer_inbox:`](#steering-a-running-agent-steer_inbox) and declares
+`output: Optional(str)`, since a host interrupt makes its output null, and each turn appends what
+was said and `${reply.new_messages}` (see
+[Examples → `chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat)).
+
 ### Narrowing inside a condition
 
 A condition narrows a [union](#unions-of-records-union) or `Optional` value as it goes,
@@ -1219,7 +1225,8 @@ send(); it takes no run input``. The top-level START binds the input to its hand
 out.
 
 An inbox is read only whole, as `${input.owner_messages}`, bound to a `take`'s `from:` (see
-[Built-in tools](#built-in-tools-take-sleep-ask)) or to an input that a named `kind: call` or a
+[Built-in tools](#built-in-tools-take-sleep-ask)), to an AGENT's `steer_inbox:` (see
+[Steering a running agent](#steering-a-running-agent-steer_inbox)), or to an input that a named `kind: call` or a
 `kind: loop` child declares as an `Inbox`:
 
 ```yaml
@@ -2727,7 +2734,9 @@ nodes:
   and sends it with that request. Steers never land between the results of one
   reply's tool calls. Nothing queued: nothing is read. A closed inbox still gives
   what is queued. The read is recorded as a `steer {inbox, from}` step, so a
-  resumed run replays it (see [API](api.md#steering-a-running-agent-ts-yian)).
+  resumed run replays it (see [API](api.md#steering-a-running-agent-ts-yian)). The steers read
+  are user messages in the agent's [`${x.new_messages}`](#an-agents-new-messages), where
+  they joined.
 - **Late steers.** When the model answers with no tool call while steers are
   queued, the node reads them and calls the model again, so a steer sent during
   the final reply still gets an answer. Every reply counts toward
@@ -4356,7 +4365,7 @@ nodes:
 ```
 
 Changed (TS yian): `human_input` is removed, so a chat body doesn't ask inside the loop. The
-flow takes an `Inbox(str)` input and each turn runs a TOOL `take` with `take: all`; see
+flow takes an `Inbox(Message)` input and each turn runs a TOOL `take` with `take: all`; see
 `examples/chat.yaml` ([Examples → `chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat)).
 
 **`while:` — pre-check (0+ runs).** A predicate evaluated on the carried record
@@ -4505,26 +4514,32 @@ A carried value that grows each iteration, such as a chat's history, stays linea
 when each node outputs only what is new and a binding does the append. The body's output binding
 (its `__end__`), a CALL's and the expansion's child START, and the LOOP driver are derived
 values: TS yian records them as `from` pointers to the commits they read and rebuilds them on
-replay, so the history itself is never written again. `examples/chat.yaml` records each turn's
-reply; `respond` returns the new turn, and the turn's output binding appends it to the history
-`compacted` (a CALL of `compact_history.yaml`) returned:
+replay, so the history itself is never written again. In `examples/chat.yaml` each turn's reply
+records only its [new messages](#an-agents-new-messages) (one messages commit, rebuilt from the
+agent's steps); `respond` returns the new turn, and the turn's output binding appends it to the
+history `compacted` (a CALL of `compact_history.yaml`) returned:
 
 ```yaml
 respond:
-  input: {summary: !str, history: !list(Msg), message: !str}
+  input:
+    summary: !str
+    history: !list(Message)
+    said: !list(Message)                         # the take's events
+    owner_messages: !Inbox(Message)
   nodes:
     reply:
       kind: agent
-      input: {summary: "${input.summary}", history: "${input.history}", message: "${input.message}"}
-      output: str                                # only this turn's reply is recorded
+      input: {summary: "${input.summary}", history: "${input.history}", said: "${input.said}"}
+      steer_inbox: ${input.owner_messages}
+      output: Optional(str)                      # text; null only after an interrupt
       system_prompt: |-
         You are a helpful conversational assistant.
 
         Conversation so far: ${summary}
       prompt:
         - ${history}
-        - user: ${message}
-  output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
+        - ${said}
+  output: !list(list(Message)) ${[input.said + reply.new_messages]}
 
 # in the loop body `turn`:
 output: !State

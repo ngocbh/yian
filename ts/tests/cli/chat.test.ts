@@ -1,6 +1,6 @@
 /**
- * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` input and
- * advances the run. Driven in process on a scripted stdin (a fake TTY where keys matter), the
+ * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
+ * `Inbox(Message)` input and advances the run. Driven in process on a scripted stdin (a fake TTY where keys matter), the
  * run's clock virtual and its signals a test emitter, so no model, timer or real signal is needed.
  * TS-only: Python's `yian chat` blocks inside a live `human_input` and has no inboxes.
  */
@@ -19,6 +19,8 @@ import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts
 import { inspectRun } from "../../src/run.ts";
 import {
   InboxClosedRecord,
+  InterruptedRecord,
+  NodeStepRecord,
   PoolCommitRecord,
   readRunLog,
   RunCancelledRecord,
@@ -30,6 +32,7 @@ import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../engine/r
 import { CTRL_C, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
+const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
 
 let tmp: string;
 let stdin: FakeInput | undefined;
@@ -264,14 +267,14 @@ describe("yian chat", () => {
   );
 
   test(
-    "Ctrl-C prints a hint; a second in a row cancels the run",
+    "Ctrl-C at the prompt cancels the run",
     async () => {
       const { io, stdin, stdout, stderr } = chatIo({ tty: true });
-      stdin.write(CTRL_C + CTRL_C);
+      stdin.write(CTRL_C);
       const { code, log } = await runChat(flowFile(ECHO), io);
       expect(code).toBe(130);
-      expect(stderr()).toContain("(Ctrl-C again to cancel the run; /exit to finish it)");
       expect(stderr()).toContain("chat cancelled");
+      expect(stderr()).not.toContain("Ctrl-C again");
       expect(stdout()).toBe("");
       expect(records(log).at(-1)).toBeInstanceOf(RunCancelledRecord);
     },
@@ -279,33 +282,54 @@ describe("yian chat", () => {
   );
 
   test(
-    "a line sent between two Ctrl-Cs resets the count",
-    async () => {
-      const { io, stdin, stdout, stderr } = chatIo({ tty: true });
-      stdin.write(CTRL_C + "hi" + ENTER + CTRL_C + "/exit" + ENTER);
-      const { code } = await runChat(flowFile(ECHO), io);
-      expect(code).toBe(0);
-      expect(stderr().split("Ctrl-C again").length - 1).toBe(2);
-      expect(stdout()).toBe("echo: hi\necho: \n");
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "SIGINT twice while the run moves cancels it through the live engine",
+    "SIGINT twice within 2 s while a turn runs cancels it through the live engine",
     async () => {
       const { started, tools } = holdTool();
       const { io, stdin, stderr } = chatIo();
       stdin.write("hi\n");
-      const chatting = runChat(flowFile(HOLD), io, {}, { tools });
+      const scheduler = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+      const chatting = runChat(flowFile(HOLD), io, {}, { tools, scheduler });
       await started;
       signals.emit("SIGINT");
-      await until(() => stderr().includes("Ctrl-C again"));
+      await until(() => stderr().includes(INTERRUPTING));
+      await scheduler.sleep(1_000);
       signals.emit("SIGINT");
       const { code, log } = await chatting;
       expect(code).toBe(130);
       expect(stderr()).toContain("chat cancelled");
       expect(records(log).at(-1)).toBeInstanceOf(RunCancelledRecord);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "two SIGINTs 3 s apart during one turn both interrupt; with no agent to cut, nothing is appended",
+    async () => {
+      const { started, tools } = holdTool();
+      const { io, stdin, stdout, stderr } = chatIo();
+      stdin.write("hi\n");
+      const scheduler = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+      const chatting = runChat(flowFile(HOLD), io, {}, { tools, scheduler });
+      await started;
+      const log = join(tmp, "run.jsonl");
+      signals.emit("SIGINT");
+      await until(() => stderr().includes(INTERRUPTING));
+      await scheduler.sleep(3_000);
+      signals.emit("SIGINT");
+      await until(() => stderr().split(INTERRUPTING).length - 1 === 2);
+      // Give the second interrupt time to settle before the turn ends.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const first = release!;
+      first();
+      await until(() => stdout().includes("released"));
+      // The closing turn calls `hold` again; release that call too.
+      stdin.write("/exit\n");
+      await until(() => release !== first);
+      release!();
+      const { code } = await chatting;
+      expect(code).toBe(0);
+      expect(stderr()).not.toContain("chat cancelled");
+      expect(records(log).some((record) => record instanceof InterruptedRecord)).toBe(false);
     },
     TIMEOUT,
   );
@@ -504,34 +528,58 @@ describe("yian chat's inbox and inputs", () => {
   };
 
   test(
-    "a flow with no Inbox(str) input is a usage error",
+    "a flow with no Inbox(str) or Inbox(Message) input is a usage error",
     async () => {
       const none = await cli([flowFile(bare({}))]);
       expect(none.code).toBe(2);
-      expect(none.stderr).toContain("flow 'f' has no Inbox(str) input; yian chat sends each line to one");
+      expect(none.stderr).toContain(
+        "flow 'f' has no Inbox(str) or Inbox(Message) input; yian chat sends each line to one",
+      );
       // An Inbox(int) isn't a candidate.
       const ints = await cli([flowFile(bare({ n: "int" }))]);
       expect(ints.code).toBe(2);
-      expect(ints.stderr).toContain("flow 'f' has no Inbox(str) input");
+      expect(ints.stderr).toContain("flow 'f' has no Inbox(str) or Inbox(Message) input");
     },
     TIMEOUT,
   );
 
   test(
-    "several Inbox(str) inputs need --inbox, which must name one",
+    "several Inbox(str) or Inbox(Message) inputs need --inbox, which must name one",
     async () => {
-      const flow = flowFile(bare({ a: "str", b: "str", c: "int" }));
+      const flow = flowFile(bare({ a: "str", b: "Message", c: "int" }));
       const several = await cli([flow]);
       expect(several.code).toBe(2);
-      expect(several.stderr).toContain("flow 'f' has several Inbox(str) inputs (a, b); pick one with --inbox");
+      expect(several.stderr).toContain(
+        "flow 'f' has several Inbox(str) or Inbox(Message) inputs (a, b); pick one with --inbox",
+      );
       const wrong = await cli([flow, "--inbox", "c"]);
       expect(wrong.code).toBe(2);
-      expect(wrong.stderr).toContain("--inbox 'c' is not one of the flow's Inbox(str) inputs (a, b)");
+      expect(wrong.stderr).toContain("--inbox 'c' is not one of the flow's Inbox(str) or Inbox(Message) inputs (a, b)");
       // A chosen inbox goes on to the run. The end of input closes it, and the takes of the other
       // inboxes, which nothing can send to, leave the run waiting.
       const picked = await cli([flow, "--inbox", "b"]);
       expect(picked.code).toBe(0);
       expect(picked.stderr).toContain("run waiting: take_a (take), take_c (take)");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an Inbox(Message) input takes each line as a user message",
+    async () => {
+      const messageEcho = turnFlow(ECHO_REPLY.replace('inputs["events"]', 'inputs["events"].map((m) => m.parts[0].text)'))
+        .replaceAll("Inbox(str)", "Inbox(Message)")
+        .replace("said: !list(str)", "said: !list(Message)");
+      const { io, stdin, stdout } = chatIo();
+      stdin.write("hi\n/exit\n");
+      const { code, log } = await runChat(flowFile(messageEcho), io);
+      expect([code, stdout()]).toEqual([0, "echo: hi\necho: \n"]);
+      const sent = records(log).filter(
+        (record) => record instanceof PoolCommitRecord && record.key === "__start__.messages",
+      );
+      expect(sent.map((record) => (record as PoolCommitRecord).value)).toEqual([
+        { kind: "object", value: { role: "user", parts: [{ type: "text", text: "hi" }] } },
+      ]);
     },
     TIMEOUT,
   );
@@ -565,7 +613,7 @@ describe("yian chat's inbox and inputs", () => {
   );
 });
 
-/** The chat example: one model call per turn, the history carried by bindings. */
+/** The chat example (an `Inbox(Message)`): one model call per turn, the history carried by bindings. */
 const EXAMPLE_CHAT = fileURLToPath(new URL("../../../examples/chat.yaml", import.meta.url));
 
 /** A one-word ("7") chat-completions stream. */
@@ -610,6 +658,64 @@ const stream = (text: string) =>
   ]
     .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
     .join("") + "data: [DONE]\n\n";
+
+test(
+  "Ctrl-C while the example's reply streams interrupts it; the chat goes on to the next line",
+  async () => {
+    const env = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+    const { io, stdin, stdout, stderr } = chatIo({ env });
+    stdin.write("tell me a story\n");
+    const { promise: started, resolve: start } = Promise.withResolvers<void>();
+    const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+    release = open;
+    const chunk = (delta: Record<string, unknown>, finish: string | null) =>
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+    let calls = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(encoder.encode(chunk({ role: "assistant", content: "Once upon" }, null)));
+          start();
+          await gate;
+          controller.enqueue(encoder.encode(chunk({ content: " a time" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    try {
+      const chatting = runChat(EXAMPLE_CHAT, io);
+      const log = join(tmp, "run.jsonl");
+      await started;
+      signals.emit("SIGINT");
+      // The live engine takes the interrupt before the stream goes on.
+      await until(() => records(log).some((record) => record instanceof InterruptedRecord));
+      open();
+      await until(() => stderr().includes("(interrupted)"));
+      stdin.write("/exit\n");
+      const { code } = await chatting;
+      expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stderr()).toContain(`${INTERRUPTING}\n`);
+      expect(stderr().indexOf(INTERRUPTING)).toBeLessThan(stderr().indexOf("(interrupted)"));
+      expect(stdout()).toBe("");
+      expect(calls).toBe(1);
+      const interrupted = records(log).find((record) => record instanceof InterruptedRecord) as InterruptedRecord;
+      expect([interrupted.inbox, interrupted.nodes]).toEqual(["owner_messages", ["chat#0/answered/reply"]]);
+      const cut = records(log).find(
+        (record) => record instanceof NodeStepRecord && record.step["kind"] === "model_call",
+      ) as NodeStepRecord;
+      expect(cut.step["finish"]).toBe("interrupted");
+      const output = inspectRun(log);
+      expect(output.status).toBe("succeeded");
+    } finally {
+      globalThis.fetch = original;
+    }
+  },
+  TIMEOUT,
+);
 
 test(
   "the summary a fold writes is never printed",
@@ -669,17 +775,18 @@ describe("the entry's chat, signalled", () => {
   }
 
   test(
-    "SIGINT prints the hint; a second cancels the run: exit 130",
+    "SIGINT at the prompt cancels the run: exit 130",
     async () => {
       const log = join(tmp, "signalled.jsonl");
       const { child, streams, closed } = spawnChat(flowFile(ECHO), log);
       try {
         child.stdin.write("hi\n");
         await soon(() => streams.out.includes("echo: hi"), "the reply");
-        child.kill("SIGINT");
-        await soon(() => streams.err.includes("Ctrl-C again"), "the hint");
+        // The prompt comes back once the turn is over: the chat is idle.
+        await soon(() => streams.err.split("You:").length - 1 >= 2, "the next prompt");
         child.kill("SIGINT");
         expect(await closed).toEqual({ code: 130, signal: null });
+        expect(streams.err).not.toContain("Ctrl-C again");
         expect(streams.err).toContain("chat cancelled");
         expect(records(log).at(-1)).toBeInstanceOf(RunCancelledRecord);
       } finally {

@@ -1,27 +1,25 @@
 # compact_history — keep a chat history's text under a budget by folding older turns into a
-# rolling summary. The history is a list of turns, each a list of messages; `keep` counts turns.
-# Msg is text-only for now; when chats carry tools, Msg becomes the built-in Message and the
-# budget and prompt read text parts, so this flow's interface changes then.
-# Comprehensions, len() and slices are TS-only.
+# rolling summary. The history is a list of turns, each a list of built-in `Message`s; `keep`
+# counts turns, so a tool call and its result never part. The budget counts the characters of
+# the messages' text parts; the summarizer reads those text parts too (tool calls, their results
+# and reasoning are left out of the summary).
+# Comprehensions, len(), slices and the built-in `Message` are TS-only.
 id: compact_history
 name: compact_history
 description: Keep a chat history's text under a budget by folding older turns into a rolling summary.
 
 typedefs:
-  Msg:
-    role: Literal(user, assistant)
-    text: str
-  Compacted: {summary: str, history: list(list(Msg))}   # history: one list of messages per turn
+  Compacted: {summary: str, history: list(list(Message))}   # history: one list of messages per turn
 
 input:
   summary: !str
-  history: !list(list(Msg))
+  history: !list(list(Message))
   budget: !int 32000      # characters of message text before compacting
   keep: !int 4            # whole turns kept verbatim; 0 (or less) folds every turn
 
 defs:
   fold:                   # one model call: the old summary and the older turns give a new summary
-    input: {summary: !str, older: !list(list(Msg)), recent: !list(list(Msg))}
+    input: {summary: !str, older: !list(list(Message)), recent: !list(list(Message))}
     nodes:
       summarize:          # never `reply`: `yian chat` prints any node named `reply`
         kind: agent
@@ -41,7 +39,7 @@ defs:
           ${summary}
 
           New messages to fold in (context only), oldest first:
-          ${join([m.role + ": " + m.text for t in older for m in t])}
+          ${join([m.role + ": " + p.text for t in older for m in t for p in m.parts if p.type == "text"])}
     output: !Compacted
       summary: ${summarize.output}
       history: ${input.recent}
@@ -50,7 +48,7 @@ nodes:
   over:
     kind: case
     cases:
-      - when: len(input.history) > input.keep and len(join([m.text for t in input.history for m in t], "")) > input.budget
+      - when: len(input.history) > input.keep and len(join([p.text for t in input.history for m in t for p in m.parts if p.type == "text"], "")) > input.budget
         then: folded
   folded:                 # skipped when under budget: no model call
     kind: call

@@ -1,6 +1,6 @@
 /**
- * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` input and
- * advances the run.
+ * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
+ * `Inbox(Message)` input and advances the run.
  *
  * The chat starts the flow, then loops while the run waits: read a line, `send` it, `advance`.
  * The engine holds no prompt and the run holds no worker between turns, and an `advance` finishes
@@ -22,12 +22,23 @@ import { AuthError } from "../llm_clients/auth/index.ts";
 import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { realScheduler, type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
-import { advance, cancel, close, DeliveryRefused, RunBusyError, type RunResult, runFlow, send } from "../run.ts";
+import {
+  advance,
+  cancel,
+  close,
+  DeliveryRefused,
+  interrupt as interruptReply,
+  RunBusyError,
+  type RunResult,
+  runFlow,
+  send,
+} from "../run.ts";
 import { recordTimeMs } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
-import { canonicalTypeLabel, isInboxType, type Value, writeAsText } from "../typesys/values.ts";
+import { builtinType } from "../typesys/types.ts";
+import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import {
   defaultRunLogPath,
   ensureProviderKeys,
@@ -71,34 +82,53 @@ export interface ChatDeps {
   tools?: Readonly<Record<string, ToolEntry>>;
 }
 
-const HINT = "(Ctrl-C again to cancel the run; /exit to finish it)";
+const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
+// A second Ctrl-C this soon after the one that interrupted a turn cancels the run.
+const SECOND_PRESS_MS = 2_000;
 const EXIT_LINES = new Set(["/exit", "/quit"]);
 
+/** The inbox lines go to: its name, and whether it takes messages (`Inbox(Message)`) or text. */
+interface LineInbox {
+  name: string;
+  message: boolean;
+}
+
 /**
- * Return the name of the `Inbox(str)` input lines go to: `chosen`, or the flow's only one.
+ * Return the `Inbox(str)` or `Inbox(Message)` input lines go to: `chosen`, or the flow's only one.
  *
  * @throws {UsageError} When the flow has none, several and `chosen` is absent, or `chosen` isn't
  *   one of them.
  */
-function pickInbox(flow: ComposedFlow, chosen: string | undefined): string {
-  const names = flow.input
-    .filter((param) => {
-      const type = param.contract?.type ?? null;
-      return isInboxType(type) && canonicalTypeLabel(type!.element!) === "str";
-    })
-    .map((param) => param.name);
+function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
+  const inboxes = flow.input.flatMap((param): LineInbox[] => {
+    const type = param.contract?.type ?? null;
+    if (!isInboxType(type)) return [];
+    if (canonicalTypeLabel(type!.element!) === "str") return [{ name: param.name, message: false }];
+    return typeEquals(type!.element!, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
+  });
+  const names = inboxes.map((inbox) => inbox.name);
   const id = flow.compiled.flowId ?? flow.name;
   if (names.length === 0) {
-    throw new UsageError(`flow '${id}' has no Inbox(str) input; yian chat sends each line to one`);
+    throw new UsageError(`flow '${id}' has no Inbox(str) or Inbox(Message) input; yian chat sends each line to one`);
   }
   if (chosen !== undefined) {
-    if (names.includes(chosen)) return chosen;
-    throw new UsageError(`--inbox '${chosen}' is not one of the flow's Inbox(str) inputs (${names.join(", ")})`);
+    const picked = inboxes.find((inbox) => inbox.name === chosen);
+    if (picked !== undefined) return picked;
+    throw new UsageError(
+      `--inbox '${chosen}' is not one of the flow's Inbox(str) or Inbox(Message) inputs (${names.join(", ")})`,
+    );
   }
   if (names.length > 1) {
-    throw new UsageError(`flow '${id}' has several Inbox(str) inputs (${names.join(", ")}); pick one with --inbox`);
+    throw new UsageError(
+      `flow '${id}' has several Inbox(str) or Inbox(Message) inputs (${names.join(", ")}); pick one with --inbox`,
+    );
   }
-  return names[0]!;
+  return inboxes[0]!;
+}
+
+/** Return the inbox event a typed line becomes: the line, or a user message holding it as text. */
+function lineEvent(line: string, message: boolean): string | Record<string, unknown> {
+  return message ? { role: "user", parts: [{ type: "text", text: line }] } : line;
 }
 
 /**
@@ -115,12 +145,15 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
 
 /**
  * Chat with the flow at `flowPath`: start it, send each line typed at the `You:` prompt to its
- * one `Inbox(str)` input (or `options.inbox`), and advance the run after each send, printing the
+ * one `Inbox(str)` or `Inbox(Message)` input (or `options.inbox`; a `Message` inbox gets the line
+ * as a user message holding it as text), and advance the run after each send, printing the
  * output of each node named `reply` on stdout as it finishes; returns the exit code.
  *
  * `/exit`, `/quit` or the end of input closes the inbox; the run finishes, `session ended` goes to
- * stderr and the chat exits 0. Ctrl-C (at the prompt, or SIGINT while the run moves) prints a
- * hint; a second one in a row cancels the run (`chat cancelled`, exit 130). SIGTERM, SIGHUP or
+ * stderr and the chat exits 0. Ctrl-C (SIGINT) while a turn runs interrupts the agents reading the
+ * inbox as their steer inbox (`interrupt`): the reply is cut, `(interrupted)` goes to stderr and
+ * the chat waits for the next line. A second Ctrl-C within 2 s, or one at the prompt, cancels the
+ * run (`chat cancelled`, exit 130). SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>`, exit 130), as
  * does Ctrl-C at an `ask` prompt. While the prompt is up, the run is advanced at its `wakeAt`;
  * what was typed so far comes back at the next prompt. Off a terminal (stdin or stderr isn't a
@@ -134,8 +167,8 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * builds no memories. A host failure prints `chat failed: <message>` and exits 1.
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
- *   one `Inbox(str)` input to pick; for an input the flow doesn't declare (the inbox included);
- *   off a TTY, for missing required inputs.
+ *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
+ *   (the inbox included); off a TTY, for missing required inputs.
  */
 export async function chat(flowPath: string, options: ChatOptions, io: CliIo, deps: ChatDeps = {}): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
@@ -176,9 +209,14 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
   // The line prompt (or, once the inbox is closed, the wait for a deadline) that a deadline, a
   // stop or a cancel takes down.
   let line: AbortController | null = null;
-  let interrupts = 0;
+  // Whether a turn runs (the run is being started or advanced), and the scheduler time of the
+  // Ctrl-C that last interrupted one.
+  let turning = false;
+  let pressedAt: number | null = null;
   // Settles true once the run is cancelled, false when it had already ended.
   let cancelling: Promise<boolean> | null = null;
+  // The interrupt a Ctrl-C started; settled before the chat sends its next line or returns.
+  let interrupting: Promise<void> | null = null;
   const cancelRun = async (path: string): Promise<boolean> => {
     try {
       await cancel(path, { env: env.read });
@@ -193,9 +231,17 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       stop.abort(new HostStop("SIGINT"));
       return;
     }
-    interrupts += 1;
-    if (interrupts === 1) {
-      void io.stderr.write(`${HINT}\n`).catch(() => {});
+    const now = scheduler.now();
+    // A press while a turn runs interrupts its reply; a second within 2 s, or one at the prompt,
+    // cancels.
+    if (turning && (pressedAt === null || now - pressedAt > SECOND_PRESS_MS)) {
+      pressedAt = now;
+      void io.stderr.write(`${INTERRUPTING}\n`).catch(() => {});
+      // The live engine takes it at once; with no reply running it names nobody and appends nothing.
+      const sent = interruptReply(log, inbox.name, { env: env.read }).catch((error: unknown) => {
+        if (!(error instanceof DeliveryRefused)) stop.abort(error);
+      });
+      interrupting = Promise.all([interrupting, sent]).then(() => {});
       return;
     }
     // A live engine takes the cancel, and its `advance` resolves `cancelled`.
@@ -263,8 +309,11 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     log = path;
     // Python's rule: a node named `reply`, at any depth, is what the chat says.
     const onEvent = (event: RunEvent) => {
-      if (!(event instanceof NodeSucceeded) || event.output === null) return;
+      if (!(event instanceof NodeSucceeded)) return;
       if (event.nodeId.slice(event.nodeId.lastIndexOf("/") + 1) !== "reply") return;
+      // An interrupted reply succeeds with null when its output is `Optional(...)`.
+      if (event.interrupted) return io.stderr.write("(interrupted)\n");
+      if (event.output === null) return;
       return io.stdout.write(`${writeAsText(event.output as Value)}\n`);
     };
     const shared = {
@@ -274,14 +323,28 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       signal: stop.signal,
       scheduler,
     };
-    const moveOn = () => advance({ log: path, ...shared });
-    let result: RunResult = await runFlow(flow, supplied, {
-      log: path,
-      runId,
-      llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
-      numWorkers: options.numWorkers,
-      ...shared,
-    });
+    /** Run `move` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling. */
+    const turn = async (move: () => Promise<RunResult>): Promise<RunResult> => {
+      turning = true;
+      try {
+        return await move();
+      } finally {
+        turning = false;
+        // An interrupt sent during the turn lands before the next line is sent.
+        await interrupting;
+        interrupting = null;
+      }
+    };
+    const moveOn = () => turn(() => advance({ log: path, ...shared }));
+    let result: RunResult = await turn(() =>
+      runFlow(flow, supplied, {
+        log: path,
+        runId,
+        llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
+        numWorkers: options.numWorkers,
+        ...shared,
+      }),
+    );
     let closed = false;
     let cancelled = false;
     // The deadline the run was last moved at. A node is due once any of its calls passes its
@@ -346,12 +409,12 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         continue;
       }
       if ("eof" in read || EXIT_LINES.has(read.value.trim())) {
-        await close(path, inbox, { env: env.read });
+        await close(path, inbox.name, { env: env.read });
         closed = true;
       } else {
-        interrupts = 0;
+        pressedAt = null;
         try {
-          await send(path, inbox, read.value, { env: env.read });
+          await send(path, inbox.name, lineEvent(read.value, inbox.message), { env: env.read });
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) throw error;
           await io.stderr.write(`not sent: ${error.message}\n`);
@@ -382,6 +445,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     await io.stderr.write(`chat failed: ${error.message}\n`);
     return 1;
   } finally {
+    await interrupting;
     stop.signal.removeEventListener("abort", takeDown);
     terminal.close();
     for (const [name, listener] of listeners) signals.off(name, listener);

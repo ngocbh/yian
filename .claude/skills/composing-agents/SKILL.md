@@ -1145,8 +1145,8 @@ inbox is closed and nothing is left unread after this take. Each event is read o
 `from:` must be an `Inbox` input of this flow, written `${input.<name>}`; `output:`,
 `asserts:` and `retries:` are load errors.
 
-An inbox is read only as a whole value: by a take's `from:`, or passed to an `Inbox` input
-of a named `call` or `loop` child (a loop carries it into every iteration and leaves it out
+An inbox is read only as a whole value: by a take's `from:`, by an AGENT's `steer_inbox:`,
+or passed to an `Inbox` input of a named `call` or `loop` child (a loop carries it into every iteration and leaves it out
 of its output). Any other read (text, a field, a CODE or AGENT input, a condition, a flow
 output) is a load error, and so is an inbox input that nothing reads. A flow a `map` calls
 can't declare one. See [`templates/chat.yaml`](templates/chat.yaml) for a chat that takes
@@ -1296,9 +1296,9 @@ optional for `while:`/`until:` but **redundant and rejected** with `times:`. A
 `while:`/`until:` is an expression string; `while: true` or `until: 1` is a load error.
 
 #### Conversational REPL — the `loop` shape of `examples/chat.yaml`
-A chat is a `loop` that carries an `Inbox(str)` input into every turn, with the record
-`{summary: str, history: list(list(Msg)), closed: bool}` (one inner list per turn). Each turn
-runs two nodes side by side: `take: all` reads every message sent since the last one, and
+A chat is a `loop` that carries an `Inbox(Message)` input into every turn, with the record
+`{summary: str, history: list(list(Message)), closed: bool}` (one inner list per turn). Each
+turn runs two nodes side by side: `take: all` reads every message sent since the last one, and
 `compacted` CALLs [`templates/compact_history.yaml`](templates/compact_history.yaml) (a `uses:`
 sibling), which passes the history through under its character budget or folds the older turns
 into the summary with one model call. It runs after the reply, so the run ends `waiting` once
@@ -1309,53 +1309,64 @@ take. Ending is the host's `close` (`/exit` in `yian chat`), so no text is speci
 [`templates/chat.yaml`](templates/chat.yaml). This carried history is how a chat remembers in
 TS yian, which has no session memory.
 
-TS yian only: send the history as real turns with a list `prompt:` (see
-[A list prompt](../../../docs/syntax.md#a-list-prompt)), so a user can't forge an `Assistant:`
-turn and the provider can cache the prefix. The AGENT outputs only the new reply; `respond`
-returns the one new turn, and the body's output binding appends it:
+TS yian only. The pattern: take all, then an agent with `steer_inbox` and `Optional(str)`,
+then carry what was said plus its `new_messages`. Send the history as real turns with a list
+`prompt:` (see [A list prompt](../../../docs/syntax.md#a-list-prompt)), so a user can't forge an
+assistant turn and the provider can cache the prefix; tool calls and their results replay as
+sent. `respond` returns the one new turn, and the body's output binding appends it:
 ```yaml
-typedefs:
-  Msg: {role: "Literal(user, assistant)", text: str}   # any record with role and text: str
 defs:
   respond:
-    input: {summary: !str, history: !list(Msg), message: !str}
+    input:
+      summary: !str
+      history: !list(Message)
+      said: !list(Message)            # the take's events, each its own user message
+      owner_messages: !Inbox(Message)
     nodes:
       reply:
         kind: agent
-        input: {summary: "${input.summary}", history: "${input.history}", message: "${input.message}"}
-        output: str
+        input: {summary: "${input.summary}", history: "${input.history}", said: "${input.said}"}
+        steer_inbox: ${input.owner_messages}   # sends during the reply join its next model call
+        output: Optional(str)         # null only after a host interrupt
         system_prompt: |-
           You are a helpful conversational assistant.
 
           Conversation so far: ${summary}
         prompt:
-          - ${history}          # a message or a list of messages, spliced in order
-          - user: ${message}    # one message; text is a template (`assistant:` too, not last)
-    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
-  turn:                         # in its nodes: compacted, heard, route, and
+          - ${history}                # a message or a list of messages, spliced in order
+          - ${said}
+    output: !list(list(Message)) ${[input.said + reply.new_messages]}
+  turn:                               # in its nodes: compacted, heard, route, and
     # answered: {kind: call, call: respond, input: {summary: "${compacted.output.summary}",
-    #   history: "${[m for t in compacted.output.history for m in t]}", message: "${join(heard.output.events)}"}}
+    #   history: "${[m for t in compacted.output.history for m in t]}",
+    #   said: "${heard.output.events}", owner_messages: "${input.owner_messages}"}}
     output: !State
       summary: ${compacted.output.summary}
       history: ${compacted.output.history + (answered.output :- [])}
       closed: ${heard.output.closed}
 ```
+- **Steers.** A message the host sends while `reply` runs joins its next model call as a user
+  message (a recorded `steer` step), and is in `${reply.new_messages}` where it joined.
+- **Interrupt contract.** `interrupt(run, inbox)` (Ctrl-C in `yian chat`) cuts the reply: its
+  output is null and its `new_messages` end with the user message `[interrupted by the user]`,
+  so the next turn's model sees the cut text. **Use `Optional(...)` on any agent a host may
+  interrupt**: with no `output:` (which means `str`) or any other type, the agent fails with
+  `agent.interrupted`.
+- `steer_inbox:` takes the lone `${input.<name>}` of an Inbox input, so pass the inbox into the
+  def that holds the agent (`owner_messages` above).
+
 A `system:` item, a last `assistant:` item, an empty list, or a spliced input whose type
 can't hold messages (`str`) fails at load; a spliced value that isn't messages, or a rendered
 list not ending with `user`, fails the node.
 This shape keeps the run log linear (see [`examples/chat.yaml`](../../../examples/chat.yaml)):
-the reply is recorded, and the appended history is a derived value the log holds as `from`
-pointers. Flatten the turns in the CALL's binding (`answered`), not the AGENT's, so a learnable
-capture holds one route, not one per message. Don't have a node (or a value entry, which lowers
-to a CODE node) return the whole history every turn: that records it each turn and the log
-grows quadratically.
+the agent's new messages are one messages commit rebuilt from its steps, and the appended
+history is a derived value the log holds as `from` pointers. Flatten the turns in the CALL's
+binding (`answered`), not the AGENT's, so a learnable capture holds one route, not one per
+message. Don't have a node (or a value entry, which lowers to a CODE node) return the whole
+history every turn: that records it each turn and the log grows quadratically.
 
-To keep the agent's tool calls and results in the history, carry `!list(Message)` and append
-`${reply.new_messages}`, everything the agent's call added (its prompt isn't in it):
-```yaml
-    output:
-      history: ${input.history + reply.new_messages}
-```
+`${reply.new_messages}` is everything the agent's call added (its prompt isn't in it), so a
+flat history grows with `${input.history + reply.new_messages}` too.
 It reads like `${reply.output}`: in node inputs, flow outputs and flow asserts, not in a
 prompt, a `case` or `llm_config:`; only an AGENT has it, and a maybe-skipped agent needs
 `${reply.new_messages :- []}`. See

@@ -528,6 +528,9 @@ export class PromptModel implements ChatModel {
   }
 }
 
+/** A user message holding only `text`, as a plain `Message` value a host sends to an `Inbox(Message)`. */
+export const userText = (text: string) => ({ role: "user", parts: [{ type: "text", text }] });
+
 /**
  * Write `examples/chat.yaml` with a 200-character compaction budget (passed to its `compacted`
  * call) and an unchanged `examples/compact_history.yaml` beside it into `dir`; return the chat's

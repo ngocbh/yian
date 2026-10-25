@@ -1,15 +1,22 @@
-# chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary
-# (agent without tools; deterministic history).
+# chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary.
 #
-# The host sends each line the user types to the `messages` inbox; each turn's `take` waits for
-# them and takes everything sent since the last turn. Beside that take, `compacted` calls
-# compact_history.yaml on the history so far: under its budget (32,000 characters of message
-# text) it passes it through with no model call; over it, one model call folds the older turns
-# into the summary and keeps the last 4 turns. `answered` calls `respond` with the summary and
-# the kept turns flattened into one list of messages; the reply's system prompt carries the
-# summary. Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are
-# answered. The run log grows linearly (see "Growing a carried value" in docs/syntax.md).
-# Comprehensions, len(), slices, the `prompt:` list style, `Inbox(str)` and `take` are TS-only.
+# The host sends each owner message to the `owner_messages` inbox (`yian chat` sends each line you
+# type as a user message). Each turn's `take` waits for them and takes everything sent since the
+# last turn. Beside that take, `compacted` calls compact_history.yaml on the history so far: under
+# its budget (32,000 characters of message text) it passes it through with no model call; over it,
+# one model call folds the older turns into the summary and keeps the last 4 turns. `answered`
+# calls `respond` with the summary, the kept turns flattened into one list of messages, and what
+# was just said; the reply's system prompt carries the summary.
+#
+# Messages sent while `reply` runs steer it: they join its next model call (`steer_inbox`).
+# `interrupt(run, "owner_messages")` (Ctrl-C in `yian chat`) cuts the reply: its output is null,
+# which `Optional(str)` allows, and its `new_messages` end with the user message
+# "[interrupted by the user]". Each turn adds one list to the history: what was said, then the
+# reply's `new_messages` (its tool calls and results, the steers it read, and its final reply).
+# Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are answered.
+# The flow grants no tools; see docs/examples.md to add some. The run log grows linearly (see
+# "Growing a carried value" in docs/syntax.md).
+# TS yian only. Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat
 description: A turn-by-turn conversational assistant that folds older turns into a rolling summary.
@@ -18,43 +25,45 @@ uses:
   compact_history: compact_history        # examples/compact_history.yaml
 
 input:
-  messages: !Inbox(str)
+  owner_messages: !Inbox(Message)
 
 typedefs:
-  Msg:                    # one message of the history the AGENT sends
-    role: Literal(user, assistant)
-    text: str
-  State: {summary: str, history: list(list(Msg)), closed: bool}   # the carried record
-  Transcript: {summary: str, history: list(Msg)}                  # the flow's output
+  State: {summary: str, history: list(list(Message)), closed: bool}   # the carried record
+  Transcript: {summary: str, history: list(Message)}                  # the flow's output
 
 defs:
   respond:                # a def, so its CALL flattens the history in a derived binding
-    input: {summary: !str, history: !list(Msg), message: !str}
+    input:
+      summary: !str
+      history: !list(Message)
+      said: !list(Message)
+      owner_messages: !Inbox(Message)
     nodes:
       reply:
         kind: agent
         input:
           summary: ${input.summary}
           history: ${input.history}      # a plain reference: one route in a learnable capture
-          message: ${input.message}
-        output: str                      # only this turn's reply is recorded
+          said: ${input.said}
+        steer_inbox: ${input.owner_messages}
+        output: Optional(str)            # text; null only after an interrupt
         system_prompt: |-
           You are a helpful conversational assistant.
 
           Conversation so far: ${summary}
         prompt:
           - ${history}
-          - user: ${message}
-    # A one-turn list (hence the double brackets), so the body appends it with `+`, or `[]` when
+          - ${said}
+    # A one-turn list (hence the brackets), so the body appends it with `+`, or `[]` when
     # `answered` is skipped.
-    output: !list(list(Msg)) ${[[Msg(role="user", text=input.message), Msg(role="assistant", text=reply.output)]]}
+    output: !list(list(Message)) ${[input.said + reply.new_messages]}
 
-  turn:                   # body: 'a -> 'a over {summary, history, closed, messages}
+  turn:                   # body: 'a -> 'a over {summary, history, closed, owner_messages}
     input:
       summary: !str
-      history: !list(list(Msg))
+      history: !list(list(Message))
       closed: !bool
-      messages: !Inbox(str)
+      owner_messages: !Inbox(Message)
     nodes:
       compacted:          # beside `heard`: compacts the history so far
         kind: call
@@ -64,7 +73,7 @@ defs:
         kind: tool
         tool_id: take                    # waits until a message arrives or the inbox closes
         input:
-          from: ${input.messages}
+          from: ${input.owner_messages}
           take: all
       route:
         kind: case
@@ -77,7 +86,8 @@ defs:
         input:
           summary: ${compacted.output.summary}
           history: ${[m for t in compacted.output.history for m in t]}
-          message: ${join(heard.output.events)}  # one line per send
+          said: ${heard.output.events}
+          owner_messages: ${input.owner_messages}
     output: !State
       summary: ${compacted.output.summary}
       history: ${compacted.output.history + (answered.output :- [])}
@@ -87,7 +97,7 @@ nodes:
   chat:
     kind: loop
     call: turn
-    input: {summary: "", history: [], closed: false, messages: "${input.messages}"}
+    input: {summary: "", history: [], closed: false, owner_messages: "${input.owner_messages}"}
     while: not closed
 output: !Transcript
   summary: ${chat.output.summary}

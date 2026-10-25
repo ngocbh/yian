@@ -1,7 +1,7 @@
 /**
  * Representation-neutral graph + reference leaf checkers.
  *
- * These operate on bare `Type`/edge/path-set inputs (never a `FlowSpec`), so the Compose loader
+ * These operate on bare `Type`/edge/path-set inputs, not a built flow, so the Compose loader
  * reuses them directly:
  *
  * - `rejectCycles`: Kahn's-algorithm cycle check over a bare edge list + node-id set.

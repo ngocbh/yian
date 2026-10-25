@@ -1,8 +1,8 @@
 """Validate: a `CaseNode`'s handles align with its outgoing control edges.
 
 The handle-alignment check ports `compile.validation._check_case_handles`'s rule
-to the desugared `CaseNode`s + their control edges (the Compose path has no
-`FlowSpec`). Runs in the validate phase over the built node map + derived edges.
+to the desugared `CaseNode`s + their control edges. Runs in the validate phase over
+the built node map + derived edges.
 
 Imports flow DOWN only: `compile.model` (Edge), `nodes.base` (Node) + `nodes.case`
 (CaseNode/ELSE_HANDLE), `compose.helpers.errors` (LoadError). Nothing in

@@ -1,7 +1,7 @@
 """Graph-stage: reference-wiring validation over the built flow.
 
 Cross-node assembly pass. The analogue of `compile.validation._collect_reference_errors`,
-walking the BUILT flow (not a `FlowSpec`): it CALLS the leaf checkers (`_classify_path`)
+walking the BUILT flow: it CALLS the leaf checkers (`_classify_path`)
 directly — supplying the `valid_targets`/`flow_inputs` sets and a semantic-Type
 projection of the producer contracts — only reimplementing the per-node walk glue.
 Every located problem accumulates; one `LoadError` is raised carrying them all. Builtin

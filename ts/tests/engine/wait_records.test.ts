@@ -108,8 +108,12 @@ test.each<[string, () => unknown, string | RegExp]>([
     () => new NodeWaitingRecord("n", ["r/nap"], { waits: [{ ...sleep, deadline: "tomorrow" }] }),
     /wait entry deadline must be a UTC time/,
   ],
-  ["an empty node id", () => new NodeWaitingRecord("", ["r/n"]), "node_id must be non-empty"],
-  ["an empty steer inbox", () => new NodeWaitingRecord("n", ["r/n"], { steerInbox: "" }), "steer_inbox must be non-empty"],
+  ["an empty node id", () => new NodeWaitingRecord("", ["r/n"]), "node_id must be a non-empty string"],
+  [
+    "an empty steer inbox",
+    () => new NodeWaitingRecord("n", ["r/n"], { steerInbox: "" }),
+    "steer_inbox must be a non-empty string",
+  ],
 ])("node_waiting refuses %s", (_name, build, message) => expect(build).toThrow(message));
 
 test("node_woken, run_waiting, inbox_closed, run_cancelled and run_failed", () => {
@@ -119,7 +123,7 @@ test("node_woken, run_waiting, inbox_closed, run_cancelled and run_failed", () =
   expect(new RunWaitingRecord(["heard", "nap"]).nodeIds).toEqual(["heard", "nap"]);
   expectError(() => new RunWaitingRecord([]), RangeError, "node_ids must be non-empty");
   expect(new InboxClosedRecord("msgs").inbox).toBe("msgs");
-  expectError(() => new InboxClosedRecord(""), RangeError, "inbox must be non-empty");
+  expectError(() => new InboxClosedRecord(""), RangeError, "inbox must be a non-empty string");
   const cancelled = new RunCancelledRecord();
   expect(Object.keys(cancelled)).toEqual([]);
   expect(Object.isFrozen(cancelled)).toBe(true);
@@ -290,7 +294,7 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     "an empty inbox",
     () => new PoolCommitRecord("e", "e", null, { take: { inbox: "", events: [], closed: false } }),
     RangeError,
-    "take inbox must be non-empty",
+    "take inbox must be a non-empty string",
   ],
   [
     "a non-boolean closed",
@@ -346,7 +350,7 @@ test("interrupted names its inbox and the nodes it interrupts; frozen", () => {
   expect([record.inbox, [...record.nodes]]).toEqual(["owner", ["turn#0/reply", "side"]]);
   expect(Object.isFrozen(record)).toBe(true);
   expect(Object.isFrozen(record.nodes)).toBe(true);
-  expectError(() => new InterruptedRecord("", ["a"]), RangeError, "inbox must be non-empty");
+  expectError(() => new InterruptedRecord("", ["a"]), RangeError, "inbox must be a non-empty string");
   expectError(() => new InterruptedRecord("owner", []), RangeError, "nodes must be non-empty");
   expectError(() => new InterruptedRecord("owner", ["a", "a"]), RangeError, "nodes must contain unique IDs");
   expectError(() => new InterruptedRecord("owner", [""]), RangeError, "nodes must contain only non-empty strings");

@@ -1677,11 +1677,10 @@ export abstract class Node {
   /**
    * Return the first assertion that doesn't hold on `record`, as the error to throw, or `null`.
    *
-   * Each assertion is parsed before it is evaluated with this node's type table. A false
-   * condition fails with `assertion.failed`; one that throws an `ExpressionError` while
-   * evaluating fails with `condition.evaluate`, that error as the `cause`.
-   *
-   * @throws ExpressionError when an assertion doesn't parse; the message names the node.
+   * Each assertion is evaluated with this node's type table. A false condition fails with
+   * `assertion.failed`; one that throws an `ExpressionError` while evaluating fails with
+   * `condition.evaluate`, that error as the `cause`. Callers run `validateExecutionSetup` first,
+   * which has parsed every assertion and named the node in any parse error.
    */
   private failingAssertion(
     label: string,
@@ -1690,7 +1689,6 @@ export abstract class Node {
   ): NodeAssertFailed | null {
     const subject = `node ${reprText(this.id)} ${label}`;
     for (const assertion of assertions) {
-      this.parseAssertion(label, assertion);
       let holds: boolean;
       try {
         holds = evaluateWhenRecord(assertion.expression, record as ValueRecord, this.types);

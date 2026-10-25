@@ -321,30 +321,6 @@ class ResolverTable:
         object.__setattr__(table, "_targets", MappingProxyType(dict(targets)))
         return table
 
-    @classmethod
-    def merge(cls, *tables: "ResolverTable") -> "ResolverTable":
-        """Combine disjoint tables without adding resolver precedence.
-
-        Args:
-            *tables (`ResolverTable`): Tables whose public origins must be disjoint.
-
-        Returns:
-            `ResolverTable`: One immutable table containing every route.
-
-        Raises:
-            TypeError: Raised when an argument is not a `ResolverTable`.
-            ValueError: Raised when two tables contain the same public origin key.
-        """
-        entries: list[tuple[OriginRef, OriginResolver, OriginRef]] = []
-        for table in tables:
-            if not isinstance(table, ResolverTable):
-                raise TypeError("resolver table merge requires ResolverTable values")
-            entries.extend(
-                (OriginRef(key), target.resolver, target.origin)
-                for key, target in table._targets.items()
-            )
-        return cls.from_entries(entries)
-
     @property
     def origins(self) -> frozenset[OriginRef]:
         """Return the exact public origins routed by this table.

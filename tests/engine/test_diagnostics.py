@@ -316,8 +316,8 @@ def test_resolver_table_routes_each_new_origin_to_one_exact_delegate_origin() ->
     ]
 
 
-def test_resolver_table_merge_is_strict_and_preserves_delegate_behavior() -> None:
-    """Merging uses exact disjoint routes and never adds fallback semantics."""
+def test_resolver_table_routes_each_origin_to_its_own_delegate() -> None:
+    """Each route resolves through its own delegate, with no fallback between them."""
 
     class Resolver:
         def __init__(self, label: str) -> None:
@@ -332,19 +332,16 @@ def test_resolver_table_merge_is_strict_and_preserves_delegate_behavior() -> Non
                 range=SourceRange(1, 1, 1, 6),
             )
 
-    first = ResolverTable.from_entries(
-        [(OriginRef("first"), Resolver("first"), OriginRef("old"))]
-    )
-    second = ResolverTable.from_entries(
-        [(OriginRef("second"), Resolver("second"), OriginRef("old"))]
+    table = ResolverTable.from_entries(
+        [
+            (OriginRef("first"), Resolver("first"), OriginRef("old")),
+            (OriginRef("second"), Resolver("second"), OriginRef("old")),
+        ]
     )
 
-    merged = ResolverTable.merge(first, second)
-
-    assert len(merged) == 2
-    assert merged.resolve(OriginRef("first")).label == "first"  # type: ignore[union-attr]
-    assert merged.resolve(OriginRef("second")).label == "second"  # type: ignore[union-attr]
-    assert len(ResolverTable.merge()) == 0
+    assert len(table) == 2
+    assert table.resolve(OriginRef("first")).label == "first"  # type: ignore[union-attr]
+    assert table.resolve(OriginRef("second")).label == "second"  # type: ignore[union-attr]
 
 
 def test_resolver_table_rejects_duplicate_routes_before_information_is_lost() -> None:
@@ -365,11 +362,6 @@ def test_resolver_table_rejects_duplicate_routes_before_information_is_lost() ->
         ResolverTable.from_entries(
             [(new, resolver, old), (DerivedOrigin("same"), resolver, old)]
         )
-
-    first = ResolverTable.from_entries([(new, resolver, old)])
-    second = ResolverTable.from_entries([(new, resolver, old)])
-    with pytest.raises(ValueError, match="duplicate resolver table origin 'same'"):
-        ResolverTable.merge(first, second)
 
 
 def test_resolver_table_revalidates_subclass_keys_before_routing() -> None:
@@ -466,10 +458,6 @@ def test_resolver_table_rejects_delegate_results_outside_the_protocol() -> None:
         (
             lambda: ResolverTable({}),  # type: ignore[call-arg]
             "positional argument",
-        ),
-        (
-            lambda: ResolverTable.merge(ResolverTable(), object()),  # type: ignore[arg-type]
-            "merge requires ResolverTable values",
         ),
         (
             lambda: ResolverTable().resolve("new"),  # type: ignore[arg-type]

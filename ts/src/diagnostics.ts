@@ -743,24 +743,6 @@ export class ResolverTable {
     return table;
   }
 
-  /**
-   * Combine tables whose public origins are disjoint, without adding resolver
-   * precedence. Throws `TypeError` when an argument is not a `ResolverTable`, and
-   * `RangeError` when two tables route the same public key.
-   */
-  static merge(...tables: ResolverTable[]): ResolverTable {
-    const entries: [OriginRef, OriginResolver, OriginRef][] = [];
-    for (const table of tables) {
-      if (!(table instanceof ResolverTable)) {
-        throw new TypeError("resolver table merge requires ResolverTable values");
-      }
-      for (const [key, target] of table.#targets) {
-        entries.push([new OriginRef(key), target.resolver, target.origin]);
-      }
-    }
-    return ResolverTable.fromEntries(entries);
-  }
-
   /** The number of public-origin routes. */
   get size(): number {
     return this.#targets.size;

@@ -240,7 +240,8 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     if (turning && (pressedAt === null || now - pressedAt > SECOND_PRESS_MS)) {
       pressedAt = now;
       void io.stderr.write(`${INTERRUPTING}\n`).catch(() => {});
-      // The live engine takes it at once; with no reply running it names nobody and appends nothing.
+      // The live engine takes it at once. With no reply running it records the Stop for the turn,
+      // or nothing when the chat waits at the take.
       const sent = interruptReply(log, inbox.name, { env: env.read }).catch((error: unknown) => {
         if (!(error instanceof DeliveryRefused)) stop.abort(error);
       });

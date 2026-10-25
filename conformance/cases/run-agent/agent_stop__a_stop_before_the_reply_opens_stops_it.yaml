@@ -1,0 +1,150 @@
+# TS-only: withdraw and the remembered Stop (#1106).
+# A message is sent to the waiting take, then the host interrupts before the take wakes: no agent
+# reads the inbox yet, so the interrupt records `interrupted {notes, []}`, remembering the Stop.
+# The take wakes and takes the message (a waited take's commit doesn't end the Stop); `reply`
+# opens the inbox while the Stop stands, gets its own `interrupted {notes, [reply]}` record and
+# honors it before any model call: output null.
+kind: run
+python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
+rules: [run-log]
+flow: |
+  id: stop
+  name: stop
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.notes}
+    reply:
+      kind: agent
+      steer_inbox: ${input.notes}
+      input: {got: "${heard.output.events}"}
+      system_prompt: Help.
+      prompt: "answer ${got}"
+      output: Optional(str)
+  output: ${reply.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: notes, event: hi, hold: true}
+  - {interrupt: notes}
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        reply:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - {call_id: r1/heard, inbox: notes, mode: one, tool: take}
+  - - run_waiting
+    - null
+    - node_ids: [heard]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: hi}
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: []
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - closed: false
+      events: [11]
+      inbox: notes
+  - - node_succeeded
+    - heard
+    - {commit: 14}
+  - [node_started, reply]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [reply]
+  - - node_step
+    - reply
+    - n: 1
+      step: {by: 17, kind: interrupted}
+  - [pool_commit, reply]
+  - - pool_commit
+    - reply
+    - key: reply.new_messages
+      steps: [18]
+  - - node_succeeded
+    - reply
+    - {commit: 19, messages: 20}
+  - [node_started, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 23}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - node_id: heard
+      call_ids: [r1/heard]
+  - - RunWaiting
+    - node_ids: [heard]
+  - - NodeWoken
+    - node_id: heard
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        events: [hi]
+  - - NodeStarted
+    - {node_id: reply}
+  - - NodeSucceeded
+    - {node_id: reply, interrupted: true}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__}
+  - [RunSucceeded]
+  stream: []

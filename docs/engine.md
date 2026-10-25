@@ -223,7 +223,7 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
-Changed (TS yian): records use schema 22, with a `RunStoppedRecord`, every payload field
+Changed (TS yian): records use schema 23, with a `RunStoppedRecord`, every payload field
 required, the time each record was appended (`at`), a `RunStartedRecord` that holds the
 flow files, the skills, tool specs and tool groups the AGENTs grant, the yian version and the
 parent run, a `PoolCommitRecord` for every write to the variable pool (a derived value's holding `from`

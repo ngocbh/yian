@@ -1,6 +1,6 @@
 /**
  * The inbox and wait record kinds (`node_waiting`, `node_woken`, `run_waiting`, `inbox_closed`,
- * `interrupted`, `run_cancelled`, `run_failed`), the take form of `pool_commit`, and the record-time exports:
+ * `inbox_withdrawn`, `interrupted`, `run_cancelled`, `run_failed`), the take form of `pool_commit`, and the record-time exports:
  * their constructors' checks and their canonical wire; the waits fold's empty state on a fresh
  * `RunState`, the reducer refusing the new kinds until it applies them, and `eventBytes`, an
  * event's size. TS-only: Python yian has no inbox or suspension records.
@@ -15,6 +15,7 @@ import {
   encodeRecord,
   formatRecordTime,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
   iterRunRecords,
   JsonlRunLog,
@@ -116,6 +117,19 @@ test.each<[string, () => unknown, string | RegExp]>([
   ],
 ])("node_waiting refuses %s", (_name, build, message) => expect(build).toThrow(message));
 
+test("inbox_withdrawn holds an inbox and its strictly increasing, non-empty send seqs", () => {
+  const record = new InboxWithdrawnRecord("msgs", [3, 5]);
+  expect([record.inbox, [...record.events]]).toEqual(["msgs", [3, 5]]);
+  expect(Object.isFrozen(record)).toBe(true);
+  expect(Object.isFrozen(record.events)).toBe(true);
+  expectError(() => new InboxWithdrawnRecord("", [3]), RangeError, "inbox must be a non-empty string");
+  expectError(() => new InboxWithdrawnRecord("msgs", []), RangeError, "events must be non-empty");
+  expectError(() => new InboxWithdrawnRecord("msgs", [5, 3]), RangeError, "events must be strictly increasing");
+  expectError(() => new InboxWithdrawnRecord("msgs", [3, 3]), RangeError, "events must be strictly increasing");
+  expectError(() => new InboxWithdrawnRecord("msgs", [0]), RangeError, "events must be positive integers");
+  expectError(() => new InboxWithdrawnRecord("msgs", [1.5]), RangeError, "events must be positive integers");
+});
+
 test("node_woken, run_waiting, inbox_closed, run_cancelled and run_failed", () => {
   expect(new NodeWokenRecord("heard").timedOut).toEqual([]);
   expect(Object.isFrozen(new NodeWokenRecord("nap", ["r/nap"]).timedOut)).toBe(true);
@@ -163,7 +177,9 @@ test.each([
   ["node_woken", new NodeWokenRecord("heard"), { node_id: "heard", timed_out: [] }],
   ["run_waiting", new RunWaitingRecord(["heard"]), { node_ids: ["heard"] }],
   ["inbox_closed", new InboxClosedRecord("msgs"), { inbox: "msgs" }],
+  ["inbox_withdrawn", new InboxWithdrawnRecord("msgs", [3, 5]), { inbox: "msgs", events: [3n, 5n] }],
   ["interrupted", new InterruptedRecord("owner", ["turn#0/reply", "side"]), { inbox: "owner", nodes: ["turn#0/reply", "side"] }],
+  ["interrupted", new InterruptedRecord("owner", []), { inbox: "owner", nodes: [] }],
   ["run_cancelled", new RunCancelledRecord(), {}],
   ["run_failed", new RunFailedRecord(FAILURE), { failure: FAILURE.toJSON() }],
 ])("%s round trips under its wire kind", (kind, record, payload) => {
@@ -351,7 +367,7 @@ test("interrupted names its inbox and the nodes it interrupts; frozen", () => {
   expect(Object.isFrozen(record)).toBe(true);
   expect(Object.isFrozen(record.nodes)).toBe(true);
   expectError(() => new InterruptedRecord("", ["a"]), RangeError, "inbox must be a non-empty string");
-  expectError(() => new InterruptedRecord("owner", []), RangeError, "nodes must be non-empty");
+  expect([...new InterruptedRecord("owner", []).nodes]).toEqual([]);
   expectError(() => new InterruptedRecord("owner", ["a", "a"]), RangeError, "nodes must contain unique IDs");
   expectError(() => new InterruptedRecord("owner", [""]), RangeError, "nodes must contain only non-empty strings");
 });

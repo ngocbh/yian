@@ -96,6 +96,7 @@ import {
   decodeRecord,
   encodeRecord,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
@@ -152,12 +153,14 @@ import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import {
   applyWaitsRecord,
   availableUnread,
+  awaitsNextMessage,
   type Call,
   type CallStateKind,
   nodeCalls,
   seqList,
   WaitsState,
   wakeableNodes,
+  withdrawableEvents,
 } from "./waits.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
@@ -242,7 +245,7 @@ export class NodeDataError extends Error {
   }
 }
 
-/** Why a host delivery (a send, complete, close, interrupt or cancel) was refused. */
+/** Why a host delivery (a send, withdraw, complete, close, interrupt or cancel) was refused. */
 export type DeliveryRefusal =
   | "unknown_inbox"
   | "not_started"
@@ -254,7 +257,7 @@ export type DeliveryRefusal =
   | "call_settled"
   | "not_host_call";
 
-/** A send, complete, close, interrupt or cancel the run refuses; nothing was appended. */
+/** A send, withdraw, complete, close, interrupt or cancel the run refuses; nothing was appended. */
 export class DeliveryRefused extends RangeError {
   override name = "DeliveryRefused";
   /** Why the delivery was refused. */
@@ -859,6 +862,13 @@ interface InboxClosedDelta {
   readonly inbox: string;
 }
 
+/** Withdrawing unread sends from an inbox; the waits fold applies it, and the commit drops their values. */
+interface InboxWithdrawnDelta {
+  readonly kind: "withdrawn";
+  readonly inbox: string;
+  readonly events: readonly number[];
+}
+
 /** Interrupting steer-inbox readers; the waits fold applies it. `closedCalls` are the host calls it closes. */
 interface InterruptedDelta {
   readonly kind: "interrupted";
@@ -888,7 +898,7 @@ interface CommitPlan extends PlanAnchors {
   readonly messagesJson: string | null;
 }
 
-/** One dispatch, resume, step, stop, wait, wake, run wait, inbox close or interrupt. */
+/** One dispatch, resume, step, stop, wait, wake, run wait, inbox close, withdraw or interrupt. */
 interface FrontierPlan extends PlanAnchors {
   readonly kind: "frontier";
   readonly delta:
@@ -900,6 +910,7 @@ interface FrontierPlan extends PlanAnchors {
     | NodeWokenDelta
     | RunWaitingDelta
     | InboxClosedDelta
+    | InboxWithdrawnDelta
     | InterruptedDelta;
 }
 
@@ -1320,6 +1331,30 @@ export function prepareInboxClosed(state: RunState, inbox: string): PreparedTran
 }
 
 /**
+ * Prepare a host's withdraw of every unread send of the top-level inbox `inbox`: its unread sends
+ * and those assigned to a take whose node hasn't woken, which then waits again (or, on a closed
+ * inbox, is answered by the close). The withdrawn sends' values are dropped.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @returns The canonical `InboxWithdrawnRecord` and its plan, with no observers; `null` when
+ *   nothing of the inbox is unread.
+ * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
+ *   such inbox.
+ */
+export function prepareWithdraw(state: RunState, inbox: string): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareWithdraw expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  requireDeliverable(state);
+  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  const events = withdrawableEvents(state.waits, inbox);
+  if (events.length === 0) return null;
+  return prepareRecord(state, new InboxWithdrawnRecord(inbox, events));
+}
+
+/**
  * Prepare a host's cancel: `run_cancelled` ends the run, closing its open calls; every later record
  * is refused.
  *
@@ -1337,37 +1372,86 @@ export function prepareRunCancelled(state: RunState): PreparedTransition {
 }
 
 /**
- * Prepare a host's interrupt of the agents reading `inbox` as their steer inbox: `running` (the
- * engine's in-flight readers, in flight order) then each waiting node whose `node_waiting` named
- * `inbox`, leaving out nodes that already hold a pending interrupt. The record closes the named
- * nodes' open calls (`interrupted`); a closed inbox can still be interrupted, since a reply may
- * still run on what it already read.
+ * Prepare a host's interrupt (a Stop) of `inbox`: an `interrupted` record naming the agents
+ * reading it as their steer inbox, `running` (the engine's in-flight readers, in flight order)
+ * then each waiting node whose `node_waiting` named `inbox`, leaving out nodes already being
+ * stopped (holding a pending interrupt, or running after honoring one). With no reader it names
+ * none and only records the Stop, which a reader opening the inbox while it stands honors. The
+ * record closes the named nodes' open calls (`interrupted`); a closed inbox can still be
+ * interrupted, since a reply may still run on what it already read.
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
  * @param running The in-flight nodes reading `inbox` as their steer inbox, which only the engine
- *   knows; none offline.
+ *   knows; `null` offline, where any in-flight node counts as an open reader for the idle rule,
+ *   and any in-flight node that reads a steer inbox as a current reader for "already stopping".
  * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
- *   per open host call of the named nodes; `null` when no node is left to name.
+ *   per open host call of the named nodes; `null` when the run waits for the inbox's next message
+ *   (a take of it waits with nothing unread and no reader is open), or when it is already
+ *   stopping (a Stop on the inbox stands, or every current reader holds or has honored an
+ *   interrupt).
  * @throws TypeError when an argument has the wrong type.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
  *   such inbox.
  * @throws RangeError when a running node can't be interrupted (see `validateInterrupted`).
  */
-export function prepareInterrupt(state: RunState, inbox: string, running: readonly string[] = []): PreparedTransition | null {
+export function prepareInterrupt(state: RunState, inbox: string, running: readonly string[] | null = null): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new TypeError("prepareInterrupt expects a RunState");
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  if (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string")) {
-    throw new TypeError("running must be an array of node ids");
+  if (running !== null && (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string"))) {
+    throw new TypeError("running must be null or an array of node ids");
   }
   requireDeliverable(state);
   if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
   const w = state.waits;
-  const waiting = [...w.waiting].filter(([, node]) => node.steerInbox === inbox).map(([nodeId]) => nodeId);
-  const nodes = [...running, ...waiting].filter((nodeId) => !w.interrupts.has(nodeId));
-  if (nodes.length === 0) return null;
-  return prepareRecord(state, new InterruptedRecord(inbox, nodes));
+  // Offline no engine says which in-flight node opened the inbox, so any counts as a reader.
+  const readersOpen = running === null ? state.inFlight.size > 0 : running.length > 0;
+  if (!readersOpen && awaitsNextMessage(w, inbox)) return null;
+  // Already stopping: a second Esc never carries a Stop into the next reply.
+  if (w.stops.has(inbox)) return null;
+  // Offline every in-flight node that reads a steer inbox may have opened this one, so each counts
+  // as a current reader, but none is named. Only an interrupt of this inbox makes one stopping
+  // (a crashed reader of it still holding its interrupt); one of another inbox leaves it a
+  // possible reader of this one.
+  const runningReaders = running ?? [...state.inFlight].filter((nodeId) => state.flow.nodes.get(nodeId)?.readsSteerInbox === true);
+  const stopping = (nodeId: string): boolean =>
+    w._interruptInboxes.get(nodeId) === inbox &&
+    (w.interrupts.has(nodeId) || (runningReaders.includes(nodeId) && w._honored.has(nodeId)));
+  const waiting = waitingReaders(state, inbox);
+  const readers = [...runningReaders, ...waiting];
+  if (readers.length > 0 && readers.every(stopping)) return null;
+  const named = running === null ? waiting : readers;
+  return prepareRecord(state, new InterruptedRecord(inbox, named.filter((nodeId) => !stopping(nodeId))));
+}
+
+/**
+ * Prepare the remembered Stop on `inbox` for `nodeId`, which has just opened it as its steer
+ * inbox: an `interrupted` record naming it and each waiting reader without a pending interrupt.
+ * The caller checks that a Stop stands and that the node holds and has honored none.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @param nodeId The in-flight node that opened `inbox`.
+ * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
+ *   per open host call of the named nodes.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws DeliveryRefused as `prepareInterrupt`.
+ * @throws RangeError when the node can't be interrupted (see `validateInterrupted`).
+ */
+export function prepareAppliedStop(state: RunState, inbox: string, nodeId: string): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareAppliedStop expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (typeof nodeId !== "string") throw new TypeError("nodeId must be a string");
+  requireDeliverable(state);
+  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  const waiting = waitingReaders(state, inbox).filter((id) => id !== nodeId && !state.waits.interrupts.has(id));
+  return prepareRecord(state, new InterruptedRecord(inbox, [nodeId, ...waiting]));
+}
+
+/** The waiting nodes whose `node_waiting` named `inbox` as their steer inbox, in waiting order. */
+function waitingReaders(state: RunState, inbox: string): string[] {
+  return [...state.waits.waiting].filter(([, node]) => node.steerInbox === inbox).map(([nodeId]) => nodeId);
 }
 
 /**
@@ -1844,6 +1928,7 @@ const FRONTIER_RECORDS = [
   NodeWokenRecord,
   RunWaitingRecord,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
 ] as const;
 
@@ -1956,6 +2041,10 @@ export function prepareRecord(
   } else if (isExactly(canonical, RunWaitingRecord)) {
     validateRunWaiting(state, canonical);
     delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
+  } else if (isExactly(canonical, InboxWithdrawnRecord)) {
+    // Before the close: it has every field a close has, so the close's guard would narrow it away.
+    validateInboxWithdrawn(state, canonical);
+    delta = { kind: "withdrawn", inbox: canonical.inbox, events: canonical.events };
   } else if (isExactly(canonical, InterruptedRecord)) {
     // Before the close: an interrupt has every field a close has, so the close's guard would narrow it away.
     validateInterrupted(state, canonical);
@@ -1993,7 +2082,7 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
       return [new RunResumed(), ...closed("crashed")];
     case "step":
       // A step is node-owned detail; no observer event announces it, except that a host call
-      // registered closed is withdrawn.
+      // registered closed is announced closed.
       return closed("interrupted");
     case "waiting": {
       const { nodeId, callIds } = record as NodeWaitingRecord;
@@ -2009,6 +2098,7 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
       return closed("interrupted");
     case "stopped":
     case "inboxClosed":
+    case "withdrawn":
       return [];
   }
 }
@@ -3143,6 +3233,10 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
   } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
     if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
+  } else if (isExactly(record, InboxWithdrawnRecord) && delta.kind === "withdrawn") {
+    if (delta.inbox !== record.inbox || !sameItems(delta.events, record.events)) {
+      throw new RangeError("frontier withdraw delta disagrees with its record");
+    }
   } else if (isExactly(record, InterruptedRecord) && delta.kind === "interrupted") {
     if (!sameItems(delta.nodeIds, record.nodes)) throw new RangeError("frontier interrupt delta disagrees with its record");
   } else {
@@ -3201,6 +3295,10 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       // doesn't move, since no new start was recorded.
       state.inFlight.add(delta.nodeId);
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
+      break;
+    case "withdrawn":
+      // Withdrawn sends get no reply; nothing reads their values again.
+      for (const seq of delta.events) state.inboxEvents.delete(seq);
       break;
     case "runWaiting":
     case "inboxClosed":
@@ -3480,6 +3578,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     isExactly(record, RunStoppedRecord) ||
     isExactly(record, RunWaitingRecord) ||
     isExactly(record, InboxClosedRecord) ||
+    isExactly(record, InboxWithdrawnRecord) ||
     isExactly(record, InterruptedRecord)
   ) {
     if (delta.started !== null || delta.resumed !== false) {
@@ -3494,7 +3593,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
       throw new RangeError("frontier trace wake must bring back its node's parked start");
     }
   } else {
-    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait, close or interrupt record");
+    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait, close, withdraw or interrupt record");
   }
   if (!isExactly(record, NodeWaitingRecord) && delta.parked !== null) {
     throw new RangeError("only a wait can park a start");
@@ -4010,17 +4109,34 @@ function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
 }
 
 /**
+ * Require a withdraw record to name a declared inbox and its whole unread set (as
+ * `withdrawableEvents` reads it), in seq order, as a steer step names its whole queue.
+ */
+function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): void {
+  if (inboxElementType(state, record.inbox) === null) {
+    throw new RangeError(`InboxWithdrawn inbox ${reprText(record.inbox)} is no inbox the START declares`);
+  }
+  const unread = withdrawableEvents(state.waits, record.inbox);
+  if (!sameItems(record.events, unread)) {
+    throw new RangeError(
+      `InboxWithdrawn must name the whole unread set [${unread.join(", ")}] of inbox ${reprText(record.inbox)}, found [${record.events.join(", ")}]`,
+    );
+  }
+}
+
+/**
  * Require an interrupt record to name, once each, nodes reading its declared inbox as their steer
  * inbox: in flight with `readsSteerInbox` (which inbox a running node opened is the engine's word,
  * bound at run time), or waiting with `node_waiting.steer_inbox` equal to it; none holding a
- * pending interrupt already; and every waiting reader of the inbox without one among them.
+ * pending interrupt already; and every waiting reader of the inbox without one among them. It may
+ * name none: the Stop is recorded for a reader that opens the inbox later. When a host may record
+ * one (the idle and already-stopping rules) is `prepareInterrupt`'s.
  */
 function validateInterrupted(state: RunState, record: InterruptedRecord): void {
   const { inbox, nodes } = record;
   if (inboxElementType(state, inbox) === null) {
     throw new RangeError(`Interrupted inbox ${reprText(inbox)} is no inbox the START declares`);
   }
-  if (nodes.length === 0) throw new RangeError("Interrupted names at least one node");
   if (new Set(nodes).size !== nodes.length) throw new RangeError("Interrupted names each node once");
   const w = state.waits;
   for (const nodeId of nodes) {
@@ -6344,6 +6460,7 @@ function requirePristine(state: RunState): void {
     state.waits.calls.size === 0 &&
     state.waits.inboxes.size === 0 &&
     state.waits.interrupts.size === 0 &&
+    state.waits.stops.size === 0 &&
     state.waits.lastFrontier === null &&
     !state.waits._inputsCommitted &&
     state.waits._lastWoken.size === 0 &&

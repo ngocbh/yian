@@ -435,6 +435,27 @@ describe("updateRunIndex and readRunIndex", () => {
     expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([["run-1", "failed"]]);
   });
 
+  test("an index of version 3, whose scans hold no remembered Stops, is rebuilt", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", failedRun);
+    updateRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    db.exec("UPDATE runs SET scan = json_remove(scan, '$.waits.stops'); PRAGMA user_version = 3");
+    db.close();
+    // Another layout version reads as no rows until an update rebuilds it.
+    expect(readRunIndex(runs)).toEqual([]);
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => [row.runId, row.status])).toEqual([["run-1", "failed"]]);
+    const reader = openSqlite(join(runs, "index.sqlite"), { readonly: true });
+    try {
+      const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
+      expect(JSON.parse(scan).waits.stops).toEqual([]);
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+    } finally {
+      reader.close();
+    }
+  });
+
   test("a read takes the layout version and the rows from one snapshot, so a rebuild between them can't mix layouts", () => {
     const runs = freshRuns();
     writeRun(runs, "run-1", failedRun);

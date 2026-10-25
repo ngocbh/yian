@@ -318,12 +318,14 @@ A case can't hold code, so its host is declared under `host`.
   as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
   `ask` or `ask_user`.
 - **`sends`** (TS-only; a case using it has `python_skip`): a list of `{inbox: <name>, event:
-  <value>}`, `{close: <name>}`, `{interrupt: <name>}` and `{complete: <call id>, output:
-  <value>}` or `{complete: <call id>, error: <text>}` items. While the run ends `waiting` and
-  items are left, the runner delivers the next one (`send`, `close`, `interrupt` or `complete`)
-  and moves the run on with `advance`, with the same host, clock and observers, so `events` and
-  `stream` cover the whole run. A run still waiting when the items run out fails the case. A case
-  with such items gets no crash sweep. More forms of a send item:
+  <value>}`, `{close: <name>}`, `{withdraw: <name>}`, `{interrupt: <name>}` and `{complete:
+  <call id>, output: <value>}` or `{complete: <call id>, error: <text>}` items. While the run
+  ends `waiting` and items are left, the runner delivers the next one (`send`, `close`,
+  `withdraw`, `interrupt` or `complete`) and moves the run on with `advance`, with the same host,
+  clock and observers, so `events` and `stream` cover the whole run. An item with `hold: true` is
+  delivered with no `advance` after it, so the next item lands on the same waiting run. A run
+  still waiting when the items run out fails the case. A case with such items gets no crash
+  sweep. More forms of a send item:
   - `{inbox, event, after: {node: <node id>, <point>}}` is sent while the run is live, when it
     reaches the point (see [points](#points) below), through the run's engine, as a host's `send`
     does. A steer to an AGENT's `steer_inbox` is such an item: sent at `{tool_call: i}`, it joins
@@ -333,6 +335,8 @@ A case can't hold code, so its host is declared under `host`.
     is live, when it reaches the point; the delivery lands in the same tick, through the run's
     engine. It interrupts every AGENT reading that inbox as its `steer_inbox:`, running or
     waiting (see [Interrupting an agent](../docs/api.md#interrupting-an-agent-ts-yian)).
+  - `{withdraw, after: {node: <node id>, <point>}}` calls `withdraw(log, inbox)` while the run is
+    live, when it reaches the point, through the run's engine.
   - `{inbox, event, down: true}`, `resume` cases only, is sent after the cut and before the
     resume, as a host does while the run is down.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
@@ -571,7 +575,8 @@ they are, except as the rules below say), and an empty payload is left out.
 | `node_woken` (TS only) | `node_id` | `timed_out` |
 | `run_waiting` (TS only) | null | `node_ids` |
 | `inbox_closed` (TS only) | null | `inbox` |
-| `interrupted` (TS only, schema 22; not accepted yet) | null | `inbox`, `nodes` |
+| `inbox_withdrawn` (TS only, schema 23) | null | `inbox`, `events` |
+| `interrupted` (TS only; `nodes` may be empty from schema 23) | null | `inbox`, `nodes` |
 | `run_cancelled` (TS only) | null | none |
 | `run_failed` (TS only) | null | `failure` |
 | `node_started` | `node_id` | none |

@@ -11,8 +11,8 @@
  *
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `advance` (Python's
  * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`). Hosts
- * reach a run by its log through `send`, `complete`, `close`, `interrupt`, `cancel` and
- * `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
+ * reach a run by its log through `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel`
+ * and `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
  * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
  * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
@@ -124,6 +124,7 @@ import {
   decodeRecord,
   encodeRecord,
   isRunLogLocked,
+  InterruptedRecord,
   iterRunRecords,
   JsonlRunLog,
   RunLogChangedError,
@@ -156,6 +157,7 @@ import {
   wakeableNodes,
   wakeAt,
   waitInfos,
+  withdrawableEvents,
 } from "./runtime/waits.ts";
 import {
   acceptedCommits,
@@ -1952,14 +1954,14 @@ export interface DeliveryOptions {
  * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
  * the entry. `before` sees the state just before the delivery, synchronously.
  *
- * @returns The appended record's seq (`null` for a no-op) and its observers.
+ * @returns The appended record and its seq (both `null` for a no-op), and its observers.
  */
 async function deliverTo(
   log: string,
   op: DeliveryOp,
   options: DeliveryOptions,
   before: (state: RunState) => void = () => {},
-): Promise<{ readonly seq: number | null; readonly events: readonly RunEvent[] }> {
+): Promise<{ readonly seq: number | null; readonly events: readonly RunEvent[]; readonly record: RunRecord | null }> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
@@ -1995,9 +1997,9 @@ async function deliverTo(
       keep = () => idleRun(state, flow, key, opened, { ...want, ...credentials });
       before(state);
       const prepared = prepareDelivery(state, op);
-      if (prepared === null) return { seq: null, events: [] };
+      if (prepared === null) return { seq: null, events: [], record: null };
       const events = commitPrepared(authority, state, prepared);
-      return { seq: prepared.expectedSequence, events };
+      return { seq: prepared.expectedSequence, events, record: prepared.record };
     } catch (error) {
       primary = { error };
       throw error;
@@ -2102,6 +2104,43 @@ export async function close(log: string, inbox: string, options: DeliveryOptions
   return (await deliverTo(log, { kind: "close", inbox }, options)).seq;
 }
 
+/** One send `withdraw` took back: its seq and value. */
+export interface WithdrawnEvent {
+  /** The send's seq. */
+  readonly seq: number;
+  /** The value it sent. */
+  readonly value: unknown;
+}
+
+/**
+ * Take back every unread send of the top-level inbox `inbox` of the run at `log`: those no take or
+ * steer read has taken, including sends assigned to a take whose node hasn't woken, which then
+ * waits again (or, on a closed inbox, gets `{events: [], closed: true}`). Withdrawn sends get no
+ * reply, take output or late steer. Delivered as `send` is; a closed inbox is allowed. No event
+ * is published.
+ *
+ * @param log The run's JSONL log.
+ * @param inbox The name of one of the flow's `Inbox(T)` inputs.
+ * @param options See `DeliveryOptions`.
+ * @returns The sends taken back, in send order; `[]` when nothing was unread (nothing is appended).
+ * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
+ *   result, `not_started`, or `unknown_inbox`.
+ * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ */
+export async function withdraw(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly WithdrawnEvent[]> {
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  let taken: WithdrawnEvent[] = [];
+  const { seq } = await deliverTo(log, { kind: "withdraw", inbox }, options, (state) => {
+    // Read before the record drops the values, in the delivery's synchronous section.
+    taken = withdrawableEvents(state.waits, inbox).map((event) => ({
+      seq: event,
+      value: copyValue(state.inboxEvents.get(event)!.toObject()),
+    }));
+  });
+  return seq === null ? [] : taken;
+}
+
 /**
  * Cancel the run at `log`: `run_cancelled` ends it, closing its open calls, with no output and no
  * learning. A live engine aborts its running nodes and publishes `CallClosed {reason:
@@ -2123,34 +2162,54 @@ export async function cancel(log: string, options: DeliveryOptions = {}): Promis
   return open;
 }
 
+/** What `interrupt` did. */
+export interface InterruptResult {
+  /** The `interrupted` record's seq; `null` when nothing was appended. */
+  readonly seq: number | null;
+  /** The agents the record named. */
+  readonly nodes: readonly string[];
+  /** The open host calls it closed, as `pendingCalls` listed them. */
+  readonly calls: readonly PendingCall[];
+}
+
 /**
- * Interrupt the agents reading the top-level inbox `inbox` as their steer inbox: each one's
- * current reply is cut and its result is null, which its declared output decides (`Optional(...)`
- * succeeds with null; anything else, no `output:` included, fails `agent.interrupted`). The
- * interrupt closes their open calls (`CallClosed {reason: "interrupted"}`), so a later `complete`
- * of one is refused. A live engine cuts a running reply at once; a waiting agent honors it when the
- * run next moves. Queued steers stay in the inbox. Delivered as `send` is; offline only waiting
- * agents are named (a crashed run's agents aren't known without an engine), so `advance` a crashed
- * run first.
+ * Stop the turn on the top-level inbox `inbox`: interrupt the agents reading it as their steer
+ * inbox, and remember the Stop for one that opens it soon. Each named agent's current reply is cut
+ * and its result is null, which its declared output decides (`Optional(...)` succeeds with null;
+ * anything else, no `output:` included, fails `agent.interrupted`). The interrupt closes their open
+ * calls (`CallClosed {reason: "interrupted"}`), so a later `complete` of one is refused. A live
+ * engine cuts a running reply at once; a waiting agent honors it when the run next moves. Queued
+ * steers stay in the inbox: `withdraw` takes them back.
+ *
+ * It appends nothing (`seq: null`) when the run waits for the next message on `inbox` (a take of
+ * it waits with nothing unread and no reader is open), or when it is already stopping (a Stop on
+ * `inbox` stands, or every current reader already holds or has honored an interrupt). Otherwise
+ * it records `interrupted {inbox, nodes}`, and `nodes` may be empty. The Stop is remembered until
+ * the next pickup from `inbox` (a take of it waits, a waiting take is answered or times out, an
+ * inline take commits, a withdraw reopens a take), the first `run_waiting` after it stopped an
+ * agent, or run end: a reader that opens `inbox` meanwhile is stopped before its first model
+ * call, and only its own `interrupted` record and `CallClosed` events report it. Delivered as
+ * `send` is; offline only waiting agents are named, and a crashed run's agents stop when they
+ * reopen.
  *
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param options See `DeliveryOptions`.
- * @returns The open host calls the interrupt closed, as `pendingCalls` listed them; `[]` when no
- *   agent reads `inbox` (nothing is appended).
+ * @returns The record's seq, the agents it named and the open host calls it closed.
  * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `not_started`, or `unknown_inbox`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
-export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
+export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<InterruptResult> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   let open: readonly PendingCall[] = [];
-  const { events } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
+  const { seq, events, record } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
     open = openHostCalls(state.waits, (call) => stateArguments(state, call));
   });
   const closed = new Set(events.flatMap((event) => (event instanceof CallClosed ? [event.callId] : [])));
-  return open.filter((call) => closed.has(call.callId));
+  const nodes = record instanceof InterruptedRecord ? [...record.nodes] : [];
+  return { seq, nodes, calls: open.filter((call) => closed.has(call.callId)) };
 }
 
 /** One open host call of a run, as `pendingCalls` lists it. */

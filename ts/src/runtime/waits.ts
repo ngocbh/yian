@@ -4,16 +4,18 @@
  * stays with the run scan (`runtime/run_index.ts`).
  *
  * Knows about: runtime/log (record types, record times), events (`CloseReason`), nodes/base
- * (`WaitRequest`), nodes/start (the START id), diagnostics.
+ * (`WaitRequest`), nodes/start and nodes/end (the START and END ids), diagnostics.
  * Never imports: runtime/state, engine, run.
  */
 
 import { reprText } from "../diagnostics.ts";
 import type { WaitRequest } from "../nodes/base.ts";
+import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import {
   formatRecordTime,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -92,6 +94,14 @@ export interface WaitingNode {
   readonly steerInbox: string | null;
 }
 
+/** A remembered Stop on an inbox. */
+export interface StopState {
+  /** The seq of the latest `interrupted` record on the inbox. */
+  readonly seq: number;
+  /** Whether it has stopped an agent: an `interrupted` record on the inbox named one. */
+  readonly stopped: boolean;
+}
+
 /** One call a host can see the run waiting on. */
 export interface WaitInfo {
   readonly node: string;
@@ -114,6 +124,13 @@ export class WaitsState {
   /** Pending interrupts by node: the seq of the `interrupted` record each named node hasn't honored yet. */
   readonly interrupts = new Map<string, number>();
   /**
+   * The remembered Stop by inbox: set by an `interrupted` record, ended by the next pickup from
+   * the inbox (a take of it waits, a waiting take is answered or times out, an inline take
+   * commits, a withdraw reopens a take), by the first `run_waiting` once it has stopped an agent,
+   * or by run end. A steer reader that opens the inbox while it stands is stopped.
+   */
+  readonly stops = new Map<string, StopState>();
+  /**
    * The wire kind of the last frontier record (start, wake, wait, resume, stop, run_waiting,
    * outcome); `null` before any.
    */
@@ -128,6 +145,8 @@ export class WaitsState {
   readonly _replies = new Map<string, number>();
   /** @internal The unsettled nodes that wrote an `interrupted` step, honoring an interrupt; their success says `interrupted`. */
   readonly _honored = new Set<string>();
+  /** @internal Each unsettled node an interrupt named: that interrupt's inbox, held through its honor. */
+  readonly _interruptInboxes = new Map<string, string>();
 
   /** Return the plain JSON form, each map as its `[key, value]` entries in order (`fromJSON` reads it back). */
   toJSON(): WaitsJson {
@@ -136,12 +155,14 @@ export class WaitsState {
       calls: [...this.calls],
       inboxes: [...this.inboxes],
       interrupts: [...this.interrupts],
+      stops: [...this.stops],
       lastFrontier: this.lastFrontier,
       inputsCommitted: this._inputsCommitted,
       lastWoken: [...this._lastWoken],
       pendingTakes: [...this._pendingTakes],
       replies: [...this._replies],
       honored: [...this._honored],
+      interruptInboxes: [...this._interruptInboxes],
     };
   }
 
@@ -156,7 +177,7 @@ export class WaitsState {
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {
       throw new RangeError(
-        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies and honored",
+        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, stops, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies, honored and interruptInboxes",
       );
     }
     const w = new WaitsState();
@@ -164,6 +185,7 @@ export class WaitsState {
     for (const [callId, call] of entries(json, "calls")) w.calls.set(callId, callFromJson(call, `calls ${reprText(callId)}`));
     for (const [name, inbox] of entries(json, "inboxes")) w.inboxes.set(name, inboxFromJson(inbox, `inboxes ${reprText(name)}`));
     for (const [node, seq] of entries(json, "interrupts")) w.interrupts.set(node, int(seq, `interrupts ${reprText(node)}`));
+    for (const [name, stop] of entries(json, "stops")) w.stops.set(name, stopFromJson(stop, `stops ${reprText(name)}`));
     if (json.lastFrontier !== null && typeof json.lastFrontier !== "string") {
       throw new RangeError("waits JSON lastFrontier must be a string or null");
     }
@@ -178,6 +200,10 @@ export class WaitsState {
       throw new RangeError("waits JSON honored must be an array of node ids");
     }
     for (const node of honored) w._honored.add(node);
+    for (const [node, inbox] of entries(json, "interruptInboxes")) {
+      if (typeof inbox !== "string") throw new RangeError(`waits JSON interruptInboxes ${reprText(node)} must be an inbox name`);
+      w._interruptInboxes.set(node, inbox);
+    }
     return w;
   }
 }
@@ -188,12 +214,14 @@ const WAITS_JSON_KEYS = [
   "calls",
   "inboxes",
   "interrupts",
+  "stops",
   "lastFrontier",
   "inputsCommitted",
   "lastWoken",
   "pendingTakes",
   "replies",
   "honored",
+  "interruptInboxes",
 ] as const;
 
 /** The call states, for checking a stored call. */
@@ -292,6 +320,14 @@ function inboxFromJson(value: unknown, label: string): InboxState {
   return { unread, closed, absorbing };
 }
 
+/** Return a stored remembered Stop. @throws RangeError when it isn't one. */
+function stopFromJson(value: unknown, label: string): StopState {
+  const seq = isObject(value) ? intOrNull(value["seq"]) : null;
+  const stopped = isObject(value) ? value["stopped"] : undefined;
+  if (seq === null || typeof stopped !== "boolean") throw new RangeError(`waits JSON ${label} must be a stop`);
+  return { seq, stopped };
+}
+
 /** Return a stored pending take commit. @throws RangeError when it isn't one. */
 function takeFromJson(value: unknown, label: string): { readonly seq: number } & TakeCommit {
   const seq = isObject(value) ? intOrNull(value["seq"]) : null;
@@ -310,12 +346,14 @@ export interface WaitsJson {
   readonly calls: readonly (readonly [string, Call])[];
   readonly inboxes: readonly (readonly [string, InboxState])[];
   readonly interrupts: readonly (readonly [string, number])[];
+  readonly stops: readonly (readonly [string, StopState])[];
   readonly lastFrontier: string | null;
   readonly inputsCommitted: boolean;
   readonly lastWoken: readonly (readonly [string, number])[];
   readonly pendingTakes: readonly (readonly [string, { readonly seq: number } & TakeCommit])[];
   readonly replies: readonly (readonly [string, number])[];
   readonly honored: readonly string[];
+  readonly interruptInboxes: readonly (readonly [string, string])[];
 }
 
 /** The prefix of a send's pool key: the START's id and a dot, then the inbox's name. */
@@ -357,6 +395,11 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
   else if (record instanceof NodeFailedRecord) {
     closeOpenCalls(w, "failed");
     settle(w, record.failure.nodeId!);
+    // A node failure ends the run.
+    w.stops.clear();
+  } else if (record instanceof RunWaitingRecord) {
+    // The reply a Stop targeted is stopped; a Stop that stopped no one yet (a mid-turn ask or sleep) still stands.
+    for (const [name, stop] of w.stops) if (stop.stopped) w.stops.delete(name);
   } else if (record instanceof RunResumedRecord) {
     // A resume drops every orphan commit, an inline take's among them, so its events are free again.
     const freed = [...w._pendingTakes.values()];
@@ -364,9 +407,15 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     for (const take of freed) reoffer(w, take.inbox);
     for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed");
   } else if (record instanceof InboxClosedRecord) applyClose(w, record.inbox);
+  else if (record instanceof InboxWithdrawnRecord) applyWithdrawn(w, record);
   else if (record instanceof InterruptedRecord) applyInterrupted(w, seq, record);
-  else if (record instanceof RunCancelledRecord) closeOpenCalls(w, "cancelled");
-  else if (record instanceof RunFailedRecord) closeOpenCalls(w, "failed");
+  else if (record instanceof RunCancelledRecord) {
+    closeOpenCalls(w, "cancelled");
+    w.stops.clear();
+  } else if (record instanceof RunFailedRecord) {
+    closeOpenCalls(w, "failed");
+    w.stops.clear();
+  }
   const frontier = FRONTIER_KINDS.get(record.constructor);
   if (frontier !== undefined) w.lastFrontier = frontier;
 }
@@ -399,6 +448,8 @@ function applyCommit(w: WaitsState, seq: number, record: PoolCommitRecord): void
   }
   if (record.take !== null) {
     w._pendingTakes.set(record.nodeId, { seq, ...record.take });
+    // An inline take is a pickup from the inbox; a waited take's commit isn't (its wait or answer was).
+    if (!nodeCalls(w, record.nodeId).some((call) => call.tool === "take")) w.stops.delete(record.take.inbox);
     return;
   }
   if (!record.key.startsWith(SEND_PREFIX)) return;
@@ -414,6 +465,8 @@ function assign(w: WaitsState, inbox: InboxState, seq: number): boolean {
   const takeId = inbox.absorbing[0];
   const take = takeId === undefined ? undefined : w.calls.get(takeId);
   if (take === undefined) return false;
+  // Answering a waiting take is a pickup; a second event for an answered `take: all` isn't.
+  if (take.state === "open") w.stops.delete(take.inbox!);
   take.assigned.push(seq);
   take.state = "answered";
   if (take.mode === "one") inbox.absorbing.shift();
@@ -501,8 +554,12 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
 
 /** Apply `interrupted`: each named node holds a pending interrupt, and its open calls close `interrupted`. */
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
+  // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
+  const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
+  w.stops.set(record.inbox, { seq, stopped });
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
+    w._interruptInboxes.set(nodeId, record.inbox);
     for (const call of nodeCalls(w, nodeId)) close(call, "interrupted");
   }
 }
@@ -526,7 +583,11 @@ function applyWaiting(w: WaitsState, seq: number, record: NodeWaitingRecord): vo
       closedInbox: false,
       closedReason: null,
     });
-    if (entry.tool === "take") inboxOf(w, entry.inbox!).absorbing.push(entry.callId);
+    if (entry.tool === "take") {
+      inboxOf(w, entry.inbox!).absorbing.push(entry.callId);
+      // The run waits for the inbox's next message: a pickup.
+      w.stops.delete(entry.inbox!);
+    }
   }
   w.waiting.set(record.nodeId, { seq, callIds: record.callIds, steerInbox: record.steerInbox });
 }
@@ -538,6 +599,8 @@ function applyWoken(w: WaitsState, seq: number, record: NodeWokenRecord): void {
     if (call === undefined || call.state !== "open") continue;
     if (call.tool === "take" || call.tool === "sleep") call.state = "timed_out";
     else close(call, "timed_out");
+    // A take timing out is a pickup (of nothing).
+    if (call.tool === "take") w.stops.delete(call.inbox!);
   }
   for (const call of nodeCalls(w, record.nodeId)) {
     if (call.inbox !== null) remove(inboxOf(w, call.inbox).absorbing, call.callId);
@@ -556,6 +619,8 @@ function applySuccess(w: WaitsState, record: NodeSucceededRecord): void {
     for (const event of take.events) remove(unread, event);
   }
   settle(w, record.nodeId);
+  // END's success ends the run.
+  if (record.nodeId === EndNode.ID) w.stops.clear();
 }
 
 /** Apply `inbox_closed`: absorbing takes with nothing assigned are answered by the close; none absorbs after it. */
@@ -567,9 +632,41 @@ function applyClose(w: WaitsState, name: string): void {
     if (call !== undefined && call.assigned.length === 0) {
       call.state = "answered";
       call.closedInbox = true;
+      // The close answers a waiting take: a pickup.
+      w.stops.delete(name);
     }
   }
   inbox.absorbing.length = 0;
+}
+
+/**
+ * Apply `inbox_withdrawn`: its sends leave `unread`, and each take of a waiting node they were
+ * assigned to gives them up and waits again, absorbing in call order (or, on a closed inbox, is
+ * answered by the close).
+ */
+function applyWithdrawn(w: WaitsState, record: InboxWithdrawnRecord): void {
+  const inbox = inboxOf(w, record.inbox);
+  for (const seq of record.events) remove(inbox.unread, seq);
+  for (const call of waitedTakes(w, record.inbox)) {
+    if (call.assigned.length === 0) continue;
+    call.assigned.length = 0;
+    // The take waits for the inbox's next message again (or takes the close): a pickup.
+    w.stops.delete(record.inbox);
+    if (inbox.closed) {
+      call.state = "answered";
+      call.closedInbox = true;
+      continue;
+    }
+    call.state = "open";
+    // A `take: all` never left absorbing; a `take: one` shifted out at its assignment.
+    if (!inbox.absorbing.includes(call.callId)) {
+      const later = inbox.absorbing.findIndex((id) => {
+        const other = w.calls.get(id);
+        return other !== undefined && other.seq > call.seq;
+      });
+      inbox.absorbing.splice(later < 0 ? inbox.absorbing.length : later, 0, call.callId);
+    }
+  }
 }
 
 /** Close `call` with `reason` when it is open. */
@@ -598,6 +695,7 @@ function settle(w: WaitsState, nodeId: string): void {
   w.interrupts.delete(nodeId);
   w._replies.delete(nodeId);
   w._honored.delete(nodeId);
+  w._interruptInboxes.delete(nodeId);
 }
 
 /** Return `nodeId`'s registered calls, in registration order. */
@@ -630,6 +728,33 @@ export function unreadEvents(w: WaitsState): ReadonlyMap<string, readonly number
 export function availableUnread(w: WaitsState, inbox: string): readonly number[] {
   const held = new Set([...w._pendingTakes.values()].flatMap((take) => take.events));
   return (w.inboxes.get(inbox)?.unread ?? []).filter((seq) => !held.has(seq));
+}
+
+/** Return the take calls on inbox `name` whose node waits (hasn't woken), in registration order. */
+function waitedTakes(w: WaitsState, name: string): Call[] {
+  return [...w.calls.values()].filter((call) => call.tool === "take" && call.inbox === name && w.waiting.has(call.nodeId));
+}
+
+/**
+ * Return the send seqs of inbox `name` a `withdraw` takes back, in seq order: its unread sends
+ * (an orphan inline take commit's among them) and those assigned to a take whose node hasn't
+ * woken. Not included: sends assigned to a woken take, taken by an accepted take, or read by a
+ * steer.
+ */
+export function withdrawableEvents(w: WaitsState, name: string): readonly number[] {
+  const unread = w.inboxes.get(name)?.unread ?? [];
+  return [...unread, ...waitedTakes(w, name).flatMap((call) => call.assigned)].sort((a, b) => a - b);
+}
+
+/**
+ * Return whether the run's records say it waits for the next message on inbox `name`: an open
+ * take of it waits, nothing of it is withdrawable, and no waiting node reads it as its steer
+ * inbox. Running readers are the caller's to check.
+ */
+export function awaitsNextMessage(w: WaitsState, name: string): boolean {
+  if (!waitedTakes(w, name).some((call) => call.state === "open")) return false;
+  if (withdrawableEvents(w, name).length > 0) return false;
+  return ![...w.waiting.values()].some((waiting) => waiting.steerInbox === name);
 }
 
 /** Return a call's deadline in epoch milliseconds, or `null` when it has none. */

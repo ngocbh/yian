@@ -1693,28 +1693,55 @@ interrupts through the same inbox with [`interrupt(log, inbox)`](#interrupting-a
 
 ## Interrupting an agent (TS yian)
 
-New (TS yian): `interrupt(log, inbox, options?)` cuts the current reply of every AGENT, running
-or waiting, whose `steer_inbox:` is the flow's top-level `Inbox` input `inbox`:
+New (TS yian): `interrupt(log, inbox, options?)` stops the turn on the flow's top-level `Inbox`
+input `inbox`: it cuts the current reply of every AGENT, running or waiting, whose
+`steer_inbox:` is `inbox`, and it remembers the Stop for an agent that opens `inbox` soon:
 
 ```ts
 import { interrupt } from "@ngocbh/yian";
 
-const closed = await interrupt("run.jsonl", "messages");   // the host calls it closed
+const { seq, nodes, calls } = await interrupt("run.jsonl", "messages");
 ```
 
-It is a [host call](#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls), delivered
-as `send` is (live through the engine, or offline under the log's lock), and resolves to the open
-host calls it closed, as `pendingCalls` listed them.
+It is a [host call](#host-calls-send-withdraw-complete-close-interrupt-cancel-and-pendingcalls),
+delivered as `send` is (live through the engine, or offline under the log's lock). It resolves to
+`{seq, nodes, calls}`: the seq of the record it appended (`null` when it appended none), the
+agents the record names, and the open host calls it closed, as `pendingCalls` listed them.
 
-- **Who.** It appends one run record, `interrupted {inbox, nodes}`. `nodes` names the agents it
-  affects: the running ones that opened `inbox` as their steer inbox (from the live engine, in
-  the order they went in flight), then the waiting ones whose `node_waiting.steer_inbox` is
-  `inbox`. An agent already holding an interrupt it hasn't honored is left out. It resolves to
-  the open host calls the record closed: `[]` both when no agent reads `inbox` and when the agents
-  it names hold no open host call. With no agent to name it appends nothing and resolves to `[]`, so an interrupt before an agent opens its inbox,
-  or after it has answered, changes nothing. A closed inbox can still be interrupted.
+Changed (TS yian): `interrupt` used to resolve to `PendingCall[]`, the calls it closed; it now
+resolves to `{seq, nodes, calls}`, with those calls in `calls`.
+
+- **When it records nothing.** `seq` is `null` and nothing is appended when the run waits for the
+  next message on `inbox` (a take of it waits with nothing unread and no reader is open), or when
+  it is already stopping: a Stop on `inbox` stands (below), or every current reader of `inbox`
+  already holds an interrupt of it or has honored one. So a second Esc never carries a Stop into the
+  next reply.
+- **Who.** Otherwise it appends one run record, `interrupted {inbox, nodes}`. `nodes` names the
+  agents it affects: the running ones that opened `inbox` as their steer inbox (from the live
+  engine, in the order they went in flight), then the waiting ones whose
+  `node_waiting.steer_inbox` is `inbox`. An agent already holding an interrupt, or a running one
+  that has honored one, is left out. `nodes` may be empty: with no reader the record only
+  remembers the Stop. A closed inbox can still be interrupted.
+- **The remembered Stop.** An agent that opens `inbox` as its steer inbox while the Stop stands
+  gets its own `interrupted {inbox, nodes}` record, naming it (and any waiting reader without an
+  interrupt), and stops before its first model call. Only that record and its `CallClosed`
+  events report it; `interrupt` has already returned. The Stop ends at the next pickup from
+  `inbox` (a take of it waits, a send or close answers a waiting take, a take times out, an
+  inline take commits, a withdraw reopens a take), at the first `run_waiting` after it has
+  stopped an agent, or at run end. A wait before it has stopped anyone (an approval `ask`, a
+  `sleep`, a host stop and resume) keeps it, so an Esc anywhere between the pickup and the reply
+  starting stops that reply. A loop of readers with no take or wait between them stops each one
+  until then.
 - **A crashed run.** Offline, the engine isn't there to say which agents were running, so an
-  interrupt names only the waiting ones. `advance` a crashed run first, then interrupt it.
+  interrupt names only the waiting ones and records the Stop; the crashed readers stop when they
+  reopen the inbox on the next `advance`. Every running agent with a `steer_inbox:` counts as a current
+  reader, so when each of them still holds an interrupt of `inbox` (or has honored one) and no
+  waiting reader lacks one, the run is already stopping and nothing is recorded. One stopping by
+  another inbox may still open `inbox`, so it doesn't count as stopping.
+- **A message still queued.** An interrupt alone can't stop the reply to a message sent before it
+  that no take has woken for: the take picks the message up, which ends the Stop, and the reply
+  answers it in full. Take the message back with
+  [`withdraw`](#withdrawing-unread-messages-ts-yian) first, as `yian chat`'s Esc does.
 - **Calls close at once.** The record closes the named agents' open host calls with reason
   `interrupted`: the engine publishes `CallClosed {reason: "interrupted"}` for each, they leave
   `pendingCalls`, and a later `complete` of one is refused (`call_settled`, or `unknown_call` once
@@ -1761,6 +1788,36 @@ host calls it closed, as `pendingCalls` listed them.
 
 `DeliveryRefused` reasons: `ended`, `not_started` and `unknown_inbox`, as for `send`; a
 `TypeError` when `inbox` isn't a string.
+
+## Withdrawing unread messages (TS yian)
+
+New (TS yian): `withdraw(log, inbox, options?)` takes back every unread message of the flow's
+top-level `Inbox` input `inbox`:
+
+```ts
+import { withdraw } from "@ngocbh/yian";
+
+const back = await withdraw("run.jsonl", "messages"); // [{seq, value}, ...]
+```
+
+It is a [host call](#host-calls-send-withdraw-complete-close-interrupt-cancel-and-pendingcalls),
+delivered as `send` is, and resolves to the sends it took back, `{seq, value}` in send order, or
+`[]` when nothing was unread (nothing is appended then).
+
+- **Unread.** The sends no take or steer read has taken: those still queued, and those assigned
+  to a take whose node hasn't woken yet. A send a woken take holds, a committed take took, or a
+  `steer` step read is no longer unread.
+- **The record.** It appends `inbox_withdrawn {inbox, events}`. A take it takes sends back from
+  waits again for the next message; on a closed inbox it is answered by the close instead
+  (`{events: [], closed: true}`). The withdrawn values are dropped from the run.
+- **No reply.** A withdrawn send gets no take output, no steer and no late steer.
+- **No event.** Like `close`, it publishes no event.
+- **Esc.** A host's Esc is `withdraw`, then `interrupt`: the withdrawn values go back to the
+  user's editor, and the interrupt stops whatever still runs (or records nothing when the run
+  now waits for the next message). Either order is safe; they are two deliveries.
+
+`DeliveryRefused` reasons: `ended`, `not_started` and `unknown_inbox`, as for `send`; a closed
+inbox is allowed. A `TypeError` when `inbox` isn't a string.
 
 ## Injecting agent memory
 
@@ -2462,17 +2519,19 @@ the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate forward terminal record exists.
 
-Changed (TS yian): records use schema 22, and readers accept only schema 22. The schema
+Changed (TS yian, schema 23): `inbox_withdrawn`; `interrupted` may name no node. Records use
+schema 23, and readers accept only schema 23. The schema
 is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 21 log
+schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 22 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
 backward attempt was `backward.unfinished`, before derived commits held `from` pointers,
 before outcome records dropped `evidence`, before the inbox and wait records, before
 forward captures dropped their bound inputs, before they dropped their interpolation text,
-before they dropped their node data, or before an AGENT's success wrote a messages commit)
-with "run log schema N predates schema 22 and is not supported", and any other schema with
-"unsupported run-record schema: N" (a float token shows as `22.0`); the "predates" message for schemas 7
+before they dropped their node data, before an AGENT's success wrote a messages commit, or
+before `inbox_withdrawn` and empty `interrupted` records) with "run log schema N predates
+schema 23 and is not supported", and any other schema with "unsupported run-record schema: N"
+(a float token shows as `23.0`); the "predates" message for schemas 7
 and 8 is gone. All are a
 `RunLogSchemaError` (from `yian/run`), a `RangeError` whose `schema` holds the schema the
 line names (`null` when it isn't an integer), so a host tells a log it can't read from a
@@ -2693,8 +2752,14 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   reuses its call). The reducer publishes `CallClosed` for each host call it
   closes: a timed-out `ask` in `node_woken`, a resume's closed calls, `run_cancelled`,
   `run_failed`, `interrupted` and a `node_failed`; takes and sleeps get none.
-- `interrupted {inbox, nodes}` (TS yian, schema 22) names a declared inbox and a non-empty list of
-  distinct nodes, each either in flight and reading a steer inbox (the engine's word: the inbox
+- `inbox_withdrawn {inbox, events}` (TS yian, schema 23) names a declared inbox and its whole
+  unread set, in seq order and non-empty: its unread sends and those assigned to a take whose
+  node hasn't woken. A closed inbox is allowed. It takes the sends out of the queue and un-assigns
+  each unwoken take they were assigned to, which waits again (absorbing in call order), or, on a
+  closed inbox, is answered by the close. The withdrawn values are dropped. It isn't a frontier
+  record and publishes nothing.
+- `interrupted {inbox, nodes}` (TS yian, from schema 23 `nodes` may be empty) names a declared
+  inbox and a list of distinct nodes, each either in flight and reading a steer inbox (the engine's word: the inbox
   is bound at run time) or waiting with `steer_inbox` equal to `inbox`, none holding an interrupt
   it hasn't honored; every waiting reader of the inbox without one is named. It marks each node's
   interrupt pending (a waiting node becomes wakeable) and closes the node's open calls with
@@ -2703,7 +2768,7 @@ The run reducer applies them with these rules, live and on replay (a broken rule
   node's step `{kind: "interrupted", by}` (exactly these keys; `by` the seq of the pending
   `interrupted` record) honors it and clears it.
 
-A host delivery (a send, an answer to a pending call, a close, an interrupt or a cancel) that the run refuses
+A host delivery (a send, a withdraw, an answer to a pending call, a close, an interrupt or a cancel) that the run refuses
 appends nothing and throws `DeliveryRefused`, a `RangeError` whose `reason` says why, checked in
 this order: `ended` (the run has a terminal result, a second cancel among them), `not_started`
 (its run start is incomplete), then for a send `unknown_inbox`, `inbox_closed`, `invalid_value`
@@ -3008,25 +3073,30 @@ then reads the log again. A missing log rejects with code `ENOENT`, from resolvi
 inbox, and is empty while the run waits. `result.backward` needs a run that succeeded or failed;
 on a waiting or cancelled one it raises `RangeError`.
 
-### Host calls: `send`, `complete`, `close`, `interrupt`, `cancel` and `pendingCalls`
+### Host calls: `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel` and `pendingCalls`
 
 New (TS yian): a host reaches a run through its log path, whether this process is moving the run
 or nobody is (for a whole host loop, see [A chat host](#a-chat-host-ts-yian)):
 
 ```ts
-import { advance, cancel, close, complete, DeliveryRefused, interrupt, pendingCalls, RunBusyError, send } from "@ngocbh/yian";
+import { advance, cancel, close, complete, DeliveryRefused, interrupt, pendingCalls, RunBusyError, send, withdraw } from "@ngocbh/yian";
 
 await send("run.jsonl", "messages", "hello");          // the send's seq
 await advance({ log: "run.jsonl" });                     // a take reads it
 for (const call of pendingCalls("run.jsonl")) {          // open asks and host-tool calls
   await complete("run.jsonl", call.callId, { output: "approve" });
 }
+await withdraw("run.jsonl", "messages");                 // take back what no take has read
 await interrupt("run.jsonl", "messages");                // cut the agents steered by it
 await close("run.jsonl", "messages");                    // a waiting take gets closed: true
 ```
 
 - `send(log, inbox, event, options?)` sends `event` to the flow's top-level `Inbox(T)` input
   `inbox` and returns the send's seq. `event` must be a `T`, within `YIAN_MAX_EVENT_BYTES`.
+- `withdraw(log, inbox, options?)` takes back the unread sends of `inbox` (queued, or assigned to a
+  take that hasn't woken, which then waits again) and returns them as `{seq, value}` in send
+  order, or `[]` when nothing was unread (nothing is appended); see
+  [Withdrawing unread messages](#withdrawing-unread-messages-ts-yian).
 - `complete(log, callId, result, options?)` answers an open host call (a host tool that returned
   `pending()`, a TOOL `ask`, or an AGENT's tool call, its `ask_user` included) with `{output}` or
   `{error}` and returns the answer's seq, or `null` when the call is already answered with exactly
@@ -3037,9 +3107,11 @@ await close("run.jsonl", "messages");                    // a waiting take gets 
   closed. Takes still read what was sent; a take waiting on it with nothing to read gets
   `{events: [], closed: true}`.
 - `interrupt(log, inbox, options?)` interrupts the AGENTs whose `steer_inbox:` is `inbox`, running
-  or waiting, and returns the open host calls it closed, as `pendingCalls` listed them: `[]` when
-  no agent reads it (nothing is appended) and when the agents hold no open host call. A call an
-  agent registers after the record is closed at once and reported only by `CallClosed`; see
+  or waiting, remembers the Stop for one that opens `inbox` soon, and returns `{seq, nodes,
+  calls}`: the record's seq (`null` when nothing was appended: the run waits for the inbox's next
+  message, or is already stopping), the agents it named (possibly none) and the open host calls
+  it closed, as `pendingCalls` listed them. A call an agent registers after the record is closed
+  at once and reported only by `CallClosed`; see
   [Interrupting an agent](#interrupting-an-agent-ts-yian).
 - `cancel(log, options?)` writes `run_cancelled`, which ends the run with no output and no
   learning, and returns the open host calls it closed, as `pendingCalls` listed them.
@@ -3075,7 +3147,7 @@ code). The state is kept after a refused call too, since a refusal appends nothi
   |---|---|
   | `ended` | the run has a terminal result (checked first; a complete after a cancel, a second cancel) |
   | `not_started` | the run start is incomplete |
-  | `unknown_inbox` | the flow has no such top-level `Inbox` input (a send, a close or an interrupt) |
+  | `unknown_inbox` | the flow has no such top-level `Inbox` input (a send, a withdraw, a close or an interrupt) |
   | `inbox_closed` | a send to a closed inbox |
   | `invalid_value` | the event isn't a `T`, or the tool's output type (an `ask`'s answer can't be null) refuses the answer; the `TypeCheckError` is the `cause` |
   | `too_large` | the event or answer is over the run's `YIAN_MAX_EVENT_BYTES` |
@@ -3358,6 +3430,11 @@ result = await advance({ log, ...options });            // succeeded; result.out
   `onStream`) cuts the running reply: its output is null (`Optional(str)`), its
   `new_messages` end with the user message `[interrupted by the user]`, the `NodeSucceeded`
   event says `interrupted: true`, and `advance` returns `waiting` at the next take.
+- **Esc.** `withdraw(log, "owner_messages")`, then `interrupt(log, "owner_messages")`: the
+  withdraw takes back the messages no take has read (put their text back in the owner's editor),
+  and the interrupt stops the reply that is running or about to start; when the chat now waits
+  for the next message it records nothing. See
+  [Withdrawing unread messages](#withdrawing-unread-messages-ts-yian).
 - **A crash.** The log is the state: after the process dies, `advance` resumes it (a call
   answered before the crash is replayed, one in flight is closed as `crashed`), and the chat goes
   on with `send` and `advance`.
@@ -3456,7 +3533,7 @@ for (const entry of iterRunRecords(log, { ...after, payloads: false })) {
 - `payloads: false` checks each line's envelope (schema, run id, seq, time, kind) and node id without
   validating the payload, and yields `envelope: null`. `kinds` yields only records of those kinds,
   checking the others the same way; a kind no record has raises `RangeError`.
-- It reads every schema `advance` reads (schema 22); a line of another schema raises
+- It reads every schema `advance` reads (schema 23); a line of another schema raises
   `RunLogSchemaError` naming the line. A damaged line raises `RangeError` naming the log and the
   line (after an offset, the byte), with the underlying error as `cause`.
 
@@ -3819,7 +3896,7 @@ handler must be thread-safe.
 If another node fails the run while a handler is waiting, `on_event` receives
 `NodeFailed` and `RunFailed` right away, before the run waits for its in-flight
 nodes. `run_flow` returns only after every pending handler returns or raises, and
-it discards their answers. To stop waiting on a human, withdraw the prompt when
+it discards their answers. To stop waiting on a human, dismiss the prompt when
 `on_event` sees the failure and make the handler return.
 For a `human_input` node, `node_id` is the expanded node id (for example
 `loop#1/ask` for a LOOP's second iteration), so a run id plus `node_id` identifies

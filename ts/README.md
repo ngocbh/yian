@@ -150,7 +150,7 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `MemorySetupError`, `DefaultsError`, `DefaultsMismatchError`): check `error.name`.
   Tool errors, `FunctionTool` and `McpServer` are recognized by brand, not `instanceof`, so ones
   from another copy of yian work.
-- **Storage.** Run logs (schema 22) and memory stores (SQLite envelope version 3) are not compatible
+- **Storage.** Run logs (schema 23) and memory stores (SQLite envelope version 3) are not compatible
   with Python yian's.
 
 ## Loading a flow
@@ -386,15 +386,17 @@ that call.
 send(log: string, inbox: string, event: unknown, options?: DeliveryOptions): Promise<number>
 complete(log: string, callId: string, result: CompleteResult, options?: DeliveryOptions): Promise<number | null>
 close(log: string, inbox: string, options?: DeliveryOptions): Promise<number | null>
-interrupt(log: string, inbox: string, options?: DeliveryOptions): Promise<readonly PendingCall[]>
+withdraw(log: string, inbox: string, options?: DeliveryOptions): Promise<readonly WithdrawnEvent[]>
+interrupt(log: string, inbox: string, options?: DeliveryOptions): Promise<InterruptResult>
 cancel(log: string, options?: DeliveryOptions): Promise<readonly PendingCall[]>
 pendingCalls(log: string): readonly PendingCall[]
 ```
 
 A host reaches a run by its log path: `send` an event to a top-level `Inbox(T)` input, `complete`
 an open host call (`{output}` or `{error}`; an identical repeat returns `null`), `close` an inbox
-(again: `null`), `interrupt` the AGENTs whose `steer_inbox:` is an inbox (returning the open host
-calls it closed; see [Steering](#steering)), or `cancel` the run (returning the open host calls it
+(again: `null`), `withdraw` an inbox's unread sends (returning them as `{seq, value}`),
+`interrupt` the AGENTs whose `steer_inbox:` is an inbox and remember the Stop (returning `{seq,
+nodes, calls}`: `seq` `null` when nothing was recorded; see [Steering](#steering)), or `cancel` the run (returning the open host calls it
 closed). `pendingCalls`
 reads the log's records without the lock and lists the open host calls (`callId`, `node`, `tool`,
 `arguments`, `pendingSeq`, `deadline`). While this process's engine is moving the run, a call goes
@@ -404,7 +406,7 @@ waiting run's kept state or compiling the recorded flow as `advance` does (`Deli
 result whose `waits` show a call `settled: true` needs another `advance`. A refusal appends
 nothing: `DeliveryRefused` with a `reason` (`ended`, `unknown_inbox`, `inbox_closed`,
 `invalid_value`, `too_large`, `unknown_call`, `not_host_call`, `call_settled`, `not_started`), or
-`RunBusyError` when another writer holds the log. See [Host calls][docs/api.md#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls].
+`RunBusyError` when another writer holds the log. See [Host calls][docs/api.md#host-calls-send-withdraw-complete-close-interrupt-cancel-and-pendingcalls].
 
 `inspectRun` reads a log without its lock: `status` (a `RunStatus`: `"running"`, `"succeeded"`,
 `"failed"`, `"cancelled"`, `"waiting"`, `"stopped"` or `"crashed"`), `inFlight`, `crashedAttempts`,
@@ -602,7 +604,9 @@ each model call; the host sends them with `send(log, "<name>", event)`. Each rea
 current reply of every AGENT reading that inbox, running or waiting: it records `interrupted
 {inbox, nodes}`, closes their open host calls, and each agent writes `interrupted {by}` and ends
 with output null. An `Optional(...)` output succeeds with null; any other fails
-`agent.interrupted`. Queued steers stay in the inbox. See [Interrupting an
+`agent.interrupted`. With no reader the record names none and the Stop is remembered: an agent
+that opens the inbox before the next pickup from it is stopped before its first model call.
+Queued steers stay in the inbox; `withdraw(log, "<name>")` takes them back. See [Interrupting an
 agent][docs/api.md#interrupting-an-agent-ts-yian].
 
 ## Provider setup
@@ -800,7 +804,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 [docs/api.md#explicit-backward-feedback]: https://github.com/ngocbh/yian/blob/main/docs/api.md#explicit-backward-feedback
 [docs/api.md#failure-codes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#failure-codes
 [docs/api.md#following-a-run-log-with-iterrunrecords]: https://github.com/ngocbh/yian/blob/main/docs/api.md#following-a-run-log-with-iterrunrecords
-[docs/api.md#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls]: https://github.com/ngocbh/yian/blob/main/docs/api.md#host-calls-send-complete-close-interrupt-cancel-and-pendingcalls
+[docs/api.md#host-calls-send-withdraw-complete-close-interrupt-cancel-and-pendingcalls]: https://github.com/ngocbh/yian/blob/main/docs/api.md#host-calls-send-withdraw-complete-close-interrupt-cancel-and-pendingcalls
 [docs/api.md#load_flow]: https://github.com/ngocbh/yian/blob/main/docs/api.md#load_flow
 [docs/api.md#mcp-servers]: https://github.com/ngocbh/yian/blob/main/docs/api.md#mcp-servers
 [docs/api.md#naming-a-runs-nodes-with-staticnodes]: https://github.com/ngocbh/yian/blob/main/docs/api.md#naming-a-runs-nodes-with-staticnodes

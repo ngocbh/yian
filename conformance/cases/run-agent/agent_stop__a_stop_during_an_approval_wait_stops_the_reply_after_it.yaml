@@ -1,0 +1,203 @@
+# TS-only: withdraw and the remembered Stop (#1106).
+# The take takes the message, then `approve` (a TOOL calling the pending host tool `approve`)
+# waits. An interrupt now finds no reader and records `interrupted {notes, []}`; the wait that came
+# before it doesn't end the Stop, and nothing has been stopped yet, so it stands. Once the host
+# completes the approval, `reply` opens the inbox, gets its own `interrupted` record and ends
+# null before any model call.
+kind: run
+python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
+rules: [run-log]
+flow: |
+  id: stop
+  name: stop
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    heard:
+      kind: tool
+      tool_id: take
+      input:
+        from: ${input.notes}
+    approve:
+      kind: tool
+      tool_id: approve
+      depends_on: [heard]
+    reply:
+      kind: agent
+      steer_inbox: ${input.notes}
+      input: {got: "${heard.output.events}", ok: "${approve.output}"}
+      system_prompt: Help.
+      prompt: "answer ${got}"
+      output: Optional(str)
+  output: ${reply.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: notes, event: hi}
+  - {interrupt: notes}
+  - {complete: r1/approve, output: ok}
+  tools:
+    approve:
+      description: Approve the reply.
+      parameters:
+        type: object
+        properties: {}
+      pending: true
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        reply:
+          model: gpt-5.5
+          provider: openai
+          _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        notes: {inbox: notes}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, heard]
+  - - node_waiting
+    - heard
+    - call_ids: [r1/heard]
+      waits:
+      - {call_id: r1/heard, inbox: notes, mode: one, tool: take}
+  - - run_waiting
+    - null
+    - node_ids: [heard]
+  - - pool_commit
+    - __start__
+    - {key: __start__.notes, value: hi}
+  - [node_woken, heard]
+  - - pool_commit
+    - heard
+    - closed: false
+      events: [11]
+      inbox: notes
+  - - node_succeeded
+    - heard
+    - {commit: 13}
+  - [node_started, approve]
+  - - node_step
+    - approve
+    - n: 1
+      step:
+        arguments: {}
+        call_id: r1/approve
+        kind: pending
+        tool: approve
+  - - node_waiting
+    - approve
+    - call_ids: [r1/approve]
+  - - run_waiting
+    - null
+    - node_ids: [approve]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: []
+  - - node_step
+    - approve
+    - n: 2
+      step:
+        call_id: r1/approve
+        kind: tool_result
+        output: {kind: str, value: ok}
+  - [node_woken, approve]
+  - - pool_commit
+    - approve
+    - {value: ok}
+  - - node_succeeded
+    - approve
+    - {commit: 22}
+  - [node_started, reply]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [reply]
+  - - node_step
+    - reply
+    - n: 1
+      step: {by: 25, kind: interrupted}
+  - [pool_commit, reply]
+  - - pool_commit
+    - reply
+    - key: reply.new_messages
+      steps: [26]
+  - - node_succeeded
+    - reply
+    - {commit: 27, messages: 28}
+  - [node_started, __end__]
+  - [pool_commit, __end__]
+  - - node_succeeded
+    - __end__
+    - {commit: 31}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        notes: {inbox: notes}
+  - - NodeStarted
+    - {node_id: heard}
+  - - NodeWaiting
+    - node_id: heard
+      call_ids: [r1/heard]
+  - - RunWaiting
+    - node_ids: [heard]
+  - - NodeWoken
+    - node_id: heard
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: heard
+      output:
+        closed: false
+        events: [hi]
+  - - NodeStarted
+    - {node_id: approve}
+  - - NodeWaiting
+    - node_id: approve
+      call_ids: [r1/approve]
+  - - RunWaiting
+    - node_ids: [approve]
+  - - NodeWoken
+    - node_id: approve
+      timed_out: []
+  - - NodeSucceeded
+    - {node_id: approve, output: ok}
+  - - NodeStarted
+    - {node_id: reply}
+  - - NodeSucceeded
+    - {node_id: reply, interrupted: true}
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - {node_id: __end__}
+  - [RunSucceeded]
+  stream: []

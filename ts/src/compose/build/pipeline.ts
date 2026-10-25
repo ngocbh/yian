@@ -2172,6 +2172,11 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     narrowing,
     typeFn: constructorType,
   });
+  // The same, unnarrowed: a local the routing narrows from an untyped value is still untyped at run
+  // time.
+  const baseLocals = localInputContracts(flowWiring, producers, flowInputContracts, buildResults, {
+    typeFn: constructorType,
+  });
 
   // Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in BEFORE root
   // synthesis so an ordering-only dependent is demoted from root, and into the cycle check below
@@ -2261,6 +2266,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       outputs,
       valueMode: outputsSection !== null && !isRecord(outputsSection),
       outputsRange,
+      localContracts,
+      baseLocals,
     },
     { resolveOrigin, diagnostics },
   );

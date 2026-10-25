@@ -58,6 +58,7 @@ import {
 } from "../helpers/narrowing_facts.ts";
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import { bindingSource } from "../../nodes/contracts.ts";
+import { AgentNode } from "../../nodes/agent/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
@@ -65,7 +66,7 @@ import { bindingProducers } from "../edges/producers.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";
 import { ARITHMETIC, type SkipModel, stringSites } from "./skips.ts";
-import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
+import { LocalInput, locatedError, type ResolveOrigin } from "./typed_bindings.ts";
 
 /** The code of a nullable field-read load error. */
 export const NULLABLE_FIELD_READ = "expr.nullable_field_read";
@@ -807,12 +808,16 @@ export interface FieldReadLevel {
   readonly valueMode?: boolean;
   /** Where an output with no resolvable origin is reported (default unlocated). */
   readonly outputsRange?: SourceRange | null;
+  /** Each node's local input contracts, narrowed by the CASE routing the node (default none). */
+  readonly localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>>;
+  /** The same, not narrowed: whether a local is untyped (default none). */
+  readonly baseLocals?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>>;
 }
 
 /**
  * Check every nullable field read of one flow level at load (design 2.5, 2.6): node bindings
- * (CASE `on:` and reserved sources included), then flow outputs. The first error throws with code
- * `expr.nullable_field_read`.
+ * (CASE `on:` and reserved sources included), then flow outputs, then node-local sites (AGENT
+ * prompts). The first error throws with code `expr.nullable_field_read`.
  *
  * A flow output is read by END. A co-skipping output (a lone reference, or a coalesce of them) is
  * one required group of its producers: a producer may be null there only when it may be skipped
@@ -886,6 +891,74 @@ export function checkFieldReads(
       });
     }
   }
+  for (const [nodeId, result] of buildResults) {
+    for (const [where, text, range] of localSites(nodeId, result)) {
+      const message = firstNullableRead(text, localRoots(level, nodeId, result), registry);
+      if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range, code: NULLABLE_FIELD_READ });
+    }
+  }
+}
+
+/** Return each node-local template of a node (its prompts) with its site label and range. */
+function localSites(nodeId: string, result: BuildResult): [where: string, text: string, range: SourceRange | null][] {
+  const node = result.node;
+  const sites: [string, string, SourceRange | null][] = [];
+  if (!(node instanceof AgentNode)) return sites;
+  const franges = result.fieldRanges;
+  const promptRange = franges.get(siteKey("field", "prompt")) ?? result.nodeRange;
+  if (typeof node.prompt === "string") {
+    sites.push([result.siteName(nodeId, "prompt"), node.prompt, promptRange]);
+  } else {
+    // A splice `${name}` has no steps, so only message texts are read.
+    node.prompt.forEach((item, index) => {
+      if (!("text" in item)) return;
+      const range = franges.get(siteKey("field", `prompt[${index}]`)) ?? promptRange;
+      sites.push([`${result.siteName(nodeId, "prompt")}[${index}]`, item.text, range]);
+    });
+  }
+  if (node.systemPrompt) {
+    const range = franges.get(siteKey("field", "system_prompt")) ?? result.nodeRange;
+    sites.push([result.siteName(nodeId, "system_prompt"), node.systemPrompt, range]);
+  }
+  return sites;
+}
+
+/**
+ * Return the local-scope roots of node `nodeId`: its inputs (and an AGENT's variables), each tried
+ * under every alternative, nullable when bound straight from a producer that may be skipped while
+ * the node runs (design 2.7: from the authored root, not from a `:- null`), untyped by their
+ * un-narrowed contracts.
+ */
+function localRoots(level: FieldReadLevel, nodeId: string, result: BuildResult): ReadRoots {
+  const { skips, narrowing } = level;
+  const locals = new Map(level.localContracts?.get(nodeId) ?? []);
+  const base = new Map(level.baseLocals?.get(nodeId) ?? []);
+  if (result.node instanceof AgentNode) {
+    for (const variable of result.node.variables) {
+      if (variable.contract === null) continue;
+      locals.set(variable.name, new LocalInput([variable.contract]));
+      base.set(variable.name, new LocalInput([variable.contract]));
+    }
+  }
+  /** The producer a local is bound straight from, when it may be skipped while the node runs. */
+  const skippedProducer = (local: string): string | null => {
+    const source = locals.get(local)?.source ?? null;
+    if (source === null) return null;
+    const names = source.split(".");
+    const producer = producerOfLevel(level, names.slice(0, poolRootLength(names)).join("."));
+    return producer !== null && skips.maySkipWhileRunning([producer], nodeId) ? producer : null;
+  };
+  return {
+    contracts: (local) => locals.get(local)?.alternatives,
+    rootLength: () => 1,
+    nullable: (local) => skippedProducer(local) !== null,
+    why: (local) => {
+      const producer = skippedProducer(local);
+      return producer === null ? "it is Optional" : `node ${reprText(producer)} may be skipped while ${reprText(nodeId)} runs`;
+    },
+    untyped: (local) => (base.get(local)?.alternatives ?? []).every((contract) => isUntyped(contractType(contract))),
+    routing: () => narrowing.environment(nodeId),
+  };
 }
 
 /** Return the node a `<p>.output` or `<p>.new_messages` root reads, else `null`. */

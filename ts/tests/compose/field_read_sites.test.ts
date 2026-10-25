@@ -1320,3 +1320,65 @@ test("an unguarded Optional read in a flow output is a load error", () => {
   expect(error.diagnostic.code).toBe("expr.nullable_field_read");
   expect(error.message).toContain("output: ${input.maybe.a} reads field 'a' of input.maybe, which may be null");
 });
+
+/**
+ * A flow where `gate` may skip `ms` (`output: Rec`), and AGENT `ag` binds `r: <source>` and reads it
+ * in `prompt` (or in `extra` lines); `routed` puts `ag` behind a CASE that proves `input.maybe`.
+ */
+function promptFlow(source: string, prompt: string, options: { extra?: string; routed?: boolean } = {}): string {
+  const { extra = "", routed = false } = options;
+  const ag =
+    `  ag:\n    kind: agent\n    input:\n      r: ${source}\n` + (prompt !== "" ? `    prompt: "${prompt}"\n` : "") + extra;
+  const route = routed
+    ? "  route:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: ag\n    else: skip\n" +
+      "  skip:\n    kind: code\n    output: str\n    code: return 'n'\n"
+    : "";
+  return (
+    NULLABLE_PREAMBLE +
+    "nodes:\n" +
+    "  gate:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: ms\n" +
+    "  ms:\n    kind: code\n    output: Rec\n    code: \"return {'a': 'x'}\"\n" +
+    route +
+    ag +
+    `output: ${routed ? "${ag.output | skip.output}" : "${ag.output}"}\n`
+  );
+}
+
+const SKIPPED = "${ms.output :- null}";
+
+test.each([
+  ["a skippable producer", SKIPPED, "(node 'ms' may be skipped while 'ag' runs)"],
+  ["an Optional input", "${input.maybe}", "(it is Optional)"],
+])("an unguarded prompt read of %s is a load error", (_name, source, why) => {
+  const error = loadError(() => load(promptFlow(source, "Say ${r.a}")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toBe(
+    `node 'ag' prompt: \${r.a} reads field 'a' of r, which may be null ${why}; write r?.a, or check r != null first`,
+  );
+});
+
+test("a prompt read through ?. with a default loads", () => {
+  load(promptFlow(SKIPPED, "Say ${r?.a :- 'x'}"));
+});
+
+test("a system prompt and a prompt-list item check nullable reads", () => {
+  expect(loadError(() => load(promptFlow(SKIPPED, "hi", { extra: '    system_prompt: "${r.a}"\n' }))).message).toContain(
+    "node 'ag' system_prompt: ${r.a} reads field 'a' of r, which may be null",
+  );
+  expect(loadError(() => load(promptFlow(SKIPPED, "", { extra: '    prompt:\n      - user: "${r.a}"\n' }))).message).toContain(
+    "node 'ag' prompt[0]: ${r.a} reads field 'a' of r, which may be null",
+  );
+});
+
+test("a prompt in a node a CASE routes when the value is set reads it with .", () => {
+  load(promptFlow("${input.maybe}", "Say ${r.a}", { routed: true }));
+});
+
+test("a prompt read of a local that is never null loads", () => {
+  load(promptFlow("${input.rec}", "Say ${r.a}"));
+});
+
+// `isinstance` is not a prompt function.
+test.each(FORMS.filter(([name]) => name !== "isinstance"))("a prompt narrowed by %s loads", (_name, form) => {
+  load(promptFlow("${input.maybe}", `\${${form("r")}}`));
+});

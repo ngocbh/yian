@@ -66,8 +66,12 @@ import {
   ExpressionError,
   exprRefs,
   ISINSTANCE,
+  namesEnd,
   type RefRename,
+  type RefRenamed,
   ResolveMode,
+  referencePath,
+  referenceText,
   resolveInRecord,
   rewriteExprRefs,
   type TraceOptions,
@@ -545,8 +549,10 @@ const ESCAPES: ReadonlySet<string> = new Set(["coalesce", "default_expr", "requi
 
 /** One reference occurrence in a parsed condition. */
 export interface ConditionRead {
-  /** The reference path. */
+  /** The reference's flat dotted path. */
   readonly path: string;
+  /** The read as written, `?.` included. */
+  readonly text: string;
   /**
    * The source-order index of the outermost `:-` / `:?` / `|` sub-expression around it, or `null`
    * outside any. Every outermost escape takes an index, with or without references.
@@ -579,8 +585,7 @@ function conditionReadLeaves(tree: ExprNode): [Tree, ConditionRead][] {
       const children = node.children;
       const callSuffix = callSuffixOf(node);
       if (callSuffix === undefined) {
-        const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
-        leaves.push([node, { path: [String(children[0]), ...segments].join("."), escape, coSkips }]);
+        leaves.push([node, { path: referencePath(node), text: referenceText(node), escape, coSkips }]);
         return;
       }
       for (const arg of valueArgs(String(children[0]), callSuffix)) {
@@ -621,23 +626,21 @@ export function conditionReads(tree: ExprNode): ConditionRead[] {
  *
  * @param expression The condition source, in either spelling.
  * @param rename Gets the occurrence's index in `conditionReads` order and its read; returns the
- *   replacement path, or `null` to keep it.
+ *   text for a prefix of the read and how many names it used, as `rewriteExprRefs` takes it, or
+ *   `null` to keep it. The steps after that prefix stay as written.
  * @returns `expression` with the renamed reference leaves spliced in.
  * @throws {ExpressionError} If the condition does not parse.
  */
 export function rewriteConditionReads(
   expression: string,
-  rename: (i: number, read: ConditionRead) => string | null,
+  rename: (i: number, read: ConditionRead) => RefRenamed | null,
 ): string {
   const interior = wholeSpanInterior(expression);
   let text = interior === null ? expression.trim() : interior;
   const edits: [number, number, string][] = [];
   conditionReadLeaves(parseExpr(text)).forEach(([node, read], i) => {
-    const replacement = rename(i, read);
-    if (replacement === null) return;
-    const last = node.children.at(-1)!; // the last trailer, or the leading NAME token itself
-    const end = last instanceof Tree ? (last.children[0] as Token).endPos : last.endPos;
-    edits.push([(node.children[0] as Token).startPos, end, replacement]);
+    const renamed = rename(i, read);
+    if (renamed !== null) edits.push([(node.children[0] as Token).startPos, namesEnd(node, renamed.used), renamed.text]);
   });
   // Splice right to left so earlier offsets stay valid.
   edits.sort((a, b) => b[0] - a[0]);

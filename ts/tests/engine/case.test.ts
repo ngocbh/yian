@@ -603,3 +603,9 @@ test("an on: case without then: is refused at cases:, else at the node", () => {
   expect(atNode.message).toBe(message);
   expect(errorRange(atNode)).toEqual(nodeRange);
 });
+
+test("a searched read keeps ?. in its __rN binding", () => {
+  const result = searched("x.output?.k > 1");
+  expect(result.wiring).toEqual(new Map([["__r0", "${x.output?.k}"]]));
+  expect(caseNode(result).cases[0]!.when).toBe("__r0 > 1");
+});

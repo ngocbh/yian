@@ -800,8 +800,8 @@ export function markerMessage(original: unknown): string {
 
 /**
  * @internal Return an `Error`'s stack followed by its string `notes`, one per line, else `null`;
- * Python's traceback text prints `__notes__` the same way, so a cleanup note stays durable. The
- * evaluator and the backward driver use it for a failure's traceback.
+ * Python's traceback text prints `__notes__` the same way, so a cleanup note stays durable. Used
+ * for a failure's traceback.
  */
 export function tracebackText(error: unknown): string | null {
   if (!(error instanceof Error)) return null;

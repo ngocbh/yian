@@ -79,8 +79,8 @@ export class McpConnectError extends McpError {
  * For an error result the message is the result's content rendered as text, as a successful
  * call's text result is: text blocks, then one-line markers for media. For any other failure
  * while the server is up (for example structured content that fails the tool's output schema,
- * thrown as the subclass `McpOutputError`) it names only the server, the tool and the error type. An AGENT's model reads it as the call's
- * result.
+ * thrown as the subclass `McpOutputError`) it names only the server, the tool and the error
+ * type. An AGENT's model reads it as the call's result.
  */
 export class McpToolError extends McpError {
   override name = "McpToolError";

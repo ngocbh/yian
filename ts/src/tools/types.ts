@@ -105,6 +105,8 @@ export function inputTypeFromJsonSchema(schema: unknown, root?: unknown): Type |
     // runtime's stack overflow, standing for Python's RecursionError, or a shape the IR refuses)
     // leaves the input unchecked rather than failing the run.
     if (!(error instanceof RangeError)) throw error;
+    // Kept like any other result: a stack overflow depends on the depth of the first call, but
+    // `null` only leaves the input unchecked, so keeping it can only widen the check.
     typ = null;
   }
   if (kept) {

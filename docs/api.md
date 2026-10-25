@@ -1116,7 +1116,7 @@ float such as `1.0` arrives as the int `1`. An HTTP server's result is read by t
 `outputSchema` must return structured content, checked against the schema read as an input
 type; an object's fields are checked only when its schema sets `additionalProperties: false`
 (see [Typed tools](#typed-tools)). A result without structured content, or one that fails
-the check, is an `McpToolError`.
+the check, is an `McpOutputError` (see Errors below).
 
 Changed (TS yian): arguments holding `Infinity` anywhere, and for an HTTP server an int
 beyond ±(2^53−1), can't be carried as JSON; the call is refused before anything is sent,
@@ -1146,6 +1146,12 @@ also `TransientToolError`s. `McpInvalidRequestError` is an `McpRequestError`. Af
 `McpServerClosed`, later calls to that server fail at once; the host still closes a
 server it opened. `McpConnectError` (a `RuntimeError`) is raised only when a server
 opens, so the run doesn't start.
+
+Changed (TS yian): a result without structured content, or one that fails the tool's
+`outputSchema`, raises `McpOutputError`, an `McpToolError` that is also permanent: the
+model still reads it, but TOOL `retries:` never apply, since yian ran the check and
+another attempt would call the tool again. Observers' `ToolCallFinished.error` names
+`McpOutputError` (see [AGENT](agent.md)).
 
 Changed (TS yian): Python yian refuses a redirect to another origin; TS yian follows no
 redirect at all. An HTTP server has forgotten the session when it answers 404 while the

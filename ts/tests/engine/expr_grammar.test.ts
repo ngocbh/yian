@@ -18,6 +18,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { ConstructorTypeError, ExpressionError, RequiredError } from "../../src/expr/expressions.ts";
 import {
+  compVarKey,
   EXPRESSION_KEYWORDS,
   type ExprNode,
   findSpanEnd,
@@ -988,4 +989,27 @@ describe("comprehension scoping", () => {
   test("an inner comprehension in the first iterable may reuse the name", () => {
     expect(tree("[x for x in [x for x in a]]").data).toBe("list_comp");
   });
+});
+
+test("two comprehensions binding m give their reads different keys", () => {
+  const t = tree("[[m.a for m in xs], [m.b for m in ys]]");
+  const keys = iterSubtrees(t).filter((n) => n.data === "comp_var").map(compVarKey);
+  expect(new Set(keys).size).toBe(2);
+  expect(keys.every((key) => key !== null && key.startsWith("m@"))).toBe(true);
+  expect(compVarKey(new Tree("comp_var", [new Token("NAME", "m")]))).toBeNull();
+});
+
+test("reads of one variable in nested scopes share its key", () => {
+  const t = tree("[[n for n in m.xs if m.ok] for m in ys]");
+  const keys = iterSubtrees(t)
+    .filter((n) => n.data === "comp_var")
+    .map(compVarKey);
+  expect(new Set(keys)).toEqual(new Set(["m@31", "n@8"]));
+});
+
+test("a copied comp_var keeps its key, as masked and falsified copies do", () => {
+  const t = tree("[m.a for m in xs]");
+  const node = iterSubtrees(t).find((n) => n.data === "comp_var")!;
+  // masked/falsified rebuild each Tree but keep its Tokens.
+  expect(compVarKey(new Tree(node.data, [...node.children]))).toBe(compVarKey(node));
 });

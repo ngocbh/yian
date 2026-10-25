@@ -46,7 +46,7 @@ import {
   wholeSpanInterior,
 } from "./grammar.ts";
 
-/** A `when:` expression could not be parsed or evaluated. */
+/** An expression could not be parsed or evaluated. */
 export class ExpressionError extends RangeError {
   override name = "ExpressionError";
 }
@@ -1449,7 +1449,7 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * Dotted access reads only a record's own field or a file's `uri`, `mime` or `name`
  * (`fieldOf`), never a JS property, so `${x.constructor}` is a miss (safety-critical).
  *
- * @param tree The parsed expression: a `Tree`, or a lone literal or reference `Token`.
+ * @param tree The parsed expression: a `Tree`, or a lone literal `Token`.
  * @param resolve Resolves a reference path to its value; `null` is a miss. `item`-headed paths
  *   bypass it. With `trace`, it returns a `ResolvedValue` holding the value, whether it is
  *   present, and its `SourceRef` or prior `ValueRoute`.

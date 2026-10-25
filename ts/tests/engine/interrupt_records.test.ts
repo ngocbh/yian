@@ -24,7 +24,7 @@ import {
   RunStoppedRecord,
   RunWaitingRecord,
 } from "../../src/runtime/log.ts";
-import { applyWaitsRecord, isWakeable, nodeCalls, wakeableNodes, WaitsState } from "../../src/runtime/waits.ts";
+import { applyWaitsRecord, awaitsNextMessage, isWakeable, nodeCalls, wakeableNodes, WaitsState } from "../../src/runtime/waits.ts";
 import type { CallClosed } from "../../src/events.ts";
 import { prepareDelivery } from "../../src/runtime/engine.ts";
 import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/memory.ts";
@@ -480,3 +480,17 @@ describe("stops", () => {
     );
   });
 });
+
+test.each<[string, RunRecord[], boolean]>([
+  ["a take waits with nothing assigned", [takeWait("heard", "one")], true],
+  ["the take was answered and hasn't woken", [takeWait("heard", "one"), send("msgs", "x")], false],
+  ["a send is unread and no take waits", [send("msgs", "x")], false],
+  ["no take waits", [], false],
+  [
+    "a waiting reader reads the inbox",
+    [takeWait("heard", "one"), new NodeWaitingRecord("reply", ["r/reply/1/0"], { steerInbox: "msgs" })],
+    false,
+  ],
+  ["a take of another inbox waits", [takeWait("heard", "one", "other")], false],
+  ["the take woke and hasn't committed", [takeWait("heard", "one"), new NodeWokenRecord("heard", ["r/heard"])], false],
+])("awaitsNextMessage: %s", (_, records, idle) => expect(awaitsNextMessage(fold(...START, ...records), "msgs")).toBe(idle));

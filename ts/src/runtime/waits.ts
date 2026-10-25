@@ -732,6 +732,17 @@ export function withdrawableEvents(w: WaitsState, name: string): readonly number
   return [...unread, ...waitedTakes(w, name).flatMap((call) => call.assigned)].sort((a, b) => a - b);
 }
 
+/**
+ * Return whether the run's records say it waits for the next message on inbox `name`: an open
+ * take of it waits, nothing of it is withdrawable, and no waiting node reads it as its steer
+ * inbox. Running readers are the caller's to check.
+ */
+export function awaitsNextMessage(w: WaitsState, name: string): boolean {
+  if (!waitedTakes(w, name).some((call) => call.state === "open")) return false;
+  if (withdrawableEvents(w, name).length > 0) return false;
+  return ![...w.waiting.values()].some((waiting) => waiting.steerInbox === name);
+}
+
 /** Return a call's deadline in epoch milliseconds, or `null` when it has none. */
 function deadlineMs(call: Call): number | null {
   return call.deadline === null ? null : recordTimeMs(call.deadline, "deadline");

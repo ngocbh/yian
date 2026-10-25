@@ -163,7 +163,7 @@ export interface ToolResultFields {
 }
 
 /** A recorded step and its `n`. */
-interface NumberedStep {
+export interface NumberedStep {
   readonly n: number;
   readonly step: ValueRecord;
 }
@@ -197,15 +197,74 @@ export interface PriorAttempts {
   readonly retryIn: number;
 }
 
+/** A node's recorded steps as the AGENT loop reads them (`readAgentSteps`). */
+export interface ReadSteps {
+  /** The logical calls, each its failed attempts that were retried, then its reply or its last failure. */
+  readonly calls: (readonly NumberedStep[])[];
+  /** The retried failed attempts after the last logical call: the start of a call not over yet. */
+  readonly trailing: readonly NumberedStep[];
+  /** Each tool result, by the `n` of the reply before it (0 before any), then by call id. */
+  readonly results: Map<number, Map<string, ValueRecord>>;
+  /**
+   * The steer steps, oldest first, by the index in `calls` of the logical call they preceded. A
+   * call can follow several: a resume replays a steer recorded before an unmade call, then reads
+   * live and records another before that call.
+   */
+  readonly steers: Map<number, NumberedStep[]>;
+  /** The `by` of an `interrupted` step, the honor of a host interrupt, else `null`. */
+  readonly honored: number | null;
+}
+
+/**
+ * Read a node's recorded steps, in order and numbered from 1 (a step's `n` is its place), as the
+ * AGENT loop replays them: each successful `model_call`, and each failed one that wasn't to be
+ * retried, ends one logical call, which the failed attempts before it belong to; each
+ * `tool_result` is filed under the reply before it, each `steer` under the call after it. Steps of
+ * any other kind are skipped.
+ */
+export function readAgentSteps(steps: readonly ValueRecord[]): ReadSteps {
+  const calls: NumberedStep[][] = [];
+  const results = new Map<number, Map<string, ValueRecord>>();
+  const steers = new Map<number, NumberedStep[]>();
+  let honored: number | null = null;
+  let attempts: NumberedStep[] = [];
+  for (const [index, step] of steps.entries()) {
+    if (step["kind"] === "model_call") {
+      attempts.push({ n: index + 1, step });
+      // A reply, or a failure with no retry after it, ends the call.
+      if (!Object.hasOwn(step, "error") || step["retry_in"] == null) {
+        calls.push(attempts);
+        attempts = [];
+      }
+    } else if (step["kind"] === "tool_result") {
+      // Call ids repeat across replies (an adapter may number each reply's calls from 0), so a
+      // result is filed under the reply before it; a later start's closer still follows it.
+      const reply = calls.at(-1)?.at(-1)?.n ?? 0;
+      let filed = results.get(reply);
+      if (filed === undefined) results.set(reply, (filed = new Map()));
+      filed.set(step["call_id"] as string, step);
+    } else if (step["kind"] === "steer") {
+      // A steer is read only before a logical call, never between its attempts, so it belongs
+      // to the next call.
+      const before = steers.get(calls.length);
+      if (before === undefined) steers.set(calls.length, [{ n: index + 1, step }]);
+      else before.push({ n: index + 1, step });
+    } else if (step["kind"] === "interrupted") {
+      honored = Number(step["by"]);
+    }
+  }
+  return { calls, trailing: attempts, results, steers, honored };
+}
+
 /**
  * Writes one AGENT start's steps through the engine's `NodeSteps`, each as a JSON object with a
  * `kind`: `model_call` for a model call that returned or an attempt that failed, `tool_result`
  * for a tool call's result. Each write returns the step's `n`, as the engine committed it. Without
  * engine steps (direct loop tests) it records nothing and numbers the steps itself.
  *
- * It also replays what earlier starts recorded (`NodeSteps.prior`), in order: each successful
- * `model_call`, and each failed one that wasn't to be retried, ends one logical call to take back
- * (`takeRecorded`) in place of calling the model; the failed attempts before it belong to it, and
+ * It also replays what earlier starts recorded (`NodeSteps.prior`, read by `readAgentSteps`), in
+ * order: each successful `model_call`, and each failed one that wasn't to be retried, ends one
+ * logical call to take back (`takeRecorded`) in place of calling the model; the failed attempts before it belong to it, and
  * failed attempts after the last one are the next live call's (`priorAttempts`). Each
  * `tool_result` is found by its reply and its call id (`recordedResult`). The `steer` steps
  * before a logical call are handed back (`takeRecordedSteers`), in order, before it, with the
@@ -224,21 +283,17 @@ export class AgentSteps {
   readonly #nodeId: string;
   #count = 0;
   /** The recorded logical calls, each its failed attempts then its reply or its last failure. */
-  readonly #calls: (readonly NumberedStep[])[] = [];
+  readonly #calls: readonly (readonly NumberedStep[])[];
   /** How many of `#calls` were taken. */
   #taken = 0;
   /** The retried failed attempts recorded after the last logical call. */
   #trailing: readonly NumberedStep[];
   /** The recorded tool results, by the `n` of the reply they answer, then by call id. */
-  readonly #results = new Map<number, Map<string, ValueRecord>>();
-  /**
-   * The recorded steer steps, oldest first, by the index in `#calls` of the logical call they
-   * preceded. A call can follow several: a resume replays a steer recorded before an unmade call,
-   * then reads live and records another before that call.
-   */
-  readonly #steers = new Map<number, NumberedStep[]>();
+  readonly #results: ReadSteps["results"];
+  /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
+  readonly #steers: ReadSteps["steers"];
   /** The `by` of a recorded `interrupted` step: the interrupt an earlier start honored, else `null`. */
-  readonly #honored: number | null = null;
+  readonly #honored: number | null;
 
   /**
    * @param steps This start's engine steps, or `undefined` to record nothing.
@@ -259,34 +314,13 @@ export class AgentSteps {
     this.runDir = runDir;
     this.#scrub = scrub;
     this.#nodeId = nodeId;
-    let attempts: NumberedStep[] = [];
     // Steps are numbered densely from 1 across the node's starts, so a step's `n` is its place.
-    for (const [index, step] of (steps?.prior ?? []).entries()) {
-      if (step["kind"] === "model_call") {
-        attempts.push({ n: index + 1, step });
-        // A reply, or a failure with no retry after it, ends the call.
-        if (!Object.hasOwn(step, "error") || step["retry_in"] == null) {
-          this.#calls.push(attempts);
-          attempts = [];
-        }
-      } else if (step["kind"] === "tool_result") {
-        // Call ids repeat across replies (an adapter may number each reply's calls from 0), so a
-        // result is filed under the reply before it; a later start's closer still follows it.
-        const reply = this.#calls.at(-1)?.at(-1)?.n ?? 0;
-        let results = this.#results.get(reply);
-        if (results === undefined) this.#results.set(reply, (results = new Map()));
-        results.set(step["call_id"] as string, step);
-      } else if (step["kind"] === "steer") {
-        // A steer is read only before a logical call, never between its attempts, so it belongs
-        // to the next call.
-        const before = this.#steers.get(this.#calls.length);
-        if (before === undefined) this.#steers.set(this.#calls.length, [{ n: index + 1, step }]);
-        else before.push({ n: index + 1, step });
-      } else if (step["kind"] === "interrupted") {
-        this.#honored = Number(step["by"]);
-      }
-    }
-    this.#trailing = attempts;
+    const read = readAgentSteps(steps?.prior ?? []);
+    this.#calls = read.calls;
+    this.#trailing = read.trailing;
+    this.#results = read.results;
+    this.#steers = read.steers;
+    this.#honored = read.honored;
   }
 
   /**

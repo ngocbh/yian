@@ -37,7 +37,7 @@ import {
 } from "./log.ts";
 
 export { CLOSE_REASONS, type CloseReason } from "../events.ts";
-import type { CloseReason } from "../events.ts";
+import { CLOSE_REASONS, type CloseReason } from "../events.ts";
 
 /** Where a registered call stands. */
 export type CallStateKind = "open" | "answered" | "timed_out" | "closed";
@@ -199,9 +199,6 @@ const WAITS_JSON_KEYS = [
 /** The call states, for checking a stored call. */
 const CALL_STATES: readonly string[] = ["open", "answered", "timed_out", "closed"];
 
-/** The close reasons, for checking a stored call. */
-const CLOSE_REASON_NAMES: readonly string[] = ["crashed", "interrupted", "timed_out", "cancelled", "failed"];
-
 /** Return whether `value` is a plain JSON object (not an array or null). */
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -279,7 +276,7 @@ function callFromJson(value: unknown, label: string): Call {
     Object.values(call).some((field) => field === undefined) ||
     (call.mode !== null && call.mode !== "one" && call.mode !== "all") ||
     !CALL_STATES.includes(call.state!) ||
-    (call.closedReason !== null && !CLOSE_REASON_NAMES.includes(call.closedReason!))
+    (call.closedReason !== null && !(CLOSE_REASONS as readonly string[]).includes(call.closedReason!))
   ) {
     throw bad();
   }

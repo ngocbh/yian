@@ -54,6 +54,7 @@ import {
   canonicalTypeLabel,
   canonicalUnionOrder,
   FileRef,
+  joinedType,
   listKindForElement,
   Type,
   TypeCheckError,
@@ -1521,4 +1522,12 @@ describe("the built-in Message type", () => {
   ])("%s is refused", (_, value) => {
     expect(() => buildValueAs(MESSAGE(), value)).toThrow(TypeCheckError);
   });
+});
+
+test("joinedType joins types equal up to Optional", () => {
+  const s = Type.scalar(ValueKind.STRING);
+  expect(joinedType([s, s.replace({ nullable: true })])?.nullable).toBe(true);
+  expect(joinedType([s, s])?.nullable).toBe(false);
+  expect(joinedType([s, Type.scalar(ValueKind.INTEGER)])).toBeNull();
+  expect(joinedType([])).toBeNull();
 });

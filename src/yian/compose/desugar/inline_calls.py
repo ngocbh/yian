@@ -545,8 +545,9 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     Its FIRST arg is the POSITIONAL flow id (a bare identifier, may be hyphenated — flow
     ids allow `-`); every remaining arg is a `name=value` keyword, each at most once.
     Each keyword value passes through `_arg_source`: a bare value reads like a named
-    `input:` value (`window=30` -> int 30, `1e3` -> float 1000.0), a quoted scalar
-    unwraps to text, and a `${…}`-bearing value stays a binding string. An unquoted
+    `input:` value (`window=30` -> int 30, `1e3` -> float 1000.0), a quoted value
+    loses only its outer quotes (no escape processing), and a `${…}`-bearing value
+    stays a binding string. An unquoted
     arg value starting with `call(` is ITSELF a directive, under the same rule —
     desugared inner-first.
 
@@ -605,15 +606,18 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
 
 
 def _arg_source(value: str) -> Any:
-    """Read one `call(...)` keyword value the way the named form reads its `input:`.
+    """Read one `call(...)` keyword value: a bare value the way the named form reads
+    its `input:`, a quoted value as the text between its outer quotes, kept verbatim
+    (no YAML escape processing, so `'it''s'` stays `it''s`).
 
     Args:
         value (`str`): The keyword's raw value text.
 
     Returns:
-        `Any`: For a fully quoted scalar (`"…"`/`'…'`), its inner text, a binding
-            template if it interpolates (`"hi ${name}"` -> `hi ${name}`); for an
-            unquoted `${…}`-bearing value, the binding string; else the trimmed text
+        `Any`: For a value that starts and ends with the same quote (`"…"`/`'…'`),
+            the text between them, a binding template if it interpolates
+            (`"hi ${name}"` -> `hi ${name}`); for an unquoted `${…}`-bearing value,
+            the binding string; else the trimmed text
             read as one plain scalar like a named `input:` value (`30` -> int,
             `1e3` -> float, `~` or an empty value -> `None`, `None` -> text). YAML
             structure such as `[1]` stays text: a bare argument is one scalar.

@@ -6,12 +6,13 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ModelCallFinished, NodeSucceeded, type RunEvent, type StreamChunk } from "../../src/events.ts";
 import { Finish, TextDelta } from "../../src/llm/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { FileLockError, lockFile } from "../../src/platform.ts";
+import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
 import {
   advance,
   close,
@@ -19,14 +20,17 @@ import {
   DeliveryRefused,
   interrupt,
   pendingCalls,
+  replayRunLog,
   RunBusyError,
   runFlow,
+  send,
 } from "../../src/run.ts";
-import { decodeRecord, InterruptedRecord, NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
+import { decodeRecord, InterruptedRecord, JsonlRunLog, NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
+import { applyWaitsRecord, WaitsState } from "../../src/runtime/waits.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { hostEnv } from "./mcp_helpers.ts";
-import { callReply, crashAfter, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, crashAfter, rejected, serving, textReply, userText } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-interrupt-host-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -238,4 +242,374 @@ test("an interrupt that lands after the final reply: the agent answers and NodeS
   // The interrupt landed and named the agent, but the reply was whole: nothing was cut.
   expect(readRunLog(log).some(({ record }) => record instanceof InterruptedRecord)).toBe(true);
   expect(succeeded(events)["reply"]).toBe(false);
+});
+
+// --- The remembered Stop through the host calls ----------------------------------------------- //
+
+/** The `nodes` of each `interrupted` record at `log`, in log order. */
+const stopsAt = (log: string) => readRunLog(log).flatMap(({ record }) => (record instanceof InterruptedRecord ? [[...record.nodes]] : []));
+
+/** The waits the records at `log` fold to. */
+function foldedWaits(log: string): WaitsState {
+  const w = new WaitsState();
+  for (const envelope of readRunLog(log)) applyWaitsRecord(w, envelope);
+  return w;
+}
+
+/** The step kinds node `node` recorded at `log`. */
+const stepKinds = (log: string, node: string) => stepsOf(log, node).map((step) => String(step["kind"]));
+
+/** `heard` takes one message from `m`; `gate`, a node beside it, holds the reply back; then `reply` reads steer inbox `m`. */
+const gateFlow = (gate: string) => `
+id: stop_gate
+name: stop_gate
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.m}
+      take: one
+  gate:
+${gate}
+  reply:
+    kind: agent
+    prompt: "answer \${got}"
+    steer_inbox: \${input.m}
+    input:
+      got: \${heard.output.events}
+      gated: \${gate.output}
+    output: Optional(str)
+output: \${reply.output}
+`;
+
+const ASK_GATE = `    kind: tool
+    tool_id: ask
+    input:
+      prompt: approve?`;
+
+const SLEEP_GATE = `    kind: tool
+    tool_id: sleep
+    input:
+      for: 60s`;
+
+/** `heard` takes one message from `m`, then `reply` reads steer inbox `m` and answers it. */
+const TAKE_REPLY = gateFlow(`    kind: code
+    code: return 1`);
+
+/** A run of `text` waiting at its take, then `send` "hi" and an advance to the next wait. */
+async function heardHi(text: string, model: ScriptedModel, extra: Record<string, unknown> = {}) {
+  const log = freshLog();
+  const flow = await loadFlow(text);
+  const options = { env, log, models: serving(model), runId: "r", tools: { ask: () => pending() }, ...extra };
+  expect((await runFlow(flow, {}, options)).status).toBe("waiting");
+  await send(log, "m", "hi", { env });
+  return { log, flow, options };
+}
+
+/** The reply was stopped by its own applied record: honored, no model call, null. */
+function expectStoppedByApplied(log: string, output: unknown, model: ScriptedModel) {
+  expect(output).toBeNull();
+  expect(model.requests).toHaveLength(0);
+  expect(stopsAt(log).at(-1)).toEqual(["reply"]);
+  expect(stepKinds(log, "reply")).toEqual(["interrupted"]);
+}
+
+test("idle at the take: interrupt records nothing", async () => {
+  const log = freshLog();
+  const model = new ScriptedModel([], CONFIG);
+  expect((await runFlow(await loadFlow(TAKE_REPLY), {}, { env, log, models: serving(model), runId: "r" })).status).toBe("waiting");
+  const before = readFileSync(log);
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+test("a Stop during an approval ask stops the reply after it", async () => {
+  const model = new ScriptedModel([], CONFIG);
+  const { log, options } = await heardHi(gateFlow(ASK_GATE), model);
+  expect((await advance(options)).status).toBe("waiting");
+  const [ask] = pendingCalls(log);
+  const stop = await interrupt(log, "m", { env });
+  expect(stop).toEqual({ seq: readRunLog(log).at(-1)!.seq, nodes: [], calls: [] });
+  await complete(log, ask!.callId, { output: "yes" }, { env });
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expectStoppedByApplied(log, done.output, model);
+  expect(stopsAt(log)).toEqual([[], ["reply"]]);
+});
+
+test("a Stop during a sleep stops the reply when the sleep ends", async () => {
+  const start = Date.parse("2026-01-01T00:00:00Z");
+  const model = new ScriptedModel([], CONFIG);
+  const { log, options } = await heardHi(gateFlow(SLEEP_GATE), model, { scheduler: virtualScheduler(start) });
+  expect((await advance(options)).status).not.toBe("succeeded");
+  expect((await interrupt(log, "m", { env })).seq).not.toBeNull();
+  const done = await advance({ ...options, scheduler: virtualScheduler(start + 61_000) });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expectStoppedByApplied(log, done.output, model);
+});
+
+test("a Stop survives a host stop and a re-wait before it stopped anyone", async () => {
+  const model = new ScriptedModel([], CONFIG);
+  const { log, options } = await heardHi(gateFlow(ASK_GATE), model);
+  expect((await advance(options)).status).toBe("waiting");
+  const [ask] = pendingCalls(log);
+  await interrupt(log, "m", { env });
+  const stopped = new AbortController();
+  stopped.abort(new Error("host stop"));
+  await rejected(advance({ ...options, signal: stopped.signal }));
+  expect((await advance(options)).status).toBe("waiting");
+  expect(foldedWaits(log).stops.has("m")).toBe(true);
+  await complete(log, ask!.callId, { output: "yes" }, { env });
+  const done = await advance(options);
+  expectStoppedByApplied(log, done.output, model);
+});
+
+test("a Stop after the send, before the take wakes, stops the reply", async () => {
+  const model = new ScriptedModel([], CONFIG);
+  const { log, options } = await heardHi(TAKE_REPLY, model);
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: readRunLog(log).at(-1)!.seq, nodes: [], calls: [] });
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expectStoppedByApplied(log, done.output, model);
+});
+
+const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
+/** `examples/chat.yaml`. */
+const chatExample = () => loadFlow(readFileSync(join(EXAMPLES_DIR, "chat.yaml"), "utf8"), { searchPaths: [EXAMPLES_DIR] });
+const CHUNKS = () => [new TextDelta(0, "one"), new TextDelta(0, " two"), new TextDelta(0, " three"), new Finish({ reason: "stop" })];
+
+test("a message sent after a cut reply is taken at the next turn and answered in full", async () => {
+  const log = freshLog();
+  const flow = await chatExample();
+  const model = new ScriptedModel([CHUNKS(), textReply("the second answer")], CONFIG);
+  const options = { env, log, models: serving(model), runId: "r", numWorkers: 0, llmConfig: CONFIG };
+  expect((await runFlow(flow, {}, options)).status).toBe("waiting");
+  await send(log, "owner_messages", userText("first"), { env });
+  const onStream = (chunk: StreamChunk) => void (chunk.chunk === " two" && interrupt(log, "owner_messages", { env }));
+  const onEvent = (event: RunEvent) =>
+    void (event instanceof NodeSucceeded && event.nodeId === "chat#0/answered/reply" && send(log, "owner_messages", userText("second"), { env }));
+  expect((await advance({ ...options, onStream, onEvent })).status).toBe("waiting");
+  expect(stopsAt(log)).toEqual([["chat#0/answered/reply"]]);
+  expect(model.requests).toHaveLength(2);
+  expect(stepKinds(log, "chat#1/answered/reply")).toEqual(["model_call"]);
+  expect(foldedWaits(log).stops.size).toBe(0);
+});
+
+test("Esc after the reply finished records an empty Stop; the next take ends it", async () => {
+  const log = freshLog();
+  const flow = await chatExample();
+  const model = new ScriptedModel([textReply("answer")], CONFIG);
+  const options = { env, log, models: serving(model), runId: "r", numWorkers: 0, llmConfig: CONFIG };
+  expect((await runFlow(flow, {}, options)).status).toBe("waiting");
+  await send(log, "owner_messages", userText("first"), { env });
+  let stop: Promise<{ seq: number | null }> | null = null;
+  const onEvent = (event: RunEvent) => {
+    if (event instanceof NodeSucceeded && event.nodeId === "chat#0/answered/reply") stop = interrupt(log, "owner_messages", { env });
+  };
+  expect((await advance({ ...options, onEvent })).status).toBe("waiting");
+  expect((await stop!).seq).not.toBeNull();
+  expect(stopsAt(log)).toEqual([[]]);
+  expect(stepKinds(log, "chat#0/answered/reply")).toEqual(["model_call"]);
+  expect(foldedWaits(log).stops.size).toBe(0);
+});
+
+/** `heard`, then `reply1` (a reader), then `approve` (an ask), then `reply2` (a reader). */
+const TWO_REPLIES = `
+id: two_replies
+name: two_replies
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.m}
+      take: one
+  reply1:
+    kind: agent
+    prompt: "answer \${got}"
+    steer_inbox: \${input.m}
+    input:
+      got: \${heard.output.events}
+    output: Optional(str)
+  approve:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: 'approve? \${reply1.output :- "-"}'
+  reply2:
+    kind: agent
+    prompt: "go on \${ok}"
+    steer_inbox: \${input.m}
+    input:
+      ok: \${approve.output}
+    output: Optional(str)
+output: \${reply2.output}
+`;
+
+test("a Stop that stopped an agent ends at the next wait: the reply after the approval answers in full", async () => {
+  const model = new ScriptedModel([CHUNKS(), textReply("second reply")], CONFIG);
+  const { log, options } = await heardHi(TWO_REPLIES, model, { numWorkers: 0 });
+  const onStream = (chunk: StreamChunk) => void (chunk.nodeId === "reply1" && chunk.chunk === "one" && interrupt(log, "m", { env }));
+  expect((await advance({ ...options, onStream })).status).toBe("waiting");
+  expect(stopsAt(log)).toEqual([["reply1"]]);
+  expect(foldedWaits(log).stops.size).toBe(0);
+  await complete(log, pendingCalls(log)[0]!.callId, { output: "yes" }, { env });
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBe("second reply");
+  expect(stopsAt(log)).toEqual([["reply1"]]);
+  expect(stepKinds(log, "reply2")).toEqual(["model_call"]);
+});
+
+test("a repeated Esc during the reply records nothing and never carries over", async () => {
+  const model = new ScriptedModel([CHUNKS(), textReply("second reply")], CONFIG);
+  const { log, options } = await heardHi(TWO_REPLIES, model, { numWorkers: 0 });
+  let second: unknown = null;
+  const onStream = (chunk: StreamChunk) => {
+    if (chunk.nodeId !== "reply1" || chunk.chunk !== "one") return;
+    void (async () => {
+      await interrupt(log, "m", { env });
+      second = await interrupt(log, "m", { env });
+    })();
+  };
+  expect((await advance({ ...options, onStream })).status).toBe("waiting");
+  expect(second).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(stopsAt(log)).toEqual([["reply1"]]);
+  await complete(log, pendingCalls(log)[0]!.callId, { output: "yes" }, { env });
+  const done = await advance(options);
+  expect(done.output).toBe("second reply");
+  expect(stopsAt(log)).toEqual([["reply1"]]);
+});
+
+test("a repeated Esc during an approval ask records nothing; the reply after it gets one applied record", async () => {
+  const model = new ScriptedModel([], CONFIG);
+  const { log, options } = await heardHi(gateFlow(ASK_GATE), model);
+  expect((await advance(options)).status).toBe("waiting");
+  expect((await interrupt(log, "m", { env })).seq).not.toBeNull();
+  const before = readFileSync(log);
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(readFileSync(log).equals(before)).toBe(true);
+  await complete(log, pendingCalls(log)[0]!.callId, { output: "yes" }, { env });
+  const done = await advance(options);
+  expectStoppedByApplied(log, done.output, model);
+  expect(stopsAt(log)).toEqual([[], ["reply"]]);
+});
+
+test("a crashed reader is stopped after an offline interrupt: it replays its recorded call, then honors", async () => {
+  const flow = await loadFlow(replyFlow());
+  const script = () => new ScriptedModel([callReply(["lookup", {}, "c1"]), textReply("done")], CONFIG);
+  const whole = freshLog();
+  await runFlow(flow, {}, { env, log: whole, tools: tools(), models: serving(script()), runId: "r" });
+  const log = freshLog();
+  await crashAfter(kinds(whole).indexOf("model_call") + 1, () =>
+    runFlow(flow, {}, { env, log, tools: tools(), models: serving(script()), runId: "r" }),
+  );
+  expect((await interrupt(log, "m", { env })).nodes).toEqual([]);
+  const model = new ScriptedModel([], CONFIG);
+  const done = await advance({ env, log, tools: tools(), models: serving(model) });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(model.requests).toHaveLength(0);
+  expect(stopsAt(log)).toEqual([[], ["reply"]]);
+  expect(stepKinds(log, "reply").filter((kind) => kind === "model_call")).toHaveLength(1);
+  expect(stepKinds(log, "reply").at(-1)).toBe("interrupted");
+});
+
+test("a crashed reader whose final answer was recorded keeps it", async () => {
+  const flow = await loadFlow(replyFlow());
+  const script = () => new ScriptedModel([textReply("done")], CONFIG);
+  const whole = freshLog();
+  await runFlow(flow, {}, { env, log: whole, tools: tools(), models: serving(script()), runId: "r" });
+  const log = freshLog();
+  await crashAfter(kinds(whole).indexOf("model_call") + 1, () =>
+    runFlow(flow, {}, { env, log, tools: tools(), models: serving(script()), runId: "r" }),
+  );
+  await interrupt(log, "m", { env });
+  const events: RunEvent[] = [];
+  const model = new ScriptedModel([], CONFIG);
+  const done = await advance({ env, log, tools: tools(), models: serving(model), onEvent: (event) => void events.push(event) });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBe("done");
+  expect(model.requests).toHaveLength(0);
+  const succeededReply = events.find((event) => event instanceof NodeSucceeded && event.nodeId === "reply") as NodeSucceeded;
+  expect(succeededReply.interrupted).toBe(false);
+});
+
+test("a Stop recorded offline before the take wakes stops the reply across a crash at every boundary", async () => {
+  const flow = await loadFlow(TAKE_REPLY);
+  const start = async (log: string) => {
+    expect((await runFlow(flow, {}, { env, log, models: serving(new ScriptedModel([], CONFIG)), runId: "r" })).status).toBe("waiting");
+    await send(log, "m", "hi", { env });
+    return (await interrupt(log, "m", { env })).seq!;
+  };
+  const whole = freshLog();
+  const r = await start(whole);
+  expect((await advance({ env, log: whole, models: serving(new ScriptedModel([], CONFIG)) })).status).toBe("succeeded");
+  const n = readRunLog(whole).length;
+  for (let k = r + 1; k < n; k++) {
+    const log = freshLog();
+    await start(log);
+    await crashAfter(k, () => advance({ env, log, models: serving(new ScriptedModel([], CONFIG)) }));
+    const model = new ScriptedModel([], CONFIG);
+    const done = await advance({ env, log, models: serving(model) });
+    expect(done.status, `cut at ${k}: ${done.failure?.message}`).toBe("succeeded");
+    expect(done.output).toBeNull();
+    expect(model.requests).toHaveLength(0);
+    expect(stopsAt(log), `cut at ${k}`).toEqual([[], ["reply"]]);
+    expect(stepKinds(log, "reply").filter((kind) => kind === "interrupted")).toHaveLength(1);
+    expect(stepKinds(log, "reply")).not.toContain("model_call");
+    const authority = JsonlRunLog.resume(log);
+    try {
+      expect(foldedWaits(log).toJSON()).toEqual(replayRunLog(flow, authority).waits.toJSON());
+    } finally {
+      authority.close();
+    }
+  }
+}, 60_000);
+
+test("a host call re-pended after a replay stays open; an interrupt closes it", async () => {
+  const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
+  const { log, options } = await waitingReply(model);
+  const stopped = new AbortController();
+  stopped.abort(new Error("host stop"));
+  await rejected(advance({ ...options, signal: stopped.signal }));
+  expect((await advance(options)).status).toBe("waiting");
+  const [call] = pendingCalls(log);
+  expect(call).toBeDefined();
+  const { nodes, calls } = await interrupt(log, "m", { env });
+  expect([nodes, calls]).toEqual([["reply"], [call!]]);
+  const refused = (await rejected(complete(log, call!.callId, { output: "late" }, { env }))) as DeliveryRefused;
+  expect(refused.reason).toBe("call_settled");
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(stepKinds(log, "reply").slice(-2)).toEqual(["tool_result", "interrupted"]);
+});
+
+test("offline Esc on a crashed run with a take waiting and a node in flight is recorded", async () => {
+  // `gate`, a host tool beside the take, was mid-call when the run crashed.
+  const text = gateFlow(`    kind: tool
+    tool_id: lookup`);
+  const flow = await loadFlow(text);
+  const lookup = tool({ name: "lookup", description: "Look up.", parameters: { type: "object", properties: {} }, execute: () => "found" });
+  const whole = freshLog();
+  await runFlow(flow, {}, { env, log: whole, tools: { lookup }, models: serving(new ScriptedModel([], CONFIG)), runId: "r" });
+  // Cut once `heard` waits, with `gate` started and not yet committed.
+  const heardWaits = readRunLog(whole).findIndex(({ kind, record }) => kind === "node_waiting" && (record as { nodeId: string }).nodeId === "heard");
+  const log = freshLog();
+  await crashAfter(heardWaits + 1, () =>
+    runFlow(flow, {}, { env, log, tools: { lookup }, models: serving(new ScriptedModel([], CONFIG)), runId: "r" }),
+  );
+  expect([...foldedWaits(log).waiting.keys()]).toEqual(["heard"]);
+  expect(kinds(log).at(-1)).toBe("node_waiting");
+  expect(readRunLog(log).some(({ kind, record }) => kind === "node_started" && (record as { nodeId: string }).nodeId === "gate")).toBe(true);
+  const before = readRunLog(log).length;
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: before, nodes: [], calls: [] });
 });

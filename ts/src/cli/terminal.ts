@@ -1045,6 +1045,20 @@ async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
 const OTHER = "✎ Other (write your own)";
 
 /**
+ * `text` safe to draw: `\r\n` read as `\n`, then each control character but `\n` (C0, DEL and
+ * C1, ESC included) shown as `^X` (`^[` for ESC, `^?` for DEL) or, for C1, U+FFFD. An ask's text
+ * comes from the flow or a model, and a raw escape sequence in it could move the cursor, set the
+ * clipboard or forge a link.
+ */
+function visible(text: string): string {
+  return text.replaceAll("\r\n", "\n").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, (char) => {
+    const code = char.charCodeAt(0);
+    if (code === 0x7f) return "^?";
+    return code < 0x20 ? `^${String.fromCharCode(code + 64)}` : "\uFFFD";
+  });
+}
+
+/**
  * Write the box that opens a question set: who needs the input (`title`), the prompt when there is
  * one, and how many questions follow. Rich's `Panel` look, with no wrapping.
  */
@@ -1081,35 +1095,38 @@ function writeRule(output: Output, index: number, total: number, header: string)
  */
 async function askQuestion(run: RunWidget, question: Omit<QuestionSpec, "header">): Promise<unknown> {
   const options = question.options;
-  if (options.length === 0) return run(textWidget({ label: question.question }));
+  const label = visible(question.question);
+  if (options.length === 0) return run(textWidget({ label }));
   const titles = options.map((option) =>
-    option.description ? `${option.label}  —  ${option.description}` : option.label,
+    visible(option.description ? `${option.label}  —  ${option.description}` : option.label),
   );
   titles.push(OTHER);
   const other = (): Promise<string> => run(textWidget({ label: "Your answer", mark: "✎" }));
   if (question.multiSelect) {
     const labels: string[] = [];
-    for (const i of await run(checkboxWidget({ label: question.question, titles }))) {
+    for (const i of await run(checkboxWidget({ label, titles }))) {
       labels.push(i === options.length ? await other() : options[i]!.label);
     }
     return labels;
   }
-  const chosen = await run(selectWidget({ label: question.question, titles, indicator: true }));
+  const chosen = await run(selectWidget({ label, titles, indicator: true }));
   return chosen === options.length ? other() : options[chosen]!.label;
 }
 
 /**
  * Answer one ask request inside a turn: a question set (an `ask` node's `QuestionSpec`s)
  * opens with the panel and asks each question under its rule, answering a record keyed by header;
- * `options` are one choice; otherwise a text prompt labelled with the question.
+ * `options` are one choice; otherwise a text prompt labelled with the question. The request's
+ * text is drawn through `visible`; the answers keep its labels and headers as they are.
  */
 async function promptRequest(run: RunWidget, output: Output, request: AskUserRequest): Promise<unknown> {
   const questions = (request.questions ?? []) as QuestionSpec[];
   if (questions.length > 0) {
-    writePanel(output, request.title || request.nodeId || "this step", request.question, questions.length);
+    const title = visible(request.title || request.nodeId || "this step");
+    writePanel(output, title, visible(request.question), questions.length);
     const answers: [string, unknown][] = [];
     for (const [i, question] of questions.entries()) {
-      writeRule(output, i + 1, questions.length, question.header);
+      writeRule(output, i + 1, questions.length, visible(question.header));
       answers.push([question.header, await askQuestion(run, question)]);
     }
     // `fromEntries` defines each key as data, so a header `__proto__` stays an entry.
@@ -1119,5 +1136,5 @@ async function promptRequest(run: RunWidget, output: Output, request: AskUserReq
     const options = request.options.map((label) => ({ label, description: "" }));
     return askQuestion(run, { question: request.question, options, multiSelect: false });
   }
-  return run(textWidget({ label: request.question || `input for ${request.nodeId}` }));
+  return run(textWidget({ label: visible(request.question || `input for ${request.nodeId}`) }));
 }

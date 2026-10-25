@@ -2,6 +2,7 @@
 
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../diagnostics.ts";
 import type { SourceCursor, SourceDocument } from "../source/index.ts";
+import { oneLineSlice } from "./source.ts";
 
 /** Where a load diagnostic points: a primary range or explicit frames, and notes. */
 export interface LoadDiagnosticOptions {
@@ -162,13 +163,7 @@ export class LoadDiagnostics {
  * whitespace.
  */
 export function sourceText(diagnostics: LoadDiagnostics, range: SourceRange | null): string | null {
-  const text = diagnostics.text;
-  if (text === null || range === null || range.startLine !== range.endLine) return null;
-  // Lines break as ranges count them (`rule: columns`); no empty line after a final break.
-  const lines = text.split(/\r\n|\r|\n/);
-  if (lines[lines.length - 1] === "") lines.pop();
-  if (!(1 <= range.startLine && range.startLine <= lines.length)) return null;
-  return lines[range.startLine - 1]!.slice(range.startCol - 1, range.endCol - 1).trim() || null;
+  return oneLineSlice(diagnostics.text, range)?.trim() || null;
 }
 
 /** A Compose flow cannot be loaded, expressed as one canonical diagnostic. */

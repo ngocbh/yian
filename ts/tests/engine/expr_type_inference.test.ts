@@ -87,3 +87,12 @@ test("a builtin call is not mistaken for a reference", () => {
   expect(inferred).toBeNull();
   expect(calls).toEqual([]);
 });
+
+test("a ?. read is Optional of its field", () => {
+  const str = Type.scalar(ValueKind.STRING);
+  expect(inferExprType(parseExpr("a.output?.k"), () => str)?.nullable).toBe(true);
+  expect(inferExprType(parseExpr("a.output.k"), () => str)?.nullable).toBe(false);
+  const Rec = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str]]), required: new Set(["k"]) });
+  expect(inferExprType(parseExpr("R(k='x').k"), () => null, (n) => (n === "R" ? Rec : null))?.nullable).toBe(false);
+  expect(inferExprType(parseExpr("R(k='x')?.k"), () => null, (n) => (n === "R" ? Rec : null))?.nullable).toBe(true);
+});

@@ -1517,9 +1517,10 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  * Inference is deliberately conservative: literal tokens, exact references, comparisons,
  * boolean combinators, and `isinstance(x, T)` have fixed result types, and a `T(...)`
  * constructor has type `T` (its value is checked against `T`), with field reads on the result
- * typed through `T`. Other forms stay unknown until their runtime value semantics can be
- * modeled without guessing. Reference and constructor lookup are injected so this
- * source-neutral expression layer knows nothing of a flow graph or compose document.
+ * typed through `T`. A read with a `?.` step (`a?.b`) is `Optional` of the field. Other forms
+ * stay unknown until their runtime value semantics can be modeled without guessing. Reference
+ * and constructor lookup are injected so this source-neutral expression layer knows nothing of a
+ * flow graph or compose document.
  *
  * Example: `inferExprType(parseExpr("answer == 42"), () => Type.scalar(ValueKind.INTEGER))`
  * gives `Type.scalar(ValueKind.BOOLEAN)`.
@@ -1552,21 +1553,20 @@ export function inferExprType(
     return null;
   }
   if (tree.data === "refcall") {
-    const children = tree.children;
-    const name = String(children[0]);
+    const { head: name, steps } = splitReference(tree);
     if (callSuffixOf(tree) !== undefined) {
       // `parseExpr` rejects dotted access on an `isinstance(...)` result.
       if (name === ISINSTANCE) return Type.scalar(ValueKind.BOOLEAN);
       let typ = typeFn === null || TEMPLATE_FNS.has(name) ? null : typeFn(name);
-      for (const child of children) {
-        if (!(child instanceof Tree) || child.data !== "trailer") continue;
+      for (const step of steps) {
         if (typ === null) return null;
-        typ = fieldReadType(typ, String(child.children[0]));
+        typ = fieldReadType(typ, step.name);
+        if (typ !== null && step.optional) typ = typ.replace({ nullable: true });
       }
       return typ;
     }
-    const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
-    return refTypeFn([name, ...segments].join("."));
+    const typ = refTypeFn(referencePath(tree));
+    return typ !== null && steps.some((step) => step.optional) ? typ.replace({ nullable: true }) : typ;
   }
   return BOOLEAN_NODES.has(tree.data) ? Type.scalar(ValueKind.BOOLEAN) : null;
 }

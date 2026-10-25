@@ -755,3 +755,18 @@ export function itemContract(
   if (!isListKind(source.type.kind) || source.type.element === undefined) return null;
   return new ValueContract(source.type.element);
 }
+
+/**
+ * Return the type a value with `contract` has for field reads: a value contract's type; for a
+ * partial record, a record of its names, each required, typed by its contract or `Any` when
+ * opaque; `null` for no contract.
+ */
+export function contractType(contract: OutputContract | null): Type | null {
+  if (contract === null) return null;
+  if (isExactly(contract, ValueContract)) return contract.type;
+  const fields = new Map<string, Type>();
+  for (const [name, field] of (contract as PartialRecordContract).fields) {
+    fields.set(name, field !== null ? field.type : Type.scalar(ValueKind.ANY));
+  }
+  return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });
+}

@@ -5,9 +5,9 @@
 
 import { expect, test } from "bun:test";
 
-import { bindingAlternatives, itemContract } from "../../src/compile/output_contracts.ts";
+import { bindingAlternatives, contractType, itemContract } from "../../src/compile/output_contracts.ts";
 import type { Node } from "../../src/nodes/base.ts";
-import { ValueContract } from "../../src/nodes/contracts.ts";
+import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { listKindForElement, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
 const str = Type.scalar(ValueKind.STRING);
@@ -24,4 +24,17 @@ test("itemContract reads a node's item source, given the node", () => {
   const map = { itemSourceKey: "over" } as unknown as Node;
   expect(typeEquals(itemContract(map, new Map([["over", "${a.output}"]]), producers, new Map())!.type, str)).toBe(true);
   expect(itemContract(null, new Map(), producers, new Map())).toBeNull();
+});
+
+test("contractType gives a partial record its names, opaque ones untyped", () => {
+  const typ = contractType(
+    new PartialRecordContract([
+      ["n", new ValueContract(str)],
+      ["o", null],
+    ]),
+  )!;
+  expect([...typ.fields!.keys()]).toEqual(["n", "o"]);
+  expect(typ.fields!.get("o")!.kind).toBe(ValueKind.ANY);
+  expect(contractType(null)).toBeNull();
+  expect(typeEquals(contractType(new ValueContract(strs))!, strs)).toBe(true);
 });

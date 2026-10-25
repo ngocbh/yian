@@ -39,7 +39,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { nullableReadErrors, type ReadRoots } from "../../src/compose/validate/field_reads.ts";
+import { parseCondition } from "../../src/expr/expressions.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
 
@@ -507,4 +511,89 @@ test.each([
 test("?. after a root loads, and a comprehension variable is a one-name root", () => {
   assembleText(FLOW_WITH_A.replace("${a.output.k}", "${a.output?.k}"));
   assembleText(FLOW_WITH_A.replace("${a.output.k}", "${[x?.output for x in [a.output]]}"));
+});
+
+// The nullable field-read check over one expression (`nullableReadErrors`): a `.` step whose
+// receiver may be null is an error, a `?.` step is not.
+
+const str = Type.scalar(ValueKind.STRING);
+const Rec = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([
+    ["k", str],
+    ["o", str.replace({ nullable: true })],
+  ]),
+  required: new Set(["k", "o"]),
+});
+const Nested = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([["r", Rec.replace({ nullable: true })]]),
+  required: new Set(["r"]),
+});
+/** One root `x` of type `typ`, and an untyped root `u`. */
+const roots = (typ: Type, nullable = false): ReadRoots => ({
+  contracts: (root) => (root === "x" ? [new ValueContract(typ)] : root === "u" ? [null] : undefined),
+  rootLength: () => 1,
+  nullable: () => nullable,
+  why: () => "it is Optional",
+  untyped: (root) => root === "u",
+  routing: () => null,
+});
+const errors = (text: string, r: ReadRoots) => nullableReadErrors(parseCondition(text), r, new Map());
+
+test.each([
+  ["x.k", Rec.replace({ nullable: true }), "${x.k} reads field 'k' of x, which may be null (it is Optional)"],
+  ["x.r.k", Nested, "${x.r.k} reads field 'k' of x.r, which may be null (field 'r' is Optional)"],
+  // ?. short-circuits only a null x; x exists and x.r may be null, so .k follows rule 1.
+  ["x?.r.k", Nested, "${x?.r.k} reads field 'k' of x?.r, which may be null (field 'r' is Optional)"],
+])("a . step on a value that may be null is an error (%s)", (text, typ, message) => {
+  expect(errors(text, roots(typ))[0]).toStartWith(message);
+});
+
+test.each(["x?.k", "x != null and x.k", "x == null or x.k", "x.r?.k", "x?.r?.k == null", "u.k.m"])(
+  "no error (%s)",
+  (text) => {
+    const typ = text.includes(".r") ? Nested : Rec.replace({ nullable: true });
+    expect(errors(text, roots(typ))).toEqual([]);
+  },
+);
+
+test("a root that may be skipped needs ?. whatever its type", () => {
+  expect(errors("x.k", roots(Rec, true))[0]).toBe(
+    "${x.k} reads field 'k' of x, which may be null (it is Optional); write x?.k, or check x != null first",
+  );
+});
+
+test("a read is an error only when every alternative rejects it", () => {
+  const two: ReadRoots = {
+    ...roots(Rec),
+    contracts: () => [new ValueContract(Rec.replace({ nullable: true })), new ValueContract(Rec)],
+  };
+  expect(errors("x.k", two)).toEqual([]);
+});
+
+// Design 2.6.6: a skipped producer is a missing root whatever its type.
+test.each([
+  ["no contract", null],
+  ["Any", new ValueContract(Type.scalar(ValueKind.ANY))],
+  ["Optional(Any)", new ValueContract(Type.scalar(ValueKind.ANY).replace({ nullable: true }))],
+])("a root that may be skipped needs ?. even when untyped (%s)", (_name, contract) => {
+  const skippable: ReadRoots = {
+    ...roots(Rec, true),
+    contracts: (root) => (root === "x" ? [contract] : undefined),
+    untyped: () => true,
+  };
+  expect(errors("x.k.m", skippable)[0]).toStartWith("${x.k} reads field 'k' of x, which may be null (it is Optional)");
+  expect(errors("x?.k.m", skippable)).toEqual([]);
+  expect(errors("x != null and x.k.m", skippable)).toEqual([]);
+});
+
+test("an untyped root that can't be skipped is never flagged", () => {
+  const optionalAny: ReadRoots = {
+    ...roots(Rec),
+    contracts: () => [new ValueContract(Type.scalar(ValueKind.ANY).replace({ nullable: true }))],
+    untyped: () => true,
+  };
+  expect(errors("x.k.m", optionalAny)).toEqual([]);
+  expect(errors("u.k.m", roots(Rec))).toEqual([]);
 });

@@ -18,7 +18,7 @@ import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { ContractOrigins, isExactly, type Parameter, ValueContract } from "../../nodes/contracts.ts";
 import { MapNode } from "../../nodes/map/node.ts";
-import { isInboxType, Type, ValueKind } from "../../typesys/values.ts";
+import { isInboxType, listKindForElement, Type } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import {
   type BuildContext,
@@ -29,15 +29,6 @@ import {
   siteKey,
 } from "./base.ts";
 import { callableDisplay, type ChildSignature, childSignature, resolveChild } from "./resolver.ts";
-
-// The list kind for a scalar or record element kind, as `resolveType` picks a list's storage.
-const LIST_KIND_FOR_ELEMENT: ReadonlyMap<ValueKind, ValueKind> = new Map([
-  [ValueKind.STRING, ValueKind.LIST_STRING],
-  [ValueKind.INTEGER, ValueKind.LIST_INTEGER],
-  [ValueKind.NUMBER, ValueKind.LIST_NUMBER],
-  [ValueKind.BOOLEAN, ValueKind.LIST_BOOLEAN],
-  [ValueKind.OBJECT, ValueKind.LIST_OBJECT],
-]);
 
 /** The fields `CallDescriptor`'s constructor takes: the common ones and the CALL's own. */
 export interface CallDescriptorFields extends NodeDescriptorFields {
@@ -217,17 +208,9 @@ export class CallDescriptor extends NodeDescriptor {
   }
 }
 
-/**
- * Return the type `list(element)`, a MAP's output: a record or union element gives
- * `LIST_OBJECT`, a `Literal` element `LIST_STRING`, a scalar its own list kind, else `LIST_ANY`,
- * as `resolveType` picks a list's storage.
- */
+/** Return the type `list(element)`, a MAP's output, stored as `resolveType` stores a list. */
 function listOf(element: Type): Type {
-  let kind: ValueKind;
-  if (element.tags !== undefined) kind = ValueKind.LIST_STRING;
-  else if (element.fields !== undefined || element.variants !== undefined) kind = ValueKind.LIST_OBJECT;
-  else kind = LIST_KIND_FOR_ELEMENT.get(element.kind) ?? ValueKind.LIST_ANY;
-  return new Type({ kind, element });
+  return new Type({ kind: listKindForElement(element), element });
 }
 
 /**

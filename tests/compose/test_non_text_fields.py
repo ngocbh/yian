@@ -316,6 +316,17 @@ def test_non_text_case_on_is_a_load_error(value, phrase):
     assert _start_line(error) == _line(text, "on: ")
 
 
+@pytest.mark.parametrize("value", ["input.proj", "hello", "''"])
+def test_case_on_text_without_a_reference_is_a_load_error(value):
+    text = _case_on(value)
+    error = _error(text)
+    assert (
+        "node 'a' (kind=case): `on:` must be a reference, but has no `${...}`; "
+        "write a reference such as `on: ${input.x}`"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "on: ")
+
+
 def test_null_case_on_is_absent():
     # `on: null` is the searched form, where `when: x` names no input.
     assert "unresolved references" in str(_error(_case_on("null")))

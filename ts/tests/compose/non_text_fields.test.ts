@@ -431,6 +431,18 @@ describe("parseNodes", () => {
     expect(startLine(error)).toBe(lineOf(text, "on: "));
   });
 
+  test.each(["input.proj", "hello", "''"])("case on text without a reference is a load error: %s", (value) => {
+    const text = caseOn(value);
+
+    const error = loadError(() => nodesOf(text, []));
+
+    expect(error.message).toContain(
+      "node 'a' (kind=case): `on:` must be a reference, but has no `${...}`; " +
+        "write a reference such as `on: ${input.x}`",
+    );
+    expect(startLine(error)).toBe(lineOf(text, "on: "));
+  });
+
   describe.each([...CALL_HEADS.keys()])("%s", (kind) => {
     test.each(NON_TEXT)("non-text call is a load error: %s", (value, phrase) => {
       const text = callFlow(kind, value);

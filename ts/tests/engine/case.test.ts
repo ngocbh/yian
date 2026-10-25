@@ -297,11 +297,11 @@ test("a searched case without then: is refused at its then:, else at cases:, els
   const casesRange = new SourceRange(7, 7, 10, 5);
   const nodeRange = new SourceRange(5, 5, 11, 1);
 
-  // Parsed, the second entry's `then:` range is null, so the error has no frame (as in Python).
+  // Parsed, the second entry's `then:` range is null, so the error is at `cases:`.
   const parsed = nodesOf(text, [], "flow.yaml").get("gate") as CaseDescriptor;
-  const unlocated = loadError(() => parsed.build(ctx));
-  expect(unlocated.message).toBe(message);
-  expect(unlocated.diagnostic.frames).toEqual([]);
+  const atParsedCases = loadError(() => parsed.build(ctx));
+  expect(atParsedCases.message).toBe(message);
+  expect(errorRange(atParsedCases)).toEqual(parsed.fieldRanges.get(siteKey("field", "cases"))!);
   // A descriptor built in code with a `then:` range for the entry: at that range.
   const atThen = loadError(() => new CaseDescriptor({ id: "gate", cases, thenRanges: [thenRange] }).build(ctx));
   expect(atThen.message).toBe(message);
@@ -312,6 +312,18 @@ test("a searched case without then: is refused at its then:, else at cases:, els
   expect(errorRange(atCases)).toEqual(casesRange);
   const atNode = loadError(() => new CaseDescriptor({ id: "gate", cases, range: nodeRange }).build(ctx));
   expect(errorRange(atNode)).toEqual(nodeRange);
+});
+
+test("a parsed searched case without when: is refused at cases:", () => {
+  const text =
+    "id: c\nname: c\nnodes:\n  gate:\n    kind: case\n    cases:\n      - when: x.output > 1\n        then: hot\n" +
+    "      - then: cold\n    else: cold\n";
+  const parsed = nodesOf(text, [], "flow.yaml").get("gate") as CaseDescriptor;
+
+  const error = loadError(() => parsed.build(located(text)));
+
+  expect(error.message).toBe("case node 'gate': each searched case needs a string `when:` expression");
+  expect(errorRange(error)).toEqual(parsed.fieldRanges.get(siteKey("field", "cases"))!);
 });
 
 test("searched reads are allocated in read order", () => {

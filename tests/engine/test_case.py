@@ -540,3 +540,24 @@ def test_on_value_with_both_quotes_is_loud_load_error():
 
     with pytest.raises(LoadError):
         _quote("a'b\"c")
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ("- when: x.output < 0", "each searched case needs a `then:`"),
+        ("- then: cold", "each searched case needs a string `when:` expression"),
+    ],
+)
+def test_parsed_searched_case_missing_a_key_is_refused_at_cases(entry, message):
+    text = (
+        "id: c\nname: c\nnodes:\n  gate:\n    kind: case\n    cases:\n"
+        "      - when: x.output > 1\n        then: hot\n"
+        f"      {entry}\n    else: cold\n"
+    )
+    document = SourceDocument.parse(text, label="flow.yaml")
+    desc = parse_nodes(document.root.child("nodes"))["gate"]
+    with pytest.raises(LoadError) as exc:
+        desc.build(BuildContext({}, diagnostics=LoadDiagnostics.from_document(document)))
+    assert message in str(exc.value)
+    assert exc.value.diagnostic.frames[0].range == desc.field_ranges[("field", "cases")]

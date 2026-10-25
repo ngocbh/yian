@@ -71,13 +71,16 @@ from yian.typesys import TypeCheckError
 from yian.typesys.values import IntTooLongError, reject_nonfinite
 from yian.compose.helpers.condition_guards import Guard, guarded_refs
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
-from yian.compose.helpers.tags import yaml_quoted
+from yian.compose.helpers.tags import has_span, yaml_quoted
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
 from yian.compose.source import SourceCursor
 
 if TYPE_CHECKING:
     from yian.diagnostics import SourceRange
     from yian.compose.source.catalog import _SourceCatalogBuilder
+
+_ON_FIX = "write a reference such as `on: ${input.x}`"
+
 
 @dataclass(frozen=True, kw_only=True)
 class CaseDescriptor(NodeDescriptor):
@@ -194,16 +197,17 @@ class CaseDescriptor(NodeDescriptor):
         own_range: Optional[SourceRange],
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Reject a non-text `on:`, then run the base checks."""
-        reject_non_text(
-            cls.kind,
-            node_id,
-            "on",
-            kwargs.get("on"),
-            ranges.get(("field", "on")) or own_range,
-            diagnostics,
-            fix="write a reference such as `on: ${input.x}`",
-        )
+        """Reject a non-text `on:` or text with no `${...}` reference, then run the base checks."""
+        on = kwargs.get("on")
+        rng = ranges.get(("field", "on")) or own_range
+        reject_non_text(cls.kind, node_id, "on", on, rng, diagnostics, fix=_ON_FIX)
+        # Text with no span is a constant, so every run would route the same way.
+        if isinstance(on, str) and not has_span(on):
+            raise diagnostics.error(
+                f"node {node_id!r} (kind={cls.kind}): `on:` must be a reference, "
+                f"but has no `${{...}}`; {_ON_FIX}",
+                range=rng,
+            )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     @classmethod
@@ -758,9 +762,9 @@ def _searched_params(
     for ci, c in enumerate(desc.cases):
         when = c.get("when")
         when_range = (
-            desc.when_ranges[ci]
-            if ci < len(desc.when_ranges)
-            else desc.field_ranges.get(("field", "cases")) or desc.range
+            (desc.when_ranges[ci] if ci < len(desc.when_ranges) else None)
+            or desc.field_ranges.get(("field", "cases"))
+            or desc.range
         )
         if not isinstance(when, str):
             raise diagnostics.error(
@@ -858,9 +862,9 @@ def _desugar_searched(
             raise diagnostics.error(
                 f"case node {desc.id!r}: each searched case needs a `then:`",
                 range=(
-                    desc.then_ranges[index]
-                    if index < len(desc.then_ranges)
-                    else desc.field_ranges.get(("field", "cases")) or desc.range
+                    (desc.then_ranges[index] if index < len(desc.then_ranges) else None)
+                    or desc.field_ranges.get(("field", "cases"))
+                    or desc.range
                 ),
             )
         rewritten = _rewrite_when(when, params.case_locals[index])

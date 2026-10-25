@@ -56,6 +56,7 @@ import { pythonTypeName } from "../../typesys/types.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
 import { type Guard, guardedRefs } from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import { hasSpan } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import type { ScalarStyle } from "../source/common.ts";
@@ -68,6 +69,8 @@ import {
   rejectNonText,
   siteKey,
 } from "./base.ts";
+
+const ON_FIX = "write a reference such as `on: ${input.x}`";
 
 /** One authored `cases:` entry as YAML read it: `when:` and `then:` to their values. */
 export type CaseSpec = Readonly<Record<string, unknown>>;
@@ -199,8 +202,8 @@ export class CaseDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject an `on:` YAML read as non-text (`null` stays absent) or text holding a lone surrogate,
-   * then run the base checks.
+   * Reject an `on:` YAML read as non-text (`null` stays absent), text holding a lone surrogate or
+   * text with no `${...}` reference, then run the base checks.
    *
    * @throws LoadError at `on:` (else at the node).
    */
@@ -213,10 +216,18 @@ export class CaseDescriptor extends NodeDescriptor {
   ): void {
     const on = fields["on"] ?? null;
     const range = ranges.get(siteKey("field", "on")) ?? ownRange;
-    rejectNonText(this.kind, nodeId, "on", on, range, diagnostics, {
-      fix: "write a reference such as `on: ${input.x}`",
-    });
-    if (typeof on === "string") checkWrittenValue(on, `node ${reprText(nodeId)} field 'on'`, range, diagnostics);
+    rejectNonText(this.kind, nodeId, "on", on, range, diagnostics, { fix: ON_FIX });
+    if (typeof on === "string") {
+      checkWrittenValue(on, `node ${reprText(nodeId)} field 'on'`, range, diagnostics);
+      // Text with no span is a constant, so every run would route the same way.
+      if (!hasSpan(on)) {
+        throw diagnostics.error(
+          `node ${reprText(nodeId)} (kind=${this.kind}): \`on:\` must be a reference, ` +
+            `but has no \`\${...}\`; ${ON_FIX}`,
+          { range },
+        );
+      }
+    }
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
   }
 
@@ -642,7 +653,7 @@ function joinSources(reads: readonly ConditionRead[]): string[] {
  *
  * @param guardsOf Gives each occurrence's guard; by default what the checks before it prove
  *   through `and`, `or` and `not` (`guardedRefs`).
- * @throws LoadError at a `when:` that isn't text or doesn't parse.
+ * @throws LoadError at a `when:` that isn't text or doesn't parse (at `cases:` when it is missing).
  * @throws RangeError when `guardsOf` gives a different number of guards than there are reads.
  */
 function searchedParams(
@@ -668,10 +679,7 @@ function searchedParams(
 
   desc.cases.forEach((spec, caseIndex) => {
     const when = spec["when"];
-    const whenRange =
-      caseIndex < desc.whenRanges.length
-        ? (desc.whenRanges[caseIndex] ?? null)
-        : (desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range);
+    const whenRange = desc.whenRanges[caseIndex] ?? desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range;
     if (typeof when !== "string") {
       throw diagnostics.error(
         `case node ${reprText(desc.id)}: each searched case needs a string \`when:\` expression`,
@@ -740,8 +748,8 @@ export function searchedParamGuards(
  * Reads are as `searchedParams` defines them. Each `__rN` is located at the `cases[N].when` it
  * was first seen in and labelled `cases[N].when`.
  *
- * @throws LoadError when a `when:` isn't text or doesn't parse (at that `when:`), or a case lacks
- *   its `then:` (at the `then:`, else at `cases:`).
+ * @throws LoadError when a `when:` isn't text or doesn't parse (at that `when:`, else at `cases:`),
+ *   or a case lacks its `then:` (at the `then:`, else at `cases:`).
  */
 function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lowering {
   const params = searchedParams(desc, diagnostics);
@@ -757,10 +765,7 @@ function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lo
     const then = spec["then"] ?? null;
     if (then === null) {
       throw diagnostics.error(`case node ${reprText(desc.id)}: each searched case needs a \`then:\``, {
-        range:
-          index < desc.thenRanges.length
-            ? (desc.thenRanges[index] ?? null)
-            : (desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range),
+        range: desc.thenRanges[index] ?? desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range,
       });
     }
     // As in `desugarOn`: the branch check has made each `then:` and the `else:` a node name, and

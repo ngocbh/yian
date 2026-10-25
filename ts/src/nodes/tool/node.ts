@@ -172,6 +172,21 @@ function durationSeconds(value: unknown, tool: string, name: string): number | n
 }
 
 /**
+ * Return the record time `seconds` after `caps`' clock (`realScheduler` when absent) for the
+ * duration input `name`, whose bound value is `value`.
+ *
+ * @throws BindingError classified `contract.input` when that time falls after the year 9999.
+ */
+function deadlineAfter(caps: NodeCaps, seconds: number, tool: string, name: string, value: unknown): string {
+  try {
+    return formatRecordTime((caps.scheduler ?? realScheduler).now() + seconds * 1000);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw inputError(`${tool} \`${name}\` ${valueRepr(value)}: the deadline falls after the year 9999`, error);
+  }
+}
+
+/**
  * A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).
  *
  * The node's bound input record is checked by `ToolSet.validate` and passed to `ToolSet.invoke`;
@@ -318,8 +333,8 @@ export class ToolNode extends Node {
    * @throws ToolTimeoutError when an `ask` timed out and the declared output doesn't allow null.
    */
   override async forward(inputs: Record<string, unknown>, caps: NodeCaps): Promise<Output | Pending> {
-    if (this.builtin === TAKE) return this.takeRequest(inputs);
-    if (this.builtin === SLEEP) return this.sleepRequest(inputs);
+    if (this.builtin === TAKE) return this.takeRequest(inputs, caps);
+    if (this.builtin === SLEEP) return this.sleepRequest(inputs, caps);
     const tools = caps.tools ?? new ToolSet();
     // Outside a run each call gets a fresh id, so there is no call to hold.
     const callId = tools.runId === "" ? null : toolCallId(tools.runId, this.id);
@@ -418,15 +433,7 @@ export class ToolNode extends Node {
     const parsed = raw === null ? null : parseQuestions(raw);
     const seconds = durationSeconds(timeout, ASK, "timeout");
     // Computed before the handler runs so the request carries it; recorded only on pending().
-    let deadline: string | null = null;
-    if (seconds !== null) {
-      try {
-        deadline = formatRecordTime((caps.scheduler ?? realScheduler).now() + seconds * 1000);
-      } catch (error) {
-        if (!(error instanceof RangeError)) throw error;
-        throw inputError(`ask \`timeout\` ${valueRepr(timeout)}: the deadline falls after the year 9999`, error);
-      }
-    }
+    const deadline = seconds === null ? null : deadlineAfter(caps, seconds, ASK, "timeout", timeout);
     const answer = await tools.invokeTrusted(
       ASK,
       {
@@ -473,14 +480,16 @@ export class ToolNode extends Node {
    * whether it commits at once or waits, so nothing is recorded here.
    *
    * @throws BindingError classified `contract.input` when `from` isn't an inbox, `take` isn't
-   *   `one` or `all`, or `timeout` isn't a duration.
+   *   `one` or `all`, or `timeout` isn't a duration or ends after the year 9999.
    */
-  private takeRequest(inputs: Record<string, unknown>): Pending {
+  private takeRequest(inputs: Record<string, unknown>, caps: NodeCaps): Pending {
     const inbox = inboxName(inputs.from);
     if (inbox === null) throw inputError(`take \`from\` must be an inbox, got ${valueRepr(inputs.from ?? null)}`);
     const mode = inputs.take ?? "one";
     if (mode !== "one" && mode !== "all") throw inputError(`take \`take\` must be one or all, got ${valueRepr(mode)}`);
     const timeoutSeconds = durationSeconds(inputs.timeout, TAKE, "timeout");
+    // The engine turns the timeout into a record-time deadline; one it can't write is the input's fault.
+    if (timeoutSeconds !== null) deadlineAfter(caps, timeoutSeconds, TAKE, "timeout", inputs.timeout);
     return new Pending([], { wait: { tool: TAKE, inbox, mode, timeoutSeconds } });
   }
 
@@ -489,14 +498,17 @@ export class ToolNode extends Node {
    * already past is still a request, which the engine commits at once.
    *
    * @throws BindingError classified `contract.input` unless exactly one of `until` and `for` is
-   *   given, or when `until` isn't a date or datetime or `for` isn't a duration.
+   *   given, or when `until` isn't a date or datetime or `for` isn't a duration or ends after the
+   *   year 9999.
    */
-  private sleepRequest(inputs: Record<string, unknown>): Pending {
+  private sleepRequest(inputs: Record<string, unknown>, caps: NodeCaps): Pending {
     const until = inputs.until ?? null;
     const forValue = inputs.for ?? null;
     if ((until === null) === (forValue === null)) throw inputError("sleep takes exactly one of `until` and `for`");
     if (until === null) {
-      return new Pending([], { wait: { tool: SLEEP, until: null, forSeconds: durationSeconds(forValue, SLEEP, "for") } });
+      const forSeconds = durationSeconds(forValue, SLEEP, "for")!;
+      deadlineAfter(caps, forSeconds, SLEEP, "for", forValue);
+      return new Pending([], { wait: { tool: SLEEP, until: null, forSeconds } });
     }
     if (typeof until !== "string") {
       throw inputError(`sleep \`until\` did not resolve to a date/datetime: ${valueRepr(until)}`);

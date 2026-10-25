@@ -78,15 +78,22 @@ import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "./b
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
 import { parseMemoryDeclarations } from "./helpers/memory.ts";
-import { boundaryFieldRanges } from "./helpers/source.ts";
+import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
-import { notTextDetail, notTextError, rejectInfinityName } from "./nodes/base.ts";
+import { notTextDetail, notTextError } from "./nodes/base.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
-import { flowNodesCursor, isEmptyValue, parseFile, parseSourceDocument } from "./parse/file.ts";
+import {
+  flowNodesCursor,
+  isEmptyValue,
+  parseFile,
+  parseSourceDocument,
+  signatureNodeBody,
+  signatureParams,
+} from "./parse/file.ts";
 import { scopeOrigin, SourceCatalog, SourceCatalogBuilder } from "./source/catalog.ts";
 import { SourceAccessError, SourceCursor, type SourceDocument } from "./source/index.ts";
 
@@ -191,14 +198,8 @@ function sourceChild(cursor: SourceCursor | null, key: string): SourceCursor | n
  */
 export function singleNodeDefCursor(name: string, body: ValueRecord, defCursor: SourceCursor | null): SourceCursor {
   const paramTypes = isRecord(body["inputs"]) ? body["inputs"] : {};
-  const generatedInputs: ValueRecord = Object.fromEntries(
-    Object.keys(paramTypes).map((param) => [param, `\${input.${param}}`]),
-  );
-  const nodeBody: ValueRecord = Object.fromEntries(
-    Object.entries(body).filter(([key]) => key !== "inputs" && key !== "outputs"),
-  );
-  nodeBody["input"] = generatedInputs;
-  if (Object.hasOwn(body, "outputs")) nodeBody["output"] = body["outputs"]!;
+  const nodeBody = signatureNodeBody(body, paramTypes, { input: "inputs", output: "outputs" });
+  const generatedInputs = nodeBody["input"] as ValueRecord;
 
   if (defCursor === null) return SourceCursor.virtual(Object.fromEntries([[name, nodeBody]]));
 
@@ -333,15 +334,6 @@ async function newLoadCtx(codeRoot: string | null): Promise<LoadCtx> {
 // it, so a custom `childResolver` that calls `loadFlow` is bounded too. Each import runs in its
 // own store (`run`, never `enterWith`), so concurrent loads keep separate counts.
 const ACTIVE_IMPORTS = new AsyncLocalStorage<number>();
-
-/**
- * Return `path` spelled as Python's `PurePosixPath` spells it: repeated slashes merged, `.`
- * segments and a trailing slash dropped, `..` kept.
- */
-function pathText(path: string): string {
-  const root = path.startsWith("/") ? "/" : "";
-  return root + path.split("/").filter((part) => part !== "" && part !== ".").join("/") || ".";
-}
 
 /** Return a `system.paths` entry: a relative one joined onto the file's own directory. */
 function joinPath(base: string, path: string): string {
@@ -1820,19 +1812,14 @@ function loadSingleNodeDef(
 ): ComposedFlow {
   const diagnostics = scope.diagnostics;
   const where = `defs entry ${reprText(name)}`;
-  const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : null;
   const inputCursor = sourceChild(defCursor, "input");
-  if (!isRecord(inputs) && !isEmptyValue(inputs)) {
-    throw diagnostics.error(
-      `${where}: single-node \`input:\` must be a param map (\`name: !TYPE\`, e.g. \`topic: !str\`)`,
-      { range: inputCursor?.range ?? defCursor?.range ?? null },
-    );
-  }
-  const paramTypes: ValueRecord = isRecord(inputs) ? inputs : {};
-  // The node reads each parameter by bare name, so `inf` would read infinity instead.
-  if (Object.hasOwn(paramTypes, "inf")) {
-    rejectInfinityName(`${where}: input 'inf'`, "inf", inputCursor?.keyRangeOf("inf") ?? null, diagnostics);
-  }
+  const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : null, {
+    where,
+    inputLabel: "single-node `input:`",
+    inputCursor,
+    fallbackRange: defCursor?.range ?? null,
+    diagnostics,
+  });
   const nodesCursor = singleNodeDefCursor(name, body, defCursor);
   try {
     return assemble({

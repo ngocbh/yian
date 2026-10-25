@@ -303,7 +303,7 @@ describe("yian chat", () => {
   );
 
   test(
-    "two SIGINTs 3 s apart during one turn both interrupt; with no agent to cut, nothing is appended",
+    "two SIGINTs 3 s apart during one turn both interrupt; with no agent to cut, the first records an empty Stop and the second nothing",
     async () => {
       const { started, tools } = holdTool();
       const { io, stdin, stdout, stderr } = chatIo();
@@ -329,7 +329,8 @@ describe("yian chat", () => {
       const { code } = await chatting;
       expect(code).toBe(0);
       expect(stderr()).not.toContain("chat cancelled");
-      expect(records(log).some((record) => record instanceof InterruptedRecord)).toBe(false);
+      const stops = records(log).filter((record) => record instanceof InterruptedRecord);
+      expect(stops.map((record) => [...(record as InterruptedRecord).nodes])).toEqual([[]]);
     },
     TIMEOUT,
   );

@@ -245,7 +245,7 @@ export class NodeDataError extends Error {
   }
 }
 
-/** Why a host delivery (a send, complete, close, interrupt or cancel) was refused. */
+/** Why a host delivery (a send, withdraw, complete, close, interrupt or cancel) was refused. */
 export type DeliveryRefusal =
   | "unknown_inbox"
   | "not_started"
@@ -257,7 +257,7 @@ export type DeliveryRefusal =
   | "call_settled"
   | "not_host_call";
 
-/** A send, complete, close, interrupt or cancel the run refuses; nothing was appended. */
+/** A send, withdraw, complete, close, interrupt or cancel the run refuses; nothing was appended. */
 export class DeliveryRefused extends RangeError {
   override name = "DeliveryRefused";
   /** Why the delivery was refused. */
@@ -1372,37 +1372,79 @@ export function prepareRunCancelled(state: RunState): PreparedTransition {
 }
 
 /**
- * Prepare a host's interrupt of the agents reading `inbox` as their steer inbox: `running` (the
- * engine's in-flight readers, in flight order) then each waiting node whose `node_waiting` named
- * `inbox`, leaving out nodes that already hold a pending interrupt. The record closes the named
- * nodes' open calls (`interrupted`); a closed inbox can still be interrupted, since a reply may
- * still run on what it already read.
+ * Prepare a host's interrupt (a Stop) of `inbox`: an `interrupted` record naming the agents
+ * reading it as their steer inbox, `running` (the engine's in-flight readers, in flight order)
+ * then each waiting node whose `node_waiting` named `inbox`, leaving out nodes already being
+ * stopped (holding a pending interrupt, or running after honoring one). With no reader it names
+ * none and only records the Stop, which a reader opening the inbox while it stands honors. The
+ * record closes the named nodes' open calls (`interrupted`); a closed inbox can still be
+ * interrupted, since a reply may still run on what it already read.
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
  * @param running The in-flight nodes reading `inbox` as their steer inbox, which only the engine
- *   knows; none offline.
+ *   knows; `null` offline, where any in-flight node counts as an open reader.
  * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
- *   per open host call of the named nodes; `null` when no node is left to name.
+ *   per open host call of the named nodes; `null` when the run waits for the inbox's next message
+ *   (a take of it waits with nothing unread and no reader is open), or when it is already
+ *   stopping (a Stop on the inbox stands, or every current reader holds or has honored an
+ *   interrupt).
  * @throws TypeError when an argument has the wrong type.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
  *   such inbox.
  * @throws RangeError when a running node can't be interrupted (see `validateInterrupted`).
  */
-export function prepareInterrupt(state: RunState, inbox: string, running: readonly string[] = []): PreparedTransition | null {
+export function prepareInterrupt(state: RunState, inbox: string, running: readonly string[] | null = null): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new TypeError("prepareInterrupt expects a RunState");
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
-  if (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string")) {
-    throw new TypeError("running must be an array of node ids");
+  if (running !== null && (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string"))) {
+    throw new TypeError("running must be null or an array of node ids");
   }
   requireDeliverable(state);
   if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
   const w = state.waits;
-  const waiting = [...w.waiting].filter(([, node]) => node.steerInbox === inbox).map(([nodeId]) => nodeId);
-  const nodes = [...running, ...waiting].filter((nodeId) => !w.interrupts.has(nodeId));
-  if (nodes.length === 0) return null;
+  // Offline no engine says which in-flight node opened the inbox, so any counts as a reader.
+  const readersOpen = running === null ? state.inFlight.size > 0 : running.length > 0;
+  if (!readersOpen && awaitsNextMessage(w, inbox)) return null;
+  // Already stopping: a second Esc never carries a Stop into the next reply.
+  if (w.stops.has(inbox)) return null;
+  const runningReaders = running ?? [];
+  const stopping = (nodeId: string): boolean =>
+    w.interrupts.has(nodeId) || (runningReaders.includes(nodeId) && w._honored.has(nodeId));
+  const readers = [...runningReaders, ...waitingReaders(state, inbox)];
+  const nodes = readers.filter((nodeId) => !stopping(nodeId));
+  if (readers.length > 0 && nodes.length === 0) return null;
   return prepareRecord(state, new InterruptedRecord(inbox, nodes));
+}
+
+/**
+ * Prepare the remembered Stop on `inbox` for `nodeId`, which has just opened it as its steer
+ * inbox: an `interrupted` record naming it and each waiting reader without a pending interrupt.
+ * The caller checks that a Stop stands and that the node holds and has honored none.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @param nodeId The in-flight node that opened `inbox`.
+ * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
+ *   per open host call of the named nodes.
+ * @throws TypeError when an argument has the wrong type.
+ * @throws DeliveryRefused as `prepareInterrupt`.
+ * @throws RangeError when the node can't be interrupted (see `validateInterrupted`).
+ */
+export function prepareAppliedStop(state: RunState, inbox: string, nodeId: string): PreparedTransition {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareAppliedStop expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  if (typeof nodeId !== "string") throw new TypeError("nodeId must be a string");
+  requireDeliverable(state);
+  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  const waiting = waitingReaders(state, inbox).filter((id) => id !== nodeId && !state.waits.interrupts.has(id));
+  return prepareRecord(state, new InterruptedRecord(inbox, [nodeId, ...waiting]));
+}
+
+/** The waiting nodes whose `node_waiting` named `inbox` as their steer inbox, in waiting order. */
+function waitingReaders(state: RunState, inbox: string): string[] {
+  return [...state.waits.waiting].filter(([, node]) => node.steerInbox === inbox).map(([nodeId]) => nodeId);
 }
 
 /**
@@ -4079,14 +4121,15 @@ function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): 
  * Require an interrupt record to name, once each, nodes reading its declared inbox as their steer
  * inbox: in flight with `readsSteerInbox` (which inbox a running node opened is the engine's word,
  * bound at run time), or waiting with `node_waiting.steer_inbox` equal to it; none holding a
- * pending interrupt already; and every waiting reader of the inbox without one among them.
+ * pending interrupt already; and every waiting reader of the inbox without one among them. It may
+ * name none: the Stop is recorded for a reader that opens the inbox later. When a host may record
+ * one (the idle and already-stopping rules) is `prepareInterrupt`'s.
  */
 function validateInterrupted(state: RunState, record: InterruptedRecord): void {
   const { inbox, nodes } = record;
   if (inboxElementType(state, inbox) === null) {
     throw new RangeError(`Interrupted inbox ${reprText(inbox)} is no inbox the START declares`);
   }
-  if (nodes.length === 0) throw new RangeError("Interrupted names at least one node");
   if (new Set(nodes).size !== nodes.length) throw new RangeError("Interrupted names each node once");
   const w = state.waits;
   for (const nodeId of nodes) {

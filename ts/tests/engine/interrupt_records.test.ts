@@ -30,12 +30,13 @@ import { prepareDelivery } from "../../src/runtime/engine.ts";
 import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import type { RunLog } from "../../src/runtime/log.ts";
+import { MemoryRunLog, type RunLog } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   DeliveryRefused,
   prepareComplete,
   prepareInboxClosed,
+  prepareAppliedStop,
   prepareInterrupt,
   prepareNodeStarted,
   prepareNodeStep,
@@ -44,11 +45,13 @@ import {
   prepareRecord,
   prepareRunCancelled,
   prepareRunResumed,
-  type RunState,
+  prepareRunStarted,
+  prepareSend,
+  RunState,
 } from "../../src/runtime/state.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { RUN_ID } from "./run_state_fixtures.ts";
-import { MSGS, paramFlow, started, tool } from "./waits_fixtures.ts";
+import { FIXED_CLOCK, RUN_ID, startData } from "./run_state_fixtures.ts";
+import { call, MSGS, paramFlow, started, takeEntry, tool } from "./waits_fixtures.ts";
 
 const commit = (node: string, key: string, value: unknown) => new PoolCommitRecord(node, key, canonicalTyped(value, null)[0]);
 /** The run start's commits: a system value, then the START inputs (seqs 0 and 1). */
@@ -159,11 +162,34 @@ function reader(id: string, inbox: string | null = "msgs"): { node: AgentNode; w
   return { node, wiring: inbox === null ? null : [id, new Map([[STEER_INBOX_KEY, new Binding(`\${input.${inbox}}`)]])] };
 }
 
-/** START(msgs, other) -> a (reads msgs), w (reads msgs), w2 (reads other), t (an ask TOOL) -> END. */
+/**
+ * START(msgs, other) -> a (reads msgs), w (reads msgs), w2 (reads other), t (an ask TOOL), t2 (a
+ * take TOOL) -> END.
+ */
 function readersFlow() {
   const nodes = [reader("a"), reader("w"), reader("w2", "other")];
   const wiring = new Map(nodes.flatMap((each) => (each.wiring === null ? [] : [each.wiring])));
-  return started(paramFlow([MSGS, OTHER], { wiring }, ...nodes.map((each) => each.node), tool("t", "ask")));
+  return started(paramFlow([MSGS, OTHER], { wiring }, ...nodes.map((each) => each.node), tool("t", "ask"), tool("t2", "take")));
+}
+
+type Run = ReturnType<typeof readersFlow>;
+
+/** Start ready nodes, head first, until `nodeId` has started. */
+function startUpTo(run: Run, nodeId: string): void {
+  while (!run.state.inFlight.has(nodeId)) commitPrepared(run.log, run.state, prepareNodeStarted(run.state, run.state.ready[0]!));
+}
+
+/** Start nodes up to `t2`, whose take then waits on msgs. */
+function waitTake(run: Run): void {
+  startUpTo(run, "t2");
+  commitPrepared(run.log, run.state, prepareNodeWaiting(run.state, "t2", { callIds: [call("t2")], waits: [takeEntry("t2")] }));
+}
+
+/** Commit an interrupt of msgs with `running`, returning its record's nodes. */
+function interruptNow(run: Run, running: readonly string[] | null): string[] {
+  const prepared = prepareInterrupt(run.state, "msgs", running)!;
+  commitPrepared(run.log, run.state, prepared);
+  return [...(prepared.record as InterruptedRecord).nodes];
 }
 
 /** A recorded chat reply calling `calls` (`[id, name]`). */
@@ -238,12 +264,92 @@ test("prepareInterrupt names running readers first, then waiting readers, and cl
   expect(state.waits.lastFrontier).toBe("node_waiting");
 });
 
-test("no reader: prepareInterrupt returns null", () => {
-  const { state } = readersFlow();
-  expect(prepareInterrupt(state, "msgs", [])).toBeNull();
+test.each<[string, (run: Run) => void, readonly string[] | null, string[] | null]>([
+  ["idle at the take: no record", waitTake, [], null],
+  [
+    "the take was answered, not woken: an empty record",
+    (run) => {
+      waitTake(run);
+      commitPrepared(run.log, run.state, prepareSend(run.state, "msgs", "x"));
+    },
+    [],
+    [],
+  ],
+  ["no take waits, nothing runs: an empty record", () => {}, [], []],
+  ["a running reader: named", waitTake, ["a"], ["a"]],
+  // Offline no engine says which in-flight node opened the inbox, so any counts as a reader.
+  ["offline, crashed nodes in flight and the take waiting: an empty record", waitTake, null, []],
+])("prepareInterrupt: %s", (_, setup, running, nodes) => {
+  const run = readersFlow();
+  setup(run);
+  const prepared = prepareInterrupt(run.state, "msgs", running);
+  if (nodes === null) expect(prepared).toBeNull();
+  else expect([...(prepared!.record as InterruptedRecord).nodes]).toEqual(nodes);
 });
 
-test("a node with a pending interrupt is left out; all left out is null", () => {
+test("already stopping: while a Stop stands, a repeated interrupt records nothing, even with a reader just opened", () => {
+  const run = readersFlow();
+  expect(interruptNow(run, [])).toEqual([]);
+  expect(prepareInterrupt(run.state, "msgs", [])).toBeNull();
+  startUpTo(run, "a");
+  // That reader gets its interrupt from the applied Stop, not the host's.
+  expect(prepareInterrupt(run.state, "msgs", ["a"])).toBeNull();
+});
+
+test("already stopping: a running reader that has honored an interrupt isn't named again", () => {
+  const run = readersFlow();
+  startUpTo(run, "a");
+  expect(interruptNow(run, ["a"])).toEqual(["a"]);
+  commitStep(run.log, run.state, "a", { kind: "interrupted", by: BigInt(run.state.waits.interrupts.get("a")!) });
+  // t2's take waiting on msgs is a pickup: the Stop ends.
+  waitTake(run);
+  expect(run.state.waits.stops.has("msgs")).toBe(false);
+  expect(prepareInterrupt(run.state, "msgs", ["a"])).toBeNull();
+});
+
+test("already stopping: a reader holding an interrupt is left out; the others are named", () => {
+  const run = readersFlow();
+  startUpTo(run, "a");
+  interruptNow(run, ["a"]);
+  waitTake(run);
+  expect(interruptNow(run, ["a", "w"])).toEqual(["w"]);
+});
+
+test("prepareAppliedStop names the opener and each waiting reader without an interrupt, whatever stands", () => {
+  const run = readersFlow();
+  const { log, state } = run;
+  interruptNow(run, []);
+  startUpTo(run, "t");
+  commitStep(log, state, "w", replyStep(["c1", "ask_user"]));
+  commitStep(log, state, "w", pendingStep("w", 1, 0, "c1"));
+  commitPrepared(log, state, prepareNodeWaiting(state, "w", { callIds: [agentCall("w", 1, 0)], steerInbox: "msgs" }));
+  const prepared = prepareAppliedStop(state, "msgs", "a");
+  expect([...(prepared.record as InterruptedRecord).nodes]).toEqual(["a", "w"]);
+  expect(prepareRecord(state, prepared.record).record).toEqual(prepared.record);
+  commitPrepared(log, state, prepared);
+  expect(state.waits.stops.get("msgs")!.stopped).toBe(true);
+  expect(state.waits.calls.get(agentCall("w", 1, 0))).toMatchObject({ state: "closed", closedReason: "interrupted" });
+});
+
+test("prepareAppliedStop refusals: unknown inbox, not started, ended", () => {
+  const run = readersFlow();
+  startUpTo(run, "a");
+  expect(() => prepareAppliedStop(run.state, "nope", "a")).toThrow(/no inbox 'nope'/);
+  const fresh = new RunState(run.state.flow);
+  commitPrepared(new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK }), fresh, prepareRunStarted(fresh, startData()));
+  expect(() => prepareAppliedStop(fresh, "msgs", "a")).toThrow(DeliveryRefused);
+  commitPrepared(run.log, run.state, prepareRunCancelled(run.state));
+  expect(() => prepareAppliedStop(run.state, "msgs", "a")).toThrow(DeliveryRefused);
+});
+
+test("replay accepts an interrupted record naming no node unless a waiting reader lacks one", () => {
+  const { state } = readersFlow();
+  expect([...(prepareRecord(state, new InterruptedRecord("msgs", [])).record as InterruptedRecord).nodes]).toEqual([]);
+  const busy = interruptible();
+  expect(() => prepareRecord(busy.state, new InterruptedRecord("msgs", []))).toThrow(/must name waiting node 'w'/);
+});
+
+test("a node with a pending interrupt is left out; all left out is null (already stopping)", () => {
   const { log, state } = interruptible();
   commitPrepared(log, state, prepareInterrupt(state, "msgs", ["a"])!);
   expect(prepareInterrupt(state, "msgs", ["a"])).toBeNull();
@@ -380,8 +486,10 @@ test("the interrupt delivery op prepares the interrupt; a missing running is non
   const { state } = interruptible();
   const viaOp = prepareDelivery(state, { kind: "interrupt", inbox: "msgs", running: ["a"] })!;
   expect([...(viaOp.record as InterruptedRecord).nodes]).toEqual(["a", "w"]);
+  // Without `running` the delivery is offline: `a` in flight counts as an open reader for the idle
+  // rule, and only the waiting reader is named.
   expect([...(prepareDelivery(state, { kind: "interrupt", inbox: "msgs" })!.record as InterruptedRecord).nodes]).toEqual(["w"]);
-  expect(() => prepareDelivery(state, { kind: "nope" } as never)).toThrow(/send, complete, close, interrupt or cancel/);
+  expect(() => prepareDelivery(state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, close, interrupt or cancel/);
 });
 
 // --- The remembered Stop's window ------------------------------------------------------------- //

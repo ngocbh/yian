@@ -87,24 +87,29 @@ test("deliver(interrupt) names the opened running reader and aborts its signal i
   expect(engine.state.pool.store.get("p")!.toObject()).toBe(true);
 });
 
-test("a reader that hasn't opened its inbox yet isn't named: the interrupt is a no-op", async () => {
+test("a reader that hasn't opened its inbox yet isn't named: an empty Stop is recorded", async () => {
   const probe = new InterruptProbe("p", "m", false);
   const engine = chain(probe);
   const running = engine.run();
   await probe.started;
   const before = engine.log.records().length;
-  expect(engine.deliver({ kind: "interrupt", inbox: "m" })).toEqual({ seq: null, events: [] });
-  expect(engine.log.records().length).toBe(before);
+  const { seq, events, record } = engine.deliver({ kind: "interrupt", inbox: "m" });
+  expect(seq).toBe(before);
+  expect(events).toEqual([]);
+  expect(record).toEqual(engine.log.records().at(-1)!.record);
+  expect([...(record as InterruptedRecord).nodes]).toEqual([]);
   probe.release();
   await running;
 });
 
-test("a reader of another inbox isn't named", async () => {
+test("a reader of another inbox isn't named: an empty Stop is recorded", async () => {
   const probe = new InterruptProbe("p", "o");
   const engine = chain(probe);
   const running = engine.run();
   await probe.started;
-  expect(engine.deliver({ kind: "interrupt", inbox: "m" }).seq).toBeNull();
+  const { seq, record } = engine.deliver({ kind: "interrupt", inbox: "m" });
+  expect(seq).not.toBeNull();
+  expect([...(record as InterruptedRecord).nodes]).toEqual([]);
   expect(probe.opened!.interrupt.aborted).toBe(false);
   probe.release();
   await running;
@@ -137,7 +142,10 @@ test("the reader leaves the engine's readers when its outcome commits", async ()
   await probe.started;
   probe.release();
   await gate.started;
-  expect(engine.deliver({ kind: "interrupt", inbox: "m" }).seq).toBeNull();
+  // No take waits, so the Stop is recorded; no reader is left to name.
+  const { seq, record } = engine.deliver({ kind: "interrupt", inbox: "m" });
+  expect(seq).not.toBeNull();
+  expect([...(record as InterruptedRecord).nodes]).toEqual([]);
   gate.release();
   await running;
 });

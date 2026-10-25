@@ -69,6 +69,7 @@ import {
   type OutcomeCarriers,
   recordTimeMs,
   type RunLog,
+  type RunRecord,
   type RunResumedRecord,
   type RunStopReason,
 } from "./log.ts";
@@ -100,6 +101,7 @@ import {
   prepareRunWaiting,
   prepareSend,
   prepareTakeCommit,
+  prepareWithdraw,
   RunState,
   inboxElementType,
   requireExpansionOutput,
@@ -235,12 +237,14 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
 }
 
 /**
- * One host delivery: a send, a completed call, an inbox close, an interrupt or a cancel. An
- * interrupt's `running` are the in-flight readers of its inbox, which only the engine knows; none
- * when absent.
+ * One host delivery: a send, a withdraw of an inbox's unread sends, a completed call, an inbox
+ * close, an interrupt or a cancel. An
+ * interrupt's `running` are the in-flight readers of its inbox, which only the engine knows;
+ * absent offline: then any in-flight node counts as an open reader for the idle rule.
  */
 export type DeliveryOp =
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown }
+  | { readonly kind: "withdraw"; readonly inbox: string }
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "close"; readonly inbox: string }
   | { readonly kind: "interrupt"; readonly inbox: string; readonly running?: readonly string[] }
@@ -249,25 +253,26 @@ export type DeliveryOp =
 /**
  * @internal Prepare `op` on `state`; the engine and the run boundary share it.
  *
- * @returns null for a no-op (an identical repeat complete, closing a closed inbox, or an interrupt
- *   no node reads).
+ * @returns null for a no-op (nothing to withdraw, an identical repeat complete, closing a closed inbox, or an interrupt
+ *   while the run waits for the inbox's next message or is already stopping).
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
 export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | null {
   const kind: unknown = typeof op === "object" && op !== null ? op.kind : undefined;
   if (kind === "send") return prepareSend(state, (op as { inbox: string }).inbox, (op as { event: unknown }).event);
+  if (kind === "withdraw") return prepareWithdraw(state, (op as { inbox: string }).inbox);
   if (kind === "complete") {
     const { callId, result } = op as Extract<DeliveryOp, { kind: "complete" }>;
     return prepareComplete(state, callId, result);
   }
   if (kind === "close") return prepareInboxClosed(state, (op as { inbox: string }).inbox);
   if (kind === "interrupt") {
-    const { inbox, running = [] } = op as Extract<DeliveryOp, { kind: "interrupt" }>;
+    const { inbox, running = null } = op as Extract<DeliveryOp, { kind: "interrupt" }>;
     return prepareInterrupt(state, inbox, running);
   }
   if (kind === "cancel") return prepareRunCancelled(state);
-  throw new TypeError(`a delivery's kind must be send, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
+  throw new TypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
 }
 
 /** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */
@@ -440,14 +445,14 @@ export class FlowEngine {
    * ones, and aborts the running ones' interrupt signals. Then nudge the dispatcher and publish
    * the observers.
    *
-   * @returns The appended seq (null for a no-op) and the observers.
+   * @returns The appended seq and record (both null for a no-op) and the observers.
    * @throws DeliveryRefused when the run refuses it; nothing is appended.
    * @throws Error before `run()` was called.
    * @throws The error of an `onEvent` that throws on these observers. The record is durable by
    *   then. While the loop runs, the throw (or a rejection of the promise it returned) stops the
    *   run; after the loop has ended, a throw is only rethrown and a rejection is ignored.
    */
-  deliver(op: DeliveryOp): { readonly seq: number | null; readonly events: readonly RunEvent[] } {
+  deliver(op: DeliveryOp): { readonly seq: number | null; readonly events: readonly RunEvent[]; readonly record: RunRecord | null } {
     if (!this.#ran) throw new Error("FlowEngine.deliver needs run() first");
     const { state, log } = this;
     // Which inbox a running node opened only the engine knows.
@@ -456,7 +461,7 @@ export class FlowEngine {
         ? { ...op, running: [...state.inFlight].filter((nodeId) => this.#steerInboxes.get(nodeId)?.inbox === op.inbox) }
         : op;
     const prepared = prepareDelivery(state, delivery);
-    if (prepared === null) return { seq: null, events: [] };
+    if (prepared === null) return { seq: null, events: [], record: null };
     const seq = prepared.expectedSequence;
     const observers = commitPrepared(log, state, prepared);
     if (state.result instanceof RunCancelled) this.#controller.abort(this.#cancelled);
@@ -475,7 +480,7 @@ export class FlowEngine {
         if (returned instanceof Promise) returned.then(undefined, () => {});
       }
     }
-    return { seq, events: observers };
+    return { seq, events: observers, record: prepared.record };
   }
 
   /**
@@ -703,7 +708,7 @@ export class FlowEngine {
         // A refused or unrecorded step is a host fault, never the node's failure.
         throw new CapabilityFault(error);
       }
-      // A pending step on a node an interrupt names registers its call closed; the host withdraws it.
+      // A pending step on a node an interrupt names registers its call closed; the host dismisses it.
       this.#publish(observers, this.#events);
       return (prepared.record as NodeStepRecord).n;
     };

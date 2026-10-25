@@ -104,7 +104,7 @@ test("an idle interrupt of a waiting agent closes its call, returns it, and refu
   expect([refused.reason, refused.callState]).toEqual(["call_settled", "closed"]);
 });
 
-test("interrupt with no reader appends nothing and returns []", async () => {
+test("interrupt while idle at the take appends nothing", async () => {
   const log = freshLog();
   const flow = await loadFlow(replyFlow("Optional(str)", false));
   const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
@@ -138,8 +138,8 @@ test("an interrupt of a closed inbox still cuts a waiting reader", async () => {
 });
 
 test("a crashed run: an offline interrupt names only waiting readers", async () => {
-  // The agent was mid-call when the run crashed: it is in flight, not waiting, so offline no
-  // record names it.
+  // The agent was mid-call when the run crashed: it is in flight, not waiting, so offline the
+  // record names no node; it only records the Stop.
   const flow = await loadFlow(replyFlow());
   const script = () => new ScriptedModel([callReply(["lookup", {}, "c1"]), textReply("done")], CONFIG);
   const whole = freshLog();
@@ -147,9 +147,10 @@ test("a crashed run: an offline interrupt names only waiting readers", async () 
   const cut = kinds(whole).indexOf("model_call") + 1;
   const log = freshLog();
   await crashAfter(cut, () => runFlow(flow, {}, { env, log, tools: tools(), models: serving(script()), runId: "r" }));
-  const before = readFileSync(log);
+  const before = readRunLog(log).length;
   expect(await interrupt(log, "m", { env })).toEqual([]);
-  expect(readFileSync(log).equals(before)).toBe(true);
+  const appended = readRunLog(log).slice(before);
+  expect(appended.map(({ record }) => record)).toEqual([new InterruptedRecord("m", [])]);
 });
 
 test("advance after an idle interrupt: the wake, the interrupted closer, the honor step; output null", async () => {

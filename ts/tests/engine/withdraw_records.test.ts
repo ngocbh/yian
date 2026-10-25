@@ -32,6 +32,7 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { applyWaitsRecord, availableUnread, decideWait, withdrawableEvents, WaitsState } from "../../src/runtime/waits.ts";
+import { prepareDelivery } from "../../src/runtime/engine.ts";
 import { FIXED_CLOCK, RUN_ID, startData } from "./run_state_fixtures.ts";
 import { call as callOf, started, steerFlow, takeEntry, tool, waitFlow } from "./waits_fixtures.ts";
 
@@ -220,4 +221,12 @@ test("a withdraw replays to the same waits", () => {
   commitPrepared(run.log, run.state, prepareWithdraw(run.state, "msgs")!);
   const back = WaitsState.fromJSON(JSON.parse(JSON.stringify(run.state.waits.toJSON())));
   expect(back.toJSON()).toEqual(run.state.waits.toJSON());
+});
+
+test("the withdraw delivery op prepares the withdraw", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  const prepared = prepareDelivery(run.state, { kind: "withdraw", inbox: "msgs" })!;
+  expect(prepared.record).toEqual(new InboxWithdrawnRecord("msgs", [x]));
+  expect(() => prepareDelivery(run.state, { kind: "nope" } as never)).toThrow(/send, withdraw, complete, close, interrupt or cancel/);
 });

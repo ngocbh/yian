@@ -513,10 +513,11 @@ test("an interrupt before the first model call: no call, null, the steer stays u
   expect(honors()).toEqual([recordSeq()]);
 });
 
-test("an agent without a steer inbox isn't interrupted; the event stays unread", async () => {
+test("an agent without a steer inbox isn't interrupted: an empty Stop is recorded; the event stays unread", async () => {
   const model = new ScriptedModel([reply("done")], CONFIG);
   expect(await run(chatFlow({ steerInbox: false }), model, { models: interruptingAtBuild(model), before: ["ignored"] })).toBe("done");
-  expect(running!.log.records().some(({ record }) => record instanceof InterruptedRecord)).toBe(false);
+  const stops = running!.log.records().filter(({ record }) => record instanceof InterruptedRecord);
+  expect(stops.map(({ record }) => [...(record as InterruptedRecord).nodes])).toEqual([[]]);
   expect(unread()).toEqual(["ignored"]);
   expect(shown(model.requests[0]!.messages).at(-1)).toEqual(["user", "Help the user."]);
 });
@@ -584,13 +585,15 @@ test("an interrupted Optional(str) agent succeeds null and the flow continues", 
   expect(shown(model.requests[0]!.messages).at(-1)).toEqual(["user", "summarize: (interrupted)"]);
 });
 
-test("an interrupt for a finished node is a no-op", async () => {
+test("an interrupt after the reader finished records an empty Stop and stops nothing", async () => {
   let started = 0;
   const seqs: (number | null)[] = [];
   const onEvent = (event: unknown) => void (event instanceof ModelCallStarted && ++started === 2 && seqs.push(interruptNow()));
   const model = new ScriptedModel([reply("chat done"), reply("summary")], CONFIG);
   expect(await run(chatFlow({ after: true }), model, { onEvent })).toBe("summary");
-  expect(seqs).toEqual([null]);
+  expect(seqs).toHaveLength(1);
+  const record = running!.log.records().find(({ seq }) => seq === seqs[0])!.record as InterruptedRecord;
+  expect([...record.nodes]).toEqual([]);
   expect(shown(model.requests[1]!.messages).at(-1)).toEqual(["user", "summarize: chat done"]);
 });
 

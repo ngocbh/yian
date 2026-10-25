@@ -52,7 +52,7 @@ test("complete answers once; an identical repeat is a no-op and a different one 
   const { run, host } = await waitingRun();
   const first = run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } });
   expect(first.seq).toBe(run.log.nextSequence - 1);
-  expect(run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } })).toEqual({ seq: null, events: [] });
+  expect(run.deliver({ kind: "complete", callId: host.callId, result: { output: "yes" } })).toEqual({ seq: null, events: [], record: null });
   const settled = refusal(run, { kind: "complete", callId: host.callId, result: { output: "no" } });
   expect([settled.reason, settled.callState]).toEqual(["call_settled", "answered"]);
 });
@@ -60,7 +60,7 @@ test("complete answers once; an identical repeat is a no-op and a different one 
 test("closing a closed inbox is a no-op", async () => {
   const { run } = await waitingRun();
   expect(run.deliver({ kind: "close", inbox: "m" }).seq).toBe(run.log.nextSequence - 1);
-  expect(run.deliver({ kind: "close", inbox: "m" })).toEqual({ seq: null, events: [] });
+  expect(run.deliver({ kind: "close", inbox: "m" })).toEqual({ seq: null, events: [], record: null });
 });
 
 test.each([0, 2])("a cancel during a live run ends it cancelled and aborts running nodes (%p workers)", async (numWorkers) => {

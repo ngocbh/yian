@@ -2770,7 +2770,10 @@ export function agentCalls(log: string): AgentCallEntry[] {
  *   (default `defaultModelAccess(env)`).
  * @param options.memory The run's memory mapping, as `advance` takes it, to recall sections.
  * @returns The call's view.
- * @throws RangeError when the log has no model call `n` of `nodeId`; `foldRunLog`'s errors.
+ * @throws RangeError when the log has no model call `n` of `nodeId`, or the node's binding, which
+ *   finished in the run, no longer does (the `BindingError` is its cause); `foldRunLog`'s errors.
+ * @throws RangeError as `advance`'s, when `apiKey` or `headers` is refused, or `headers` differ
+ *   from the header names a run that uses the host key recorded.
  * @throws AuthError when a call-time agent's run used a host key and `apiKey` isn't given, or
  *   `headers` lack the names it recorded.
  * @throws MemorySetupError, RangeError when `memory` doesn't match the run's memory table.
@@ -2795,6 +2798,8 @@ export async function agentCall(
 ): Promise<AgentCallView> {
   const { nodeId, n } = call;
   const missing = () => new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
+  const apiKey = options.apiKey == null ? null : secretKey(options.apiKey);
+  const headers = options.headers == null ? null : secretHeaders(options.headers);
   const env = options.env ?? processEnv;
   const entries = [...iterRunRecords(log)];
   const start = startRecord(entries[0]?.envelope);
@@ -2812,20 +2817,29 @@ export async function agentCall(
   let inputs: Record<string, unknown> | null = null;
   const state = withEnv(env, () =>
     replayRunLog(flow, MemoryRunLog.fromRecords(entries.slice(0, end + 1).map((entry) => entry.envelope)), {
-      apiKey: options.apiKey ?? null,
-      headers: options.headers ?? null,
+      apiKey,
+      headers,
       onPrepared: ({ record }, state) => {
         if (!(record instanceof NodeStartedRecord) || record.nodeId !== nodeId || node !== null) return;
         node = state.flow.nodes.get(nodeId)!;
         try {
           inputs = bindStarted(node, state.flow, state.pool, state.wiringOverrides.get(nodeId) ?? null);
         } catch (error) {
-          // The node failed at binding, so it made no model call.
+          // A node that failed at binding in the run has no steps, so it never gets here: the
+          // binding finished then and fails now (an edited log, or a yian that binds differently).
           if (!(error instanceof BindingError)) throw error;
+          throw new RangeError(
+            `run log ${log}: node ${reprText(nodeId)}'s binding no longer finishes, so no request is rebuilt`,
+            { cause: error },
+          );
         }
       },
     }),
   );
+  const callTime = state.callTimeLlm as CallTimeLlm | null;
+  if ((apiKey !== null || headers !== null) && usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
+    checkHostHeaderNames(state.effectiveLlmByStaticPath, headers, callTime);
+  }
   const steps = stepsWithSteerValues(state, nodeId);
   const { calls, read } = agentStepCalls(steps);
   const attempts = calls.find((each) => each.some((attempt) => attempt.n === n));

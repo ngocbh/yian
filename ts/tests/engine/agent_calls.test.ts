@@ -17,6 +17,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
 import { NamedTool, type Request } from "../../src/llm/messages.ts";
+import { BindingError } from "../../src/nodes/binding.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AuthError } from "../../src/llm_clients/auth/index.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -677,4 +678,99 @@ test("agentCall refuses a step that is no model call", async () => {
       new RangeError(`run log ${log} has no model call ${at.n} of node '${at.nodeId}'`),
     );
   }
+});
+
+/** A flow whose agent binds `!<tag> ${input.data}`. */
+const bound = (tag: string) => `
+id: bound
+name: bound
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  data: !Any
+nodes:
+  writer:
+    kind: agent
+    input:
+      topic: !${tag} \${input.data}
+    prompt: Write about \${topic}.
+    output: str
+output: \${writer.output}
+`;
+
+test("agentCall refuses a node that failed at binding, and one whose binding no longer finishes", async () => {
+  const model = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
+  const { log: failedLog, result: failed } = await run(bound("int"), model, { data: "owls" });
+  expect(failed.failure?.code).toBe("binding.type");
+  await expect(agentCall(failedLog, { nodeId: "writer", n: 1 }, { env: NO_ENV })).rejects.toThrow(
+    new RangeError(`run log ${failedLog} has no model call 1 of node 'writer'`),
+  );
+
+  // The run bound a str; an edited log gives an int, which the binding now refuses.
+  const { log, result } = await run(bound("str"), model, { data: "owls-sentinel" });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  writeFileSync(log, readFileSync(log, "utf8").replaceAll('"owls-sentinel"', "5"));
+  const error = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV }).catch((e) => e);
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toBe(`run log ${log}: node 'writer''s binding no longer finishes, so no request is rebuilt`);
+  expect(error.cause).toBeInstanceOf(BindingError);
+});
+
+test("agentCall refuses bad credentials with advance's error", async () => {
+  const model = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
+  const llmConfig = { provider: "anthropic", model: "claude-test", api_key: KEY, headers: { "x-trace": HEADER } };
+  const { log, result } = await run(TOOLS, model, { topic: "owls" }, { llmConfig, tools: toolsOf() });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const refusedHeaders: Record<string, string>[] = [{ "x-other": HEADER }, { "x-trace": "bad\nvalue" }];
+  for (const headers of refusedHeaders) {
+    const credentials = { apiKey: KEY, headers };
+    const refused = await advance({ log, env: NO_ENV, tools: toolsOf(), ...credentials }).catch((e) => e);
+    expect(refused).toBeInstanceOf(RangeError);
+    await expect(agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV, ...credentials })).rejects.toThrow(refused);
+  }
+});
+
+test("only the last of a node's calls before its honor of an interrupt is interrupted", async () => {
+  const log = runLog();
+  let ends = 0;
+  const model = hooked(
+    new ScriptedModel([callReply(["lookup", { topic: "a" }, "c1"]), callReply(["lookup", { topic: "b" }, "c2"])], {
+      provider: "anthropic",
+      model: "claude-test",
+    }),
+    (k) => {
+      if (k === Infinity && ++ends === 2) void interrupt(log, "notes");
+    },
+  );
+  const tools = { lookup: topicTool("lookup") };
+  const { result } = await run(chat("Optional(str)"), model, { history: [], message: "go" }, { log, tools });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const calls = agentCalls(log);
+  expect(calls).toHaveLength(2);
+  const views = await Promise.all(calls.map((entry) => agentCall(log, entry, { env: NO_ENV })));
+  expect(views.map(({ interrupted }) => interrupted)).toEqual([false, true]);
+  expect(views.map(({ finish }) => finish)).toEqual(["tool_calls", "tool_calls"]);
+});
+
+test("a steer read after the run resumed joins the request after it", async () => {
+  const replies = () => [callReply(["lookup", { topic: "t" }, "c1"]), textReply("done")];
+  const scripted = () => new ScriptedModel(replies(), { provider: "anthropic", model: "claude-test" });
+  const inputs = { history: [], message: "go" };
+  const tools = { lookup: topicTool("lookup") };
+  const uncut = await run(chat(), scripted(), inputs, { tools });
+  // Cut right after the tool result, before the second model call.
+  const k = readFileSync(uncut.log, "utf8").split("\n").findIndex((line) => line.includes('"tool_result"')) + 1;
+  const log = runLog();
+  await crashAfter(k, () => run(chat(), scripted(), inputs, { log, tools }));
+  await send(log, "notes", "only 2024", { env: NO_ENV });
+
+  const second = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
+  const resumed = await advance({ log, models: serving(second), env: NO_ENV, tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  const text = readFileSync(log, "utf8");
+  expect(text.indexOf('"kind":"steer"')).toBeGreaterThan(text.indexOf('"run_resumed"'));
+  const [, after] = agentCalls(log);
+  const view = await agentCall(log, after!, { env: NO_ENV });
+  expect(view.digestMismatch).toBe(false);
+  expect(requestOf(view)).toMatchObject(sentView(second.requests[0]!));
+  expect(requestOf(view).messages.at(-1)).toEqual({ role: "user", parts: [{ type: "text", text: "only 2024" }] });
 });

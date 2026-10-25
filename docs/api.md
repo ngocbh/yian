@@ -3729,9 +3729,9 @@ call's view;
   rendered with the skills and tool specs `run_started` recorded (a grant of a tool group expands
   with the recorded membership). The steps before the call give the history, steer messages and
   tool results the request carried, as the AGENT built them.
-- The request is checked against each attempt's `request_sha256`. A mismatch (a different yian
-  version renders differently, or the log was edited) returns the rebuilt request with
-  `digestMismatch: true` rather than throwing. A request that can't be rebuilt is `null`, with
+- The request is checked against each attempt's `purpose` and `request_sha256`. A mismatch (a
+  different yian version renders differently, or the log was edited) returns the rebuilt request
+  with `digestMismatch: true` rather than throwing. A request that can't be rebuilt is `null`, with
   `digestMismatch: false`: a structured call whose model can't be built, or a granted tool the
   recorded specs lack.
 - `params` is the config `run_started` recorded for the node's static path
@@ -3740,7 +3740,9 @@ call's view;
   authenticated the call.
 - A run started with `llmConfig.api_key` needs `apiKey` (and `headers`, as `advance` takes them)
   to bind a call-time agent's config again, which otherwise raises `AuthError`, and to build a
-  structured call's model. They are used only for that and never reach the view.
+  structured call's model. They are used only for that and never reach the view. They are
+  checked as `advance` checks them: a refused key or header, or header names that differ from the
+  ones a host-key run recorded, raise the same `RangeError`.
 - A request's digest leaves recalled memory out. Given `memory` (the run's memory mapping, as
   `advance` takes it), the system message gets the sections recalled against the snapshots the
   run recorded, as learning does; without it, a node that recalls memory gets its system prompt
@@ -3748,7 +3750,9 @@ call's view;
 - A structured call's request depends on the model's structured-output plan: `models` builds the
   model to read it off, never calling it (default `defaultModelAccess(env)`).
 - A call still in flight has no step yet, so neither reader sees it; the live channel shows it.
-  A step that isn't a model call, or a node without one, raises `RangeError`.
+  A step that isn't a model call, or a node without one, raises `RangeError`. So does a node
+  whose binding finished in the run but no longer does (an edited log, or a yian version that
+  binds differently), with the `BindingError` as its cause.
 
 ```ts
 import { agentCall, agentCalls } from "@ngocbh/yian/run";

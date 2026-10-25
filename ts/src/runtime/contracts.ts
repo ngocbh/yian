@@ -188,7 +188,7 @@ export function validateRoute(route: unknown, options: { deep?: boolean } = {}):
     while (pending.length > 0) {
       const current = pending.pop()!;
       if (current.kind !== "literal" && current.kind !== "list" && current.kind !== "record") {
-        throw new RangeError("partial snapshot cannot contain source routes");
+        throw new RangeError("partial snapshot may contain only literal, list and record routes");
       }
       for (const child of current.children) pending.push(child);
     }

@@ -454,10 +454,10 @@ export class TraceOccurrence {
 }
 
 /**
- * Bind an occurrence's node again (`rebind`) from the values its capture route read, each looked
- * up in the trace's history by the producer the route names (`traceResolver`), so it works after
- * the pool has moved on. The run's system values are added whole, since the route names no
- * producer for them.
+ * Bind an occurrence's node again (`rebind`) from the values its capture's routes read, its items'
+ * included, each looked up in the trace's history by the producer the route names
+ * (`traceResolver`), so it works after the pool has moved on. The run's system values are added
+ * whole, since the routes name no producer for them.
  *
  * @returns What the rebinder returns: the capture binding again collects, and the `BindingError`
  *   of a binding that doesn't finish.
@@ -465,13 +465,20 @@ export class TraceOccurrence {
  */
 export function reboundCapture(
   trace: RetainedTrace,
-  route: ValueRoute,
+  capture: ForwardCapture,
   rebind: Rebinder,
 ): { capture: BindingCapture; failure: BindingError | null } {
   const sources = new Map<string, number>();
   // System values never change within a run, so their seq isn't checked (`traceResolver`).
   for (const key of trace.system.keys()) sources.set(`${SYSTEM_PREFIX}${key}`, 0);
-  const pending = [route];
+  // A MAP's item bindings read sources (its `over`) that its top-level route may not name.
+  const captures = [capture];
+  const pending: ValueRoute[] = [];
+  while (captures.length > 0) {
+    const binding = captures.pop()!;
+    pending.push(binding.route);
+    captures.push(...binding.items.map(([, item]) => item));
+  }
   while (pending.length > 0) {
     const node = pending.pop()!;
     pending.push(...node.children);
@@ -483,7 +490,7 @@ export function reboundCapture(
     // One binding reads each pool name from its one current producer.
     sources.set(name, seq);
   }
-  return rebind(sources, traceResolver(trace), route);
+  return rebind(sources, traceResolver(trace), capture.route);
 }
 
 /**
@@ -1420,7 +1427,7 @@ export function prepareTrace(
     throw new RangeError("rebuilding the node data of a finished binding requires a rebinder");
   }
   let again: { capture: BindingCapture; failure: BindingError | null } | null = null;
-  const bindAgain = () => (again ??= reboundCapture(trace, capture.route, rebinder!));
+  const bindAgain = () => (again ??= reboundCapture(trace, capture, rebinder!));
   const rebind = (): ReboundOccurrence => {
     if (!bound && !fillsText) return { inputs: null, capture, inputRoute };
     const rebound = bindAgain();

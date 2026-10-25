@@ -192,9 +192,9 @@ def _raised(call: Any, *args: Any) -> tuple[type[BaseException], str]:
     ),
     (
         _bad_spans_and_bad_child_snapshot,
-        (ValueError, "partial snapshot cannot contain source routes"),
-        (ValueError, "partial snapshot cannot contain source routes"),
-        (ValueError, "partial snapshot cannot contain source routes"),
+        (ValueError, "partial snapshot may contain only literal, list and record routes"),
+        (ValueError, "partial snapshot may contain only literal, list and record routes"),
+        (ValueError, "partial snapshot may contain only literal, list and record routes"),
     ),
     (
         _snapshot_with_invalid_source,

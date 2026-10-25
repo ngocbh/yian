@@ -31,6 +31,7 @@ import {
   copyBackwardValue,
   type LearningMaterial,
   markerMessage,
+  tracebackText,
   validateBackwardResult,
 } from "../nodes/base.ts";
 import { Skill } from "../skills/catalog.ts";
@@ -58,6 +59,7 @@ import {
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
   MemoryCommitSucceededRecord,
+  isRunLog,
   type RunLog,
   type RunRecord,
 } from "./log.ts";
@@ -76,17 +78,6 @@ export class BackwardComputeError extends Error {
     super(failure.message, options);
     this.failure = failure;
   }
-}
-
-/**
- * Return an `Error`'s stack followed by its string `notes`, one per line, else `null`; Python's
- * traceback text prints `__notes__` the same way. Local copy of eval_node.ts's tracebackText.
- */
-function tracebackText(error: unknown): string | null {
-  if (!(error instanceof Error)) return null;
-  const notes: unknown = (error as { notes?: unknown }).notes;
-  const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
-  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 /** Return `error` as a `code` failure of the occurrence `context` describes. */
@@ -179,18 +170,6 @@ export async function computeBackward(
   }
   const root = projectRootBackward(trace, pending, rootInputs, directRoot);
   return [root, occurrences.map((item) => results.get(sourceKey(item.source))!)];
-}
-
-/** Whether `log` has the `RunLog` members the driver reads. Local copy of engine.ts's isRunLog. */
-function isRunLog(log: unknown): log is RunLog {
-  const candidate = log as Partial<RunLog> | null;
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    typeof candidate.append === "function" &&
-    typeof candidate.runId === "string" &&
-    typeof candidate.nextSequence === "number"
-  );
 }
 
 /**

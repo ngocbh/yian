@@ -64,6 +64,7 @@ import {
 import { LiveChannel } from "./live.ts";
 import {
   InterruptedRecord,
+  isRunLog,
   type NodeStepRecord,
   type OutcomeCarriers,
   recordTimeMs,
@@ -217,18 +218,6 @@ class CompletionQueue {
     }
     return entry;
   }
-}
-
-/** Whether `log` has the `RunLog` members the engine reads. */
-function isRunLog(log: unknown): log is RunLog {
-  const candidate = log as Partial<RunLog> | null;
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    typeof candidate.append === "function" &&
-    typeof candidate.runId === "string" &&
-    typeof candidate.nextSequence === "number"
-  );
 }
 
 /**

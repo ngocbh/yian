@@ -76,7 +76,6 @@ import {
   iterOriginCarrier,
   type NodeSteps,
   type OriginMapper,
-  type OutputContract,
   outputContractType,
   Parameter,
   rewriteOriginCarrier,
@@ -127,16 +126,6 @@ const CONFIG_STEP_KIND = "llm_config";
 function openSteerInbox(caps: NodeCaps, inbox: string): SteerInbox {
   if (caps.openSteerInbox === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no steer inbox"));
   return caps.openSteerInbox(inbox);
-}
-
-/** Whether an AGENT output contract is plain text: none, or an untagged `str`, nullable or not (`Optional(str)`). */
-export function isTextOutput(contract: OutputContract | null): boolean {
-  return (
-    contract === null ||
-    (isExactly(contract, ValueContract) &&
-      contract.type.kind === ValueKind.STRING &&
-      (contract.type.tags === undefined || contract.type.tags.size === 0))
-  );
 }
 
 /** Whether `value` is a valid `max_tool_iterations`: a positive int, or `-1n` for no cap. */
@@ -349,6 +338,11 @@ function captureValue<T>(make: () => T): T {
   }
 }
 
+/** An AGENT a host interrupted whose declared output doesn't allow null; its failure is `agent.interrupted`. */
+export class AgentInterruptedError extends Error {
+  override name = "AgentInterruptedError";
+}
+
 /**
  * An LLM-backed leaf configured by a prompt and authored tools.
  *
@@ -357,11 +351,6 @@ function captureValue<T>(make: () => T): T {
  * declarations; compile derives runtime scope. `variables` keeps typed local declarations with
  * mandatory literal defaults, resolved into a fresh prompt record for each invocation.
  */
-/** An AGENT a host interrupted whose declared output doesn't allow null; its failure is `agent.interrupted`. */
-export class AgentInterruptedError extends Error {
-  override name = "AgentInterruptedError";
-}
-
 export class AgentNode extends Node {
   readonly kind = NodeKind.AGENT;
   override readonly needsMemoryContext: boolean = true;

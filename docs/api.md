@@ -1698,8 +1698,9 @@ host calls it closed, as `pendingCalls` listed them.
 - **Who.** It appends one run record, `interrupted {inbox, nodes}`. `nodes` names the agents it
   affects: the running ones that opened `inbox` as their steer inbox (from the live engine, in
   the order they went in flight), then the waiting ones whose `node_waiting.steer_inbox` is
-  `inbox`. An agent already holding an interrupt it hasn't honored is left out. With no agent to
-  name it appends nothing and resolves to `[]`, so an interrupt before an agent opens its inbox,
+  `inbox`. An agent already holding an interrupt it hasn't honored is left out. It resolves to
+  the open host calls the record closed: `[]` both when no agent reads `inbox` and when the agents
+  it names hold no open host call. With no agent to name it appends nothing and resolves to `[]`, so an interrupt before an agent opens its inbox,
   or after it has answered, changes nothing. A closed inbox can still be interrupted.
 - **A crashed run.** Offline, the engine isn't there to say which agents were running, so an
   interrupt names only the waiting ones. `advance` a crashed run first, then interrupt it.
@@ -1707,7 +1708,8 @@ host calls it closed, as `pendingCalls` listed them.
   `interrupted`: the engine publishes `CallClosed {reason: "interrupted"}` for each, they leave
   `pendingCalls`, and a later `complete` of one is refused (`call_settled`). A call an agent
   registers after the record (its tool's group was already running) is closed `interrupted` at
-  once.
+  once; it isn't in what `interrupt` returned, so the host learns of it from its `CallClosed
+  {reason: "interrupted"}`.
 - **A running agent** honors the interrupt at its next safe point: before a model call, before
   each later text chunk of a streamed reply (a cut reply is recorded with `finish:
   "interrupted"` and the text that arrived), during the wait before retrying a failed model
@@ -3039,8 +3041,9 @@ await close("run.jsonl", "messages");                    // a waiting take gets 
   closed. Takes still read what was sent; a take waiting on it with nothing to read gets
   `{events: [], closed: true}`.
 - `interrupt(log, inbox, options?)` interrupts the AGENTs whose `steer_inbox:` is `inbox`, running
-  or waiting, and returns the open host calls it closed, as `pendingCalls` listed them (`[]`, with
-  nothing appended, when no agent reads it); see
+  or waiting, and returns the open host calls it closed, as `pendingCalls` listed them: `[]` when
+  no agent reads it (nothing is appended) and when the agents hold no open host call. A call an
+  agent registers after the record is closed at once and reported only by `CallClosed`; see
   [Interrupting an agent](#interrupting-an-agent-ts-yian).
 - `cancel(log, options?)` writes `run_cancelled`, which ends the run with no output and no
   learning, and returns the open host calls it closed, as `pendingCalls` listed them.
@@ -3726,9 +3729,8 @@ handler runs and records it on the `pending` step. When it passes, the call clos
 (the host gets `CallClosed {reason: "timed_out"}` and a late `complete` is refused) and the model
 reads `timed out: no answer`, even while other calls of the reply are still open: the agent then
 waits again on those, and its next model call waits until every call of the reply is settled. A
-malformed `timeout` is the call's error result, and the handler isn't called. An agent given the
-host's interrupt signal (an agent with a `steer_inbox:` run with host steering) can't wait yet: its tool returning `pending()` fails
-it, so answer inline. A process lost after the `pending` step but before the agent waits closes
+malformed `timeout` is the call's error result, and the handler isn't called. A host
+[interrupt](#interrupting-an-agent-ts-yian) closes the agent's pending calls `interrupted`. A process lost after the `pending` step but before the agent waits closes
 the call as `crashed` on resume, and the model reads that the call's outcome is unknown. With
 `adaptive_questions:`, the `ask` node's other inputs (the composer's context) reach the handler as
 `extra`, so the handler's `AskTool` declares them.

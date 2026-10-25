@@ -701,15 +701,17 @@ describe("events schema", () => {
     }
   });
 
-  test("every object form requires each key it lists", () => {
+  test("every object form requires each key it lists, but NodeSucceeded's interrupted, which Python doesn't send", () => {
     const trace = (def("failure").properties as Record<string, Schema>).trace!;
     const retryError = (def("ModelCallRetried").properties as Record<string, Schema>).error!;
     const defs = Object.values(SCHEMA.$defs as Record<string, Schema>);
     const objects = [...defs.filter((schema) => "properties" in schema), trace.items as Schema, retryError];
     expect(objects).toHaveLength(EVENT_CLASS_NAMES.length + 5);
+    const succeeded = def("NodeSucceeded");
     for (const schema of objects) {
       expect(schema.type).toBe("object");
-      expect(schema.required).toEqual(Object.keys(schema.properties as Schema));
+      const keys = Object.keys(schema.properties as Schema);
+      expect(schema.required).toEqual(schema === succeeded ? keys.filter((key) => key !== "interrupted") : keys);
     }
   });
 

@@ -50,7 +50,7 @@
  * list, `null`, `Infinity`, a big int and a `Date` (a `TypeCheckError` naming the tool's result);
  * `reportedText` (the message, else the error's `name`; a branded non-`Error` by `String()`, else
  * its `typeof`); the `SKIPPED_TOOL_ERROR` text; the `DEFAULT_SYSTEM` text and the loop errors'
- * names; `isTextOutput`; `isTextOutput` on `Optional(str)` (pin); `isMaxToolIterations`; the
+ * names; `isMaxToolIterations`; the
  * default `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward`'s host
  * secrets (a static agent's own `api_key` and `headers`, a marked call-time agent's host key and
  * headers, an unmarked one's none) joined to the recorded config; the load-time hooks
@@ -133,7 +133,7 @@ import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
 import { reportedText, toolText } from "../../src/nodes/agent/memory.ts";
-import { AgentNode, isMaxToolIterations, isTextOutput } from "../../src/nodes/agent/node.ts";
+import { AgentNode, isMaxToolIterations } from "../../src/nodes/agent/node.ts";
 import { pushVisible, textOf } from "../../src/nodes/agent/text.ts";
 import { BackwardContext, CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
@@ -369,21 +369,6 @@ test("maxToolIterations defaults to the agent max tool iterations default", () =
   const node = new AgentNode("n");
   node.env = { max_tool_iterations: 300n };
   expect(node.maxToolIterations()).toBe(300);
-});
-
-test("isTextOutput accepts no contract and an untagged str, nullable or not", () => {
-  expect(isTextOutput(null)).toBe(true);
-  expect(isTextOutput(new ValueContract(Type.scalar(ValueKind.STRING)))).toBe(true);
-  const tagged = new Type({ kind: ValueKind.STRING, tags: new Set(["a", "b"]) });
-  expect(isTextOutput(new ValueContract(tagged))).toBe(false);
-  expect(isTextOutput(new ValueContract(Type.scalar(ValueKind.INTEGER)))).toBe(false);
-  const optionalStr = new Type({ kind: ValueKind.STRING, nullable: true });
-  expect(isTextOutput(new ValueContract(optionalStr))).toBe(true);
-  const optionalTagged = new Type({ kind: ValueKind.STRING, tags: new Set(["a"]), nullable: true });
-  expect(isTextOutput(new ValueContract(optionalTagged))).toBe(false);
-  expect(isTextOutput(new ValueContract(new Type({ kind: ValueKind.INTEGER, nullable: true })))).toBe(false);
-  class CustomContract extends ValueContract {}
-  expect(isTextOutput(new CustomContract(Type.scalar(ValueKind.STRING)))).toBe(false);
 });
 
 test("isMaxToolIterations takes a positive bigint or -1n only", () => {

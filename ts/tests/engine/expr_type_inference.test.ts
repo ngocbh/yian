@@ -70,10 +70,6 @@ test.each([
   "left % right",
   "left ** right",
   "-value",
-  "[left, right]",
-  "left | right",
-  "left :- right",
-  'left :? "required"',
   "upper(value)",
 ])("%s stays unknown", (source) => {
   expect(inferExprType(parseExpr(source), unexpectedRef)).toBeNull();
@@ -119,4 +115,35 @@ test.each([
     expect(typeEquals(got!.replace({ nullable: false }), element)).toBe(true);
     expect(got!.nullable).toBe(nullable);
   }
+});
+
+const refs = (types: Record<string, Type>) => (path: string) => types[path] ?? null;
+
+test.each([
+  ["a.output?.items :- []", { "a.output.items": listOf(Msg) }, listOf(Msg)],
+  ["xs | ys", { xs: listOf(Msg), ys: listOf(Msg) }, listOf(Msg)],
+  ["xs | ys", { xs: listOf(Msg), ys: listOf(Msg).replace({ nullable: true }) }, listOf(Msg).replace({ nullable: true })],
+  ["xs :? 'no xs'", { xs: listOf(Msg).replace({ nullable: true }) }, listOf(Msg)],
+  ["xs[1:]", { xs: listOf(Msg).replace({ nullable: true }) }, listOf(Msg)],
+  ["[m.text for m in xs]", { xs: listOf(Msg) }, listOf(str)],
+  ["[m?.text for m in xs]", { xs: listOf(Msg) }, listOf(str.replace({ nullable: true }))],
+  ["[m.text for m in xs if m.text != '']", { xs: listOf(Msg) }, listOf(str)],
+  ["[[n for n in m.text] for m in xs]", { xs: listOf(Msg) }, null],
+  ["[m for m in (xs :- [])]", { xs: listOf(Msg).replace({ nullable: true }) }, listOf(Msg)],
+  ["['a', 'b']", {}, listOf(str)],
+] as [string, Record<string, Type>, Type | null][])("inferExprType types %s", (text, types, expected) => {
+  const got = inferExprType(parseExpr(text), refs(types));
+  if (expected === null) expect(got).toBeNull();
+  else expect(typeEquals(got!, expected)).toBe(true);
+});
+
+test.each([
+  ["[m.text for m in xs]", "an untyped iterable"],
+  ["xs | 'a'", "operands of different types"],
+  ["xs :- []", "an untyped left operand"],
+  ["['a', 1]", "list items of different types"],
+  ["[]", "an empty list"],
+  ["'abc'[1:]", "a slice of a non-list"],
+])("inferExprType leaves %s untyped (%s)", (text) => {
+  expect(inferExprType(parseExpr(text), refs({}))).toBeNull();
 });

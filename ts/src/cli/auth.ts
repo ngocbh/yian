@@ -206,6 +206,16 @@ async function apiKey(
   return answer.trim();
 }
 
+/** Return what `fn` returns; a `RangeError` it throws is rethrown as an `AuthError`, its message after `prefix`. */
+function asAuthError<T>(prefix: string, fn: () => T): T {
+  try {
+    return fn();
+  } catch (error) {
+    if (error instanceof RangeError) throw new AuthError(prefix + error.message);
+    throw error;
+  }
+}
+
 /**
  * Check each `--header` and read the values given through environment variables.
  *
@@ -227,12 +237,7 @@ function headerSources(specs: readonly string[], provider: string, ctx: SetupCon
     const split = spec.indexOf("=");
     const name = split === -1 ? spec : spec.slice(0, split);
     const variable = split === -1 ? null : spec.slice(split + 1);
-    try {
-      validateHeaderName(name, provider);
-    } catch (error) {
-      if (error instanceof RangeError) throw new AuthError(`Invalid --header: ${error.message}`);
-      throw error;
-    }
+    asAuthError("Invalid --header: ", () => validateHeaderName(name, provider));
     if (seen.has(name.toLowerCase())) throw new AuthError(`--header ${name} is given more than once (names ignore case)`);
     seen.add(name.toLowerCase());
     if (variable === null) {
@@ -248,12 +253,7 @@ function headerSources(specs: readonly string[], provider: string, ctx: SetupCon
     if (!variable) throw new AuthError(`--header ${name}=VARIABLE needs an environment variable name`);
     const value = ctx.io.env(variable);
     if (!value) throw new AuthError(`The environment variable given for --header ${name} is not set`);
-    try {
-      sources.set(name, validateHeaderValue(name, value));
-    } catch (error) {
-      if (error instanceof RangeError) throw new AuthError(`Invalid --header: ${error.message}`);
-      throw error;
-    }
+    sources.set(name, asAuthError("Invalid --header: ", () => validateHeaderValue(name, value)));
   }
   return sources;
 }
@@ -282,12 +282,7 @@ async function headers(
     }
     values[name] = value;
   }
-  try {
-    return validateHeaders(values, provider);
-  } catch (error) {
-    if (error instanceof RangeError) throw new AuthError(`Invalid --header: ${error.message}`);
-    throw error;
-  }
+  return asAuthError("Invalid --header: ", () => validateHeaders(values, provider));
 }
 
 /** Start a program that opens a URL; `spawn` by default. */
@@ -375,12 +370,7 @@ async function list(store: AuthStore, io: CliIo): Promise<void> {
  * @throws {AuthError} The endpoint is invalid.
  */
 function checkEndpoint(endpoint: string): void {
-  try {
-    validateBaseUrl(endpoint);
-  } catch (error) {
-    if (error instanceof RangeError) throw new AuthError(`Invalid Azure endpoint: ${error.message}`);
-    throw error;
-  }
+  asAuthError("Invalid Azure endpoint: ", () => validateBaseUrl(endpoint));
 }
 
 /** The options of `yian auth` that `checkOptions` checks; an option not given is `undefined`. */
@@ -454,12 +444,7 @@ function checkOptions(provider: string, options: AuthOptions, ctx: SetupContext)
       ["project", project],
     ] as const) {
       if (value === undefined) continue;
-      try {
-        validateOrganization(value, field);
-      } catch (error) {
-        if (error instanceof RangeError) throw new AuthError(`Invalid --${field}: ${error.message}`);
-        throw error;
-      }
+      asAuthError(`Invalid --${field}: `, () => validateOrganization(value, field));
     }
   }
   if (header.length > 0) {

@@ -26,6 +26,9 @@ import pytest
 
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import BuildContext
+from yian.compose.nodes.loop import LoopDescriptor
+from yian.compose.nodes.map import MapDescriptor
 from yian.compose.nodes.resolver import call_nesting
 from yian.compose.source import SourceDocument
 from yian.events import NodeStarted
@@ -806,3 +809,21 @@ def test_long_cross_file_cycle_reports_the_depth_limit(tmp_path: Path) -> None:
 
     assert str(caught.value) == _import_message(51)
     _assert_no_recursion_error(caught.value)
+
+
+def _unresolvable(flow_id, version):
+    raise LookupError("no such flow")
+
+
+@pytest.mark.parametrize(
+    ("kind", "desc"),
+    [
+        ("map", MapDescriptor(id="m", call="c", over="${input.xs}")),
+        ("loop", LoopDescriptor(id="m", call="c", times=1)),
+    ],
+)
+def test_map_and_loop_errors_name_their_kind(kind, desc) -> None:
+    with pytest.raises(LoadError) as caught:
+        desc.build(BuildContext(registry={}, resolver=_unresolvable))
+
+    assert str(caught.value) == f"{kind} node 'm': could not resolve callable 'c': no such flow"

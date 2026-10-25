@@ -151,6 +151,7 @@ class CallDescriptor(NodeDescriptor):
             self.child_label,
             diagnostics=ctx.diagnostics,
             range=self.field_ranges.get(("field", "call")) or self.range,
+            kind=self.kind,
         )
         sig = child_signature(child)
         child_display = _callable_display(self.call, self.child_label)
@@ -196,6 +197,7 @@ class CallDescriptor(NodeDescriptor):
             wiring = self.sink_wiring()
             node.output_contract = sig.output
         _check_child_bindings(
+            self.kind,
             self.id,
             self.call,
             node.params,
@@ -224,6 +226,7 @@ def _list_of(element: Type) -> Type:
 
 
 def _check_child_bindings(
+    kind: str,
     node_id: str,
     flow_id: str,
     params: list[Parameter],
@@ -237,8 +240,9 @@ def _check_child_bindings(
     signature). Reads the node-side `params` (the split); the deep cross-flow TYPE
     check is `check_call_map_types`, a loader post-build pass over the flow wiring.
 
-    ``labels`` is the descriptor's `field_labels`: an inline call's `input '<p>'` entry
-    names its argument and its `call` entry names the call, in place of the synth node."""
+    ``kind`` (`call` or `map`) names the node in messages. ``labels`` is the descriptor's
+    `field_labels`: an inline call's `input '<p>'` entry names its argument and its `call`
+    entry names the call, in place of the synth node."""
     labels = labels or {}
     declared = {d.name for d in sig.inputs}
     bound = set()
@@ -246,13 +250,13 @@ def _check_child_bindings(
         bound.add(p.name)
         if p.name not in declared:
             subject = labels.get(f"input {p.name!r}") or (
-                f"call node {node_id!r}: binding {p.name!r}"
+                f"{kind} node {node_id!r}: binding {p.name!r}"
             )
             errors.append(
                 f"{subject} is not a declared input of "
                 f"{_callable_display(flow_id, child_label)}"
             )
-    call_label = labels.get("call") or f"call node {node_id!r}"
+    call_label = labels.get("call") or f"{kind} node {node_id!r}"
     for decl in sig.inputs:
         if decl.required and decl.name not in bound:
             errors.append(

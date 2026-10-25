@@ -268,6 +268,7 @@ def _resolve_child(
     *,
     diagnostics: LoadDiagnostics | None = None,
     range: SourceRange | None = None,
+    kind: str = "call",
 ) -> Any:
     """Resolve a callable to its `ComposedFlow` via the resolver, loud on failure.
 
@@ -284,6 +285,8 @@ def _resolve_child(
             The context errors are raised in; `None` uses a fresh one.
         range (`SourceRange | None`, *optional*, defaults to `None`):
             Location of the call in the owning document.
+        kind (`str`, *optional*, defaults to `"call"`):
+            The calling node's kind (`call`, `map` or `loop`), named in messages.
 
     Returns:
         `ComposedFlow`:
@@ -296,11 +299,12 @@ def _resolve_child(
     """
     diagnostics = diagnostics or LoadDiagnostics()
     display = _callable_display(flow_id, child_label)
+    subject = f"{kind} node {node_id!r}"
     limit = current().max_call_nesting
 
     def too_deep(levels: str) -> LoadError:
         return diagnostics.error(
-            f"call node {node_id!r}: calling {display} nests calls {levels} deep, past the "
+            f"{subject}: calling {display} nests calls {levels} deep, past the "
             f"call nesting limit of {limit} (each call, map, or loop body is a "
             "level); flatten the chain",
             range=range,
@@ -317,7 +321,7 @@ def _resolve_child(
         raise
     except Exception as exc:  # any resolver failure -> the callable is unknown
         raise diagnostics.error(
-            f"call node {node_id!r}: could not resolve {display}: {exc}",
+            f"{subject}: could not resolve {display}: {exc}",
             range=range,
         ) from exc
     finally:

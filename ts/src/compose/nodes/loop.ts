@@ -217,6 +217,7 @@ export class LoopDescriptor extends NodeDescriptor {
     const child = resolveChild(this.id, this.call, ctx.resolver, this.childLabel, {
       diagnostics: ctx.diagnostics,
       range: this.fieldRanges.get(siteKey("field", "call")) ?? this.range,
+      kind: this.kind,
     });
     const sig = childSignature(child);
     const subject = `loop node ${reprText(this.id)}`;

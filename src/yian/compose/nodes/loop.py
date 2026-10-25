@@ -186,6 +186,7 @@ class LoopDescriptor(NodeDescriptor):
             self.child_label,
             diagnostics=ctx.diagnostics,
             range=self.field_ranges.get(("field", "call")) or self.range,
+            kind=self.kind,
         )
         sig = child_signature(child)
         child_display = _callable_display(self.call, self.child_label)

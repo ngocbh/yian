@@ -591,6 +591,24 @@ def test_flow_call_in_outputs_span_is_loud():
         desugar_inline_calls({}, {"result": "${summarize(m=m)}"}, next_id=_ids())
 
 
+@pytest.mark.parametrize(
+    ("value", "where"),
+    [
+        ("call(f, v=${g(1)})", "use: call(f) argument 'v'"),
+        ("call(f, v=call(h, w=pre ${g(x=1)}))", "use: call(h) argument 'w'"),
+    ],
+    ids=["keyword-argument", "nested-call-argument"],
+)
+def test_flow_call_in_a_call_argument_span_is_loud(value, where):
+    descriptors = {"use": _code("use", {"topic": value})}
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(descriptors, None, next_id=_ids())
+    assert str(caught.value).startswith(
+        f"{where}: a flow call 'g' inside ${{...}} is not supported — write it as the "
+        "whole value with the call(...) directive: call(g, ...)"
+    )
+
+
 def test_pure_builtin_in_span_still_allowed():
     # `upper` is a TEMPLATE_FNS builtin — a call to it inside `${...}` is NOT a flow call,
     # so it passes through untouched (no synth node, no raise).

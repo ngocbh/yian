@@ -30,7 +30,8 @@
  * uses a variant of the shared flow (the harvested case holds Python's `cv_bad` flow word for word).
  *
  * TS-only: the harvested `load-case/engine_case_value__case_value_in_a_coalesce_is_rejected` and
- * `load-case/seed_22_case_value`, pinned at the end.
+ * `load-case/seed_22_case_value`, pinned at the end; `shared nested cases flatten once per case`
+ * and `a case reached by two paths keeps each path's cycle cut`, which pin the memoized flatten.
  */
 
 import { expect, test } from "bun:test";
@@ -140,6 +141,30 @@ test("case of case cycle drops arm is loud", () => {
     "node 'c': ${g1.output} — case 'g1' has no resolvable branch value (a case needs a `then:` or " +
       "`else:`, and its targets must not form a cycle)",
   );
+});
+
+test("shared nested cases flatten once per case", () => {
+  // Layer i's `a`/`b` cases each target layer i+1's `a` (then) and `b` (else): 2^40 paths from
+  // `a0`, so walking each path instead of each case would never finish.
+  const layers = 40;
+  const nodes: Record<string, NodeDescriptor> = {};
+  for (let i = 0; i < layers; i++) {
+    const [next, nextElse] = i + 1 < layers ? [`a${i + 1}`, `b${i + 1}`] : ["x", "y"];
+    for (const id of [`a${i}`, `b${i}`]) {
+      nodes[id] = new CaseDescriptor({ id, cases: [{ when: "w", then: next }], else_: nextElse });
+    }
+  }
+  nodes["c"] = code("c", { v: "${a0.output}" });
+  expect(inputOf(expanded(nodes), "c", "v")).toBe("${x.output | y.output}");
+});
+
+test("a case reached by two paths keeps each path's cycle cut", () => {
+  // g2 -> g1 cycles back only through g1, so g2's leaves read from g1 differ from its own.
+  const g1 = new CaseDescriptor({ id: "g1", cases: [{ when: "w", then: "g2" }], else_: "x" });
+  const g2 = new CaseDescriptor({ id: "g2", cases: [{ when: "w", then: "g1" }], else_: "y" });
+  const out = expanded({ g1, g2, c: code("c", { u: "${g1.output}", v: "${g2.output}" }) });
+  expect(inputOf(out, "c", "u")).toBe("${y.output | x.output}");
+  expect(inputOf(out, "c", "v")).toBe("${x.output | y.output}");
 });
 
 test("non case ref untouched", () => {

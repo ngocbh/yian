@@ -487,28 +487,63 @@ function desugarValue(
           : "";
       throw diagnostics.error(`${host}: ${error.message}${hint}`, { range, cause: error });
     }
+    // A keyword argument is a binding too, so it gets the same retired-form check (nested
+    // calls are in `found`, each with its own arguments). A malformed span is left for the
+    // binding parser, which names the argument.
+    for (const call of found) {
+      for (const [name, arg] of Object.entries(call.args)) {
+        if (typeof arg === "string" && arg.includes("${")) {
+          rejectSpanFlowCalls(arg, `${host}: call(${call.callee}) argument ${reprText(name)}`, {
+            range,
+            typeNames,
+            diagnostics,
+            skipMalformed: true,
+          });
+        }
+      }
+    }
     calls.push(...found);
     return newValue;
   }
+  rejectSpanFlowCalls(value, host, { range, typeNames, diagnostics });
+  return value;
+}
+
+/**
+ * Throw a located `LoadError` (prefixed `where:`) when a `${...}` span of `value` calls a flow,
+ * the retired `${flow(args)}` form, or calls a builtin type name like a function; also when a
+ * span doesn't parse, unless `skipMalformed`. A call to a name in `typeNames` is a constructor
+ * and passes.
+ */
+function rejectSpanFlowCalls(
+  value: string,
+  where: string,
+  options: {
+    range: SourceRange | null;
+    typeNames: ReadonlySet<string>;
+    diagnostics: LoadDiagnostics;
+    skipMalformed?: boolean;
+  },
+): void {
+  const { range, typeNames, diagnostics, skipMalformed = false } = options;
   let flowCallees: string[];
   try {
     flowCallees = flowCallCalleesInSpans(value, typeNames);
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
-    throw diagnostics.error(`${host}: ${error.message}`, { range, cause: error });
+    if (skipMalformed) return;
+    throw diagnostics.error(`${where}: ${error.message}`, { range, cause: error });
   }
-  if (flowCallees.length > 0) {
-    const callee = flowCallees[0]!;
-    if (BUILTIN_TYPE_NAMES.has(callee)) {
-      throw diagnostics.error(`${host}: ${unknownFunctionMessage(callee)}`, { range });
-    }
-    throw diagnostics.error(
-      `${host}: a flow call ${reprText(callee)} inside \${...} is not supported — write it ` +
-        `as the whole value with the call(...) directive: call(${callee}, ...)`,
-      { range },
-    );
+  if (flowCallees.length === 0) return;
+  const callee = flowCallees[0]!;
+  if (BUILTIN_TYPE_NAMES.has(callee)) {
+    throw diagnostics.error(`${where}: ${unknownFunctionMessage(callee)}`, { range });
   }
-  return value;
+  throw diagnostics.error(
+    `${where}: a flow call ${reprText(callee)} inside \${...} is not supported — write it ` +
+      `as the whole value with the call(...) directive: call(${callee}, ...)`,
+    { range },
+  );
 }
 
 /**
@@ -519,8 +554,8 @@ function desugarValue(
  * POSITIONAL flow id (a bare identifier, may be hyphenated: flow ids allow `-`); every remaining
  * arg is a `name=value` keyword, each at most once. Each keyword value passes through
  * `argSource`: a bare value reads like a named `input:` value (`window=30` gives `30n`, `1e3`
- * gives `1000`), a quoted scalar unwraps to text, and a `${…}`-bearing value stays a binding
- * string. An unquoted arg value starting with `call(` is ITSELF a directive, under the same rule,
+ * gives `1000`), a quoted value loses only its outer quotes (no escape processing), and a
+ * `${…}`-bearing value stays a binding string. An unquoted arg value starting with `call(` is ITSELF a directive, under the same rule,
  * desugared inner-first.
  *
  * @param value The binding text.
@@ -583,11 +618,13 @@ export function desugarCallDirectives(value: string, mint: () => string): [strin
 }
 
 /**
- * Read one `call(...)` keyword value the way the named form reads its `input:`.
+ * Read one `call(...)` keyword value: a bare value the way the named form reads its `input:`, a
+ * quoted value as the text between its outer quotes, kept verbatim (no YAML escape processing,
+ * so `'it''s'` stays `it''s`).
  *
  * @param value The keyword's raw value text.
- * @returns For a fully quoted scalar (`"…"`/`'…'`), its inner text, a binding template if it
- *   interpolates (`"hi ${name}"` gives `hi ${name}`); for an unquoted `${…}`-bearing value, the
+ * @returns For a value that starts and ends with the same quote (`"…"`/`'…'`), the text between
+ *   them, a binding template if it interpolates (`"hi ${name}"` gives `hi ${name}`); for an unquoted `${…}`-bearing value, the
  *   binding string; else the trimmed text read as one plain scalar like a named `input:` value
  *   (`30` gives `30n`, `1e3` a number, `~` or an empty value `null`, `None` text). YAML
  *   structure such as `[1]` stays text: a bare argument is one scalar.

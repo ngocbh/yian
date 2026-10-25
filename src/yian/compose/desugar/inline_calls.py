@@ -482,25 +482,59 @@ def _desugar_value(
                 else ""
             )
             raise diagnostics.error(f"{host}: {exc}{hint}", range=range) from exc
+        # A keyword argument is a binding too, so it gets the same retired-form check
+        # (nested calls are in `found`, each with its own arguments). A malformed span
+        # is left for the binding parser, which names the argument.
+        for call in found:
+            for name, arg in call.args.items():
+                if isinstance(arg, str) and "${" in arg:
+                    _reject_span_flow_calls(
+                        arg,
+                        f"{host}: call({call.callee}) argument {name!r}",
+                        range=range,
+                        type_names=type_names,
+                        diagnostics=diagnostics,
+                        skip_malformed=True,
+                    )
         calls.extend(found)
         return new_value
+    _reject_span_flow_calls(
+        value, host, range=range, type_names=type_names, diagnostics=diagnostics
+    )
+    return value
+
+
+def _reject_span_flow_calls(
+    value: str,
+    where: str,
+    *,
+    range: Optional[SourceRange],
+    type_names: frozenset[str],
+    diagnostics: LoadDiagnostics,
+    skip_malformed: bool = False,
+) -> None:
+    """Raise a located `LoadError` (prefixed ``where:``) when a `${...}` span of
+    ``value`` calls a flow, the retired `${flow(args)}` form, or calls a builtin type
+    name like a function; also when a span doesn't parse, unless ``skip_malformed``.
+    A call to a name in ``type_names`` is a constructor and passes."""
     try:
         flow_callees = flow_call_callees_in_spans(value, type_names)
     except ExpressionError as exc:
+        if skip_malformed:
+            return
         raise diagnostics.error(
-            f"{host}: {exc}",
+            f"{where}: {exc}",
             range=range,
         ) from exc
     if flow_callees:
         callee = flow_callees[0]
         if callee in BUILTIN_TYPE_NAMES:
-            raise diagnostics.error(f"{host}: {unknown_function_message(callee)}", range=range)
+            raise diagnostics.error(f"{where}: {unknown_function_message(callee)}", range=range)
         raise diagnostics.error(
-            f"{host}: a flow call {callee!r} inside ${{...}} is not supported — write it "
+            f"{where}: a flow call {callee!r} inside ${{...}} is not supported — write it "
             f"as the whole value with the call(...) directive: call({callee}, ...)",
             range=range,
         )
-    return value
 
 
 def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
@@ -511,8 +545,9 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     Its FIRST arg is the POSITIONAL flow id (a bare identifier, may be hyphenated — flow
     ids allow `-`); every remaining arg is a `name=value` keyword, each at most once.
     Each keyword value passes through `_arg_source`: a bare value reads like a named
-    `input:` value (`window=30` -> int 30, `1e3` -> float 1000.0), a quoted scalar
-    unwraps to text, and a `${…}`-bearing value stays a binding string. An unquoted
+    `input:` value (`window=30` -> int 30, `1e3` -> float 1000.0), a quoted value
+    loses only its outer quotes (no escape processing), and a `${…}`-bearing value
+    stays a binding string. An unquoted
     arg value starting with `call(` is ITSELF a directive, under the same rule —
     desugared inner-first.
 
@@ -571,15 +606,18 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
 
 
 def _arg_source(value: str) -> Any:
-    """Read one `call(...)` keyword value the way the named form reads its `input:`.
+    """Read one `call(...)` keyword value: a bare value the way the named form reads
+    its `input:`, a quoted value as the text between its outer quotes, kept verbatim
+    (no YAML escape processing, so `'it''s'` stays `it''s`).
 
     Args:
         value (`str`): The keyword's raw value text.
 
     Returns:
-        `Any`: For a fully quoted scalar (`"…"`/`'…'`), its inner text, a binding
-            template if it interpolates (`"hi ${name}"` -> `hi ${name}`); for an
-            unquoted `${…}`-bearing value, the binding string; else the trimmed text
+        `Any`: For a value that starts and ends with the same quote (`"…"`/`'…'`),
+            the text between them, a binding template if it interpolates
+            (`"hi ${name}"` -> `hi ${name}`); for an unquoted `${…}`-bearing value,
+            the binding string; else the trimmed text
             read as one plain scalar like a named `input:` value (`30` -> int,
             `1e3` -> float, `~` or an empty value -> `None`, `None` -> text). YAML
             structure such as `[1]` stays text: a bare argument is one scalar.

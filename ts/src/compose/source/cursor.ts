@@ -121,10 +121,18 @@ export class SourceCursor {
    * @throws TypeError when `value` holds anything but a YAML value.
    */
   static virtual(value: Value): SourceCursor {
+    return SourceCursor._adopt(freezeValue(snapshotValue(value)));
+  }
+
+  /**
+   * @internal Build a location-free cursor over `value` without copying it; `value` must
+   * already be deep-frozen, as a part of another cursor's value is.
+   */
+  static _adopt(value: Value): SourceCursor {
     return new SourceCursor({
       document: null,
       definition: null,
-      value: freezeValue(snapshotValue(value)),
+      value,
       pathLink: null,
       keyDefinition: null,
       cycleCut: false,
@@ -317,9 +325,9 @@ export class SourceCursor {
     const value = this._value;
     if (this._overlay || this._document === null) {
       if (isRecord(value)) {
-        return Object.keys(value).map((key) => SourceCursor.virtual(value[key]!));
+        return Object.keys(value).map((key) => SourceCursor._adopt(value[key]!));
       }
-      if (isList(value)) return value.map((item) => SourceCursor.virtual(item as Value));
+      if (isList(value)) return value.map((item) => SourceCursor._adopt(item as Value));
       return [];
     }
     const mapping = this._mappingDefinition();
@@ -356,7 +364,7 @@ export class SourceCursor {
       if (!isRecord(value)) return [];
       return Object.keys(value)
         .filter((name) => key === undefined || name === key)
-        .map((name) => SourceCursor.virtual(value[name]!));
+        .map((name) => SourceCursor._adopt(value[name]!));
     }
     const definition = this._mappingDefinition();
     if (definition === null) return [];
@@ -463,7 +471,7 @@ export class SourceCursor {
     this._ensureTraversable();
     if (this._projectedEntries !== null) {
       const entry = this._projectedEntry(key);
-      return entry === null ? null : this._projectedChild(entry).keyRange;
+      return entry?.source?.keyRange ?? null;
     }
     if (this._overlay || this._document === null) return null;
     const occurrence = this._effectiveOccurrence(key);
@@ -535,7 +543,14 @@ export class SourceCursor {
    * @throws TypeError when `value` holds anything but a YAML value.
    */
   withValue(value: Value): SourceCursor {
-    const snapshot = freezeValue(snapshotValue(value));
+    return this._withSnapshot(freezeValue(snapshotValue(value)));
+  }
+
+  /**
+   * @internal `withValue` over `snapshot` without copying it; `snapshot` must already be
+   * deep-frozen, as a part of another cursor's value is.
+   */
+  _withSnapshot(snapshot: Value): SourceCursor {
     let projectedEntries: ProjectedEntry[] | null = null;
     let sequenceSources: (SourceCursor | null)[] | null = null;
     if (isRecord(snapshot)) {
@@ -552,8 +567,11 @@ export class SourceCursor {
       });
     } else if (isList(snapshot)) {
       const current = this._value;
+      const retained = this._sequenceSources;
       const aligned = this._document !== null && !this._cycleCut && isList(current);
       sequenceSources = snapshot.map((_, index) => {
+        // The retained item source, not its projected overlay, as for a mapping above.
+        if (retained !== null) return retained[index] ?? null;
         if (!aligned || index >= current.length) return null;
         try {
           return this.child(index);
@@ -778,7 +796,7 @@ export class SourceCursor {
   /** @internal Return a projected value's cursor, with its entry's source when it has one. */
   _projectedChild(entry: ProjectedEntry): SourceCursor {
     const value = (this._value as ValueRecord)[entry.key]!;
-    return entry.source === null ? SourceCursor.virtual(value) : entry.source.withValue(value);
+    return entry.source === null ? SourceCursor._adopt(value) : entry.source._withSnapshot(value);
   }
 
   /**
@@ -791,7 +809,7 @@ export class SourceCursor {
     checkIndex(index, this._sequenceSources!.length, this.range);
     const value = (this._value as Value[])[index]!;
     const source = this._sequenceSources![index] ?? null;
-    return source === null ? SourceCursor.virtual(value) : source.withValue(value);
+    return source === null ? SourceCursor._adopt(value) : source._withSnapshot(value);
   }
 
   /** @internal Navigate a value with no navigable definition: virtual, or replaced. */
@@ -801,11 +819,11 @@ export class SourceCursor {
       if (typeof key !== "string" || !Object.hasOwn(value, key)) {
         throw new SourceAccessError(missingField(key), this.range);
       }
-      return SourceCursor.virtual(value[key]!);
+      return SourceCursor._adopt(value[key]!);
     }
     if (isList(value)) {
       checkIndex(key, value.length, this.range);
-      return SourceCursor.virtual(value[key] as Value);
+      return SourceCursor._adopt(value[key] as Value);
     }
     throw new SourceAccessError("cannot select a child from a scalar value", this.range);
   }

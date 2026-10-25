@@ -358,6 +358,23 @@ def test_empty_key_is_reported_with_empty_text(text, key, key_range):
     assert found[2] == key_range
 
 
+def test_a_key_repeated_through_an_alias_is_located_where_each_key_is_written():
+    assert SourceDocument.parse("x: &k a\ny: {*k : 1, *k : 2}").repeated_key == (
+        "a",
+        SourceRange(2, 5, 2, 7),
+        SourceRange(2, 13, 2, 15),
+    )
+    assert SourceDocument.parse("&k a: 1\n*k : 2\n").repeated_key == (
+        "a",
+        SourceRange(1, 1, 1, 5),
+        SourceRange(2, 1, 2, 3),
+    )
+    # Aliases written as values before the repeat don't shift its range.
+    assert SourceDocument.parse(
+        "b: &v 1\n&k a: *v\nc: [*v, *k]\n*k : 3\n"
+    ).repeated_key == ("a", SourceRange(2, 1, 2, 5), SourceRange(4, 1, 4, 3))
+
+
 def test_non_text_key_and_repeated_key_are_both_found():
     document = SourceDocument.parse("017: a\n17: b\n")
 

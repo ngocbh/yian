@@ -2132,16 +2132,7 @@ function prepareSuccessTransition(
     terminal,
     files,
   });
-  const observers: RunEvent[] = [
-    new NodeSucceeded({
-      nodeId: delta.nodeId,
-      output: normalizeTypedFiles(files, decodeTyped(delta.valueJson)).toObject(),
-      commitAs: delta.observerCommitAs,
-      interrupted: delta.interrupted,
-    }),
-  ];
-  if (terminal !== null) observers.push(terminalObserver(terminal));
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, materializeSuccess(plan).observers);
 }
 
 /**
@@ -2188,12 +2179,7 @@ function prepareRouteTransition(
     delta,
     terminal,
   });
-  const observers: RunEvent[] = [
-    new NodeRouted({ nodeId: delta.nodeId, handle: delta.handle }),
-    ...delta.skippedNodeIds.map((nodeId) => new NodeSkipped({ nodeId })),
-  ];
-  if (terminal !== null) observers.push(terminalObserver(terminal));
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, observers);
+  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, materializeRoute(plan).observers);
 }
 
 /** Freeze one validated terminal failure and its canonical public record. */

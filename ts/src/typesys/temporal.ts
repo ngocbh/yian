@@ -5,8 +5,8 @@
  * set differs between runtimes, so a string parses the same way everywhere.
  */
 
-export const DATE_FORMAT = "2026-05-21";
-export const DATETIME_FORMAT = "2026-05-21T14:30[:00][Z|+07:00]";
+const DATE_FORMAT = "2026-05-21";
+const DATETIME_FORMAT = "2026-05-21T14:30[:00][Z|+07:00]";
 
 // `[0-9]` rather than `\d` to say ASCII digits outright; no `m` flag, so `$` is the end
 // of the text and a trailing newline fails.

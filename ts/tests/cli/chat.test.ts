@@ -16,7 +16,7 @@ import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
-import { cancel, inspectRun } from "../../src/run.ts";
+import { cancel, inspectRun, send } from "../../src/run.ts";
 import {
   InboxClosedRecord,
   InboxWithdrawnRecord,
@@ -31,7 +31,7 @@ import {
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../engine/run_state_fixtures.ts";
-import { CTRL_C, ENTER, ESCAPE, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
+import { CTRL_C, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -1011,6 +1011,104 @@ test(
   },
   TIMEOUT,
 );
+
+/**
+ * A chat turn whose reply is the host tool `sender`; the turn ends after it. `T` is the inbox's
+ * element type.
+ */
+const SENDER = (element: string) => `id: sender_chat
+name: sender_chat
+input:
+  messages: !Inbox(${element})
+defs:
+  turn:
+    input:
+      said: !list(str)
+      closed: !bool
+      messages: !Inbox(${element})
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.messages}
+          take: all
+      reply:
+        kind: tool
+        tool_id: sender
+        input:
+          events: \${heard.output.events}
+        output: str
+    output:
+      said: \${input.said + [reply.output]}
+      closed: \${heard.output.closed}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      said: []
+      closed: false
+      messages: \${input.messages}
+    while: not closed
+output: \${chat.output.said}
+`;
+
+for (const message of [false, true]) {
+  test(
+    `Esc puts a message the run hasn't read back in the prompt (Inbox(${message ? "Message" : "str"}))`,
+    async () => {
+      const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+      const log = join(tmp, "run.jsonl");
+      const text = (event: unknown) => (message ? (event as { parts: { text: string }[] }).parts[0]!.text : event);
+      const { promise: started, resolve: start } = Promise.withResolvers<void>();
+      let calls = 0;
+      // Its first call sends a line no take will read before Esc, then waits for the test.
+      const sender = new FunctionTool({
+        name: "sender",
+        description: "sends a second line once",
+        parametersJsonSchema: { type: "object", properties: { events: { type: "array" } } },
+        execute: async (args: { events?: unknown[] }) => {
+          const got = `got: ${(args.events ?? []).map(text).join(" ")}`;
+          if (calls++ > 0) return got;
+          const second = message ? { role: "user", parts: [{ type: "text", text: "second" }] } : "second";
+          await send(log, "messages", second, { env: io.env });
+          const { promise: held, resolve } = Promise.withResolvers<void>();
+          release = resolve;
+          start();
+          await held;
+          return got;
+        },
+      });
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(flowFile(SENDER(message ? "Message" : "str")), io, {}, { tools: { sender } });
+      await started;
+      stdin.write(ESCAPE);
+      await until(() => stderr().includes(STOPPING));
+      release!();
+      await until(() => stdout().includes("got: hi"));
+      // The withdrawn line is the next prompt's text: ENTER sends it.
+      await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You: second");
+      stdin.write(ENTER);
+      await until(() => stdout().includes("got: second"));
+      stdin.write("/exit" + ENTER);
+      const { code } = await chatting;
+      expect(code).toBe(0);
+      expect(stdout()).toBe("got: hi\ngot: second\ngot: \n");
+      expect(stderr()).toContain("(withdrew 1 message; back in the prompt)\n");
+      const all = readRunLog(log);
+      const sends = all.filter(
+        (envelope) => envelope.record instanceof PoolCommitRecord && envelope.record.key === "__start__.messages",
+      );
+      expect(sends.length).toBe(3);
+      const withdrawn = all.flatMap((envelope) =>
+        envelope.record instanceof InboxWithdrawnRecord ? [[envelope.record.inbox, [...envelope.record.events]]] : [],
+      );
+      expect(withdrawn).toEqual([["messages", [sends[1]!.seq]]]);
+    },
+    TIMEOUT,
+  );
+}
 
 test(
   "the summary a fold writes is never printed",

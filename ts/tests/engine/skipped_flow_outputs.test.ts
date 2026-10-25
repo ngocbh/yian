@@ -1025,3 +1025,37 @@ test.each<CaseRow>([
 test("assembled: load-case/engine_skipped_flow_outputs__arithmetic_in_a_map_over", () => {
   runCase({ id: "load-case/engine_skipped_flow_outputs__arithmetic_in_a_map_over", call: assembled });
 });
+
+// ---- nullable field reads: a reader that runs while its producer may be skipped needs ?. ----
+
+const ORDER = gate("order", "rejected") + code("order", '{"qty": 2}', "\n      qty: int") + code("rejected", '"no"');
+const reader = (binding: string) => code("use", 'inputs["v"]', "str", `    input:\n      v: ${binding}\n`);
+
+test("a reader that co-skips with its producer reads it with .", () => {
+  expect(() => assembleText(flow(ORDER + reader("${order.output.qty}"), " ${use.output :- null}"))).not.toThrow();
+});
+
+test("a reader that runs while its producer may be skipped needs ?.", () => {
+  const error = loadError(() => assembleText(flow(ORDER + reader("'${order.output.qty} items'"), " ${use.output}")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain(
+    "${order.output.qty} reads field 'qty' of order.output, which may be null " +
+      "(node 'order' may be skipped while 'use' runs); write order.output?.qty",
+  );
+  expect(() => assembleText(flow(ORDER + reader("'${order.output?.qty} items'"), " ${use.output}"))).not.toThrow();
+});
+
+// Design 2.6.6: the same reader over an untyped `order` (`output: Any`).
+const UNTYPED_ORDER = gate("order", "rejected") + code("order", '{"qty": 2}', "Any") + code("rejected", '"no"');
+
+test("a reader that runs while an untyped producer may be skipped needs ?.", () => {
+  const error = loadError(() =>
+    assembleText(flow(UNTYPED_ORDER + reader("'${order.output.qty} items'"), " ${use.output}")),
+  );
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain("(node 'order' may be skipped while 'use' runs); write order.output?.qty");
+  expect(() =>
+    assembleText(flow(UNTYPED_ORDER + reader("'${order.output?.qty} items'"), " ${use.output}")),
+  ).not.toThrow();
+  expect(() => assembleText(flow(UNTYPED_ORDER + reader("${order.output.qty}"), " ${use.output :- null}"))).not.toThrow();
+});

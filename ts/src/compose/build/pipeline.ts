@@ -152,6 +152,7 @@ import { lowerFlowAsserts, validateNodeAsserts } from "../validate/asserts.ts";
 import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
+import { checkFieldReads } from "../validate/field_reads.ts";
 import { checkSkippedArithmetic, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
 import type { FlowSource } from "../../runtime/log.ts";
 
@@ -2247,6 +2248,12 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     if (contract === undefined) return output;
     return new FlowOutput(output.name, new Binding(output.binding.source, { origin: output.binding.origin, contract }));
   });
+  // A `.` step through a value that may be null (an `Optional`, or a producer that may be skipped
+  // while the reader runs) is a load error; it runs before the outputs get their null defaults.
+  checkFieldReads(
+    { flowWiring, buildResults, narrowing, skips, registry, typeFn: constructorType },
+    { resolveOrigin, diagnostics },
+  );
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
   outputs = nullSkippedOutputs(outputs, skips);

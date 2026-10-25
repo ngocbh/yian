@@ -1210,3 +1210,99 @@ test.each<CaseRow>([
   { id: `${CASES}prompt_inside_a_def_reads_unknown_field`, call: assembled, full: true },
   { id: `${CASES}loop_while_reads_a_field_on_a_builtin_result`, call: assembled, full: true },
 ])("assemble: $id", runCase);
+
+// --------------------------------------------------------------------------- //
+// Nullable field reads (`expr.nullable_field_read`): a `.` step on a value that may be null is a
+// load error at every site, and each narrowing form lifts it.
+// --------------------------------------------------------------------------- //
+
+const NULLABLE_PREAMBLE =
+  "id: nf\nname: nf\n" +
+  "typedefs:\n" +
+  "  Rec: {a: str}\n" +
+  "  RecK: {kind: 'Literal(rec)', a: str}\n" +
+  "  OtherK: {kind: 'Literal(other)', a: str, b: str}\n" +
+  "  Tagged: Union(RecK, OtherK)\n" +
+  "  T: {f: Optional(str), g: str}\n" +
+  "input:\n  maybe: !Optional(Rec)\n  tagged: !Optional(Tagged)\n  rec: !Rec\n";
+
+/** The narrowing forms of design rule 3, each a condition over subject `S` that reads `S.a`. */
+const FORMS: readonly [name: string, form: (s: string) => string][] = [
+  ["!= null and", (s) => `${s} != null and ${s}.a == 'x'`],
+  ["== null or", (s) => `${s} == null or ${s}.a == 'x'`],
+  ["isinstance", (s) => `isinstance(${s}, Rec) and ${s}.a == 'x'`],
+];
+/**
+ * The tag-test form, over a subject that is an `Optional` tagged union; both members have `a`, so
+ * only the null matters.
+ */
+const TAG_FORM = (s: string) => `${s}?.kind == 'rec' and ${s}.a == 'x'`;
+/** The read the forms guard, unguarded: a load error at every site. */
+const UNGUARDED = (s: string) => `${s}.a == 'x'`;
+
+/** A flow whose CODE node `use` binds `v: ${<text>}`. */
+const nullableBinding = (text: string) =>
+  NULLABLE_PREAMBLE +
+  "nodes:\n" +
+  `  use:\n    kind: code\n    input:\n      v: \${${text}}\n    code: return 1\n` +
+  "output: ${use.output}\n";
+
+/** A flow where a CASE routes `use` when `input.maybe` is set, and `use` binds `v: ${<text>}`. */
+const routedBinding = (text: string) =>
+  NULLABLE_PREAMBLE +
+  "nodes:\n" +
+  "  gate:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: use\n    else: skip\n" +
+  `  use:\n    kind: code\n    output: str\n    input:\n      v: \${${text}}\n    code: return 'u'\n` +
+  "  skip:\n    kind: code\n    output: str\n    code: return 'n'\n" +
+  "output: ${use.output | skip.output}\n";
+
+/**
+ * A flow where an untyped `mk` (`output: Any`) is routed by `isinstance(mk.output, T)` to `go`, and
+ * the `binding` sits on `reader`: `go`, or `other`, the `else:`.
+ */
+const typeBranch = (binding: string, reader: "go" | "other" = "go") => {
+  const node = (id: string) =>
+    `  ${id}:\n    kind: code\n    output: str\n` +
+    (id === reader ? `    input:\n      v: ${binding}\n` : "") +
+    `    code: return '${id}'\n`;
+  return (
+    NULLABLE_PREAMBLE +
+    "nodes:\n" +
+    "  mk:\n    kind: code\n    output: Any\n    code: \"return {'g': 'x'}\"\n" +
+    "  route:\n    kind: case\n    cases:\n      - when: isinstance(mk.output, T)\n        then: go\n    else: other\n" +
+    node("go") +
+    node("other") +
+    "output: ${go.output | other.output}\n"
+  );
+};
+
+test.each(FORMS)("a binding narrowed by %s loads", (_name, form) => {
+  load(nullableBinding(form("input.maybe")));
+});
+
+test("a binding narrowed by a tag test loads", () => {
+  load(nullableBinding(TAG_FORM("input.tagged")));
+});
+
+test("an unguarded Optional read in a binding is a load error", () => {
+  const error = loadError(() => load(nullableBinding(UNGUARDED("input.maybe"))));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain("reads field 'a' of input.maybe, which may be null (it is Optional)");
+});
+
+test("a CASE branch that proves the value lets a routed binding read it with .", () => {
+  load(routedBinding("input.maybe.a"));
+});
+
+test("an untyped producer narrowed by a CASE type branch needs ?. for an optional field", () => {
+  const message = loadError(() => load(typeBranch("${mk.output.f}"))).message;
+  expect(message).toContain("which is untyped and only narrowed to T; write mk.output?.f");
+  load(typeBranch("${mk.output?.f}"));
+  load(typeBranch("${mk.output.g}"));
+});
+
+test("an untyped producer narrowed by isinstance in a binding needs ?. for an optional field", () => {
+  expect(
+    loadError(() => load(typeBranch("${isinstance(mk.output, T) and mk.output.f == 'a'}", "other"))).message,
+  ).toContain("only narrowed to T; write mk.output?.f");
+});

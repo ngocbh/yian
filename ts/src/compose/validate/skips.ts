@@ -468,7 +468,7 @@ export function checkSkippedArithmetic(
  *
  * A string nested in a value template takes its registered origin, else the outer binding's.
  */
-function stringSites(binding: unknown): Binding[] {
+export function stringSites(binding: unknown): Binding[] {
   const outer = asBinding(binding);
   return [...iterSourceStrings(outer)].map(([path, text]) => {
     const origin = outer.source instanceof ValueTemplate ? outer.source.originAt(path) : null;

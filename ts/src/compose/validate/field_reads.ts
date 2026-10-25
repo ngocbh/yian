@@ -10,7 +10,16 @@
  * Never imports: build, the loader, or the runtime.
  */
 
-import { contractType, outputContractPathError, projectOutputContract } from "../../compile/output_contracts.ts";
+import {
+  contractType,
+  itemContract,
+  outputContractPathError,
+  projectOutputContract,
+  referenceContract,
+  type TypeFn,
+} from "../../compile/output_contracts.ts";
+import { reprText, type SourceRange } from "../../diagnostics.ts";
+import { ExpressionError } from "../../expr/expressions.ts";
 import { type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
 import { type RefStep, splitReference, stepsText } from "../../expr/expressions.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../nodes/contracts.ts";
@@ -46,8 +55,15 @@ import {
   type NotNarrowable,
   unresolvedType,
 } from "../helpers/narrowing_facts.ts";
+import { scanTemplate, Span } from "../../expr/template.ts";
+import { bindingSource } from "../../nodes/contracts.ts";
+import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
+import { LoadDiagnostics } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
-import { ARITHMETIC } from "./skips.ts";
+import { type BuildResult, siteKey } from "../nodes/base.ts";
+import type { Narrowing } from "./narrowing.ts";
+import { ARITHMETIC, type SkipModel, stringSites } from "./skips.ts";
+import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
 
 /** The code of a nullable field-read load error. */
 export const NULLABLE_FIELD_READ = "expr.nullable_field_read";
@@ -772,4 +788,130 @@ export function fieldReadErrors(
     ...names.map((message) => ({ message, code: "compose.load" })),
     ...nullable.map((message) => ({ message, code: NULLABLE_FIELD_READ })),
   ];
+}
+
+/** What `checkFieldReads` checks: one assembled flow level. */
+export interface FieldReadLevel {
+  readonly flowWiring: ReadonlyMap<string, ReadonlyMap<string, unknown>>;
+  readonly buildResults: ReadonlyMap<string, BuildResult>;
+  readonly narrowing: Narrowing;
+  readonly skips: SkipModel;
+  readonly registry: TypeRegistry;
+  /** Resolves a constructor name to its type (default none). */
+  readonly typeFn?: TypeFn | null;
+}
+
+/**
+ * Check every nullable field read of one flow level at load (design 2.5, 2.6): node bindings
+ * (CASE `on:` and reserved sources included). The first error throws with code
+ * `expr.nullable_field_read`.
+ *
+ * @param level The assembled level.
+ * @param options.resolveOrigin Resolves a binding's origin to its source frame (default none).
+ * @param options.diagnostics Factory for located load errors (default an unlocated one).
+ * @throws LoadError at the first read that steps `.` through a value that may be null.
+ */
+export function checkFieldReads(
+  level: FieldReadLevel,
+  options: { resolveOrigin?: ResolveOrigin | null; diagnostics?: LoadDiagnostics | null } = {},
+): void {
+  const resolveOrigin = options.resolveOrigin ?? null;
+  const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  const { flowWiring, buildResults, registry } = level;
+  for (const [nodeId, wiring] of flowWiring) {
+    const result = buildResults.get(nodeId) ?? null;
+    const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
+    const roots = poolRoots(level, nodeId, wiring);
+    for (const [param, binding] of wiring) {
+      for (const site of stringSites(binding)) {
+        const message = firstNullableRead(bindingSource(site), roots, registry);
+        if (message === null) continue;
+        let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
+        let fallback: SourceRange | null = null;
+        if (result !== null) {
+          // A reserved key (`over`, `until`) is a kind field, not an input.
+          const isReserved = reserved.has(param);
+          const label = isReserved ? result.node.reservedKeyLabel(param) : result.node.wiringRefLabel(param);
+          const own = result.fieldRanges.get(siteKey(isReserved ? "field" : "input", param));
+          fallback = own ?? result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
+          // A synthetic param's label may already end in a colon (`on:`); the message adds one.
+          where = result.siteName(nodeId, label.replace(/:+$/, ""));
+        }
+        throw locatedError(`${where}: ${message}`, site, fallback, resolveOrigin, diagnostics, {
+          code: NULLABLE_FIELD_READ,
+        });
+      }
+    }
+  }
+}
+
+/** Return the first nullable-read message of a template string, else `null`. */
+function firstNullableRead(text: unknown, roots: ReadRoots, registry: TypeRegistry): string | null {
+  if (typeof text !== "string") return null;
+  let segments;
+  try {
+    segments = scanTemplate(text);
+  } catch (error) {
+    // Reference validation reports a malformed template.
+    if (error instanceof ExpressionError) return null;
+    throw error;
+  }
+  for (const segment of segments) {
+    if (!(segment instanceof Span)) continue;
+    const [message] = nullableReadErrors(segment.tree, roots, registry);
+    if (message !== undefined) return message;
+  }
+  return null;
+}
+
+/**
+ * Return the pool-scope roots node `nodeId` reads (`reader` names it in messages): producers,
+ * flow inputs and `item`, typed by the routing-narrowed view of the node, nullable when the
+ * producer may be skipped while the node runs, untyped by their un-narrowed contracts.
+ */
+function poolRoots(
+  level: FieldReadLevel,
+  nodeId: string,
+  wiring: ReadonlyMap<string, unknown>,
+  reader: string = nodeId,
+): ReadRoots {
+  const { buildResults, narrowing, skips } = level;
+  const typeFn = level.typeFn ?? null;
+  const [producers, inputs] = narrowing.forNode(nodeId);
+  const node = buildResults.get(nodeId)?.node ?? null;
+  /** The producer a `<p>.output` or `<p>.new_messages` root reads, else `null`. */
+  const producerOf = (root: string): string | null => {
+    const [head, field] = root.split(".");
+    if (field === "output" && buildResults.has(head!)) return head!;
+    if (field === NEW_MESSAGES && producers.has(messagesKey(head!))) return head!;
+    return null;
+  };
+  const isRoot = (root: string): boolean =>
+    producerOf(root) !== null || (root.startsWith("input.") && inputs.has(root.slice("input.".length)));
+  return {
+    contracts: (root) => {
+      if (root === "item") {
+        if (node === null || node.itemSourceKey === null) return undefined;
+        return [itemContract(node, wiring, producers, inputs, typeFn)];
+      }
+      return isRoot(root) ? [referenceContract(root, producers, inputs)] : undefined;
+    },
+    rootLength: poolRootLength,
+    nullable: (root) => {
+      const producer = producerOf(root);
+      return producer !== null && skips.maySkipWhileRunning([producer], nodeId);
+    },
+    why: (root) => {
+      const producer = producerOf(root);
+      if (producer === null || !skips.maySkipWhileRunning([producer], nodeId)) return "it is Optional";
+      return `node ${reprText(producer)} may be skipped while ${reprText(reader)} runs`;
+    },
+    untyped: (root) => {
+      if (root === "item") {
+        return isUntyped(contractType(itemContract(node, wiring, narrowing.producers, narrowing.inputs, typeFn)));
+      }
+      return isUntyped(contractType(referenceContract(root, narrowing.producers, narrowing.inputs)));
+    },
+    routing: () => narrowing.environment(nodeId),
+  };
 }

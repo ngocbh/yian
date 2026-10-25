@@ -248,12 +248,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       // cut. An interrupt seen now beats a late steer: the answer stands as if it never came (no
       // steer, no honor step), and queued steers stay for the next reader. At the cap the answer
       // stands too: the cap is checked before anything is read, so nothing is consumed that won't
-      // be sent. A structured agent's trailing call is cut like any model call, and an interrupt
-      // seen now (an earlier start's honor included) means it never starts.
-      const interrupted = interruptRequested(interrupt, steps);
-      const late = !interrupted && iterations !== ctx.maxToolIterations;
+      // be sent. A structured agent's trailing call is cut like any model call, and never starts
+      // once an interrupt is seen (an earlier start's honor included).
+      const late = !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
       if (late && lateSteer(steps, ctx.steerInbox)) continue;
-      if (schema !== null) return interrupted ? honor(ctx, steps) : await structured();
+      if (schema !== null) return await structured();
       return new Output(textOf(reply));
     }
 

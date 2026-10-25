@@ -307,9 +307,6 @@ function parseArgsError(error: Error): UsageError {
   if (match) return new UsageError(`No such option: ${match[1]}`);
   match = /--(\S+) <value>' argument missing/.exec(message);
   if (match) return new UsageError(`Option '--${match[1]}' requires an argument.`);
-  // `-w -1`: parseArgs refuses a separate value starting with `-`, as Click finds none.
-  match = /^Option '([^']*)' argument is ambiguous/.exec(message);
-  if (match) return new UsageError(`Option '${match[1]}' requires an argument.`);
   // parseArgs names the option `-q, --quiet`; Click names the long form alone.
   match = /^Option '(?:-[^-], )?([^']*)' does not take an argument/.exec(message);
   if (match) return new UsageError(`Option '${match[1]}' does not take a value.`);
@@ -317,9 +314,48 @@ function parseArgsError(error: Error): UsageError {
 }
 
 /**
+ * Return `argv` with each value-taking option written as a separate word and followed by a word
+ * starting with `-` joined to that word (`--name=-1`, `-w-1`, `-qw-1`), since `parseArgs` refuses
+ * such a value and Click takes the next word as the value whatever it is. Words after a bare `--`
+ * are left alone.
+ */
+function joinDashValues(spec: CommandSpec, argv: readonly string[]): string[] {
+  const takesValue = new Map<string, boolean>();
+  for (const option of spec.options) {
+    takesValue.set(`--${option.name}`, option.type !== "boolean");
+    if (option.short !== undefined) takesValue.set(`-${option.short}`, option.type !== "boolean");
+  }
+  /** Whether `word` ends with an option that takes the next word as its value. */
+  const needsValue = (word: string): boolean => {
+    if (word.startsWith("--")) return takesValue.get(word) === true;
+    if (!/^-[^-]/.test(word)) return false;
+    // A short group: each letter before the last a flag, the last one taking a value.
+    const letters = Array.from(word.slice(1));
+    return letters.every((letter, i) => takesValue.get(`-${letter}`) === (i === letters.length - 1));
+  };
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i]!;
+    if (word === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const next = argv[i + 1];
+    if (next?.startsWith("-") && needsValue(word)) {
+      out.push(word.startsWith("--") ? `${word}=${next}` : word + next);
+      i++;
+    } else {
+      out.push(word);
+    }
+  }
+  return out;
+}
+
+/**
  * Parse `argv` (the arguments after the command's name) against `spec`.
  *
- * Options and positionals may mix; `--` ends the options. An int or float option's value is
+ * Options and positionals may mix; `--` ends the options. A value-taking option takes the next
+ * word as its value even when it starts with `-`, as Click does. An int or float option's value is
  * converted, an int's checked against `min`; each path is checked once parsing is done,
  * positionals then options, in declared order. `--help` anywhere returns `{help: true}` before any
  * of those checks.
@@ -340,7 +376,7 @@ export function parseCommand(spec: CommandSpec, argv: readonly string[]): Parsed
   }
   let parsed;
   try {
-    parsed = parseArgs({ args: [...argv], options, strict: true, allowPositionals: true });
+    parsed = parseArgs({ args: joinDashValues(spec, argv), options, strict: true, allowPositionals: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code?.startsWith("ERR_PARSE_ARGS_")) throw parseArgsError(error as Error);
     throw error;

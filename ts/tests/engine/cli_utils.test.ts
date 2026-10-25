@@ -303,8 +303,23 @@ describe("parseCommand", () => {
     for (const argv of [["--num-workers=-1"], ["-w-1"]]) {
       expect(usage(RUN, [flow, ...argv])).toBe("Invalid value for '--num-workers' / '-w': -1 is not in the range x>=0.");
     }
-    // parseArgs refuses a value starting with `-` written as a separate word.
-    expect(usage(RUN, [flow, "-w", "-1"])).toBe("Option '-w' requires an argument.");
+  });
+
+  test("a value-taking option takes the next word even when it starts with -, as Click does", () => {
+    const range = "Invalid value for '--num-workers' / '-w': -1 is not in the range x>=0.";
+    for (const argv of [["-w", "-1"], ["--num-workers", "-1"], ["-qw", "-1"]]) {
+      expect(usage(RUN, [flow, ...argv])).toBe(range);
+    }
+    expect(parseCommand(RUN, [flow, "-i", "-x=1", "--input", "--json", "-q"])).toEqual({
+      help: false,
+      args: { flow },
+      options: { input: ["-x=1", "--json"], quiet: true, json: false },
+    });
+    // After a bare `--`, an option name is a positional and takes nothing.
+    expect(parseCommand(CHECK, ["a.yaml", "--", "--root", "-x"])).toMatchObject({
+      args: { flows: ["a.yaml", "--root", "-x"] },
+    });
+    expect(usage(RUN, [flow, "--input"])).toBe("Option '--input' requires an argument.");
   });
 
   test("float options take Python's float() syntax", () => {

@@ -1711,7 +1711,8 @@ host calls it closed, as `pendingCalls` listed them.
   interrupt names only the waiting ones. `advance` a crashed run first, then interrupt it.
 - **Calls close at once.** The record closes the named agents' open host calls with reason
   `interrupted`: the engine publishes `CallClosed {reason: "interrupted"}` for each, they leave
-  `pendingCalls`, and a later `complete` of one is refused (`call_settled`). A call an agent
+  `pendingCalls`, and a later `complete` of one is refused (`call_settled`, or `unknown_call` once
+  its node has settled). A call an agent
   registers after the record (its tool's group was already running) is closed `interrupted` at
   once; it isn't in what `interrupt` returned, so the host learns of it from its `CallClosed
   {reason: "interrupted"}`.
@@ -3246,7 +3247,8 @@ checked as live and, when its check passes, closed with a `tool_result` written 
 pended is closed by the record: when a crash or a stop retries the AGENT, `run_resumed.closed_calls`
 names its open calls (not those a timeout wake left open: they are still pending at the host, and
 the replay waits on them again), the host gets `CallClosed {reason: "crashed"}`, the calls leave
-`pendingCalls` and `complete` refuses them (`call_settled`); a `complete` made while the run was
+`pendingCalls` and `complete` refuses them (`call_settled`, or `unknown_call` once their node has
+settled); a `complete` made while the run was
 down, before the resume, is kept and replayed. The replay writes the closer with the word of the
 record that closed the call (`crashed`, or `timed_out` for an ask whose deadline passed), and the
 model decides what to do; the handler is never called again. A waiting AGENT isn't retried, so

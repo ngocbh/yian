@@ -247,8 +247,10 @@ then ends the loop, and a closed take with no events skips `answered`. The flow'
 
 The AGENT's new messages are one messages commit rebuilt from its steps, and the history is
 built in derived bindings (CALL and END commits are pointers), so the run log grows linearly:
-per turn a constant, plus one summary per fold, plus the flow's output once. Every reply
-request holds at most the budget, the new messages, the summary and the system text.
+per turn a constant, plus one summary per fold, plus the flow's output once. The budget counts
+only the history's text parts, so a reply request stays near the budget, the new messages, the
+summary and the system text only while the turns are mostly text: tool calls and their results
+aren't counted, and the last 4 turns are kept whole even when they alone pass the budget.
 
 Chat with it at the terminal (TS yian; see [Chatting with a flow](cli.md#chatting-with-a-flow-yian-chat)):
 

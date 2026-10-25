@@ -129,8 +129,6 @@ test("the Phase 2 chat end to end: steer, interrupt, pending call, crash and adv
     ],
     CONFIG,
   );
-  // The owner steers during the lookup call's reply (request 2): the steer lands live and the
-  // agent reads it once the lookup result is in.
   // The owner steers during the lookup call's reply (request 2), and interrupts the story (request
   // 4) once its second chunk is shown, then sends the next message at once.
   const model = hooked(script, async (n, k) => {

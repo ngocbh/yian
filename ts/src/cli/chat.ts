@@ -215,6 +215,8 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
   let pressedAt: number | null = null;
   // Settles true once the run is cancelled, false when it had already ended.
   let cancelling: Promise<boolean> | null = null;
+  // The interrupt a Ctrl-C started; settled before the chat sends its next line or returns.
+  let interrupting: Promise<void> | null = null;
   const cancelRun = async (path: string): Promise<boolean> => {
     try {
       await cancel(path, { env: env.read });
@@ -236,9 +238,10 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       pressedAt = now;
       void io.stderr.write(`${INTERRUPTING}\n`).catch(() => {});
       // The live engine takes it at once; with no reply running it names nobody and appends nothing.
-      interruptReply(log, inbox.name, { env: env.read }).catch((error: unknown) => {
+      const sent = interruptReply(log, inbox.name, { env: env.read }).catch((error: unknown) => {
         if (!(error instanceof DeliveryRefused)) stop.abort(error);
       });
+      interrupting = Promise.all([interrupting, sent]).then(() => {});
       return;
     }
     // A live engine takes the cancel, and its `advance` resolves `cancelled`.
@@ -327,6 +330,9 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         return await move();
       } finally {
         turning = false;
+        // An interrupt sent during the turn lands before the next line is sent.
+        await interrupting;
+        interrupting = null;
       }
     };
     const moveOn = () => turn(() => advance({ log: path, ...shared }));
@@ -439,6 +445,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     await io.stderr.write(`chat failed: ${error.message}\n`);
     return 1;
   } finally {
+    await interrupting;
     stop.signal.removeEventListener("abort", takeDown);
     terminal.close();
     for (const [name, listener] of listeners) signals.off(name, listener);

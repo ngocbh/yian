@@ -340,10 +340,21 @@ export function sameBackwardResult(a: BackwardResult, b: BackwardResult): boolea
  * @param memo Containers already copied, mapped to their copies. A container met again returns
  *   its earlier copy, so the result shares it. Omitted, every occurrence is copied separately.
  * @returns The copy, with fresh frozen arrays and records.
- * @throws TypeError for a value that isn't JSON (`<name> must contain only JSON values`).
+ * @throws TypeError for a value that isn't JSON (`<name> must contain only JSON values`) or
+ *   that contains itself (`<name> must not contain itself`, naming the inner occurrence).
  * @throws RangeError for NaN (`<name> must not contain NaN`).
  */
 export function copyBackwardValue(value: unknown, name: string, memo?: Map<object, unknown>): unknown {
+  return copyBackwardItem(value, name, memo, new Set());
+}
+
+/** Copy one value for `copyBackwardValue`; `active` holds the containers still being copied. */
+function copyBackwardItem(
+  value: unknown,
+  name: string,
+  memo: Map<object, unknown> | undefined,
+  active: Set<object>,
+): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "bigint") {
     return value;
   }
@@ -353,21 +364,27 @@ export function copyBackwardValue(value: unknown, name: string, memo?: Map<objec
   }
   const shared = memo?.get(value as object);
   if (shared !== undefined) return shared;
+  // The memo holds only finished copies, so a container met again while it is still being copied
+  // is a cycle.
+  if (active.has(value as object)) throw new TypeError(`${name} must not contain itself`);
   let result: unknown[] | ValueRecord;
   if (isList(value)) {
+    active.add(value);
     result = [];
     // An index loop, not `map`: `map` skips the holes of a sparse array, which must fail here.
     for (let index = 0; index < value.length; index++) {
-      result.push(copyBackwardValue(value[index], `${name}[${index}]`, memo));
+      result.push(copyBackwardItem(value[index], `${name}[${index}]`, memo, active));
     }
   } else if (isRecord(value)) {
+    active.add(value);
     result = {};
     for (const key of Object.keys(value)) {
-      setField(result, key, copyBackwardValue(value[key], `${name}[${writeAsJson(key)}]`, memo) as Value);
+      setField(result, key, copyBackwardItem(value[key], `${name}[${writeAsJson(key)}]`, memo, active) as Value);
     }
   } else {
     throw new TypeError(`${name} must contain only JSON values`);
   }
+  active.delete(value);
   Object.freeze(result);
   // Only finished copies are stored, so a failing container fails again, named by its own path,
   // wherever it reappears.

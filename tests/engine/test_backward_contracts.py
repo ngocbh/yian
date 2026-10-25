@@ -16,6 +16,7 @@ from yian.memory.contracts import (
 from yian.nodes.base import (
     BackwardContext,
     BackwardResult,
+    _copy_backward_value,
     validate_backward_result,
 )
 from yian.nodes.contracts import ExecutionPosition, ExecutionScope
@@ -434,6 +435,20 @@ def test_backward_contracts_reject_invalid_snapshots_and_outcomes(factory) -> No
     """Backward status and source-neutral diagnostic data have explicit contracts."""
     with pytest.raises((TypeError, ValueError)):
         factory()
+
+
+def test_backward_value_copy_refuses_a_value_that_contains_itself() -> None:
+    """A cyclic value fails with a named error, not a RecursionError."""
+    record: dict = {"a": 1}
+    record["self"] = record
+    items: list = []
+    items.append([items])
+    with pytest.raises(TypeError, match=r"value\['self'\] must not contain itself"):
+        _copy_backward_value(record, "value")
+    with pytest.raises(TypeError, match=r"value\[0\]\[0\] must not contain itself"):
+        _copy_backward_value(items, "value", {})
+    with pytest.raises(TypeError, match="must not contain itself"):
+        BackwardContext(inputs={}, node_data=record)
 
 
 def test_backward_outcome_can_succeed_without_memory() -> None:

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import { ModelCallFinished, NodeSucceeded, type RunEvent, type StreamChunk } from "../../src/events.ts";
+import { ModelCallFinished, NodeSucceeded, NodeWaiting, type RunEvent, type StreamChunk } from "../../src/events.ts";
 import { Finish, TextDelta } from "../../src/llm/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
@@ -612,4 +612,73 @@ test("offline Esc on a crashed run with a take waiting and a node in flight is r
   expect(readRunLog(log).some(({ kind, record }) => kind === "node_started" && (record as { nodeId: string }).nodeId === "gate")).toBe(true);
   const before = readRunLog(log).length;
   expect(await interrupt(log, "m", { env })).toEqual({ seq: before, nodes: [], calls: [] });
+});
+
+/** `reply` reads steer inbox `m` and calls `slow`; beside it `heard` takes from `m` once `gate` has run. */
+const PARALLEL_TAKE = `
+id: parallel_take
+name: parallel_take
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+nodes:
+  reply:
+    kind: agent
+    prompt: go
+    tools: [slow]
+    steer_inbox: \${input.m}
+    output: Optional(str)
+  gate:
+    kind: tool
+    tool_id: open
+  heard:
+    kind: tool
+    tool_id: take
+    depends_on: [gate]
+    input:
+      from: \${input.m}
+      take: one
+output: \${reply.output}
+`;
+
+/**
+ * Run PARALLEL_TAKE at `log`: while `reply` runs `slow`, a live interrupt names it, then `gate`
+ * opens and `heard`'s take waits on `m`, which ends the Stop with `reply` still stopping.
+ */
+async function stopThenTakeWaits(log: string) {
+  let openGate!: () => void;
+  const gateOpen = new Promise<void>((resolve) => (openGate = resolve));
+  let heardWaits!: () => void;
+  const heardWaiting = new Promise<void>((resolve) => (heardWaits = resolve));
+  const parameters = { type: "object", properties: {} };
+  const open = tool({ name: "open", description: "Open.", parameters, execute: async () => (await gateOpen, "open") });
+  const slow = tool({
+    name: "slow",
+    description: "Slow.",
+    parameters,
+    execute: async () => {
+      await interrupt(log, "m", { env });
+      openGate();
+      await heardWaiting;
+      return "slow";
+    },
+  });
+  const onEvent = (event: RunEvent) => void (event instanceof NodeWaiting && event.nodeId === "heard" && heardWaits());
+  const model = new ScriptedModel([callReply(["slow", {}, "c1"]), textReply("done")], CONFIG);
+  return runFlow(await loadFlow(PARALLEL_TAKE), {}, { env, log, tools: { open, slow }, models: serving(model), runId: "r", onEvent });
+}
+
+test("offline, a crashed reader still holding its interrupt is being stopped: a repeated Esc records nothing", async () => {
+  const whole = freshLog();
+  await stopThenTakeWaits(whole);
+  const heardWaits = readRunLog(whole).findIndex(({ kind, record }) => kind === "node_waiting" && (record as { nodeId: string }).nodeId === "heard");
+  const log = freshLog();
+  await crashAfter(heardWaits + 1, () => stopThenTakeWaits(log));
+  const w = foldedWaits(log);
+  expect(stopsAt(log)).toEqual([["reply"]]);
+  expect(w.stops.size).toBe(0);
+  expect([...w.interrupts.keys()]).toEqual(["reply"]);
+  const before = readFileSync(log);
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
+  expect(readFileSync(log).equals(before)).toBe(true);
 });

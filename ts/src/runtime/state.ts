@@ -1383,7 +1383,8 @@ export function prepareRunCancelled(state: RunState): PreparedTransition {
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
  * @param running The in-flight nodes reading `inbox` as their steer inbox, which only the engine
- *   knows; `null` offline, where any in-flight node counts as an open reader.
+ *   knows; `null` offline, where any in-flight node counts as an open reader for the idle rule,
+ *   and any in-flight node that reads a steer inbox as a current reader for "already stopping".
  * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
  *   per open host call of the named nodes; `null` when the run waits for the inbox's next message
  *   (a take of it waits with nothing unread and no reader is open), or when it is already
@@ -1409,13 +1410,17 @@ export function prepareInterrupt(state: RunState, inbox: string, running: readon
   if (!readersOpen && awaitsNextMessage(w, inbox)) return null;
   // Already stopping: a second Esc never carries a Stop into the next reply.
   if (w.stops.has(inbox)) return null;
-  const runningReaders = running ?? [];
+  // Offline every in-flight node that reads a steer inbox may have opened this one, so each counts
+  // as a current reader (a crashed reader still holding its interrupt is being stopped), but none
+  // is named.
+  const runningReaders = running ?? [...state.inFlight].filter((nodeId) => state.flow.nodes.get(nodeId)?.readsSteerInbox === true);
   const stopping = (nodeId: string): boolean =>
     w.interrupts.has(nodeId) || (runningReaders.includes(nodeId) && w._honored.has(nodeId));
-  const readers = [...runningReaders, ...waitingReaders(state, inbox)];
-  const nodes = readers.filter((nodeId) => !stopping(nodeId));
-  if (readers.length > 0 && nodes.length === 0) return null;
-  return prepareRecord(state, new InterruptedRecord(inbox, nodes));
+  const waiting = waitingReaders(state, inbox);
+  const readers = [...runningReaders, ...waiting];
+  if (readers.length > 0 && readers.every(stopping)) return null;
+  const named = running === null ? waiting : readers;
+  return prepareRecord(state, new InterruptedRecord(inbox, named.filter((nodeId) => !stopping(nodeId))));
 }
 
 /**

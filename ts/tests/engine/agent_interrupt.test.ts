@@ -437,6 +437,27 @@ test("the trailing structured call after tools is cut, or never starts once an i
   expect(written.map((step) => step["kind"])).toEqual(["model_call", "tool_result", "model_call", "interrupted"]);
 });
 
+test("a resumed start past the honor before the trailing structured call honors it again: no live call", async () => {
+  const outputType = recordA(true);
+  const toolset = () => new ToolSet({ lookup: lookupTool((topic) => `found ${topic}`) });
+  const host = interruptible();
+  const { steps: first, written } = recorded();
+  const emitEvent = (event: unknown) => void (event instanceof ModelCallFinished && event.n === 3 && host.interrupt());
+  const live = new ScriptedModel([reply("", ["lookup", { topic: "a" }, "call-1"]), reply("answer"), reply('{"a": 1}')], CONFIG);
+  const tools = ["lookup"];
+  await runAgent(agentContext(live, { steerInbox: host.steerInbox, steps: first, outputType, toolset: toolset(), tools, emitEvent }));
+  expect(written.map((step) => step["kind"])).toEqual(["model_call", "tool_result", "model_call", "interrupted"]);
+
+  // A crash before the commit: the honor step deleted the pending interrupt, so the signal is unset.
+  const resumed: ValueRecord[] = [];
+  const steps = new NodeSteps(2, written, (step) => resumed.push(step));
+  const model = new ScriptedModel([reply('{"a": 1}')], CONFIG);
+  const ctx = agentContext(model, { steerInbox: interruptible().steerInbox, steps, outputType, toolset: toolset(), tools });
+  expect(await runAgent(ctx)).toEqual(new Interrupted(7));
+  expect(model.requests).toEqual([]);
+  expect(resumed).toEqual([]);
+});
+
 test("generateStructured doesn't retry a cut call", async () => {
   const interruptSignal = new AbortController();
   const model = new Paced(words('{"a"', ": x", "}", new Finish({ reason: "stop" })), (index) => {

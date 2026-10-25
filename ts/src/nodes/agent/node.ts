@@ -1186,19 +1186,27 @@ export class AgentNode extends Node {
   /**
    * Rebuild what learning reads about one accepted invocation: its prompt rendered with the
    * recorded skills (`renderPrompt`), its memory sections recalled against the recorded
-   * snapshots, and its interactions read from its steps (`stepsMaterial`), each recorded request
-   * checked against the one rebuilt from them.
+   * snapshots, and its interactions and each request it sent, read from its steps
+   * (`stepsMaterial`), each recorded request checked against the one rebuilt from them.
    *
    * An invocation with no `model_call` step showed no model anything, so it has no prompt, no
-   * sections and no interactions. One whose render or recall now fails (the run rendered and
-   * recalled it before its first model call) has no prompt either, and fails the digest check.
+   * sections, no interactions and no requests. One whose render or recall now fails (the run
+   * rendered and recalled it before its first model call) has no prompt or requests either, and
+   * fails the digest check.
    */
   override async learningMaterial(
     inputs: Readonly<Record<string, unknown>> | null,
     steps: readonly ValueRecord[],
     caps: MaterialCaps,
   ): Promise<LearningMaterial> {
-    const none = { interactions: [], baseSystemPrompt: null, prompt: null, memorySections: [], digestOk: true };
+    const none = {
+      interactions: [],
+      baseSystemPrompt: null,
+      prompt: null,
+      memorySections: [],
+      digestOk: true,
+      requests: new Map(),
+    };
     if (inputs === null || !steps.some((step) => step["kind"] === "model_call")) return none;
     // The run refused this render; any other RangeError while rebuilding is a fault.
     if (collidingVariable(this, inputs) !== null) return { ...none, digestOk: false };
@@ -1233,7 +1241,7 @@ export class AgentNode extends Node {
         return null;
       }
     };
-    const { interactions, digestOk } = await stepsMaterial(steps, {
+    const { interactions, requests, digestOk } = await stepsMaterial(steps, {
       messages: [system, ...rendered.modelMessages()],
       tools,
       structured,
@@ -1246,6 +1254,7 @@ export class AgentNode extends Node {
       prompt: rendered.promptText,
       memorySections: sections,
       digestOk,
+      requests,
     };
   }
 

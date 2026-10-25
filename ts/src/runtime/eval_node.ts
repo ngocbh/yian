@@ -904,6 +904,37 @@ function bindFrom(
     else pool.store.set(name, entry.value);
   }
   const sourceResolver: SourceResolver = (path) => resolvePoolPath(path, pool, (name) => entries.get(name)!.source);
+  return bindPool(node, flow, pool, sourceResolver, wiringOverride, collector, reserved);
+}
+
+/**
+ * Bind `node` from the run's `pool` as the evaluator binds it when the node starts, with defaults
+ * filled, capturing nothing.
+ *
+ * @param wiringOverride The wiring the run gave the node in place of the flow's (a growth's), or
+ *   `null`.
+ * @returns The bound inputs.
+ * @throws BindingError when a source doesn't evaluate, and the node's `bindReserved` errors.
+ */
+export function bindStarted(
+  node: Node,
+  flow: Flow,
+  pool: VariablePool,
+  wiringOverride: JsonObject | null,
+): Record<string, unknown> {
+  return bindPool(node, flow, pool, null, wiringOverride, null, null).inputs;
+}
+
+/** `bindFrom`'s binding over a built `pool`. */
+function bindPool(
+  node: Node,
+  flow: Flow,
+  pool: VariablePool,
+  sourceResolver: SourceResolver | null,
+  wiringOverride: JsonObject | null,
+  collector: BindingCollector | null,
+  reserved: Readonly<Record<string, unknown>> | null,
+): Rebound {
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow.wiring.get(node.id) ?? new Map());
   const params = node.params ?? [];

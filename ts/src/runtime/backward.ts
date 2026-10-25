@@ -31,6 +31,7 @@ import {
   copyBackwardValue,
   type LearningMaterial,
   markerMessage,
+  type MaterialCaps,
   tracebackText,
   validateBackwardResult,
 } from "../nodes/base.ts";
@@ -227,24 +228,7 @@ export async function learningMaterials(
 ): Promise<LearningMaterials> {
   const { memory, models, onEvent } = options;
   const trace = state.trace!;
-  const skills = new Map(
-    Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
-      name,
-      new Skill({ name, description, instructions }),
-    ]),
-  );
-  const toolSpecs = (ids: readonly string[]): ToolSpec[] | null => {
-    const specs: ToolSpec[] = [];
-    // As `ToolSet.expand`: a group becomes its tools, and a tool granted twice is bound once.
-    const groups = state.recordedToolGroups;
-    const names = new Set(ids.flatMap((id) => (Object.hasOwn(groups, id) ? groups[id]! : [id])));
-    for (const name of names) {
-      if (!Object.hasOwn(state.recordedTools, name)) return null;
-      const { description, parameters } = state.recordedTools[name]!;
-      specs.push(new ToolSpec({ name, description, parameters }));
-    }
-    return specs;
-  };
+  const { skills, toolSpecs } = recordedGrants(state);
   // Recalls for `occurrence` against the recorded snapshots, as its run did.
   const recallFor =
     (occurrence: TraceOccurrence) =>
@@ -270,6 +254,33 @@ export async function learningMaterials(
     materials.set(sourceKey(occurrence.source), material);
   }
   return materials;
+}
+
+/**
+ * Return what the run recorded of its grants, as a `MaterialCaps` reads them: the skills by name,
+ * and the specs of the tools some grant ids name, a group expanded with the membership the run
+ * recorded (`null` when one names no recorded tool).
+ */
+export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "toolSpecs"> {
+  const skills = new Map(
+    Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
+      name,
+      new Skill({ name, description, instructions }),
+    ]),
+  );
+  const toolSpecs = (ids: readonly string[]): ToolSpec[] | null => {
+    const specs: ToolSpec[] = [];
+    // As `ToolSet.expand`: a group becomes its tools, and a tool granted twice is bound once.
+    const groups = state.recordedToolGroups;
+    const names = new Set(ids.flatMap((id) => (Object.hasOwn(groups, id) ? groups[id]! : [id])));
+    for (const name of names) {
+      if (!Object.hasOwn(state.recordedTools, name)) return null;
+      const { description, parameters } = state.recordedTools[name]!;
+      specs.push(new ToolSpec({ name, description, parameters }));
+    }
+    return specs;
+  };
+  return { skills, toolSpecs };
 }
 
 /** Compute once, stage every memory, then request and observe each memory key in order. */

@@ -99,7 +99,7 @@ notice.
 | Import | Names |
 |---|---|
 | `@ngocbh/yian` | `loadFlow`, `ComposedFlow`, `CompiledFlow`, `LoadError`, `FlowValidationError`; `runFlow`, `advance`; `send`, `complete`, `close`, `cancel`, `pendingCalls`, `RunBusyError`, `DeliveryRefused`; `Failure`, `Diagnostic`; `VariablePool`, `evaluateWhen`, `ExpressionError`, `registerTemplateFn`; `tool`, `FunctionTool`, `ToolContext`, `pending`, `PermanentToolError`, `TransientToolError`, `ReportedToolError`, `ToolAttemptsFailed`; `buildMemories`, `MemoryRegistry`, `SQLiteStorage`, `checkStoragePath`, `MarkdownStore` (type), `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownVersionMismatch`, `markdownVersion`, `ProfileMemory` |
-| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `send`, `complete`, `close`, `cancel`, `pendingCalls`, `DeliveryOptions`, `PendingCall`, `CompleteResult`, `DeliveryOp`, `RunBusyError`, `DeliveryRefused`, `DeliveryRefusal`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`, `WaitInfo`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
+| `@ngocbh/yian/run` | `runFlow`, `RunFlowOptions`, `advance`, `AdvanceOptions`, `send`, `complete`, `close`, `cancel`, `pendingCalls`, `DeliveryOptions`, `PendingCall`, `CompleteResult`, `DeliveryOp`, `RunBusyError`, `DeliveryRefused`, `DeliveryRefusal`, `loadRecordedFlow`, `RunResult`, `BackwardOutcome`, `Steering`, `EventHook`, `StreamHook`, `runLogPath`, `inspectRun`, `RunInspection`, `RunStatus`, `WaitInfo`; for hosts that show runs, `updateRunIndex`, `readRunIndex`, `RunIndexRow`, `RunIndexStatus`, `RunIndexBusyError`, `iterRunRecords`, `IterRunRecordsOptions`, `RunLogEntry`, `runRecordOffsets`, `RunLogChangedError`, `RunLogSchemaError`, `staticNodes`, `staticPathOf`, `agentCalls`, `AgentCallEntry`, `agentCall`, `AgentCallView`, `AgentCallRequest`, `AgentCallAttempt`, `AgentCallUsage`, `AgentToolResult`; for hosts that read run-log values, `TypedValue`, `FileRef`, `logJson`, `parseJson`, `JSONDecodeError`, `StorageKind`, `Value`, `ValueRecord`, `JsonValue`, `JsonObject`, `JsonMode` |
 | `@ngocbh/yian/tools` | `registerTool`, `registeredTools`, `invokeTool`, `ToolEntry`, `AskHandler`, `AskRequest`, `AskTool`, `AskUserHandler`, `AskUserRequest`, `pending`, `isPending`, `PendingMarker`, `TAKE`, `SLEEP`, `ASK`; `mcpServer`, `McpServer`, `McpServerOptions`, `McpError`, `McpConnectError`, `McpToolError`, `McpOutputError`, `McpRequestError`, `McpInvalidRequestError`, `McpTimeoutError`, `McpTransportError`, `McpServerClosed`, `McpCallCancelled`, `isMcpError`; `ToolSet`, `CheckedCall`, `InvokeOptions`, `invokeToolTrusted`, `resolveTools`, `TOOL_REGISTRY`; also `tool`, `FunctionTool`, `StandardSchemaV1`, `StandardIssue`, `StandardResult`, `ToolContext`, the tool errors, `ToolCheckError`, `TOOL_ERROR`, `toolErrorKinds`, `ToolErrorKind`, `isPermanentToolError`, `isTransientToolError`, `isReportedToolError`, `isToolCheckError` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | for hosts that lock files and open SQLite as yian does: `lockFile`, `waitForLock`, `isLocked`, `FileLock`, `FileLockError`, `FileLockReason`; `openSqlite`, `Sqlite`, `SqliteStatement`, `SqliteParam`, `SqliteValue`, `SqliteRow`, `sqliteErrorCode` |
@@ -107,7 +107,8 @@ notice.
 | `@ngocbh/yian/code-worker` | for hosts that bundle yian: no names; imported for its side effect as a bundle entry (see [Bundling yian](#bundling-yian)) |
 
 `Steering`, `EventHook`, `StreamHook`, `RunFlowOptions`, `AdvanceOptions`, `RunInspection`,
-`RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `StorageKind`, `Value`, `ValueRecord`,
+`AgentCallEntry`, `AgentCallView`, `AgentCallRequest`, `AgentCallAttempt`, `AgentCallUsage`,
+`AgentToolResult`, `RunStatus`, `IterRunRecordsOptions`, `RunLogEntry`, `StorageKind`, `Value`, `ValueRecord`,
 `JsonValue`, `JsonObject`, `JsonMode`, `ToolEntry`, `AskHandler`, `AskRequest`, `AskTool`,
 `AskUserHandler`, `AskUserRequest`, `PendingMarker`, `CheckedCall`, `InvokeOptions`, `McpServerOptions`, `StandardSchemaV1`, `StandardIssue`,
 `StandardResult`, `ToolErrorKind`, `MarkdownStore`, `FileLock`, `FileLockReason`, `Sqlite`,
@@ -123,10 +124,10 @@ Each difference is a "Changed (TS yian):" note in `docs/`; these shape every cal
   `runId`, `backward_outcome` is `backwardOutcome`), and keyword arguments become one options
   object. The JSON forms stay snake_case: an event's `toJSON()`, run logs, CLI documents. Flow
   values keep their own keys.
-- **Promises.** `loadFlow`, `runFlow`, `advance`, `result.backward`, `buildMemories`,
+- **Promises.** `loadFlow`, `runFlow`, `advance`, `result.backward`, `buildMemories`, `agentCall`,
   `invokeTool` and `McpServer`'s `open` and `close` return Promises; their errors are rejections.
-  `inspectRun`, `iterRunRecords`, `runRecordOffsets`, `updateRunIndex`, `readRunIndex`, `loadSkills`
-  and `loadSkillDir` are synchronous.
+  `inspectRun`, `iterRunRecords`, `runRecordOffsets`, `updateRunIndex`, `readRunIndex`, `agentCalls`,
+  `loadSkills` and `loadSkillDir` are synchronous.
 - **Numbers.** Ints in yian values are `bigint` and floats are `number`: `result.output`,
   `result.input` and event payloads hold `3n`, not `3`. Values a host passes in (`inputs`,
   `llmConfig`, feedback, a tool's result) go through host intake: a whole `number` within ±(2^53−1)
@@ -338,6 +339,8 @@ foldRunLog(log: string, options?: { env?: (name: string) => string | undefined; 
 inspectRun(log: string, options?: { flow?: ComposedFlow | null; env?: (name: string) => string | undefined }): RunInspection
 updateRunIndex(runsDir: string, options?: { timeoutMs?: number }): void
 readRunIndex(runsDir: string, options?: { timeoutMs?: number }): RunIndexRow[]
+agentCalls(log: string): AgentCallEntry[]
+agentCall(log: string, call: { nodeId: string; n: number }, options?: { env?: (name: string) => string | undefined; flow?: ComposedFlow | null; codeRoot?: string | null; apiKey?: string | null; headers?: Record<string, string> | null; models?: ModelAccess | null; memory?: ReadonlyMap<string, Memory> | null }): Promise<AgentCallView>
 ```
 
 `advance` takes `log` (required) and `runFlow`'s `numWorkers` (`null` keeps the recorded one),
@@ -472,6 +475,13 @@ transaction that waits at most `timeoutMs` (default 5000) and then throws `RunIn
 `readRunIndex(runsDir)` returns the rows, with `running` in place of a `stopped` or `crashed`
 status while a writer holds the run's lock. The index may lag the logs, never leads them, and can
 be deleted and rebuilt. See [The run index][docs/api.md#the-run-index-with-updaterunindex].
+
+`agentCalls(log)` lists a log's AGENT model calls from its `node_step` records (a call's retried
+attempts are one call). `agentCall(log, { nodeId, n })` replays the log as `foldRunLog` does and
+rebuilds that call's request (system prompt, messages, tool specs, model and config without
+credentials), checked against its purpose and `request_sha256` (`digestMismatch` instead of a throw; `request`
+is `null` when it can't be rebuilt), with its attempts, reply and tool results as recorded. A run
+started with `llmConfig.api_key` takes `apiKey` and `headers`, as `advance` does. See [An AGENT's model calls][docs/api.md#an-agents-model-calls-with-agentcalls-and-agentcall].
 
 ## Tools
 
@@ -795,6 +805,7 @@ unknown model, TLS checks off, ...) reach a library host through `process.emitWa
 
 [conformance/schema/events.schema.json]: https://github.com/ngocbh/yian/blob/main/conformance/schema/events.schema.json
 [docs/api.md]: https://github.com/ngocbh/yian/blob/main/docs/api.md
+[docs/api.md#an-agents-model-calls-with-agentcalls-and-agentcall]: https://github.com/ngocbh/yian/blob/main/docs/api.md#an-agents-model-calls-with-agentcalls-and-agentcall
 [docs/api.md#authoritative-run-logs]: https://github.com/ngocbh/yian/blob/main/docs/api.md#authoritative-run-logs
 [docs/api.md#blocking-human-interaction]: https://github.com/ngocbh/yian/blob/main/docs/api.md#blocking-human-interaction
 [docs/api.md#building-memories-with-build_memories]: https://github.com/ngocbh/yian/blob/main/docs/api.md#building-memories-with-build_memories

@@ -3689,6 +3689,81 @@ A node a run grows has an id of its own: MAP element `i` of node `each` runs its
 each `/` segment's `#<i>` and `~<k>` suffixes: `each#1/echo` is `each/echo`, `node~2` is `node`.
 Authored node ids are identifiers, so neither suffix is ever part of one.
 
+### An AGENT's model calls with `agentCalls` and `agentCall`
+
+Changed (TS yian): a `model_call` step records the reply but only the digest of the request
+(`request_sha256`). `agentCall` (from `yian/run`) rebuilds the request, so a host can show what
+an AGENT sent and what came back without re-implementing yian's rendering.
+
+`agentCalls(log)` lists the log's AGENT model calls, in the order their first attempts were
+written, as `{ nodeId, n, purpose, model, startedAt, attempts, finish }`. It reads only the
+`node_step` records, with `iterRunRecords`, and loads no flow. A call is one `model_call` step
+together with the failed attempts before it that were retried (an `error` with a `retry_in`), as a
+resumed AGENT groups them; retried attempts with no attempt after them yet are a call too. `n` is
+the last attempt's, the one the call's tool call
+ids use (`<run id>/<node>/<n>/<index>`); `startedAt` is the first attempt's `started_at`,
+`attempts` the attempt count and `finish` the last attempt's (`null` when it failed).
+
+`agentCall(log, { nodeId, n }, { env, flow, codeRoot, apiKey, headers, models, memory })` returns one
+call's view;
+`n` may name any of its attempts:
+
+| Field | Meaning |
+|---|---|
+| `nodeId`, `n`, `purpose` | the call, `n` its last attempt's |
+| `request` | `{ model, params, system, messages, tools, toolChoice, parallelToolCalls, outputFormat }`: the model the step records, its config without credentials, the system message's text, the other messages as `Message` values, and the tool specs and settings as sent; `null` when it couldn't be rebuilt |
+| `digestMismatch` | `true` when the request was rebuilt and an attempt's recorded `purpose` or `request_sha256` differs from it; `false` when `request` is `null` |
+| `memorySections` | the recalled `{ memory, text }` sections in the system message, `[]` for a node with no memory; `null` when the node recalls memory and no `memory` was given |
+| `attempts` | each attempt's `{ n, startedAt, firstTokenAt, finishedAt, error, retryIn, usage }`; `finishedAt` is its record's `at` |
+| `reply` | the last attempt's `output` as a `Message` (reasoning, text and tool call parts as recorded; what arrived before a failure), or `null` |
+| `toolResults` | each tool call of the reply, in call order: `{ callId, name, arguments, output, isError, closed, startedAt }`, from the `tool_result` written for it before the node's next model call; `output` and `isError` are `null` while none is |
+| `usage` | the last attempt's `{ inputTokens, outputTokens, cacheReadTokens, reasoningTokens }`, or `null` |
+| `finish` | the last attempt's finish reason, `null` when it failed |
+| `interrupted` | `true` when a host interrupt cut the reply (`finish: "interrupted"`), or when the node's `interrupted` step (its honor of an interrupt) follows the call |
+
+- The log is replayed as `foldRunLog` replays it, up to the node's last step, so the recorded flow
+  is used whatever the files on disk hold now, and `env`'s `YIAN_*` values must be the run's. `flow` is for a run whose flow
+  was built in code, and `codeRoot` is `foldRunLog`'s. A learnable run and one that isn't read
+  the same; so does a run still in progress, up to its last record.
+- The node is bound from the replayed pool when it first started, as the run bound it, and
+  rendered with the skills and tool specs `run_started` recorded (a grant of a tool group expands
+  with the recorded membership). The steps before the call give the history, steer messages and
+  tool results the request carried, as the AGENT built them.
+- The request is checked against each attempt's `purpose` and `request_sha256`. A mismatch (a
+  different yian version renders differently, or the log was edited) returns the rebuilt request
+  with `digestMismatch: true` rather than throwing. A request that can't be rebuilt is `null`, with
+  `digestMismatch: false`: a structured call whose model can't be built, or a granted tool the
+  recorded specs lack.
+- `params` is the config `run_started` recorded for the node's static path
+  (`effective_llm_by_static_path`), or a call-time agent's latest `llm_config` step before the
+  call. It never holds `api_key`, `headers` or the `_`-prefixed fields that say how the host
+  authenticated the call.
+- A run started with `llmConfig.api_key` needs `apiKey` (and `headers`, as `advance` takes them)
+  to bind a call-time agent's config again, which otherwise raises `AuthError`, and to build a
+  structured call's model. They are used only for that and never reach the view. They are
+  checked as `advance` checks them: a refused key or header, or header names that differ from the
+  ones a host-key run recorded, raise the same `RangeError`.
+- A request's digest leaves recalled memory out. Given `memory` (the run's memory mapping, as
+  `advance` takes it), the system message gets the sections recalled against the snapshots the
+  run recorded, as learning does; without it, a node that recalls memory gets its system prompt
+  without them.
+- A structured call's request depends on the model's structured-output plan: `models` builds the
+  model to read it off, never calling it (default `defaultModelAccess(env)`).
+- A call still in flight has no step yet, so neither reader sees it; the live channel shows it.
+  A step that isn't a model call, or a node without one, raises `RangeError`. So does a node
+  whose binding finished in the run but no longer does (an edited log, or a yian version that
+  binds differently), with the `BindingError` as its cause.
+
+```ts
+import { agentCall, agentCalls } from "@ngocbh/yian/run";
+
+for (const call of agentCalls(log)) show(call.nodeId, call.n, call.model, call.finish);
+const view = await agentCall(log, { nodeId: "writer", n: 4 }, { codeRoot });
+show(view.request?.system, view.request?.messages, view.reply, view.toolResults);
+```
+
+No Python counterpart.
+
 ## Defaults and limits
 
 Every predefined default and limit is an entry in `yian.defaults`, overridable by a

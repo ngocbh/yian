@@ -62,7 +62,7 @@ import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
-import { CapabilityFault, Output, Pending, type SteerInbox } from "../base.ts";
+import { CapabilityFault, Output, Pending, type RebuiltRequest, type SteerInbox } from "../base.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
@@ -342,8 +342,8 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
 }
 
 /**
- * Rebuild what one AGENT invocation showed a learner from the steps it recorded, and check each
- * recorded request against the one rebuilt from them, as `runAgent` builds it.
+ * Rebuild what one AGENT invocation showed a learner from the steps it recorded, and each request
+ * it sent, as `runAgent` builds it, checked against the recorded digest.
  *
  * Interactions follow step order: each chat reply's text when it makes no runnable tool call,
  * else its runnable calls, then the results recorded for them in call order (a `skipped` result
@@ -361,7 +361,10 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
  *   then matches); `baseSystemPrompt` is the system prompt without recalled memory, which each
  *   request's digest reads in place of the system message (`digestRequest`); `renderSteer` is
  *   the agent's steer render, which steer steps render through as the live loop did.
- * @returns The interactions, and whether every recorded request matched.
+ * @returns The interactions; each `model_call` step's rebuilt request, by its index in `steps`
+ *   (a step after a reply that failed the node, or after a steer step without its values, has
+ *   none; with no `tools` or `structured` model, a step's request is `null`); and whether every
+ *   recorded request matched.
  */
 export async function stepsMaterial(
   steps: readonly ValueRecord[],
@@ -372,9 +375,10 @@ export async function stepsMaterial(
     baseSystemPrompt: string | null;
     renderSteer?: SteerRender | null;
   },
-): Promise<{ interactions: VisibleInteraction[]; digestOk: boolean }> {
+): Promise<{ interactions: VisibleInteraction[]; requests: Map<number, RebuiltRequest>; digestOk: boolean }> {
   const messages = [...options.messages];
   const interactions: VisibleInteraction[] = [];
+  const requests = new Map<number, RebuiltRequest>();
   let digestOk = true;
   // The latest reply's runnable calls and the results recorded for them, by call id.
   let calls: ToolCallPart[] = [];
@@ -412,16 +416,28 @@ export async function stepsMaterial(
     if (step["kind"] !== "model_call") continue;
     commit();
     if (step["purpose"] !== "chat") {
-      const rest = steps.slice(index).filter((later) => later["kind"] === "model_call");
+      const rest = [...steps.entries()].slice(index).filter(([, later]) => later["kind"] === "model_call");
       const structured = await options.structured();
-      if (structured === null) return { interactions, digestOk: false };
-      const material = structuredMaterial(structured.model, messages, structured.typ, rest, options.baseSystemPrompt);
+      if (structured === null) {
+        for (const [at] of rest) requests.set(at, { request: null, digestOk: false });
+        return { interactions, requests, digestOk: false };
+      }
+      const material = structuredMaterial(
+        structured.model,
+        messages,
+        structured.typ,
+        rest.map(([, later]) => later),
+        options.baseSystemPrompt,
+      );
+      material.requests.forEach((rebuilt, at) => requests.set(rest[at]![0], rebuilt));
       interactions.push(...material.interactions);
-      return { interactions, digestOk: digestOk && material.digestOk };
+      return { interactions, requests, digestOk: digestOk && material.digestOk };
     }
     const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
     const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt));
-    if (digest === null || step["request_sha256"] !== digest) digestOk = false;
+    const matched = digest !== null && step["request_sha256"] === digest;
+    requests.set(index, { request, digestOk: matched });
+    if (!matched) digestOk = false;
     if (Object.hasOwn(step, "error")) continue;
     const reply = recordedResponse(step).message;
     messages.push(reply);
@@ -438,7 +454,7 @@ export async function stepsMaterial(
     for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
   }
   commit();
-  return { interactions, digestOk };
+  return { interactions, requests, digestOk };
 }
 
 /** What running one reply's tool calls reads and appends to. */

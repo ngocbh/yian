@@ -41,7 +41,7 @@ import {
 import { evaluateWhenRecord } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import type { ToolSpec } from "../llm/messages.ts";
+import type { Request, ToolSpec } from "../llm/messages.ts";
 import type {
   MemoryContext,
   MemoryScope,
@@ -636,6 +636,22 @@ export interface LearningMaterial {
   /** The recalled memory sections the model saw. */
   readonly memorySections: readonly MemorySection[];
   /** Whether every recorded model call's `request_sha256` matched its rebuilt request. */
+  readonly digestOk: boolean;
+  /**
+   * Each `model_call` step's rebuilt request, by the step's index in the steps given; a step the
+   * rebuild didn't reach (it stopped at a reply that failed the node, or never started) has none.
+   */
+  readonly requests: ReadonlyMap<number, RebuiltRequest>;
+}
+
+/** One `model_call` step's request, rebuilt from the invocation's render and the steps before it. */
+export interface RebuiltRequest {
+  /**
+   * The request as the call sent it, its system message with the recalled memory sections; `null`
+   * when it can't be rebuilt (a tool the recorded specs lack, a structured model that can't be built).
+   */
+  readonly request: Request | null;
+  /** Whether the step recorded the purpose and the `request_sha256` of the rebuilt request. */
   readonly digestOk: boolean;
 }
 

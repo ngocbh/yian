@@ -1,16 +1,28 @@
 /**
  * TS-only: the `interrupted` record and step in the waits fold and the reducer.
  */
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
+import { Failure } from "../../src/diagnostics.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
 import {
   canonicalTyped,
+  InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
+  NodeFailedRecord,
+  NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
   NodeWaitingRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
+  RunCancelledRecord,
+  RunFailedRecord,
   type RunRecord,
+  RunResumedRecord,
+  RunStoppedRecord,
+  RunWaitingRecord,
 } from "../../src/runtime/log.ts";
 import { applyWaitsRecord, isWakeable, nodeCalls, wakeableNodes, WaitsState } from "../../src/runtime/waits.ts";
 import type { CallClosed } from "../../src/events.ts";
@@ -18,7 +30,7 @@ import { prepareDelivery } from "../../src/runtime/engine.ts";
 import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import type { RunLog, RunResumedRecord } from "../../src/runtime/log.ts";
+import type { RunLog } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
   DeliveryRefused,
@@ -55,6 +67,12 @@ const agentPending = (node: string, n: number, reply: number, index: number, too
 const closer = (node: string, n: number, toolCallId: string, closed: string) =>
   new NodeStepRecord(node, n, { kind: "tool_result", call_id: toolCallId, output: "x", is_error: true, closed });
 const honor = (node: string, n: number, by: number) => new NodeStepRecord(node, n, { kind: "interrupted", by: BigInt(by) });
+const send = (inbox: string, value: unknown) => commit("__start__", `__start__.${inbox}`, value);
+const takeWait = (node: string, mode: "one" | "all", inbox = "msgs") =>
+  new NodeWaitingRecord(node, [`r/${node}`], { waits: [{ callId: `r/${node}`, tool: "take", inbox, mode, deadline: null }] });
+const takeCommit = (node: string, events: number[], closed = false) =>
+  new PoolCommitRecord(node, node, null, { take: { inbox: "msgs", events, closed } });
+const stop = (inbox: string, nodes: string[] = []) => new InterruptedRecord(inbox, nodes);
 
 /** Fold `records` at seqs 0, 1, ... into a fresh state. */
 function fold(...records: RunRecord[]): WaitsState {
@@ -364,4 +382,101 @@ test("the interrupt delivery op prepares the interrupt; a missing running is non
   expect([...(viaOp.record as InterruptedRecord).nodes]).toEqual(["a", "w"]);
   expect([...(prepareDelivery(state, { kind: "interrupt", inbox: "msgs" })!.record as InterruptedRecord).nodes]).toEqual(["w"]);
   expect(() => prepareDelivery(state, { kind: "nope" } as never)).toThrow(/send, complete, close, interrupt or cancel/);
+});
+
+// --- The remembered Stop's window ------------------------------------------------------------- //
+
+describe("stops", () => {
+  test("an interrupted record remembers the Stop; stopped says whether it named an agent", () => {
+    expect([...fold(...START, stop("msgs")).stops]).toEqual([["msgs", { seq: 2, stopped: false }]]);
+    expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"])).stops.get("msgs")).toEqual({ seq: 3, stopped: true });
+    // A replayed empty record after a stopping one doesn't reset stopped (so it can't outlive the next wait).
+    expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"]), stop("msgs")).stops.get("msgs")).toEqual({
+      seq: 4,
+      stopped: true,
+    });
+  });
+
+  test("a run_waiting keeps a Stop that stopped no one and clears one that did", () => {
+    const w = fold(
+      ...START,
+      stop("msgs"),
+      new RunWaitingRecord(["approve"]),
+      new RunStoppedRecord("signal", "", ["approve"]),
+      new RunResumedRecord([], 0),
+      new RunWaitingRecord(["approve"]),
+    );
+    expect(w.stops.has("msgs")).toBe(true);
+    applyWaitsRecord(w, { seq: 7, record: new NodeStartedRecord("reply") });
+    applyWaitsRecord(w, { seq: 8, record: stop("msgs", ["reply"]) }); // the applied record
+    applyWaitsRecord(w, { seq: 9, record: new RunWaitingRecord(["approve"]) });
+    expect(w.stops.has("msgs")).toBe(false);
+  });
+
+  test("a Stop on one inbox isn't closed by a pickup from another", () => {
+    const w = fold(...START, stop("msgs"), takeWait("heard", "one", "other"));
+    expect(w.stops.has("msgs")).toBe(true);
+  });
+
+  test.each<[string, RunRecord[], RunRecord[]]>([
+    ["a take of the inbox waits", [], [takeWait("heard", "one")]],
+    ["a send answers a waiting take", [takeWait("heard", "one")], [send("msgs", "x")]],
+    ["a timeout wake times the take out", [takeWait("heard", "one")], [new NodeWokenRecord("heard", ["r/heard"])]],
+    ["the close answers a waiting take", [takeWait("heard", "one")], [new InboxClosedRecord("msgs")]],
+    ["an inline take commits (taking nothing)", [new NodeStartedRecord("t")], [takeCommit("t", [], true)]],
+    // 2 take, 3 x -> heard, 4 Stop, 5 withdraw
+    ["a withdraw reopens a waited take", [takeWait("heard", "one"), send("msgs", "x")], [new InboxWithdrawnRecord("msgs", [3])]],
+    [
+      "a withdraw on a closed inbox answers it",
+      [takeWait("heard", "one"), send("msgs", "x"), new InboxClosedRecord("msgs")],
+      [new InboxWithdrawnRecord("msgs", [3])],
+    ],
+    // 2 x, 3 t starts, 4 t's orphan take of [2], 5 heard waits, 6 Stop, 7 resume re-offers x to heard
+    [
+      "run_resumed re-offers an orphan's event to a waiting take",
+      [send("msgs", "x"), new NodeStartedRecord("t"), takeCommit("t", [2]), takeWait("heard", "one")],
+      [new RunResumedRecord(["t"], 2)],
+    ],
+  ])("a pickup closes the window: %s", (_, before, after) => {
+    const w = fold(...START, ...before, stop("msgs"), ...after);
+    expect(w.stops.has("msgs")).toBe(false);
+  });
+
+  test.each<[string, RunRecord[], RunRecord[]]>([
+    // 2 take, 3 x -> heard, 4 woken, 5 Stop, 6 heard's take commit
+    ["a waited take's own commit", [takeWait("heard", "one"), send("msgs", "x"), new NodeWokenRecord("heard")], [takeCommit("heard", [3])]],
+    ["a second send to an already answered take: all", [takeWait("heard", "all"), send("msgs", "x")], [send("msgs", "y")]],
+    ["run_stopped and run_resumed", [], [new RunStoppedRecord("signal", "", []), new RunResumedRecord([], 0)]],
+    ["a node_woken that times nothing out", [takeWait("heard", "one"), send("msgs", "x")], [new NodeWokenRecord("heard")]],
+    ["a node_step", [new NodeStartedRecord("reply")], [modelCall("reply", 1)]],
+    ["a run_waiting before it stopped anyone", [], [new RunWaitingRecord(["approve"])]],
+  ])("not a closer: %s", (_, before, after) => {
+    const w = fold(...START, ...before, stop("msgs"), ...after);
+    expect(w.stops.has("msgs")).toBe(true);
+  });
+
+  const FAILURE = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
+  test.each<[string, RunRecord]>([
+    ["run_cancelled", new RunCancelledRecord()],
+    ["run_failed", new RunFailedRecord(FAILURE)],
+    ["node_failed", new NodeFailedRecord(FAILURE)],
+    ["END's success", new NodeSucceededRecord(EndNode.ID, 1)],
+  ])("%s clears every Stop", (_, terminal) => {
+    const w = fold(...START, stop("msgs"), stop("other"), terminal);
+    expect(w.stops.size).toBe(0);
+  });
+
+  test("another node's success keeps the Stop", () => {
+    const w = fold(...START, new NodeStartedRecord("work"), stop("msgs"), new NodeSucceededRecord("work", 1));
+    expect(w.stops.has("msgs")).toBe(true);
+  });
+
+  test("toJSON/fromJSON keeps stops; a bad stop entry is refused", () => {
+    const w = fold(...START, stop("msgs"));
+    expect([...WaitsState.fromJSON(JSON.parse(JSON.stringify(w.toJSON()))).stops]).toEqual([...w.stops]);
+    expect(() => WaitsState.fromJSON({ ...w.toJSON(), stops: [["msgs", { seq: 1 }]] } as never)).toThrow(/stops 'msgs' must be a stop/);
+    expect(() => WaitsState.fromJSON({ ...w.toJSON(), stops: [["msgs", { seq: "1", stopped: true }]] } as never)).toThrow(
+      /stops 'msgs' must be a stop/,
+    );
+  });
 });

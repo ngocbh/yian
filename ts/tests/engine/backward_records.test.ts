@@ -150,7 +150,7 @@
  *   drops the module patches, as above; `forward` and `backward` throw on the nodes of a
  *   `copyGraph` copy of the run's flow (not `captureBackwardContext`, which rebuilds the node data
  *   learning reads), each prefix replays over a fresh
- *   `copyGraph` of that copy with `noGrowth`, and `sameRuntimeBackwardState` is Python's `==`.
+ *   `copyGraph` of that copy with `noGrowth`, and the backward states compare with `toEqual`.
  *
  * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
  *
@@ -204,7 +204,6 @@ import {
 import {
   memoryCommitId,
   RuntimeBackwardState,
-  sameRuntimeBackwardState,
   validateAttributedBackward,
 } from "../../src/runtime/learning.ts";
 import {
@@ -2082,7 +2081,7 @@ test("backward replay matches every accepted prefix without callbacks", async ()
   for (const [length, expected] of prefixes) {
     const prefix = accepted.slice(0, length);
     const replay = replayRecords(new RunState(copyGraph(original)), prefix, { growBuilder: noGrowth });
-    expect(sameRuntimeBackwardState(replay.backwardState, expected)).toBe(true);
+    expect(replay.backwardState).toEqual(expected);
     expect(replay.backwardState.outcome).toEqual(expected.outcome);
     expect(replay.trace!.nextSequence).toBe(length);
     expect(replay.nextSequence).toBe(length);

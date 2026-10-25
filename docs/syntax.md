@@ -2779,8 +2779,12 @@ nodes:
   `[interrupted by the user]`. With `output: Optional(...)` the node succeeds with
   null, so the flow can route on it (`${worker.output :- "(interrupted)"}`); any
   other output fails the node with `agent.interrupted`. An interrupt when no node
-  reads the inbox changes nothing. Steers the node never read stay in the inbox.
-  See [API](api.md#interrupting-an-agent-ts-yian).
+  reads the inbox is remembered: a node that opens the inbox before the next take
+  of it (or before the next wait, once the Stop has stopped a node) is stopped
+  before its first model call. While the run waits at a take of the inbox with
+  nothing unread, an interrupt changes nothing. Steers the node never read stay
+  in the inbox; `withdraw(log, "notes")` takes them back. See
+  [API](api.md#interrupting-an-agent-ts-yian).
 - An AGENT without `tools:` or `skills:` makes one model call. Steers queued
   before it go with that request, and an interrupt cuts its streaming text reply
   at the last chunk shown.

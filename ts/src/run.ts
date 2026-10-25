@@ -1667,6 +1667,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const key = realpathSync(locator);
     const scheduler = options.scheduler ?? realScheduler;
     const clock = () => scheduler.now();
+    // Resolved before the hold is awaited, like the log, and used for both the compile and the entry.
     const root = codeRoot === null ? null : resolve(codeRoot);
     const runHold = await holdForAdvance(key, locator);
     let authority: JsonlRunLog | null = null;
@@ -1682,7 +1683,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecorded(start.defaults);
       const credentials = { apiKey, headers };
       const kept = reusable(runHold.idle, authority, key, { codeRoot: root, hostFlow, credentials });
-      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, codeRoot));
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, root));
       const state = kept?.state ?? replayRunLog(flow, authority, credentials);
       // The caller's credentials, which the replay used, before a flow that sends no host key
       // drops them below: a later call passing the same ones then reuses the entry.
@@ -1988,7 +1989,7 @@ async function deliverTo(
       const start = startRecord(authority[Symbol.iterator]().next().value);
       checkRecorded(start.defaults);
       const kept = reusable(runHold.idle, authority, key, want);
-      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, codeRoot));
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, want.codeRoot));
       const state = kept?.state ?? replayRunLog(flow, authority);
       // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
       const credentials = { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };

@@ -406,6 +406,19 @@ describe("loaded sites", () => {
     await expectLoadLimitError(text, "flow env 'max_tool_iterations' at ", "  max_tool_iterations:");
   });
 
+  test.each([
+    ["flow", loadedFlowEnv, "flow ", "  K:"],
+    ["multi-node-def", multiDefEnv, "defs entry 'd': ", "      K:"],
+  ] as const)("an invalid %s env max_tool_iterations is a located load error", async (_, flow, prefix, line) => {
+    const text = flow("", "0").replace(line, line.replace("K:", "max_tool_iterations:"));
+    const { diagnostic } = await loadErrorAsync(loadConformanceFlow(text));
+
+    expect(diagnostic.message).toBe(
+      `${prefix}\`env.max_tool_iterations\` must be a positive int or -1 (no cap), got 0`,
+    );
+    expect(diagnostic.frames.at(-1)!.range.startLine).toBe(lineOf(text, line.replace("K:", "max_tool_iterations:")));
+  });
+
   /** Return a flow whose node `use` has the one-line `env:` mapping `env`. */
   const nodeEnvInline = (env: string) =>
     `id: f\nname: f\nnodes:\n  use:\n${ECHO}    env: ${env}\n` + "    input:\n      topic: x\noutput: ${use.output}\n";

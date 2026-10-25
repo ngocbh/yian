@@ -1032,21 +1032,30 @@ function readAuthoredLlmConfig(
 }
 
 /**
- * Refuse a flow `env:` value too deep or holding itself, or an invalid `max_tool_iterations`.
+ * Refuse a flow or `defs:` entry `env:` value too deep or holding itself, or an invalid
+ * `max_tool_iterations`.
  *
  * The nesting and recursive alias checks run first, so a deep `max_tool_iterations` isn't shown in
  * full; a `max_tool_iterations` default must be one every AGENT node would accept when it runs.
  *
+ * @param env The `env:` mapping.
+ * @param prefix The message prefix: `flow ` or `defs entry '<name>': `.
+ * @param envCursor The authored `env:` mapping, or `null` when there is none.
+ * @param diagnostics The file's diagnostics.
  * @throws LoadError at the offending entry.
  */
-function validateFlowEnv(env: ValueRecord, options: { diagnostics: LoadDiagnostics; cursor: SourceCursor }): void {
-  const { diagnostics, cursor } = options;
-  checkEnvValues(env, "flow ", cursor.has("env") ? cursor.child("env") : null, diagnostics);
+function validateEnv(
+  env: ValueRecord,
+  prefix: string,
+  envCursor: SourceCursor | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  checkEnvValues(env, prefix, envCursor, diagnostics);
   if (Object.hasOwn(env, "max_tool_iterations") && !isMaxToolIterations(env["max_tool_iterations"])) {
     throw diagnostics.error(
-      "flow `env.max_tool_iterations` must be a positive int or -1 (no cap), " +
+      `${prefix}\`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
         `got ${valueRepr(env["max_tool_iterations"])}`,
-      { range: cursor.child("env").rangeOf("max_tool_iterations") },
+      { range: envCursor?.rangeOf("max_tool_iterations") ?? null },
     );
   }
 }
@@ -1099,7 +1108,7 @@ export async function loadFlowFile(
   const diagnostics = LoadDiagnostics.fromDocument(document);
   const f = parseFile(document);
   rejectAuthoredPrivateCallableNames(root, f.defs, f.uses);
-  validateFlowEnv(f.env, { diagnostics, cursor: root });
+  validateEnv(f.env, "flow ", root.has("env") ? root.child("env") : null, diagnostics);
   validateSystem(f.system, root.has("system") ? root.child("system") : null);
 
   // Typedefs are read as plain values, so a tag in them is rejected before they are.
@@ -1729,7 +1738,7 @@ function loadDef(
       range: defCursor?.rangeOf("env") ?? null,
     });
   }
-  if (defEnv !== null) checkEnvValues(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
+  if (defEnv !== null) validateEnv(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
   checkDefAsserts(name, field("asserts"), defCursor, diagnostics);
   const nodesCursor = defAssemblyCursor(defCursor, body["nodes"]!);
   try {

@@ -80,7 +80,7 @@ import {
   resolveOutputBindingContract,
   templateContract,
   type TypeFn,
-} from "../helpers/output_contracts.ts";
+} from "../../compile/output_contracts.ts";
 import { namedTypeLabel, pathLabel } from "../helpers/tags.ts";
 import { type BuildResult, type OriginPresenter, siteKey } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";

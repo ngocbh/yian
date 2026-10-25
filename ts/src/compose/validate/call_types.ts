@@ -58,7 +58,7 @@ import {
   referenceContract,
   resolveOutputBindingContract,
   type TypeFn,
-} from "../helpers/output_contracts.ts";
+} from "../../compile/output_contracts.ts";
 import { anySourceHint, valueFits, yamlQuoted } from "../helpers/tags.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";

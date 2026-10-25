@@ -56,7 +56,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Edge, GrowthRejected } from "../../src/compile/model.ts";
-import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { projectOutputContract } from "../../src/compile/output_contracts.ts";
 import { inferExprType } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { Grow } from "../../src/nodes/base.ts";

@@ -48,7 +48,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { isRecord, Type, ValueKind } from "../../typesys/values.ts";
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import { collectConstructorNames, collectIsinstanceNames } from "../helpers/isinstance_types.ts";
-import type { TypeFn } from "../helpers/output_contracts.ts";
+import type { TypeFn } from "../../compile/output_contracts.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { inferBindingType, type ResolveOrigin, typedValueError } from "./typed_bindings.ts";

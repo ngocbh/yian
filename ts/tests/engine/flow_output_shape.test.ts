@@ -62,7 +62,7 @@ import { join } from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
-import { combineOutputContracts } from "../../src/compose/helpers/output_contracts.ts";
+import { combineOutputContracts } from "../../src/compile/output_contracts.ts";
 import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";

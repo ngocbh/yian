@@ -47,7 +47,7 @@ import {
   unresolvedType,
   widerType,
 } from "../helpers/narrowing_facts.ts";
-import { combineOutputContracts, projectOutputContract } from "../helpers/output_contracts.ts";
+import { combineOutputContracts, projectOutputContract } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import {
   type BuildContext,

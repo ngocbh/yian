@@ -151,7 +151,7 @@ import {
 } from "../../src/compose/helpers/narrowing_facts.ts";
 import * as narrowingFacts from "../../src/compose/helpers/narrowing_facts.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
-import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { projectOutputContract } from "../../src/compile/output_contracts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor, searchedParamGuards } from "../../src/compose/nodes/case.ts";

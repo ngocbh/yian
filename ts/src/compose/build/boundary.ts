@@ -14,7 +14,7 @@
  * and is assembled by END).
  *
  * Knows about: the compile model, `expr` co-skip scanning, the START/END nodes, inbox types, binding
- * input groups, `edges/producers`, `helpers/output_contracts` and `validate/asserts`
+ * input groups, `edges/producers`, `compile/output_contracts` and `validate/asserts`
  * (`LoweredAsserts`; a forward edge only, since `validate/asserts.ts` never imports this module).
  * Never imports: `build/pipeline`, the loader, or the runtime.
  */
@@ -28,7 +28,7 @@ import { EndNode } from "../../nodes/end/node.ts";
 import { StartNode } from "../../nodes/start/node.ts";
 import { isInboxType } from "../../typesys/values.ts";
 import { bindingProducers } from "../edges/producers.ts";
-import { combineOutputContracts } from "../helpers/output_contracts.ts";
+import { combineOutputContracts } from "../../compile/output_contracts.ts";
 import type { LoweredAsserts } from "../validate/asserts.ts";
 
 /**

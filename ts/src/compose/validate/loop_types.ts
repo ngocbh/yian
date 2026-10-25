@@ -41,7 +41,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { canonicalTypeLabel, isList, isRecord, jsTypeName, type Type, ValueKind } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { assertExactContracts, resolveOutputBindingContract } from "../helpers/output_contracts.ts";
+import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
 import { anySourceHint, suggestTag, tagText } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";

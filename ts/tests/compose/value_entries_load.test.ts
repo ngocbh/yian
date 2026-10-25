@@ -67,7 +67,7 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { ValueEntryDescriptor } from "../../src/compose/desugar/value_entries.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
-import { literalContract } from "../../src/compose/helpers/output_contracts.ts";
+import { literalContract } from "../../src/compile/output_contracts.ts";
 import { forget } from "../../src/defaults.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";

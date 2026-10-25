@@ -67,7 +67,7 @@ import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../helpers/output_contracts.ts";
+import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../../compile/output_contracts.ts";
 import {
   oldFormSuggestion,
   oldTypedText,

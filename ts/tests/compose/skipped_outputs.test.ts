@@ -17,7 +17,7 @@
 
 import { expect, test } from "bun:test";
 
-import { resolveOutputBindingContract } from "../../src/compose/helpers/output_contracts.ts";
+import { resolveOutputBindingContract } from "../../src/compile/output_contracts.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import {
   ContractOrigins,

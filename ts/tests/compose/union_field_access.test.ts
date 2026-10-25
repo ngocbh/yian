@@ -58,7 +58,7 @@ import { expect, test } from "bun:test";
 
 import { Edge, GrowthRejected } from "../../src/compile/model.ts";
 import { canonicalizeInlineType } from "../../src/compose/build/inline_inputs.ts";
-import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { projectOutputContract } from "../../src/compile/output_contracts.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";

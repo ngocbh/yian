@@ -105,7 +105,7 @@ import {
   type NotNarrowable,
   unresolvedType,
 } from "../helpers/narrowing_facts.ts";
-import { outputContractPathError, projectOutputContract } from "../helpers/output_contracts.ts";
+import { outputContractPathError, projectOutputContract } from "../../compile/output_contracts.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";

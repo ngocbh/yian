@@ -17,7 +17,7 @@
 import type { OutputContract, ValueContract } from "../../nodes/contracts.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import type { Type } from "../../typesys/values.ts";
-import type { TypeFn } from "../helpers/output_contracts.ts";
+import type { TypeFn } from "../../compile/output_contracts.ts";
 import type { BuildResult } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";
 import { inferBindingType } from "./typed_bindings.ts";

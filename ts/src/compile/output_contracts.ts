@@ -1,6 +1,8 @@
 /**
  * Infer canonical value contracts for Compose output bindings.
  *
+ * It lives below `compose/` so that the run time can derive the same types the loader checks.
+ *
  * This module owns the Compose-specific envelope around the generic expression engine: template
  * shape, reference-to-contract lookup, record-field projection, and provenance retention. Direct
  * references re-export their exact or partial contract; computed expressions receive a
@@ -11,10 +13,10 @@
  * Never imports: YAML/source documents, node kinds, graph-stage passes, the loader, or runtime.
  */
 
-import { type OriginRef, reprText } from "../../diagnostics.ts";
-import { ExpressionError, evalBinding, exprRefs, inferExprType, scanTemplate } from "../../expr/index.ts";
-import { type ExprNode, Token, Tree } from "../../expr/grammar.ts";
-import { Span, templateRefs } from "../../expr/template.ts";
+import { type OriginRef, reprText } from "../diagnostics.ts";
+import { ExpressionError, evalBinding, exprRefs, inferExprType, scanTemplate } from "../expr/index.ts";
+import { type ExprNode, Token, Tree } from "../expr/grammar.ts";
+import { Span, templateRefs } from "../expr/template.ts";
 import {
   Binding,
   bindingSource,
@@ -29,7 +31,7 @@ import {
   ValueContract,
   type ValuePath,
   ValueTemplate,
-} from "../../nodes/contracts.ts";
+} from "../nodes/contracts.ts";
 import {
   buildValue,
   isList,
@@ -40,9 +42,9 @@ import {
   TypeCheckError,
   unionField,
   ValueKind,
-} from "../../typesys/index.ts";
-import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
-import { fileFieldType, typeEquals } from "../../typesys/values.ts";
+} from "../typesys/index.ts";
+import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
+import { fileFieldType, typeEquals } from "../typesys/values.ts";
 
 /** Marks a binding source that is a template, not a literal, in `literalValue`. */
 export const NOT_LITERAL: unique symbol = Symbol("NOT_LITERAL");

@@ -39,7 +39,7 @@
 import { isinstanceSubject, isinstanceTypeNames } from "../../expr/index.ts";
 import { ISINSTANCE, referencePath, valueArgs } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, Token, Tree } from "../../expr/grammar.ts";
-import { directReferenceParts } from "./output_contracts.ts";
+import { directReferenceParts } from "../../compile/output_contracts.ts";
 
 /** An `isinstance(<base>, <typeName>)` check on a plain reference; frozen. */
 export class IsinstanceCheck {

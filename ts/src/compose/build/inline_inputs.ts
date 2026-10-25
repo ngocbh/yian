@@ -48,7 +48,7 @@ import {
   outputContractPathError,
   projectOutputContract,
   type TypeFn,
-} from "../helpers/output_contracts.ts";
+} from "../../compile/output_contracts.ts";
 
 /**
  * Return the advice for an inline binding whose type can't be proven.

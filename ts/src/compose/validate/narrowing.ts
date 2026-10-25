@@ -59,7 +59,7 @@ import {
   directReferencePathParts,
   projectOutputContract,
   recordFieldOrigins,
-} from "../helpers/output_contracts.ts";
+} from "../../compile/output_contracts.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
 import { CaseDescriptor, type GuardedRead, searchedParamGuards } from "../nodes/case.ts";
 

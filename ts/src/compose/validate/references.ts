@@ -87,7 +87,7 @@ import {
   outputContractPathError,
   projectOutputContract,
   referenceContract,
-} from "../helpers/output_contracts.ts";
+} from "../../compile/output_contracts.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";

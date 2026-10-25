@@ -8,10 +8,10 @@
  * `outputContract` (a LOOP's, or the returned fields of its merged carried contract) and to check
  * the bindings' names, arity and types. Each kind's own `build` bakes the resolved child's
  * compiled flow onto its node; this module supplies the shared resolution, the call nesting limit
- * it enforces, and the signature derivation. Output-binding contract inference lives one layer
- * lower in `helpers/output_contracts.ts`.
+ * it enforces, and the signature derivation. Output-binding contract inference lives below
+ * compose, in `compile/output_contracts.ts`.
  *
- * Like `base.ts` this is a leaf of the nodes package: it imports `helpers/output_contracts.ts`,
+ * Like `base.ts` this is a leaf of the nodes package: it imports `compile/output_contracts.ts`,
  * `helpers/errors.ts`, the node contracts (`nodes/contracts.ts`), the END node class
  * (`nodes/end/node.ts`), `BUILTIN_TYPE_NAMES` (`typesys/types.ts`), `typesys/values.ts`,
  * `defaults.ts`, `diagnostics.ts` and types from the compile layer, but no other kind module and
@@ -33,7 +33,7 @@ import { EndNode } from "../../nodes/end/node.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { jsTypeName, type Type } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
-import { combineOutputContracts, resolveOutputBindingContract } from "../helpers/output_contracts.ts";
+import { combineOutputContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
 
 /** Whether `contract` is an exact `ValueContract` or `PartialRecordContract`. */
 function isOutputContract(contract: unknown): contract is OutputContract {

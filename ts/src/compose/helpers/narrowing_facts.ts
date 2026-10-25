@@ -54,7 +54,7 @@ import {
   unknownCheck,
 } from "./condition_guards.ts";
 import { checkedMembers, isinstanceMembers, resolveIsinstanceType } from "./isinstance_types.ts";
-import { projectOutputContract } from "./output_contracts.ts";
+import { projectOutputContract } from "../../compile/output_contracts.ts";
 import { CLOSE_MATCH_CUTOFF, namedTypeLabel } from "./tags.ts";
 
 /**

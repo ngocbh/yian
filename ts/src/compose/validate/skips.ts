@@ -43,7 +43,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { bindingProducers, refProducer } from "../edges/producers.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
-import { directReferenceParts, directReferencePath } from "../helpers/output_contracts.ts";
+import { directReferenceParts, directReferencePath } from "../../compile/output_contracts.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
 

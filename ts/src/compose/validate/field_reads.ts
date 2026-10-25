@@ -16,6 +16,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { fileFieldType, Type, typeEquals, unionField, ValueKind } from "../../typesys/values.ts";
 import { guardedReads } from "../helpers/condition_guards.ts";
 import { type Env, guardedReadTypes, type NarrowedRead } from "../helpers/narrowing_facts.ts";
+import { namedTypeLabel } from "../helpers/tags.ts";
 import { rootBaseType } from "./asserts.ts";
 import { ARITHMETIC } from "./skips.ts";
 
@@ -57,7 +58,9 @@ export function isUntyped(typ: Type | null): boolean {
  * `?.` introduced doesn't count (TypeScript optional chains). A guard's narrowing lifts it.
  * Untyped receivers are never flagged, except a root that may be skipped: a `.` right after it is
  * flagged whatever the producer's type (design 2.6.6). An operand of arithmetic names the whole
- * fix, `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message.
+ * fix, `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message. An
+ * untyped root narrowed to `T` (by a guard or the CASE branch routing the site) needs `?.` for
+ * each field `T` doesn't require (owner ruling, 2026-10-25).
  *
  * @param tree A parsed expression.
  * @param roots What the site knows of its roots.
@@ -85,15 +88,11 @@ export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: T
     let accepted = alternatives.length === 0;
     for (const contract of alternatives) {
       const nullable = roots.nullable(root);
-      // An opaque root that may be skipped is checked as a nullable `Any`; otherwise it is untyped.
-      if (contract === null && !nullable) {
-        accepted = true;
-        break;
-      }
+      // An opaque root walks as `Any`: untyped, unless a guard narrows it or it may be skipped.
       const chosen = contract ?? new ValueContract(Type.scalar(ValueKind.ANY));
       const baseTypeOf = rootBaseType(new Map([[root, chosen]]), nullable ? new Set([root]) : new Set());
       const candidates = guardedReadTypes(path, guard, baseTypeOf, registry);
-      const error = alternativeError(read, chosen, candidates, roots);
+      const error = alternativeError(read, chosen, candidates, roots, registry);
       if (error === null) {
         accepted = true;
         break;
@@ -136,18 +135,30 @@ function alternativeError(
   contract: OutputContract,
   candidates: readonly NarrowedRead[],
   roots: ReadRoots,
+  registry: TypeRegistry,
 ): string | null {
   let first: string | null = null;
   for (const candidate of candidates.length === 0 ? [null] : candidates) {
-    const error = walk(read, contract, candidate, roots);
+    const error = walk(read, contract, candidate, roots, registry);
     if (error === null) return null;
     first ??= error;
   }
   return first;
 }
 
-/** Return the first `.` step of `read` through a value that may be null, as a message, else `null`. */
-function walk(read: Read, contract: OutputContract, candidate: NarrowedRead | null, roots: ReadRoots): string | null {
+/**
+ * Return the first `.` step of `read` through a value that may be null, as a message, else `null`.
+ *
+ * A walk from an untyped root narrowed to a type (by a guard, or by the CASE branch routing the
+ * site) is untyped at run time, so every field that type doesn't require may be absent there.
+ */
+function walk(
+  read: Read,
+  contract: OutputContract,
+  candidate: NarrowedRead | null,
+  roots: ReadRoots,
+  registry: TypeRegistry,
+): string | null {
   const nullable = roots.nullable(read.root);
   let typ = contractType(contract);
   if (typ !== null && nullable) typ = typ.replace({ nullable: true });
@@ -155,6 +166,7 @@ function walk(read: Read, contract: OutputContract, candidate: NarrowedRead | nu
   let prefix = read.rootText;
   if (candidate !== null && candidate[2] === path) typ = candidate[0];
   let why = roots.why(read.root);
+  const narrowedUntyped = roots.untyped(read.root) && typ !== null && !isUntyped(typ);
   // A root that may be skipped is a missing root at run time, whatever its type: check its step
   // before the untyped stop.
   if (nullable && (typ === null || typ.nullable) && !read.rest[0]!.optional) {
@@ -165,6 +177,9 @@ function walk(read: Read, contract: OutputContract, candidate: NarrowedRead | nu
     if (typ.nullable && !step.optional) return nullableMessage(prefix, step.name, why, read.arithmetic);
     const field = fieldRead(typ, step.name);
     if (field === null) return null; // the name checks report it
+    if (narrowedUntyped && field.nullable && !step.optional) {
+      return narrowedUntypedMessage(prefix, step.name, namedTypeLabel(typ, registry));
+    }
     typ = field.type?.replace({ nullable: field.nullable }) ?? null;
     why = field.optional ? `field '${step.name}' is Optional` : `field '${step.name}' is not required`;
     path += "." + step.name;
@@ -199,6 +214,15 @@ function fieldRead(typ: Type, name: string): { type: Type | null; nullable: bool
   if (field === undefined) return null;
   const optional = field.nullable;
   return { type: field, nullable: optional || !(typ.required?.has(name) ?? false), optional };
+}
+
+/** Return the message for `.name` read on `prefix`, untyped and only narrowed to `label`. */
+function narrowedUntypedMessage(prefix: string, name: string, label: string): string {
+  return (
+    `\${${prefix}.${name}} reads field '${name}', which ${label} doesn't require, of ${prefix}, ` +
+    `which is untyped and only narrowed to ${label}; ` +
+    `write ${prefix}?.${name}, or type ${prefix} as ${label} where it is bound (\`output: ${label}\` or \`!${label}\`)`
+  );
 }
 
 /**

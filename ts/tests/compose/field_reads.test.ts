@@ -43,6 +43,7 @@ import { nullableReadErrors, type ReadRoots } from "../../src/compose/validate/f
 import { parseCondition } from "../../src/expr/expressions.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
+import { type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
@@ -603,4 +604,42 @@ test("an arithmetic operand gets the whole fix in one message", () => {
   expect(message).toEndWith("write (x?.k :- <default>)");
   expect(message).not.toContain("check x != null");
   expect(errors("-(x.k) > 1", roots(Rec, true))[0]).toEndWith("write (x?.k :- <default>)");
+});
+
+const types: TypeRegistry = new Map([
+  [
+    "T",
+    {
+      kind: "record",
+      fields: new Map([
+        ["f", "Optional(str)"],
+        ["g", "str"],
+      ]),
+    },
+  ],
+]);
+const T = typeFor("T", types);
+
+test("an untyped value narrowed by isinstance needs ?. for a field T doesn't require", () => {
+  const r = roots(Rec);
+  expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.f == 'a'"), r, types)[0]).toBe(
+    "${u.f} reads field 'f', which T doesn't require, of u, which is untyped and only narrowed to T; " +
+      "write u?.f, or type u as T where it is bound (`output: T` or `!T`)",
+  );
+  expect(nullableReadErrors(parseCondition("isinstance(u, T) and u?.f == 'a'"), r, types)).toEqual([]);
+  expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.g == 'a'"), r, types)).toEqual([]);
+});
+
+test("a root a CASE branch narrowed is untyped by its base, not its routed view", () => {
+  // The routed view types m.output as T; its un-narrowed base is untyped (Any).
+  const r: ReadRoots = {
+    ...roots(Rec),
+    contracts: (root) => (root === "m.output" ? [new ValueContract(T)] : undefined),
+    rootLength: () => 2,
+    untyped: (root) => root === "m.output",
+  };
+  expect(nullableReadErrors(parseCondition("m.output.f == 'a'"), r, types)[0]).toContain(
+    "which is untyped and only narrowed to T; write m.output?.f",
+  );
+  expect(nullableReadErrors(parseCondition("m.output.g == 'a'"), r, types)).toEqual([]);
 });

@@ -760,7 +760,8 @@ interface SourceNode {
 /**
  * Return the source of a loaded root: `rootFile`, every file the disk resolver read, and each host
  * child's own source, each keyed by its real path relative to the real `ownDir` (see `FlowSource`).
- * The root's path is `<real ownDir>/<file name of sourceLabel>`, as is any source's root.
+ * The root's path is `<real ownDir>/<file name of sourceLabel>`, as is any source's root; a label
+ * with no file name (`""`, `.`, `..`, `/`) gives `<flow>`.
  *
  * @returns The source, or `null` when a host child has none (it was built in code).
  */

@@ -1916,8 +1916,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const buildInlineChild = (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor): ComposedFlow => {
     /** Resolve one parent producer through this assembly's build cache. */
     const producerType: ProducerType = (producerKey, bindingLabel, bindingRange) => {
-      // `messagesKey(id)` names an AGENT's new messages; node ids hold no `.`.
-      const [producerId, messages] = producerKey.split(".") as [string, string | undefined];
+      // `messagesKey(id)` names an AGENT's new messages.
+      const messages = producerKey.endsWith(`.${NEW_MESSAGES}`);
+      const producerId = messages ? producerKey.slice(0, -`.${NEW_MESSAGES}`.length) : producerKey;
       const unavailableType = (): LoadError =>
         diagnostics.error(
           `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
@@ -1931,7 +1932,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       const cache = descriptorCache;
       if (cache === null) throw new Error("descriptor cache was not initialized before inline child resolution");
       const node = cache.buildOne(producerId, bindingLabel, bindingRange).node;
-      if (messages !== undefined) {
+      if (messages) {
         if (node.producesMessages) return new ValueContract(newMessagesType());
         throw diagnostics.error(
           `cannot infer type for inline binding ${reprText(bindingLabel)}: node ${reprText(producerId)} ` +

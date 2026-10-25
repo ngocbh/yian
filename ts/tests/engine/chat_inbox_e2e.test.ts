@@ -17,7 +17,7 @@ import type { Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
-import { advance, close, complete, foldRunLog, interrupt, pendingCalls, runFlow, send } from "../../src/run.ts";
+import { advance, close, complete, foldRunLog, interrupt, pendingCalls, runFlow, send, withdraw } from "../../src/run.ts";
 import {
   InboxClosedRecord,
   InterruptedRecord,
@@ -237,6 +237,29 @@ test("the Phase 2 chat end to end: steer, interrupt, pending call, crash and adv
   ]);
   expect(newMessages("chat#2/answered/reply")).toEqual([assistant("Once upon a time"), user(INTERRUPTED_MARKER)]);
   expect(pendingCalls(log)).toEqual([]);
+}, 60_000);
+
+test("Esc right after a send, offline: withdraw takes the message back, interrupt records nothing, and the next message is answered alone", async () => {
+  const flow = await chatFlow();
+  const log = join(tmp, "chat-esc.jsonl");
+  const env = { env: NO_ENV };
+  const script = new ScriptedModel([textReply("hello again")], CONFIG);
+  const options = { ...env, numWorkers: 0, tools, models: serving(script) };
+  expect((await runFlow(flow, {}, { ...options, log, llmConfig: CONFIG })).status).toBe("waiting");
+  const seq = await send(log, "owner_messages", user("hi"), env);
+  expect(await withdraw(log, "owner_messages", env)).toEqual([{ seq, value: user("hi") }]);
+  // The take waits again with nothing unread: the chat waits for the next message.
+  expect(await interrupt(log, "owner_messages", env)).toEqual({ seq: null, nodes: [], calls: [] });
+  expect((await advance({ ...options, log })).status).toBe("waiting");
+  expect(script.requests).toHaveLength(0);
+  await send(log, "owner_messages", user("again"), env);
+  expect((await advance({ ...options, log })).status).toBe("waiting");
+  expect(script.requests).toHaveLength(1);
+  await close(log, "owner_messages", env);
+  const done = await advance({ ...options, log });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(history(done.output)).toEqual([user("again"), assistant("hello again")]);
+  expect(milestones(log)).toEqual(["inbox_closed"]);
 }, 60_000);
 
 test("a crash with the owner's call open closes it: the reply reads its outcome is unknown", async () => {

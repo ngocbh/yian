@@ -37,13 +37,15 @@
 
 import { classifyPath } from "../../compile/validation.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
 import {
   checkTemplateCalls,
   conditionRefs,
   ExpressionError,
   exprRefsOf,
   optionalInsideRoot,
+  referencePath,
+  referenceText,
   promptRefs,
   scanTemplate,
 } from "../../expr/index.ts";
@@ -414,7 +416,7 @@ export function validateReferences(
           });
         }
       }
-      if (err !== null) errors.push([`${where}: ${err}`, rng]);
+      if (err !== null) errors.push([`${where}: ${asWritten(err, path, trees)}`, rng]);
     }
     for (const tree of trees) {
       const err = optionalInsideRoot(tree, poolRootLength);
@@ -806,6 +808,18 @@ export function validateReferences(
       range: problems.find(([, range]) => range !== null)?.[1] ?? null,
     });
   }
+}
+
+/** Return `message` with the reference `${path}` spelled as `trees` write it, `?.` included. */
+function asWritten(message: string, path: string, trees: readonly ExprNode[]): string {
+  for (const tree of trees) {
+    if (!(tree instanceof Tree)) continue;
+    for (const node of iterSubtreesTopdown(tree)) {
+      if (node.data !== "refcall" || callSuffixOf(node) !== undefined || referencePath(node) !== path) continue;
+      return message.replaceAll(`\${${path}}`, `\${${referenceText(node)}}`);
+    }
+  }
+  return message;
 }
 
 /** Return the parsed tree of each `${...}` span of `text`. */

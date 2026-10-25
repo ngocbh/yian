@@ -509,6 +509,15 @@ test.each([
   expect(message).toContain(`reference \${${read}} puts ?. inside its root; ?. goes after the root, as in \${${fix}}`);
 });
 
+test("an unknown field read through ?. is named as written", () => {
+  expect(failure(FLOW_WITH_A.replace("${a.output.k}", "${a.output?.nope}"))).toContain(
+    "reference ${a.output?.nope} reads unknown field 'nope'",
+  );
+  expect(failure(FLOW_WITH_A.replace("${a.output.k}", "'${a.output?.k.x} y'"))).toContain(
+    "reference ${a.output?.k.x} reads field 'x' on type str",
+  );
+});
+
 test("?. after a root loads, and a comprehension variable is a one-name root", () => {
   assembleText(FLOW_WITH_A.replace("${a.output.k}", "${a.output?.k}"));
   assembleText(FLOW_WITH_A.replace("${a.output.k}", "${[x?.output for x in [a.output]]}"));

@@ -46,7 +46,7 @@ import {
   wholeSpanInterior,
 } from "./grammar.ts";
 
-/** A `when:` expression could not be parsed or evaluated. */
+/** An expression could not be parsed or evaluated. */
 export class ExpressionError extends RangeError {
   override name = "ExpressionError";
 }
@@ -390,19 +390,6 @@ export function evaluateWhen(
 }
 
 /**
- * Return the first assert expression in `exprs` that is false against `pool`, else `null`.
- *
- * A helper for callers that evaluate several pool-scoped expressions, each in the
- * `when:`/`asserts:` boolean grammar.
- */
-export function firstFailingAssert(exprs: Iterable<string>, pool: VariablePool): string | null {
-  for (const expr of exprs) {
-    if (!evaluateWhen(expr, pool)) return expr;
-  }
-  return null;
-}
-
-/**
  * Evaluate a strict-CASE `when:` against the node's bound input record.
  *
  * `name` / `name.path` resolve against `record` (`resolveInRecord`); a miss is `null`, compared
@@ -725,6 +712,13 @@ function describe(node: Tree, children: readonly ValueRoute[]): string {
   return `${kind}(${children.map((child) => child.expression).join(", ")})`;
 }
 
+/** Name a slice's base in a miss path: a literal's text, a comprehension variable's name, else `(...)`. */
+function sliceBaseText(node: ExprNode): string {
+  if (node instanceof Token) return node.value;
+  if (node.data === "comp_var" && node.children.length === 1) return String(node.children[0]);
+  return "(...)";
+}
+
 /**
  * The route of a read: a `source` for a `SourceRef`, a `selected` over a prior route, else a
  * literal of the value.
@@ -800,9 +794,15 @@ class EvalExpr {
     return value;
   }
 
-  /** Turn `MISSING` into `null` in every mode: a `|` / `:-` / `:?` operand whose miss the operator handles. */
-  static orNone(value: Walked): Value {
-    return value === MISSING ? null : value;
+  /**
+   * Turn `MISSING` into `null` in every mode: an operand whose miss its consumer handles (a
+   * `|` / `:-` / `:?` operand, a comprehension iterable, a slice bound). A handled miss's path is
+   * dropped, so a later error can't name it.
+   */
+  orNone(value: Walked): Value {
+    if (value !== MISSING) return value;
+    this.#missPath = null;
+    return null;
   }
 
   // --- dispatch --- //
@@ -1000,7 +1000,8 @@ class EvalExpr {
    * `base[lower:upper]` on a list, as Python's `slice.indices` with step 1: an omitted lower is 0
    * and an omitted upper the length, a negative bound counts from the end, and both clamp to
    * `[0, n]`. A null or missing base is a miss, as a `.field` on null is, and its bounds aren't
-   * read. When tracing, the route is a `list` of the base route projected to each kept index.
+   * read; a null base's miss is named `base[...]`, with a non-literal, non-variable base as
+   * `(...)`. When tracing, the route is a `list` of the base route projected to each kept index.
    *
    * @throws {ExpressionError} If a bound is null or not an int (a bool counts as 0 or 1), or the
    *   base is not a list.
@@ -1009,7 +1010,11 @@ class EvalExpr {
     const [baseNode, slice] = node.children as [ExprNode, Tree];
     const base = this.walk(baseNode);
     // A miss before the bounds are read, so `xs[n:] :- []` falls back whatever the bounds are.
-    if (base === MISSING || base === null) return MISSING;
+    if (base === MISSING) return MISSING;
+    if (base === null) {
+      this.#missPath = `${sliceBaseText(baseNode)}[...]`;
+      return MISSING;
+    }
     const baseRoute = this.#trace ? this.#lastRoute! : null;
     const lower = this.sliceBound(slice.children[0]!);
     const upper = this.sliceBound(slice.children[1]!);
@@ -1073,7 +1078,7 @@ class EvalExpr {
         i = next();
       } else if (clauses[i]!.data === "comp_for") {
         const [target, iterable, source] = clauses[i]!.children as [Token, ExprNode, Token];
-        const items = EvalExpr.orNone(this.walk(iterable));
+        const items = this.orNone(this.walk(iterable));
         if (items === null) {
           throw new ExpressionError(
             `comprehension \`for ${target} in ${source}\` iterates over null; give a default, e.g. \`(${source} :- [])\``,
@@ -1118,7 +1123,7 @@ class EvalExpr {
   /** One slice bound: `null` when omitted, else its int (a bool as 0 or 1). */
   sliceBound(node: ExprNode): bigint | null {
     if (node instanceof Tree && node.data === "omitted") return null;
-    const value = EvalExpr.orNone(this.walk(node));
+    const value = this.orNone(this.walk(node));
     if (value === null) throw new ExpressionError("slice bound is null; omit it to mean the end");
     if (typeof value === "boolean") return value ? 1n : 0n;
     if (typeof value !== "bigint") throw new ExpressionError(`slice bounds take int, got ${kindName(value)}`);
@@ -1286,7 +1291,7 @@ class EvalExpr {
     const last = node.children.length - 1;
     for (const [i, child] of node.children.entries()) {
       const walked = this.walk(child);
-      const value = i === last ? this.asValue(walked) : EvalExpr.orNone(walked);
+      const value = i === last ? this.asValue(walked) : this.orNone(walked);
       if (value !== null) {
         this.selectRoute("|");
         return value;
@@ -1302,7 +1307,7 @@ class EvalExpr {
    */
   defaultExpr(node: Tree): Value {
     const [head, fallback] = node.children as [ExprNode, ExprNode];
-    let value = EvalExpr.orNone(this.walk(head));
+    let value = this.orNone(this.walk(head));
     if (value === null) value = this.asValue(this.walk(fallback));
     this.selectRoute(":-");
     return value;
@@ -1314,7 +1319,7 @@ class EvalExpr {
    */
   requiredExpr(node: Tree): Value {
     const [head, message] = node.children as [ExprNode, ExprNode];
-    const value = EvalExpr.orNone(this.walk(head));
+    const value = this.orNone(this.walk(head));
     if (value === null) {
       const text = this.asValue(this.walk(message));
       throw new RequiredError(typeof text === "string" ? text : valueRepr(text));
@@ -1444,7 +1449,7 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * Dotted access reads only a record's own field or a file's `uri`, `mime` or `name`
  * (`fieldOf`), never a JS property, so `${x.constructor}` is a miss (safety-critical).
  *
- * @param tree The parsed expression: a `Tree`, or a lone literal or reference `Token`.
+ * @param tree The parsed expression: a `Tree`, or a lone literal `Token`.
  * @param resolve Resolves a reference path to its value; `null` is a miss. `item`-headed paths
  *   bypass it. With `trace`, it returns a `ResolvedValue` holding the value, whether it is
  *   present, and its `SourceRef` or prior `ValueRoute`.

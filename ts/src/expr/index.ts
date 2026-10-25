@@ -8,10 +8,9 @@
  *   as deep as a value, `current().maxValueNesting` levels.
  * - `expressions` (`evalExpr`, `inferExprType`, `exprRefs`): evaluate a parsed tree against a
  *   `resolve`, conservatively infer its static type, and walk its reference leaves. Also the
- *   `when:`/`asserts:` condition surface (`parseCondition`, `evaluateWhen`,
- *   `firstFailingAssert`), the `isinstance` type names a tree uses (`isinstanceTypeNames`), its
- *   constructor names (`constructorNames`), a call's tested expression (`isinstanceSubject`), and
- *   pool resolution (`resolveReference`).
+ *   `when:`/`asserts:` condition surface (`parseCondition`, `evaluateWhen`), the `isinstance`
+ *   type names a tree uses (`isinstanceTypeNames`), its constructor names (`constructorNames`), a
+ *   call's tested expression (`isinstanceSubject`), and pool resolution (`resolveReference`).
  * - `template`: the binding/prompt scanner. It splits a value into text and `${...}` spans, then
  *   drives the engine per span (`evalBinding`, `evalTemplate`, `exprRefsOf`, `promptRefs`,
  *   `renderTemplateRecord`, `scanTemplate`), and checks every builtin call in those spans
@@ -40,7 +39,6 @@ export {
   evalExpr,
   evaluateWhen,
   exprRefs,
-  firstFailingAssert,
   inferExprType,
   isinstanceSubject,
   isinstanceTypeNames,

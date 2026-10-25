@@ -1,12 +1,13 @@
 /**
  * Condition evaluation against a variable pool and a node's input record: the expression tests
  * of `tests/engine/test_expr_case.py` (`resolve_reference`, `evaluate_when`,
- * `evaluate_when_record`, `first_failing_assert`, and conditions with arithmetic, strings, lists
- * and builtins), the `eval_binding` half of `test_builtins_evaluate_in_conditions_and_bindings`,
- * and the record-scoped strict prompt rendering (`renderTemplateRecord`).
+ * `evaluate_when_record`, and conditions with arithmetic, strings, lists and builtins), the
+ * `eval_binding` half of `test_builtins_evaluate_in_conditions_and_bindings`, and the
+ * record-scoped strict prompt rendering (`renderTemplateRecord`).
  *
  * The values follow the TS number model: pool ints are `bigint`s, and a membership test against
  * `null` fails with the operand-kinds message. An embedded `false` is written `false`.
+ * `first_failing_assert` has no TS counterpart: nothing called it.
  *
  * The CASE node tests run through `graph` and `engine` (Python's `_branch_graph`):
  * `test_case_when_routes_high`, `test_case_when_routes_default`, `test_case_string_equality_routes`
@@ -25,7 +26,6 @@ import {
   ExpressionError,
   evaluateWhen,
   evaluateWhenRecord,
-  firstFailingAssert,
   resolveInRecord,
   resolveReference,
 } from "../../src/expr/expressions.ts";
@@ -131,16 +131,6 @@ test("when: record conditions in both spellings agree", () => {
   const record = { a: 8n };
   expect(evaluateWhenRecord("a > 5", record)).toBe(true);
   expect(evaluateWhenRecord("${a > 5}", record)).toBe(true);
-});
-
-test("firstFailingAssert in both spellings", () => {
-  const pool = poolWith({ a: 8n });
-  // All hold: null.
-  expect(firstFailingAssert(["a.output > 5", "${a.output > 5}"], pool)).toBeNull();
-  // The failing one comes back verbatim, and both spellings agree.
-  expect(firstFailingAssert(["a.output < 5"], pool)).toBe("a.output < 5");
-  expect(firstFailingAssert(["${a.output < 5}"], pool)).toBe("${a.output < 5}");
-  expect(firstFailingAssert(["a.output > 5", "a.output > 9", "a.output > 10"], pool)).toBe("a.output > 9");
 });
 
 // --- arithmetic in when:/asserts: --- //

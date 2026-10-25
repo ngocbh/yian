@@ -390,19 +390,6 @@ export function evaluateWhen(
 }
 
 /**
- * Return the first assert expression in `exprs` that is false against `pool`, else `null`.
- *
- * A helper for callers that evaluate several pool-scoped expressions, each in the
- * `when:`/`asserts:` boolean grammar.
- */
-export function firstFailingAssert(exprs: Iterable<string>, pool: VariablePool): string | null {
-  for (const expr of exprs) {
-    if (!evaluateWhen(expr, pool)) return expr;
-  }
-  return null;
-}
-
-/**
  * Evaluate a strict-CASE `when:` against the node's bound input record.
  *
  * `name` / `name.path` resolve against `record` (`resolveInRecord`); a miss is `null`, compared

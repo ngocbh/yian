@@ -55,6 +55,7 @@ import {
   type ToolSpec,
   Usage,
 } from "../messages.ts";
+import { callId, eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "gemini";
@@ -455,7 +456,7 @@ export class Gemini implements SseProtocol {
     let reason: ReplayDegradedReason | null = null;
     for (const part of message.parts) {
       // Refused here so a bad message never fires onReplayDegraded first.
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
       if (!(part instanceof TextPart || part instanceof ToolCallPart) || part.providerPayload === null) {
         signatures.push(null);
         continue;
@@ -501,7 +502,7 @@ function thoughtSignature(
 function textParts(message: Message): JsonObject[] {
   const parts: JsonObject[] = [];
   for (const part of message.parts) {
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(part, message.role));
+    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
     if (part.text !== "") parts.push({ text: part.text });
   }
   return parts;
@@ -514,7 +515,7 @@ function textParts(message: Message): JsonObject[] {
  * @throws {TypeError} If the part is not a tool result.
  */
 function functionResponse(part: Part): JsonObject {
-  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(part, "tool"));
+  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, "tool"));
   return { functionResponse: { id: part.callId, name: part.name, response: toolResponse(part.content) } };
 }
 
@@ -550,22 +551,6 @@ function toolConfig(choice: ToolChoice): JsonObject | null {
   if (choice === "required") return { functionCallingConfig: { mode: "ANY" } };
   if (choice === "none") return { functionCallingConfig: { mode: "NONE" } };
   return null;
-}
-
-/** Return the error text for a part a message of `role` cannot carry. */
-function wrongPart(part: Part, role: string): string {
-  const article = role === "assistant" ? "an" : "a";
-  return `the gemini route cannot send a ${part.constructor.name} in ${article} ${role} message`;
-}
-
-/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
-function eventData(data: string, provider: string): JsonValue {
-  try {
-    return parseJson(data, "plain");
-  } catch (error) {
-    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
-    throw error;
-  }
 }
 
 /**
@@ -623,23 +608,6 @@ function readCall(
 }
 
 /**
- * Return a call's id: its own unless missing or in `taken`, else `yian_call_<n>` with `_<k>`
- * appended while that is in `taken`. The id it gets is added to `taken`.
- *
- * @param n The call's position among the reply's calls.
- * @param taken The ids in the reply so far: the server's and those generated.
- */
-function callId(id: string | null, n: number, taken: Set<string>): string {
-  let out = id;
-  if (out === null || taken.has(out)) {
-    out = `yian_call_${n}`;
-    for (let k = 1; taken.has(out); k++) out = `yian_call_${n}_${k}`;
-  }
-  taken.add(out);
-  return out;
-}
-
-/**
  * Merge a chunk's `usageMetadata` counts into `counts`, field by field; a missing or `null` count
  * replaces nothing, so a count-free object keeps earlier counts.
  *
@@ -683,18 +651,6 @@ function usageOf(counts: Map<string, number>, provider: string): Usage | null {
     if (error instanceof MessageFormatError) throw new ProviderError("protocol", notIntMessage(provider));
     throw error;
   }
-}
-
-/** Return the error message for a usage count that is not an int. */
-function notIntMessage(provider: string): string {
-  return `${provider} response usage has a count that is not an int`;
-}
-
-/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
-function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "bigint" || !Number.isSafeInteger(Number(value))) throw new ProviderError("protocol", notInt);
-  return Number(value);
 }
 
 /**

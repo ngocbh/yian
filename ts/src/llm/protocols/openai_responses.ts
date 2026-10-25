@@ -13,7 +13,7 @@
  * uncapped; `RouteModel` scrubs it of the route's credentials and then caps it.
  */
 
-import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
+import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { type ErrorKind, ProviderError } from "../errors.ts";
 import {
@@ -52,6 +52,7 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
+import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_responses";
@@ -106,7 +107,7 @@ export const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string
   ["usage_limit_reached", "quota"],
   ["usage_not_included", "quota"],
 ]);
-const USAGE_NOT_INT = "openai response usage has a count that is not an int";
+const USAGE_NOT_INT = notIntMessage("openai");
 
 /** An assistant part that can carry a replay record. */
 type ReplayPart = TextPart | RefusalPart | ReasoningPart | ToolCallPart;
@@ -247,7 +248,7 @@ export class OpenAIResponses implements SseProtocol {
       if (frame.data.startsWith("[DONE]")) break;
       // Some gateways send keep-alive frames with empty data.
       if (frame.data === "") continue;
-      const data = eventData(frame.data);
+      const data = eventData(frame.data, "openai");
       if (!isPlainObject(data)) continue;
       const rawType = data["type"] || frame.event;
       const type = typeof rawType === "string" ? rawType : null;
@@ -457,7 +458,7 @@ export class OpenAIResponses implements SseProtocol {
       } else {
         for (const part of message.parts) {
           if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(part, message.role));
+          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
           // Responses has no error flag; the error text is the output.
           items.push({ type: "function_call_output", call_id: part.callId, output: part.content });
         }
@@ -522,7 +523,7 @@ export class OpenAIResponses implements SseProtocol {
     let unpaired = false;
     for (const part of message.parts) {
       if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
       if (part.providerPayload === null) {
         if (part instanceof ReasoningPart) unpaired = true;
         records.push(null);
@@ -611,16 +612,6 @@ function readRecord(
   return fits ? read : { ok: false, reason: "malformed" };
 }
 
-/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
-function eventData(data: string): JsonValue {
-  try {
-    return parseJson(data, "plain");
-  } catch (error) {
-    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", "invalid JSON in openai stream event");
-    throw error;
-  }
-}
-
 /** Return an output item's string `id`, and its string `call_id` when it is a function call. */
 function itemIds(item: JsonValue): string[] {
   if (!isPlainObject(item)) return [];
@@ -649,29 +640,22 @@ function usageOf(usage: JsonValue | undefined): Usage | null {
   if (!isPlainObject(inputDetails) || !isPlainObject(outputDetails)) {
     throw new ProviderError("protocol", "openai response usage details are not objects");
   }
-  const inputTokens = tokenCount(usage["input_tokens"]) ?? 0;
-  const outputTokens = tokenCount(usage["output_tokens"]) ?? 0;
+  const inputTokens = tokenCount(usage["input_tokens"], USAGE_NOT_INT) ?? 0;
+  const outputTokens = tokenCount(usage["output_tokens"], USAGE_NOT_INT) ?? 0;
   try {
     return new Usage({
       inputTokens,
       outputTokens,
-      totalTokens: tokenCount(usage["total_tokens"]) ?? inputTokens + outputTokens,
-      cacheReadTokens: tokenCount(inputDetails["cached_tokens"]),
-      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"]),
-      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"]),
+      totalTokens: tokenCount(usage["total_tokens"], USAGE_NOT_INT) ?? inputTokens + outputTokens,
+      cacheReadTokens: tokenCount(inputDetails["cached_tokens"], USAGE_NOT_INT),
+      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], USAGE_NOT_INT),
+      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], USAGE_NOT_INT),
     });
   } catch (error) {
     // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
     if (error instanceof MessageFormatError) throw new ProviderError("protocol", USAGE_NOT_INT);
     throw error;
   }
-}
-
-/** Return a usage count as a number, `null` when it is `null` or absent. */
-function tokenCount(value: JsonValue | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "bigint") throw new ProviderError("protocol", USAGE_NOT_INT);
-  return Number(value);
 }
 
 /**
@@ -800,7 +784,7 @@ function inputMessage(message: Message): JsonObject | null {
   const texts: string[] = [];
   for (const part of message.parts) {
     if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(part, message.role));
+    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
     texts.push(part.text);
   }
   if (texts.length === 0) return null;
@@ -843,10 +827,4 @@ function textFormat(format: OutputFormat): JsonObject {
   const rendered: JsonObject = { type: "json_schema", name: format.name, schema: copyJson(format.schema) };
   if (format.strict !== null) rendered["strict"] = format.strict;
   return rendered;
-}
-
-/** Return the error text for a part a message of `role` cannot carry. */
-function wrongPart(part: Part, role: string): string {
-  const article = role === "assistant" ? "an" : "a";
-  return `the openai_responses route cannot send a ${part.constructor.name} in ${article} ${role} message`;
 }

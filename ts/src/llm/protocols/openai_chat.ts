@@ -21,7 +21,7 @@
  * credentials and then caps it.
  */
 
-import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
+import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { getCapabilities } from "../capabilities.ts";
 import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
@@ -59,6 +59,7 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
+import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 import { STREAM_ERROR_KINDS } from "./openai_responses.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
@@ -440,7 +441,7 @@ export class OpenAIChat implements SseProtocol {
       } else {
         for (const part of shown.parts) {
           if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(part, message.role));
+          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
           // Chat Completions has no error flag; the error text is the content.
           rendered.push({ role: "tool", tool_call_id: part.callId, content: part.content });
         }
@@ -465,7 +466,7 @@ export class OpenAIChat implements SseProtocol {
     let reason: ReplayDegradedReason | null = null;
     for (const part of message.parts) {
       if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
       if (part instanceof TextPart) {
         texts.push(part.text);
       } else if (part instanceof ToolCallPart) {
@@ -506,16 +507,6 @@ function readField(
   if (!read.ok) return read;
   const field = read.fields["field"];
   return typeof field === "string" ? { ok: true, field } : { ok: false, reason: "malformed" };
-}
-
-/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
-function eventData(data: string, provider: string): JsonValue {
-  try {
-    return parseJson(data, "plain");
-  } catch (error) {
-    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
-    throw error;
-  }
 }
 
 /**
@@ -675,7 +666,7 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   if (!isPlainObject(promptDetails) || !isPlainObject(completionDetails)) {
     throw new ProviderError("protocol", `${provider} response usage details are not objects`);
   }
-  const notInt = `${provider} response usage has a count that is not an int`;
+  const notInt = notIntMessage(provider);
   const inputTokens = tokenCount(usage["prompt_tokens"], notInt) ?? 0;
   const outputTokens = tokenCount(usage["completion_tokens"], notInt) ?? 0;
   try {
@@ -695,13 +686,6 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   }
 }
 
-/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
-function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "bigint") throw new ProviderError("protocol", notInt);
-  return Number(value);
-}
-
 /** Render a tool call with its arguments text. */
 function toolCall(part: ToolCallPart, args: string): JsonObject {
   return { type: "function", id: part.id, function: { name: part.name, arguments: args } };
@@ -716,7 +700,7 @@ function inputMessage(message: Message): JsonObject | null {
   const texts: string[] = [];
   for (const part of message.parts) {
     if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(part, message.role));
+    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
     texts.push(part.text);
   }
   if (texts.length === 0) return null;
@@ -742,10 +726,4 @@ function responseFormat(format: OutputFormat): JsonObject {
   const jsonSchema: JsonObject = { name: format.name, schema: copyJson(format.schema) };
   if (format.strict !== null) jsonSchema["strict"] = format.strict;
   return { type: "json_schema", json_schema: jsonSchema };
-}
-
-/** Return the error text for a part a message of `role` cannot carry. */
-function wrongPart(part: Part, role: string): string {
-  const article = role === "assistant" ? "an" : "a";
-  return `the openai_chat route cannot send a ${part.constructor.name} in ${article} ${role} message`;
 }

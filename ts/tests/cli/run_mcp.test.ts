@@ -30,7 +30,7 @@
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -526,6 +526,27 @@ test(
     expect(result.code).toBe(1);
     expect(result.output).toContain("MCP server 'broken'");
     expect(flat(result.output)).toContain('the flow needs ["echo"], which no started server supplies');
+  },
+  SLOW,
+);
+
+test(
+  "a fresh run on the default log path that a server keeps from starting leaves no run folder",
+  async () => {
+    const cfg = config(join(tmp, "cfg.json"), { broken: { command: join(tmp, "missing") } });
+    const err: string[] = [];
+    const code = await main(["run", toolFlow(), "--mcp-config", cfg, "--quiet"], {
+      stdout: { write: async () => {} },
+      stderr: { write: async (text) => void err.push(text) },
+      stdin: new PassThrough(),
+      stderrStream: new PassThrough(),
+      env: (name) => (name === "HOME" ? home : undefined),
+    });
+
+    expect(code).toBe(1);
+    expect(err.join("")).toContain("MCP server 'broken'");
+    const runsDir = join(home, ".yian", "runs");
+    expect(readdirSync(runsDir).filter((name) => !name.startsWith("index.sqlite"))).toEqual([]);
   },
   SLOW,
 );

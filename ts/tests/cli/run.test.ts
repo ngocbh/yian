@@ -493,6 +493,22 @@ describe("main", () => {
     });
   });
 
+  test("the command runs under io.env's YIAN_ defaults: the key prompt's cap", async () => {
+    const flow = file(
+      "flow.yaml",
+      "id: k\nname: k\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: ${agent.output}\n" +
+        "llm_config: {provider: anthropic, model: claude-sonnet-4-5}\n",
+    );
+    mkdirSync(join(tmp, "home"), { recursive: true });
+    const { io, stderr } = testIo({ HOME: join(tmp, "home"), YIAN_MAX_KEY_PROMPTS: "1" });
+    const input = new FakeInput();
+    // Empty answers for the built-in cap of 3; io.env's cap of 1 takes only the first.
+    input.write("\r\r\r");
+    const argv = ["run", flow, "-q", "--log", join(tmp, "run.jsonl")];
+    expect(await main(argv, { ...io, stdin: input, stderrStream: new FakeOutput() })).toBe(1);
+    expect(stderr()).toContain("no API key provided for 'anthropic' ($ANTHROPIC_API_KEY) after 1 attempts");
+  });
+
   test("an unknown command or option exits 2 with nothing on stdout", async () => {
     for (const [argv, message] of [
       [["nope"], "No such command 'nope'."],

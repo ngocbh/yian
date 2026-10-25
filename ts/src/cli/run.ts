@@ -24,7 +24,7 @@
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -716,6 +716,16 @@ export function defaultRunLogPath(runId: string, env: Env): string {
     chmodSync(dir, 0o700);
   }
   return runLogPath(runsDir, runId);
+}
+
+/** Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
+export function removeEmptyDir(dir: string): void {
+  try {
+    rmdirSync(dir);
+  } catch {
+    // Not empty (the run created its log) or not removable: tidying must not replace the
+    // command's own outcome.
+  }
 }
 
 /** Return the CLI's runs folder, `~/.yian/runs`, with `HOME` from `env` as `defaultRunLogPath` reads it. */
@@ -1453,25 +1463,33 @@ async function startRun(
       const onEvent = reporter === null ? null : (event: RunEvent) => reporter.handle(event);
       const memory = registry.size > 0 ? registry : null;
       const selection = { signal: controller.signal, warn };
-      /** Print `log`, then start the run with `start`, given the run's tools and MCP servers. */
+      /**
+       * Print `log`, then start the run with `start`, given the run's tools and MCP servers. With
+       * `runDir`, the run folder this command made for `log`, the folder is removed when the
+       * command ends before the run created the log in it.
+       */
       type Start = (tools: Record<string, ToolEntry>) => Promise<RunResult>;
-      const startLogged = async (log: string, start: Start) => {
-        // Not after the log path is printed: a stopped run creates no log.
-        controller.signal.throwIfAborted();
-        await reportRunLog(log, io.stderr, io.env);
-        host.started.value = true;
+      const startLogged = async (log: string, start: Start, runDir: string | null = null) => {
         try {
-          return await openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
-            await writeWarnings();
-            try {
-              return await start({ ...registeredTools(), ...selected, ask: terminal.askUser });
-            } finally {
-              // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
-              reporter?.stop();
-            }
-          });
+          // Not after the log path is printed: a stopped run creates no log.
+          controller.signal.throwIfAborted();
+          await reportRunLog(log, io.stderr, io.env);
+          host.started.value = true;
+          try {
+            return await openMcpServers(servers, toolIds, grants, known, selection, async (selected) => {
+              await writeWarnings();
+              try {
+                return await start({ ...registeredTools(), ...selected, ask: terminal.askUser });
+              } finally {
+                // Before anything else is printed: on a TTY, stopping erases the spinner lines on screen.
+                reporter?.stop();
+              }
+            });
+          } finally {
+            await indexRun(log, io);
+          }
         } finally {
-          await indexRun(log, io);
+          if (runDir !== null) removeEmptyDir(runDir);
         }
       };
       // Recovery takes no inputs, `--provider`/`--model` or key preflight: the log holds the run's
@@ -1537,19 +1555,22 @@ async function startRun(
 
       const runId = defaultRunId();
       const log = options.log ?? defaultRunLogPath(runId, io.env);
-      return startLogged(log, (tools) =>
-        runFlow(flow, supplied, {
-          log,
-          runId,
-          llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
-          numWorkers: options.numWorkers,
-          onEvent,
-          memory,
-          tools,
-          skills,
-          env: commandEnv.read,
-          signal: controller.signal,
-        }),
+      return startLogged(
+        log,
+        (tools) =>
+          runFlow(flow, supplied, {
+            log,
+            runId,
+            llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
+            numWorkers: options.numWorkers,
+            onEvent,
+            memory,
+            tools,
+            skills,
+            env: commandEnv.read,
+            signal: controller.signal,
+          }),
+        options.log === undefined ? dirname(log) : null,
       );
     });
   } catch (error) {

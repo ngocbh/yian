@@ -448,6 +448,18 @@ async function aPlainTerminalWritesNoEscapesAndSetsNoRawMode(): Promise<void> {
   assert.equal(output.text, "> You: \n? Pick (Use arrow keys)\n » a\n   b\n");
 }
 
+async function aPlainTerminalSetsRawModeForASecretPrompt(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const terminal = new Terminal({ input, output, plain: true });
+  const key = terminal.askText("Key:", { secret: true });
+  input.write("sk-typed" + ENTER);
+  assert.equal(await key, "sk-typed");
+  // The tty doesn't echo the key, and the plain output draws none of it.
+  assert.deepEqual(input.rawCalls, [true, false]);
+  assert.equal(output.text, "? Key: \n");
+}
+
 async function aNonTtyReadLineReadsOneLinePerCall(): Promise<void> {
   const { input, terminal } = setup({ tty: false });
   input.write("a\nb\n");
@@ -1773,6 +1785,45 @@ async function optionsAreOneSelectWithOtherAndNoPanel(): Promise<void> {
   assert.ok(!output.text.includes("Question"));
 }
 
+async function anAskShowsControlCharactersInsteadOfSendingThem(): Promise<void> {
+  const { input, output, terminal } = setup();
+  const osc52 = "\x1b]52;c;aGk=\x07";
+  const link = "A\x1b]8;;https://x.example\x1b\\";
+  const answer = terminal.askUser(
+    request({
+      question: `Prompt${osc52}\r\nSecond line`,
+      questions: parseQuestions([
+        { question: "Pick\x9b2J one", header: "H\x1b[1A", options: [{ label: link, description: "d\x7f" }] },
+      ]),
+      title: `Title${osc52}`,
+    }),
+    toolContext(),
+  );
+  input.write(ENTER);
+  // The answer keeps the label and the header as the request wrote them.
+  assert.deepEqual(await answer, { "H\x1b[1A": link });
+  const text = terminal.askUser(request({ question: "Name\x1b]0;owned\x07?" }), toolContext());
+  input.write(ENTER);
+  assert.equal(await text, "");
+  for (const sent of ["\x1b]", "\x07", "\x9b", "\x7f", "\x1b\\", "H\x1b[1A"]) {
+    assert.ok(!output.text.includes(sent), JSON.stringify(sent));
+  }
+  const shown = [
+    "Title^[]52;c;aGk=^G",
+    "Prompt^[]52;c;aGk=^G",
+    "H^[[1A",
+    "Pick\uFFFD2J one",
+    "A^[]8;;https://x.example^[\\",
+    "d^?",
+    "Name^[]0;owned^G?",
+  ];
+  for (const each of shown) {
+    assert.ok(output.text.includes(each), JSON.stringify(each));
+  }
+  // A `\r\n` in the text is a line break.
+  assert.ok(!output.text.includes("^M"));
+}
+
 async function aPlainAskIsATextPrompt(): Promise<void> {
   const { input, terminal, view } = setup();
   let answer = terminal.askUser(request({ question: "Name?", options: [], questions: [] }), toolContext());
@@ -2181,6 +2232,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
   "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
+  "a plain terminal sets raw mode for a secret prompt": aPlainTerminalSetsRawModeForASecretPrompt,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
@@ -2251,6 +2303,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "Ctrl-Q interrupts a checkbox": ctrlQInterruptsACheckbox,
   "options are one select with Other and no panel": optionsAreOneSelectWithOtherAndNoPanel,
   "a plain ask is a text prompt": aPlainAskIsATextPrompt,
+  "an ask shows control characters instead of sending them": anAskShowsControlCharactersInsteadOfSendingThem,
   "an aborted askUser throws the reason and leaves later keys buffered":
     anAbortedAskUserThrowsTheReasonAndLeavesLaterKeysBuffered,
   "a queued askUser whose signal aborts never draws": aQueuedAskUserWhoseSignalAbortsNeverDraws,

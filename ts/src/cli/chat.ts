@@ -48,6 +48,7 @@ import {
   mergeInputs,
   NotUtf8Error,
   readFlowText,
+  removeEmptyDir,
   renderDiagnostic,
   renderRunError,
   reportRunLog,
@@ -205,6 +206,8 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
   const stop = new AbortController();
   // Set once the run starts: before it, a stopped prompt answers null and the chat reports that.
   let log: string | null = null;
+  // The run folder the chat made for its default log path, removed at the end if still empty.
+  let runDir: string | null = null;
   const env = new CommandEnv(io.env);
   // The line prompt (or, once the inbox is closed, the wait for a deadline) that a deadline, a
   // stop or a cancel takes down.
@@ -305,6 +308,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
 
     const runId = defaultRunId();
     const path = options.log ?? defaultRunLogPath(runId, io.env);
+    if (options.log === undefined) runDir = dirname(path);
     await reportRunLog(path, io.stderr, io.env);
     log = path;
     // Python's rule: a node named `reply`, at any depth, is what the chat says.
@@ -408,8 +412,14 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         interrupt();
         continue;
       }
+      // A run that ended under the chat (a cancel from outside) refuses the line or the close as
+      // `ended`; the move below then reads how it ended, and the loop stops.
       if ("eof" in read || EXIT_LINES.has(read.value.trim())) {
-        await close(path, inbox.name, { env: env.read });
+        try {
+          await close(path, inbox.name, { env: env.read });
+        } catch (error) {
+          if (!(error instanceof DeliveryRefused && error.reason === "ended")) throw error;
+        }
         closed = true;
       } else {
         pressedAt = null;
@@ -417,8 +427,10 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
           await send(path, inbox.name, lineEvent(read.value, inbox.message), { env: env.read });
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) throw error;
-          await io.stderr.write(`not sent: ${error.message}\n`);
-          continue;
+          if (error.reason !== "ended") {
+            await io.stderr.write(`not sent: ${error.message}\n`);
+            continue;
+          }
         }
       }
       result = await moveOn();
@@ -450,5 +462,6 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     terminal.close();
     for (const [name, listener] of listeners) signals.off(name, listener);
     outside?.removeEventListener("abort", forwardStop);
+    if (runDir !== null) removeEmptyDir(runDir);
   }
 }

@@ -1635,7 +1635,7 @@ START is ready after the START inputs' commit; a success walks its
   Click's path checks and messages), `CliIo` (the streams and `Env` a command gets; tests pass
   fakes), `CommandEnv` (a prompted key is recorded there, never in `process.env`), `printJson`
   (one `yian.cli.v1` document; ints must be `bigint`, a `number` is written as a float), and the
-  key prompts `ensureEnvKey`, `ensureApiKey`, `confirmOllamaEndpoint`.
+  key prompt `ensureEnvKey`.
 - `src/cli/run.ts` holds `yian run`, `yian check`, `yian skills check` and `yian status`, wired to
   `loadFlow`, `runFlow` (fresh), `loadRecordedFlow` and `advance` (`--resume`, which takes no
   flow file and runs the recorded flow, with the recorded-key checks),

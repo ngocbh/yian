@@ -1,4 +1,4 @@
-// Ported from tests/engine/test_cli_utils.py: the key and endpoint helpers, with a fake terminal
+// Ported from tests/engine/test_cli_utils.py: the key prompt, with a fake terminal
 // standing in for questionary and a TTY; plus the argument parser, the usage text and `printJson`.
 // The `_agent_connections` / `_ensure_provider_keys` rows load the hello-agent seed from its
 // harvested case, `load-core/seed_00_hello_agent`, and set the default provider and model the
@@ -15,8 +15,6 @@ import { agentConnections, ensureProviderKeys } from "../../src/cli/run.ts";
 import {
   CommandEnv,
   type CommandSpec,
-  confirmOllamaEndpoint,
-  ensureApiKey,
   ensureEnvKey,
   flush,
   helpText,
@@ -34,7 +32,7 @@ import {
 import { type Env, forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
+import { ApiKeyCredentials, AuthStore } from "../../src/llm_clients/auth/index.ts";
 import { caseText } from "../compose/declarations.ts";
 
 // Each test's environment: a private home and auth store, so no real login is read.
@@ -95,103 +93,6 @@ function thrown(run: () => unknown): Error {
   throw new Error("expected a throw");
 }
 
-describe("ensureApiKey", () => {
-  test("returns an existing key", async () => {
-    vars.set("ANTHROPIC_API_KEY", "sk-existing");
-    expect(await ensureApiKey("anthropic", { env: new CommandEnv(base), terminal: null })).toBe("sk-existing");
-  });
-
-  test("a keyless provider gives null", async () => {
-    expect(await ensureApiKey("ollama", { env: new CommandEnv(base), terminal: null })).toBeNull();
-  });
-
-  test("an unknown provider gives null", async () => {
-    expect(await ensureApiKey("totally-made-up", { env: new CommandEnv(base), terminal: null })).toBeNull();
-  });
-
-  test("matches the provider case-insensitively", async () => {
-    vars.set("OPENAI_API_KEY", "sk-oai");
-    expect(await ensureApiKey("OpenAI", { env: new CommandEnv(base), terminal: null })).toBe("sk-oai");
-  });
-
-  test("a missing key without a terminal throws", async () => {
-    const error = await rejection(ensureApiKey("anthropic", { env: new CommandEnv(base), terminal: null }));
-    expect(error.message).toContain("ANTHROPIC_API_KEY");
-  });
-
-  test("prompts and sets the typed key", async () => {
-    const env = new CommandEnv(base);
-    const terminal = fakeTerminal("sk-typed");
-    expect(await ensureApiKey("anthropic", { env, terminal })).toBe("sk-typed");
-    expect(env.read("ANTHROPIC_API_KEY")).toBe("sk-typed");
-    expect(terminal.prompts.some((p) => p.label.includes("ANTHROPIC_API_KEY"))).toBe(true);
-  });
-
-  test("an empty answer re-prompts", async () => {
-    const env = new CommandEnv(base);
-    const terminal = fakeTerminal(["", "sk-typed"]);
-    expect(await ensureApiKey("anthropic", { env, terminal })).toBe("sk-typed");
-    expect(env.read("ANTHROPIC_API_KEY")).toBe("sk-typed");
-    expect(terminal.prompts).toHaveLength(2);
-  });
-
-  test("a cancel throws at once", async () => {
-    const terminal = fakeTerminal([null]);
-    const error = await rejection(ensureApiKey("anthropic", { env: new CommandEnv(base), terminal }));
-    expect(error.message).toContain("no API key provided");
-    expect(terminal.prompts).toHaveLength(1);
-  });
-
-  test("three empty answers exhaust the prompts", async () => {
-    const terminal = fakeTerminal(["", "", ""]);
-    const error = await rejection(ensureApiKey("anthropic", { env: new CommandEnv(base), terminal }));
-    expect(error.message).toContain("after 3 attempts");
-    expect(terminal.prompts).toHaveLength(3);
-  });
-
-  test("the last attempt can succeed", async () => {
-    const terminal = fakeTerminal(["  ", "", "sk-typed"]);
-    expect(await ensureApiKey("anthropic", { env: new CommandEnv(base), terminal })).toBe("sk-typed");
-    expect(terminal.prompts).toHaveLength(3);
-  });
-
-  test("strips the surrounding whitespace", async () => {
-    const env = new CommandEnv(base);
-    expect(await ensureApiKey("anthropic", { env, terminal: fakeTerminal(["  sk-abc  "]) })).toBe("sk-abc");
-    expect(env.read("ANTHROPIC_API_KEY")).toBe("sk-abc");
-  });
-
-  test("without a terminal it suggests a saved login", async () => {
-    const error = await rejection(ensureApiKey("openai", { env: new CommandEnv(base), terminal: null }));
-    expect(error.message).toMatch(/OPENAI_API_KEY.*run 'yian auth openai'/);
-  });
-
-  test("a saved login needs no key prompt", async () => {
-    await new AuthStore(null, { env: base }).save("anthropic", new ApiKeyCredentials("saved-k"), "m", {
-      makeDefault: false,
-    });
-    const terminal = fakeTerminal("typed");
-    expect(await ensureApiKey("anthropic", { env: new CommandEnv(base), terminal })).toBe("saved-k");
-    expect(terminal.prompts).toEqual([]);
-  });
-
-  test("a saved subscription gives null without a prompt", async () => {
-    await new AuthStore(null, { env: base }).save(
-      "openai",
-      new OAuthCredentials({
-        accessToken: "access",
-        refreshToken: "refresh",
-        expiresAt: Date.now() / 1000 + 3600,
-        accountId: "acct",
-      }),
-      "gpt-x",
-    );
-    const terminal = fakeTerminal("typed");
-    expect(await ensureApiKey("openai", { env: new CommandEnv(base), terminal })).toBeNull();
-    expect(terminal.prompts).toEqual([]);
-  });
-});
-
 describe("ensureEnvKey", () => {
   test("returns an existing value", async () => {
     vars.set("OPENAI_API_KEY", "sk-oai");
@@ -238,6 +139,12 @@ describe("ensureEnvKey", () => {
     expect(error.message).toBe("no API key provided for 'openai' ($OPENAI_API_KEY) after 3 attempts");
   });
 
+  test("the last attempt can succeed", async () => {
+    const terminal = fakeTerminal(["  ", "", "sk-typed"]);
+    expect(await ensureEnvKey("anthropic", { env: new CommandEnv(base), terminal })).toBe("sk-typed");
+    expect(terminal.prompts).toHaveLength(3);
+  });
+
   test("a cancel throws at once", async () => {
     const terminal = fakeTerminal([null]);
     const error = await rejection(ensureEnvKey("openai", { env: new CommandEnv(base), terminal }));
@@ -251,32 +158,6 @@ describe("ensureEnvKey", () => {
     expect(terminal.prompts).toEqual([]);
     vars.set("VLLM_API_KEY", "sk-vllm");
     expect(await ensureEnvKey("vllm", { env: new CommandEnv(base), terminal: null })).toBe("sk-vllm");
-  });
-});
-
-describe("confirmOllamaEndpoint", () => {
-  test("without a terminal returns the default", async () => {
-    expect(await confirmOllamaEndpoint({ env: new CommandEnv(base), terminal: null })).toBe("http://localhost:11434");
-  });
-
-  test("without a terminal returns the environment's value", async () => {
-    vars.set("OLLAMA_BASE_URL", "http://gpu-box:11434");
-    expect(await confirmOllamaEndpoint({ env: new CommandEnv(base), terminal: null })).toBe("http://gpu-box:11434");
-  });
-
-  test("prompts and sets the answer", async () => {
-    const env = new CommandEnv(base);
-    const terminal = fakeTerminal(" http://h200:11434 ");
-    expect(await confirmOllamaEndpoint({ env, terminal })).toBe("http://h200:11434");
-    expect(env.read("OLLAMA_BASE_URL")).toBe("http://h200:11434");
-    expect(terminal.prompts).toEqual([{ label: "Ollama endpoint:", initial: "http://localhost:11434" }]);
-  });
-
-  test("an empty answer keeps the current value", async () => {
-    vars.set("OLLAMA_BASE_URL", "http://gpu-box:11434");
-    const env = new CommandEnv(base);
-    expect(await confirmOllamaEndpoint({ env, terminal: fakeTerminal("") })).toBe("http://gpu-box:11434");
-    expect(env.read("OLLAMA_BASE_URL")).toBe("http://gpu-box:11434");
   });
 });
 
@@ -422,8 +303,29 @@ describe("parseCommand", () => {
     for (const argv of [["--num-workers=-1"], ["-w-1"]]) {
       expect(usage(RUN, [flow, ...argv])).toBe("Invalid value for '--num-workers' / '-w': -1 is not in the range x>=0.");
     }
-    // parseArgs refuses a value starting with `-` written as a separate word.
-    expect(usage(RUN, [flow, "-w", "-1"])).toBe("Option '-w' requires an argument.");
+  });
+
+  test("a value-taking option takes the next word even when it starts with -, as Click does", () => {
+    const range = "Invalid value for '--num-workers' / '-w': -1 is not in the range x>=0.";
+    for (const argv of [["-w", "-1"], ["--num-workers", "-1"], ["-qw", "-1"]]) {
+      expect(usage(RUN, [flow, ...argv])).toBe(range);
+    }
+    expect(parseCommand(RUN, [flow, "-i", "-x=1", "--input", "--json", "-q"])).toEqual({
+      help: false,
+      args: { flow },
+      options: { input: ["-x=1", "--json"], quiet: true, json: false },
+    });
+    // A flag takes no value, so a flag before a dash word stays two flags.
+    const verbose: OptionSpec = { name: "verbose", short: "v", type: "boolean", help: "Show node outputs." };
+    const withVerbose: CommandSpec = { ...RUN, options: [...RUN.options, verbose] };
+    expect(parseCommand(withVerbose, [flow, "--quiet", "-v"])).toMatchObject({
+      options: { quiet: true, verbose: true },
+    });
+    // After a bare `--`, an option name is a positional and takes nothing.
+    expect(parseCommand(CHECK, ["a.yaml", "--", "--root", "-x"])).toMatchObject({
+      args: { flows: ["a.yaml", "--root", "-x"] },
+    });
+    expect(usage(RUN, [flow, "--input"])).toBe("Option '--input' requires an argument.");
   });
 
   test("float options take Python's float() syntax", () => {

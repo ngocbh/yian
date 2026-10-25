@@ -1,6 +1,6 @@
 /**
- * CLI helpers: the command I/O, the argument parser, the `--json` writer, provider credentials
- * and endpoints, and `osReason` (a system error's reason in Python's words).
+ * CLI helpers: the command I/O, the argument parser, the `--json` writer, the API key prompt, and
+ * `osReason` (a system error's reason in Python's words).
  *
  * - `parseCommand` reads a command's arguments against its `CommandSpec` with `node:util`'s
  *   `parseArgs`, then converts int and float options and checks paths with Click's messages;
@@ -10,14 +10,10 @@
  *   the stop the entry forwards to the child into its `CliIo.stop`, aborted with a `HostStop`.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
- *   prompt instead of a failure on the first API call. `ensureApiKey` resolves a provider's saved
- *   login first, then falls back to `ensureEnvKey`. `confirmOllamaEndpoint` surfaces the resolved
- *   Ollama endpoint right after provider selection.
- *
- * The key and endpoint helpers prompt only when given a terminal; without one they return the
- * ambient value, or throw for a required key that is missing, so non-interactive runs stay
- * scriptable. They read the environment through a `CommandEnv`, and record a prompted value there
- * rather than in the process environment.
+ *   prompt instead of a failure on the first API call. It prompts only when given a terminal;
+ *   without one it returns the ambient key, or throws for a required key that is missing, so
+ *   non-interactive runs stay scriptable. It reads the environment through a `CommandEnv`, and
+ *   records a prompted key there rather than in the process environment.
  */
 
 import { accessSync, constants, statSync } from "node:fs";
@@ -26,9 +22,6 @@ import { parseArgs } from "node:util";
 import { current, type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
-import { ApiKeyCredentials } from "../llm_clients/auth/index.ts";
-import { connectionCredentials, connectionSnapshot } from "../llm_clients/connection.ts";
-import { OLLAMA_ENDPOINT } from "../llm_clients/endpoints.ts";
 import { logJson } from "../typesys/json.ts";
 import type { Terminal } from "./terminal.ts";
 
@@ -314,9 +307,6 @@ function parseArgsError(error: Error): UsageError {
   if (match) return new UsageError(`No such option: ${match[1]}`);
   match = /--(\S+) <value>' argument missing/.exec(message);
   if (match) return new UsageError(`Option '--${match[1]}' requires an argument.`);
-  // `-w -1`: parseArgs refuses a separate value starting with `-`, as Click finds none.
-  match = /^Option '([^']*)' argument is ambiguous/.exec(message);
-  if (match) return new UsageError(`Option '${match[1]}' requires an argument.`);
   // parseArgs names the option `-q, --quiet`; Click names the long form alone.
   match = /^Option '(?:-[^-], )?([^']*)' does not take an argument/.exec(message);
   if (match) return new UsageError(`Option '${match[1]}' does not take a value.`);
@@ -324,9 +314,48 @@ function parseArgsError(error: Error): UsageError {
 }
 
 /**
+ * Return `argv` with each value-taking option written as a separate word and followed by a word
+ * starting with `-` joined to that word (`--name=-1`, `-w-1`, `-qw-1`), since `parseArgs` refuses
+ * such a value and Click takes the next word as the value whatever it is. Words after a bare `--`
+ * are left alone.
+ */
+function joinDashValues(spec: CommandSpec, argv: readonly string[]): string[] {
+  const takesValue = new Map<string, boolean>();
+  for (const option of spec.options) {
+    takesValue.set(`--${option.name}`, option.type !== "boolean");
+    if (option.short !== undefined) takesValue.set(`-${option.short}`, option.type !== "boolean");
+  }
+  /** Whether `word` ends with an option that takes the next word as its value. */
+  const needsValue = (word: string): boolean => {
+    if (word.startsWith("--")) return takesValue.get(word) === true;
+    if (!/^-[^-]/.test(word)) return false;
+    // A short group: each letter before the last a flag, the last one taking a value.
+    const letters = Array.from(word.slice(1));
+    return letters.every((letter, i) => takesValue.get(`-${letter}`) === (i === letters.length - 1));
+  };
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i]!;
+    if (word === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const next = argv[i + 1];
+    if (next?.startsWith("-") && needsValue(word)) {
+      out.push(word.startsWith("--") ? `${word}=${next}` : word + next);
+      i++;
+    } else {
+      out.push(word);
+    }
+  }
+  return out;
+}
+
+/**
  * Parse `argv` (the arguments after the command's name) against `spec`.
  *
- * Options and positionals may mix; `--` ends the options. An int or float option's value is
+ * Options and positionals may mix; `--` ends the options. A value-taking option takes the next
+ * word as its value even when it starts with `-`, as Click does. An int or float option's value is
  * converted, an int's checked against `min`; each path is checked once parsing is done,
  * positionals then options, in declared order. `--help` anywhere returns `{help: true}` before any
  * of those checks.
@@ -347,7 +376,7 @@ export function parseCommand(spec: CommandSpec, argv: readonly string[]): Parsed
   }
   let parsed;
   try {
-    parsed = parseArgs({ args: [...argv], options, strict: true, allowPositionals: true });
+    parsed = parseArgs({ args: joinDashValues(spec, argv), options, strict: true, allowPositionals: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code?.startsWith("ERR_PARSE_ARGS_")) throw parseArgsError(error as Error);
     throw error;
@@ -456,33 +485,10 @@ export class MissingKeyError extends Error {
   override name = "MissingKeyError";
 }
 
-/** The key and endpoint helpers' arguments: the command's environment and terminal, if any. */
+/** The key prompt's arguments: the command's environment and terminal, if any. */
 export interface PromptContext {
   env: CommandEnv;
   terminal: Pick<Terminal, "askText"> | null;
-}
-
-/**
- * Return the key `provider`'s saved login or environment supplies, prompting if neither does.
- *
- * A saved login resolves its stored credential, so it never prompts: an API-key login returns its
- * key, a subscription `null`. Otherwise the provider's key variable is checked with `ensureEnvKey`.
- *
- * @param provider The LLM provider name (such as `"anthropic"`), matched case-insensitively.
- * @returns The key, or `null` for a saved subscription or a provider that needs no key.
- * @throws {AuthError} If the saved login can't be read.
- * @throws {RangeError} If the saved logins or the default-provider environment are invalid.
- * @throws {MissingKeyError} As `ensureEnvKey` does, when there is no saved login.
- */
-export async function ensureApiKey(provider: string, context: PromptContext): Promise<string | null> {
-  const name = provider.toLowerCase();
-  const { connections } = connectionSnapshot({ env: context.env.read });
-  const connection = Object.hasOwn(connections, name) ? connections[name] : undefined;
-  if (connection?.source === "store") {
-    const credentials = await connectionCredentials(connection, name, { env: context.env.read });
-    return credentials instanceof ApiKeyCredentials ? credentials.apiKey : null;
-  }
-  return ensureEnvKey(provider, context);
 }
 
 /**
@@ -525,23 +531,6 @@ export async function ensureEnvKey(provider: string, { env, terminal }: PromptCo
     }
   }
   throw new MissingKeyError(`no API key provided for ${reprText(provider)} ($${envVar}) after ${tries} attempts`);
-}
-
-/**
- * Confirm (or override) the Ollama base URL, prompting when a terminal is given.
- *
- * The current endpoint is `$OLLAMA_BASE_URL` if set, else `http://localhost:11434`. With a
- * terminal it is offered as an editable answer, and the confirmed endpoint is `set` as
- * `OLLAMA_BASE_URL` so the client resolves the same one; an empty answer keeps the current value.
- * Without one the current value is returned.
- */
-export async function confirmOllamaEndpoint({ env, terminal }: PromptContext): Promise<string> {
-  const endpoint = env.read("OLLAMA_BASE_URL") || OLLAMA_ENDPOINT;
-  if (terminal === null) return endpoint;
-  const answer = await terminal.askText("Ollama endpoint:", { initial: endpoint });
-  const confirmed = (answer || endpoint).trim();
-  env.set("OLLAMA_BASE_URL", confirmed);
-  return confirmed;
 }
 
 /**

@@ -232,6 +232,12 @@ So `${doc.output.uri}` reads a file's `uri` in bindings, templates and prompts, 
 the read: `uri` is `str`, `mime` and `name` are `Optional(str)`, and any other name is a
 load error (see [Flow syntax → References](syntax.md#references-naming-a-value)).
 
+Changed (TS yian): **`?.`** reads a field that may be missing. `x?.k` is null when `x` is null
+or missing, or is a record without `k`, and it is typed `Optional`. It short-circuits the rest of
+the chain, so `a?.b.c` is null when `a` is null. `?.` goes after a reference's root
+(`a.output?.k`, `input.k?.x`); `a?.output` and `input?.k` are load errors. Until #1149 lands, a
+plain `.` still reads null on a null value.
+
 ### Arithmetic follows Python
 
 Operators run on the resolved *values* with Python semantics:

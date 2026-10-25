@@ -173,7 +173,8 @@ LOOP `while:`/`until:` predicate reads, a node's local names in its prompts
 and its own `asserts:`, and `${input.X...}` in flow `asserts:`. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
 values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
-below them) aren't checked.
+below them) aren't checked. `a.output?.k` reads null when `a` was skipped or `k` is
+absent (TS yian).
 
 A local name is typed by its binding: a typed binding by its declared type (plus its
 inferred type when that fits, e.g. a case branch's member or a literal tag), a literal by

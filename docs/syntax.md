@@ -556,6 +556,8 @@ plain reference `<ref>`:
   narrows `Optional(T)` to `T`, and an `Optional` union to its members. `<ref> == null`
   proves it when false, so `not (x == null)` and the read in `x == null or x.qty > 0` see
   `x` as not null. `none` is the same as `null`. There is no `x is not null` form.
+  Changed (TS yian): `x?.k` reads null when `x` is null, without a check (see
+  [Expressions](expressions.md)).
 
 The narrowed type replaces the declared one for the reads after the check, the same way for
 `and`, `or` and `not`. With `Order: Union(Buy, Sell)`, where only `Buy` has `qty`, each of

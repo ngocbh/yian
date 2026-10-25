@@ -213,7 +213,7 @@ function whenRange(descriptor: CaseDescriptor, index: number): SourceRange | nul
  */
 function expander(
   caseIds: ReadonlySet<string>,
-  targets: ReadonlyMap<string, readonly unknown[]>,
+  targets: (caseId: string) => readonly unknown[],
   host: string,
   options: { range: SourceRange | null; diagnostics: LoadDiagnostics },
 ): (value: string) => string {
@@ -258,7 +258,7 @@ function expander(
 function expandSpan(
   interior: string,
   caseIds: ReadonlySet<string>,
-  targets: ReadonlyMap<string, readonly unknown[]>,
+  targets: (caseId: string) => readonly unknown[],
   host: string,
   options: { range: SourceRange | null; diagnostics: LoadDiagnostics },
 ): string {
@@ -268,7 +268,7 @@ function expandSpan(
     const caseId = match[1]!;
     const suffix = match[2] ?? "";
     if (caseIds.has(caseId)) {
-      const leaves = targets.get(caseId)!;
+      const leaves = targets(caseId);
       // No then:/else:, or a case-target cycle (the flatten dropped the arm).
       if (leaves.length === 0) {
         throw diagnostics.error(
@@ -341,18 +341,19 @@ function sourceRefs(source: unknown, condition: boolean): string[] {
 }
 
 /**
- * Return each case id's branch targets, flattened to LEAF (non-case) node ids.
+ * Return a reader of each case id's branch targets, flattened to LEAF (non-case) node ids.
  *
  * Direct targets are each `then:` (case order) then the `else:`; a target that is itself a `case`
  * is flattened to ITS leaf targets (recursive, cycle-guarded — a case-target cycle drops that arm
  * and surfaces as an empty-leaves `LoadError` here, or a graph cycle at DAG validation).
  * Duplicates are removed preserving order. Sound via the case-route veto: the nested gate
  * skip-floods when the outer branch loses, so only the taken leaf is non-null in the coalesce.
+ * A case's leaves are computed when first read.
  */
 function caseLeafTargets(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   caseIds: ReadonlySet<string>,
-): Map<string, unknown[]> {
+): (caseId: string) => readonly unknown[] {
   const raw = new Map<string, unknown[]>();
   for (const [nodeId, d] of descriptors) {
     if (!(d instanceof CaseDescriptor)) continue;
@@ -361,17 +362,32 @@ function caseLeafTargets(
     raw.set(nodeId, direct);
   }
 
-  const leaves = (caseId: string, seen: ReadonlySet<string>): unknown[] => {
-    const out: unknown[] = [];
+  // Shared nested cases are reached by many paths, so each case is flattened once. A walk that
+  // cut a cycle depends on its path (which cases were above it), so only a cut-free result is
+  // kept; a cut-free walk saw no cycle below it, so every path gives that result.
+  const memo = new Map<string, readonly unknown[]>();
+  const walk = (caseId: string, path: Set<string>): [leaves: readonly unknown[], cut: boolean] => {
+    const known = memo.get(caseId);
+    if (known !== undefined) return [known, false];
+    const out = new Set<unknown>();
+    let cut = false;
     for (const target of raw.get(caseId) ?? []) {
-      if (typeof target === "string" && caseIds.has(target)) {
-        if (!seen.has(target)) out.push(...leaves(target, new Set([...seen, target])));
+      if (!(typeof target === "string" && caseIds.has(target))) {
+        out.add(target);
+      } else if (path.has(target)) {
+        cut = true;
       } else {
-        out.push(target);
+        path.add(target);
+        const [inner, innerCut] = walk(target, path);
+        path.delete(target);
+        for (const leaf of inner) out.add(leaf);
+        cut ||= innerCut;
       }
     }
-    return out;
+    const leaves = [...out];
+    if (!cut) memo.set(caseId, leaves);
+    return [leaves, cut];
   };
 
-  return new Map([...caseIds].map((caseId) => [caseId, [...new Set(leaves(caseId, new Set([caseId])))]]));
+  return (caseId) => walk(caseId, new Set([caseId]))[0];
 }

@@ -633,7 +633,10 @@ export class NodeWaitingRecord {
   readonly callIds: readonly string[];
   /** The take or sleep call this record registers, if any: at most one entry. */
   readonly waits: readonly WaitEntry[];
-  /** The agent's steer inbox; always null until agents wait on one. */
+  /**
+   * The steer inbox the waiting node opened, which an interrupt of that inbox reaches while it
+   * waits; `null` when it opened none.
+   */
   readonly steerInbox: string | null;
 
   /**
@@ -1556,7 +1559,7 @@ export function recordTimeMs(at: unknown, label = "run-record envelope at"): num
  * Check an envelope's schema version.
  *
  * @throws RunLogSchemaError when it isn't `SCHEMA_VERSION`, naming Python yian for schema 9 and
- *   a retired TS schema (10) as retired.
+ *   a retired TS schema (one of `RETIRED_SCHEMAS`) as retired.
  */
 function requireSchema(schema: unknown): void {
   if (schema === 9) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
@@ -1572,7 +1575,7 @@ function requireSchema(schema: unknown): void {
  * Check a decoded envelope's `schema` member.
  *
  * @throws RunLogSchemaError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9
- *   and a retired TS schema (10) as retired.
+ *   and a retired TS schema (one of `RETIRED_SCHEMAS`) as retired.
  */
 function requireWireSchema(schema: unknown): void {
   if (schema === BigInt(SCHEMA_VERSION)) return;
@@ -2155,9 +2158,9 @@ export interface RunLogEntry<E extends RecordEnvelope | null = RecordEnvelope> {
   /** The record's wire kind, such as `node_started`. */
   readonly kind: string;
   /**
-   * The node the record is about: the `node_id` of a node's start, step, pool commit, success or
-   * route, the spawner of a growth, the node of a failure; `null` for a run, stop, memory or
-   * backward record.
+   * The node the record is about: the `node_id` of a node's start, step, pool commit, success,
+   * route, wait or wake, the spawner of a growth, the node of a failure; `null` for a run, stop,
+   * memory or backward record, and for a `run_failed` even though its failure names a node.
    */
   readonly nodeId: string | null;
   /** The validated envelope; `null` when read with `payloads: false`. */
@@ -3116,7 +3119,7 @@ function outcomeFromPayload(payload: JsonObject, label: string): OutcomeCarriers
   return { forwardCapture: capture === null ? null : captureFromPayload(capture, `${label} forward_capture`) };
 }
 
-/** The fields of a `run_started` payload; schema 13 writes every one. */
+/** The fields of a `run_started` payload; every `run_started` payload holds each one. */
 const RUN_STARTED_FIELDS = [
   "flow_fingerprint",
   "start_wiring_override",

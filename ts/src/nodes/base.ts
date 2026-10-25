@@ -937,8 +937,8 @@ export interface NodeCaps {
 /**
  * The base contract every node kind implements: a pure function of its input record.
  *
- * A node implements its `forward` body; the inherited `run` template resolves to one of the
- * closed sum `Output | Route | Grow`. The node never receives the pool (the engine's evaluator
+ * A node implements its `forward` body; the inherited `run` template resolves to one `NodeResult`
+ * (`Output | Route | Grow | Pending`). The node never receives the pool (the engine's evaluator
  * binds its inputs and hands it a record) and never writes the pool: it describes its one output
  * as `new Output(value)` and the engine performs the write under the node id. Failure is a
  * rejection, not a variant.
@@ -1372,7 +1372,7 @@ export abstract class Node {
    * Declared defaults are filled first, then node-owned setup is validated (including that every
    * assertion and kind predicate parses), the pre-asserts run against the bound record, `forward`
    * runs, and the post-asserts check an `Output` against the inputs as bound. The promise
-   * resolves to exactly one `Output | Route | Grow`. Every failure rejects it, with the original
+   * resolves to exactly one `NodeResult` (`Output | Route | Grow | Pending`). Every failure rejects it, with the original
    * error; the checks and the synchronous part of `forward` (up to its first `await`) still run
    * before the promise is returned.
    *
@@ -1449,9 +1449,9 @@ export abstract class Node {
     this.validateExecutionSetup();
     const preFailure = this.failingAssertion("pre-assert", this.preAsserts, record);
     if (preFailure !== null) throw classify ? new AssertionStageError(preFailure) : preFailure;
-    // A snapshot for the post-asserts, taken before `forward`: a body may change the record it
-    // receives (a CODE body transforming its input in place), and the post-asserts must see the
-    // inputs as bound. Only paid when the node has post-asserts.
+    // A snapshot for the post-asserts, taken before `forward`: a kind's `forward` may change the
+    // record it receives, and the post-asserts must see the inputs as bound. Only paid when the
+    // node has post-asserts.
     const postRecord = this.postAsserts.length > 0 ? (copyValue(record as ValueRecord) as ValueRecord) : null;
     let result: NodeResult;
     try {
@@ -1491,7 +1491,7 @@ export abstract class Node {
    *
    * @param inputs The bound input record; the body may change it.
    * @param caps The capabilities the node's traits ask for.
-   * @returns One `Output | Route | Grow`, or a promise of one.
+   * @returns One `NodeResult` (`Output | Route | Grow | Pending`), or a promise of one.
    * @throws Error always, on the base.
    */
   forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult | Promise<NodeResult> {

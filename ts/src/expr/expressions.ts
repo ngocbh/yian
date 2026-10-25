@@ -1688,6 +1688,41 @@ export function isinstanceSubject(tree: ExprNode): ExprNode | null {
   return (callSuffix.children[0] as Tree).children[0]!;
 }
 
+/** One `.name` or `?.name` step of a reference, a comprehension variable read, or a call result. */
+export interface RefStep {
+  readonly name: string;
+  /** Written `?.name`. */
+  readonly optional: boolean;
+}
+
+/**
+ * Split a `refcall` or `comp_var` into its head name and its steps as written. For a call, the
+ * steps are the trailers after its parentheses (the parser rejects trailers before them).
+ */
+export function splitReference(node: Tree): { head: string; steps: RefStep[] } {
+  const steps = node.children
+    .filter((child): child is Tree => child instanceof Tree && child.data === "trailer")
+    .map((trailer) => ({ name: String(trailer.children[0]), optional: trailer.children.length === 2 }));
+  return { head: String(node.children[0]), steps };
+}
+
+/** Return steps as written: `.a?.b`. */
+export function stepsText(steps: readonly RefStep[]): string {
+  return steps.map((step) => (step.optional ? "?." : ".") + step.name).join("");
+}
+
+/** Return a reference's flat dotted path, its head and step names with `?.` written as `.`. */
+export function referencePath(node: Tree): string {
+  const { head, steps } = splitReference(node);
+  return [head, ...steps.map((step) => step.name)].join(".");
+}
+
+/** Return a reference as written, `?.` included. */
+export function referenceText(node: Tree): string {
+  const { head, steps } = splitReference(node);
+  return head + stepsText(steps);
+}
+
 /**
  * Collect every reference-leaf path a unified `${...}` expression tree reads.
  *
@@ -1717,13 +1752,12 @@ function collectExprRefs(node: ExprNode, refs: string[]): void {
   if (node instanceof Token) return; // a lone NUMBER / STRING / BOOL / NULL literal names no reference
   if (node.data === "refcall") {
     // Keep in sync with the evaluator's refcall decomposition, `collectRefEdits` and
-    // `conditionReadLeaves` in `template.ts`: each finds the call_suffix and joins the path
-    // (leading NAME + trailer segments) the same way.
+    // `conditionReadLeaves` in `template.ts`: each finds the call_suffix and takes the path from
+    // `splitReference`.
     const children = node.children;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) {
-      const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
-      refs.push([String(children[0]), ...segments].join("."));
+      refs.push(referencePath(node));
       return;
     }
     // A builtin call: the callee contributes no reference; walk each argument value only.

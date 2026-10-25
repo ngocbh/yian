@@ -10,7 +10,8 @@
  *   `resolve`, conservatively infer its static type, and walk its reference leaves. Also the
  *   `when:`/`asserts:` condition surface (`parseCondition`, `evaluateWhen`), the `isinstance`
  *   type names a tree uses (`isinstanceTypeNames`), its constructor names (`constructorNames`), a
- *   call's tested expression (`isinstanceSubject`), and pool resolution (`resolveReference`).
+ *   call's tested expression (`isinstanceSubject`), a reference's head and `.`/`?.` steps
+ *   (`splitReference`), and pool resolution (`resolveReference`).
  * - `template`: the binding/prompt scanner. It splits a value into text and `${...}` spans, then
  *   drives the engine per span (`evalBinding`, `evalTemplate`, `exprRefsOf`, `promptRefs`,
  *   `renderTemplateRecord`, `scanTemplate`), and checks every builtin call in those spans
@@ -44,10 +45,15 @@ export {
   isinstanceTypeNames,
   parseCondition,
   RequiredError,
+  referencePath,
+  referenceText,
   resolveReference,
   rewriteConditionRefs,
   rewriteExprRefs,
+  splitReference,
+  stepsText,
 } from "./expressions.ts";
+export type { RefStep } from "./expressions.ts";
 export { parseExpr } from "./grammar.ts";
 export type { FeedbackValue } from "./lineage.ts";
 export { hasFeedback, validateFeedback } from "./lineage.ts";

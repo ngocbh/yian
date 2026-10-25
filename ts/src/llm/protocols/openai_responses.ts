@@ -200,13 +200,16 @@ export class OpenAIResponses implements SseProtocol {
    * Turn a streamed reply's events into stream events.
    *
    * Deltas stream as they arrive; each `output_item.done` gives one `PartDone` per part of the
-   * done item. An item that never got its done event takes its parts from the terminal event's
-   * `output` at its output index; when it is absent there, its deltas build its parts. Items of
-   * that `output` the stream never mentioned, by output index, item id or call id, give their
-   * parts after all the others. Part indexes are dense, in the order each (output index,
-   * content index) is first seen. An added item's own text or arguments are ignored, since the
-   * deltas that follow carry them. Unknown events are ignored, and a `[DONE]` sentinel ends the
-   * stream.
+   * done item. At the terminal event each streamed output index is matched to at most one item
+   * of its `output`: by the item ids and call ids its events gave, wherever the item sits; else
+   * the item at its own position, when the stream gave none of that item's ids; else, for an
+   * unfinished index whose events gave no ids, the first item left whose ids the stream never
+   * gave. An item that never got its done event takes its parts from its match; with none, its
+   * deltas build its parts. Items of that `output` no index took, and whose ids the stream never
+   * gave, give their parts after all the others. Part indexes are dense: streamed parts in the
+   * order each (output index, content index) is first seen, then each such item's parts in
+   * order. An added item's own text or arguments are ignored, since the deltas that follow carry
+   * them. Unknown events are ignored, and a `[DONE]` sentinel ends the stream.
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
@@ -339,26 +342,39 @@ export class OpenAIResponses implements SseProtocol {
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
         const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
-        // Positions in `output` an unfinished item took, so no item is used twice.
+        // Each streamed output index is matched to at most one item of `output`, and each item to
+        // at most one index. By ids first, wherever the item sits, since a gateway may renumber
+        // output indexes; then the item at the index's own position, when the stream gave none of
+        // its ids, since a gateway may also rewrite ids for the final response.
+        const streamed = [...new Set([...started, ...finished])].sort((a, b) => a - b);
+        const terminal = new Map<number, JsonValue>();
         const claimed = new Set<number>();
-        // An unfinished item is the output item with the ids its events gave, wherever it sits; one
-        // whose events gave none takes the item at its index only when no streamed item holds it.
-        // An item no output item matches by id is built from its deltas, not taken by position: a
-        // gateway that renumbers output indexes would give it another item's parts.
-        const terminalItem = (each: number): JsonValue | undefined => {
-          const ids = streamedIds.get(each) ?? new Set<string>();
-          const position =
-            ids.size > 0
-              ? output.findIndex((item) => itemIds(item).some((id) => ids.has(id)))
-              : each < output.length && !itemIds(output[each]!).some((id) => seenIds.has(id))
-                ? each
-                : -1;
-          if (position < 0 || claimed.has(position)) return undefined;
+        const take = (each: number, position: number): void => {
+          if (position < 0 || claimed.has(position) || terminal.has(each)) return;
           claimed.add(position);
-          return output[position];
+          terminal.set(each, output[position]!);
         };
+        const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
+        for (const each of streamed) {
+          const ids = streamedIds.get(each);
+          if (ids !== undefined && ids.size > 0) {
+            take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
+          }
+        }
+        for (const each of streamed) {
+          if (each < output.length && fresh(output[each]!)) take(each, each);
+        }
+        // An unfinished index the stream gave no ids takes the first item left whose ids it never
+        // gave, so no item of `output` is shown twice.
         for (const each of unfinished) {
-          const item = terminalItem(each);
+          if (terminal.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
+          take(
+            each,
+            output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
+          );
+        }
+        for (const each of unfinished) {
+          const item = terminal.get(each);
           if (item === undefined) {
             // Text, reasoning and calls are built from their deltas; a refusal streams none, so
             // its part is built here.
@@ -373,15 +389,10 @@ export class OpenAIResponses implements SseProtocol {
             yield new PartDone(index(each, itemContentIndex), part);
           }
         }
-        // Output items the stream never mentioned still belong to the reply, after the others. A
-        // gateway's output indexes may not be positions in `output`, so an item with ids is
-        // matched by them alone; only an item with none is matched by its position.
+        // Output items no streamed index took, and whose ids the stream never gave, still belong
+        // to the reply, after the others.
         for (const [position, item] of output.entries()) {
-          if (claimed.has(position)) continue;
-          const ids = itemIds(item);
-          const mentioned =
-            ids.length > 0 ? ids.some((id) => seenIds.has(id)) : finished.has(position) || started.has(position);
-          if (mentioned) continue;
+          if (claimed.has(position) || !fresh(item)) continue;
           // A new slot each: the position may also be an output index the stream used.
           for (const [, part] of itemParts(item, this.#key)) {
             if (part instanceof ToolCallPart) sawCalls = true;

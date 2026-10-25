@@ -430,6 +430,28 @@ describe("deltas and parts", () => {
     expect((await collect(events)).message.parts).toEqual([TEXT_PART, REASONING_PART]);
   });
 
+  test("a terminal output item whose id changed from the stream's is shown once", async () => {
+    const renamed = { ...MESSAGE, id: "msg_B" };
+    const record = replayRecord(KEY, { id: "msg_B", annotations: [] });
+    const cases: [JsonObject[], Part[]][] = [
+      // Every item done: the stream's part stands.
+      [[added(0, started(MESSAGE)), textDelta(0, 0, "Hello there."), done(0, MESSAGE)], [TEXT_PART]],
+      // Not done: the item at its position fills it.
+      [[added(0, started(MESSAGE)), textDelta(0, 0, "Hello there.")], [new TextPart("Hello there.", record)]],
+      [[textDelta(0, 0, "Hello there.", "x_9")], [new TextPart("Hello there.", record)]],
+    ];
+    for (const [streamed, parts] of cases) {
+      const events = await parse([...streamed, completed([renamed])]);
+      expect((await collect(events)).message.parts).toEqual(parts);
+    }
+  });
+
+  test("an unfinished item the stream gave no ids takes the first output item left", async () => {
+    const { item_id: _, ...anonymous } = textDelta(0, 0, "Hello there.");
+    const events = await parse([anonymous, done(1, CALL), completed([CALL, MESSAGE])]);
+    expect((await collect(events)).message.parts).toEqual([TEXT_PART, CALL_PART]);
+  });
+
   test("an added reasoning item takes its slot before any delta", async () => {
     const events = await parse([
       added(0, { ...REASONING, summary: [] }),

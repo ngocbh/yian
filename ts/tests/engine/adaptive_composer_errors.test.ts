@@ -257,8 +257,8 @@ output: \${ask.output}
 `),
   );
   expect(error.message).toBe(
-    "node 'ask' input 'q': ${order.output.qty * 2} does arithmetic on order.output.qty, which is null when " +
-      "node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)",
+    "node 'ask' input 'q': ${order.output.qty} reads field 'qty' of order.output, which may be null " +
+      "(node 'order' may be skipped while this node runs); write (order.output?.qty :- <default>)",
   );
   expect(lineOf(error)).toBe(20);
 });

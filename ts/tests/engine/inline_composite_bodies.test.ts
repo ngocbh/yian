@@ -1461,8 +1461,8 @@ nodes:
   wrapper:
     kind: call
     input:
-      root_value: \${input.root.value}
-      nested_value: \${input.outer.inner.value}
+      root_value: \${input.root?.value}
+      nested_value: \${input.outer.inner?.value}
     nodes:
       collect:
         kind: code
@@ -2043,7 +2043,7 @@ nodes:
     over: \${input.items}
     input:
       row: \${item}
-      name: \${item.detail.name}
+      name: \${item?.detail?.name}
     nodes:
       collect:
         kind: code

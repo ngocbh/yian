@@ -850,7 +850,9 @@ export function checkFieldReads(
   for (const [nodeId, wiring] of flowWiring) {
     const result = buildResults.get(nodeId) ?? null;
     const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
-    const roots = poolRoots(level, nodeId, wiring);
+    // A desugared node (an adaptive composer, a lifted call) is named by its author-facing labels,
+    // not by its generated id.
+    const roots = poolRoots(level, nodeId, wiring, result !== null && result.fieldLabels.size > 0 ? null : nodeId);
     for (const [param, binding] of wiring) {
       for (const site of stringSites(binding)) {
         const message = firstNullableRead(bindingSource(site), roots, registry);
@@ -1107,7 +1109,8 @@ function firstNullableRead(text: unknown, roots: ReadRoots, registry: TypeRegist
 }
 
 /**
- * Return the pool-scope roots node `nodeId` reads (`reader` names it in messages): producers,
+ * Return the pool-scope roots node `nodeId` reads (`reader` names it in messages, `null` for "this
+ * node"): producers,
  * flow inputs and `item`, typed by the routing-narrowed view of the node, nullable when the
  * producer may be skipped while the node runs, untyped by their un-narrowed contracts.
  */
@@ -1115,7 +1118,7 @@ function poolRoots(
   level: FieldReadLevel,
   nodeId: string,
   wiring: ReadonlyMap<string, unknown>,
-  reader: string = nodeId,
+  reader: string | null = nodeId,
 ): ReadRoots {
   const { buildResults, narrowing, skips } = level;
   const typeFn = level.typeFn ?? null;
@@ -1140,7 +1143,7 @@ function poolRoots(
     why: (root) => {
       const producer = producerOf(root);
       if (producer === null || !skips.maySkipWhileRunning([producer], nodeId)) return "it is Optional";
-      return `node ${reprText(producer)} may be skipped while ${reprText(reader)} runs`;
+      return `node ${reprText(producer)} may be skipped while ${reader === null ? "this node" : reprText(reader)} runs`;
     },
     untyped: (root) => {
       if (root === "item") {

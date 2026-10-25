@@ -1382,3 +1382,26 @@ test("a prompt read of a local that is never null loads", () => {
 test.each(FORMS.filter(([name]) => name !== "isinstance"))("a prompt narrowed by %s loads", (_name, form) => {
   load(promptFlow("${input.maybe}", `\${${form("r")}}`));
 });
+
+/** An AGENT whose steer inbox is `Inbox(Ev)`, with `Ev: {o: Optional(Inner)}`, rendering `render`. */
+const steerRender = (render: string) =>
+  "id: steer\nname: steer\n" +
+  "typedefs:\n  Inner: {x: str}\n  Ev: {o: Optional(Inner)}\n" +
+  "input:\n  notes: !Inbox(Ev)\n" +
+  "nodes:\n  chat:\n    kind: agent\n    prompt: Help the user.\n" +
+  `    steer_inbox:\n      from: \${input.notes}\n      render: |-\n        ${render}\n` +
+  "    output: str\n" +
+  "output: ${chat.output}\n";
+
+test("a render reading a field through an Optional field of event is a load error", () => {
+  const error = loadError(() => load(steerRender("${event.o.x}")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toBe(
+    "node 'chat' steer_inbox render: ${event.o.x} reads field 'x' of event.o, which may be null " +
+      "(field 'o' is Optional); write event.o?.x, or check event.o != null first",
+  );
+});
+
+test.each(["${event.o?.x :- ''}", "${event.o != null and event.o.x == 'a'}"])("a guarded render loads: %s", (render) => {
+  load(steerRender(render));
+});

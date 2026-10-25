@@ -12,6 +12,7 @@
 
 import {
   contractType,
+  directReferencePath,
   itemContract,
   outputContractPathError,
   projectOutputContract,
@@ -58,7 +59,7 @@ import {
 } from "../helpers/narrowing_facts.ts";
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import { bindingSource } from "../../nodes/contracts.ts";
-import { AgentNode } from "../../nodes/agent/node.ts";
+import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
@@ -896,7 +897,45 @@ export function checkFieldReads(
       const message = firstNullableRead(text, localRoots(level, nodeId, result), registry);
       if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range, code: NULLABLE_FIELD_READ });
     }
+    const render = steerRenderSite(level, nodeId, result);
+    if (render !== null) {
+      const [where, text, range, roots] = render;
+      const message = firstNullableRead(text, roots, registry);
+      if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range, code: NULLABLE_FIELD_READ });
+    }
   }
+}
+
+/**
+ * Return an AGENT's `steer_inbox.render:` with its label, range and roots, else `null`: it reads
+ * only `event`, typed by the element type of the flow input the steer inbox takes from.
+ */
+function steerRenderSite(
+  level: FieldReadLevel,
+  nodeId: string,
+  result: BuildResult,
+): [where: string, text: string, range: SourceRange | null, roots: ReadRoots] | null {
+  const node = result.node;
+  if (!(node instanceof AgentNode) || node.steerRender === null) return null;
+  const path = directReferencePath(level.flowWiring.get(nodeId)?.get(STEER_INBOX_KEY) ?? null);
+  const names = path?.split(".") ?? [];
+  if (names.length !== 2 || names[0] !== "input") return null;
+  const element = level.narrowing.inputs.get(names[1]!)?.type.element;
+  if (element === undefined) return null;
+  const where = `${result.siteName(nodeId, "steer_inbox")} render`;
+  const range =
+    result.fieldRanges.get(siteKey("field", "steer_inbox.render")) ??
+    result.fieldRanges.get(siteKey("field", STEER_INBOX_KEY)) ??
+    result.nodeRange;
+  const roots: ReadRoots = {
+    contracts: (root) => (root === "event" ? [new ValueContract(element)] : undefined),
+    rootLength: () => 1,
+    nullable: () => false,
+    why: () => "it is Optional",
+    untyped: () => isUntyped(element),
+    routing: () => null,
+  };
+  return [where, node.steerRender, range, roots];
 }
 
 /** Return each node-local template of a node (its prompts) with its site label and range. */

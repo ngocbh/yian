@@ -76,7 +76,7 @@ export function synthesizeBoundaryGraph(
   outputs: readonly FlowOutput[],
   nodeIds: ReadonlySet<string>,
   bodyEdges: readonly Edge[],
-  lowered: LoweredAsserts | null = null,
+  lowered: LoweredAsserts | null,
   options: { record: boolean },
 ): [nodes: Map<string, Node>, edges: Edge[], wiring: Map<string, Map<string, unknown>>] {
   const { record } = options;

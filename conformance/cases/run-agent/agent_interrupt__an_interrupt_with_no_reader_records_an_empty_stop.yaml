@@ -1,7 +1,8 @@
 # TS-only: interrupt(run, inbox) is TS yian's (#1025).
 # From tests/engine/test_agent_steering.py::test_non_steerable_agent_never_calls_the_inbox.
-# An AGENT without `steer_inbox:` reads no inbox: an interrupt of the inbox during its model call
-# appends nothing (no `interrupted` record), and a send during it goes to the take after it.
+# An AGENT without `steer_inbox:` reads no inbox, and no take waits: an interrupt of the inbox
+# during its model call records `interrupted {notes, []}`, naming no node. The agent answers in
+# full. A send during it goes to the inline take after it, a pickup that ends the Stop.
 kind: run
 rules: [run-log]
 python_skip: "interrupt(run, inbox) is TS-only (#1025)"
@@ -94,6 +95,10 @@ expect:
   - - pool_commit
     - __start__
     - {key: __start__.notes, value: for the take}
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: []
   - - node_step
     - chat
     - n: 1
@@ -115,10 +120,10 @@ expect:
     - value: done
   - - pool_commit
     - chat
-    - {key: chat.new_messages, steps: [10]}
+    - {key: chat.new_messages, steps: [11]}
   - - node_succeeded
     - chat
-    - {commit: 11, messages: 12}
+    - {commit: 12, messages: 13}
   - [node_started, heard]
   - - pool_commit
     - heard
@@ -127,7 +132,7 @@ expect:
       inbox: notes
   - - node_succeeded
     - heard
-    - {commit: 15}
+    - {commit: 16}
   - [node_started, __end__]
   - - pool_commit
     - __end__
@@ -136,7 +141,7 @@ expect:
         heard: [for the take]
   - - node_succeeded
     - __end__
-    - {commit: 18}
+    - {commit: 19}
   events:
   - [RunStarted]
   - - NodeStarted

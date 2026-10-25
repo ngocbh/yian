@@ -243,6 +243,13 @@ for (const mode of ["auto", "legacy"] as const) {
       expect(extra).toEqual([1n, [2n ** 53n - 1n]]);
     }, SLOW);
 
+    test("a bigint in a sub-object the arguments hold twice is sent as a number", async () => {
+      const slow = server.tools.find((tool) => tool.name === "slow")!;
+      const shared = { x: 1n };
+      expect(await slow.execute({ seconds: 0, extra: [shared, { again: shared }] }, context("slow"))).toBe("done");
+      expect(shared).toEqual({ x: 1n });
+    }, SLOW);
+
     test("an integer past 2^53 in the arguments is refused before the server is called", async () => {
       const before = await tools().invoke("calls", {});
       const slow = server.tools.find((tool) => tool.name === "slow")!;

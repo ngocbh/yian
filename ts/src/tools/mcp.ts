@@ -971,26 +971,31 @@ function unsendable(args: unknown, http: boolean): { path: (string | number)[]; 
  * with `JSON.stringify`; `unsendable` has refused the unsafe ones. Copies only the arrays and
  * records on the way to a `bigint`, so the caller's arguments stay as they were.
  */
-function numbersForBigints(value: unknown, seen = new Set<object>()): unknown {
+function numbersForBigints(value: unknown, done = new Map<object, unknown>()): unknown {
   if (typeof value === "bigint") return Number(value);
-  if (typeof value !== "object" || value === null || seen.has(value)) return value;
-  // A cycle is left as is; `JSON.stringify` refuses it.
-  seen.add(value);
+  if (typeof value !== "object" || value === null) return value;
+  // A container met again gives its result, so one held twice is converted both times. Until its
+  // walk ends it maps to itself, so a cycle is left as is; `JSON.stringify` refuses it.
+  if (done.has(value)) return done.get(value);
+  done.set(value, value);
+  let result: unknown = value;
   if (Array.isArray(value)) {
     let copy: unknown[] | undefined;
     value.forEach((item, i) => {
-      const next = numbersForBigints(item, seen);
+      const next = numbersForBigints(item, done);
       if (next !== item) (copy ??= [...value])[i] = next;
     });
-    return copy ?? value;
+    result = copy ?? value;
+  } else if (isRecord(value)) {
+    let copy: Record<string, unknown> | undefined;
+    for (const [key, item] of Object.entries(value)) {
+      const next = numbersForBigints(item, done);
+      if (next !== item) (copy ??= { ...value })[key] = next;
+    }
+    result = copy ?? value;
   }
-  if (!isRecord(value)) return value;
-  let copy: Record<string, unknown> | undefined;
-  for (const [key, item] of Object.entries(value)) {
-    const next = numbersForBigints(item, seen);
-    if (next !== item) (copy ??= { ...value })[key] = next;
-  }
-  return copy ?? value;
+  done.set(value, result);
+  return result;
 }
 
 Object.defineProperty(McpServer.prototype, MCP_SERVER, { value: true });

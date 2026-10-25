@@ -499,9 +499,9 @@ test.each([
   ["${a?.output?.k}", "a?.output?.k", "a.output?.k"],
   ["${input?.go}", "input?.go", "input.go"],
 ])("?. inside a root is a load error (%s)", (source, read, fix) => {
-  expect(failure(FLOW_WITH_A.replace("${a.output.k}", source))).toContain(
-    `reference \${${read}} puts ?. inside its root; ?. goes after the root, as in \${${fix}}`,
-  );
+  const message = failure(FLOW_WITH_A.replace("${a.output.k}", source));
+  expect(message).toStartWith("flow has ?. inside a reference root:");
+  expect(message).toContain(`reference \${${read}} puts ?. inside its root; ?. goes after the root, as in \${${fix}}`);
 });
 
 test("?. after a root loads, and a comprehension variable is a one-name root", () => {

@@ -305,6 +305,7 @@ export function validateReferences(
   }
   const errors: [message: string, range: SourceRange | null][] = [];
   const constructorProblems: [message: string, range: SourceRange | null][] = [];
+  const misplacedOptionals: [message: string, range: SourceRange | null][] = [];
   // The `[site name, source, range]` of each plain input binding already scanned, as JSON.
   const scanned = new Set<string>();
   const unordered = narrowing !== null ? narrowing.unordered : new Set<string>();
@@ -417,7 +418,7 @@ export function validateReferences(
     }
     for (const tree of trees) {
       const err = optionalInsideRoot(tree, poolRootLength);
-      if (err !== null) errors.push([`${where}: ${err}`, rng]);
+      if (err !== null) misplacedOptionals.push([`${where}: ${err}`, rng]);
     }
     try {
       checkTemplateCalls(text);
@@ -781,6 +782,7 @@ export function validateReferences(
 
   for (const [headline, problems] of [
     ["flow has unresolved references", errors],
+    ["flow has ?. inside a reference root", misplacedOptionals],
     ["flow has constructor calls that can never succeed", constructorProblems],
   ] as const) {
     if (problems.length > 0) {

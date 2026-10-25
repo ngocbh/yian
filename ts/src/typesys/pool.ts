@@ -14,9 +14,8 @@
  * - `resolve(head, rest)` backs the `${...}` expression evaluator. Because values are typed
  *   objects (not stringified), `${x.output.ratio}` traverses into an object output;
  *   `${x.output}` is the node's whole value.
- * - `toWire()`/`fromWire()` and `dumps()`/`loads()` serialize the whole pool losslessly (each
- *   value's `{kind, value}` wire form keeps its exact type), matching the pool wire
- *   representation recorded at run initialization and reconstructed during replay.
+ * - `toWire()`/`fromWire()` and `dumps()`/`loads()` are a lossless whole-pool snapshot codec
+ *   (each value's `{kind, value}` wire form keeps its exact type).
  */
 
 import { logJson, parseJson } from "./json.ts";
@@ -56,8 +55,7 @@ export interface PoolWire {
  * Each node id has at most one stored typed value (`store.get(nodeId)`); a routing-only node
  * can have none. "Multiple outputs" are fields of one object. `${input.X}` reads the
  * synthesized START node's committed record; `${system.X}` reads host-injected ambients. Backs
- * the `${...}` resolver and serializes losslessly for canonical run-record payloads and
- * recovery.
+ * the `${...}` resolver and snapshots the whole pool losslessly (`toWire`/`dumps`).
  */
 export class VariablePool {
   /** Node id to that node's single produced value. Read via `${<id>.output[.path]}`. */

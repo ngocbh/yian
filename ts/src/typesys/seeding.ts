@@ -61,7 +61,6 @@ export function defaultRunId(): string {
  * @throws RangeError when `epochMs` isn't a finite time within years 1 to 9999.
  */
 export function seedSystemClock(pool: VariablePool, epochMs: number = Date.now()): void {
-  const now = nowUtc(epochMs);
-  pool.system.set("today", buildValueAs(ValueKind.DATE, now.slice(0, 10)));
-  pool.system.set("now", buildValueAs(ValueKind.DATETIME, now));
+  pool.system.set("today", buildValueAs(ValueKind.DATE, todayUtc(epochMs)));
+  pool.system.set("now", buildValueAs(ValueKind.DATETIME, nowUtc(epochMs)));
 }

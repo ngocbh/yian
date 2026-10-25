@@ -119,11 +119,10 @@ describe("rejected definitions", () => {
     );
   });
 
-  test("an empty sequence hints an empty Literal", () => {
+  test("an empty sequence gets the hint without an example", () => {
     expectRejected(
       { X: [] },
-      "typedef 'X': a tag-only union must be a Literal(...) enum, not a sequence " +
-        "(e.g. X: Literal())",
+      "typedef 'X': a tag-only union must be a Literal(...) enum, not a sequence",
       ["X"],
     );
   });
@@ -294,7 +293,7 @@ describe("record fields", () => {
     ["", "typedef 'R' field '': field names must be non-empty strings"],
     ["\ud800", "typedef 'R' field '\\ud800': field names must not contain a Unicode surrogate"],
   ])("field name %p is rejected", (field, message) => {
-    expectRejected({ R: { [field]: "int" } }, message, []);
+    expectRejected({ R: { [field]: "int" } }, message, ["R", field]);
   });
 
   test("__proto__ and constructor are ordinary fields", () => {

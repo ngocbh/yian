@@ -18,4 +18,4 @@ expect:
       message: 'bad typedefs: typedef ''R'' field ''\ud800'': field names must not contain a Unicode surrogate'
       frames:
       - label: flow.yaml
-        range: [3, 1, 3, 9]
+        range: [5, 15, 5, 18]

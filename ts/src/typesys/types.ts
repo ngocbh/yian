@@ -1681,12 +1681,14 @@ export function readTypedefs(
           throw new TypeCheckError(
             `typedef ${reprText(name)} field ${reprText(fname)}: field names must be ` +
               "non-empty strings",
+            { path: [name, fname] },
           );
         }
         if (!encodesAsUtf8(fname)) {
           throw new TypeCheckError(
             `typedef ${reprText(name)} field ${reprText(fname)}: field names must not ` +
               "contain a Unicode surrogate",
+            { path: [name, fname] },
           );
         }
         if (typeof ftype !== "string") {
@@ -1715,9 +1717,11 @@ export function readTypedefs(
       );
     } else if (Array.isArray(value)) {
       if (value.every((member): member is string => typeof member === "string")) {
+        // `Literal()` doesn't parse, so an empty sequence gets no example.
+        const example = value.length > 0 ? ` (e.g. ${name}: ${literalLabel(value)})` : "";
         throw new TypeCheckError(
           `typedef ${reprText(name)}: a tag-only union must be a Literal(...) enum, not a ` +
-            `sequence (e.g. ${name}: ${literalLabel(value)})`,
+            `sequence${example}`,
           { path: [name] },
         );
       }

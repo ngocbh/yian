@@ -1347,12 +1347,14 @@ def read_typedefs(raw: dict) -> TypeRegistry:
             for fname, ftype in value.items():
                 if type(fname) is not str or not fname:
                     raise TypeCheckError(
-                        f"typedef {name!r} field {fname!r}: field names must be non-empty strings"
+                        f"typedef {name!r} field {fname!r}: field names must be non-empty strings",
+                        path=(name, fname) if isinstance(fname, str) else (name,),
                     )
                 if not encodes_as_utf8(fname):
                     raise TypeCheckError(
                         f"typedef {name!r} field {fname!r}: field names must not contain a "
-                        f"Unicode surrogate"
+                        f"Unicode surrogate",
+                        path=(name, fname),
                     )
                 if not isinstance(ftype, str):
                     raise TypeCheckError(
@@ -1372,9 +1374,11 @@ def read_typedefs(raw: dict) -> TypeRegistry:
                 registry[name] = AliasDef(target=parsed)
         elif isinstance(value, (list, tuple)):
             if all(isinstance(m, str) for m in value):
+                # `Literal()` doesn't parse, so an empty sequence gets no example.
+                example = f" (e.g. {name}: {literal_label(value)})" if value else ""
                 raise TypeCheckError(
                     f"typedef {name!r}: a tag-only union must be a Literal(...) enum, not a "
-                    f"sequence (e.g. {name}: {literal_label(value)})",
+                    f"sequence{example}",
                     path=(name,),
                 )
             raise TypeCheckError(

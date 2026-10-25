@@ -1456,8 +1456,8 @@ const TYPE_NAME_CHECKS = "types/compose_type_name_checks__";
 const TYPEDEF_NESTING = "types/engine_typedef_nesting__";
 
 test.each<{ id: string; path: string[] }>([
-  { id: `${TYPE_NAME_CHECKS}empty_typedef_field_name`, path: [] },
-  { id: `${TYPE_NAME_CHECKS}surrogate_typedef_field_name`, path: [] },
+  { id: `${TYPE_NAME_CHECKS}empty_typedef_field_name`, path: ["R", ""] },
+  { id: `${TYPE_NAME_CHECKS}surrogate_typedef_field_name`, path: ["R", "\ud800"] },
   { id: `${TYPEDEF_NESTING}alias_chain_fails_on_its_length`, path: ["A5"] },
   { id: `${TYPEDEF_NESTING}record_chain_fails_on_levels`, path: ["T5", "a"] },
   { id: "types/engine_typedefs__alias_cycle_rejected", path: ["A"] },

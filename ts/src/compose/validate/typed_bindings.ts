@@ -152,11 +152,9 @@ export function checkTypedInputs(
     const item = itemContract(result?.node ?? null, wiring, nodeProducers, nodeInputs, typeFn);
     for (const [name, binding] of wiring) {
       if (name === LLM_CONFIG_KEY) continue;
-      const [paramProducers, paramInputs] =
-        narrowing !== null ? narrowing.forParam(nodeId, name) : [nodeProducers, nodeInputs];
       for (const [path, typed] of typedSites(binding)) {
         const slot = pathLabel(name, path);
-        const message = bindingError(typed, paramProducers, paramInputs, { item, typeFn, registry, slot });
+        const message = bindingError(typed, nodeProducers, nodeInputs, { item, typeFn, registry, slot });
         if (message === null) continue;
         let fallback: SourceRange | null = null;
         let where = `node ${reprText(nodeId)} input ${reprText(slot)}`;
@@ -309,9 +307,8 @@ export function localInputContracts(
     const names = new Map<string, LocalInput>();
     for (const [name, binding] of wiring) {
       if (reserved.has(name)) continue;
-      const [paramProducers, paramInputs] =
-        narrowing !== null ? narrowing.forParam(nodeId, name) : [producers, flowInputs];
-      let alternatives = bindingAlternatives(binding, paramProducers, paramInputs, typeFn);
+      const [nodeProducers, nodeInputs] = narrowing !== null ? narrowing.forNode(nodeId) : [producers, flowInputs];
+      let alternatives = bindingAlternatives(binding, nodeProducers, nodeInputs, typeFn);
       if (alternatives === null) continue;
       if (node instanceof LoopNode) {
         const carried = node.outputContract !== null ? projectOutputContract(node.outputContract, [name]) : null;

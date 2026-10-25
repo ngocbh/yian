@@ -1186,6 +1186,17 @@ describe("isinstance of a type the base already fits does not narrow", () => {
   });
 });
 
+test("a when: read after a check that can never hold reports only the check", () => {
+  const text = flow(
+    searched([`"isinstance(d.output, Buy) and d.output.action == 'hold' and d.output.qty > 0"`, "b"]),
+    code("b"),
+    code("e"),
+  );
+  const message = assembleError(text);
+  expect(message).toContain("can never be true");
+  expect(message).not.toContain("reads field");
+});
+
 test("a read guarded by different members is checked against each one", () => {
   const guarded = (field: string) =>
     flow(

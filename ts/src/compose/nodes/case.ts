@@ -11,10 +11,10 @@
  * carries no inputs and no leaf node, and its build returns the strict `CaseNode` with the case's
  * data edges followed by its control edges. Two surface forms:
  *
- * - searched (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): each distinct read of the
- *   `when:`s (defined at `searchedParams`) becomes one `CaseNode` input `__rN`. Each reference in
- *   a `when:` is rewritten to its bare local `__rN`; the `when:` itself stays lazily evaluated.
- *   `searchedParamGuards` gives the guard each read is checked under.
+ * - searched (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): each distinct read root of the
+ *   `when:`s (defined at `searchedParams`) becomes one `CaseNode` input `__rN`. Each reference's
+ *   root in a `when:` is rewritten to its local `__rN`, keeping the steps after it; the `when:`
+ *   itself stays lazily evaluated.
  * - `on:` (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`; each
  *   `when: <value>` is a literal compared exactly: text becomes `__on == "<value>"`, a number
  *   `__on == <n> and not isinstance(__on, bool)`, a bool `__on == true and isinstance(__on, bool)`.
@@ -55,7 +55,6 @@ import {
 import { poolRootLength } from "../../typesys/pool.ts";
 import { pythonTypeName } from "../../typesys/types.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
-import { type Guard, guardedRefs } from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -570,23 +569,6 @@ function desugarOn(desc: CaseDescriptor, on: string, diagnostics: LoadDiagnostic
   };
 }
 
-/**
- * One read of a searched case's generated input: its case index and the guard it is checked
- * under, `null` when it is not checked.
- */
-export type GuardedRead = readonly [number, Guard | null];
-
-/**
- * The guard each reference occurrence of a parsed `when:` is checked under, in `guardedRefs`
- * order.
- */
-export type GuardsOf = (tree: ExprNode) => (Guard | null)[];
-
-/** Return the guard that holds whenever each reference occurrence of `tree` is read. */
-function plainGuards(tree: ExprNode): (Guard | null)[] {
-  return guardedRefs(tree).map(([, guard]) => guard);
-}
-
 /** The `__rN` inputs of a searched case, from one parse of its `when:`s. */
 interface SearchedParams {
   /** Each distinct binding source and its local, in first-seen order. */
@@ -595,11 +577,6 @@ interface SearchedParams {
   localCaseIndex: Map<string, number>;
   /** Per case, the local of each reference occurrence, in `conditionReads` order. */
   caseLocals: string[][];
-  /**
-   * For each local, the case index of each occurrence and the guard it is checked under. A join
-   * input has no occurrences.
-   */
-  guards: Map<string, GuardedRead[]>;
 }
 
 /**
@@ -652,23 +629,14 @@ function joinSources(reads: readonly ConditionRead[]): string[] {
  * (`${root :- null}`, an optional edge), or, once per co-skipping escape that reads a node output,
  * a join input over its producers, which the `when:` doesn't read but whose required edges skip the
  * gate as that escape's binding would skip; its source is also its dedupe key. Per `when:`, its
- * reference reads are allocated before its join inputs. Locals and guards come from the same parse,
- * so every guarded occurrence has a local.
+ * reference reads are allocated before its join inputs.
  *
- * @param guardsOf Gives each occurrence's guard; by default what the checks before it prove
- *   through `and`, `or` and `not` (`guardedRefs`).
  * @throws LoadError at a `when:` that isn't text or doesn't parse (at `cases:` when it is missing).
- * @throws RangeError when `guardsOf` gives a different number of guards than there are reads.
  */
-function searchedParams(
-  desc: CaseDescriptor,
-  diagnostics: LoadDiagnostics,
-  guardsOf: GuardsOf = plainGuards,
-): SearchedParams {
+function searchedParams(desc: CaseDescriptor, diagnostics: LoadDiagnostics): SearchedParams {
   const sourceToLocal = new Map<string, string>();
   const localCaseIndex = new Map<string, number>();
   const caseLocals: string[][] = [];
-  const guards = new Map<string, GuardedRead[]>();
 
   const allocate = (source: string, caseIndex: number): string => {
     let local = sourceToLocal.get(source);
@@ -676,7 +644,6 @@ function searchedParams(
       local = `__r${sourceToLocal.size}`;
       sourceToLocal.set(source, local);
       localCaseIndex.set(local, caseIndex);
-      guards.set(local, []);
     }
     return local;
   };
@@ -705,45 +672,9 @@ function searchedParams(
     const reads = conditionReads(tree);
     const locals = reads.map((read) => allocate(readSource(read), caseIndex));
     for (const source of joinSources(reads)) allocate(source, caseIndex);
-    // `guardedRefs` walks the same occurrences in the same order as `conditionReads`.
-    const occurrenceGuards = guardsOf(tree);
-    if (occurrenceGuards.length !== locals.length) {
-      throw new RangeError(`guardsOf gave ${occurrenceGuards.length} guards for ${locals.length} reads`);
-    }
-    occurrenceGuards.forEach((guard, i) => guards.get(locals[i]!)!.push([caseIndex, guard]));
     caseLocals.push(locals);
   });
-  return { sourceToLocal, localCaseIndex, caseLocals, guards };
-}
-
-/**
- * Return, per searched-case `__rN` input, each occurrence's case and guard.
- *
- * `and`, `or` and `not` short-circuit, so an occurrence of an input's reference is read only once
- * the checks before it decide (`guardedRefs`): its guard is what they prove. A check after it
- * never guards it. The inputs are allocated exactly as the build allocates them; a join input
- * over a co-skipping escape's producers has no occurrences.
- *
- * @param desc A searched case that has already built. An `on:` case has no guards.
- * @param guardsOf The guard each occurrence of a parsed `when:` is checked under, in
- *   `guardedRefs` order, with `null` for an occurrence that is not checked; by default
- *   `guardedRefs`'s guards.
- * @returns For each local, one `[case index, guard]` pair per occurrence, across all `when:`s in
- *   source order (empty for a join input).
- * @throws LoadError when `desc` has a `when:` its build would reject. The loader only calls this
- *   after the build succeeded, so the error is unlocated.
- * @throws RangeError when `guardsOf` gives a different number of guards than a `when:` has reads.
- *
- * @example
- * For a first case `not isinstance(d.output, Buy) or d.output.qty > 5`, the local of
- * `d.output.qty` maps to `[[0, new Holds(new IsinstanceCheck("d.output", "Buy"), true)]]`.
- */
-export function searchedParamGuards(
-  desc: CaseDescriptor,
-  guardsOf: GuardsOf = plainGuards,
-): Map<string, GuardedRead[]> {
-  if (desc.on !== null) return new Map();
-  return searchedParams(desc, new LoadDiagnostics(), guardsOf).guards;
+  return { sourceToLocal, localCaseIndex, caseLocals };
 }
 
 /**

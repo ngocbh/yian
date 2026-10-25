@@ -40,7 +40,6 @@ import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
 import {
   checkTemplateCalls,
-  conditionRefs,
   ExpressionError,
   exprRefsOf,
   optionalInsideRoot,
@@ -95,7 +94,7 @@ import {
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
-import { type Narrowing, searchedWhenReads } from "./narrowing.ts";
+import { Narrowing, searchedWhenReads } from "./narrowing.ts";
 import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
@@ -718,7 +717,7 @@ export function validateReferences(
     // fallback (a spanless flow has no ranges at all). `wiringRefLabel` gives a synthetic param
     // the author-facing name it was hoisted from instead of leaking `__rN`.
     const whens = node instanceof CaseNode ? searchedWhens.get(nodeId) : undefined;
-    if (whens !== undefined && narrowing !== null) {
+    if (whens !== undefined) {
       // A searched CASE's `__rN` inputs bind only the roots its `when:`s read; each read is
       // checked as written, at its own `when:`, under the checks before it.
       for (const [index, when, , whenRange] of whens) {
@@ -732,7 +731,8 @@ export function validateReferences(
           throw error;
         }
         const where = `${result.siteName(nodeId, `cases[${index}].when`)} from`;
-        for (const read of searchedWhenReads(narrowing, nodeId, tree, registry ?? new Map())) {
+        const views = narrowing ?? new Narrowing({ producers, inputs: inputContracts });
+        for (const read of searchedWhenReads(views, nodeId, tree, registry ?? new Map())) {
           scan(`\${${referenceText(read.node)}}`, where, whenRange ?? inputRng, {
             siteProducers: read.views[0],
             siteInputs: read.views[1],
@@ -747,45 +747,10 @@ export function validateReferences(
       }
       continue;
     }
-    const caseReads =
-      node instanceof CaseNode
-        ? new Set(
-            node.cases.flatMap((branch) =>
-              branch.when ? conditionRefs(branch.when).map((ref) => ref.split(".", 1)[0]!) : [],
-            ),
-          )
-        : null;
     for (const [param, src] of nwiring) {
       if (reserved.has(param)) continue;
-      if (caseReads !== null && caseReads.size > 0 && !caseReads.has(param)) {
-        // In a searched case whose `when:`s read something, a param they don't read is a join
-        // input over a co-skipping escape's producers; each of its references is already checked
-        // at the read that introduced it, so scanning it would repeat that error. An `on:` case
-        // with no cases reads nothing, so its `on:` value is still checked.
-        continue;
-      }
-      let label = node.wiringRefLabel(param);
-      let paramRng = franges.get(siteKey("input", param)) ?? inputRng;
-      let [paramProducers, paramInputs] = [nodeProducers, nodeInputs];
-      let readFacts: Env | null = null;
-      let routedBases: ReadonlySet<string> = new Set();
-      if (narrowing !== null) {
-        if (narrowing.paramUnchecked(nodeId, param)) {
-          // Every read follows a check that can never be true, which `checkImpossibleWhens`
-          // reports; no value reaches them.
-          continue;
-        }
-        // A searched CASE's param read only after the checks before it in its `when:` has its
-        // own view; one read guarded first and unguarded later reports at the later read.
-        [paramProducers, paramInputs] = narrowing.forParam(nodeId, param);
-        readFacts = narrowing.paramEnv(nodeId, param);
-        routedBases = narrowing.paramRoutedBases(nodeId, param);
-        const paramSite = narrowing.paramSite(nodeId, param);
-        if (paramSite !== null) {
-          label = paramSite[0];
-          paramRng = paramSite[1] ?? paramRng;
-        }
-      }
+      const label = node.wiringRefLabel(param);
+      const paramRng = franges.get(siteKey("input", param)) ?? inputRng;
       const where = `${result.siteName(nodeId, label)} from`;
       const source = bindingSource(src);
       if (typeof source === "string") {
@@ -797,11 +762,9 @@ export function validateReferences(
       // A typed binding or a value holding the inbox doesn't pass it whole.
       const whole = !(src instanceof Binding && src.contract !== null) && !(source instanceof ValueTemplate);
       scan(src, where, paramRng, {
-        siteProducers: paramProducers,
-        siteInputs: paramInputs,
+        siteProducers: nodeProducers,
+        siteInputs: nodeInputs,
         partialUnionFields,
-        readFacts,
-        routedBases,
         inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
         // A CASE's routing edges follow only `${x.output}` reads.
         messages: !(node instanceof CaseNode),

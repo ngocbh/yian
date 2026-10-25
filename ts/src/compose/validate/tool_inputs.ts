@@ -46,9 +46,8 @@ export function stampToolInputTypes(
     if (!(node instanceof ToolNode)) continue;
     const inputTypes = new Map<string, Type>();
     for (const [name, binding] of flowWiring.get(nodeId) ?? []) {
-      const [paramProducers, paramInputs] =
-        narrowing !== null ? narrowing.forParam(nodeId, name) : [producers, flowInputs];
-      const inferred = inferBindingType(binding, paramProducers, paramInputs, { typeFn });
+      const [nodeProducers, nodeInputs] = narrowing !== null ? narrowing.forNode(nodeId) : [producers, flowInputs];
+      const inferred = inferBindingType(binding, nodeProducers, nodeInputs, { typeFn });
       if (inferred !== null) inputTypes.set(name, inferred);
     }
     node.inputTypes = inputTypes;

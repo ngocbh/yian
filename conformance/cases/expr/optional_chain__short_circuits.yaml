@@ -1,0 +1,7 @@
+kind: expr
+rules: [null-field-read]
+# a?.b.c is null when a is null: ?. short-circuits the rest of the chain.
+expr: "a?.b.c :- 'none'"
+values: {a: null}
+expect:
+  value: none

@@ -1,0 +1,7 @@
+kind: expr
+rules: [null-field-read]
+# a?.k is null when a is null.
+expr: "[a?.k, b?.k]"
+values: {a: null, b: {k: 1}}
+expect:
+  value: [null, 1]

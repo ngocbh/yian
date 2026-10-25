@@ -730,6 +730,7 @@ A case lists in `rules` the TS-era rules its expectation depends on (design #736
 | `code` | TS CODE bodies and their failures |
 | `failure-codes` | decision 36's TS-only failure codes |
 | `run-log` | the TS run log redesign: the trace shows the TS log as written |
+| `null-field-read` | TS yian's null-safe field reads (#1149): `?.`, `.` on a null value is an error, and a declared field reads null when absent |
 
 ## Groups
 

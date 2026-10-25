@@ -32,6 +32,7 @@ import {
   type RunResult,
   runFlow,
   send,
+  withdraw,
 } from "../run.ts";
 import { recordTimeMs } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
@@ -132,6 +133,13 @@ function lineEvent(line: string, message: boolean): string | Record<string, unkn
   return message ? { role: "user", parts: [{ type: "text", text: line }] } : line;
 }
 
+/** Return the text a withdrawn event holds: a `str` as it is, a message's text parts joined. */
+function valueText(value: unknown, message: boolean): string {
+  if (!message) return String(value);
+  const parts = (value as { parts?: readonly { type?: unknown; text?: unknown }[] }).parts ?? [];
+  return parts.map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : "")).join("");
+}
+
 /**
  * Resolve once `scheduler`'s clock reaches `at` (epoch milliseconds), re-reading it after each
  * chunk, so a laptop that slept still wakes on time.
@@ -154,12 +162,20 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * stderr and the chat exits 0. Ctrl-C (SIGINT) while a turn runs interrupts the agents reading the
  * inbox as their steer inbox (`interrupt`): the reply is cut, `(interrupted)` goes to stderr and
  * the chat waits for the next line. A second Ctrl-C within 2 s, or one at the prompt, cancels the
- * run (`chat cancelled`, exit 130). SIGTERM, SIGHUP or
+ * run (`chat cancelled`, exit 130). On a terminal, Esc, during a turn or at the prompt, takes back
+ * the lines the run hasn't read yet (`withdraw`) and puts their text back in the prompt
+ * (`(withdrew N messages; back in the prompt)`; after `/exit` it prints them), then stops the
+ * turn (`interrupt`; `(stopping the reply)` when a Stop is recorded): a running reply is cut, and
+ * during a sleep or an approval the reply after it stops before its first model call. At the take
+ * Esc does nothing; it never cancels. While a turn runs on a terminal, the input is raw, so Ctrl-C
+ * arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal, and other keys are kept
+ * for the next prompt. SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>`, exit 130), as
- * does Ctrl-C at an `ask` prompt. While the prompt is up, the run is advanced at its `wakeAt`;
- * what was typed so far comes back at the next prompt. Off a terminal (stdin or stderr isn't a
- * TTY), each prompt is written once, with no escape codes. An `ask` node prompts at the terminal.
- * A line the inbox refuses prints `not sent: <reason>` and the chat goes on. A failed run prints its diagnostic and exits 1; a
+ * does Ctrl-C at an `ask` prompt, which ignores Esc. While the prompt is up, the run is advanced
+ * at its `wakeAt`; what was typed so far comes back at the next prompt. Off a terminal (stdin or
+ * stderr isn't a TTY), each prompt is written once, with no escape codes, and Esc isn't seen. An
+ * `ask` node prompts at the terminal. A line the inbox refuses prints `not sent: <reason>` and the
+ * chat goes on. A failed run prints its diagnostic and exits 1; a
  * run that ends waiting after the inbox closed, with no deadline to wake it, prints what it waits
  * on and exits 0.
  *
@@ -218,8 +234,13 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
   let pressedAt: number | null = null;
   // Settles true once the run is cancelled, false when it had already ended.
   let cancelling: Promise<boolean> | null = null;
-  // The interrupt a Ctrl-C started; settled before the chat sends its next line or returns.
+  // The interrupt a Ctrl-C or Esc started; settled before the chat sends its next line or returns.
   let interrupting: Promise<void> | null = null;
+  // What was typed at a prompt a deadline or Esc took down, plus what Esc withdrew, shown again at
+  // the next prompt.
+  let draft = "";
+  // Set once the inbox is closed (`/exit`, `/quit`, the end of input): no prompt comes back.
+  let closed = false;
   const cancelRun = async (path: string): Promise<boolean> => {
     try {
       await cancel(path, { env: env.read });
@@ -255,6 +276,32 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       cancelling.catch(() => {});
     }
     line?.abort();
+  };
+  // Esc: take back what the run hasn't read, then stop the turn; the text goes back to the prompt.
+  // It never cancels and isn't a Ctrl-C press.
+  const escape = (): void => {
+    if (log === null) return;
+    const path = log;
+    const done = (async () => {
+      const back = await withdraw(path, inbox.name, { env: env.read });
+      // Kept before the interrupt, which may be refused.
+      if (back.length > 0) {
+        const texts = back.map((event) => valueText(event.value, inbox.message)).filter(Boolean);
+        const count = `${back.length} message${back.length === 1 ? "" : "s"}`;
+        // After /exit no prompt comes back, so the text is printed rather than lost.
+        if (closed) await io.stderr.write(`(withdrew ${count}: ${texts.join(" ")})\n`);
+        else {
+          // Sent before the draft was typed, so it goes first.
+          draft = [...texts, draft].filter(Boolean).join(" ");
+          await io.stderr.write(`(withdrew ${count}; back in the prompt)\n`);
+        }
+      }
+      const stopped = await interruptReply(path, inbox.name, { env: env.read });
+      if (stopped.seq !== null) await io.stderr.write("(stopping the reply)\n");
+    })().catch((error: unknown) => {
+      if (!(error instanceof DeliveryRefused)) stop.abort(error);
+    });
+    interrupting = Promise.all([interrupting, done]).then(() => {});
   };
   const tty = io.stdin.isTTY === true && (io.stderrStream as { isTTY?: boolean }).isTTY === true;
   const terminal = new Terminal({
@@ -328,12 +375,18 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       signal: stop.signal,
       scheduler,
     };
-    /** Run `move` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling. */
+    /**
+     * Run `move` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling, and on a
+     * terminal, Esc withdraws and stops it (`escape`).
+     */
     const turn = async (move: () => Promise<RunResult>): Promise<RunResult> => {
       turning = true;
+      const keys = new AbortController();
+      terminal.watchKeys(keys.signal, (key) => (key === "escape" ? escape() : interrupt()));
       try {
         return await move();
       } finally {
+        keys.abort();
         turning = false;
         // An interrupt sent during the turn lands before the next line is sent.
         await interrupting;
@@ -350,14 +403,11 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         ...shared,
       }),
     );
-    let closed = false;
     let cancelled = false;
     // The deadline the run was last moved at. A node is due once any of its calls passes its
     // deadline, so that move times it out and `wakeAt` comes later; were it to stay, a timer for
     // it would only spin.
     let spent: string | null = null;
-    // What was typed at a prompt a deadline took down, shown again at the next one.
-    let draft = "";
     while (result.status === "waiting") {
       if (cancelling !== null) {
         cancelled = await cancelling;
@@ -397,12 +447,20 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         );
       }
       if (stop.signal.aborted) prompt.abort();
-      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft });
-      draft = "aborted" in read ? read.draft : "";
+      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft, escape: true });
+      draft = "aborted" in read || "escape" in read ? read.draft : "";
       timer.abort();
       line = null;
       stop.signal.throwIfAborted();
       if (cancelling !== null) continue;
+      if ("escape" in read) {
+        // Offline: a turn that waits mid-way (a sleep, an approval) has the Stop recorded for its
+        // reply; at the take it is a no-op.
+        escape();
+        await interrupting;
+        interrupting = null;
+        continue;
+      }
       if ("aborted" in read) {
         // A deadline passed.
         spent = wake;

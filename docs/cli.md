@@ -652,9 +652,12 @@ yian chat examples/chat.yaml
   supplied.
 - **Turns.** The chat starts the run, and each time it waits, shows a `> You:` prompt on stderr.
   A line is sent to the inbox and the run is advanced; lines typed while the run moves wait for
-  the next prompt. The output of every node named `reply`, at any depth, prints on stdout as it
-  finishes (an interrupted one prints `(interrupted)` on stderr instead); the flow's final output
-  isn't printed. A line the inbox refuses (too large for
+  the next prompt. On a terminal the input is raw while the run moves, as it is at the prompt:
+  Ctrl-C reaches the chat as a key; Esc reaches it once readline's escape timeout (about half a
+  second) passes, so an Esc pressed just as a turn ends applies at the next prompt; `Ctrl-Z` and
+  `Ctrl-\` raise no signal; other keys are kept for the next prompt. The output of every node
+  named `reply`, at any depth, prints on stdout as it finishes (an interrupted one prints
+  `(interrupted)` on stderr instead); the flow's final output isn't printed. A line the inbox refuses (too large for
   `YIAN_MAX_EVENT_BYTES`, say) prints `not sent: <reason>` and the chat goes on. Off a terminal
   (stdin or stderr isn't a TTY), each prompt is written once, with no escape codes, and the input
   stays in cooked mode.
@@ -667,12 +670,23 @@ yian chat examples/chat.yaml
   `(interrupting the reply; Ctrl-C again within 2 s to cancel the run)`. Every agent reading the
   inbox as its `steer_inbox:` is cut; a reply declared `Optional(str)` succeeds with null, so
   `(interrupted)` prints on stderr, the turn ends and the prompt comes back (a reply declared
-  `str` fails the run with `agent.interrupted`). With no agent reading the inbox, nothing is cut.
+  `str` fails the run with `agent.interrupted`). With no agent reading the inbox, nothing is cut;
+  the Stop is remembered for the turn, so the reply that opens the inbox later in it stops before
+  its first model call.
   A second Ctrl-C within 2 s of the first, or a Ctrl-C at the prompt, cancels the run
   (`run_cancelled`: no output, no learning), prints `chat cancelled` and exits `130`; a press
   more than 2 s later is a new first press. SIGTERM or SIGHUP stops the run instead
   (`run_stopped`): `chat stopped; the run is in LOG`, exit `130`. Ctrl-C at an `ask` prompt
   stops the run the same way.
+- **Esc.** On a terminal, Esc, while a turn runs or at the prompt, first takes back the lines the
+  run hasn't read yet ([`withdraw`](api.md#withdrawing-unread-messages-ts-yian)) and puts their
+  text back in the prompt, `(withdrew N messages; back in the prompt)` (after `/exit`, when no
+  prompt comes back, it prints the text instead: `(withdrew N messages: <text>)`), then stops the turn
+  (`interrupt`), printing `(stopping the reply)` when it records a Stop. A running reply is cut as
+  with Ctrl-C; during an approval or a sleep, the reply after it stops before its first model
+  call. At the take, with nothing queued, Esc does nothing. Esc never cancels the run and doesn't
+  count as a Ctrl-C press; a second Esc while the turn is already stopping records nothing. An
+  `ask` prompt ignores Esc, and off a terminal Esc isn't seen.
 - **Steering.** The prompt is closed while a turn runs, so lines typed meanwhile are the next
   turn's message, not steers. A host steers a running reply by calling `send` during the turn
   (see [Examples → `chat.yaml`](examples.md#chatyaml-a-turn-by-turn-chat)).

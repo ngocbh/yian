@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,24 +15,27 @@ import { fileURLToPath } from "node:url";
 import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
-import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
-import { cancel, inspectRun } from "../../src/run.ts";
+import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
+import { cancel, inspectRun, send } from "../../src/run.ts";
 import {
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
   NodeStepRecord,
   PoolCommitRecord,
   readRunLog,
   RunCancelledRecord,
   RunStoppedRecord,
+  RunWaitingRecord,
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../engine/run_state_fixtures.ts";
-import { CTRL_C, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
+import { CTRL_C, CTRL_U, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
+const STOPPING = "(stopping the reply)";
 
 let tmp: string;
 let stdin: FakeInput | undefined;
@@ -109,6 +112,11 @@ function records(log: string) {
 /** Resolve once `check` holds, polling each turn of the event loop. */
 async function until(check: () => boolean): Promise<void> {
   while (!check()) await new Promise((resolve) => setTimeout(resolve, 1));
+}
+
+/** Wait past readline's escape timeout, so a lone Escape written before arrives as the Escape key. */
+function pastEscapeTimeout(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 600));
 }
 
 /** A chat turn per line: take everything sent, reply with `reply` (YAML lines, 6 spaces in). */
@@ -539,6 +547,28 @@ const HOLD = turnFlow(`      reply:
 `);
 
 /**
+ * `HOLD` whose turn ends only after its reply, so the next take doesn't wait while `hold` runs and
+ * the run isn't waiting for the next message.
+ */
+const HOLD_IN_TURN = HOLD.replace(
+  "said: ${input.said + heard.output.events}",
+  "said: ${input.said + heard.output.events + [reply.output]}",
+);
+
+/** `HOLD_IN_TURN` with a 60 s sleep before the reply. */
+const NAP_HOLD = turnFlow(
+  `      reply:
+        kind: tool
+        tool_id: hold
+        input:
+          events: \${heard.output.events}
+          napped: \${nap.output}
+        output: str
+`,
+  { nodes: NAP_NODES },
+).replace("said: ${input.said + heard.output.events}", "said: ${input.said + heard.output.events + [reply.output]}");
+
+/**
  * The `hold` tool: it resolves `started` when called, then waits until the test's `release` (in
  * `afterEach`) or its signal aborts, rejecting with the abort's reason.
  */
@@ -547,7 +577,10 @@ function holdTool() {
   const hold = new FunctionTool({
     name: "hold",
     description: "waits for the test",
-    parametersJsonSchema: { type: "object", properties: { events: { type: "array", items: { type: "string" } } } },
+    parametersJsonSchema: {
+      type: "object",
+      properties: { events: { type: "array", items: { type: "string" } }, napped: {} },
+    },
     execute: (_args, ctx: ToolContext) =>
       new Promise<string>((resolve, reject) => {
         release = () => resolve("released");
@@ -557,6 +590,36 @@ function holdTool() {
   });
   return { started, tools: { hold } };
 }
+
+test(
+  "Esc after /exit prints the withdrawn text, since no prompt comes back",
+  async () => {
+    const { started, tools } = holdTool();
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    const { scheduler, open } = heldScheduler();
+    stdin.write("hi" + ENTER);
+    const chatting = runChat(flowFile(NAP_HOLD), io, {}, { tools, scheduler });
+    const log = join(tmp, "run.jsonl");
+    const waits = () => records(log).filter((record) => record instanceof RunWaitingRecord).length;
+    await until(() => existsSync(log) && waits() === 2);
+    await send(log, "messages", "second", { env: io.env });
+    stdin.write("/exit" + ENTER);
+    await until(() => records(log).some((record) => record instanceof InboxClosedRecord));
+    open();
+    await started;
+    stdin.write(ESCAPE);
+    await until(() => stderr().includes(STOPPING));
+    const first = release!;
+    first();
+    await until(() => release !== first);
+    release!();
+    expect((await chatting).code).toBe(0);
+    expect(stderr()).toContain("(withdrew 1 message: second)\n");
+    expect(stderr()).not.toContain("back in the prompt");
+    expect(stdout()).toBe("released\nreleased\n");
+  },
+  TIMEOUT,
+);
 
 describe("yian chat's inbox and inputs", () => {
   /** Run `yian chat <args>` through `main` on a stdin that has ended. */
@@ -710,33 +773,43 @@ const stream = (text: string) =>
     .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
     .join("") + "data: [DONE]\n\n";
 
+/**
+ * Mock `fetch` with a chat-completions stream that sends "Once upon", resolves `started`, and
+ * finishes once the test's `release` is called; `restore` puts `fetch` back.
+ */
+function gatedStream() {
+  const { promise: started, resolve: start } = Promise.withResolvers<void>();
+  const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+  release = open;
+  const chunk = (delta: Record<string, unknown>, finish: string | null) =>
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+  const counter = { calls: 0 };
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    counter.calls += 1;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode(chunk({ role: "assistant", content: "Once upon" }, null)));
+        start();
+        await gate;
+        controller.enqueue(encoder.encode(chunk({ content: " a time" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return new Response(body, { headers: { "content-type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+  return { started, counter, restore: () => (globalThis.fetch = original) };
+}
+
+const XAI = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
+
 test(
   "Ctrl-C while the example's reply streams interrupts it; the chat goes on to the next line",
   async () => {
-    const env = { XAI_API_KEY: "test-xai-key", YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
-    const { io, stdin, stdout, stderr } = chatIo({ env });
+    const { io, stdin, stdout, stderr } = chatIo({ env: XAI });
     stdin.write("tell me a story\n");
-    const { promise: started, resolve: start } = Promise.withResolvers<void>();
-    const { promise: gate, resolve: open } = Promise.withResolvers<void>();
-    release = open;
-    const chunk = (delta: Record<string, unknown>, finish: string | null) =>
-      `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
-    let calls = 0;
-    const original = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      calls += 1;
-      const encoder = new TextEncoder();
-      const body = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          controller.enqueue(encoder.encode(chunk({ role: "assistant", content: "Once upon" }, null)));
-          start();
-          await gate;
-          controller.enqueue(encoder.encode(chunk({ content: " a time" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"));
-          controller.close();
-        },
-      });
-      return new Response(body, { headers: { "content-type": "text/event-stream" } });
-    }) as unknown as typeof fetch;
+    const { started, counter, restore } = gatedStream();
     try {
       const chatting = runChat(EXAMPLE_CHAT, io);
       const log = join(tmp, "run.jsonl");
@@ -744,7 +817,7 @@ test(
       signals.emit("SIGINT");
       // The live engine takes the interrupt before the stream goes on.
       await until(() => records(log).some((record) => record instanceof InterruptedRecord));
-      open();
+      release!();
       await until(() => stderr().includes("(interrupted)"));
       stdin.write("/exit\n");
       const { code } = await chatting;
@@ -752,7 +825,7 @@ test(
       expect(stderr()).toContain(`${INTERRUPTING}\n`);
       expect(stderr().indexOf(INTERRUPTING)).toBeLessThan(stderr().indexOf("(interrupted)"));
       expect(stdout()).toBe("");
-      expect(calls).toBe(1);
+      expect(counter.calls).toBe(1);
       const interrupted = records(log).find((record) => record instanceof InterruptedRecord) as InterruptedRecord;
       expect([interrupted.inbox, interrupted.nodes]).toEqual(["owner_messages", ["chat#0/answered/reply"]]);
       const cut = records(log).find(
@@ -761,6 +834,356 @@ test(
       expect(cut.step["finish"]).toBe("interrupted");
       const output = inspectRun(log);
       expect(output.status).toBe("succeeded");
+    } finally {
+      restore();
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "Esc while the example's reply streams stops it; the chat goes on",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true, env: XAI });
+    stdin.write("tell me a story" + ENTER);
+    const { started, counter, restore } = gatedStream();
+    try {
+      const chatting = runChat(EXAMPLE_CHAT, io);
+      const log = join(tmp, "run.jsonl");
+      await started;
+      stdin.write(ESCAPE);
+      await until(() => records(log).some((record) => record instanceof InterruptedRecord));
+      release!();
+      await until(() => stderr().includes("(interrupted)"));
+      stdin.write("/exit" + ENTER);
+      const { code } = await chatting;
+      expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stderr()).toContain(`${STOPPING}\n`);
+      expect(stderr()).not.toContain("chat cancelled");
+      expect(stderr()).not.toContain(INTERRUPTING);
+      expect(stderr()).not.toContain("withdrew");
+      expect(stdout()).toBe("");
+      expect(counter.calls).toBe(1);
+      const stops = records(log).filter((record) => record instanceof InterruptedRecord) as InterruptedRecord[];
+      expect(stops.map((record) => [record.inbox, [...record.nodes]])).toEqual([
+        ["owner_messages", ["chat#0/answered/reply"]],
+      ]);
+      expect(inspectRun(log).status).toBe("succeeded");
+    } finally {
+      restore();
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "Esc twice while a turn's hold tool runs records one empty Stop and never cancels",
+  async () => {
+    const { started, tools } = holdTool();
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    stdin.write("hi" + ENTER);
+    const chatting = runChat(flowFile(HOLD_IN_TURN), io, {}, { tools });
+    await started;
+    const log = join(tmp, "run.jsonl");
+    stdin.write(ESCAPE);
+    await until(() => stderr().includes(STOPPING));
+    // Within 2 s on the chat's clock, which no Esc reads: the second is already stopping.
+    stdin.write(ESCAPE);
+    await pastEscapeTimeout();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const first = release!;
+    first();
+    await until(() => stdout().includes("released"));
+    stdin.write("/exit" + ENTER);
+    await until(() => release !== first);
+    release!();
+    const { code } = await chatting;
+    expect(code).toBe(0);
+    expect(stderr()).not.toContain("chat cancelled");
+    expect(stderr()).not.toContain(INTERRUPTING);
+    expect(stderr().split(STOPPING).length - 1).toBe(1);
+    const stops = records(log).filter((record) => record instanceof InterruptedRecord);
+    expect(stops.map((record) => [...(record as InterruptedRecord).nodes])).toEqual([[]]);
+    expect(records(log).some((record) => record instanceof RunCancelledRecord)).toBe(false);
+  },
+  TIMEOUT,
+);
+
+test(
+  "Ctrl-C keys while a turn runs keep the SIGINT rule: the first interrupts, a second within 2 s cancels",
+  async () => {
+    const { started, tools } = holdTool();
+    const { io, stdin, stderr } = chatIo({ tty: true });
+    stdin.write("hi" + ENTER);
+    const chatting = runChat(flowFile(HOLD_IN_TURN), io, {}, { tools });
+    await started;
+    stdin.write(CTRL_C);
+    await until(() => stderr().includes(INTERRUPTING));
+    stdin.write(CTRL_C);
+    const { code, log } = await chatting;
+    expect(code).toBe(130);
+    expect(stderr()).toContain("chat cancelled");
+    expect(records(log).filter((record) => record instanceof InterruptedRecord).length).toBe(1);
+    expect(records(log).at(-1)).toBeInstanceOf(RunCancelledRecord);
+  },
+  TIMEOUT,
+);
+
+/**
+ * The virtual scheduler with every sleep held until `open` is called, so a prompt the run's
+ * `wakeAt` would take down stays up meanwhile.
+ */
+function heldScheduler(): { scheduler: Scheduler; open: () => void } {
+  const base = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+  const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+  const scheduler: Scheduler = {
+    now: () => base.now(),
+    async sleep(ms, signal) {
+      await new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) return reject(signal.reason);
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        void gate.then(resolve);
+      });
+      return base.sleep(ms, signal);
+    },
+  };
+  return { scheduler, open };
+}
+
+/**
+ * A chat turn that takes the lines, sleeps 60 s, then replies with an agent reading the inbox as
+ * its steer inbox; the turn ends after the reply.
+ */
+const NAP_AGENT = `id: nap_agent
+name: nap_agent
+input:
+  messages: !Inbox(str)
+defs:
+  turn:
+    input:
+      said: !list(str)
+      closed: !bool
+      messages: !Inbox(str)
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.messages}
+          take: all
+${NAP_NODES}      reply:
+        kind: agent
+        input:
+          events: \${heard.output.events}
+          napped: \${nap.output}
+        steer_inbox: \${input.messages}
+        output: Optional(str)
+        prompt: "Reply to: \${events}"
+    output:
+      said: \${input.said + heard.output.events + [reply.output :- ""]}
+      closed: \${heard.output.closed}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      said: []
+      closed: false
+      messages: \${input.messages}
+    while: not closed
+output: \${chat.output.said}
+`;
+
+test(
+  "Esc at the prompt during a mid-turn sleep records the Stop; the reply after the sleep stops",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true, env: XAI });
+    const { scheduler, open } = heldScheduler();
+    let calls = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    try {
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(flowFile(NAP_AGENT), io, {}, { scheduler });
+      const log = join(tmp, "run.jsonl");
+      // The turn sleeps: the run waits again, with the prompt up.
+      const waits = () => records(log).filter((record) => record instanceof RunWaitingRecord).length;
+      await until(() => existsSync(log) && waits() === 2);
+      stdin.write(ESCAPE);
+      await until(() => stderr().includes(STOPPING));
+      open();
+      await until(() => stderr().includes("(interrupted)"));
+      stdin.write("/exit" + ENTER);
+      const { code } = await chatting;
+      expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stderr()).not.toContain("chat cancelled");
+      expect(stderr().split(STOPPING).length - 1).toBe(1);
+      const stops = records(log).filter((record) => record instanceof InterruptedRecord) as InterruptedRecord[];
+      expect(stops.map((record) => [...record.nodes])).toEqual([[], ["chat#0/reply"]]);
+      // Stopped before its first model call; only the closing turn's reply calls the model.
+      expect(calls).toBe(1);
+      expect(stdout()).toBe("7\n");
+    } finally {
+      globalThis.fetch = original;
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "Esc at the prompt while the chat waits at the take appends nothing and keeps the draft",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    stdin.write("hal");
+    const chatting = runChat(flowFile(ECHO), io);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stdin.write(ESCAPE);
+    await pastEscapeTimeout();
+    stdin.write("f" + ENTER);
+    await until(() => stdout().includes("echo: half"));
+    stdin.write("/exit" + ENTER);
+    const { code, log } = await chatting;
+    expect(code).toBe(0);
+    expect(stdout()).toBe("echo: half\necho: \n");
+    expect(stderr()).not.toContain(STOPPING);
+    expect(stderr()).not.toContain("withdrew");
+    const kept = records(log).filter(
+      (record) => record instanceof InterruptedRecord || record instanceof InboxWithdrawnRecord,
+    );
+    expect(kept).toEqual([]);
+  },
+  TIMEOUT,
+);
+
+/**
+ * A chat turn whose reply is the host tool `sender`; the turn ends after it. `T` is the inbox's
+ * element type.
+ */
+const SENDER = (element: string) => `id: sender_chat
+name: sender_chat
+input:
+  messages: !Inbox(${element})
+defs:
+  turn:
+    input:
+      said: !list(str)
+      closed: !bool
+      messages: !Inbox(${element})
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.messages}
+          take: all
+      reply:
+        kind: tool
+        tool_id: sender
+        input:
+          events: \${heard.output.events}
+        output: str
+    output:
+      said: \${input.said + [reply.output]}
+      closed: \${heard.output.closed}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      said: []
+      closed: false
+      messages: \${input.messages}
+    while: not closed
+output: \${chat.output.said}
+`;
+
+for (const message of [false, true]) {
+  test(
+    `Esc puts a message the run hasn't read back in the prompt (Inbox(${message ? "Message" : "str"}))`,
+    async () => {
+      const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+      const log = join(tmp, "run.jsonl");
+      const text = (event: unknown) => (message ? (event as { parts: { text: string }[] }).parts[0]!.text : event);
+      const { promise: started, resolve: start } = Promise.withResolvers<void>();
+      let calls = 0;
+      // Its first call sends a line no take will read before Esc, then waits for the test.
+      const sender = new FunctionTool({
+        name: "sender",
+        description: "sends a second line once",
+        parametersJsonSchema: { type: "object", properties: { events: { type: "array" } } },
+        execute: async (args: { events?: unknown[] }) => {
+          const got = `got: ${(args.events ?? []).map(text).join(" ")}`;
+          if (calls++ > 0) return got;
+          const second = message ? { role: "user", parts: [{ type: "text", text: "second" }] } : "second";
+          await send(log, "messages", second, { env: io.env });
+          const { promise: held, resolve } = Promise.withResolvers<void>();
+          release = resolve;
+          start();
+          await held;
+          return got;
+        },
+      });
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(flowFile(SENDER(message ? "Message" : "str")), io, {}, { tools: { sender } });
+      await started;
+      stdin.write(ESCAPE);
+      await until(() => stderr().includes(STOPPING));
+      release!();
+      await until(() => stdout().includes("got: hi"));
+      // The withdrawn line is the next prompt's text: ENTER sends it.
+      await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You: second");
+      stdin.write(ENTER);
+      await until(() => stdout().includes("got: second"));
+      stdin.write("/exit" + ENTER);
+      const { code } = await chatting;
+      expect(code).toBe(0);
+      expect(stdout()).toBe("got: hi\ngot: second\ngot: \n");
+      expect(stderr()).toContain("(withdrew 1 message; back in the prompt)\n");
+      // The text is back before the interrupt, so a refused interrupt can't lose it.
+      expect(stderr().indexOf("(withdrew")).toBeLessThan(stderr().indexOf(STOPPING));
+      const all = readRunLog(log);
+      const sends = all.filter(
+        (envelope) => envelope.record instanceof PoolCommitRecord && envelope.record.key === "__start__.messages",
+      );
+      expect(sends.length).toBe(3);
+      const withdrawn = all.flatMap((envelope) =>
+        envelope.record instanceof InboxWithdrawnRecord ? [[envelope.record.inbox, [...envelope.record.events]]] : [],
+      );
+      expect(withdrawn).toEqual([["messages", [sends[1]!.seq]]]);
+    },
+    TIMEOUT,
+  );
+}
+
+test(
+  "Esc at the prompt puts the withdrawn text before the draft",
+  async () => {
+    const { io, stdin, stderr } = chatIo({ tty: true, env: XAI });
+    const { scheduler, open } = heldScheduler();
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(SEVEN, { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+    try {
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(flowFile(NAP_AGENT), io, {}, { scheduler });
+      const log = join(tmp, "run.jsonl");
+      const waits = () => records(log).filter((record) => record instanceof RunWaitingRecord).length;
+      await until(() => existsSync(log) && waits() === 2);
+      // Sent while the turn sleeps: nothing reads it before Esc.
+      await send(log, "messages", "second", { env: io.env });
+      stdin.write("draft");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      stdin.write(ESCAPE);
+      await until(() => stderr().includes("(withdrew 1 message; back in the prompt)"));
+      await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You: second draft");
+      stdin.write(CTRL_U);
+      open();
+      await until(() => stderr().includes("(interrupted)"));
+      stdin.write("/exit" + ENTER);
+      expect((await chatting).code).toBe(0);
     } finally {
       globalThis.fetch = original;
     }

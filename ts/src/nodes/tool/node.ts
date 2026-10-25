@@ -507,6 +507,7 @@ export class ToolNode extends Node {
     if ((until === null) === (forValue === null)) throw inputError("sleep takes exactly one of `until` and `for`");
     if (until === null) {
       const forSeconds = durationSeconds(forValue, SLEEP, "for")!;
+      // The engine turns the seconds into a record-time deadline; one it can't write is the input's fault.
       deadlineAfter(caps, forSeconds, SLEEP, "for", forValue);
       return new Pending([], { wait: { tool: SLEEP, until: null, forSeconds } });
     }

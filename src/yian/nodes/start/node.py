@@ -18,6 +18,7 @@ from yian.expr.lineage import FeedbackValue
 from yian.nodes.base import (
     BackwardContext, BackwardResult, Node, NodeKind, Output, _project_structural_feedback,
 )
+from yian.nodes.binding import _validate_parameters
 from yian.nodes.contracts import Parameter
 
 
@@ -57,16 +58,7 @@ class StartNode(Node):
     ) -> None:
         super().__init__(node_id, title=title)
         parameters = [] if params is None else params
-        if type(parameters) is not list:
-            raise TypeError(
-                f"START params must be an exact list, got {type(parameters).__name__}"
-            )
-        for parameter in parameters:
-            if type(parameter) is not Parameter:
-                raise TypeError(
-                    "START params must contain Parameter values, "
-                    f"got {type(parameter).__name__}"
-                )
+        _validate_parameters(parameters, "START")
         self.params = parameters
 
     def forward(self, inputs: dict) -> Output:

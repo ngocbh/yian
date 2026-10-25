@@ -223,10 +223,18 @@ def _copy_backward_value(
 
     Raises:
         `TypeError`:
-            Raised for a non-JSON value or a non-string object key.
+            Raised for a non-JSON value, a non-string object key, or a value that
+            contains itself (naming the inner occurrence).
         `ValueError`:
             Raised for a non-finite number.
     """
+    return _copy_backward_item(value, name, memo, set())
+
+
+def _copy_backward_item(
+    value: Any, name: str, memo: dict[int, tuple[Any, Any]] | None, active: set[int],
+) -> Any:
+    """Copy one value for `_copy_backward_value`; ``active`` holds the ids being copied."""
     if value is None or type(value) in (str, bool, int):
         return value
     if type(value) is float:
@@ -237,20 +245,27 @@ def _copy_backward_value(
         entry = memo.get(id(value))
         if entry is not None:
             return entry[1]
+    # The memo holds only finished copies, so a container met again while it is
+    # still being copied is a cycle.
+    if id(value) in active:
+        raise TypeError(f"{name} must not contain itself")
     if type(value) is list:
+        active.add(id(value))
         result: Any = [
-            _copy_backward_value(item, f"{name}[{index}]", memo)
+            _copy_backward_item(item, f"{name}[{index}]", memo, active)
             for index, item in enumerate(value)
         ]
     elif type(value) is dict:
         if any(type(key) is not str for key in value):
             raise TypeError(f"{name} object keys must be strings")
+        active.add(id(value))
         result = {
-            key: _copy_backward_value(item, f"{name}[{key!r}]", memo)
+            key: _copy_backward_item(item, f"{name}[{key!r}]", memo, active)
             for key, item in value.items()
         }
     else:
         raise TypeError(f"{name} must contain only JSON values")
+    active.discard(id(value))
     if memo is not None:
         # Only finished copies are stored, so a failing container fails again,
         # with the same name, wherever it reappears.
@@ -1161,18 +1176,8 @@ class Node(ABC):
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
         params = self.params if self.params is not None else []
-        if type(params) is not list:
-            raise TypeError(
-                f"node {self.id!r} params must be an exact list, got {type(params).__name__}"
-            )
-        for parameter in params:
-            if type(parameter) is not Parameter:
-                raise TypeError(
-                    f"node {self.id!r} params must contain Parameter values, "
-                    f"got {type(parameter).__name__}"
-                )
         try:
-            inputs = apply_defaults(params, inputs)
+            inputs = apply_defaults(params, inputs, f"node {self.id!r}")
         except BindingError as exc:
             if not classify_body_errors:
                 raise

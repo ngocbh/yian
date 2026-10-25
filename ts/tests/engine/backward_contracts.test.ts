@@ -7,6 +7,7 @@
  * `test_backward_attribution_rejects_malformed_root_coordinates`,
  * `test_backward_outcome_does_not_normalize_its_caller_owned_failure`,
  * `test_backward_outcome_can_succeed_without_memory`,
+ * `test_backward_value_copy_refuses_a_value_that_contains_itself`,
  * `test_backward_outcome_copy_preserves_ordered_policy_dispositions`,
  * `test_backward_context_and_outcome_do_not_expose_mutable_authority`,
  * `test_retained_failure_origins_drop_mutable_subclass_state` and
@@ -377,6 +378,17 @@ test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
 ])("copyBackwardValue refuses %s with the nested name", (_name, value, cls, message) => {
   expect(() => copyBackwardValue(value, "value")).toThrow(cls);
   expect(() => copyBackwardValue(value, "value")).toThrow(message);
+});
+
+test("copyBackwardValue refuses a value that contains itself", () => {
+  const record: Record<string, unknown> = { a: 1 };
+  record.self = record;
+  const list: unknown[] = [];
+  list.push([list]);
+  expect(() => copyBackwardValue(record, "value")).toThrow('value["self"] must not contain itself');
+  expect(() => copyBackwardValue(list, "value", new Map())).toThrow("value[0][0] must not contain itself");
+  expect(() => new BackwardContext({}, { nodeData: record })).toThrow(TypeError);
+  expect(() => new BackwardContext({}, { nodeData: record })).toThrow("must not contain itself");
 });
 
 test("result validates input shapes and declared variable names", () => {

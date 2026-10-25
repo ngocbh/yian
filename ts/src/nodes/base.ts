@@ -340,10 +340,21 @@ export function sameBackwardResult(a: BackwardResult, b: BackwardResult): boolea
  * @param memo Containers already copied, mapped to their copies. A container met again returns
  *   its earlier copy, so the result shares it. Omitted, every occurrence is copied separately.
  * @returns The copy, with fresh frozen arrays and records.
- * @throws TypeError for a value that isn't JSON (`<name> must contain only JSON values`).
+ * @throws TypeError for a value that isn't JSON (`<name> must contain only JSON values`) or
+ *   that contains itself (`<name> must not contain itself`, naming the inner occurrence).
  * @throws RangeError for NaN (`<name> must not contain NaN`).
  */
 export function copyBackwardValue(value: unknown, name: string, memo?: Map<object, unknown>): unknown {
+  return copyBackwardItem(value, name, memo, new Set());
+}
+
+/** Copy one value for `copyBackwardValue`; `active` holds the containers still being copied. */
+function copyBackwardItem(
+  value: unknown,
+  name: string,
+  memo: Map<object, unknown> | undefined,
+  active: Set<object>,
+): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "bigint") {
     return value;
   }
@@ -353,21 +364,27 @@ export function copyBackwardValue(value: unknown, name: string, memo?: Map<objec
   }
   const shared = memo?.get(value as object);
   if (shared !== undefined) return shared;
+  // The memo holds only finished copies, so a container met again while it is still being copied
+  // is a cycle.
+  if (active.has(value as object)) throw new TypeError(`${name} must not contain itself`);
   let result: unknown[] | ValueRecord;
   if (isList(value)) {
+    active.add(value);
     result = [];
     // An index loop, not `map`: `map` skips the holes of a sparse array, which must fail here.
     for (let index = 0; index < value.length; index++) {
-      result.push(copyBackwardValue(value[index], `${name}[${index}]`, memo));
+      result.push(copyBackwardItem(value[index], `${name}[${index}]`, memo, active));
     }
   } else if (isRecord(value)) {
+    active.add(value);
     result = {};
     for (const key of Object.keys(value)) {
-      setField(result, key, copyBackwardValue(value[key], `${name}[${writeAsJson(key)}]`, memo) as Value);
+      setField(result, key, copyBackwardItem(value[key], `${name}[${writeAsJson(key)}]`, memo, active) as Value);
     }
   } else {
     throw new TypeError(`${name} must contain only JSON values`);
   }
+  active.delete(value);
   Object.freeze(result);
   // Only finished copies are stored, so a failing container fails again, named by its own path,
   // wherever it reappears.
@@ -388,6 +405,11 @@ export function validateDeclaredNames(names: unknown, fieldName: string): void {
     if (typeof name !== "string") throw new TypeError(`${fieldName} must contain only strings`);
   }
   if (new Set(names).size !== names.length) throw new RangeError(`${fieldName} must contain unique names`);
+}
+
+/** Return whether `value` can key a `WeakMap` or be held in a `WeakSet`. CASE and LOOP use it. */
+export function isWeakKey(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
 }
 
 /**
@@ -937,8 +959,8 @@ export interface NodeCaps {
 /**
  * The base contract every node kind implements: a pure function of its input record.
  *
- * A node implements its `forward` body; the inherited `run` template resolves to one of the
- * closed sum `Output | Route | Grow`. The node never receives the pool (the engine's evaluator
+ * A node implements its `forward` body; the inherited `run` template resolves to one `NodeResult`
+ * (`Output | Route | Grow | Pending`). The node never receives the pool (the engine's evaluator
  * binds its inputs and hands it a record) and never writes the pool: it describes its one output
  * as `new Output(value)` and the engine performs the write under the node id. Failure is a
  * rejection, not a variant.
@@ -1372,7 +1394,7 @@ export abstract class Node {
    * Declared defaults are filled first, then node-owned setup is validated (including that every
    * assertion and kind predicate parses), the pre-asserts run against the bound record, `forward`
    * runs, and the post-asserts check an `Output` against the inputs as bound. The promise
-   * resolves to exactly one `Output | Route | Grow`. Every failure rejects it, with the original
+   * resolves to exactly one `NodeResult` (`Output | Route | Grow | Pending`). Every failure rejects it, with the original
    * error; the checks and the synchronous part of `forward` (up to its first `await`) still run
    * before the promise is returned.
    *
@@ -1428,19 +1450,9 @@ export abstract class Node {
     // `forward` included, so `captureInputs` has run by the time `runForEvaluator` returns;
     // `async` still turns a throw here into a rejection.
     const params = this.params ?? [];
-    if (!isList(params)) {
-      throw new TypeError(`node ${reprText(this.id)} params must be an exact list, got ${jsTypeName(params)}`);
-    }
-    for (const parameter of params) {
-      if (!isExactly(parameter, Parameter)) {
-        throw new TypeError(
-          `node ${reprText(this.id)} params must contain Parameter values, got ${jsTypeName(parameter)}`,
-        );
-      }
-    }
     let record: Record<string, unknown>;
     try {
-      record = applyDefaults(params, inputs);
+      record = applyDefaults(params, inputs, `node ${reprText(this.id)}`);
     } catch (error) {
       if (classify && error instanceof BindingError) throw new BindingStageError(error);
       throw error;
@@ -1449,9 +1461,9 @@ export abstract class Node {
     this.validateExecutionSetup();
     const preFailure = this.failingAssertion("pre-assert", this.preAsserts, record);
     if (preFailure !== null) throw classify ? new AssertionStageError(preFailure) : preFailure;
-    // A snapshot for the post-asserts, taken before `forward`: a body may change the record it
-    // receives (a CODE body transforming its input in place), and the post-asserts must see the
-    // inputs as bound. Only paid when the node has post-asserts.
+    // A snapshot for the post-asserts, taken before `forward`: a kind's `forward` may change the
+    // record it receives, and the post-asserts must see the inputs as bound. Only paid when the
+    // node has post-asserts.
     const postRecord = this.postAsserts.length > 0 ? (copyValue(record as ValueRecord) as ValueRecord) : null;
     let result: NodeResult;
     try {
@@ -1491,7 +1503,7 @@ export abstract class Node {
    *
    * @param inputs The bound input record; the body may change it.
    * @param caps The capabilities the node's traits ask for.
-   * @returns One `Output | Route | Grow`, or a promise of one.
+   * @returns One `NodeResult` (`Output | Route | Grow | Pending`), or a promise of one.
    * @throws Error always, on the base.
    */
   forward(inputs: Record<string, unknown>, caps: NodeCaps): NodeResult | Promise<NodeResult> {
@@ -1687,11 +1699,10 @@ export abstract class Node {
   /**
    * Return the first assertion that doesn't hold on `record`, as the error to throw, or `null`.
    *
-   * Each assertion is parsed before it is evaluated with this node's type table. A false
-   * condition fails with `assertion.failed`; one that throws an `ExpressionError` while
-   * evaluating fails with `condition.evaluate`, that error as the `cause`.
-   *
-   * @throws ExpressionError when an assertion doesn't parse; the message names the node.
+   * Each assertion is evaluated with this node's type table. A false condition fails with
+   * `assertion.failed`; one that throws an `ExpressionError` while evaluating fails with
+   * `condition.evaluate`, that error as the `cause`. Callers run `validateExecutionSetup` first,
+   * which has parsed every assertion and named the node in any parse error.
    */
   private failingAssertion(
     label: string,
@@ -1700,7 +1711,6 @@ export abstract class Node {
   ): NodeAssertFailed | null {
     const subject = `node ${reprText(this.id)} ${label}`;
     for (const assertion of assertions) {
-      this.parseAssertion(label, assertion);
       let holds: boolean;
       try {
         holds = evaluateWhenRecord(assertion.expression, record as ValueRecord, this.types);

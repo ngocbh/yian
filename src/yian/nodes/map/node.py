@@ -50,7 +50,7 @@ class MapNode(Node):
             The id of the child flow to map.
         parallel (`bool`, *optional*, defaults to `False`):
             Inert — concurrency is the engine's `num_workers`; carried for the `over` case.
-        flow_version (`int`, *optional*, defaults to `None`):
+        flow_version (`str`, *optional*, defaults to `None`):
             A pinned child flow version, if any.
         child (`Any`, *optional*, defaults to `None`):
             The baked child flow (stamped at load); a `None` child raises at run time.
@@ -67,7 +67,7 @@ class MapNode(Node):
     grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper
 
     def __init__(self, node_id: str, *, flow_id: str, parallel: bool = False,
-                 flow_version: Optional[int] = None, child: Any = None,
+                 flow_version: Optional[str] = None, child: Any = None,
                  child_inputs: Optional[list[Parameter]] = None,
                  title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)

@@ -58,7 +58,7 @@ export class MapNode extends Node {
   /** The id of the child flow to map. */
   flowId: string;
   /** A pinned child flow version, if any. */
-  flowVersion: bigint | null;
+  flowVersion: string | null;
   /** Inert: concurrency is the engine's worker count; carried for the `over` case. */
   parallel: boolean;
   /** The baked child flow (stamped at load); a `null` child rejects at run time. */
@@ -82,7 +82,7 @@ export class MapNode extends Node {
     options: {
       flowId: string;
       parallel?: boolean;
-      flowVersion?: bigint | null;
+      flowVersion?: string | null;
       child?: unknown;
       childInputs?: readonly Parameter[] | null;
       title?: string | null;

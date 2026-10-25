@@ -54,6 +54,7 @@ import {
 } from "../typesys/index.ts";
 import {
   fromHost,
+  isList,
   jsTypeName,
   rejectDeepNesting,
   renderValuePath,
@@ -299,15 +300,16 @@ export function rejectInvalidBinding(value: unknown, where: string, origin: Orig
 /**
  * Require the canonical exact-array parameter carrier at every binding seam. Used by node kinds.
  *
+ * @param subject What owns the params, as the error messages name it.
  * @throws TypeError when `params` isn't a plain array or holds anything but exact `Parameter`s.
  */
-export function validateParameters(params: readonly Parameter[]): void {
-  if (!Array.isArray(params) || Object.getPrototypeOf(params) !== Array.prototype) {
-    throw new TypeError(`node params must be an exact list, got ${jsTypeName(params)}`);
+export function validateParameters(params: readonly Parameter[], subject = "node"): void {
+  if (!isList(params)) {
+    throw new TypeError(`${subject} params must be an exact list, got ${jsTypeName(params)}`);
   }
   for (const parameter of params) {
     if (!isExactly(parameter, Parameter)) {
-      throw new TypeError(`node params must contain Parameter values, got ${jsTypeName(parameter)}`);
+      throw new TypeError(`${subject} params must contain Parameter values, got ${jsTypeName(parameter)}`);
     }
   }
 }
@@ -436,6 +438,8 @@ export function coerceInputs(
  * A present own key, `null` included, always shadows a default. Defaults are validated against
  * any semantic contract but are kept as given, not as the typed value system's normalized form.
  *
+ * @param subject What owns the params, as a params error names it.
+ * @throws TypeError as `validateParameters`.
  * @throws BindingError with `failureCode` `binding.evaluate` when a default nests deeper than
  *   `YIAN_MAX_VALUE_NESTING` levels, is not a yian value (NaN, for one), or violates its
  *   parameter's contract.
@@ -443,8 +447,9 @@ export function coerceInputs(
 export function applyDefaults(
   params: readonly Parameter[],
   inputs: Readonly<Record<string, unknown>>,
+  subject = "node",
 ): Record<string, unknown> {
-  validateParameters(params);
+  validateParameters(params, subject);
   // The `as Value` casts below only satisfy `setField`: the record goes back to the caller
   // unchecked, as Python's dict does.
   const output: ValueRecord = {};

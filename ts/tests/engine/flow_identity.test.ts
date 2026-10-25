@@ -2131,8 +2131,8 @@ test.each([
   ],
   [
     "call-flow-version",
-    () => new CallNode("node", { flowId: "child", flowVersion: 1n, child: fragment() }),
-    () => new CallNode("node", { flowId: "child", flowVersion: 2n, child: fragment() }),
+    () => new CallNode("node", { flowId: "child", flowVersion: "1", child: fragment() }),
+    () => new CallNode("node", { flowId: "child", flowVersion: "2", child: fragment() }),
   ],
   [
     "call-child",
@@ -2146,8 +2146,8 @@ test.each([
   ],
   [
     "map-flow-version",
-    () => new MapNode("node", { flowId: "child", flowVersion: 1n, child: fragment() }),
-    () => new MapNode("node", { flowId: "child", flowVersion: 2n, child: fragment() }),
+    () => new MapNode("node", { flowId: "child", flowVersion: "1", child: fragment() }),
+    () => new MapNode("node", { flowId: "child", flowVersion: "2", child: fragment() }),
   ],
   [
     "map-child",

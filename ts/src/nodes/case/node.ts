@@ -19,7 +19,7 @@
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord } from "../../expr/expressions.ts";
 import type { ValueRecord } from "../../typesys/values.ts";
-import { ELSE_HANDLE, Node, NodeKind, parseNamedCondition, Route } from "../base.ts";
+import { ELSE_HANDLE, isWeakKey, Node, NodeKind, parseNamedCondition, Route } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 
 /**
@@ -181,7 +181,7 @@ export class CaseNode extends Node {
    * to evaluate, else the base's.
    */
   override exceptionCode(error: unknown): FailureCode {
-    const failed = isObject(error) ? failedCases.get(error) : undefined;
+    const failed = isWeakKey(error) ? failedCases.get(error) : undefined;
     return failed !== undefined && this.cases.includes(failed) ? "condition.evaluate" : super.exceptionCode(error);
   }
 
@@ -193,7 +193,7 @@ export class CaseNode extends Node {
    * the authored node origin.
    */
   override exceptionOrigin(error: unknown): OriginRef | null {
-    const failed = isObject(error) ? failedCases.get(error) : undefined;
+    const failed = isWeakKey(error) ? failedCases.get(error) : undefined;
     if (failed === undefined || !this.cases.includes(failed)) return super.exceptionOrigin(error);
     validateOptionalOrigin(failed.origin, "CASE predicate origin");
     return failed.origin ?? super.exceptionOrigin(error);
@@ -212,15 +212,10 @@ export class CaseNode extends Node {
           return new Route(branch.handle);
         }
       } catch (error) {
-        if (isObject(error)) failedCases.set(error, branch);
+        if (isWeakKey(error)) failedCases.set(error, branch);
         throw error;
       }
     }
     return new Route(ELSE_HANDLE);
   }
-}
-
-/** Return whether `value` can key a `WeakMap`. */
-function isObject(value: unknown): value is object {
-  return (typeof value === "object" && value !== null) || typeof value === "function";
 }

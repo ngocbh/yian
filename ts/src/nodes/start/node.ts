@@ -17,9 +17,10 @@
  */
 
 import type { FeedbackValue } from "../../expr/index.ts";
-import { isList, isRecord, jsTypeName } from "../../typesys/values.ts";
+import { isRecord } from "../../typesys/values.ts";
 import { type BackwardContext, BackwardResult, Node, NodeKind, Output, projectStructuralFeedback } from "../base.ts";
-import { isExactly, Parameter } from "../contracts.ts";
+import { validateParameters } from "../binding.ts";
+import type { Parameter } from "../contracts.ts";
 
 /**
  * The flow's parameter-binding boundary: internal-only, loader-synthesized, pure.
@@ -57,14 +58,7 @@ export class StartNode extends Node {
     const { params = null, title = null } = options;
     super(nodeId, { title });
     const parameters = params ?? [];
-    if (!isList(parameters)) {
-      throw new TypeError(`START params must be an exact list, got ${jsTypeName(parameters)}`);
-    }
-    for (const parameter of parameters) {
-      if (!isExactly(parameter, Parameter)) {
-        throw new TypeError(`START params must contain Parameter values, got ${jsTypeName(parameter)}`);
-      }
-    }
+    validateParameters(parameters, "START");
     this.params = parameters;
   }
 

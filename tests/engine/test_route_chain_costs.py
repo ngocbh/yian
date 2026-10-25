@@ -298,12 +298,13 @@ def test_run_and_resume_route_checks_grow_linearly(tmp_path, route_checks):
 
 _COUNTED = {
     "lookups": (RetainedTrace, "lookup_source"),
-    "context_copies": (node_base, "_copy_backward_value"),
+    "context_copies": (node_base, "_copy_backward_item"),
     "freezes": (memory_contracts, "_freeze_json"),
 }
 """Calls counted during backward, by name: the owner and attribute each counter wraps.
 
-``_copy_backward_value`` and ``_freeze_json`` are wrapped on their modules because
+``_copy_backward_item`` (the recursion behind ``_copy_backward_value``) and
+``_freeze_json`` are wrapped on their modules because
 their recursion looks up that global, so recursive calls count too.
 """
 

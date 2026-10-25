@@ -40,7 +40,7 @@ export class CallNode extends Node {
   /** The id of the child flow to call. */
   flowId: string;
   /** A pinned child flow version, if any. */
-  flowVersion: bigint | null;
+  flowVersion: string | null;
   /** The baked child flow (stamped at load); a `null` child rejects at run time. */
   child: unknown;
   /** The child's canonical parameters, read by compile validation. */
@@ -60,7 +60,7 @@ export class CallNode extends Node {
     nodeId: string,
     options: {
       flowId: string;
-      flowVersion?: bigint | null;
+      flowVersion?: string | null;
       child?: unknown;
       childInputs?: readonly Parameter[] | null;
       title?: string | null;

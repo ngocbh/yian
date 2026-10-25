@@ -315,6 +315,12 @@ describe("parseCommand", () => {
       args: { flow },
       options: { input: ["-x=1", "--json"], quiet: true, json: false },
     });
+    // A flag takes no value, so a flag before a dash word stays two flags.
+    const verbose: OptionSpec = { name: "verbose", short: "v", type: "boolean", help: "Show node outputs." };
+    const withVerbose: CommandSpec = { ...RUN, options: [...RUN.options, verbose] };
+    expect(parseCommand(withVerbose, [flow, "--quiet", "-v"])).toMatchObject({
+      options: { quiet: true, verbose: true },
+    });
     // After a bare `--`, an option name is a positional and takes nothing.
     expect(parseCommand(CHECK, ["a.yaml", "--", "--root", "-x"])).toMatchObject({
       args: { flows: ["a.yaml", "--root", "-x"] },

@@ -445,10 +445,10 @@ function groupHelp(group?: string): string {
  * `--licenses` prints `LICENSES` and `--version` the version, each returning 0. The command name is
  * resolved first (an unknown one is a usage error, 2), then the `YIAN_<NAME>` defaults in `io.env`
  * are checked (a bad value is reported on stderr, and as a `defaults.invalid` document when `argv`
- * holds `--json`, 1); the command runs under them. A group without its command prints the group's help and returns 2. A command line
- * its spec refuses, or a `UsageError` from the handler, prints the usage and the error and returns
- * 2; any other error prints its stack and returns 1. A warning yian raises while the command runs
- * prints as a `warning: <message>` line on stderr.
+ * holds `--json`, 1); the command runs under them. A group without its command prints the group's
+ * help and returns 2. A command line its spec refuses, or a `UsageError` from the handler, prints
+ * the usage and the error and returns 2; any other error prints its stack and returns 1. A warning
+ * yian raises while the command runs prints as a `warning: <message>` line on stderr.
  */
 export async function main(argv: readonly string[], io: CliIo = processIo()): Promise<number> {
   const [first, ...rest] = argv;

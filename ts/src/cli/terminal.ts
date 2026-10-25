@@ -459,6 +459,11 @@ export class Terminal {
   #turn: Turn | undefined;
   /** Settles once every turn queued so far has finished. */
   #tail: Promise<void> = Promise.resolve();
+  /**
+   * The host's handler while `watchKeys` runs, and the raw mode to restore once nothing needs the
+   * terminal raw.
+   */
+  #watch: { onKey: (key: "escape" | "interrupt") => void; wasRaw: boolean } | undefined;
   /** The last key was a `return`, so an `enter` now is the `\n` of the same `\r\n`. */
   #afterReturn = false;
   #pasting = false;
@@ -613,6 +618,35 @@ export class Terminal {
     }
   }
 
+  /**
+   * Watch the keys while no prompt is up, until `signal` aborts: Escape calls `onKey("escape")`
+   * and Ctrl-C `onKey("interrupt")`, rather than raising SIGINT, since the input is raw; other keys
+   * wait for the next prompt. A prompt meanwhile takes the keys as usual, and the watch goes on
+   * after it. Does nothing on a plain terminal or an input that isn't a TTY.
+   */
+  watchKeys(signal: AbortSignal, onKey: (key: "escape" | "interrupt") => void): void {
+    const input = this.#input;
+    if (this.#plain || this.#closed || signal.aborted) return;
+    if (input.isTTY !== true || typeof input.setRawMode !== "function") return;
+    this.#attach();
+    const watch = { onKey, wasRaw: input.isRaw === true };
+    this.#watch = watch;
+    // A `process.exit()` elsewhere skips the restore below.
+    const onExit = (): void => quietly(() => input.setRawMode!(false));
+    process.once("exit", onExit);
+    quietly(() => input.setRawMode!(true));
+    input.resume();
+    const end = (): void => {
+      if (this.#watch === watch) this.#watch = undefined;
+      quietly(() => process.removeListener("exit", onExit));
+      // A turn holding the terminal restores it when it ends.
+      if (this.#turn !== undefined) return;
+      quietly(() => input.setRawMode!(watch.wasRaw));
+      quietly(() => input.pause());
+    };
+    signal.addEventListener("abort", end, { once: true });
+  }
+
   /** Normalize one keypress and hand it to the active widget, or buffer it for the next one. */
   readonly #onKeypress = (
     str: string | undefined,
@@ -638,7 +672,10 @@ export class Terminal {
       str: alt?.[1] ?? str,
       paste: this.#pasting,
     };
+    const watching = this.#watch !== undefined && this.#turn === undefined;
     if (this.#active) this.#active.key(key);
+    else if (watching && key.name === "escape") this.#watch!.onKey("escape");
+    else if (watching && key.ctrl && key.name === "c") this.#watch!.onKey("interrupt");
     else this.#buffer.push(key);
   };
 
@@ -721,7 +758,8 @@ export class Terminal {
         this.#turn = turn;
         quietly(() => this.#onActive?.(true));
         this.#attach();
-        wasRaw = input.isRaw === true;
+        // Under a watch the terminal is raw for it; the mode before the watch is the one to restore.
+        wasRaw = this.#watch?.wasRaw ?? input.isRaw === true;
         // Even without raw mode the widgets hide the cursor and turn bracketed paste on.
         process.once("exit", onExit);
         if (setsRaw) input.setRawMode!(true);
@@ -737,10 +775,14 @@ export class Terminal {
         // Each step runs on its own, cooked mode first, so a failing one never skips the rest.
         // Pausing here, in a promise continuation rather than inside the key dispatch, keeps a
         // piped stdin from being restarted by its read-ahead.
-        if (setsRaw) quietly(() => input.setRawMode!(wasRaw));
+        // A watch still running keeps the terminal raw and the input flowing, and restores `wasRaw`
+        // itself when it ends.
+        const watch = this.#watch;
+        if (watch !== undefined) watch.wasRaw = wasRaw;
+        if (setsRaw) quietly(() => input.setRawMode!(watch !== undefined || wasRaw));
         quietly(() => output.write(SHOW_CURSOR + PASTE_OFF));
         quietly(() => process.removeListener("exit", onExit));
-        quietly(() => input.pause());
+        if (watch === undefined) quietly(() => input.pause());
         if (this.#closed) quietly(() => this.#detach());
         quietly(() => this.#onActive?.(false));
       }

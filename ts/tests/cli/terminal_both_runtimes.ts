@@ -463,6 +463,82 @@ async function escapeAtReadLineWithoutTheOptionIsIgnored(): Promise<void> {
   assert.deepEqual(await line, { value: "halfa" });
 }
 
+async function watchKeysSendsEscapeAndCtrlCAndBuffersTheRest(): Promise<void> {
+  const { input, terminal, exitHooks } = setup();
+  const keys: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(watch.signal, (key) => keys.push(key));
+  assert.deepEqual(input.rawCalls, [true]);
+  assert.equal(input.isPaused(), false);
+  input.write(ESCAPE);
+  // Past readline's escape timeout, so the Escape arrives on its own.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  input.write(CTRL_C);
+  input.write("ab");
+  await tick();
+  assert.deepEqual(keys, ["escape", "interrupt"]);
+  watch.abort();
+  assert.deepEqual(input.rawCalls, [true, false]);
+  assert.equal(input.isPaused(), true);
+  assert.equal(process.listenerCount("exit"), exitHooks);
+  // The other keys wait for the next prompt.
+  const line = terminal.readLine("You:");
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "ab" });
+  assert.deepEqual(keys, ["escape", "interrupt"]);
+}
+
+async function aPromptDuringWatchTakesTheKeysThenWatchingResumes(): Promise<void> {
+  const { input, terminal } = setup();
+  const keys: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(watch.signal, (key) => keys.push(key));
+  const answer = terminal.askText("Sure?");
+  input.write("yes" + ENTER);
+  assert.equal(await answer, "yes");
+  // The prompt gives the terminal back raw and flowing, to the watch.
+  assert.equal(input.isRaw, true);
+  assert.equal(input.isPaused(), false);
+  input.write(ESCAPE);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await tick();
+  assert.deepEqual(keys, ["escape"]);
+  watch.abort();
+  assert.equal(input.isRaw, false);
+  assert.equal(input.isPaused(), true);
+  // A watch that ends while a prompt is up leaves the terminal cooked once the prompt ends.
+  const again = new AbortController();
+  terminal.watchKeys(again.signal, (key) => keys.push(key));
+  const second = terminal.askText("Again?");
+  await tick();
+  again.abort();
+  assert.equal(input.isRaw, true);
+  input.write("no" + ENTER);
+  assert.equal(await second, "no");
+  assert.equal(input.isRaw, false);
+  assert.equal(input.isPaused(), true);
+  assert.deepEqual(keys, ["escape"]);
+}
+
+async function watchKeysOnAPlainOrNonTtyTerminalDoesNothing(): Promise<void> {
+  const keys: string[] = [];
+  for (const [tty, plain] of [
+    [false, false],
+    [true, true],
+  ] as const) {
+    const input = new FakeInput({ tty });
+    const terminal = new Terminal({ input, output: new FakeOutput(), plain });
+    const watch = new AbortController();
+    terminal.watchKeys(watch.signal, (key) => keys.push(key));
+    input.write(CTRL_C + ESCAPE);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    watch.abort();
+    assert.deepEqual(input.rawCalls, []);
+    assert.equal(input.listenerCount("keypress"), 0);
+  }
+  assert.deepEqual(keys, []);
+}
+
 async function aPlainTerminalWritesNoEscapesAndSetsNoRawMode(): Promise<void> {
   const input = new FakeInput();
   const output = new FakeOutput();
@@ -2264,6 +2340,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,
+  "watchKeys sends Escape and Ctrl-C and buffers the rest": watchKeysSendsEscapeAndCtrlCAndBuffersTheRest,
+  "a prompt during a watch takes the keys, then watching resumes": aPromptDuringWatchTakesTheKeysThenWatchingResumes,
+  "watchKeys on a plain or non-TTY terminal does nothing": watchKeysOnAPlainOrNonTtyTerminalDoesNothing,
   "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
   "a plain terminal sets raw mode for a secret prompt": aPlainTerminalSetsRawModeForASecretPrompt,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,

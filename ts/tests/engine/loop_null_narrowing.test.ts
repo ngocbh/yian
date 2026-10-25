@@ -1180,3 +1180,51 @@ test("assembled: load-types/engine_loop_null_narrowing__while_null_check_rejects
     call: assembledWith({ step: strictStep("Optional(Strict)") }),
   });
 });
+
+// ---------- a field read through a carried value that may be null ----------
+
+/** A LOOP carrying `draft: Optional(Draft)` (`Draft: {done: bool}`), driven by `driver`. */
+const draftLoop = (driver: string) => `id: drafts
+name: drafts
+typedefs:
+  Draft: {done: bool}
+input:
+  start: !Optional(Draft)
+defs:
+  step:
+    input:
+      draft: !Optional(Draft)
+    nodes:
+      get:
+        kind: code
+        input:
+          d: \${input.draft}
+        output: Optional(Draft)
+        code: return null
+    output:
+      draft: \${get.output}
+nodes:
+  loop:
+    kind: loop
+    ${driver}
+    max: 3
+    input:
+      draft: \${input.start}
+    call: step
+output: \${loop.output}
+`;
+
+test("a loop predicate reading a field of an Optional carried value is a load error", () => {
+  const error = loadError(() => assembleText(draftLoop("until: draft.done")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain(
+    "loop node 'loop' `until:` ${draft.done} reads field 'done' of draft, which may be null (it is Optional)",
+  );
+});
+
+test.each(["until: draft == null or draft.done", "until: draft?.done", "while: draft != null and not draft.done"])(
+  "a guarded loop predicate loads: %s",
+  (driver) => {
+    assembleText(draftLoop(driver));
+  },
+);

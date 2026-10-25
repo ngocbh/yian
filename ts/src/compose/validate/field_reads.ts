@@ -21,7 +21,7 @@ import {
 } from "../../compile/output_contracts.ts";
 import { END_ID, type FlowOutput } from "../../compile/model.ts";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
-import { ExpressionError } from "../../expr/expressions.ts";
+import { ExpressionError, parseCondition } from "../../expr/expressions.ts";
 import { type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
 import { type RefStep, splitReference, stepsText } from "../../expr/expressions.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../nodes/contracts.ts";
@@ -60,6 +60,7 @@ import {
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import { bindingSource } from "../../nodes/contracts.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
+import { LoopNode } from "../../nodes/loop/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
@@ -818,7 +819,8 @@ export interface FieldReadLevel {
 /**
  * Check every nullable field read of one flow level at load (design 2.5, 2.6): node bindings
  * (CASE `on:` and reserved sources included), then flow outputs, then node-local sites (AGENT
- * prompts). The first error throws with code `expr.nullable_field_read`.
+ * prompts and `render:`, LOOP predicates). The first error throws with code
+ * `expr.nullable_field_read`.
  *
  * A flow output is read by END. A co-skipping output (a lone reference, or a coalesce of them) is
  * one required group of its producers: a producer may be null there only when it may be skipped
@@ -897,6 +899,11 @@ export function checkFieldReads(
       const message = firstNullableRead(text, localRoots(level, nodeId, result), registry);
       if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range, code: NULLABLE_FIELD_READ });
     }
+    const predicate = loopPredicateError(nodeId, result, registry);
+    if (predicate !== null) {
+      const [message, range] = predicate;
+      throw diagnostics.error(message, { range, code: NULLABLE_FIELD_READ });
+    }
     const render = steerRenderSite(level, nodeId, result);
     if (render !== null) {
       const [where, text, range, roots] = render;
@@ -904,6 +911,46 @@ export function checkFieldReads(
       if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range, code: NULLABLE_FIELD_READ });
     }
   }
+}
+
+/**
+ * Return the first nullable read of a LOOP's `while:` or `until:` with its range, else `null`: the
+ * predicate reads the carried record, typed by the loop's own output contract.
+ */
+function loopPredicateError(
+  nodeId: string,
+  result: BuildResult,
+  registry: TypeRegistry,
+): [message: string, range: SourceRange | null] | null {
+  const node = result.node;
+  if (!(node instanceof LoopNode) || node.predicate === null || node.predicateKind === "times") return null;
+  const carried = node.outputContract;
+  if (carried === null) return null;
+  let tree: ExprNode;
+  try {
+    tree = parseCondition(node.predicate);
+  } catch (error) {
+    // The LOOP build reports a malformed predicate.
+    if (error instanceof ExpressionError) return null;
+    throw error;
+  }
+  const field = (name: string) => projectOutputContract(carried, [name]);
+  const roots: ReadRoots = {
+    contracts: (name) => {
+      const contract = field(name);
+      return contract === null ? undefined : [contract];
+    },
+    rootLength: () => 1,
+    nullable: () => false,
+    why: () => "it is Optional",
+    untyped: (name) => isUntyped(contractType(field(name))),
+    routing: () => null,
+  };
+  const [message] = nullableReadErrors(tree, roots, registry);
+  if (message === undefined) return null;
+  const key = node.predicateKind;
+  const range = result.fieldRanges.get(siteKey("field", key)) ?? result.nodeRange;
+  return [`loop node ${reprText(nodeId)} \`${key}:\` ${message}`, range];
 }
 
 /**

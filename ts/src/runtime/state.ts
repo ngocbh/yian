@@ -1528,8 +1528,9 @@ export function commitInitialPool(log: RunLog, state: RunState, pool: VariablePo
  *   observers.
  * @throws TypeError when `state` or `nodeId` has the wrong type, or the target's contract is
  *   malformed.
- * @throws RangeError when the state, the executing node or its baked target is invalid, or the
- *   node already has a pending commit.
+ * @throws RangeError when the state, the executing node or its baked target is invalid, the node
+ *   already has a pending commit, or `options.from` is set when the node isn't derived or missing
+ *   when it is.
  * @throws NodeDataError when `commitAs` or `output` is rejected: the output nests too deep,
  *   violates its target's type, or isn't a yian value. `original` holds the value layer's error.
  */
@@ -1549,6 +1550,8 @@ export function preparePoolCommit(
   requireInitializedNonterminal(state);
   requireCommittingNode(state, nodeId);
   requireValueCommitNode(state, nodeId);
+  const from = options.from ?? null;
+  requireCommitFrom(state, nodeId, from);
 
   const node = state.flow.nodes.get(nodeId)!;
   const nodeTarget: unknown = node.commitAs;
@@ -1574,7 +1577,6 @@ export function preparePoolCommit(
     const path = error instanceof TypeCheckError ? error.path : [];
     throw new NodeDataError(error, outputContractOrigin(outputContract, path));
   }
-  const from = options.from ?? null;
   // A derived commit records only its sources; its success rebuilds the value, live as on replay.
   const record = from === null ? new PoolCommitRecord(nodeId, target, valueWire) : new PoolCommitRecord(nodeId, target, null, { from });
   return prepareCommitTransition(state, record, false);
@@ -5547,19 +5549,28 @@ function validateNodeCommit(state: RunState, record: PoolCommitRecord): void {
   if (targetNode === undefined) {
     throw new RangeError(`success commit target ${reprText(record.key)} does not exist in the flow`);
   }
-  const derived = isDerivedCommit(state, record.nodeId);
-  if (derived && record.from === null) {
-    throw new RangeError(`pool_commit of ${reprText(record.nodeId)} must hold from: its node is derived`);
-  }
-  if (!derived && record.from !== null) {
-    throw new RangeError(`pool_commit of ${reprText(record.nodeId)} holds from, but its node isn't derived`);
-  }
+  requireCommitFrom(state, record.nodeId, record.from);
   // A derived commit's value is rebuilt, and checked, when its success accepts it.
   if (record.value === null) return;
   const typed = TypedValue.fromWire(record.value);
   const [wire] = canonicalOutputValue(typed, targetNode.outputContract, nodeOutputType(targetNode));
   if (logJson(wire) !== logJson(record.value)) {
     throw new RangeError("PoolCommitRecord value is not canonical for its target");
+  }
+}
+
+/**
+ * Require a node's own commit to hold `from` exactly when its node is derived (`isDerivedCommit`).
+ *
+ * @throws RangeError otherwise.
+ */
+function requireCommitFrom(state: RunState, nodeId: string, from: ReadonlyMap<string, number> | null): void {
+  const derived = isDerivedCommit(state, nodeId);
+  if (derived && from === null) {
+    throw new RangeError(`pool_commit of ${reprText(nodeId)} must hold from: its node is derived`);
+  }
+  if (!derived && from !== null) {
+    throw new RangeError(`pool_commit of ${reprText(nodeId)} holds from, but its node isn't derived`);
   }
 }
 

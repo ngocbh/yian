@@ -670,6 +670,22 @@ test("a success treats an invalid baked target as a host invariant error", () =>
   expect(log.nextSequence).toBe(7);
 });
 
+test.each([
+  ["holds from, though its node isn't derived", false, "pool_commit of 'filler' holds from, but its node isn't derived"],
+  ["holds no from, though its node is derived", true, "pool_commit of 'filler' must hold from: its node is derived"],
+] as const)("a live commit that %s is refused before append, as replay refuses it", (_label, derived, message) => {
+  const { state, log } = redirectReady();
+  Object.defineProperty(node(state.flow, "filler"), "derived", { value: derived });
+  const before = snapshot(state);
+  const sequence = log.nextSequence;
+  const from = derived ? null : new Map(state.producers);
+
+  expectError(() => preparePoolCommit(state, "filler", ["valid"], { from }), RangeError, message);
+
+  expectUnchanged(state, before);
+  expect(log.nextSequence).toBe(sequence);
+});
+
 test("a success refuses a settled newly ready successor before append", () => {
   const { state, log } = redirectReady();
   state.nodeState.set("after-baked", NodeState.TAKEN);

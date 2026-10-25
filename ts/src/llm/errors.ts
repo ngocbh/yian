@@ -10,6 +10,7 @@
  */
 
 import { redirectDetail } from "../platform.ts";
+import { scrub } from "./auth.ts";
 import { parseJson } from "../typesys/json.ts";
 
 /** What went wrong with a model call, independent of the provider. */
@@ -254,6 +255,8 @@ export interface ErrorFromResponseOptions {
   maxRetryAfter?: number | null;
   /** Current time in epoch seconds for an HTTP-date retry-after. */
   now?: number;
+  /** Secrets replaced in the body's detail after it is decoded and before it is capped. */
+  credentials?: Iterable<string>;
 }
 
 /**
@@ -267,11 +270,11 @@ export function errorFromResponse(
   status: number,
   headers: Headers,
   body: string,
-  { provider, maxRetryAfter = MAX_RETRY_AFTER_SECONDS, now }: ErrorFromResponseOptions,
+  { provider, maxRetryAfter = MAX_RETRY_AFTER_SECONDS, now, credentials = [] }: ErrorFromResponseOptions,
 ): ProviderError {
   const kind = kindForStatus(status, body);
   const retryAfter = parseRetryAfter(headers, now);
-  const detail = kind === "redirect" ? redirectDetail(headers.get("location")) : bodyDetail(body);
+  const detail = kind === "redirect" ? redirectDetail(headers.get("location")) : bodyDetail(body, credentials);
   return new ProviderError(kind, `${provider} returned HTTP ${status} (${kind}): ${detail}`, {
     status,
     retryAfter,
@@ -298,9 +301,25 @@ function isRetryable(
   return [408, 409, 429].includes(status) || status >= 500;
 }
 
-/** Return the most useful short text of an error body. */
-function bodyDetail(body: string): string {
-  return capDetail(jsonDetail(body) ?? (body.replace(/\s+/g, " ").trim() || "no body"));
+/**
+ * Return the most useful short text of an error body, scrubbed of `credentials`.
+ *
+ * A body shown whole has its JSON escapes undone first, so an echo in mixed escapes is shown
+ * plain and matches. Scrubbed before the cap, since a cut through an echo would leave a prefix
+ * no scrub can match.
+ */
+function bodyDetail(body: string, credentials: Iterable<string>): string {
+  const detail = jsonDetail(body) ?? (unescapeJson(body).replace(/\s+/g, " ").trim() || "no body");
+  return capDetail(scrub(detail, credentials));
+}
+
+const JSON_ESCAPES: Readonly<Record<string, string>> = { b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+
+/** Return `text` with each JSON string escape (`\uXXXX`, `\"`, `\n`, ...) replaced by its character. */
+function unescapeJson(text: string): string {
+  return text.replace(/\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))/g, (_, hex: string | undefined, char: string) =>
+    hex !== undefined ? String.fromCharCode(parseInt(hex, 16)) : (JSON_ESCAPES[char] ?? char),
+  );
 }
 
 /** Return the body's JSON `error.message`, `message` or `detail` string, or a string `error`, or `null`. */

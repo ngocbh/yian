@@ -13,7 +13,7 @@
  * uncapped; `RouteModel` scrubs it of the route's credentials and then caps it.
  */
 
-import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
+import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { type ErrorKind, ProviderError } from "../errors.ts";
 import {
@@ -52,6 +52,7 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
+import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_responses";
@@ -106,7 +107,7 @@ export const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string
   ["usage_limit_reached", "quota"],
   ["usage_not_included", "quota"],
 ]);
-const USAGE_NOT_INT = "openai response usage has a count that is not an int";
+const USAGE_NOT_INT = notIntMessage("openai");
 
 /** An assistant part that can carry a replay record. */
 type ReplayPart = TextPart | RefusalPart | ReasoningPart | ToolCallPart;
@@ -199,13 +200,16 @@ export class OpenAIResponses implements SseProtocol {
    * Turn a streamed reply's events into stream events.
    *
    * Deltas stream as they arrive; each `output_item.done` gives one `PartDone` per part of the
-   * done item. An item that never got its done event takes its parts from the terminal event's
-   * `output` at its output index; when it is absent there, its deltas build its parts. Items of
-   * that `output` the stream never mentioned, by output index, item id or call id, give their
-   * parts after all the others. Part indexes are dense, in the order each (output index,
-   * content index) is first seen. An added item's own text or arguments are ignored, since the
-   * deltas that follow carry them. Unknown events are ignored, and a `[DONE]` sentinel ends the
-   * stream.
+   * done item. At the terminal event each streamed output index is matched to at most one item
+   * of its `output`: by the item ids and call ids its events gave, wherever the item sits; else
+   * the item at its own position, when the stream gave none of that item's ids; else, for an
+   * unfinished index whose events gave no ids, the first item left whose ids the stream never
+   * gave. An item that never got its done event takes its parts from its match; with none, its
+   * deltas build its parts. Items of that `output` no index took, and whose ids the stream never
+   * gave, give their parts after all the others. Part indexes are dense: streamed parts in the
+   * order each (output index, content index) is first seen, then each such item's parts in
+   * order. An added item's own text or arguments are ignored, since the deltas that follow carry
+   * them. Unknown events are ignored, and a `[DONE]` sentinel ends the stream.
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
@@ -230,8 +234,17 @@ export class OpenAIResponses implements SseProtocol {
     };
     const opened = new Map<number, JsonObject>();
     const finished = new Set<number>();
-    // The item ids and call ids of the items the stream opened or finished.
+    // The item ids and call ids the stream gave, in all and by output index.
     const seenIds = new Set<string>();
+    const streamedIds = new Map<number, Set<string>>();
+    const sawIds = (outputIndex: number, ids: string[]): void => {
+      let known = streamedIds.get(outputIndex);
+      if (known === undefined) streamedIds.set(outputIndex, (known = new Set()));
+      for (const id of ids) {
+        known.add(id);
+        seenIds.add(id);
+      }
+    };
     const lastSummary = new Map<number, JsonValue | undefined>();
     // Refusal text by output index, then content index.
     const refusals = new Map<number, Map<number, string>>();
@@ -247,7 +260,7 @@ export class OpenAIResponses implements SseProtocol {
       if (frame.data.startsWith("[DONE]")) break;
       // Some gateways send keep-alive frames with empty data.
       if (frame.data === "") continue;
-      const data = eventData(frame.data);
+      const data = eventData(frame.data, "openai");
       if (!isPlainObject(data)) continue;
       const rawType = data["type"] || frame.event;
       const type = typeof rawType === "string" ? rawType : null;
@@ -262,6 +275,7 @@ export class OpenAIResponses implements SseProtocol {
           throw new ProviderError("protocol", `openai stream event ${type} has no output_index`);
         }
         outputIndex = Number(raw);
+        if (typeof data["item_id"] === "string") sawIds(outputIndex, [data["item_id"]]);
       }
       const rawContentIndex = data["content_index"];
       const contentIndex = typeof rawContentIndex === "bigint" ? Number(rawContentIndex) : 0;
@@ -274,7 +288,7 @@ export class OpenAIResponses implements SseProtocol {
         const item = data["item"];
         if (!isPlainObject(item)) continue;
         opened.set(outputIndex, item);
-        for (const id of itemIds(item)) seenIds.add(id);
+        sawIds(outputIndex, itemIds(item));
         if (item["type"] === "function_call") {
           sawCalls = true;
           yield new ToolCallDelta({
@@ -316,7 +330,7 @@ export class OpenAIResponses implements SseProtocol {
         const item = data["item"];
         if (!isPlainObject(item)) continue;
         finished.add(outputIndex);
-        for (const id of itemIds(item)) seenIds.add(id);
+        sawIds(outputIndex, itemIds(item));
         if (item["type"] === "function_call") sawCalls = true;
         for (const [itemContentIndex, part] of itemParts(item, this.#key)) {
           yield new PartDone(index(outputIndex, itemContentIndex), part);
@@ -328,26 +342,61 @@ export class OpenAIResponses implements SseProtocol {
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
         const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
-        // Output items the stream never mentioned still belong to the reply, after the others. A
-        // gateway's output indexes may not be positions in `output`, so an item is matched by
-        // its ids too.
-        const unseen = [...output.keys()].filter(
-          (each) =>
-            !finished.has(each) && !started.has(each) && !itemIds(output[each]!).some((id) => seenIds.has(id)),
-        );
-        for (const each of [...unfinished, ...unseen]) {
-          if (0 <= each && each < output.length) {
-            for (const [itemContentIndex, part] of itemParts(output[each]!, this.#key)) {
-              if (part instanceof ToolCallPart) sawCalls = true;
-              yield new PartDone(index(each, itemContentIndex), part);
+        // Each streamed output index is matched to at most one item of `output`, and each item to
+        // at most one index. By ids first, wherever the item sits, since a gateway may renumber
+        // output indexes; then the item at the index's own position, when the stream gave none of
+        // its ids, since a gateway may also rewrite ids for the final response.
+        const streamed = [...new Set([...started, ...finished])].sort((a, b) => a - b);
+        const terminal = new Map<number, JsonValue>();
+        const claimed = new Set<number>();
+        const take = (each: number, position: number): void => {
+          if (position < 0 || claimed.has(position) || terminal.has(each)) return;
+          claimed.add(position);
+          terminal.set(each, output[position]!);
+        };
+        const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
+        for (const each of streamed) {
+          const ids = streamedIds.get(each);
+          if (ids !== undefined && ids.size > 0) {
+            take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
+          }
+        }
+        for (const each of streamed) {
+          if (each < output.length && fresh(output[each]!)) take(each, each);
+        }
+        // An unfinished index the stream gave no ids takes the first item left whose ids it never
+        // gave, so no item of `output` is shown twice.
+        for (const each of unfinished) {
+          if (terminal.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
+          take(
+            each,
+            output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
+          );
+        }
+        for (const each of unfinished) {
+          const item = terminal.get(each);
+          if (item === undefined) {
+            // Text, reasoning and calls are built from their deltas; a refusal streams none, so
+            // its part is built here.
+            const openedItem = opened.get(each) ?? {};
+            for (const [refusalIndex, text] of refusals.get(each) ?? []) {
+              yield new PartDone(index(each, refusalIndex), refusalPart(text, openedItem, this.#key));
             }
             continue;
           }
-          // Text, reasoning and calls are built from their deltas; a refusal streams none, so
-          // its part is built here.
-          const item = opened.get(each) ?? {};
-          for (const [refusalIndex, text] of refusals.get(each) ?? []) {
-            yield new PartDone(index(each, refusalIndex), refusalPart(text, item, this.#key));
+          for (const [itemContentIndex, part] of itemParts(item, this.#key)) {
+            if (part instanceof ToolCallPart) sawCalls = true;
+            yield new PartDone(index(each, itemContentIndex), part);
+          }
+        }
+        // Output items no streamed index took, and whose ids the stream never gave, still belong
+        // to the reply, after the others.
+        for (const [position, item] of output.entries()) {
+          if (claimed.has(position) || !fresh(item)) continue;
+          // A new slot each: the position may also be an output index the stream used.
+          for (const [, part] of itemParts(item, this.#key)) {
+            if (part instanceof ToolCallPart) sawCalls = true;
+            yield new PartDone(count++, part);
           }
         }
         yield* this.#finish(response, sawCalls, responseId, type);
@@ -445,7 +494,7 @@ export class OpenAIResponses implements SseProtocol {
       } else {
         for (const part of message.parts) {
           if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(part, message.role));
+          if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
           // Responses has no error flag; the error text is the output.
           items.push({ type: "function_call_output", call_id: part.callId, output: part.content });
         }
@@ -510,7 +559,7 @@ export class OpenAIResponses implements SseProtocol {
     let unpaired = false;
     for (const part of message.parts) {
       if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
       if (part.providerPayload === null) {
         if (part instanceof ReasoningPart) unpaired = true;
         records.push(null);
@@ -599,16 +648,6 @@ function readRecord(
   return fits ? read : { ok: false, reason: "malformed" };
 }
 
-/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
-function eventData(data: string): JsonValue {
-  try {
-    return parseJson(data, "plain");
-  } catch (error) {
-    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", "invalid JSON in openai stream event");
-    throw error;
-  }
-}
-
 /** Return an output item's string `id`, and its string `call_id` when it is a function call. */
 function itemIds(item: JsonValue): string[] {
   if (!isPlainObject(item)) return [];
@@ -637,29 +676,22 @@ function usageOf(usage: JsonValue | undefined): Usage | null {
   if (!isPlainObject(inputDetails) || !isPlainObject(outputDetails)) {
     throw new ProviderError("protocol", "openai response usage details are not objects");
   }
-  const inputTokens = tokenCount(usage["input_tokens"]) ?? 0;
-  const outputTokens = tokenCount(usage["output_tokens"]) ?? 0;
+  const inputTokens = tokenCount(usage["input_tokens"], USAGE_NOT_INT) ?? 0;
+  const outputTokens = tokenCount(usage["output_tokens"], USAGE_NOT_INT) ?? 0;
   try {
     return new Usage({
       inputTokens,
       outputTokens,
-      totalTokens: tokenCount(usage["total_tokens"]) ?? inputTokens + outputTokens,
-      cacheReadTokens: tokenCount(inputDetails["cached_tokens"]),
-      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"]),
-      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"]),
+      totalTokens: tokenCount(usage["total_tokens"], USAGE_NOT_INT) ?? inputTokens + outputTokens,
+      cacheReadTokens: tokenCount(inputDetails["cached_tokens"], USAGE_NOT_INT),
+      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], USAGE_NOT_INT),
+      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], USAGE_NOT_INT),
     });
   } catch (error) {
     // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
     if (error instanceof MessageFormatError) throw new ProviderError("protocol", USAGE_NOT_INT);
     throw error;
   }
-}
-
-/** Return a usage count as a number, `null` when it is `null` or absent. */
-function tokenCount(value: JsonValue | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "bigint") throw new ProviderError("protocol", USAGE_NOT_INT);
-  return Number(value);
 }
 
 /**
@@ -788,7 +820,7 @@ function inputMessage(message: Message): JsonObject | null {
   const texts: string[] = [];
   for (const part of message.parts) {
     if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(part, message.role));
+    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
     texts.push(part.text);
   }
   if (texts.length === 0) return null;
@@ -831,10 +863,4 @@ function textFormat(format: OutputFormat): JsonObject {
   const rendered: JsonObject = { type: "json_schema", name: format.name, schema: copyJson(format.schema) };
   if (format.strict !== null) rendered["strict"] = format.strict;
   return rendered;
-}
-
-/** Return the error text for a part a message of `role` cannot carry. */
-function wrongPart(part: Part, role: string): string {
-  const article = role === "assistant" ? "an" : "a";
-  return `the openai_responses route cannot send a ${part.constructor.name} in ${article} ${role} message`;
 }

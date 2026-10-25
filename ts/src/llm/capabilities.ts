@@ -25,18 +25,8 @@ export type StructuredMethod = "function_calling" | "json_mode" | "json_schema" 
 export interface ModelCapabilities {
   /** Whether the model accepts the `tool_choice` parameter. */
   readonly supportsToolChoice: boolean;
-  /** Whether the model accepts `response_format: {type: "json_object"}`. */
-  readonly supportsJsonMode: boolean;
-  /** Whether the model accepts `response_format: {type: "json_schema"}`. */
-  readonly supportsJsonSchema: boolean;
   /** The structured-output method to use for this model. */
   readonly preferredStructuredMethod: StructuredMethod;
-  /**
-   * Whether prior assistant turns must echo their `reasoning_content` back.
-   *
-   * DeepSeek thinking-mode models 400 if it is not echoed on the next request.
-   */
-  readonly requiresReasoningContentRoundtrip: boolean;
   /**
    * Whether requests must set `reasoning_split: true`.
    *
@@ -52,22 +42,17 @@ export interface ModelCapabilities {
 // parameter (official Oh My Pi integration guide and the 400 response in issue #678).
 // Their official tool-calling examples (api-docs.deepseek.com/guides/tool_calls) pass
 // `tools` without `tool_choice`; supportsToolChoice is false so the caller mirrors that
-// and leaves `tool_choice` out.
+// and leaves `tool_choice` out. Their echo of `reasoning_content` on later turns is
+// switched by `chatOptions` in openai_chat.ts, per provider.
 const DEEPSEEK_THINKING: ModelCapabilities = Object.freeze({
   supportsToolChoice: false,
-  supportsJsonMode: true,
-  supportsJsonSchema: false,
   preferredStructuredMethod: "function_calling",
-  requiresReasoningContentRoundtrip: true,
   requiresReasoningSplit: false,
 });
 
 const DEEPSEEK_CHAT: ModelCapabilities = Object.freeze({
   supportsToolChoice: true,
-  supportsJsonMode: true,
-  supportsJsonSchema: false,
   preferredStructuredMethod: "function_calling",
-  requiresReasoningContentRoundtrip: false,
   requiresReasoningSplit: false,
 });
 
@@ -79,19 +64,13 @@ const DEEPSEEK_CHAT: ModelCapabilities = Object.freeze({
 // response_format is only for MiniMax-Text-01, not M2.x.
 const MINIMAX_THINKING: ModelCapabilities = Object.freeze({
   supportsToolChoice: false,
-  supportsJsonMode: false,
-  supportsJsonSchema: false,
   preferredStructuredMethod: "function_calling",
-  requiresReasoningContentRoundtrip: false,
   requiresReasoningSplit: true,
 });
 
 const DEFAULT: ModelCapabilities = Object.freeze({
   supportsToolChoice: true,
-  supportsJsonMode: true,
-  supportsJsonSchema: true,
   preferredStructuredMethod: "function_calling",
-  requiresReasoningContentRoundtrip: false,
   requiresReasoningSplit: false,
 });
 
@@ -100,34 +79,20 @@ const DEFAULT: ModelCapabilities = Object.freeze({
 // (provider, model) pair; no real provider is marked no-native today.
 const NO_NATIVE_STRUCTURED: ModelCapabilities = Object.freeze({
   supportsToolChoice: false,
-  supportsJsonMode: false,
-  supportsJsonSchema: false,
   preferredStructuredMethod: "none",
-  requiresReasoningContentRoundtrip: false,
   requiresReasoningSplit: false,
 });
 
 // Exact-ID matches take precedence over pattern matches.
 const BY_ID: ReadonlyMap<string, ModelCapabilities> = new Map([
   ["deepseek-chat", DEEPSEEK_CHAT],
-  ["deepseek-reasoner", DEEPSEEK_THINKING],
-  ["deepseek-v4-flash", DEEPSEEK_THINKING],
-  ["deepseek-v4-pro", DEEPSEEK_THINKING],
-  // MiniMax: full official model lineup per
-  // platform.minimax.io/docs/api-reference/text-openai-api
-  ["MiniMax-M2.7", MINIMAX_THINKING],
-  ["MiniMax-M2.7-highspeed", MINIMAX_THINKING],
-  ["MiniMax-M2.5", MINIMAX_THINKING],
-  ["MiniMax-M2.5-highspeed", MINIMAX_THINKING],
-  ["MiniMax-M2.1", MINIMAX_THINKING],
-  ["MiniMax-M2.1-highspeed", MINIMAX_THINKING],
-  ["MiniMax-M2", MINIMAX_THINKING],
   // Test/escape-hatch sentinel: the only entry with no native structured output.
   ["no-structured-sentinel", NO_NATIVE_STRUCTURED],
 ]);
 
-// Forward-compat patterns. New `deepseek-v5-*` / `deepseek-reasoner-*` or `MiniMax-M3*`
-// variants inherit the thinking-mode quirks automatically.
+// Thinking-mode families: `deepseek-reasoner`, `deepseek-v4-*` and MiniMax's M2.x lineup
+// (platform.minimax.io/docs/api-reference/text-openai-api), and future `deepseek-v5-*` or
+// `MiniMax-M3*` variants without a table edit.
 const BY_PATTERN: readonly (readonly [RegExp, ModelCapabilities])[] = [
   [/^deepseek-v\d/, DEEPSEEK_THINKING],
   [/^deepseek-reasoner/, DEEPSEEK_THINKING],

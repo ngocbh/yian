@@ -21,7 +21,7 @@
 
 import { createHash } from "node:crypto";
 
-import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
+import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
 import {
@@ -58,6 +58,7 @@ import {
   type ToolSpec,
   Usage,
 } from "../messages.ts";
+import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "anthropic_messages";
@@ -473,7 +474,7 @@ export class AnthropicMessages implements SseProtocol {
     let unsigned = false;
     for (const part of message.parts) {
       // Refused here so a bad message never fires onReplayDegraded first.
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
       if (!(part instanceof ReasoningPart)) {
         blocks.push(null);
         continue;
@@ -538,14 +539,14 @@ function merge(messages: readonly Message[]): Turn[] {
 /** Return a system or user message's texts. */
 function textsOf(message: Message): string[] {
   return message.parts.map((part) => {
-    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(part, message.role));
+    if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
     return part.text;
   });
 }
 
 /** Render a tool message's part as a `tool_result` block; `is_error` is always sent. */
 function toolResult(part: Part): JsonObject {
-  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(part, "tool"));
+  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, "tool"));
   return { type: "tool_result", content: part.content, tool_use_id: toolId(part.callId), is_error: part.isError };
 }
 
@@ -625,16 +626,6 @@ function reasoningBlock(
     }
   }
   return { ok: false, reason: "malformed" };
-}
-
-/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
-function eventData(data: string, provider: string): JsonValue {
-  try {
-    return parseJson(data, "plain");
-  } catch (error) {
-    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", `invalid JSON in ${provider} stream event`);
-    throw error;
-  }
 }
 
 /**
@@ -732,18 +723,6 @@ function usageOf(usage: JsonObject, provider: string): Usage {
   }
 }
 
-/** Return the error message for a usage count that is not an int. */
-function notIntMessage(provider: string): string {
-  return `${provider} response usage has a count that is not an int`;
-}
-
-/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
-function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "bigint" || !Number.isSafeInteger(Number(value))) throw new ProviderError("protocol", notInt);
-  return Number(value);
-}
-
 /** Return the text of `blocks` when they are one text block, else `null`. */
 function loneText(blocks: JsonObject[]): string | null {
   const [first] = blocks;
@@ -799,10 +778,4 @@ function toolChoice(choice: ToolChoice, parallel: boolean | null): JsonObject | 
 function toolId(id: string): string {
   if (id === "" || TOOL_ID.test(id)) return id;
   return `toolu_${createHash("sha256").update(id).digest("hex").slice(0, 24)}`;
-}
-
-/** Return the error text for a part a message of `role` cannot carry. */
-function wrongPart(part: Part, role: string): string {
-  const article = role === "assistant" ? "an" : "a";
-  return `the anthropic_messages route cannot send a ${part.constructor.name} in ${article} ${role} message`;
 }

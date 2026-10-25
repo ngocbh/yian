@@ -8,7 +8,6 @@ describe("getCapabilities", () => {
   test("deepseek-reasoner rejects tool choice", () => {
     const caps = getCapabilities("deepseek-reasoner");
     expect(caps.supportsToolChoice).toBe(false);
-    expect(caps.requiresReasoningContentRoundtrip).toBe(true);
   });
 
   test("MiniMax requires reasoning_split", () => {

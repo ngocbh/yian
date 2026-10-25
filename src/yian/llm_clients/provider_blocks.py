@@ -1352,13 +1352,22 @@ def _partial_field(
                 tag = {"type": value["type"]} if "type" in value else {}
                 _check_literal(model, name, tag, top=top, path=path, keys=keys,
                                problems=problems)
+            elif not _block_members(annotation) and Any not in _members(annotation):
+                # A field that takes no mapping: an empty one gives its own type's message,
+                # whatever the values resolve to.
+                _check_literal(model, name, {}, top=top, path=path, keys=keys, problems=problems)
             return
     elif isinstance(value, list) and _holds_value(value, is_value):
         items = [typing.get_args(m)[0] for m in _members(annotation) if _is_list(m)]
-        item = Union[tuple(items)] if items else None
+        if not items:
+            # A field that takes no list, as for a mapping above.
+            if Any not in _members(annotation):
+                _check_literal(model, name, [], top=top, path=path, keys=keys, problems=problems)
+            return
+        item = Union[tuple(items)]
         for index, entry in enumerate(value):
             if isinstance(entry, Mapping) and not is_value(entry):
-                part = _nested_block(item, entry) if item is not None else None
+                part = _nested_block(item, entry)
                 if part is not None:
                     _partial_problems(part, entry, top=top, prefix=f"{path}[{index}].",
                                       keys=(*keys, index), is_value=is_value,

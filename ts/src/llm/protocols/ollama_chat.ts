@@ -61,6 +61,7 @@ import {
   type ToolSpec,
   Usage,
 } from "../messages.ts";
+import { callId, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "ollama_chat";
@@ -174,7 +175,7 @@ export class OllamaChat implements NdjsonProtocol {
     const texts: string[] = [];
     const calls: JsonObject[] = [];
     for (const part of message.parts) {
-      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, "assistant"));
+      if (part instanceof ToolResultPart) throw new TypeError(wrongPart(PROTOCOL, part, "assistant"));
       if (part instanceof TextPart) {
         texts.push(part.text);
       } else if (part instanceof ToolCallPart) {
@@ -337,7 +338,7 @@ export class OllamaChat implements NdjsonProtocol {
 function joinedText(message: Message): string {
   return message.parts
     .map((part) => {
-      if (!(part instanceof TextPart)) throw new TypeError(wrongPart(part, message.role));
+      if (!(part instanceof TextPart)) throw new TypeError(wrongPart(PROTOCOL, part, message.role));
       return part.text;
     })
     .join("\n");
@@ -349,7 +350,7 @@ function joinedText(message: Message): string {
  * @throws {TypeError} If the part is not a tool result.
  */
 function toolMessage(part: Part): JsonObject {
-  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(part, "tool"));
+  if (!(part instanceof ToolResultPart)) throw new TypeError(wrongPart(PROTOCOL, part, "tool"));
   const rendered = withContent({ role: "tool" }, part.content);
   rendered["tool_name"] = part.name;
   rendered["tool_call_id"] = part.callId;
@@ -369,12 +370,6 @@ function functionTool(spec: ToolSpec): JsonObject {
     type: "function",
     function: { name: spec.name, description: spec.description, parameters: copyJson(spec.parameters) },
   };
-}
-
-/** Return the error text for a part a message of `role` cannot carry. */
-function wrongPart(part: Part, role: string): string {
-  const article = role === "assistant" ? "an" : "a";
-  return `the ollama_chat route cannot send a ${part.constructor.name} in ${article} ${role} message`;
 }
 
 /** Return whether `value` is a string or `null`. */
@@ -417,23 +412,6 @@ function readCall(entry: JsonValue, n: number, provider: string): WireCall {
 }
 
 /**
- * Return a call's id: its own unless missing or in `taken`, else `yian_call_<n>` with `_<k>`
- * appended while that is in `taken`. The id it gets is added to `taken`.
- *
- * @param n The call's position among the reply's calls.
- * @param taken The ids in the reply so far: the server's and those generated.
- */
-function callId(id: string | null, n: number, taken: Set<string>): string {
-  let out = id;
-  if (out === null || taken.has(out)) {
-    out = `yian_call_${n}`;
-    for (let k = 1; taken.has(out); k++) out = `yian_call_${n}_${k}`;
-  }
-  taken.add(out);
-  return out;
-}
-
-/**
  * Return the `done` line's usage, or `null` when input, output and cache reads are all 0 or
  * missing. A missing input or output count is 0 and the total their sum; the cache reads are
  * `prompt_eval_cached_count`, `null` when missing.
@@ -442,7 +420,7 @@ function callId(id: string | null, n: number, taken: Set<string>): string {
  *   (kind `protocol`).
  */
 function usageOf(line: JsonObject, provider: string): Usage | null {
-  const notInt = `${provider} response usage has a count that is not an int`;
+  const notInt = notIntMessage(provider);
   const inputTokens = tokenCount(line["prompt_eval_count"], notInt) ?? 0;
   const outputTokens = tokenCount(line["eval_count"], notInt) ?? 0;
   const cacheReadTokens = tokenCount(line["prompt_eval_cached_count"], notInt);
@@ -461,11 +439,4 @@ function usageOf(line: JsonObject, provider: string): Usage | null {
     if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
     throw error;
   }
-}
-
-/** Return a usage count as a number, `null` when it is `null` or absent; throw `notInt` otherwise. */
-function tokenCount(value: JsonValue | undefined, notInt: string): number | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "bigint" || !Number.isSafeInteger(Number(value))) throw new ProviderError("protocol", notInt);
-  return Number(value);
 }

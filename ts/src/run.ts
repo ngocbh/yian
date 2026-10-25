@@ -124,6 +124,7 @@ import {
   decodeRecord,
   encodeRecord,
   isRunLogLocked,
+  InterruptedRecord,
   iterRunRecords,
   JsonlRunLog,
   RunLogChangedError,
@@ -2161,34 +2162,54 @@ export async function cancel(log: string, options: DeliveryOptions = {}): Promis
   return open;
 }
 
+/** What `interrupt` did. */
+export interface InterruptResult {
+  /** The `interrupted` record's seq; `null` when nothing was appended. */
+  readonly seq: number | null;
+  /** The agents the record named. */
+  readonly nodes: readonly string[];
+  /** The open host calls it closed, as `pendingCalls` listed them. */
+  readonly calls: readonly PendingCall[];
+}
+
 /**
- * Interrupt the agents reading the top-level inbox `inbox` as their steer inbox: each one's
- * current reply is cut and its result is null, which its declared output decides (`Optional(...)`
- * succeeds with null; anything else, no `output:` included, fails `agent.interrupted`). The
- * interrupt closes their open calls (`CallClosed {reason: "interrupted"}`), so a later `complete`
- * of one is refused. A live engine cuts a running reply at once; a waiting agent honors it when the
- * run next moves. Queued steers stay in the inbox. Delivered as `send` is; offline only waiting
- * agents are named (a crashed run's agents aren't known without an engine), so `advance` a crashed
- * run first.
+ * Stop the turn on the top-level inbox `inbox`: interrupt the agents reading it as their steer
+ * inbox, and remember the Stop for one that opens it soon. Each named agent's current reply is cut
+ * and its result is null, which its declared output decides (`Optional(...)` succeeds with null;
+ * anything else, no `output:` included, fails `agent.interrupted`). The interrupt closes their open
+ * calls (`CallClosed {reason: "interrupted"}`), so a later `complete` of one is refused. A live
+ * engine cuts a running reply at once; a waiting agent honors it when the run next moves. Queued
+ * steers stay in the inbox: `withdraw` takes them back.
+ *
+ * It appends nothing (`seq: null`) when the run waits for the next message on `inbox` (a take of
+ * it waits with nothing unread and no reader is open), or when it is already stopping (a Stop on
+ * `inbox` stands, or every current reader already holds or has honored an interrupt). Otherwise
+ * it records `interrupted {inbox, nodes}`, and `nodes` may be empty. The Stop is remembered until
+ * the next pickup from `inbox` (a take of it waits, a waiting take is answered or times out, an
+ * inline take commits, a withdraw reopens a take), the first `run_waiting` after it stopped an
+ * agent, or run end: a reader that opens `inbox` meanwhile is stopped before its first model
+ * call, and only its own `interrupted` record and `CallClosed` events report it. Delivered as
+ * `send` is; offline only waiting agents are named, and a crashed run's agents stop when they
+ * reopen.
  *
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
  * @param options See `DeliveryOptions`.
- * @returns The open host calls the interrupt closed, as `pendingCalls` listed them; `[]` when no
- *   agent reads `inbox` (nothing is appended).
+ * @returns The record's seq, the agents it named and the open host calls it closed.
  * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `not_started`, or `unknown_inbox`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
-export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly PendingCall[]> {
+export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<InterruptResult> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   let open: readonly PendingCall[] = [];
-  const { events } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
+  const { seq, events, record } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
     open = openHostCalls(state.waits, (call) => stateArguments(state, call));
   });
   const closed = new Set(events.flatMap((event) => (event instanceof CallClosed ? [event.callId] : [])));
-  return open.filter((call) => closed.has(call.callId));
+  const nodes = record instanceof InterruptedRecord ? [...record.nodes] : [];
+  return { seq, nodes, calls: open.filter((call) => closed.has(call.callId)) };
 }
 
 /** One open host call of a run, as `pendingCalls` lists it. */

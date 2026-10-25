@@ -20,7 +20,7 @@
  *
  * Added beside them: `Diagnostic` (`diagnostics`) and `registerTemplateFn` (`expr/builtins`);
  * `pending` (`tools/context`), the marker a host tool returns when its answer comes later, and the
- * host calls on a run log, `send`, `complete`, `close`, `interrupt`, `cancel` and `pendingCalls`, with their
+ * host calls on a run log, `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel` and `pendingCalls`, with their
  * errors `RunBusyError` and `DeliveryRefused` (`run`);
  * `ToolAttemptsFailed` (`nodes/tool/node`, Python's `yian.nodes.tool`), beside the tool errors; and
  * Python's `yian.memory.storage` names `SQLiteStorage`, `checkStoragePath` (`memory/storage/sqlite`),
@@ -75,6 +75,7 @@ export {
   RunBusyError,
   runFlow,
   send,
+  withdraw,
 } from "./run.ts";
 export { pending, ToolContext } from "./tools/context.ts";
 export { PermanentToolError, ReportedToolError, TransientToolError } from "./tools/errors.ts";

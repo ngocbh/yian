@@ -94,8 +94,10 @@ test("an idle interrupt of a waiting agent closes its call, returns it, and refu
   const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
   const { log } = await waitingReply(model);
   const [call] = pendingCalls(log);
-  const closed = await interrupt(log, "m", { env });
-  expect(closed).toEqual([call!]);
+  const { seq, nodes, calls } = await interrupt(log, "m", { env });
+  expect(seq).toBe(readRunLog(log).at(-1)!.seq);
+  expect(nodes).toEqual(["reply"]);
+  expect(calls).toEqual([call!]);
   expect(pendingCalls(log)).toEqual([]);
   const record = readRunLog(log).at(-1)!.record as InterruptedRecord;
   expect([record.inbox, [...record.nodes]]).toEqual(["m", ["reply"]]);
@@ -110,7 +112,7 @@ test("interrupt while idle at the take appends nothing", async () => {
   const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
   await runFlow(flow, {}, { env, log, tools: tools(), models: serving(model), runId: "r" });
   const before = readFileSync(log);
-  expect(await interrupt(log, "m", { env })).toEqual([]);
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: null, nodes: [], calls: [] });
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 
@@ -133,7 +135,7 @@ test("an interrupt of a closed inbox still cuts a waiting reader", async () => {
   const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
   const { log } = await waitingReply(model);
   await close(log, "m", { env });
-  expect((await interrupt(log, "m", { env })).length).toBe(1);
+  expect((await interrupt(log, "m", { env })).calls.length).toBe(1);
   expect(kinds(log).at(-1)).toBe("interrupted");
 });
 
@@ -148,7 +150,7 @@ test("a crashed run: an offline interrupt names only waiting readers", async () 
   const log = freshLog();
   await crashAfter(cut, () => runFlow(flow, {}, { env, log, tools: tools(), models: serving(script()), runId: "r" }));
   const before = readRunLog(log).length;
-  expect(await interrupt(log, "m", { env })).toEqual([]);
+  expect(await interrupt(log, "m", { env })).toEqual({ seq: before, nodes: [], calls: [] });
   const appended = readRunLog(log).slice(before);
   expect(appended.map(({ record }) => record)).toEqual([new InterruptedRecord("m", [])]);
 });

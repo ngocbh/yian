@@ -32,7 +32,14 @@ import {
   type ValueRecord,
   type VariablePool,
 } from "../typesys/index.ts";
-import { fieldOf, fileFieldType, fromHost, isRecord, valueRepr } from "../typesys/values.ts";
+import {
+  fieldOf,
+  fileFieldType,
+  fromHost,
+  isListKind,
+  isRecord,
+  valueRepr,
+} from "../typesys/values.ts";
 import { bindArguments, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
 import { ResolvedValue, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 // grammar.ts imports this module too, so its exports are used only inside functions here.
@@ -1569,6 +1576,16 @@ export function inferExprType(
     return typ !== null && steps.some((step) => step.optional) ? typ.replace({ nullable: true }) : typ;
   }
   return BOOLEAN_NODES.has(tree.data) ? Type.scalar(ValueKind.BOOLEAN) : null;
+}
+
+/**
+ * Return the element type a comprehension variable gets from an iterable of type `iterable`, or
+ * `null` when untyped: `list(E)` and `Optional(list(E))` give `E`; `Any`, `object`, a union (its
+ * members are records, which raise when iterated), an untyped list or an unknown type give `null`.
+ */
+export function elementType(iterable: Type | null): Type | null {
+  if (iterable === null || !isListKind(iterable.kind)) return null;
+  return iterable.element ?? null;
 }
 
 /**

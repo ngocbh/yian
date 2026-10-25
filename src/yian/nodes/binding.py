@@ -221,16 +221,19 @@ def _reject_invalid_binding(value: Any, where: str, origin: OriginRef | None) ->
         raise BindingError(str(exc), failure_code="binding.evaluate", origin=origin) from exc
 
 
-def _validate_parameters(params: list[Parameter]) -> None:
-    """Require the canonical exact-list parameter carrier at every binding seam."""
+def _validate_parameters(params: list[Parameter], subject: str = "node") -> None:
+    """Require the canonical exact-list parameter carrier at every binding seam.
+
+    ``subject`` names what owns the params in the error messages.
+    """
     if type(params) is not list:
         raise TypeError(
-            f"node params must be an exact list, got {type(params).__name__}"
+            f"{subject} params must be an exact list, got {type(params).__name__}"
         )
     for parameter in params:
         if type(parameter) is not Parameter:
             raise TypeError(
-                "node params must contain Parameter values, "
+                f"{subject} params must contain Parameter values, "
                 f"got {type(parameter).__name__}"
             )
 
@@ -339,21 +342,23 @@ def coerce_inputs(
 
 
 def apply_defaults(
-    params: list[Parameter], inputs: dict[str, Any]
+    params: list[Parameter], inputs: dict[str, Any], subject: str = "node"
 ) -> dict[str, Any]:
     """Fill validated defaults for omitted parameters without coercing payloads.
 
     A caller-passed value, including ``None``, always shadows a default. Defaults
     are validated against any semantic contract but retain their original Python
     payload rather than the typed value system's normalized representation.
+    ``subject`` names what owns the params in a params error.
 
     Raises:
+        `TypeError`: As `_validate_parameters`.
         `BindingError`: With ``failure_code="binding.evaluate"`` when a default nests
             deeper than `YIAN_MAX_VALUE_NESTING` levels, holds a NaN, infinity, or complex
             number, or an int with more than `YIAN_MAX_INT_DIGITS` digits, at any depth, or
             violates its parameter's contract.
     """
-    _validate_parameters(params)
+    _validate_parameters(params, subject)
     output = dict(inputs)
     for parameter in params:
         if parameter.name in output or not parameter.has_default:

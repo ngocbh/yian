@@ -1428,19 +1428,9 @@ export abstract class Node {
     // `forward` included, so `captureInputs` has run by the time `runForEvaluator` returns;
     // `async` still turns a throw here into a rejection.
     const params = this.params ?? [];
-    if (!isList(params)) {
-      throw new TypeError(`node ${reprText(this.id)} params must be an exact list, got ${jsTypeName(params)}`);
-    }
-    for (const parameter of params) {
-      if (!isExactly(parameter, Parameter)) {
-        throw new TypeError(
-          `node ${reprText(this.id)} params must contain Parameter values, got ${jsTypeName(parameter)}`,
-        );
-      }
-    }
     let record: Record<string, unknown>;
     try {
-      record = applyDefaults(params, inputs);
+      record = applyDefaults(params, inputs, `node ${reprText(this.id)}`);
     } catch (error) {
       if (classify && error instanceof BindingError) throw new BindingStageError(error);
       throw error;

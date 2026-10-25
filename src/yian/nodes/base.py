@@ -1161,18 +1161,8 @@ class Node(ABC):
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
         params = self.params if self.params is not None else []
-        if type(params) is not list:
-            raise TypeError(
-                f"node {self.id!r} params must be an exact list, got {type(params).__name__}"
-            )
-        for parameter in params:
-            if type(parameter) is not Parameter:
-                raise TypeError(
-                    f"node {self.id!r} params must contain Parameter values, "
-                    f"got {type(parameter).__name__}"
-                )
         try:
-            inputs = apply_defaults(params, inputs)
+            inputs = apply_defaults(params, inputs, f"node {self.id!r}")
         except BindingError as exc:
             if not classify_body_errors:
                 raise

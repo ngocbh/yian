@@ -149,6 +149,13 @@ def test_vllm_accepts_any_model_name():
     assert validate_model("vllm", "any/arbitrary-served-model") is True
 
 
+def test_the_picker_custom_sentinel_is_not_a_known_model():
+    from yian.llm_clients.validators import validate_model
+
+    assert validate_model("glm", "custom") is False
+    assert validate_model("deepseek", "custom") is False
+
+
 def test_claude_mythos_5_1_is_a_known_anthropic_model():
     """Mythos 5.1 validates and builds an Anthropic client without an unknown-model warning."""
     import warnings

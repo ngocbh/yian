@@ -407,6 +407,11 @@ export function validateDeclaredNames(names: unknown, fieldName: string): void {
   if (new Set(names).size !== names.length) throw new RangeError(`${fieldName} must contain unique names`);
 }
 
+/** Return whether `value` can key a `WeakMap` or be held in a `WeakSet`. CASE and LOOP use it. */
+export function isWeakKey(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
 /**
  * Parse a condition expression, prefixing its parse error with `subject`. The node kinds with
  * predicates use it.

@@ -42,6 +42,7 @@ import {
   type BackwardContext,
   BackwardResult,
   Grow,
+  isWeakKey,
   Node,
   NodeKind,
   Output,
@@ -218,7 +219,7 @@ export class LoopNode extends Node {
    */
   override exceptionCode(error: unknown): FailureCode {
     if (error instanceof LoopMaxExceeded) return "loop.max_exceeded";
-    if (isObject(error) && failedPredicates.has(error)) return "condition.evaluate";
+    if (isWeakKey(error) && failedPredicates.has(error)) return "condition.evaluate";
     return super.exceptionCode(error);
   }
 
@@ -490,14 +491,9 @@ export class LoopNode extends Node {
       // The setup check has parsed the `while`/`until` predicate, a string.
       truth = evaluateWhenRecord(this.predicate as string, carried, this.types);
     } catch (error) {
-      if (isObject(error)) failedPredicates.add(error);
+      if (isWeakKey(error)) failedPredicates.add(error);
       throw error;
     }
     return this.predicateKind === "while" ? !truth : truth;
   }
-}
-
-/** Return whether `value` can be held in a `WeakSet`. */
-function isObject(value: unknown): value is object {
-  return (typeof value === "object" && value !== null) || typeof value === "function";
 }

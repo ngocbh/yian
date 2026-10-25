@@ -96,6 +96,7 @@ import {
   decodeRecord,
   encodeRecord,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
   MemoryCommitFailedRecord,
   MemoryCommitRequestedRecord,
@@ -152,12 +153,14 @@ import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import {
   applyWaitsRecord,
   availableUnread,
+  awaitsNextMessage,
   type Call,
   type CallStateKind,
   nodeCalls,
   seqList,
   WaitsState,
   wakeableNodes,
+  withdrawableEvents,
 } from "./waits.ts";
 
 /** The injected kind-aware interpreter from a spawner and its canonical seed to a fragment. */
@@ -859,6 +862,13 @@ interface InboxClosedDelta {
   readonly inbox: string;
 }
 
+/** Withdrawing unread sends from an inbox; the waits fold applies it, and the commit drops their values. */
+interface InboxWithdrawnDelta {
+  readonly kind: "withdrawn";
+  readonly inbox: string;
+  readonly events: readonly number[];
+}
+
 /** Interrupting steer-inbox readers; the waits fold applies it. `closedCalls` are the host calls it closes. */
 interface InterruptedDelta {
   readonly kind: "interrupted";
@@ -888,7 +898,7 @@ interface CommitPlan extends PlanAnchors {
   readonly messagesJson: string | null;
 }
 
-/** One dispatch, resume, step, stop, wait, wake, run wait, inbox close or interrupt. */
+/** One dispatch, resume, step, stop, wait, wake, run wait, inbox close, withdraw or interrupt. */
 interface FrontierPlan extends PlanAnchors {
   readonly kind: "frontier";
   readonly delta:
@@ -900,6 +910,7 @@ interface FrontierPlan extends PlanAnchors {
     | NodeWokenDelta
     | RunWaitingDelta
     | InboxClosedDelta
+    | InboxWithdrawnDelta
     | InterruptedDelta;
 }
 
@@ -1317,6 +1328,30 @@ export function prepareInboxClosed(state: RunState, inbox: string): PreparedTran
   if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
   if (state.waits.inboxes.get(inbox)?.closed === true) return null;
   return prepareRecord(state, new InboxClosedRecord(inbox));
+}
+
+/**
+ * Prepare a host's withdraw of every unread send of the top-level inbox `inbox`: its unread sends
+ * and those assigned to a take whose node hasn't woken, which then waits again (or, on a closed
+ * inbox, is answered by the close). The withdrawn sends' values are dropped.
+ *
+ * @param state The run's state.
+ * @param inbox The name of one of the START's `Inbox(T)` params.
+ * @returns The canonical `InboxWithdrawnRecord` and its plan, with no observers; `null` when
+ *   nothing of the inbox is unread.
+ * @throws TypeError when `state` or `inbox` has the wrong type.
+ * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
+ *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
+ *   such inbox.
+ */
+export function prepareWithdraw(state: RunState, inbox: string): PreparedTransition | null {
+  if (!isExactly(state, RunState)) throw new TypeError("prepareWithdraw expects a RunState");
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  requireDeliverable(state);
+  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  const events = withdrawableEvents(state.waits, inbox);
+  if (events.length === 0) return null;
+  return prepareRecord(state, new InboxWithdrawnRecord(inbox, events));
 }
 
 /**
@@ -1844,6 +1879,7 @@ const FRONTIER_RECORDS = [
   NodeWokenRecord,
   RunWaitingRecord,
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
 ] as const;
 
@@ -1956,6 +1992,10 @@ export function prepareRecord(
   } else if (isExactly(canonical, RunWaitingRecord)) {
     validateRunWaiting(state, canonical);
     delta = { kind: "runWaiting", nodeIds: canonical.nodeIds };
+  } else if (isExactly(canonical, InboxWithdrawnRecord)) {
+    // Before the close: it has every field a close has, so the close's guard would narrow it away.
+    validateInboxWithdrawn(state, canonical);
+    delta = { kind: "withdrawn", inbox: canonical.inbox, events: canonical.events };
   } else if (isExactly(canonical, InterruptedRecord)) {
     // Before the close: an interrupt has every field a close has, so the close's guard would narrow it away.
     validateInterrupted(state, canonical);
@@ -1993,7 +2033,7 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
       return [new RunResumed(), ...closed("crashed")];
     case "step":
       // A step is node-owned detail; no observer event announces it, except that a host call
-      // registered closed is withdrawn.
+      // registered closed is announced closed.
       return closed("interrupted");
     case "waiting": {
       const { nodeId, callIds } = record as NodeWaitingRecord;
@@ -2009,6 +2049,7 @@ function frontierObservers(record: RunRecord, delta: FrontierPlan["delta"]): Run
       return closed("interrupted");
     case "stopped":
     case "inboxClosed":
+    case "withdrawn":
       return [];
   }
 }
@@ -3143,6 +3184,10 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
     if (!sameItems(delta.nodeIds, record.nodeIds)) throw new RangeError("frontier run-wait delta disagrees with its record");
   } else if (isExactly(record, InboxClosedRecord) && delta.kind === "inboxClosed") {
     if (delta.inbox !== record.inbox) throw new RangeError("frontier close delta disagrees with its record");
+  } else if (isExactly(record, InboxWithdrawnRecord) && delta.kind === "withdrawn") {
+    if (delta.inbox !== record.inbox || !sameItems(delta.events, record.events)) {
+      throw new RangeError("frontier withdraw delta disagrees with its record");
+    }
   } else if (isExactly(record, InterruptedRecord) && delta.kind === "interrupted") {
     if (!sameItems(delta.nodeIds, record.nodes)) throw new RangeError("frontier interrupt delta disagrees with its record");
   } else {
@@ -3201,6 +3246,10 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       // doesn't move, since no new start was recorded.
       state.inFlight.add(delta.nodeId);
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
+      break;
+    case "withdrawn":
+      // Withdrawn sends get no reply; nothing reads their values again.
+      for (const seq of delta.events) state.inboxEvents.delete(seq);
       break;
     case "runWaiting":
     case "inboxClosed":
@@ -3480,6 +3529,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
     isExactly(record, RunStoppedRecord) ||
     isExactly(record, RunWaitingRecord) ||
     isExactly(record, InboxClosedRecord) ||
+    isExactly(record, InboxWithdrawnRecord) ||
     isExactly(record, InterruptedRecord)
   ) {
     if (delta.started !== null || delta.resumed !== false) {
@@ -3494,7 +3544,7 @@ function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition
       throw new RangeError("frontier trace wake must bring back its node's parked start");
     }
   } else {
-    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait, close or interrupt record");
+    throw new RangeError("frontier trace requires a dispatch, resume, step, stop, wait, wake, run-wait, close, withdraw or interrupt record");
   }
   if (!isExactly(record, NodeWaitingRecord) && delta.parked !== null) {
     throw new RangeError("only a wait can park a start");
@@ -4006,6 +4056,22 @@ function validateInboxClosed(state: RunState, record: InboxClosedRecord): void {
   }
   if (state.waits.inboxes.get(record.inbox)?.closed === true) {
     throw new RangeError(`InboxClosed inbox ${reprText(record.inbox)} is already closed`);
+  }
+}
+
+/**
+ * Require a withdraw record to name a declared inbox and its whole unread set (as
+ * `withdrawableEvents` reads it), in seq order, as a steer step names its whole queue.
+ */
+function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): void {
+  if (inboxElementType(state, record.inbox) === null) {
+    throw new RangeError(`InboxWithdrawn inbox ${reprText(record.inbox)} is no inbox the START declares`);
+  }
+  const unread = withdrawableEvents(state.waits, record.inbox);
+  if (!sameItems(record.events, unread)) {
+    throw new RangeError(
+      `InboxWithdrawn must name the whole unread set [${unread.join(", ")}] of inbox ${reprText(record.inbox)}, found [${record.events.join(", ")}]`,
+    );
   }
 }
 
@@ -6344,6 +6410,7 @@ function requirePristine(state: RunState): void {
     state.waits.calls.size === 0 &&
     state.waits.inboxes.size === 0 &&
     state.waits.interrupts.size === 0 &&
+    state.waits.stops.size === 0 &&
     state.waits.lastFrontier === null &&
     !state.waits._inputsCommitted &&
     state.waits._lastWoken.size === 0 &&

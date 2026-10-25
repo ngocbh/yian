@@ -7,6 +7,7 @@ import {
   canonicalTyped,
   InboxClosedRecord,
   InboxWithdrawnRecord,
+  MemoryRunLog,
   NodeStartedRecord,
   NodeWaitingRecord,
   NodeWokenRecord,
@@ -14,7 +15,25 @@ import {
   type RunRecord,
   RunResumedRecord,
 } from "../../src/runtime/log.ts";
+import {
+  commitPrepared,
+  DeliveryRefused,
+  prepareInboxClosed,
+  prepareNodeStarted,
+  prepareNodeStep,
+  prepareNodeWaiting,
+  prepareNodeWoken,
+  prepareRecord,
+  prepareRunCancelled,
+  prepareRunStarted,
+  prepareRunWaiting,
+  prepareSend,
+  prepareWithdraw,
+  RunState,
+} from "../../src/runtime/state.ts";
 import { applyWaitsRecord, availableUnread, decideWait, withdrawableEvents, WaitsState } from "../../src/runtime/waits.ts";
+import { FIXED_CLOCK, RUN_ID, startData } from "./run_state_fixtures.ts";
+import { call as callOf, started, steerFlow, takeEntry, tool, waitFlow } from "./waits_fixtures.ts";
 
 const commit = (node: string, key: string, value: unknown) => new PoolCommitRecord(node, key, canonicalTyped(value, null)[0]);
 const send = (inbox: string, value: unknown) => commit("__start__", `__start__.${inbox}`, value);
@@ -88,4 +107,117 @@ test("an orphan inline take commit's events are withdrawn; run_resumed then re-o
 test("a withdrawn send leaves the steer queue", () => {
   const w = fold(...START, send("msgs", "x"), new InboxWithdrawnRecord("msgs", [2]));
   expect(availableUnread(w, "msgs")).toEqual([]);
+});
+
+// --- The reducer ------------------------------------------------------------------------------ //
+
+type Run = ReturnType<typeof started>;
+
+/** START, then `heard` (take: one) waits on msgs, then run_waiting. */
+function takeRun(): Run {
+  const run = started(waitFlow(tool("heard", "take")));
+  const { log, state } = run;
+  commitPrepared(log, state, prepareNodeStarted(state, "heard"));
+  commitPrepared(log, state, prepareNodeWaiting(state, "heard", { callIds: [callOf("heard")], waits: [takeEntry("heard")] }));
+  commitPrepared(log, state, prepareRunWaiting(state));
+  return run;
+}
+
+/** Commit a send of `event` to msgs and return its seq. */
+function commitSend(run: Run, event: unknown): number {
+  const prepared = prepareSend(run.state, "msgs", event);
+  commitPrepared(run.log, run.state, prepared);
+  return prepared.expectedSequence;
+}
+
+/** Return the `DeliveryRefused` reason `run` throws. */
+function refusal(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(DeliveryRefused);
+    return (error as DeliveryRefused).reason;
+  }
+  throw new Error("expected a DeliveryRefused");
+}
+
+test("prepareWithdraw names the whole unread set; commit drops the values and reopens the take", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  const y = commitSend(run, "y");
+  const prepared = prepareWithdraw(run.state, "msgs")!;
+  expect([...(prepared.record as InboxWithdrawnRecord).events]).toEqual([x, y]);
+  expect(prepared.observers).toEqual([]);
+  expect(commitPrepared(run.log, run.state, prepared)).toEqual([]);
+  expect(run.state.inboxEvents.has(x) || run.state.inboxEvents.has(y)).toBe(false);
+  expect(run.state.waits.calls.get(callOf("heard"))!.state).toBe("open");
+  // Not a frontier kind: the last frontier record stays.
+  expect(run.state.waits.lastFrontier).toBe("run_waiting");
+});
+
+test("nothing unread: null, nothing appended", () => {
+  const run = takeRun();
+  expect(prepareWithdraw(run.state, "msgs")).toBeNull();
+  const x = commitSend(run, "x");
+  commitPrepared(run.log, run.state, prepareNodeWoken(run.state, "heard"));
+  // x is the woken take's now.
+  expect(run.state.inboxEvents.has(x)).toBe(true);
+  expect(prepareWithdraw(run.state, "msgs")).toBeNull();
+});
+
+test("allowed on a closed inbox; the waiting take is answered by the close", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  commitPrepared(run.log, run.state, prepareInboxClosed(run.state, "msgs")!);
+  const prepared = prepareWithdraw(run.state, "msgs")!;
+  expect([...(prepared.record as InboxWithdrawnRecord).events]).toEqual([x]);
+  commitPrepared(run.log, run.state, prepared);
+  expect(run.state.waits.calls.get(callOf("heard"))).toMatchObject({ state: "answered", assigned: [], closedInbox: true });
+});
+
+test("prepareWithdraw refusals: ended, not_started, unknown_inbox; a non-string inbox is a TypeError", () => {
+  const run = takeRun();
+  expect(refusal(() => prepareWithdraw(run.state, "nope"))).toBe("unknown_inbox");
+  expect(() => prepareWithdraw(run.state, 7 as never)).toThrow(TypeError);
+  commitPrepared(run.log, run.state, prepareRunCancelled(run.state));
+  expect(refusal(() => prepareWithdraw(run.state, "msgs"))).toBe("ended");
+  const fresh = new RunState(waitFlow(tool("heard", "take")));
+  commitPrepared(new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK }), fresh, prepareRunStarted(fresh, startData()));
+  expect(refusal(() => prepareWithdraw(fresh, "msgs"))).toBe("not_started");
+});
+
+test.each<[string, (x: number, y: number) => number[]]>([
+  ["a partial list", (x) => [x]],
+  ["an extra seq", (x, y) => [x, y, y + 1]],
+])("replay refuses an inbox_withdrawn naming %s", (_, events) => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  const y = commitSend(run, "y");
+  expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", events(x, y)))).toThrow(
+    `InboxWithdrawn must name the whole unread set [${x}, ${y}] of inbox 'msgs'`,
+  );
+});
+
+test("replay refuses an inbox_withdrawn naming a seq a woken take holds, or an undeclared inbox", () => {
+  const run = takeRun();
+  const x = commitSend(run, "x");
+  commitPrepared(run.log, run.state, prepareNodeWoken(run.state, "heard"));
+  expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("msgs", [x]))).toThrow(/whole unread set \[\]/);
+  expect(() => prepareRecord(run.state, new InboxWithdrawnRecord("nope", [x]))).toThrow(/no inbox the START declares/);
+});
+
+test("a steer step can't consume a withdrawn send", () => {
+  const run = started(steerFlow());
+  const x = commitSend(run, "x");
+  commitPrepared(run.log, run.state, prepareWithdraw(run.state, "msgs")!);
+  commitPrepared(run.log, run.state, prepareNodeStarted(run.state, "chat"));
+  expect(() => prepareNodeStep(run.state, "chat", { kind: "steer", inbox: "msgs", from: [BigInt(x)] })).toThrow(/whole unread queue \[\]/);
+});
+
+test("a withdraw replays to the same waits", () => {
+  const run = takeRun();
+  commitSend(run, "x");
+  commitPrepared(run.log, run.state, prepareWithdraw(run.state, "msgs")!);
+  const back = WaitsState.fromJSON(JSON.parse(JSON.stringify(run.state.waits.toJSON())));
+  expect(back.toJSON()).toEqual(run.state.waits.toJSON());
 });

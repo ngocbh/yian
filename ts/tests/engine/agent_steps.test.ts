@@ -714,23 +714,39 @@ const replyCall = (id: string) =>
   new Message({ role: "assistant", parts: [new ToolCallPart({ id, name: "save", arguments: { topic: "a" } })] });
 const resultStep = (id: string): ValueRecord => ({ kind: "tool_result", call_id: id, started_at: null, output: "ok", is_error: false });
 
-test("AgentSteps hands back the steer recorded before each call, once", () => {
+test("AgentSteps hands back the steers recorded before each call, once", () => {
   const prior = [steerStep(["a"]), callStep(replyCall("c1")), resultStep("c1"), steerStep(["b"]), callStep(replyText("done"))];
   const { steps } = recordingSteps(prior);
-  expect(steps.takeRecordedSteer()).toEqual({ n: 1, values: ["a"] });
-  expect(steps.takeRecordedSteer()).toBeNull();
+  expect(steps.takeRecordedSteers()).toEqual([{ n: 1, values: ["a"] }]);
+  expect(steps.takeRecordedSteers()).toEqual([]);
   expect(steps.takeRecorded("chat", "d".repeat(64))!.n).toBe(2);
-  expect(steps.takeRecordedSteer()).toEqual({ n: 4, values: ["b"] });
+  expect(steps.takeRecordedSteers()).toEqual([{ n: 4, values: ["b"] }]);
   expect(steps.takeRecorded("chat", "d".repeat(64))!.n).toBe(5);
-  expect(steps.takeRecordedSteer()).toBeNull();
+  expect(steps.takeRecordedSteers()).toEqual([]);
+});
+
+test("every steer recorded before one call is handed back, in order", () => {
+  const prior = [steerStep(["a"]), steerStep(["b"]), callStep(replyText("done")), steerStep(["c"]), steerStep(["d"])];
+  const { steps } = recordingSteps(prior);
+  expect(steps.takeRecordedSteers()).toEqual([
+    { n: 1, values: ["a"] },
+    { n: 2, values: ["b"] },
+  ]);
+  expect(steps.takeRecorded("chat", "d".repeat(64))!.n).toBe(3);
+  expect(steps.hasRecordedSteer()).toBe(true);
+  expect(steps.takeRecordedSteers()).toEqual([
+    { n: 4, values: ["c"] },
+    { n: 5, values: ["d"] },
+  ]);
+  expect(steps.hasRecordedSteer()).toBe(false);
 });
 
 test("a trailing steer is handed back after the last call", () => {
   const { steps } = recordingSteps([callStep(replyText("done")), steerStep(["late"])]);
-  expect(steps.takeRecordedSteer()).toBeNull();
+  expect(steps.takeRecordedSteers()).toEqual([]);
   steps.takeRecorded("chat", "d".repeat(64));
   expect(steps.replaying()).toBe(false);
-  expect(steps.takeRecordedSteer()).toEqual({ n: 2, values: ["late"] });
+  expect(steps.takeRecordedSteers()).toEqual([{ n: 2, values: ["late"] }]);
 });
 
 test("hasRecordedSteer tells whether a steer was recorded before the next call, without taking it", () => {
@@ -739,7 +755,7 @@ test("hasRecordedSteer tells whether a steer was recorded before the next call, 
   steps.takeRecorded("chat", "d".repeat(64));
   expect(steps.hasRecordedSteer()).toBe(true);
   expect(steps.hasRecordedSteer()).toBe(true);
-  expect(steps.takeRecordedSteer()).toEqual({ n: 2, values: ["late"] });
+  expect(steps.takeRecordedSteers()).toEqual([{ n: 2, values: ["late"] }]);
   expect(steps.hasRecordedSteer()).toBe(false);
 });
 
@@ -753,14 +769,14 @@ test("continuesCall is true while recorded failed attempts continue the next cal
   const { steps } = recordingSteps([steerStep(["a"]), failed]);
   expect(steps.replaying()).toBe(false);
   expect(steps.continuesCall()).toBe(true);
-  expect(steps.takeRecordedSteer()).toEqual({ n: 1, values: ["a"] });
+  expect(steps.takeRecordedSteers()).toEqual([{ n: 1, values: ["a"] }]);
   expect(steps.priorAttempts("chat", "d".repeat(64))).toEqual({ attempts: 1, retryIn: 2 });
   expect(steps.continuesCall()).toBe(false);
 });
 
 test("a steer copy without values is a host fault", () => {
   const { steps } = recordingSteps([{ kind: "steer", inbox: "notes", from: [3] }]);
-  const error = thrownBy(() => steps.takeRecordedSteer());
+  const error = thrownBy(() => steps.takeRecordedSteers());
   expect(error).toBeInstanceOf(CapabilityFault);
   expect(((error as CapabilityFault).original as Error).message).toBe(
     "node 'writer' step 1: a steer step without its values; resume through the engine",

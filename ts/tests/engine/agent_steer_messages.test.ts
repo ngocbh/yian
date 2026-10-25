@@ -326,6 +326,42 @@ test("no live read while recorded attempts continue the call; the queued steer j
   expect(double.reads).toEqual([["b"]]);
 });
 
+test("two recorded steers before one call, then a live read: all three join that call, in order", async () => {
+  // Two starts each crashed after a steer read and before the model call.
+  const double = inboxDouble(["c"]);
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const recorded: ValueRecord[] = [];
+  const steps = recording([steerStep(["a"]), steerStep(["b"])], recorded);
+  expect(((await runAgent(loopContext(model, { steerInbox: double.inbox, steps }))) as Output).value).toBe("done");
+  expect(sent(model.requests[0]!).slice(-3)).toEqual([
+    ["user", ["a"]],
+    ["user", ["b"]],
+    ["user", ["c"]],
+  ]);
+  expect(double.reads).toEqual([["c"]]);
+});
+
+test("two recorded steers before a recorded call: both replay and the recorded reply is taken", async () => {
+  const request = new Request({ messages: [SYSTEM, userMessage("go"), ...steerMessages(["a"]), ...steerMessages(["b"])], tools: [] });
+  const done: ValueRecord = {
+    kind: "model_call",
+    purpose: "chat",
+    model: "claude-test",
+    request_sha256: requestSha256(request),
+    started_at: "2026-10-22T10:00:00.000Z",
+    first_token_at: null,
+    output: new ModelMessage({ role: "assistant", parts: [new TextPart("done")] }).toJSON(),
+    response_id: null,
+    finish: "stop",
+    usage: null,
+  };
+  const double = inboxDouble();
+  const model = new ScriptedModel([], CONFIG);
+  const steps = recording([steerStep(["a"]), steerStep(["b"]), done]);
+  expect(((await runAgent(loopContext(model, { steerInbox: double.inbox, steps }))) as Output).value).toBe("done");
+  expect(model.requests).toHaveLength(0);
+});
+
 /** The `render:` template `template` as the agent renders it, over `${event}`. */
 const renderWith = (template: string) => (value: unknown) => renderTemplateRecord(template, { event: value } as ValueRecord);
 
@@ -649,4 +685,92 @@ test("a crash after every record, then advance: the same output, and each send r
 test("two sends across two replies, cut after every record: each read once, the live requests unchanged", async () => {
   const replies = [callReply(["lookup", { topic: "t" }, "c1"]), callReply(["lookup", { topic: "u" }, "c2"]), textReply("done")];
   await crashEverywhere(replies, ["a", "b"]);
+});
+
+// --- two steer reads before one call (a resume read live after a recorded steer) --- //
+
+/**
+ * A fresh log whose run read steer "a" and crashed before the model call that would send it,
+ * then had "b" sent while down.
+ */
+async function steeredThenDown(): Promise<string> {
+  const replies = [callReply(["lookup", { topic: "t" }, "c1"]), textReply("done")];
+  const probe = freshLog();
+  const sending = (log: string) => lookup(() => void send(log, "notes", "a"));
+  await runSteer(steerFlow(), probe, new ScriptedModel([...replies], CONFIG), sending(probe));
+  const steerSeq = stepsOf(probe).find(({ kind }) => kind === "steer")!.seq;
+  const log = freshLog();
+  await crashAfter(steerSeq + 1, () => runSteer(steerFlow(), log, new ScriptedModel([...replies], CONFIG), sending(log)));
+  await send(log, "notes", "b", { env: NO_ENV });
+  return log;
+}
+
+/** The seqs of the second steer step and the model call after it, as an uncut advance of `steeredThenDown` writes them. */
+async function secondSteerSeqs(): Promise<{ steer: number; call: number }> {
+  const log = await steeredThenDown();
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, new ScriptedModel([textReply("done")], CONFIG), {
+    tools: { lookup: lookup() },
+  });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  const steps = stepsOf(log);
+  const second = steps.filter(({ kind }) => kind === "steer")[1]!;
+  const call = steps.find(({ seq, kind }) => seq > second.seq && kind === "model_call")!;
+  return { steer: second.seq, call: call.seq };
+}
+
+/** The `[role, texts]` of `chat.new_messages` in `state`. */
+function chatMessages(state: RunState): [string, string[]][] {
+  const value = state.pool.store.get("chat.new_messages")!.toObject() as { role: string; parts: { text?: string; type: string }[] }[];
+  return value.map((message) => [message.role, message.parts.map((part) => part.text ?? part.type)]);
+}
+
+test("crash after the second steer of one call, then advance: both join the call in order, none read twice", async () => {
+  const { steer } = await secondSteerSeqs();
+  const log = await steeredThenDown();
+  const flow = await loadFlow(steerFlow());
+  await crashAfter(steer + 1, () =>
+    resumeWith(flow, log, null, new ScriptedModel([textReply("done")], CONFIG), { tools: { lookup: lookup() } }),
+  );
+  expect(stepsOf(log).filter(({ kind }) => kind === "steer")).toHaveLength(2);
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(model.requests).toHaveLength(1);
+  expect(sent(model.requests[0]!).slice(-2)).toEqual([
+    ["user", ["a"]],
+    ["user", ["b"]],
+  ]);
+  const [sa, sb] = sendSeqs(log);
+  const read = stepsOf(log).flatMap(({ kind, step }) => (kind === "steer" ? [(step["from"] as bigint[]).map(Number)] : []));
+  expect(read).toEqual([[sa!], [sb!]]);
+});
+
+test("crash after the call that sent two steers, then advance: the recorded reply replays, its digest matching", async () => {
+  const { call } = await secondSteerSeqs();
+  const log = await steeredThenDown();
+  const flow = await loadFlow(steerFlow());
+  await crashAfter(call + 1, () =>
+    resumeWith(flow, log, null, new ScriptedModel([textReply("done")], CONFIG), { tools: { lookup: lookup() } }),
+  );
+  expect(stepsOf(log).at(-1)!.kind).toBe("model_call");
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("done");
+  expect(model.requests).toHaveLength(0);
+  expect(stepsOf(log).filter(({ kind }) => kind === "steer")).toHaveLength(2);
+});
+
+test("two steers before one call: new_messages holds both in order, live and rebuilt from the log", async () => {
+  const log = await steeredThenDown();
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, new ScriptedModel([textReply("done")], CONFIG), {
+    tools: { lookup: lookup() },
+  });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  const state = await replayed(log);
+  expect(chatMessages(state).slice(-3)).toEqual([
+    ["user", ["a"]],
+    ["user", ["b"]],
+    ["assistant", ["done"]],
+  ]);
 });

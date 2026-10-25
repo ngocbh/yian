@@ -60,6 +60,7 @@ from yian.expr import (
 )
 from yian.expr.template import Span
 from yian.nodes.binding import coerce_param
+from yian.nodes.map.node import MapNode
 from yian.nodes.contracts import (
     Binding,
     OutputContract,
@@ -113,7 +114,7 @@ def check_call_map_types(
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if not getattr(node, "child_inputs", None):
             continue
-        kind = "loop" if node.is_loop else "call"
+        kind = "loop" if node.is_loop else "map" if isinstance(node, MapNode) else "call"
         child_decls = {d.name: d for d in node.child_inputs}
         entry_decls = (
             {d.name: d for d in loop_entry_inputs(node)} if node.is_loop else child_decls

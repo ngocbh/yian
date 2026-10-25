@@ -137,8 +137,30 @@ name: downstream_map
       x: !float ${{i.output}}
 output: ${{each.output}}
 """
-    with pytest.raises(LoadError, match="binding 'x'.*'float'"):
+    with pytest.raises(LoadError) as caught:
         load_flow(text)
+    assert str(caught.value) == "map node 'each': binding 'x' — child expects 'int', source is 'float'"
+
+
+def test_map_binding_names_are_checked_under_the_map_name():
+    """A MAP's undeclared and unbound child inputs name the node as a map."""
+    text = f"""
+id: downstream-map
+name: downstream_map
+{_STRICT_CHILD}nodes:
+  each:
+    kind: map
+    over: [1, 2]
+    call: child
+    input:
+      y: ${{item}}
+output: ${{each.output}}
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    message = str(caught.value)
+    assert "map node 'each': binding 'y' is not a declared input of " in message
+    assert "map node 'each': required callable input 'x' is unbound" in message
 
 
 # --- LOOP ------------------------------------------------------------------ #

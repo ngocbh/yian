@@ -3920,7 +3920,7 @@ same way against the body's input. Each argument is checked as follows:
   [tagged binding](#typed-slots-yaml-tags): `t: !int ${input.n}`.
 
 ```text
-call node 'each': binding 'day' — child expects 'date', source is 'str'
+map node 'each': binding 'day' — child expects 'date', source is 'str'
 call node 'c': binding 'n' — child expects 'int', but the value "3" does not fit; text is not converted between flows, so write 3 without quotes
 call node 'c': binding 'day' — child expects 'date', but the value 2026-01-01 does not fit; quote it to keep it as text: "2026-01-01"
 ```

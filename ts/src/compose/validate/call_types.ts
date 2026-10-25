@@ -38,6 +38,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { coerceParam } from "../../nodes/binding.ts";
 import type { LoopNode } from "../../nodes/loop/node.ts";
+import { MapNode } from "../../nodes/map/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
   buildValueAs,
@@ -119,7 +120,7 @@ export function checkCallMapTypes(
     // output. A leaf has no `childInputs`, and a zero-input child has none either, so skip.
     const childInputs = (node as { childInputs?: readonly Parameter[] }).childInputs;
     if (childInputs === undefined || childInputs.length === 0) continue;
-    const kind = node.isLoop ? "loop" : "call";
+    const kind = node.isLoop ? "loop" : node instanceof MapNode ? "map" : "call";
     const childDecls = new Map(childInputs.map((decl) => [decl.name, decl]));
     // A loop is recognised by `isLoop`, as Python does, so a hand-built loop gets the relaxed
     // reading too.

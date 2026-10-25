@@ -784,7 +784,7 @@ describe("loading flows that wire Any", () => {
 
   test("a map over a list of Any into a child str input suggests a tag", async () => {
     expect(await message("str", "${item}", { stepOutput: "list(Any)", over: true })).toBe(
-      "call node 'c': binding 't' — child expects 'str', source is 'Any'; " +
+      "map node 'c': binding 't' — child expects 'str', source is 'Any'; " +
         "tag the slot (`t: !str ${...}`) to check it at runtime, or narrow it with `isinstance` in a `case`",
     );
   });

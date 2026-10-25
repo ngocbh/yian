@@ -34,7 +34,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'call node ''m'': binding ''x'' — child expects ''str'', but the element 1 does not fit; quote it to keep it as text: "1"'
+      message: 'map node ''m'': binding ''x'' — child expects ''str'', but the element 1 does not fit; quote it to keep it as text: "1"'
       frames:
       - label: flow.yaml
         range: [29, 7, 30, 1]

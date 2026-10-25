@@ -43,8 +43,10 @@ import {
   unionField,
   ValueKind,
 } from "../typesys/index.ts";
+import type { Node } from "../nodes/base.ts";
 import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
-import { fileFieldType, typeEquals } from "../typesys/values.ts";
+import { fileFieldType, isListKind, typeEquals } from "../typesys/values.ts";
+import { typeRelation } from "./validation.ts";
 
 /** Marks a binding source that is a template, not a literal, in `literalValue`. */
 export const NOT_LITERAL: unique symbol = Symbol("NOT_LITERAL");
@@ -675,4 +677,81 @@ export function directReferenceParts(expression: ExprNode): string[] | null {
     parts.push(name.value);
   }
   return parts;
+}
+
+/**
+ * Return the contracts one binding's value is proven to have, else `null`.
+ *
+ * Unlike `inferBindingType`, a partial record is kept, since its closed root names can still be
+ * checked, and a literal is widened, so a message names `str` rather than its one-tag `Literal`. A
+ * typed binding also keeps the type inferred from its raw source when that fits the declared type,
+ * as a narrower view of the same value.
+ *
+ * @param binding A wiring binding, raw or a `Binding`.
+ * @param producers Node output contracts by producer id.
+ * @param flowInputs Flow input contracts by name.
+ * @param typeFn Resolves a constructor name to its type.
+ * @returns The alternatives, the declared contract first for a typed binding, or `null` when the
+ *   value's contract is unproven.
+ */
+export function bindingAlternatives(
+  binding: unknown,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  typeFn: TypeFn | null,
+): OutputContract[] | null {
+  const source = bindingSource(binding);
+  const literal = literalValue(source);
+  if (binding instanceof Binding && binding.contract !== null) {
+    const declared = binding.contract;
+    // Infer from the raw source: the Binding itself resolves to its declared contract. Exact
+    // literals, so a literal tag selects its union member.
+    let inferred: OutputContract | null;
+    if (literal !== NOT_LITERAL) {
+      inferred = literalContract(literal, { exactLiterals: true });
+    } else if (source instanceof ValueTemplate) {
+      inferred = templateContract(
+        source,
+        (text) => resolveOutputBindingContract(text, producers, flowInputs, { typeFn }),
+        { exactLiterals: true },
+      );
+    } else {
+      inferred = resolveOutputBindingContract(source, producers, flowInputs, { typeFn });
+    }
+    if (isExactly(inferred, ValueContract) && typeRelation(inferred.type, declared.type) === "fits") {
+      return [declared, inferred];
+    }
+    return [declared];
+  }
+  const contract =
+    literal !== NOT_LITERAL
+      ? literalContract(literal)
+      : resolveOutputBindingContract(binding, producers, flowInputs, { typeFn });
+  return contract === null ? null : [contract];
+}
+
+/**
+ * Return the exact element contract `${item}` reads on a per-item node, else `null`.
+ *
+ * @param node The node; only a node with an item source key (MAP) has an item scope.
+ * @param wiring The node's binding map, holding the item source under that key.
+ * @param producers Node output contracts by producer id.
+ * @param flowInputs Flow input contracts by name.
+ * @param typeFn Resolves a constructor name to its type.
+ * @returns The element contract when the item source is an exact list with a known element type,
+ *   else `null`.
+ */
+export function itemContract(
+  node: Node | null,
+  wiring: ReadonlyMap<string, unknown>,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  typeFn: TypeFn | null = null,
+): ValueContract | null {
+  const key = node !== null ? node.itemSourceKey : null;
+  if (key === null || !wiring.has(key)) return null;
+  const source = resolveOutputBindingContract(wiring.get(key), producers, flowInputs, { typeFn });
+  if (!isExactly(source, ValueContract)) return null;
+  if (!isListKind(source.type.kind) || source.type.element === undefined) return null;
+  return new ValueContract(source.type.element);
 }

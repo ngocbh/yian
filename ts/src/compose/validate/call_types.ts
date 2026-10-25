@@ -52,6 +52,7 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import {
   assertExactContracts,
   directReferenceParts,
+  itemContract,
   literalValue,
   NOT_LITERAL,
   projectOutputContract,
@@ -64,7 +65,7 @@ import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { itemContract, shownLiteral } from "./typed_bindings.ts";
+import { shownLiteral } from "./typed_bindings.ts";
 
 /**
  * Cross-flow type check for every `call`/`map` binding and `loop` seed (a loader pass).
@@ -132,7 +133,7 @@ export function checkCallMapTypes(
     const scope: Scope = {
       producers: nodeProducers,
       flowInputs: nodeInputs,
-      item: itemContract(result, wiring, nodeProducers, nodeInputs),
+      item: itemContract(result?.node ?? null, wiring, nodeProducers, nodeInputs),
       items: literalItems(result, wiring),
       typeFn,
       registry,

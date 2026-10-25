@@ -83,6 +83,7 @@ import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { type Env, envReadType, narrowedReadError } from "../helpers/narrowing_facts.ts";
 import {
   directReferencePathParts,
+  itemContract,
   localFieldError,
   outputContractPathError,
   projectOutputContract,
@@ -92,7 +93,7 @@ import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { itemContract, LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
+import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /**
  * Return whether a value of `typ` can be a prompt message (the built-in `Message`, or a record with
@@ -680,7 +681,7 @@ export function validateReferences(
     // A per-item binder (MAP) reads its iteration source above, then validates each element
     // input with the body-local `${item}` scope enabled.
     if (node.bindsPerItem) {
-      const item = itemContract(result, nwiring, nodeProducers, nodeInputs, typeFn);
+      const item = itemContract(result?.node ?? null, nwiring, nodeProducers, nodeInputs, typeFn);
       for (const [param, src] of nwiring) {
         if (reserved.has(param)) continue;
         scan(

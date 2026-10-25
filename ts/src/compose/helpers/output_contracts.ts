@@ -106,6 +106,36 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
 }
 
 /**
+ * Check the contract maps a validation pass reads from.
+ *
+ * @param producers Node output contracts by producer id.
+ * @param flowInputs Flow input contracts by name (default none).
+ * @throws TypeError naming the first producer contract that is not a `ValueContract` or
+ *   `PartialRecordContract`, or the first flow input contract that is not an exact
+ *   `ValueContract`.
+ */
+export function assertExactContracts(
+  producers: ReadonlyMap<string, unknown>,
+  flowInputs: ReadonlyMap<string, unknown> = new Map(),
+): void {
+  for (const [name, contract] of producers) {
+    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+      throw new TypeError(
+        "output producer contracts must be ValueContract or PartialRecordContract values, " +
+          `got ${jsTypeName(contract)} for ${reprText(name)}`,
+      );
+    }
+  }
+  for (const [name, contract] of flowInputs) {
+    if (!isExactly(contract, ValueContract)) {
+      throw new TypeError(
+        `flow input contracts must be exact ValueContract values, got ${jsTypeName(contract)} for ${reprText(name)}`,
+      );
+    }
+  }
+}
+
+/**
  * Resolve one `input.X...`, `<id>.output...` or an AGENT's `<id>.new_messages...` path to its
  * exact or projected contract.
  *

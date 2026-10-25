@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import isfinite
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from lark import Token, Tree
 
@@ -122,6 +122,36 @@ def project_output_contract(
             entries=entries,
         ),
     )
+
+
+def assert_exact_contracts(
+    producers: Mapping[str, Any], flow_inputs: Mapping[str, Any] | None = None
+) -> None:
+    """Check the contract maps a validation pass reads from.
+
+    Args:
+        producers (`Mapping[str, Any]`): Node output contracts by producer id.
+        flow_inputs (`Mapping[str, Any] | None`, *optional*, defaults to `None`): Flow
+            input contracts by name.
+
+    Raises:
+        `TypeError`: A producer contract is not a `ValueContract` or
+            `PartialRecordContract`, or a flow input contract is not an exact
+            `ValueContract`; names the first one.
+    """
+    for name, contract in producers.items():
+        if type(contract) not in (ValueContract, PartialRecordContract):
+            raise TypeError(
+                "output producer contracts must be ValueContract or "
+                "PartialRecordContract values, "
+                f"got {type(contract).__name__} for {name!r}"
+            )
+    for name, contract in (flow_inputs or {}).items():
+        if type(contract) is not ValueContract:
+            raise TypeError(
+                "flow input contracts must be exact ValueContract values, "
+                f"got {type(contract).__name__} for {name!r}"
+            )
 
 
 def reference_contract(

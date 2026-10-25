@@ -273,15 +273,15 @@ export function suggestedLiteral(text: string, typ: Type): [shown: string, note:
     if (error instanceof SourceSyntaxError) return [text, null];
     throw error;
   }
-  if (fits(typ, parsed)) return [text, null];
+  if (valueFits(typ, parsed)) return [text, null];
   const fix = formerBooleanFix(parsed, typ);
   if (fix !== null) return [fix[0] ? "true" : "false", fix[1]];
-  if (typeof parsed !== "string" && fits(typ, text)) return [yamlQuoted(text), null];
+  if (typeof parsed !== "string" && valueFits(typ, text)) return [yamlQuoted(text), null];
   return [text, null];
 }
 
 /** Return whether `value` passes the write-boundary check for `typ`. */
-function fits(typ: Type, value: unknown): boolean {
+export function valueFits(typ: Type, value: unknown): boolean {
   try {
     buildValueAs(typ, value);
   } catch (error) {
@@ -931,7 +931,7 @@ class TaggedValueReader {
         (path.length === 0 ? `\`${this.label}: ${optional}\`` : `\`${optional}\``)
       );
     }
-    if (!fits(typ, text)) return message;
+    if (!valueFits(typ, text)) return message;
     const quoted = `!${tag} ${yamlQuoted(text)}`;
     message +=
       "; quote it to keep it as text: " +

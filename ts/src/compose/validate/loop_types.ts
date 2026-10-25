@@ -41,7 +41,7 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { canonicalTypeLabel, isList, isRecord, jsTypeName, type Type, ValueKind } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { resolveOutputBindingContract } from "../helpers/output_contracts.ts";
+import { assertExactContracts, resolveOutputBindingContract } from "../helpers/output_contracts.ts";
 import { anySourceHint, suggestTag, tagText } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
@@ -96,21 +96,7 @@ export function checkLoopTypeContract(
   const { inlineLoops = new Set<string>(), registry = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const typeFn = registry !== null ? constructorTypeFn(registry) : null;
-  for (const [name, contract] of producers) {
-    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
-        "output producer contracts must be ValueContract or PartialRecordContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
-  }
-  for (const [name, contract] of flowInputs) {
-    if (!isExactly(contract, ValueContract)) {
-      throw new TypeError(
-        `flow input contracts must be exact ValueContract values, got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
-  }
+  assertExactContracts(producers, flowInputs);
   for (const [nodeId, result] of buildResults) {
     if (!result.node.isLoop) continue;
     // A loop is recognised by `isLoop`, as Python does, so a hand-built loop is checked too.

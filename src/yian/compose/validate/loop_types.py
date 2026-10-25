@@ -35,6 +35,7 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.isinstance_types import constructor_type_fn
 from yian.compose.helpers.tags import any_source_hint, suggest_tag, tag_text
 from yian.compose.helpers.output_contracts import (
+    assert_exact_contracts,
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
@@ -111,26 +112,7 @@ def check_loop_type_contract(
         `TypeError`: A producer, flow input, or loop contract has an unexpected type."""
     diagnostics = diagnostics or LoadDiagnostics()
     type_fn = constructor_type_fn(registry) if registry is not None else None
-    for label, contracts in (
-        ("output producer", producers),
-        ("flow input", flow_inputs),
-    ):
-        for name, contract in contracts.items():
-            allowed = (
-                (ValueContract, PartialRecordContract)
-                if label == "output producer"
-                else (ValueContract,)
-            )
-            if type(contract) not in allowed:
-                required = (
-                    "ValueContract or PartialRecordContract"
-                    if label == "output producer"
-                    else "exact ValueContract"
-                )
-                raise TypeError(
-                    f"{label} contracts must be {required} values, "
-                    f"got {type(contract).__name__} for {name!r}"
-                )
+    assert_exact_contracts(producers, flow_inputs)
     for nid, result in build_results.items():
         node = result.node
         if not node.is_loop:

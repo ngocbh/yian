@@ -4585,7 +4585,7 @@ function prepareGrowthTopology(
   const derivedDepth = validatedGrowthDepth(state, record.spawnerId);
   const index = growthIndex(state);
   validateGrowthPrune(state, record.spawnerId, record.pruneIds);
-  const [retired, deferredPrune] = retiredIds(state, record.spawnerId, record.pruneIds, index.grown);
+  const [retired, deferredPrune] = retiredIds(state, record.spawnerId, record.pruneIds, index);
   validatePruneDependencies(state, fragment, retired, index);
 
   const sortedRetiredIds = [...retired].sort(compareCodeUnits);
@@ -4927,19 +4927,17 @@ function validateGrowthWiringRefs(
   reserved: ReadonlySet<string>,
 ): void {
   for (const [param, source] of wiring) {
-    const paths: string[] = [];
-    for (const [, text] of iterSourceStrings(source)) {
-      try {
-        for (const path of exprRefsOf(text)) paths.push(path);
-      } catch (error) {
-        if (!(error instanceof ExpressionError)) throw error;
-        raiseGrowthRejected(
-          new RangeError(
-            `growth fragment node ${reprText(nodeId)} wiring ${reprText(param)} is invalid: ${error.message}`,
-            { cause: error },
-          ),
-        );
-      }
+    let paths: string[];
+    try {
+      paths = [...sourceRefs(source)];
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      raiseGrowthRejected(
+        new RangeError(
+          `growth fragment node ${reprText(nodeId)} wiring ${reprText(param)} is invalid: ${error.message}`,
+          { cause: error },
+        ),
+      );
     }
     for (const path of paths) {
       const extraHeads = node.bindsPerItem === true && !reserved.has(param) ? ["item"] : [];
@@ -5011,18 +5009,28 @@ function nodeNames(nodeId: string, node: Node, wiring: ReadonlyMap<string, unkno
     if (typeof target === "string" && target !== nodeId) names.add(target);
   }
   for (const source of wiring.values()) {
-    for (const [, text] of iterSourceStrings(source)) {
-      let paths: string[];
-      try {
-        paths = exprRefsOf(text);
-      } catch (error) {
-        if (!(error instanceof ExpressionError)) throw error;
-        throw new RangeError(`node ${reprText(nodeId)} has invalid wiring: ${error.message}`, { cause: error });
-      }
-      for (const path of paths) names.add(path.split(".", 1)[0]!);
+    try {
+      for (const path of sourceRefs(source)) names.add(refHead(path));
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      throw new RangeError(`node ${reprText(nodeId)} has invalid wiring: ${error.message}`, { cause: error });
     }
   }
   return Object.freeze([...names]);
+}
+
+/**
+ * Yield each reference path the expressions in one raw or carrier-wrapped wiring source read.
+ *
+ * @throws ExpressionError when an expression doesn't parse.
+ */
+function* sourceRefs(source: unknown): Generator<string> {
+  for (const [, text] of iterSourceStrings(source)) yield* exprRefsOf(text);
+}
+
+/** The name a reference path starts with: a node id, or a reserved head such as `item`. */
+function refHead(path: string): string {
+  return path.split(".", 1)[0]!;
 }
 
 /**
@@ -5073,7 +5081,7 @@ function setDefault<V>(map: Map<string, V>, key: string, make: () => V): V {
  * @param state The pre-transition state whose `deferredPrune` names earlier deferred ids.
  * @param spawnerId The spawner whose growth record asks for `pruneIds`.
  * @param pruneIds The node ids the growth record asks to prune.
- * @param grown Each owner's directly grown live nodes.
+ * @param index The growth index: each owner's directly grown live nodes, and what each node names.
  * @returns The node ids retired by this growth, and the candidates kept live and deferred to a
  *   later growth.
  */
@@ -5081,8 +5089,9 @@ function retiredIds(
   state: RunState,
   spawnerId: string,
   pruneIds: readonly string[],
-  grown: ReadonlyMap<string, ReadonlySet<string>>,
+  index: GrowthIndex,
 ): readonly [ReadonlySet<string>, ReadonlySet<string>] {
+  const { grown } = index;
   if (pruneIds.length === 0 && state.deferredPrune.size === 0) return [new Set(), new Set()];
   const settled: ReadonlySet<NodeState | undefined> = new Set([
     NodeState.TAKEN,
@@ -5126,7 +5135,7 @@ function retiredIds(
   const pending: string[] = [];
   for (const candidate of kept) for (const nodeId of units.get(candidate)!) pending.push(nodeId);
   while (pending.length > 0) {
-    for (const read of readIds(state, pending.pop()!)) {
+    for (const read of readIds(state, index, pending.pop()!)) {
       for (const candidate of unitsOf.get(read) ?? []) {
         if (!kept.has(candidate)) {
           kept.add(candidate);
@@ -5141,25 +5150,13 @@ function retiredIds(
   return [retired, new Set([...kept].filter((candidate) => !retired.has(candidate)))];
 }
 
-/** Return the node ids a live node reads through edges, wiring, or output targets. */
-function readIds(state: RunState, nodeId: string): Set<string> {
-  const node = state.flow.nodes.get(nodeId)!;
+/**
+ * Return the node ids a live node reads: its incoming edges' sources, plus the names it names
+ * through its wiring or output targets (`GrowthIndex.names`).
+ */
+function readIds(state: RunState, index: GrowthIndex, nodeId: string): Set<string> {
   const reads = new Set(state.flow.incoming(nodeId).map((edge) => edge.from));
-  for (const target of [node.commitAs, node.originId, node.skippedOutputTarget()] as unknown[]) {
-    if (typeof target === "string") reads.add(target);
-  }
-  for (const source of (state.flow.wiring.get(nodeId) ?? new Map<string, unknown>()).values()) {
-    for (const [, text] of iterSourceStrings(source)) {
-      let paths: string[];
-      try {
-        paths = exprRefsOf(text);
-      } catch (error) {
-        if (!(error instanceof ExpressionError)) throw error;
-        continue; // the prune dependency check reports invalid wiring
-      }
-      for (const path of paths) reads.add(path.split(".", 1)[0]!);
-    }
-  }
+  for (const name of index.names.get(nodeId) ?? []) reads.add(name);
   return reads;
 }
 
@@ -5269,21 +5266,17 @@ function validatePruneDependencies(
     }
     const wiring = fragment.wiring.get(nodeId) ?? state.flow.wiring.get(nodeId) ?? new Map<string, unknown>();
     for (const source of wiring.values()) {
-      for (const [, text] of iterSourceStrings(source)) {
-        let paths: string[];
-        try {
-          paths = exprRefsOf(text);
-        } catch (error) {
-          if (!(error instanceof ExpressionError)) throw error;
-          throw new RangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
-            cause: error,
-          });
-        }
-        for (const path of paths) {
-          if (pruneIds.has(path.split(".", 1)[0]!)) {
-            raiseGrowthRejected(new RangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
-          }
-        }
+      let paths: string[];
+      try {
+        paths = [...sourceRefs(source)];
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        throw new RangeError(`surviving node ${reprText(nodeId)} has invalid wiring: ${error.message}`, {
+          cause: error,
+        });
+      }
+      if (paths.some((path) => pruneIds.has(refHead(path)))) {
+        raiseGrowthRejected(new RangeError(`surviving node ${reprText(nodeId)} wiring depends on pruned node`));
       }
     }
   }

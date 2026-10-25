@@ -2211,6 +2211,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     typeNames: new Set(registry.keys()),
     localContracts,
     partialUnionNodes: narrowing.unordered,
+    skips,
+    baseLocals,
     registry,
     diagnostics,
   });

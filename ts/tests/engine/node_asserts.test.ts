@@ -539,3 +539,55 @@ test.each([
 ])("load-leaves/engine_node_asserts__%s", (name) => {
   runCase({ id: `load-leaves/engine_node_asserts__${name}`, call: assembled });
 });
+
+// ---------- nullable field reads ----------
+
+const NULLABLE_HEAD =
+  "id: na\nname: na\n" +
+  "typedefs:\n  Rec: {a: str}\n  T: {f: Optional(str), g: str}\n" +
+  "input:\n  go: !bool\n  rec: !Rec\n  maybe: !Optional(Rec)\n" +
+  "nodes:\n";
+
+/** A flow where `gate` may skip `maybe_skipped` (`Rec`), and `use` binds `r: <source>` and asserts `assertion`. */
+const localAssert = (source: string, assertion: string) =>
+  NULLABLE_HEAD +
+  "  gate:\n    kind: case\n    cases:\n      - when: ${input.go}\n        then: maybe_skipped\n" +
+  "  maybe_skipped:\n    kind: code\n    output: Rec\n    code: \"return {'a': 'x'}\"\n" +
+  `  use:\n    kind: code\n    input:\n      r: ${source}\n    output: int\n    code: return 1\n` +
+  `    asserts:\n      - "${assertion}"\n` +
+  "output: ${use.output}\n";
+
+/** A flow where `isinstance(mk.output, T)` routes `go`, which binds `u: ${mk.output}` and asserts `assertion`. */
+const routedAssert = (assertion: string) =>
+  NULLABLE_HEAD +
+  "  mk:\n    kind: code\n    output: Any\n    code: \"return {'g': 'x'}\"\n" +
+  "  route:\n    kind: case\n    cases:\n      - when: isinstance(mk.output, T)\n        then: go\n    else: other\n" +
+  "  go:\n    kind: code\n    input:\n      u: ${mk.output}\n    output: str\n    code: return 'go'\n" +
+  `    asserts:\n      - "${assertion}"\n` +
+  "  other:\n    kind: code\n    output: str\n    code: return 'other'\n" +
+  "output: ${go.output | other.output}\n";
+
+test("a node assert on a local bound from a producer that may skip needs a guard", () => {
+  const error = loadError(() => assembleText(localAssert("${maybe_skipped.output :- null}", "r.a == 'x'")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain(
+    "node 'use' assert: ${r.a} reads field 'a' of r, which may be null (node 'maybe_skipped' may be skipped while 'use' runs)",
+  );
+  assembleText(localAssert("${maybe_skipped.output :- null}", "r != null and r.a == 'x'"));
+  assembleText(localAssert("${input.rec}", "r.a == 'x'"));
+});
+
+test("a node assert on an untyped local a CASE narrowed needs ?. for an optional field", () => {
+  expect(loadError(() => assembleText(routedAssert("u.f == 'a'"))).message).toContain(
+    "only narrowed to T; write u?.f",
+  );
+  assembleText(routedAssert("u.g == 'a'"));
+});
+
+test.each([
+  ["!= null and", "r != null and r.a == 'x'"],
+  ["== null or", "r == null or r.a == 'x'"],
+  ["isinstance", "isinstance(r, Rec) and r.a == 'x'"],
+])("a node assert narrowed by %s loads", (_name, assertion) => {
+  assembleText(localAssert("${input.maybe}", assertion));
+});

@@ -78,7 +78,8 @@ import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { collectConstructorNames, collectIsinstanceNames } from "../helpers/isinstance_types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
-import { fieldReadErrors, ReadSite } from "./field_reads.ts";
+import { contractType } from "../../compile/output_contracts.ts";
+import { fieldReadErrors, isUntyped, ReadSite } from "./field_reads.ts";
 import type { SkipModel } from "./skips.ts";
 import type { LocalInput } from "./typed_bindings.ts";
 
@@ -447,10 +448,15 @@ export const POOL_HEADS: ReadonlySet<string> = new Set(["input", "system", "item
  * @param options.typeNames The flow's `typedefs:` names (default none).
  * @param options.localContracts Each node's local input contracts (default none).
  * @param options.partialUnionNodes The nodes whose locals may read member-only fields (default none).
+ * @param options.skips Which producers may be skipped while a node runs: a local bound straight
+ *   from one reads null (default none may).
+ * @param options.baseLocals Each node's local input contracts without the CASE routing's narrowing,
+ *   to tell an untyped local the routing narrowed (default `localContracts`).
  * @param options.registry The flow's typedefs (default none).
  * @param options.diagnostics Factory for located load errors (default an unlocated one).
  * @throws LoadError holding every error, one per line, located at the first available exact
- *   assertion, offending field, or node range.
+ *   assertion, offending field, or node range; code `expr.nullable_field_read` when the first is a
+ *   nullable field read.
  * @throws TypeError when a node's output contract is neither an exact `ValueContract` nor a
  *   `PartialRecordContract`.
  */
@@ -464,17 +470,21 @@ export function validateNodeAsserts(
     typeNames?: ReadonlySet<string>;
     localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
     partialUnionNodes?: ReadonlySet<string>;
+    skips?: SkipModel | null;
+    baseLocals?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
     registry?: TypeRegistry | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): void {
+  const skips = options.skips ?? null;
   const assertionSiteAt = options.assertionSiteAt ?? null;
   const typeNames = options.typeNames ?? new Set<string>();
   const localContracts = options.localContracts ?? new Map<string, ReadonlyMap<string, LocalInput>>();
   const partialUnionNodes = options.partialUnionNodes ?? new Set<string>();
   const registry = options.registry ?? new Map();
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
-  const errors: [message: string, range: SourceRange | null][] = [];
+  const baseLocals = options.baseLocals ?? localContracts;
+  const errors: [message: string, range: SourceRange | null, code?: string][] = [];
   for (const [nid, node] of nodes) {
     const desc = descriptors.get(nid);
     // Not every descriptor has `asserts` (WAIT doesn't).
@@ -632,14 +642,37 @@ export function validateNodeAsserts(
       }
       // A spawner assert with `isinstance` was rejected above, so its impossible checks are never
       // reported on top of that error.
+      /** The producer a local is bound straight from, when it may be skipped while the node runs. */
+      const skippedProducer = (local: string): string | null => {
+        const source = nodeLocals.get(local)?.source ?? null;
+        if (skips === null || source === null) return null;
+        const names = source.split(".");
+        if (poolRootLength(names) !== 2 || (names[1] !== "output" && names[1] !== NEW_MESSAGES)) return null;
+        return skips.maySkipWhileRunning([names[0]!], nid) ? names[0]! : null;
+      };
+      const baseNodeLocals = baseLocals.get(nid) ?? new Map<string, LocalInput>();
       const messages = fieldReadErrors(tree, roots, registry, {
         partialUnionRoots: partialUnionNodes.has(nid)
           ? new Set([...roots.keys()].filter((root) => root !== "output"))
           : new Set(),
         unwalkedRoots: unwalked,
         site: new ReadSite({ spawner: SPAWNER_KINDS.has(kind), unionRoots }),
+        nullableRoots: new Set([...roots.keys()].filter((root) => skippedProducer(root) !== null)),
+        why: (root) => {
+          const producer = skippedProducer(root);
+          return producer === null
+            ? "it is Optional"
+            : `node ${reprText(producer)} may be skipped while ${reprText(nid)} runs`;
+        },
+        // `output` keeps the node's own contract; a local is untyped by its unnarrowed binding.
+        untyped: (root) =>
+          ((root === "output" ? roots.get(root) : baseNodeLocals.get(root)?.alternatives) ?? []).every((contract) =>
+            isUntyped(contractType(contract)),
+          ),
       });
-      for (const { message } of messages) errors.push([`node ${reprText(nid)} assert: ${message}`, errorRange]);
+      for (const { message, code } of messages) {
+        errors.push([`node ${reprText(nid)} assert: ${message}`, errorRange, code]);
+      }
       (readsOutput ? post : pre).push(new Assertion(a, a, { origin }));
     });
     node.preAsserts = pre;
@@ -649,7 +682,7 @@ export function validateNodeAsserts(
     const firstRange = errors.find(([, range]) => range !== null)?.[1] ?? null;
     throw diagnostics.error(
       "flow has invalid node asserts:\n  " + errors.map(([message]) => message).join("\n  "),
-      { range: firstRange },
+      { range: firstRange, code: errors[0]![2] },
     );
   }
 }

@@ -13,7 +13,7 @@
 import { current } from "../defaults.ts";
 import { realScheduler, type Scheduler, type Send } from "../platform.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
-import { scrub } from "./auth.ts";
+import { dropCredentialTail, scrub } from "./auth.ts";
 import { encodeBody } from "./body.ts";
 import { capDetail, errorFromResponse, MAX_RETRY_AFTER_SECONDS, ProviderError } from "./errors.ts";
 import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
@@ -125,7 +125,7 @@ export class RouteModel implements ChatModel {
     );
     if (exchange.status < 200 || exchange.status >= 300) {
       const credentials = route.auth.credentials();
-      const text = scrub(await readErrorBody(exchange), credentials);
+      const text = scrub(await readErrorBody(exchange, credentials), credentials);
       const error = errorFromResponse(exchange.status, exchange.headers, text, {
         provider: route.provider,
         credentials,
@@ -153,8 +153,11 @@ export class RouteModel implements ChatModel {
  * aborts the request however the read ends: stopping at the cap returns it early, which
  * runs its own release. A `ProviderError` from a read keeps what arrived; any other error,
  * such as a caller abort, propagates.
+ *
+ * A body cut at the cap loses its last run of non-whitespace and any trailing start of a
+ * credential: the cut may split one, and no scrub matches the part before it.
  */
-async function readErrorBody(exchange: Exchange): Promise<string> {
+async function readErrorBody(exchange: Exchange, credentials: readonly string[]): Promise<string> {
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -174,7 +177,12 @@ async function readErrorBody(exchange: Exchange): Promise<string> {
     bytes.set(part, at);
     at += part.length;
   }
-  return new TextDecoder().decode(bytes);
+  const text = new TextDecoder().decode(bytes);
+  if (size < MAX_ERROR_BODY) return text;
+  // A loop, not /\S*$/, which backtracks quadratically over a long run before whitespace.
+  let end = text.length;
+  while (end > 0 && !/\s/.test(text[end - 1]!)) end--;
+  return dropCredentialTail(text.slice(0, end).trimEnd(), credentials);
 }
 
 /**

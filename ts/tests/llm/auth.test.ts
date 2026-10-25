@@ -8,6 +8,7 @@ import {
   type Auth,
   BasicAuth,
   BearerAuth,
+  dropCredentialTail,
   ExtraHeadersAuth,
   HeaderKeyAuth,
   NoAuth,
@@ -299,6 +300,18 @@ async function errorEchoing(secret: string, auth: Auth): Promise<ProviderError> 
   expect(error).toBeInstanceOf(ProviderError);
   return error as ProviderError;
 }
+
+describe("dropCredentialTail", () => {
+  test("drops the longest trailing start of any form", () => {
+    expect(dropCredentialTail("seen sk-SEC", ["sk-SECRET"])).toBe("seen ");
+    expect(dropCredentialTail("seen user pa", ["user pass"])).toBe("seen ");
+    // The \u-escaped form, in either case.
+    expect(dropCredentialTail("seen \\u0073\\u006B", ["sk-SECRET"])).toBe("seen ");
+    // A whole credential is the scrub's job, not a tail.
+    expect(dropCredentialTail("seen sk-SECRET", ["sk-SECRET"])).toBe("seen sk-SECRET");
+    expect(dropCredentialTail("seen", ["", "zz"])).toBe("seen");
+  });
+});
 
 describe("BasicAuth", () => {
   test("sends Basic and the base64 of user:password", async () => {

@@ -332,6 +332,35 @@ export function secretForms(value: string): SecretForm[] {
 }
 
 /**
+ * Return `text` without a trailing start of any form of any credential, such as a cut left.
+ *
+ * Every proper prefix counts, down to one character, so a cut text may lose a little more than
+ * a credential. Empty credentials are ignored.
+ *
+ * @param text The cut text.
+ * @param credentials The secrets whose starts are dropped.
+ * @returns `text` with the longest such tail removed.
+ */
+export function dropCredentialTail(text: string, credentials: Iterable<string>): string {
+  let cut = text.length;
+  for (const value of new Set(credentials)) {
+    if (!value) continue;
+    for (const form of secretForms(value)) {
+      // Only a tail longer than the one already found can move the cut.
+      for (let length = Math.min(form.text.length - 1, text.length); length > text.length - cut; length--) {
+        const tail = text.slice(text.length - length);
+        const start = form.text.slice(0, length);
+        if (form.ignoreCase ? tail.toLowerCase() === start.toLowerCase() : tail === start) {
+          cut = text.length - length;
+          break;
+        }
+      }
+    }
+  }
+  return text.slice(0, cut);
+}
+
+/**
  * Replace each form of each credential in `text` with `marker`.
  *
  * Forms come from `secretForms` and are replaced longest first across all credentials, so a

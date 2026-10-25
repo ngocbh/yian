@@ -550,7 +550,7 @@ Most are just the functional model (above) made enforceable:
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
   no conversation records; session history lives only in the backend. TS yian
-  (schema 22) writes every pool write as a `pool_commit`: the run start's system
+  (schema 23) writes every pool write as a `pool_commit`: the run start's system
   values and START inputs right after `run_started` (applied at once; a log cut
   before the START inputs isn't resumable), and a node's output before the
   `node_succeeded` that names its seq; the success applies it, and a resume drops
@@ -640,6 +640,10 @@ Most are just the functional model (above) made enforceable:
   `steer_inbox: ${input.<name>}` reads an `Inbox(...)` input before each model call, each
   read a recorded `steer {inbox, from}` step that resume replays, and `interrupt(run, inbox)`
   ends it with a null output (`agent.interrupted` unless the output is `Optional`).
+  The Stop is remembered (`WaitsState.stops`) until the next pickup from the inbox, the first
+  `run_waiting` after it stopped an agent, or run end: a reader that opens the inbox meanwhile
+  appends its own `interrupted` record. `withdraw(run, inbox)` takes back unread sends
+  (`inbox_withdrawn`).
 - **Domain-agnostic** — no domain-specific field names or types in the engine;
   domain lives at the contract/boundary (the loader/builder). The `system`
   namespace is generic.

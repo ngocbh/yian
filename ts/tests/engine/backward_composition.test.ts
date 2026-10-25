@@ -22,7 +22,7 @@
  * - Python's `ValueError` is a `RangeError`; CODE bodies are JavaScript (decision 11).
  *
  * TS-only: slice, `len` and comprehension routes cross a public CALL the same way (Python has
- * none of them).
+ * none of them); a MAP failed on an item binding is bound again from its items' sources too.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -1058,4 +1058,40 @@ output: \${input.text}
       expect(access.configs).toEqual([]);
     });
   }
+});
+
+test("a failed map's item routes rebind from their own sources (TS-only)", async () => {
+  const flow = await load(`id: map-item-sources
+name: map_item_sources
+nodes:
+  src:
+    kind: code
+    code: |
+      return [1, "s"]
+  a:
+    kind: code
+    code: |
+      return "A"
+  m:
+    kind: map
+    over: \${src.output}
+    input:
+      extra: "x \${a.output}"
+      value: !int \${item}
+    nodes:
+      twice:
+        kind: code
+        input:
+          value: \${input.value}
+        code: |
+          return inputs["value"] * 2
+    output: \${twice.output}
+output: \${m.output}
+`);
+  const result = await run(flow, {}, { log: fresh("map-items.jsonl"), learnable: true });
+  expect(result.status).toBe("failed");
+  expect(result.failure!.code).toBe("binding.type");
+  // The item binding reads `src`, a source the MAP's top-level route doesn't name.
+  const outcome = await result.backward("Fix the inputs.");
+  expect(outcome.status).toBe("succeeded");
 });

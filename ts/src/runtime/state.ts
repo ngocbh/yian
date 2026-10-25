@@ -1698,8 +1698,6 @@ export function prepareNodeRouted(
   if (typeof handle !== "string") throw new NodeDataError(new TypeError("handle must be a string"));
   if (!handle) throw new NodeDataError(new RangeError("handle must be non-empty"));
   requireInitializedNonterminal(state);
-  requireOutcomeNode(state, nodeId, "NodeRouted");
-  requireNoPendingCommit(state, nodeId, "NodeRouted");
   return prepareRouteTransition(
     state,
     new NodeRoutedRecord(nodeId, handle, {
@@ -1914,7 +1912,6 @@ export function prepareRecord(
     return prepareSuccessTransition(state, record);
   }
   if (isExactly(record, NodeRoutedRecord)) {
-    validateRouteRecord(state, record);
     return prepareRouteTransition(state, record, false);
   }
   if (isExactly(record, NodeExpandedRecord)) {
@@ -2171,6 +2168,7 @@ function prepareRouteTransition(
   record: NodeRoutedRecord,
   deriveTerminalFailure: boolean,
 ): PreparedTransition {
+  validateRouteRecord(state, record);
   validateLearnedScope(state, record.nodeId);
   const route = prepareRouteDelta(state, record, deriveTerminalFailure);
   const causalFailure = route.causalFailure;
@@ -5433,7 +5431,7 @@ function validatePruneDependencies(
   }
 }
 
-/** Validate a replayed route's exact scalar carriers and its executing router. */
+/** Validate a route's exact scalar carriers and its executing router. */
 function validateRouteRecord(state: RunState, record: NodeRoutedRecord): void {
   const nodeId: unknown = record.nodeId;
   const handle: unknown = record.handle;
@@ -5922,7 +5920,7 @@ interface JoinScratch {
 }
 
 /**
- * Validate one route and return its frozen skip closure, plus the terminal failure it first
+ * Return one validated route's frozen skip closure, plus the terminal failure it first
  * proves (`causalFailure`), if any.
  */
 function prepareRouteDelta(
@@ -5930,7 +5928,6 @@ function prepareRouteDelta(
   record: NodeRoutedRecord,
   deriveTerminalFailure: boolean,
 ): { delta: RouteDelta; causalFailure: Failure | null } {
-  validateRouteRecord(state, record);
   const edgeUpdates = new Map<string, NodeState>();
   const edgeHeads: string[] = [];
   const skippedNodeIds: string[] = [];

@@ -203,6 +203,15 @@ test("strict-raise: a miss raises, naming the path", () => {
   );
 });
 
+test("strict-raise: a slice of null names the slice, not a miss an operator handled", () => {
+  const strict = (text: string) =>
+    errorOf(text, fromRecord({ xs: [null] }), ResolveMode.STRICT_RAISE).message;
+  expect(strict("(a :- null)[0:1]")).toBe("unresolved reference ${(...)[...]} in expression");
+  expect(strict("(a | null)[0:1]")).toBe("unresolved reference ${(...)[...]} in expression");
+  expect(strict("(null)[0:1]")).toBe("unresolved reference ${null[...]} in expression");
+  expect(strict("[x[1:] for x in xs]")).toBe("unresolved reference ${x[...]} in expression");
+});
+
 test("ResolveMode holds Python's values and is frozen", () => {
   expect({ ...ResolveMode }).toEqual({
     STRICT_RAISE: "strict-raise",

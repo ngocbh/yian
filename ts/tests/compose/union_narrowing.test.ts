@@ -233,7 +233,9 @@ function flow(...nodes: string[]): string {
  * section holding `inputs` (default `s: !str`) and the flow `output` (default `${d.output.action}`).
  */
 function flowWith(options: { inputs?: string; dType?: string; output?: string }, ...nodes: string[]): string {
-  const { inputs = "  s: !str\n", dType = "Decision", output = "${d.output.action}" } = options;
+  const { inputs = "  s: !str\n", dType = "Decision" } = options;
+  // An `Optional` output is read through `?.`.
+  const output = options.output ?? (dType.startsWith("Optional(") ? "${d.output?.action}" : "${d.output.action}");
   return (
     "id: p\nname: p\n" +
     TYPEDEFS +
@@ -260,6 +262,8 @@ const PLACE_REST_EXPECTS = `call(place_rest) argument 'order' — child expects 
 const load = (text: string) => assembleText(text);
 
 const ON = "${d.output.action}";
+/** `ON` over an `Optional` output. */
+const OPTIONAL_ON = "${d.output?.action}";
 
 /** A searched CASE `route` over `cases`, else to `e`. */
 function searched(...cases: (readonly [string, string])[]): string {
@@ -653,7 +657,7 @@ test("a nullable union else target sees an optional union", () => {
   const nullable = (callee: string) =>
     flowWith(
       { dType: "Optional(Decision)" },
-      caseNode("route", ON, [["buy", "b"]], `call(${callee}, order=\${d.output})`),
+      caseNode("route", OPTIONAL_ON, [["buy", "b"]], `call(${callee}, order=\${d.output})`),
       code("b"),
     );
 
@@ -666,7 +670,7 @@ test("a nullable union narrows to a non-nullable member under when", () => {
   load(
     flowWith(
       { dType: "Optional(Decision)" },
-      caseNode("route", ON, [["buy", "call(place, order=${d.output})"]], "e"),
+      caseNode("route", OPTIONAL_ON, [["buy", "call(place, order=${d.output})"]], "e"),
       code("e"),
     ),
   );
@@ -837,7 +841,7 @@ test("a path base through an optional record keeps nullability in else", () => {
   const wrapped = (callee: string) =>
     flow(
       producer("r", "Optional(Wrap)"),
-      caseNode("route", "${r.output.decision.action}", [["buy", "b"]], `call(${callee}, order=\${r.output.decision})`),
+      caseNode("route", "${r.output?.decision.action}", [["buy", "b"]], `call(${callee}, order=\${r.output?.decision})`),
       code("b", { l: "${r.output.decision.limit}" }),
     );
 

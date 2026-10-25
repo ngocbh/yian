@@ -277,7 +277,7 @@ test("optional binding field reads", () => {
   expect(loadMessage(flow(agent({ v: "${step.output :- null}" }, "${v.b}"), "${ag.output}"))).toContain(
     "node 'ag' prompt: reference ${v.b} reads unknown field 'b' on record",
   );
-  load(flow(agent({ v: "${step.output :- null}" }, "${v.a}"), "${ag.output}"));
+  load(flow(agent({ v: "${step.output :- null}" }, "${v?.a}"), "${ag.output}"));
 });
 
 test("adaptive brief field read is reported on the gate", () => {
@@ -377,7 +377,7 @@ test.each([
     "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    code: return 1\n" +
       agent({ v: "${u.output}" }, "${v.x}"),
   ],
-  ["optional-record", producer("m", "Optional(Rec)") + agent({ v: "${m.output}" }, "${v.a}")],
+  ["optional-record", producer("m", "Optional(Rec)") + agent({ v: "${m.output}" }, "${v?.a}")],
 ])("readable fields still load: %s", (_id, nodes) => {
   load(flow(nodes, "${ag.output}"));
 });

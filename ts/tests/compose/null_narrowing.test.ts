@@ -380,8 +380,9 @@ const nestedFlow = (when: string, aType = "A", source = "${input.a.b}", sink = "
   "        input:\n          o: ${input.v}\n        code: return 1\n" +
   "    output: ${p.output}\n";
 
+// `input.a` may be null, so its field is read through `?.`.
 describe("a narrowed optional field fills a required input", () => {
-  for (const when of ["isinstance(input.a.b, str)", "input.a.b != null"]) {
+  for (const when of ["isinstance(input.a?.b, str)", "input.a?.b != null"]) {
     for (const aType of ["A", "Optional(A)"]) {
       test(`${when} on ${aType}`, () => {
         assembleText(nestedFlow(when, aType));
@@ -390,7 +391,7 @@ describe("a narrowed optional field fills a required input", () => {
   }
 });
 
-test.each(["isinstance(input.a.b, str)", "input.a.b != null"])(
+test.each(["isinstance(input.a?.b, str)", "input.a?.b != null"])(
   "a narrowed field makes its parent non-null: %s",
   (when) => {
     assembleText(nestedFlow(when, "Optional(A)", "${input.a}", "A"));
@@ -539,10 +540,10 @@ function exhaustiveOnFlow(when: string): string {
   );
 }
 
-test.each(["input.a.b != null", "input.a != null"])(
+test.each(["input.a?.b != null", "input.a != null"])(
   "a null check on a field or its parent makes a sibling tag exhaustive: %s",
   (when) => {
-    // A non-null `input.a.b` means `input.a` is not null, so its required tag `m` is not.
+    // A non-null `input.a?.b` means `input.a` is not null, so its required tag `m` is not.
     assembleText(exhaustiveOnFlow(when));
   },
 );

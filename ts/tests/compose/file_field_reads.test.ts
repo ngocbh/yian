@@ -387,7 +387,7 @@ test("the fields of a file load and read at run", async () => {
   const text = flow(
     "  b:\n    kind: code\n    input:\n" +
       "      u: ${a.output.f.uri}\n      m: ${a.output.f.mime}\n" +
-      "      k: ${a.output.f.name}\n      g: ${a.output.g.uri}\n" +
+      "      k: ${a.output.f.name}\n      g: ${a.output.g?.uri}\n" +
       '      t: "u=${a.output.f.uri}"\n' +
       "    code: return [inputs['u'], inputs['m'], inputs['k'], inputs['g'], inputs['t']]\n",
   );

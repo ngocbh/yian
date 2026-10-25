@@ -176,7 +176,7 @@ test.each(["call", "map"] as const)("a branch under a null check passes the valu
 test.each([
   ["input.x != null", "Optional(Item)", "Item", "${input.x}"],
   ["input.x.b != null", "A", "str", "${input.x.b}"],
-  ["input.x.b != null", "Optional(A)", "str", "${input.x.b}"],
+  ["input.x?.b != null", "Optional(A)", "str", "${input.x.b}"],
   ["input.x != null", "Optional(Any)", "Any", "${input.x}"],
 ])("a branch under a null check on an input passes it as not null: %s on %s", (when, xType, sinkType, source) => {
   load(inputFlow(when, xType, sinkType, source));
@@ -245,7 +245,8 @@ function onFlow(sinkType: string): string {
     ON_TYPEDEFS +
     "input:\n  v: !Optional(AB)\n" +
     "nodes:\n" +
-    "  gate:\n    kind: case\n    on: ${input.v.kind}\n    cases:\n" +
+    // `input.v` may be null, so its tag is read through `?.`.
+    "  gate:\n    kind: case\n    on: ${input.v?.kind}\n    cases:\n" +
     "      - when: a\n        then: use\n" +
     "    else: skip\n" +
     "  use:\n    kind: call\n    call: take\n    input:\n      v: ${input.v}\n" +

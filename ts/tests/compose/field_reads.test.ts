@@ -79,7 +79,7 @@ const load = (text: string) => assembleText(text);
 const failure = (text: string) => loadError(() => load(text)).message;
 
 test("case when on a missing optional record input is falsy", async () => {
-  // A `when:` reading a field of an omitted `Optional(Rec)` input takes the else branch.
+  // A `when:` reading a field of an omitted `Optional(Rec)` input through `?.` takes the else branch.
   const text =
     "id: p\nname: p\n" +
     "typedefs:\n  Rec: {a: str}\n" +
@@ -88,7 +88,7 @@ test("case when on a missing optional record input is falsy", async () => {
     "  route:\n" +
     "    kind: case\n" +
     "    cases:\n" +
-    "      - when: ${input.maybe.a == 'x'}\n" +
+    "      - when: ${input.maybe?.a == 'x'}\n" +
     "        then: hit\n" +
     "    else: miss\n" +
     "  hit:\n" +
@@ -330,7 +330,7 @@ test("a node assert on an exact record output checks typed fields", () => {
 
 test.each([
   ["object", "${step.output.anything.deeper}", ""], // opaque
-  ["Optional(Rec)", "${step.output.a}", "typedefs:\n  Rec: {a: str}\n"],
+  ["Optional(Rec)", "${step.output?.a}", "typedefs:\n  Rec: {a: str}\n"],
   ["{a: str, b: object}", "${step.output.b.anything}", ""], // object-typed field
   ["list(str)", "${step.output}", ""], // whole value
 ])("reads the type allows still load: %s %s", (stepOutput, ref, preamble) => {

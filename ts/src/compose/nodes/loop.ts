@@ -624,15 +624,7 @@ export function loopEntryInputs(node: LoopNode): Parameter[] {
       if (path[0] === parameter.name) typ = nullableAt(typ, path.slice(1));
     }
     if (typ === contract.type) return parameter;
-    return new Parameter(parameter.name, {
-      contract: new ValueContract(typ, contract.origins),
-      required: parameter.required,
-      hasDefault: parameter.hasDefault,
-      default: parameter.default,
-      coerceStrings: parameter.coerceStrings,
-      origin: parameter.origin,
-      defaultOrigin: parameter.defaultOrigin,
-    });
+    return parameter.replace({ contract: new ValueContract(typ, contract.origins) });
   });
 }
 

@@ -365,11 +365,7 @@ export class LoopNode extends Node {
       const record = carried!;
       clone.params = this.params?.map((param) =>
         Object.hasOwn(record, param.name) && !returned.includes(param.name)
-          ? new Parameter(param.name, {
-              contract: param.contract,
-              coerceStrings: param.coerceStrings,
-              origin: param.origin,
-              defaultOrigin: param.defaultOrigin,
+          ? param.replace({
               required: false,
               hasDefault: true,
               default: this.carriedValue(param.name, record[param.name]!),

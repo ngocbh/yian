@@ -204,15 +204,7 @@ function breaksZeroIterationOutput(
     // fails; the seed error would blame the body input the `while:` guards.
     return false;
   }
-  const carriedDecl = new Parameter(decl.name, {
-    contract: new ValueContract(carried, decl.contract!.origins),
-    required: decl.required,
-    hasDefault: decl.hasDefault,
-    default: decl.default,
-    coerceStrings: decl.coerceStrings,
-    origin: decl.origin,
-    defaultOrigin: decl.defaultOrigin,
-  });
+  const carriedDecl = decl.replace({ contract: new ValueContract(carried, decl.contract!.origins) });
   return bindingMismatch(src, carriedDecl, scope) !== null;
 }
 
@@ -525,18 +517,7 @@ function literalHint(value: unknown, decl: Parameter, text: string | null, optio
   if (typeof value === "string") {
     let candidate: unknown;
     try {
-      candidate = coerceParam(
-        new Parameter(decl.name, {
-          contract: decl.contract,
-          required: decl.required,
-          hasDefault: decl.hasDefault,
-          default: decl.default,
-          coerceStrings: true,
-          origin: decl.origin,
-          defaultOrigin: decl.defaultOrigin,
-        }),
-        value,
-      );
+      candidate = coerceParam(decl.replace({ coerceStrings: true }), value);
     } catch (error) {
       // Text spelling a float past the double range, or an int the runtime refuses, fits no
       // number however it's written.

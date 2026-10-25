@@ -412,6 +412,11 @@ export interface ToolTypes {
   /** The names of the inputs a call must pass. */
   readonly required: ReadonlySet<string>;
   /**
+   * The type of an input not in `inputs`, from `additionalProperties`: `undefined` when the tool
+   * takes no such input, and `null` when it takes any (`true`, or a schema yian can't translate).
+   */
+  readonly extra?: Type | null;
+  /**
    * The return type, read from `outputJsonSchema` as a closed schema, or `null` when it is not
    * checked: the tool has no output schema, or yian can't translate it.
    */
@@ -438,10 +443,15 @@ export function toolTypes(tool: FunctionTool): ToolTypes {
   }
   const required = get(schema, "required");
   const names = Array.isArray(required) ? required : [];
+  // As a call's argument check reads it: only `true` or a schema lets other keys in.
+  const additional = get(schema, "additionalProperties");
+  const extra =
+    additional === true ? null : isRecord(additional) ? inputTypeFromJsonSchema(additional, schema) : undefined;
   return {
     inputs,
     required: new Set(names.filter((name): name is string => typeof name === "string")),
     output,
+    ...(extra === undefined ? {} : { extra }),
   };
 }
 

@@ -304,11 +304,22 @@ function isRetryable(
 /**
  * Return the most useful short text of an error body, scrubbed of `credentials`.
  *
- * Scrubbed before the cap: an echo in mixed escapes only matches once the parse has undone
- * them, and a cut through it would leave a prefix no scrub can match.
+ * A body shown whole has its JSON escapes undone first, so an echo in mixed escapes is shown
+ * plain and matches. Scrubbed before the cap, since a cut through an echo would leave a prefix
+ * no scrub can match.
  */
 function bodyDetail(body: string, credentials: Iterable<string>): string {
-  return capDetail(scrub(jsonDetail(body) ?? (body.replace(/\s+/g, " ").trim() || "no body"), credentials));
+  const detail = jsonDetail(body) ?? (unescapeJson(body).replace(/\s+/g, " ").trim() || "no body");
+  return capDetail(scrub(detail, credentials));
+}
+
+const JSON_ESCAPES: Readonly<Record<string, string>> = { b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+
+/** Return `text` with each JSON string escape (`\uXXXX`, `\"`, `\n`, ...) replaced by its character. */
+function unescapeJson(text: string): string {
+  return text.replace(/\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))/g, (_, hex: string | undefined, char: string) =>
+    hex !== undefined ? String.fromCharCode(parseInt(hex, 16)) : (JSON_ESCAPES[char] ?? char),
+  );
 }
 
 /** Return the body's JSON `error.message`, `message` or `detail` string, or a string `error`, or `null`. */

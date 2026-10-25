@@ -113,9 +113,6 @@ class CaseDescriptor(NodeDescriptor):
     no field.
     `keyword_remap` is case-owned (the base's is empty): `else` is a Python keyword, so the
     template `parse` reads the surface `else:` into the `else_` descriptor field.
-
-    `asserts` stays a declared field (the lowering path may set it) but is deliberately NOT in
-    `allowed` — a `case` never authors `asserts`, so the surface key stays rejected.
     """
 
     kind = "case"
@@ -134,7 +131,6 @@ class CaseDescriptor(NodeDescriptor):
     # True when `else:` was written, even as `else: null` (where `else_` stays None).
     has_else: bool = False
     on: Optional[str] = None
-    asserts: list[str] = field(default_factory=list)
     # Positional per-case source ranges of the `when:` / `then:` VALUES, aligned 1:1 with `cases`
     # (None where no span exists). Captured at parse so a synth CASE param (`__rN` from a `when:`
     # ref) or a `then:/else: call(...)` target can locate at its own line, not the node header.

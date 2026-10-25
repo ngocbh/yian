@@ -81,7 +81,6 @@ export interface CaseDescriptorFields extends NodeDescriptorFields {
   else_?: unknown;
   hasElse?: boolean;
   on?: string | null;
-  asserts?: readonly string[];
   whenRanges?: readonly (SourceRange | null)[];
   thenRanges?: readonly (SourceRange | null)[];
   thenStyles?: readonly (ScalarStyle | null)[];
@@ -104,7 +103,6 @@ export interface CaseDescriptorFields extends NodeDescriptorFields {
  * unquoted node name from quoted text, and `else: null` from no `else:`; `thenTags` and `elseTag`
  * keep a tagged value's tag. A style is the YAML scalar style of the authored value (`null` for a
  * mapping, a list, a missing value or a source-free cursor); downstream reads `null` as plain.
- * `asserts` is a field the lowering may set, but not in `allowed`: a `case` never authors it.
  */
 export class CaseDescriptor extends NodeDescriptor {
   static override readonly kind = "case";
@@ -128,8 +126,6 @@ export class CaseDescriptor extends NodeDescriptor {
   readonly hasElse: boolean;
   /** The `on:` reference text; `null` in the searched form. */
   readonly on: string | null;
-  /** The node asserts the lowering may set; never authored. */
-  readonly asserts: readonly string[];
   /**
    * The range of each `cases[N].when` value, aligned with `cases` (`null` where none exists), so a
    * generated parameter (`__rN`) locates at its own line. Position, not text, is the identity.
@@ -168,7 +164,6 @@ export class CaseDescriptor extends NodeDescriptor {
     // A directly constructed `else_` implies the key was written.
     this.hasElse = (fields.hasElse ?? false) || this.else_ !== null;
     this.on = fields.on ?? null;
-    this.asserts = fields.asserts ?? [];
     this.whenRanges = fields.whenRanges ?? [];
     this.thenRanges = fields.thenRanges ?? [];
     this.thenStyles = fields.thenStyles ?? [];

@@ -147,6 +147,31 @@ const SINGLE_OUTPUT_NAME = "result";
 
 const PRESENTATION_UNAVAILABLE_NOTE = "Source presentation was unavailable.";
 
+/**
+ * Return a producer's output contract, checked to be one the reference walks read.
+ *
+ * @throws TypeError when it isn't a `ValueContract` or `PartialRecordContract`.
+ */
+function producerContract(producerId: string, contract: OutputContract): ValueContract | PartialRecordContract {
+  if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+    throw new TypeError(
+      "output producer contracts must be ValueContract or PartialRecordContract values, " +
+        `got ${jsTypeName(contract)} for ${reprText(producerId)}`,
+    );
+  }
+  return contract;
+}
+
+/** Run `fn`, rethrowing a `SourceAccessError` from walking retained source as a located `LoadError`. */
+function locateSourceAccess<T>(diagnostics: LoadDiagnostics, fn: () => T): T {
+  try {
+    return fn();
+  } catch (error) {
+    if (!(error instanceof SourceAccessError)) throw error;
+    throw diagnostics.error(error.message, { range: error.range, cause: error });
+  }
+}
+
 /** One active descriptor build and the dependency edge that requested it; frozen. */
 export class BuildRequest {
   /** The node being built. */
@@ -491,13 +516,7 @@ export function assertionCursors(
   diagnostics: LoadDiagnostics,
 ): readonly (SourceCursor | null)[] {
   if (assertsCursor === null) return assertions.map(() => null);
-  let cursors: readonly SourceCursor[];
-  try {
-    cursors = assertsCursor.children();
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  const cursors = locateSourceAccess(diagnostics, () => assertsCursor.children());
   if (cursors.length !== assertions.length) {
     throw diagnostics.error("retained assertion cursor does not align with semantic assertions", {
       range: assertsCursor.range,
@@ -523,12 +542,7 @@ export function registerAssertionOrigin(
   diagnostics: LoadDiagnostics,
 ): OriginRef | null {
   if (cursor === null) return null;
-  try {
-    return catalogBuilder.register(sitePath, cursor);
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  return locateSourceAccess(diagnostics, () => catalogBuilder.register(sitePath, cursor));
 }
 
 /**
@@ -599,8 +613,8 @@ export function stampNodeWiringOrigins(
     const wiring = flowWiring.get(nodeId);
     if (node === undefined || wiring === undefined) continue;
 
-    try {
-      if (!nodesCursor.has(nodeId)) continue;
+    locateSourceAccess(diagnostics, () => {
+      if (!nodesCursor.has(nodeId)) return;
       let inputCursors: Map<string, SourceCursor>;
       if (isValueEntry(descriptor)) {
         inputCursors = new Map([[nodeId, nodesCursor.child(nodeId)]]);
@@ -616,14 +630,14 @@ export function stampNodeWiringOrigins(
           if (bindingOrigin !== null) wiring.set(key, withOrigin(wiring.get(key), bindingOrigin));
         }
 
-        if (Object.keys(descriptor.inputs).length === 0 || !nodeCursor.has("inputs")) continue;
+        if (Object.keys(descriptor.inputs).length === 0 || !nodeCursor.has("inputs")) return;
         const inputsCursor = nodeCursor.child("inputs");
         inputCursors = new Map();
         for (const name of Object.keys(descriptor.inputs)) {
           if (inputsCursor.has(name)) inputCursors.set(name, inputsCursor.child(name));
         }
       }
-      if (node.params === null) continue;
+      if (node.params === null) return;
       const parameterIndexes = new Map(node.params.map((parameter, index) => [parameter.name, index]));
       const parameters = [...node.params];
       let parametersChanged = false;
@@ -656,10 +670,7 @@ export function stampNodeWiringOrigins(
         if (bindingOrigin !== null) wiring.set(name, withOrigin(wiring.get(name), bindingOrigin));
       }
       if (parametersChanged) node.params = parameters;
-    } catch (error) {
-      if (!(error instanceof SourceAccessError)) throw error;
-      throw diagnostics.error(error.message, { range: error.range, cause: error });
-    }
+    });
   }
 }
 
@@ -775,8 +786,8 @@ export function splitTypedInputs(
     }
     const inputs = { ...descriptor.inputs };
     const inputTypes = new Map(descriptor.inputTypes);
-    let changed = false;
-    try {
+    const changed = locateSourceAccess(diagnostics, () => {
+      let changed = false;
       let inputsCursor: SourceCursor | null = null;
       if (nodesCursor.has(nodeId)) {
         const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
@@ -797,10 +808,8 @@ export function splitTypedInputs(
         if (contract !== null) inputTypes.set(name, contract);
         changed = true;
       }
-    } catch (error) {
-      if (!(error instanceof SourceAccessError)) throw error;
-      throw diagnostics.error(error.message, { range: error.range, cause: error });
-    }
+      return changed;
+    });
     split.set(nodeId, changed ? descriptor.replace({ inputs, inputTypes }) : descriptor);
   }
   return split;
@@ -838,7 +847,7 @@ function splitTypedLlmConfig(
 ): Map<string, NodeDescriptor> {
   const { registry, owner, catalogBuilder, diagnostics } = options;
   const split = new Map(descriptors);
-  try {
+  locateSourceAccess(diagnostics, () => {
     for (const [nodeId, descriptor] of descriptors) {
       if (!nodesCursor.has(nodeId)) continue;
       let path: readonly string[];
@@ -883,10 +892,7 @@ function splitTypedLlmConfig(
             }),
       );
     }
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  });
   return split;
 }
 
@@ -978,7 +984,7 @@ function bindingStyle(
   options: { valueEntries: ReadonlySet<string>; diagnostics: LoadDiagnostics },
 ): ScalarStyle | null {
   const { valueEntries, diagnostics } = options;
-  try {
+  return locateSourceAccess(diagnostics, () => {
     if (!nodesCursor.has(nodeId)) return null;
     if (valueEntries.has(nodeId)) {
       if (field !== "inputs" || key !== nodeId) return null;
@@ -992,10 +998,7 @@ function bindingStyle(
       cursor = cursor.child(key);
     }
     return cursor.scalarStyle;
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  });
 }
 
 /**
@@ -1014,14 +1017,11 @@ function outputStyle(
 ): ScalarStyle | null {
   const { diagnostics } = options;
   if (outputsCursor === null) return null;
-  try {
+  return locateSourceAccess(diagnostics, () => {
     if (key === null) return outputsCursor.scalarStyle;
     if (!outputsCursor.has(key)) return null;
     return outputsCursor.child(key).scalarStyle;
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  });
 }
 
 /**
@@ -1039,14 +1039,11 @@ function caseOutputCursor(
   options: { diagnostics: LoadDiagnostics },
 ): SourceCursor | null {
   const { diagnostics } = options;
-  try {
+  return locateSourceAccess(diagnostics, () => {
     if (!nodesCursor.has(nodeId)) return null;
     const cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
     return cursor.has("outputs") ? cursor.child("outputs") : null;
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  });
 }
 
 /**
@@ -1124,7 +1121,7 @@ function splitTypedOutputs(
       diagnostics,
     });
 
-  try {
+  return locateSourceAccess(diagnostics, () => {
     if (outputsCursor?.tag != null) {
       // A tagged whole section is one typed value, even a mapping: the carrier is not a record,
       // so every later pass takes it as the single output. A top-level tag always gives the
@@ -1151,10 +1148,7 @@ function splitTypedOutputs(
       if (contract !== null) outputTypes.set(key, contract);
     }
     return [split, outputTypes];
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  });
 }
 
 /**
@@ -1210,12 +1204,7 @@ export function stampFlowOutputOrigins(
     if (rawKeys.length !== outputs.length) {
       throw new RangeError("flow output carriers do not align with their section");
     }
-    try {
-      cursors = rawKeys.map((key) => outputsCursor.child(key));
-    } catch (error) {
-      if (!(error instanceof SourceAccessError)) throw error;
-      throw diagnostics.error(error.message, { range: error.range, cause: error });
-    }
+    cursors = locateSourceAccess(diagnostics, () => rawKeys.map((key) => outputsCursor.child(key)));
   } else {
     if (outputs.length !== 1) throw new RangeError("a bare flow output requires exactly one carrier");
     cursors = [outputsCursor];
@@ -1223,13 +1212,9 @@ export function stampFlowOutputOrigins(
 
   return outputs.map((output, index) => {
     if (output.binding.origin !== null) return output;
-    let origin: OriginRef | null;
-    try {
-      origin = catalogBuilder.register([...owner, "output", index, "binding"], cursors[index]!);
-    } catch (error) {
-      if (!(error instanceof SourceAccessError)) throw error;
-      throw diagnostics.error(error.message, { range: error.range, cause: error });
-    }
+    const origin = locateSourceAccess(diagnostics, () =>
+      catalogBuilder.register([...owner, "output", index, "binding"], cursors[index]!),
+    );
     return origin === null ? output : new FlowOutput(output.name, withOrigin(output.binding, origin));
   });
 }
@@ -1321,12 +1306,7 @@ function stampInlineCallOrigins(
     const address = descriptor.callSite;
     const addressKey = JSON.stringify(address);
     if (!origins.has(addressKey)) {
-      try {
-        origins.set(addressKey, siteOrigin(address));
-      } catch (error) {
-        if (!(error instanceof SourceAccessError)) throw error;
-        throw diagnostics.error(error.message, { range: error.range, cause: error });
-      }
+      locateSourceAccess(diagnostics, () => origins.set(addressKey, siteOrigin(address)));
     }
     const origin = origins.get(addressKey)!;
     if (origin === null) continue;
@@ -1375,8 +1355,7 @@ type TypeNames = [isinstanceNames: string[], constructors: string[]];
  * @param descriptors The body nodes' descriptors, for their authored asserts and ranges.
  * @param flowAsserts The flow's authored `asserts:` carriers, aligned with `flowAssertionRanges`.
  * @param flowAssertionRanges Each flow assert's range.
- * @param outputsCursor The authored `output:` value; a mapping locates each named output.
- * @param outputsRange The whole `output:` range, used when an output has no range of its own.
+ * @param outputRange One flow output's authored range, else the whole `output:` range.
  * @param registry The flow's `typedefs:` registry.
  * @param diagnostics The flow document's diagnostic factory, for located errors.
  * @throws LoadError at the offending site for an unknown type or constructor name, or for
@@ -1389,8 +1368,7 @@ function fillTypeTables(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   flowAsserts: readonly Assertion[],
   flowAssertionRanges: readonly (SourceRange | null)[],
-  outputsCursor: SourceCursor | null,
-  outputsRange: SourceRange | null,
+  outputRange: (name: unknown) => SourceRange | null,
   registry: TypeRegistry,
   diagnostics: LoadDiagnostics,
 ): void {
@@ -1419,17 +1397,6 @@ function fillTypeTables(
       }
     }
     return new Map([...isinstanceNames, ...constructors].map((name) => [name, resolved.get(name)!]));
-  };
-
-  /** One flow output's authored range, else the whole `output:` range. */
-  const outputRange = (name: string): SourceRange | null => {
-    try {
-      if (outputsCursor !== null && outputsCursor.has(name)) return outputsCursor.child(name).range;
-    } catch (error) {
-      // A bare `output:` value has no named children.
-      if (!(error instanceof SourceAccessError)) throw error;
-    }
-    return outputsRange;
   };
 
   /**
@@ -1691,12 +1658,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // still belongs to the unmodified authored occurrence tree.
   const authoredNodesCursor = nodesCursor;
   let inlineBodies: Map<string, InlineBody>;
-  try {
-    [nodesCursor, inlineBodies] = extractInlineBodies(nodesCursor, { owner });
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  [nodesCursor, inlineBodies] = locateSourceAccess(diagnostics, () => extractInlineBodies(nodesCursor, { owner }));
 
   const catalogBuilder = scope.catalogBuilder;
   // A bound `catalogBuilder.resolveRegistered`, which every pass below presents origins through.
@@ -1737,16 +1699,13 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     nodeId: string,
     index: number,
   ): readonly [OriginRef | null, SourceRange | null] | null => {
-    let cursor: SourceCursor;
-    try {
+    const cursor = locateSourceAccess(diagnostics, () => {
       if (valueEntries.has(nodeId) || !authoredNodesCursor.has(nodeId)) return null;
       const nodeCursor = normalizeNodeSignatureCursor(authoredNodesCursor.child(nodeId));
       if (!nodeCursor.has("asserts")) return null;
-      cursor = nodeCursor.child("asserts").child(index);
-    } catch (error) {
-      if (!(error instanceof SourceAccessError)) throw error;
-      throw diagnostics.error(error.message, { range: error.range, cause: error });
-    }
+      return nodeCursor.child("asserts").child(index);
+    });
+    if (cursor === null) return null;
     return [
       registerAssertionOrigin(cursor, [...owner, "node", nodeId, "assert", index], catalogBuilder, diagnostics),
       cursor.range,
@@ -1762,7 +1721,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
    * @throws LoadError when source traversal or type compilation fails.
    */
   const readAuthoredNodeOutput = (nodeId: string, outputSpec: unknown): ValueContract | null => {
-    try {
+    return locateSourceAccess(diagnostics, () => {
       if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
       const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
       if (!nodeCursor.has("outputs")) return null;
@@ -1774,15 +1733,12 @@ export function assemble(options: AssembleOptions): ComposedFlow {
         catalogBuilder,
         diagnostics,
       });
-    } catch (error) {
-      if (!(error instanceof SourceAccessError)) throw error;
-      throw diagnostics.error(error.message, { range: error.range, cause: error });
-    }
+    });
   };
 
   /** Compile one physical node's variables through its normalized cursor. */
   const readAuthoredNodeVariables = (nodeId: string, declarations: unknown): Parameter[] | null => {
-    try {
+    return locateSourceAccess(diagnostics, () => {
       if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
       const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
       if (!nodeCursor.has("variables")) return null;
@@ -1796,10 +1752,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
         declarationLabel: "variable",
         requireDefault: true,
       });
-    } catch (error) {
-      if (!(error instanceof SourceAccessError)) throw error;
-      throw diagnostics.error(error.message, { range: error.range, cause: error });
-    }
+    });
   };
 
   // Inline CODE receives the owning document label only as an opaque traceback file name;
@@ -1852,7 +1805,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const valueEntries: ReadonlySet<string> = new Set(
     [...descriptors].filter(([, descriptor]) => isValueEntry(descriptor)).map(([nodeId]) => nodeId),
   );
-  try {
+  descriptors = locateSourceAccess(diagnostics, () => {
     const locatedDescriptors = new Map<string, NodeDescriptor>();
     for (const [nodeId, descriptor] of descriptors) {
       const authoredCursor = nodesCursor.child(nodeId);
@@ -1867,11 +1820,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
         located.withSourceOrigins(normalizeNodeSignatureCursor(authoredCursor), { sitePath: nodePath, catalogBuilder }),
       );
     }
-    descriptors = locatedDescriptors;
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+    return locatedDescriptors;
+  });
 
   // A `uses:` alias shares the callable namespace, so it must not collide with a node id (the
   // resolver only sees a bare name; the author conflates them). The loader checks the authored
@@ -1909,7 +1859,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // A node's `output:` is a type declaration; a tag there is rejected before a declaration with
   // nothing after its tag reads as no output at all. A case has no `output:`; the case-branch
   // check below rejects it, tagged or not, with the rewrite.
-  try {
+  locateSourceAccess(diagnostics, () => {
     for (const [nodeId, descriptor] of descriptors) {
       if (descriptor.kind === "case") continue;
       if (!valueEntries.has(nodeId) && nodesCursor.has(nodeId)) {
@@ -1917,10 +1867,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
         if (nodeCursor.has("outputs")) rejectTaggedOutput(nodeCursor.child("outputs"), diagnostics);
       }
     }
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
+  });
 
   // Split tagged (`name: !Type value`) input and output bindings before any desugar reads their
   // values, so an inline `call(...)` or `${case.output}` in the value desugars as usual.
@@ -2021,15 +1968,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
           { range: bindingRange },
         );
       }
-      const outputContract = node.outputContract;
-      if (outputContract === null) throw unavailableType();
-      if (!isExactly(outputContract, ValueContract) && !isExactly(outputContract, PartialRecordContract)) {
-        throw new TypeError(
-          "output producer contracts must be ValueContract or PartialRecordContract values, " +
-            `got ${jsTypeName(outputContract)} for ${reprText(producerId)}`,
-        );
-      }
-      return outputContract;
+      if (node.outputContract === null) throw unavailableType();
+      return producerContract(producerId, node.outputContract);
     };
 
     let itemType: ItemType | null = null;
@@ -2048,7 +1988,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
           bindingRange,
           diagnostics,
         });
-        if (!isListKind(overType.kind) || overType.element === undefined) {
+        if (!isListKind(overType.kind)) {
           throw diagnostics.error(
             `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
               "MAP `over:` must have a proven list element type; " +
@@ -2056,7 +1996,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
             { range: bindingRange },
           );
         }
-        cachedItemType = overType.element;
+        // Inference proves a list kind only with its element type.
+        cachedItemType = overType.element!;
         return cachedItemType;
       };
     }
@@ -2165,15 +2106,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // contract, so it is naturally excluded.
   const producers = new Map<string, OutputContract>();
   for (const [nodeId, node] of nodesBuilt) {
-    const contract = node.outputContract;
-    if (contract === null) continue;
-    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
-        "output producer contracts must be ValueContract or PartialRecordContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(nodeId)}`,
-      );
-    }
-    producers.set(nodeId, contract);
+    if (node.outputContract !== null) producers.set(nodeId, producerContract(nodeId, node.outputContract));
   }
   for (const [nodeId, node] of nodesBuilt) {
     if (node.producesMessages) producers.set(messagesKey(nodeId), new ValueContract(newMessagesType()));
@@ -2402,8 +2335,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     descriptors,
     assertsSection,
     flowAssertionRanges,
-    outputsCursor,
-    outputsRange,
+    outputRange,
     registry,
     diagnostics,
   );

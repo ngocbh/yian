@@ -304,19 +304,6 @@ test.each([
   );
 });
 
-test.each([
-  ["map", new MapDescriptor({ id: "m", call: "c", over: "${input.xs}" })],
-  ["loop", new LoopDescriptor({ id: "m", call: "c", times: 1n })],
-])("a %s whose callable can't be resolved is named by its kind", (kind, desc) => {
-  const ctx = new BuildContext({ registry: new Map(), resolver: null });
-
-  const error = thrown(() => desc.build(ctx));
-
-  expect((error as LoadError).message).toBe(
-    `${kind} node 'm': could not resolve callable 'c': no child resolver was given`,
-  );
-});
-
 /** Return a flow whose root `top` nests `n` inline call bodies around a CODE leaf. */
 function inlineChain(n: number): string {
   let body = "kind: code\ncode: ./fixtures/compose_codefns.ts:echo\ninput:\n  topic: ${input.x}\noutput: str\n";

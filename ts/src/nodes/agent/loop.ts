@@ -327,14 +327,12 @@ function closerReason(reason: string | null): CloserReason {
 }
 
 /**
- * Return the steer reads that join the next model call, oldest first: the one recorded before it,
+ * Return the steer reads that join the next model call, oldest first: each recorded before it,
  * then, once replay is over and no recorded attempt continues the call, a live read of everything
  * queued (a send made while the run was down joins the first live call).
  */
 function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly unknown[])[] {
-  const reads: (readonly unknown[])[] = [];
-  const recorded = steps.takeRecordedSteer();
-  if (recorded !== null) reads.push(recorded.values);
+  const reads: (readonly unknown[])[] = steps.takeRecordedSteers().map((recorded) => recorded.values);
   if (inbox !== undefined && !steps.replaying() && !steps.continuesCall()) {
     const read = inbox.read();
     if (read !== null) reads.push(read.values);

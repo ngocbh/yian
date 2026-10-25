@@ -184,7 +184,7 @@ export type RecordedCall =
   | { readonly n: number; readonly response: Response }
   | { readonly n: number; readonly failure: { readonly kind: string; readonly message: string } };
 
-/** A steer read an earlier start recorded, as `takeRecordedSteer` gives it back: its step's `n` and the values it read. */
+/** A steer read an earlier start recorded, as `takeRecordedSteers` gives it back: its step's `n` and the values it read. */
 export interface RecordedSteer {
   readonly n: number;
   readonly values: readonly unknown[];
@@ -207,9 +207,9 @@ export interface PriorAttempts {
  * `model_call`, and each failed one that wasn't to be retried, ends one logical call to take back
  * (`takeRecorded`) in place of calling the model; the failed attempts before it belong to it, and
  * failed attempts after the last one are the next live call's (`priorAttempts`). Each
- * `tool_result` is found by its reply and its call id (`recordedResult`). Each `steer` step is
- * handed back (`takeRecordedSteer`) before the logical call it preceded, with the values the
- * engine attached to its copy; one after the last call is handed back after it. An
+ * `tool_result` is found by its reply and its call id (`recordedResult`). The `steer` steps
+ * before a logical call are handed back (`takeRecordedSteers`), in order, before it, with the
+ * values the engine attached to each copy; those after the last call are handed back after it. An
  * `interrupted` step, the honor of a host interrupt, ends the replay where it was written
  * (`honored`).
  * Steps of any other kind (`llm_config`, or a kind this version doesn't know) are not the loop's
@@ -231,8 +231,12 @@ export class AgentSteps {
   #trailing: readonly NumberedStep[];
   /** The recorded tool results, by the `n` of the reply they answer, then by call id. */
   readonly #results = new Map<number, Map<string, ValueRecord>>();
-  /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
-  readonly #steers = new Map<number, NumberedStep>();
+  /**
+   * The recorded steer steps, oldest first, by the index in `#calls` of the logical call they
+   * preceded. A call can follow several: a resume replays a steer recorded before an unmade call,
+   * then reads live and records another before that call.
+   */
+  readonly #steers = new Map<number, NumberedStep[]>();
   /** The `by` of a recorded `interrupted` step: the interrupt an earlier start honored, else `null`. */
   readonly #honored: number | null = null;
 
@@ -275,7 +279,9 @@ export class AgentSteps {
       } else if (step["kind"] === "steer") {
         // A steer is read only before a logical call, never between its attempts, so it belongs
         // to the next call.
-        this.#steers.set(this.#calls.length, { n: index + 1, step });
+        const before = this.#steers.get(this.#calls.length);
+        if (before === undefined) this.#steers.set(this.#calls.length, [{ n: index + 1, step }]);
+        else before.push({ n: index + 1, step });
       } else if (step["kind"] === "interrupted") {
         this.#honored = Number(step["by"]);
       }
@@ -284,29 +290,28 @@ export class AgentSteps {
   }
 
   /**
-   * Take the steer read recorded before the next logical call, once.
+   * Take the steer reads recorded before the next logical call, oldest first, once.
    *
-   * @returns Its step's `n` and the values the engine attached to the step's copy; `null` when
-   *   none was recorded there, or it was taken.
-   * @throws CapabilityFault carrying a RangeError when the step's copy has no values: the steps
+   * @returns Each one's step `n` and the values the engine attached to the step's copy; empty when
+   *   none was recorded there, or they were taken.
+   * @throws CapabilityFault carrying a RangeError when a step's copy has no values: the steps
    *   came from somewhere other than the engine.
    */
-  takeRecordedSteer(): RecordedSteer | null {
-    const recorded = this.#steers.get(this.#taken);
-    if (recorded === undefined) return null;
+  takeRecordedSteers(): RecordedSteer[] {
+    const recorded = this.#steers.get(this.#taken) ?? [];
     this.#steers.delete(this.#taken);
-    const values = recorded.step["values"];
-    if (!Array.isArray(values)) {
-      throw new CapabilityFault(
-        new RangeError(
-          `node ${reprText(this.#nodeId)} step ${recorded.n}: a steer step without its values; resume through the engine`,
-        ),
-      );
-    }
-    return { n: recorded.n, values };
+    return recorded.map(({ n, step }) => {
+      const values = step["values"];
+      if (!Array.isArray(values)) {
+        throw new CapabilityFault(
+          new RangeError(`node ${reprText(this.#nodeId)} step ${n}: a steer step without its values; resume through the engine`),
+        );
+      }
+      return { n, values };
+    });
   }
 
-  /** Whether a steer read was recorded before the next logical call, which `takeRecordedSteer` would hand back. */
+  /** Whether a steer read was recorded before the next logical call, which `takeRecordedSteers` would hand back. */
   hasRecordedSteer(): boolean {
     return this.#steers.has(this.#taken);
   }

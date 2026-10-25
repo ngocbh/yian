@@ -28,7 +28,7 @@
  */
 
 import { type OriginRef, reprText } from "../diagnostics.ts";
-import { rewriteConditionRefs, rewriteTemplateRefs } from "../expr/index.ts";
+import { type RefRenamed, rewriteConditionRefs, rewriteTemplateRefs } from "../expr/index.ts";
 import {
   MemoryOccurrenceKind,
   MemoryOccurrenceSegment,
@@ -88,17 +88,15 @@ export function rensInternal(binding: Binding, callsite: string): Binding {
   if (!(binding instanceof Binding)) {
     throw new TypeError(`compiled flow wiring must contain Binding values, got ${jsTypeName(binding)}`);
   }
-  const rename = (path: string): string | null => {
+  const rename = (path: string): RefRenamed | null => {
     const parts = path.split(".");
     if (parts.length >= 2 && parts[0] === "input") {
-      const rest = parts.slice(2).join(".");
-      const renamed = `${ns(callsite, START_ID)}.output.${parts[1]}`;
-      return rest ? `${renamed}.${rest}` : renamed;
+      return { text: `${ns(callsite, START_ID)}.output.${parts[1]}`, used: 2 };
     }
     // `system` and `item` are reserved node ids, so `${item.output}` is the item's `output` field.
     // An AGENT's `${x.new_messages}` renames like its `${x.output}`.
     if (parts.length >= 2 && (parts[1] === "output" || parts[1] === NEW_MESSAGES) && parts[0] !== "system" && parts[0] !== "item") {
-      return [`${ns(callsite, parts[0]!)}.${parts[1]}`, ...parts.slice(2)].join(".");
+      return { text: `${ns(callsite, parts[0]!)}.${parts[1]}`, used: 2 };
     }
     return null;
   };
@@ -145,8 +143,8 @@ function lowerSpawnerPostAsserts(
     return name;
   };
 
-  const rename = (path: string): string | null => {
-    const [head, ...rest] = path.split(".") as [string, ...string[]];
+  const rename = (path: string): RefRenamed | null => {
+    const head = path.split(".")[0]!;
     if (head === "output" || !inputNames.has(head)) return null;
     let synth = synthForInput.get(head);
     if (synth === undefined) {
@@ -158,7 +156,7 @@ function lowerSpawnerPostAsserts(
       endWiring.set(synth, `\${${startNs}.output.${head}:-null}`);
       endEdges.push(new Edge(`${startNs}->${end.id}#${synth}`, startNs, end.id, { inputGroup: synth, optional: true }));
     }
-    return [synth, ...rest].join(".");
+    return { text: synth, used: 1 };
   };
 
   end.postAsserts = [

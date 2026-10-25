@@ -100,6 +100,11 @@ test("dotted case ref expands per branch", () => {
   expect(inputOf(out, "c", "v")).toBe("${pro.output.report | caut.output.report}");
 });
 
+test("a ?. case ref expands per branch, keeping ?.", () => {
+  const out = expanded({ gate: gate(), c: code("c", { v: "${gate.output?.report.x}" }) });
+  expect(inputOf(out, "c", "v")).toBe("${pro.output?.report.x | caut.output?.report.x}");
+});
+
 test("embedded case ref expands", () => {
   const out = expanded({ gate: gate(), c: code("c", { v: "pre ${gate.output} post" }) });
   expect(inputOf(out, "c", "v")).toBe("pre ${pro.output | caut.output} post");

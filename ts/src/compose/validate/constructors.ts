@@ -27,7 +27,7 @@
 import { typeRelation } from "../../compile/validation.ts";
 import { reprText } from "../../diagnostics.ts";
 import { builtinResultType, TEMPLATE_FNS } from "../../expr/builtins.ts";
-import { constructorShapeError, inferExprType, ISINSTANCE } from "../../expr/expressions.ts";
+import { constructorShapeError, inferExprType, ISINSTANCE, splitReference, stepsText } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { outputContractFieldError, ValueContract } from "../../nodes/contracts.ts";
 import type { RefExpr, TypeRegistry } from "../../typesys/types.ts";
@@ -108,11 +108,13 @@ export function builtinFieldErrors(tree: ExprNode): string[] {
 
 /** Return why the field reads trailing call `name(...)`, whose result is `typ`, fail. */
 function resultFieldError(node: Tree, name: string, typ: Type): string | null {
-  const fields = node.children
-    .filter((child): child is Tree => child instanceof Tree && child.data === "trailer")
-    .map((child) => String(child.children[0]));
-  if (fields.length === 0) return null;
-  return outputContractFieldError(new ValueContract(typ), fields, `${name}(...).` + fields.join("."));
+  const { steps } = splitReference(node);
+  if (steps.length === 0) return null;
+  return outputContractFieldError(
+    new ValueContract(typ),
+    steps.map((step) => step.name),
+    `${name}(...)` + stepsText(steps),
+  );
 }
 
 /** Return why `T(x)`'s value can never be a `T`, else `null`. */

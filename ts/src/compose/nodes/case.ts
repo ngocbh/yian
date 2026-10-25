@@ -605,14 +605,14 @@ interface SearchedParams {
  * Return the binding source of one `when:` reference occurrence, also the key its local is
  * deduped by.
  *
- * A node-output read inside an escape is `${path :- null}`: it reads the same value (a miss is
+ * A node-output read inside an escape is `${read :- null}`: it reads the same value (a miss is
  * already null) but takes an optional edge, so the escape decides as it does in a binding. Any
  * other read (outside an escape, or of an input or `system.*`, which has no producer edge) stays
- * the plain `${path}`.
+ * the plain `${read}`. The read keeps its text as written, `?.` included.
  */
 function readSource(read: ConditionRead): string {
-  if (read.escape === null || outputsProducer(read.path) === null) return `\${${read.path}}`;
-  return `\${${read.path} :- null}`;
+  if (read.escape === null || outputsProducer(read.path) === null) return `\${${read.text}}`;
+  return `\${${read.text} :- null}`;
 }
 
 /**
@@ -808,5 +808,6 @@ function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lo
  * @returns The `when:` over the case's locals.
  */
 function rewriteWhen(when: string, locals: readonly string[]): string {
-  return rewriteConditionReads(when, (i) => locals[i]!);
+  // Each local binds its whole read, so the whole read is replaced.
+  return rewriteConditionReads(when, (i, read) => ({ text: locals[i]!, used: read.path.split(".").length }));
 }

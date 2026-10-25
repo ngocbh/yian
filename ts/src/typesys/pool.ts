@@ -37,6 +37,16 @@ type TypedWire = ReturnType<TypedValue["toWire"]>;
 /** The field an AGENT's new messages are read under: `${<id>.new_messages}`. */
 export const NEW_MESSAGES = "new_messages";
 
+/**
+ * Return how many of a pool reference's names its root takes: two for `<node>.output`,
+ * `<node>.new_messages`, `input.<k>` and `system.<k>`; one for `item` and any other head.
+ */
+export function poolRootLength(names: readonly string[]): number {
+  if (names.length < 2 || names[0] === "item") return 1;
+  if (names[0] === "input" || names[0] === "system") return 2;
+  return names[1] === "output" || names[1] === NEW_MESSAGES ? 2 : 1;
+}
+
 /** The pool name of node `nodeId`'s new messages. A node id holds no `.`, so it never names a node. */
 export function messagesKey(nodeId: string): string {
   return `${nodeId}.${NEW_MESSAGES}`;

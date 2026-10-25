@@ -43,6 +43,7 @@ import {
   conditionRefs,
   ExpressionError,
   exprRefsOf,
+  optionalInsideRoot,
   promptRefs,
   scanTemplate,
 } from "../../expr/index.ts";
@@ -65,7 +66,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { TAKE } from "../../tools/context.ts";
-import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
@@ -411,6 +412,10 @@ export function validateReferences(
           });
         }
       }
+      if (err !== null) errors.push([`${where}: ${err}`, rng]);
+    }
+    for (const tree of trees) {
+      const err = optionalInsideRoot(tree, poolRootLength);
       if (err !== null) errors.push([`${where}: ${err}`, rng]);
     }
     try {

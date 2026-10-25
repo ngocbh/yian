@@ -307,3 +307,18 @@ test("lowering changes only the expression and preserves occurrence metadata", (
   expect(lowered.startPre.map((a) => a.origin)).toEqual([first.origin, second.origin]);
   expect(lowered.startPre[0]).not.toBe(lowered.startPre[1]);
 });
+
+test("flow-assert lowering keeps ?. after the synth root", () => {
+  expect(expressions(lower(["emit.output?.n >= 1"]).endPost)).toEqual(["__assert_emit?.n >= 1"]);
+  expect(expressions(lower(["emit.output.n >= input.age?.y"]).endPost)).toEqual([
+    "__assert_emit.n >= __assert_input_age?.y",
+  ]);
+  expect(expressions(lower(["input.age?.y > 1"]).startPre)).toEqual(["output.age?.y > 1"]);
+});
+
+test("?. inside a flow assert's root is a load error", () => {
+  expect(loadError(() => lower(["input?.age > 1"])).message).toContain(
+    "reference ${input?.age} puts ?. inside its root; ?. goes after the root, as in ${input.age}",
+  );
+  expect(loadError(() => lower(["emit?.output.n >= 1"])).message).toContain("as in ${emit.output?.n}");
+});

@@ -11,14 +11,21 @@
 
 import { expect, test } from "bun:test";
 
-import { ExpressionError, rewriteConditionRefs, rewriteExprRefs } from "../../src/expr/expressions.ts";
+import { rensInternal } from "../../src/compile/expand.ts";
+import {
+  ExpressionError,
+  type RefRenamed,
+  rewriteConditionRefs,
+  rewriteExprRefs,
+} from "../../src/expr/expressions.ts";
 import { rewriteTemplateRefs } from "../../src/expr/template.ts";
+import { Binding, bindingSource } from "../../src/nodes/contracts.ts";
 
-/** Upper-case the head segment (`a.b` -> `A.b`); keep `keep.*`. */
-function bump(path: string): string | null {
+/** Upper-case the head (`a.b` -> `A.b`); keep `keep.*`. */
+function bump(path: string): RefRenamed | null {
   if (path.startsWith("keep")) return null;
-  const dot = path.indexOf(".");
-  return dot < 0 ? path.toUpperCase() : path.slice(0, dot).toUpperCase() + path.slice(dot);
+  const head = path.split(".")[0]!;
+  return { text: head.toUpperCase(), used: 1 };
 }
 
 // --- rewriteExprRefs: leaves spliced, everything else verbatim --- //
@@ -48,7 +55,7 @@ test("rewrite a default's right-hand side", () => {
 });
 
 test("rewrite hash and slash segments", () => {
-  expect(rewriteExprRefs("node#0.output", (p) => "ns/" + p)).toBe("ns/node#0.output");
+  expect(rewriteExprRefs("node#0.output", (p) => ({ text: "ns/" + p, used: p.split(".").length }))).toBe("ns/node#0.output");
 });
 
 // --- rewriteConditionRefs: both spellings rewrite identically --- //
@@ -95,4 +102,21 @@ test("a template value that isn't text passes through", () => {
 
 test("template, default span", () => {
   expect(rewriteTemplateRefs("${x :- y}", bump)).toBe("${X :- Y}");
+});
+
+test("a rename replaces only the names it used, keeping ?. after them", () => {
+  const rename = (path: string) => (path.startsWith("a.") ? { text: "cs/a.output", used: 2 } : null);
+  expect(rewriteExprRefs("a.output?.k.m + b", rename)).toBe("cs/a.output?.k.m + b");
+  expect(rewriteTemplateRefs("x ${a.output?.k} y", rename)).toBe("x ${cs/a.output?.k} y");
+  expect(rewriteConditionRefs("${a.output?.k > 1}", rename)).toBe("${cs/a.output?.k > 1}");
+});
+
+test("a rename that uses no name or more names than the read has is a bug", () => {
+  expect(() => rewriteExprRefs("a.b", () => ({ text: "x", used: 0 }))).toThrow(RangeError);
+  expect(() => rewriteExprRefs("a.b", () => ({ text: "x", used: 3 }))).toThrow(RangeError);
+});
+
+test("rensInternal keeps ?. after each renamed root", () => {
+  const renamed = rensInternal(new Binding("${input.q?.k :- 1} ${p.output?.k}"), "cs");
+  expect(bindingSource(renamed)).toBe("${cs/__start__.output.q?.k :- 1} ${cs/p.output?.k}");
 });

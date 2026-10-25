@@ -15,6 +15,7 @@ import {
   type ConditionRead,
   conditionReads,
   parseCondition,
+  type RefRenamed,
   rewriteConditionReads,
   rewriteConditionRefs,
 } from "../../src/expr/index.ts";
@@ -99,9 +100,9 @@ test.each<[string, [string, number | null, boolean][]]>([
   expect(reads(when)).toEqual(expected);
 });
 
-/** Return a rename giving occurrence `i` the name `names[i]`, keeping the others. */
-function byIndex(names: Record<number, string>): (i: number, read: ConditionRead) => string | null {
-  return (i) => names[i] ?? null;
+/** Return a rename replacing occurrence `i` whole with `names[i]`, keeping the others. */
+function byIndex(names: Record<number, string>): (i: number, read: ConditionRead) => RefRenamed | null {
+  return (i, read) => (i in names ? { text: names[i]!, used: read.path.split(".").length } : null);
 }
 
 test("rewrite renames each occurrence", () => {
@@ -145,7 +146,7 @@ test.each([
     "d.output": "__d",
     "d.output.qty": "__q",
   };
-  const rename = (path: string) => paths[path] ?? null;
+  const rename = (path: string) => (path in paths ? { text: paths[path]!, used: path.split(".").length } : null);
   expect(rewriteConditionReads(when, (_i, read) => rename(read.path))).toBe(rewriteConditionRefs(when, rename));
 });
 
@@ -156,5 +157,13 @@ test("comprehension variables are not condition reads", () => {
 });
 
 test("rewrite renames a comprehension's iterable, not its variables", () => {
-  expect(rewriteConditionReads(BUDGET, (i) => `__r${i}`)).toBe('len(join([m.text for t in __r0 for m in t], "")) > __r1');
+  expect(rewriteConditionReads(BUDGET, (i, read) => ({ text: `__r${i}`, used: read.path.split(".").length }))).toBe('len(join([m.text for t in __r0 for m in t], "")) > __r1');
+});
+
+test("a condition read carries its text as written", () => {
+  expect(conditionReads(parseCondition("x.output?.k > 1 or y")).map((read) => read.text)).toEqual(["x.output?.k", "y"]);
+});
+
+test("rewriteConditionReads replaces a prefix and keeps the steps after it", () => {
+  expect(rewriteConditionReads("x.output?.k > 1", () => ({ text: "__r0", used: 2 }))).toBe("__r0?.k > 1");
 });

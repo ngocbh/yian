@@ -12,8 +12,8 @@
 
 import { expect, test } from "bun:test";
 
-import { exprRefs, rewriteExprRefs } from "../../src/expr/expressions.ts";
-import { parseExpr } from "../../src/expr/grammar.ts";
+import { exprRefs, referenceText, rewriteExprRefs, splitReference } from "../../src/expr/expressions.ts";
+import { parseExpr, Tree } from "../../src/expr/grammar.ts";
 
 /** Return the reference paths `parseExpr(text)` reads. */
 function refs(text: string): string[] {
@@ -72,7 +72,23 @@ test("comprehension variables are not reads; the iterable and outer names are", 
 });
 
 test("rewriteExprRefs leaves comprehension variables alone", () => {
-  expect(rewriteExprRefs("[x + y for x in xs]", (p) => (p === "x" || p === "xs" ? "z" : null))).toBe(
+  expect(rewriteExprRefs("[x + y for x in xs]", (p) => (p === "x" || p === "xs" ? { text: "z", used: 1 } : null))).toBe(
     "[x + y for x in z]",
   );
+});
+
+test("a ?. read is the same flat reference as a . read", () => {
+  expect(exprRefs(parseExpr("a.output?.k.m | b?.c"))).toEqual(["a.output.k.m", "b.c"]);
+});
+
+test("splitReference keeps each step's ?.", () => {
+  const read = parseExpr("a.output?.k") as Tree;
+  expect(splitReference(read)).toEqual({
+    head: "a",
+    steps: [
+      { name: "output", optional: false },
+      { name: "k", optional: true },
+    ],
+  });
+  expect(referenceText(read)).toBe("a.output?.k");
 });

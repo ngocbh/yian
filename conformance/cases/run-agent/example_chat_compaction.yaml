@@ -175,8 +175,8 @@ files:
           older: "${input.history[:len(input.history) - input.keep]}"    # folded into the summary
           recent: "${input.history[len(input.history) - input.keep:]}"   # kept verbatim
     output: !Compacted
-      summary: ${folded.output.summary :- input.summary}
-      history: ${folded.output.history :- input.history}
+      summary: ${folded.output?.summary :- input.summary}
+      history: ${folded.output?.history :- input.history}
 env: {OPENAI_API_KEY: "<key:1>"}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:

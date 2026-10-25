@@ -14,7 +14,7 @@
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { TEMPLATE_FNS } from "../../expr/builtins.ts";
-import { ExpressionError, ISINSTANCE } from "../../expr/expressions.ts";
+import { ExpressionError, ISINSTANCE, type RefStep, splitReference, stepsText } from "../../expr/expressions.ts";
 import { type ExprNode, Token, Tree } from "../../expr/grammar.ts";
 import { scanTemplate, Span } from "../../expr/template.ts";
 import {
@@ -275,8 +275,13 @@ function inferBindingString(source: string, walk: Walk): Type {
 
   const constructed = constructorType(expression, walk.typeFn);
   if (constructed !== null) {
-    const [typ, name, fields] = constructed;
-    return walkRecordType(typ, fields, [`${name}(...)`, ...fields].join("."), walk);
+    const [typ, name, steps] = constructed;
+    return walkRecordType(
+      typ,
+      steps.map((step) => step.name),
+      `${name}(...)` + stepsText(steps),
+      walk,
+    );
   }
 
   if (expression instanceof Token) {
@@ -295,8 +300,8 @@ function inferBindingString(source: string, walk: Walk): Type {
   );
 }
 
-/** Return `[T, name, fields]` for a whole-value `T(...)` or `T(...).f`, else `null`. */
-function constructorType(expression: ExprNode, typeFn: TypeFn | null): [Type, string, string[]] | null {
+/** Return `[T, name, steps]` for a whole-value `T(...)` or `T(...).f`, else `null`. */
+function constructorType(expression: ExprNode, typeFn: TypeFn | null): [Type, string, RefStep[]] | null {
   if (typeFn === null || !(expression instanceof Tree) || expression.data !== "refcall") return null;
   const children = expression.children;
   if (!children.some((child) => child instanceof Tree && child.data === "call_suffix")) return null;
@@ -304,10 +309,7 @@ function constructorType(expression: ExprNode, typeFn: TypeFn | null): [Type, st
   if (name === ISINSTANCE || TEMPLATE_FNS.has(name)) return null;
   const typ = typeFn(name);
   if (typ === null) return null;
-  const fields = children
-    .filter((child): child is Tree => child instanceof Tree && child.data === "trailer")
-    .map((child) => String(child.children[0]));
-  return [typ, name, fields];
+  return [typ, name, splitReference(expression).steps];
 }
 
 /** Resolve one direct reference root, then apply the shared strict field walk. */

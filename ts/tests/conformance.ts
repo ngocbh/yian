@@ -226,6 +226,7 @@ const USAGE_DETAILS: readonly string[] = [
 const RULES: ReadonlySet<string> = new Set([
   "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
   "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes", "run-log",
+  "null-field-read",
 ]);
 // Keys holding text, or plain JSON (`http`), that is not a case value: no codec form, no number
 // checks.

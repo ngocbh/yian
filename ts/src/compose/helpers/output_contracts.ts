@@ -654,9 +654,9 @@ export function recordFieldOrigins(fields: Iterable<readonly [string, ValueContr
  * Return the path of a lone plain reference, excluding calls and expressions.
  *
  * @param expression One parsed `${...}` interior, as `Span.tree`.
- * @returns The dotted path's names, such as `["d", "output", "action"]`, or `null` when the
- *   expression is not a plain `refcall` of names (an index, a call, an escape such as `:-`, or
- *   any operator).
+ * @returns The dotted path's names, such as `["d", "output", "action"]` (a `?.` step gives its
+ *   name too), or `null` when the expression is not a plain `refcall` of names (an index, a call,
+ *   an escape such as `:-`, or any operator).
  */
 export function directReferenceParts(expression: ExprNode): string[] | null {
   if (!(expression instanceof Tree) || expression.data !== "refcall") return null;
@@ -667,8 +667,8 @@ export function directReferenceParts(expression: ExprNode): string[] | null {
 
   const parts = [first.value];
   for (const child of children.slice(1)) {
-    const name =
-      child instanceof Tree && child.data === "trailer" && child.children.length === 1 ? child.children[0] : null;
+    // A `?.` trailer is `trailer[NAME, QDOT]`; its NAME is still the step.
+    const name = child instanceof Tree && child.data === "trailer" ? child.children[0] : null;
     if (!(name instanceof Token) || name.type !== "NAME") return null;
     parts.push(name.value);
   }

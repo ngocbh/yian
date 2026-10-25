@@ -279,7 +279,7 @@ test("reference walks skip the type name", () => {
 });
 
 test("rewrites leave the type name alone", () => {
-  const rename = (path: string) => "x." + path;
+  const rename = (path: string) => ({ text: "x." + path, used: path.split(".").length });
   expect(rewriteExprRefs("isinstance(d.output, Buy)", rename)).toBe("isinstance(x.d.output, Buy)");
   expect(rewriteConditionRefs("${isinstance(d.output, Buy)}", rename)).toBe("${isinstance(x.d.output, Buy)}");
   expect(rewriteTemplateRefs("ok ${isinstance(d.output, Buy)}", rename)).toBe("ok ${isinstance(x.d.output, Buy)}");

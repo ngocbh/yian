@@ -51,7 +51,15 @@
 import { classifyPath } from "../../compile/validation.ts";
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
-import { conditionRefs, ExpressionError, exprRefs, parseCondition, rewriteConditionRefs } from "../../expr/index.ts";
+import {
+  conditionRefs,
+  ExpressionError,
+  exprRefs,
+  optionalInsideRoot,
+  parseCondition,
+  type RefRenamed,
+  rewriteConditionRefs,
+} from "../../expr/index.ts";
 import { flowCallCalleesInSpans } from "../../expr/template.ts";
 import { type Node, NodeKind } from "../../nodes/base.ts";
 import {
@@ -63,7 +71,7 @@ import {
   sameOutputContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
-import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
+import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isInboxType, jsTypeName, Type, unionTagFields, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
@@ -265,11 +273,9 @@ export function lowerFlowAsserts(
   const qualifyFlowInput = (path: string): string =>
     !path.includes(".") && flowInputs.has(path) ? `input.${path}` : path;
 
-  /** The qualified path when `qualifyFlowInput` changes it, else `null`. */
-  const qualifiedOrNull = (path: string): string | null => {
-    const qualified = qualifyFlowInput(path);
-    return qualified !== path ? qualified : null;
-  };
+  /** The qualified head when `qualifyFlowInput` changes the path, else `null`. */
+  const qualifiedOrNull = (path: string): RefRenamed | null =>
+    qualifyFlowInput(path) !== path ? { text: `input.${path}`, used: 1 } : null;
 
   // The values whose field reads are checked, with the one contract each has. An AGENT's new
   // messages sit in `producers` under their own pool name, `<id>.new_messages`, which is the root.
@@ -294,6 +300,11 @@ export function lowerFlowAsserts(
         `assert ${reprText(assertion.display)} is not a valid boolean expression: ${error.message}`,
         { range: rng, cause: error },
       );
+    }
+    // An unqualified input `X` reads as `input.X`, a two-name root.
+    const insideRoot = optionalInsideRoot(parseCondition(rewriteConditionRefs(expr, qualifiedOrNull)), poolRootLength);
+    if (insideRoot !== null) {
+      throw diagnostics.error(`assert ${reprText(assertion.display)}: ${insideRoot}`, { range: rng });
     }
     const refs = exprRefs(authored).map(qualifyFlowInput);
 
@@ -335,10 +346,12 @@ export function lowerFlowAsserts(
       // output record, so `${output.X}` sees the validated, defaulted value START binds.
       // Unqualified flow-input names first acquire the `input.` prefix, which then maps to
       // `output.`.
-      const preRename = (ref: string): string | null => {
+      const preRename = (ref: string): RefRenamed | null => {
         const path = qualifyFlowInput(ref);
-        if (path === "input") return "output"; // defensive; a bare `${input}` head shouldn't appear
-        if (path.startsWith("input.")) return "output." + path.slice("input.".length);
+        // A bare input name is one name of the read; `input.<k>` is two.
+        const used = path === ref ? 2 : 1;
+        if (path === "input") return { text: "output", used: 1 }; // defensive; a bare `${input}` head shouldn't appear
+        if (path.startsWith("input.")) return { text: `output.${path.split(".")[1]}`, used };
         return null;
       };
       const lowered = rewriteConditionRefs(expr, preRename);
@@ -347,7 +360,7 @@ export function lowerFlowAsserts(
     }
 
     // 5. POST: turn each non-`output` ref into a synth END param, wired as an edge.
-    const postRename = (ref: string): string | null => {
+    const postRename = (ref: string): RefRenamed | null => {
       const segs = qualifyFlowInput(ref).split(".");
       const head = segs[0]!;
       if (head === "output") return null; // the node's own output, kept (defensive)
@@ -360,7 +373,7 @@ export function lowerFlowAsserts(
           synthParams.push(new Parameter(synth));
           synthWiring.set(synth, `\${input.${x}}`);
         }
-        return [synth, ...segs.slice(2)].join(".");
+        return { text: synth, used: qualifyFlowInput(ref) === ref ? 2 : 1 };
       }
       // An AGENT's new messages: `pid.new_messages[.f...]`, bound like an output read.
       if (segs.length >= 2 && segs[1] === NEW_MESSAGES && validTargets.has(messagesKey(head))) {
@@ -372,7 +385,7 @@ export function lowerFlowAsserts(
           synthParams.push(new Parameter(synth));
           synthWiring.set(synth, `\${${key}:-null}`);
         }
-        return [synth, ...segs.slice(2)].join(".");
+        return { text: synth, used: 2 };
       }
       // A producer-output ref: `pid.output[.f.g...]`, pid a node id.
       if (validTargets.has(head) && segs.length >= 2 && segs[1] === "output") {
@@ -385,7 +398,7 @@ export function lowerFlowAsserts(
           // instead of co-skipping END to dead.
           synthWiring.set(synth, `\${${head}.output:-null}`);
         }
-        return [synth, ...segs.slice(2)].join(".");
+        return { text: synth, used: 2 };
       }
       return null; // anything else (e.g. an `input` head without a field), kept
     };

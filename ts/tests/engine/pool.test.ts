@@ -15,8 +15,10 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { optionalInsideRoot } from "../../src/expr/expressions.ts";
+import { parseExpr } from "../../src/expr/grammar.ts";
 import { JSONDecodeError } from "../../src/typesys/json.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
+import { poolRootLength, VariablePool } from "../../src/typesys/pool.ts";
 import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/values.ts";
 
 // The START node's id; `boundary_ids.test.ts` pins the pool's default to `StartNode.ID`.
@@ -287,4 +289,19 @@ describe("VariablePool round trip", () => {
   test("loads of bad JSON throws JSONDecodeError", () => {
     expect(() => VariablePool.loads("{")).toThrow(JSONDecodeError);
   });
+});
+
+test("a pool root takes two names under a namespace, else one", () => {
+  expect(poolRootLength(["a", "output", "k"])).toBe(2);
+  expect(poolRootLength(["a", "new_messages"])).toBe(2);
+  expect(poolRootLength(["input", "k", "x"])).toBe(2);
+  expect(poolRootLength(["system", "now"])).toBe(2);
+  expect(poolRootLength(["item", "output"])).toBe(1);
+  expect(poolRootLength(["x", "k"])).toBe(1);
+  expect(poolRootLength(["a"])).toBe(1);
+});
+
+test("a comprehension variable is a one-name root, so ?. after it is never inside its root", () => {
+  expect(optionalInsideRoot(parseExpr("[m?.output for m in xs]"), poolRootLength)).toBeNull();
+  expect(optionalInsideRoot(parseExpr("[m.output for m in a?.output]"), poolRootLength)).toContain("${a.output}");
 });

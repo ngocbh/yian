@@ -83,7 +83,7 @@ test("whole-span condition with a brace in a string literal", () => {
 });
 
 test("whole-span rewrite with a brace in a string literal", () => {
-  const rename = (path: string) => (path === "x" ? "y" : null);
+  const rename = (path: string) => (path === "x" ? { text: "y", used: 1 } : null);
   expect(rewriteConditionRefs('${x == "}"}', rename)).toBe('${y == "}"}');
 });
 

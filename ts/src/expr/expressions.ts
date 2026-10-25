@@ -908,28 +908,20 @@ class EvalExpr {
    * consumer treats the two alike (strict throws, the others read `null`).
    */
   refcall(node: Tree): Walked {
-    const children = node.children;
-    const name = String(children[0]);
+    const { head: name, steps } = splitReference(node);
     const callSuffix = callSuffixOf(node);
-    if (callSuffix === undefined) {
-      const segments = children.slice(1).map((c) => String((c as Tree).children[0])); // each trailer's NAME
-      return this.reference([name, ...segments].join("."));
-    }
+    if (callSuffix === undefined) return this.reference(referencePath(node), referenceText(node));
     const constructor = this.isConstructor(name);
     let value: Walked;
     if (name === ISINSTANCE) value = this.isinstanceCall(callSuffix);
     else if (constructor) value = this.construct(name, callSuffix);
     else value = this.callBuiltin(name, callSuffix);
-    const after = children.filter((c): c is Tree => c instanceof Tree && c.data === "trailer");
-    for (const trailer of after) value = this.dottedStep(value, String(trailer.children[0]));
-    if (value === MISSING) {
-      this.#missPath = `${name}(...)` + after.map((trailer) => `.${String(trailer.children[0])}`).join("");
-    }
+    for (const step of steps) value = this.dottedStep(value, step.name);
+    if (value === MISSING) this.#missPath = `${name}(...)` + stepsText(steps);
     if (this.#trace) {
       const frame = this.#frames.at(-1)!;
-      const steps = after.map((trailer) => String(trailer.children[0]));
       if (constructor) {
-        frame.route = this.constructorRoute(name, callSuffix).project(steps);
+        frame.route = this.constructorRoute(name, callSuffix).project(steps.map((step) => step.name));
       } else {
         const routes = frame.children;
         const names = valueArgs(name, callSuffix).map((arg) =>
@@ -937,12 +929,11 @@ class EvalExpr {
         );
         let args = names.map((key, i) => (key ? `${key}=${routes[i]!.expression}` : routes[i]!.expression)).join(", ");
         if (name === ISINSTANCE) args += `, ${isinstanceTypeName(callSuffix)}`;
-        const suffix = steps.map((step) => `.${step}`).join("");
         frame.route = ValueRoute.literal(value === MISSING ? null : value).with({
           kind: "opaque",
           children: routes,
           names,
-          expression: `${name}(${args})${suffix}`,
+          expression: `${name}(${args})${stepsText(steps)}`,
         });
       }
     }
@@ -954,8 +945,11 @@ class EvalExpr {
    * locally (record fields and file fields, see `dottedStep`); every other path goes whole to
    * `resolve`, which owns the dotted walk. A miss (an `item` miss, or `resolve` giving `null`)
    * is `MISSING`.
+   *
+   * @param path The flat dotted path, for the resolver and the `item` walk.
+   * @param text The read as written (`?.` included), for miss messages and routes.
    */
-  reference(path: string): Walked {
+  reference(path: string, text: string = path): Walked {
     const parts = path.split(".");
     if (parts[0] === "item") {
       // MAP-body-local scope (not a resolver head); a `null` item means no item scope.
@@ -976,21 +970,21 @@ class EvalExpr {
         value = this.dottedStep(value, step);
       }
       if (this.#trace && source === null) {
-        this.#frames.at(-1)!.route = ValueRoute.literal(value === MISSING ? null : value).with({ expression: path });
+        this.#frames.at(-1)!.route = ValueRoute.literal(value === MISSING ? null : value).with({ expression: text });
       } else if (this.#trace && present) {
         this.#frames.at(-1)!.route = resolvedRoute(item as ResolvedValue, "item").project(steps);
       }
-      if (value === MISSING) this.#missPath = path;
+      if (value === MISSING) this.#missPath = text;
       return value;
     }
     let resolved = this.#resolve(path);
     if (this.#trace) {
       if (!(resolved instanceof ResolvedValue)) throw new TypeError("a traced resolver must return ResolvedValue");
-      if (resolved.present) this.#frames.at(-1)!.route = resolvedRoute(resolved, path);
+      if (resolved.present) this.#frames.at(-1)!.route = resolvedRoute(resolved, text);
       resolved = resolved.present ? resolved.value : null;
     }
     if (resolved === null) {
-      this.#missPath = path;
+      this.#missPath = text;
       return MISSING;
     }
     return resolved as Value;
@@ -1111,12 +1105,14 @@ class EvalExpr {
     const binding = this.#vars.get(name);
     // Only a hand-built tree can read a variable outside its comprehension.
     if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
-    const steps = node.children.slice(1).map((trailer) => String((trailer as Tree).children[0]));
+    const { steps } = splitReference(node);
     // A null item is returned as is, as in Python; a `.field` on it misses.
     let value: Walked = binding.value;
-    for (const step of steps) value = this.dottedStep(value, step);
-    if (value === MISSING) this.#missPath = [name, ...steps].join(".");
-    else if (this.#trace && binding.route !== null) this.#frames.at(-1)!.route = binding.route.project(steps);
+    for (const step of steps) value = this.dottedStep(value, step.name);
+    if (value === MISSING) this.#missPath = name + stepsText(steps);
+    else if (this.#trace && binding.route !== null) {
+      this.#frames.at(-1)!.route = binding.route.project(steps.map((step) => step.name));
+    }
     return value;
   }
 
@@ -1433,7 +1429,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
 /**
  * Evaluate a unified `${...}` expression tree (from `parseExpr`).
  *
- * The one evaluator for every `${...}` construct: references (bare, dotted, `item`-scoped),
+ * The one evaluator for every `${...}` construct: references (bare, dotted, `item`-scoped; `?.`
+ * steps read as `.` here, see `splitReference`),
  * arithmetic and comparisons over values (so text + text and list + list concatenate), boolean
  * combinators, list literals, list slices (`xs[a:b]`, as Python's with step 1; a slice of a
  * miss or `null` is a miss), list comprehensions (as Python's; an elem miss is a `null` item and
@@ -1520,9 +1517,10 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  * Inference is deliberately conservative: literal tokens, exact references, comparisons,
  * boolean combinators, and `isinstance(x, T)` have fixed result types, and a `T(...)`
  * constructor has type `T` (its value is checked against `T`), with field reads on the result
- * typed through `T`. Other forms stay unknown until their runtime value semantics can be
- * modeled without guessing. Reference and constructor lookup are injected so this
- * source-neutral expression layer knows nothing of a flow graph or compose document.
+ * typed through `T`. A read with a `?.` step (`a?.b`) is `Optional` of the field. Other forms
+ * stay unknown until their runtime value semantics can be modeled without guessing. Reference
+ * and constructor lookup are injected so this source-neutral expression layer knows nothing of a
+ * flow graph or compose document.
  *
  * Example: `inferExprType(parseExpr("answer == 42"), () => Type.scalar(ValueKind.INTEGER))`
  * gives `Type.scalar(ValueKind.BOOLEAN)`.
@@ -1555,21 +1553,20 @@ export function inferExprType(
     return null;
   }
   if (tree.data === "refcall") {
-    const children = tree.children;
-    const name = String(children[0]);
+    const { head: name, steps } = splitReference(tree);
     if (callSuffixOf(tree) !== undefined) {
       // `parseExpr` rejects dotted access on an `isinstance(...)` result.
       if (name === ISINSTANCE) return Type.scalar(ValueKind.BOOLEAN);
       let typ = typeFn === null || TEMPLATE_FNS.has(name) ? null : typeFn(name);
-      for (const child of children) {
-        if (!(child instanceof Tree) || child.data !== "trailer") continue;
+      for (const step of steps) {
         if (typ === null) return null;
-        typ = fieldReadType(typ, String(child.children[0]));
+        typ = fieldReadType(typ, step.name);
+        if (typ !== null && step.optional) typ = typ.replace({ nullable: true });
       }
       return typ;
     }
-    const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
-    return refTypeFn([name, ...segments].join("."));
+    const typ = refTypeFn(referencePath(tree));
+    return typ !== null && steps.some((step) => step.optional) ? typ.replace({ nullable: true }) : typ;
   }
   return BOOLEAN_NODES.has(tree.data) ? Type.scalar(ValueKind.BOOLEAN) : null;
 }
@@ -1688,6 +1685,68 @@ export function isinstanceSubject(tree: ExprNode): ExprNode | null {
   return (callSuffix.children[0] as Tree).children[0]!;
 }
 
+/** One `.name` or `?.name` step of a reference, a comprehension variable read, or a call result. */
+export interface RefStep {
+  readonly name: string;
+  /** Written `?.name`. */
+  readonly optional: boolean;
+}
+
+/**
+ * Split a `refcall` or `comp_var` into its head name and its steps as written. For a call, the
+ * steps are the trailers after its parentheses (the parser rejects trailers before them).
+ */
+export function splitReference(node: Tree): { head: string; steps: RefStep[] } {
+  const steps = node.children
+    .filter((child): child is Tree => child instanceof Tree && child.data === "trailer")
+    .map((trailer) => ({ name: String(trailer.children[0]), optional: trailer.children.length === 2 }));
+  return { head: String(node.children[0]), steps };
+}
+
+/**
+ * Return the load error for the first reference in `tree` with a `?.` inside its root, else `null`.
+ *
+ * A comprehension variable is a one-name root, so its reads never have one.
+ *
+ * @param rootLength How many names a reference's root takes in this scope, given all its names.
+ */
+export function optionalInsideRoot(tree: ExprNode, rootLength: (names: readonly string[]) => number): string | null {
+  if (!(tree instanceof Tree)) return null;
+  for (const node of iterSubtreesTopdown(tree)) {
+    if (node.data !== "refcall" || callSuffixOf(node) !== undefined) continue;
+    const { head, steps } = splitReference(node);
+    const used = rootLength([head, ...steps.map((step) => step.name)]);
+    if (!steps.slice(0, used - 1).some((step) => step.optional)) continue;
+    // The fix: no `?.` inside the root, and `?.` on the first step after it.
+    const fixed = steps.map((step, i) => ({
+      name: step.name,
+      optional: i < used - 1 ? false : i === used - 1 ? true : step.optional,
+    }));
+    return (
+      `reference \${${referenceText(node)}} puts ?. inside its root; ` +
+      `?. goes after the root, as in \${${head + stepsText(fixed)}}`
+    );
+  }
+  return null;
+}
+
+/** Return steps as written: `.a?.b`. */
+export function stepsText(steps: readonly RefStep[]): string {
+  return steps.map((step) => (step.optional ? "?." : ".") + step.name).join("");
+}
+
+/** Return a reference's flat dotted path, its head and step names with `?.` written as `.`. */
+export function referencePath(node: Tree): string {
+  const { head, steps } = splitReference(node);
+  return [head, ...steps.map((step) => step.name)].join(".");
+}
+
+/** Return a reference as written, `?.` included. */
+export function referenceText(node: Tree): string {
+  const { head, steps } = splitReference(node);
+  return head + stepsText(steps);
+}
+
 /**
  * Collect every reference-leaf path a unified `${...}` expression tree reads.
  *
@@ -1717,13 +1776,12 @@ function collectExprRefs(node: ExprNode, refs: string[]): void {
   if (node instanceof Token) return; // a lone NUMBER / STRING / BOOL / NULL literal names no reference
   if (node.data === "refcall") {
     // Keep in sync with the evaluator's refcall decomposition, `collectRefEdits` and
-    // `conditionReadLeaves` in `template.ts`: each finds the call_suffix and joins the path
-    // (leading NAME + trailer segments) the same way.
+    // `conditionReadLeaves` in `template.ts`: each finds the call_suffix and takes the path from
+    // `splitReference`.
     const children = node.children;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) {
-      const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
-      refs.push([String(children[0]), ...segments].join("."));
+      refs.push(referencePath(node));
       return;
     }
     // A builtin call: the callee contributes no reference; walk each argument value only.
@@ -1736,23 +1794,45 @@ function collectExprRefs(node: ExprNode, refs: string[]): void {
   for (const child of node.children) collectExprRefs(child, refs);
 }
 
+/** A rename's answer: `text` replaces the read's first `used` names; the steps after them stay as written. */
+export interface RefRenamed {
+  readonly text: string;
+  readonly used: number;
+}
+
+/** Rename one reference, given its flat dotted path; `null` keeps it. */
+export type RefRename = (path: string) => RefRenamed | null;
+
+/**
+ * Return the end offset of a reference's `used`-th name (the NAME token or that trailer's NAME).
+ *
+ * @throws {RangeError} If `used` is not between 1 and the read's name count.
+ */
+export function namesEnd(node: Tree, used: number): number {
+  const names = 1 + splitReference(node).steps.length;
+  if (!Number.isInteger(used) || used < 1 || used > names) throw new RangeError(`a rename used ${used} of ${names} names`);
+  const last = node.children[used - 1]!;
+  return last instanceof Tree ? (last.children[0] as Token).endPos : (last as Token).endPos;
+}
+
 /**
  * Rewrite the reference-leaf paths of one unified `${...}` expression `text`.
  *
  * The rewrite analog of `exprRefs`: it walks the same parse tree (`refcall` reference /
  * builtin-call arguments), but instead of collecting each reference path it asks `rename(path)`
- * for a replacement and splices it in by source position. `rename` returns the new dotted path,
- * or `null` to leave that reference untouched. Everything that is not a reference leaf
- * (operators, numbers, string and list literals, a builtin call's callee name, parentheses,
- * whitespace) is kept verbatim, as is the type name of an `isinstance(x, T)`. A `refcall`
- * (`a.b`) is replaced with the new path.
+ * for a replacement and splices it in by source position. `rename` gets the flat dotted path and
+ * returns the text for a prefix of the read, its first `used` names, or `null` to leave that
+ * reference untouched. Only that prefix's source is replaced; the steps after it stay as written,
+ * `?.` included. Everything that is not a reference leaf (operators, numbers, string and list
+ * literals, a builtin call's callee name, parentheses, whitespace) is kept verbatim, as is the
+ * type name of an `isinstance(x, T)`.
  *
  * @param text The expression source (a bare expression, or a span interior).
- * @param rename `path -> newPath`, or `null` to keep.
+ * @param rename `path -> { text, used }`, or `null` to keep.
  * @returns `text` with the renamed reference leaves spliced in.
  * @throws {ExpressionError} If `text` does not parse (the same front end as `parseExpr`).
  */
-export function rewriteExprRefs(text: string, rename: (path: string) => string | null): string {
+export function rewriteExprRefs(text: string, rename: RefRename): string {
   const edits: [number, number, string][] = [];
   collectRefEdits(parseExpr(text), rename, edits);
   // Splice right to left so earlier offsets stay valid as later ones are replaced.
@@ -1766,24 +1846,14 @@ export function rewriteExprRefs(text: string, rename: (path: string) => string |
  * Keep in sync with `collectExprRefs` (and `rewriteConditionReads` in `template.ts`): the same
  * refcall / builtin-argument decomposition, but capturing token source positions to edit in place.
  */
-function collectRefEdits(
-  node: ExprNode,
-  rename: (path: string) => string | null,
-  edits: [number, number, string][],
-): void {
+function collectRefEdits(node: ExprNode, rename: RefRename, edits: [number, number, string][]): void {
   if (node instanceof Token) return; // a lone literal holds no reference
   if (node.data === "refcall") {
     const children = node.children;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) {
-      const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
-      const replacement = rename([String(children[0]), ...segments].join("."));
-      if (replacement !== null) {
-        const start = (children[0] as Token).startPos;
-        const last = children.at(-1)!; // the last trailer, or the leading NAME token itself
-        const end = last instanceof Tree ? (last.children[0] as Token).endPos : last.endPos;
-        edits.push([start, end, replacement]);
-      }
+      const renamed = rename(referencePath(node));
+      if (renamed !== null) edits.push([(children[0] as Token).startPos, namesEnd(node, renamed.used), renamed.text]);
       return;
     }
     // A builtin call: the callee is not a reference; rewrite each argument value only.
@@ -1800,10 +1870,11 @@ function collectRefEdits(
  * searched-`case` `when:`), honouring both spellings.
  *
  * The rewrite analog of `conditionRefs`: a whole-span `${a > 5}` keeps its outer braces and
- * rewrites the interior; a bare `a > 5` is rewritten in place. `rename(path)` returns the
- * replacement path (or `null` to keep). The value is trimmed first, matching `parseCondition`.
+ * rewrites the interior; a bare `a > 5` is rewritten in place. `rename` follows `rewriteExprRefs`:
+ * it replaces a prefix of each read and keeps the steps after it. The value is trimmed first,
+ * matching `parseCondition`.
  */
-export function rewriteConditionRefs(expression: string, rename: (path: string) => string | null): string {
+export function rewriteConditionRefs(expression: string, rename: RefRename): string {
   const interior = wholeSpanInterior(expression);
   if (interior !== null) return "${" + rewriteExprRefs(interior, rename) + "}";
   return rewriteExprRefs(expression.trim(), rename);

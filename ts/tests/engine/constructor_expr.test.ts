@@ -249,7 +249,10 @@ test("reference walks read every argument and skip the names", () => {
 });
 
 test("rewrites leave the type and field names alone", () => {
-  const renamed = rewriteExprRefs("Buy(action=a, conviction=s.output).action", (path) => "x." + path);
+  const renamed = rewriteExprRefs("Buy(action=a, conviction=s.output).action", (path) => ({
+    text: "x." + path,
+    used: path.split(".").length,
+  }));
   expect(renamed).toBe("Buy(action=x.a, conviction=x.s.output).action");
 });
 

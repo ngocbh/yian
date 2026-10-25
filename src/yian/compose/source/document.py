@@ -147,28 +147,8 @@ class _DocumentLoader(_FlowLoader):
         self._forced_string_nodes: set[yaml.Node] = set()
         self._block_scalar_tokens: dict[int, ScalarToken] = {}
         self._local_tags: dict[int, str] = {}
-        self._alias_key_ranges: dict[tuple[int, int], SourceRange] = {}
+        self._alias_ranges: list[SourceRange] = []
         super().__init__(stream)
-
-    def compose_node(self, parent: yaml.Node | None, index: Any) -> yaml.Node:
-        """Compose one node, recording where an alias mapping key is written.
-
-        A composed alias is its anchor's node, so the alias's own place is kept
-        here, by its mapping's id and pair position.
-        """
-
-        event = self.peek_event()
-        node = super().compose_node(parent, index)
-        # A mapping key is composed with no index; its value gets the key node.
-        if (
-            index is None
-            and isinstance(parent, MappingNode)
-            and isinstance(event, yaml.AliasEvent)
-        ):
-            self._alias_key_ranges[(id(parent), len(parent.value))] = _marks_to_range(
-                event.start_mark, event.end_mark
-            )
-        return node
 
     def scan_block_scalar(self, style: str) -> ScalarToken:
         """Scan once while retaining the real block-indicator token.
@@ -193,6 +173,9 @@ class _DocumentLoader(_FlowLoader):
         """
 
         event = super().parse_node(block, indentless_sequence)
+        if isinstance(event, yaml.AliasEvent):
+            # A composed alias is its anchor's node, so where it is written is kept here.
+            self._alias_ranges.append(_marks_to_range(event.start_mark, event.end_mark))
         if getattr(event, "tag", None) == "!":
             raise SourceSyntaxError(
                 "a tag names a type, e.g. `!int`",
@@ -458,20 +441,58 @@ def _mark_to_range(node: yaml.Node | None) -> SourceRange | None:
     return _marks_to_range(node.start_mark, node.end_mark)
 
 
+def _alias_key_ranges(
+    root_node: yaml.Node | None,
+    alias_ranges: list[SourceRange],
+) -> dict[tuple[int, int], SourceRange]:
+    """Return where each alias mapping key is written, by mapping id and pair position.
+
+    ``alias_ranges`` holds every alias in document order. A walk in document
+    order meets a node first where it is defined (an anchor precedes its
+    aliases), so each later meeting is the next alias.
+    """
+
+    found: dict[tuple[int, int], SourceRange] = {}
+    if not alias_ranges:
+        return found
+    aliases = iter(alias_ranges)
+    stack: list[tuple[yaml.Node, tuple[int, int] | None]] = (
+        [(root_node, None)] if root_node is not None else []
+    )
+    seen: set[int] = set()
+    while stack:
+        node, key_at = stack.pop()
+        if id(node) in seen:
+            alias_range = next(aliases)
+            if key_at is not None:
+                found[key_at] = alias_range
+            continue
+        seen.add(id(node))
+        if isinstance(node, SequenceNode):
+            stack.extend((item, None) for item in reversed(node.value))
+        elif isinstance(node, MappingNode):
+            for position in reversed(range(len(node.value))):
+                key_node, value_node = node.value[position]
+                stack.append((value_node, None))
+                stack.append((key_node, (id(node), position)))
+    return found
+
+
 def _first_repeated_key(
     root_node: yaml.Node | None,
     source_values: dict[int, Any],
-    alias_key_ranges: dict[tuple[int, int], SourceRange],
+    alias_ranges: list[SourceRange],
 ) -> tuple[Any, SourceRange, SourceRange] | None:
     """Find the first mapping that repeats one of its own keys, in document order.
 
     Keys a ``<<:`` merge brings in are YAML's override mechanism and never
     count; only a mapping's own pairs are compared, by constructed key, so an
     alias of an earlier key is a repeat too. Each key is located where it is
-    written: an alias key by ``alias_key_ranges`` (mapping id and pair
-    position), not at its anchor.
+    written, an alias key by ``alias_ranges`` (every alias, in document
+    order), not at its anchor.
     """
 
+    alias_key_ranges = _alias_key_ranges(root_node, alias_ranges)
     stack = [root_node] if root_node is not None else []
     seen: set[int] = set()
     while stack:
@@ -1173,7 +1194,7 @@ class SourceDocument:
                 local_tags=loader._local_tags,
             )
             repeated_key = _first_repeated_key(
-                root_node, loader._source_values, loader._alias_key_ranges
+                root_node, loader._source_values, loader._alias_ranges
             )
             non_text_key = _first_non_text_key(root_node, loader._source_values)
         except (yaml.YAMLError, yaml.reader.ReaderError) as exc:
@@ -1191,7 +1212,7 @@ class SourceDocument:
                 loader._forced_string_nodes = set()
                 loader._block_scalar_tokens = {}
                 loader._local_tags = {}
-                loader._alias_key_ranges = {}
+                loader._alias_ranges = []
                 loader.dispose()
 
         return cls(

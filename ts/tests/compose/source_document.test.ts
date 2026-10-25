@@ -284,6 +284,12 @@ describe("repeatedKey", () => {
       first: new SourceRange(1, 1, 1, 5),
       second: new SourceRange(2, 1, 2, 3),
     });
+    // Aliases written as values before the repeat don't shift its range.
+    expect(SourceDocument.parse("b: &v 1\n&k a: *v\nc: [*v, *k]\n*k : 3\n").repeatedKey).toEqual({
+      key: "a",
+      first: new SourceRange(2, 1, 2, 5),
+      second: new SourceRange(4, 1, 4, 3),
+    });
   });
 });
 

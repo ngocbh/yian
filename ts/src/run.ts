@@ -11,8 +11,8 @@
  *
  * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `advance` (Python's
  * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`). Hosts
- * reach a run by its log through `send`, `complete`, `close`, `interrupt`, `cancel` and
- * `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
+ * reach a run by its log through `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel`
+ * and `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
  * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
  * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
@@ -156,6 +156,7 @@ import {
   wakeableNodes,
   wakeAt,
   waitInfos,
+  withdrawableEvents,
 } from "./runtime/waits.ts";
 import {
   acceptedCommits,
@@ -1952,14 +1953,14 @@ export interface DeliveryOptions {
  * the recorded flow is compiled and the log replayed, as `advance` does. A refused delivery keeps
  * the entry. `before` sees the state just before the delivery, synchronously.
  *
- * @returns The appended record's seq (`null` for a no-op) and its observers.
+ * @returns The appended record and its seq (both `null` for a no-op), and its observers.
  */
 async function deliverTo(
   log: string,
   op: DeliveryOp,
   options: DeliveryOptions,
   before: (state: RunState) => void = () => {},
-): Promise<{ readonly seq: number | null; readonly events: readonly RunEvent[] }> {
+): Promise<{ readonly seq: number | null; readonly events: readonly RunEvent[]; readonly record: RunRecord | null }> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
@@ -1995,9 +1996,9 @@ async function deliverTo(
       keep = () => idleRun(state, flow, key, opened, { ...want, ...credentials });
       before(state);
       const prepared = prepareDelivery(state, op);
-      if (prepared === null) return { seq: null, events: [] };
+      if (prepared === null) return { seq: null, events: [], record: null };
       const events = commitPrepared(authority, state, prepared);
-      return { seq: prepared.expectedSequence, events };
+      return { seq: prepared.expectedSequence, events, record: prepared.record };
     } catch (error) {
       primary = { error };
       throw error;
@@ -2100,6 +2101,43 @@ export async function complete(
 export async function close(log: string, inbox: string, options: DeliveryOptions = {}): Promise<number | null> {
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   return (await deliverTo(log, { kind: "close", inbox }, options)).seq;
+}
+
+/** One send `withdraw` took back: its seq and value. */
+export interface WithdrawnEvent {
+  /** The send's seq. */
+  readonly seq: number;
+  /** The value it sent. */
+  readonly value: unknown;
+}
+
+/**
+ * Take back every unread send of the top-level inbox `inbox` of the run at `log`: those no take or
+ * steer read has taken, including sends assigned to a take whose node hasn't woken, which then
+ * waits again (or, on a closed inbox, gets `{events: [], closed: true}`). Withdrawn sends get no
+ * reply, take output or late steer. Delivered as `send` is; a closed inbox is allowed. No event
+ * is published.
+ *
+ * @param log The run's JSONL log.
+ * @param inbox The name of one of the flow's `Inbox(T)` inputs.
+ * @param options See `DeliveryOptions`.
+ * @returns The sends taken back, in send order; `[]` when nothing was unread (nothing is appended).
+ * @throws TypeError when `inbox` isn't a string, or `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
+ *   result, `not_started`, or `unknown_inbox`.
+ * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
+ */
+export async function withdraw(log: string, inbox: string, options: DeliveryOptions = {}): Promise<readonly WithdrawnEvent[]> {
+  if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
+  let taken: WithdrawnEvent[] = [];
+  const { seq } = await deliverTo(log, { kind: "withdraw", inbox }, options, (state) => {
+    // Read before the record drops the values, in the delivery's synchronous section.
+    taken = withdrawableEvents(state.waits, inbox).map((event) => ({
+      seq: event,
+      value: copyValue(state.inboxEvents.get(event)!.toObject()),
+    }));
+  });
+  return seq === null ? [] : taken;
 }
 
 /**

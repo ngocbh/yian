@@ -72,7 +72,7 @@ test("comprehension variables are not reads; the iterable and outer names are", 
 });
 
 test("rewriteExprRefs leaves comprehension variables alone", () => {
-  expect(rewriteExprRefs("[x + y for x in xs]", (p) => (p === "x" || p === "xs" ? "z" : null))).toBe(
+  expect(rewriteExprRefs("[x + y for x in xs]", (p) => (p === "x" || p === "xs" ? { text: "z", used: 1 } : null))).toBe(
     "[x + y for x in z]",
   );
 });

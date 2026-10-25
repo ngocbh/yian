@@ -43,6 +43,7 @@ export {
   inferExprType,
   isinstanceSubject,
   isinstanceTypeNames,
+  namesEnd,
   parseCondition,
   RequiredError,
   referencePath,
@@ -53,7 +54,7 @@ export {
   splitReference,
   stepsText,
 } from "./expressions.ts";
-export type { RefStep } from "./expressions.ts";
+export type { RefRename, RefRenamed, RefStep } from "./expressions.ts";
 export { parseExpr } from "./grammar.ts";
 export type { FeedbackValue } from "./lineage.ts";
 export { hasFeedback, validateFeedback } from "./lineage.ts";

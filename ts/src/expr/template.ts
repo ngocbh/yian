@@ -66,6 +66,7 @@ import {
   ExpressionError,
   exprRefs,
   ISINSTANCE,
+  type RefRename,
   ResolveMode,
   resolveInRecord,
   rewriteExprRefs,
@@ -457,13 +458,13 @@ export function exprRefsOf(source: string): string[] {
  * character are kept verbatim.
  *
  * @param source The binding or template value.
- * @param rename `path -> newPath`, or `null` to keep.
+ * @param rename `path -> { text, used }`, or `null` to keep, as `rewriteExprRefs` takes it.
  * @returns `source` with the renamed reference leaves spliced in. A value that isn't text, or text
  *   with no `${`, comes back as is; an unbalanced `${` keeps the rest of the text as it is (the
  *   binding parser reports it later, located).
  * @throws {ExpressionError} If a span's interior does not parse.
  */
-export function rewriteTemplateRefs<T>(source: T, rename: (path: string) => string | null): T | string {
+export function rewriteTemplateRefs<T>(source: T, rename: RefRename): T | string {
   if (typeof source !== "string" || !source.includes("${")) return source;
   let out = "";
   let i = 0;

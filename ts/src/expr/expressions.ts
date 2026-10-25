@@ -1767,23 +1767,45 @@ function collectExprRefs(node: ExprNode, refs: string[]): void {
   for (const child of node.children) collectExprRefs(child, refs);
 }
 
+/** A rename's answer: `text` replaces the read's first `used` names; the steps after them stay as written. */
+export interface RefRenamed {
+  readonly text: string;
+  readonly used: number;
+}
+
+/** Rename one reference, given its flat dotted path; `null` keeps it. */
+export type RefRename = (path: string) => RefRenamed | null;
+
+/**
+ * Return the end offset of a reference's `used`-th name (the NAME token or that trailer's NAME).
+ *
+ * @throws {RangeError} If `used` is not between 1 and the read's name count.
+ */
+export function namesEnd(node: Tree, used: number): number {
+  const names = 1 + splitReference(node).steps.length;
+  if (!Number.isInteger(used) || used < 1 || used > names) throw new RangeError(`a rename used ${used} of ${names} names`);
+  const last = node.children[used - 1]!;
+  return last instanceof Tree ? (last.children[0] as Token).endPos : (last as Token).endPos;
+}
+
 /**
  * Rewrite the reference-leaf paths of one unified `${...}` expression `text`.
  *
  * The rewrite analog of `exprRefs`: it walks the same parse tree (`refcall` reference /
  * builtin-call arguments), but instead of collecting each reference path it asks `rename(path)`
- * for a replacement and splices it in by source position. `rename` returns the new dotted path,
- * or `null` to leave that reference untouched. Everything that is not a reference leaf
- * (operators, numbers, string and list literals, a builtin call's callee name, parentheses,
- * whitespace) is kept verbatim, as is the type name of an `isinstance(x, T)`. A `refcall`
- * (`a.b`) is replaced with the new path.
+ * for a replacement and splices it in by source position. `rename` gets the flat dotted path and
+ * returns the text for a prefix of the read, its first `used` names, or `null` to leave that
+ * reference untouched. Only that prefix's source is replaced; the steps after it stay as written,
+ * `?.` included. Everything that is not a reference leaf (operators, numbers, string and list
+ * literals, a builtin call's callee name, parentheses, whitespace) is kept verbatim, as is the
+ * type name of an `isinstance(x, T)`.
  *
  * @param text The expression source (a bare expression, or a span interior).
- * @param rename `path -> newPath`, or `null` to keep.
+ * @param rename `path -> { text, used }`, or `null` to keep.
  * @returns `text` with the renamed reference leaves spliced in.
  * @throws {ExpressionError} If `text` does not parse (the same front end as `parseExpr`).
  */
-export function rewriteExprRefs(text: string, rename: (path: string) => string | null): string {
+export function rewriteExprRefs(text: string, rename: RefRename): string {
   const edits: [number, number, string][] = [];
   collectRefEdits(parseExpr(text), rename, edits);
   // Splice right to left so earlier offsets stay valid as later ones are replaced.
@@ -1797,24 +1819,14 @@ export function rewriteExprRefs(text: string, rename: (path: string) => string |
  * Keep in sync with `collectExprRefs` (and `rewriteConditionReads` in `template.ts`): the same
  * refcall / builtin-argument decomposition, but capturing token source positions to edit in place.
  */
-function collectRefEdits(
-  node: ExprNode,
-  rename: (path: string) => string | null,
-  edits: [number, number, string][],
-): void {
+function collectRefEdits(node: ExprNode, rename: RefRename, edits: [number, number, string][]): void {
   if (node instanceof Token) return; // a lone literal holds no reference
   if (node.data === "refcall") {
     const children = node.children;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) {
-      const segments = children.slice(1).map((c) => String((c as Tree).children[0]));
-      const replacement = rename([String(children[0]), ...segments].join("."));
-      if (replacement !== null) {
-        const start = (children[0] as Token).startPos;
-        const last = children.at(-1)!; // the last trailer, or the leading NAME token itself
-        const end = last instanceof Tree ? (last.children[0] as Token).endPos : last.endPos;
-        edits.push([start, end, replacement]);
-      }
+      const renamed = rename(referencePath(node));
+      if (renamed !== null) edits.push([(children[0] as Token).startPos, namesEnd(node, renamed.used), renamed.text]);
       return;
     }
     // A builtin call: the callee is not a reference; rewrite each argument value only.
@@ -1831,10 +1843,11 @@ function collectRefEdits(
  * searched-`case` `when:`), honouring both spellings.
  *
  * The rewrite analog of `conditionRefs`: a whole-span `${a > 5}` keeps its outer braces and
- * rewrites the interior; a bare `a > 5` is rewritten in place. `rename(path)` returns the
- * replacement path (or `null` to keep). The value is trimmed first, matching `parseCondition`.
+ * rewrites the interior; a bare `a > 5` is rewritten in place. `rename` follows `rewriteExprRefs`:
+ * it replaces a prefix of each read and keeps the steps after it. The value is trimmed first,
+ * matching `parseCondition`.
  */
-export function rewriteConditionRefs(expression: string, rename: (path: string) => string | null): string {
+export function rewriteConditionRefs(expression: string, rename: RefRename): string {
   const interior = wholeSpanInterior(expression);
   if (interior !== null) return "${" + rewriteExprRefs(interior, rename) + "}";
   return rewriteExprRefs(expression.trim(), rename);

@@ -923,14 +923,14 @@ describe("expressions at the nesting limit evaluate and walk", () => {
     for (let i = 0; i < 100; i++) expected = [expected];
     expect(evaluate(text, resolve)).toEqual(expected);
     expect(exprRefs(parseExpr(text))).toEqual(["x"]);
-    expect(rewriteExprRefs(text, () => "y")).toBe("[".repeat(100) + "y" + "]".repeat(100));
+    expect(rewriteExprRefs(text, () => ({ text: "y", used: 1 }))).toBe("[".repeat(100) + "y" + "]".repeat(100));
   });
 
   test("100 nested unary minuses", () => {
     const text = "-(".repeat(100) + "x" + ")".repeat(100);
     expect(evaluate(text, resolve)).toBe(1n);
     expect(exprRefs(parseExpr(text))).toEqual(["x"]);
-    expect(rewriteExprRefs(text, () => "y")).toBe("-(".repeat(100) + "y" + ")".repeat(100));
+    expect(rewriteExprRefs(text, () => ({ text: "y", used: 1 }))).toBe("-(".repeat(100) + "y" + ")".repeat(100));
   });
 
   test("100 nested calls", () => {
@@ -939,7 +939,7 @@ describe("expressions at the nesting limit evaluate and walk", () => {
       const text = open.repeat(100) + "x" + ")".repeat(100);
       expect(evaluate(text, resolve)).toBe(1n);
       expect(exprRefs(parseExpr(text))).toEqual(["x"]);
-      expect(rewriteExprRefs(text, () => "y")).toBe(open.repeat(100) + "y" + ")".repeat(100));
+      expect(rewriteExprRefs(text, () => ({ text: "y", used: 1 }))).toBe(open.repeat(100) + "y" + ")".repeat(100));
     }
   });
 
@@ -960,7 +960,7 @@ describe("expressions at the nesting limit evaluate and walk", () => {
     }
     expect(evaluate(text, resolve)).toBe(expected);
     expect(exprRefs(parseExpr(text))).toEqual(["x"]);
-    expect(rewriteExprRefs(text, () => "y")).toBe(text.replace("x", "y"));
+    expect(rewriteExprRefs(text, () => ({ text: "y", used: 1 }))).toBe(text.replace("x", "y"));
   });
 });
 

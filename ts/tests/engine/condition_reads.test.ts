@@ -145,8 +145,10 @@ test.each([
     "d.output": "__d",
     "d.output.qty": "__q",
   };
-  const rename = (path: string) => paths[path] ?? null;
-  expect(rewriteConditionReads(when, (_i, read) => rename(read.path))).toBe(rewriteConditionRefs(when, rename));
+  const rename = (path: string) => (path in paths ? { text: paths[path]!, used: path.split(".").length } : null);
+  expect(rewriteConditionReads(when, (_i, read) => rename(read.path)?.text ?? null)).toBe(
+    rewriteConditionRefs(when, rename),
+  );
 });
 
 const BUDGET = 'len(join([m.text for t in input.history for m in t], "")) > input.budget';

@@ -1268,3 +1268,12 @@ test("a comprehension's conditions are not part of its route", () => {
     ["source", ["tags", 2]],
   ]);
 });
+
+test("a traced ?. read keeps ?. in its route expression", () => {
+  const resolve = (path: string) =>
+    path === "a.output.k" ? new ResolvedValue("v", true, new SourceRef("r", 1, ["k"])) : new ResolvedValue(null, false);
+  expect(evalExpr(parseExpr("a.output?.k"), resolve, { trace: true }).route.expression).toBe("a.output?.k");
+  expect(evalExpr(parseExpr("upper(a.output?.k)"), resolve, { trace: true }).route.expression).toBe(
+    "upper(a.output?.k)",
+  );
+});

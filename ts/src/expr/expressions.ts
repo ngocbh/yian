@@ -908,28 +908,20 @@ class EvalExpr {
    * consumer treats the two alike (strict throws, the others read `null`).
    */
   refcall(node: Tree): Walked {
-    const children = node.children;
-    const name = String(children[0]);
+    const { head: name, steps } = splitReference(node);
     const callSuffix = callSuffixOf(node);
-    if (callSuffix === undefined) {
-      const segments = children.slice(1).map((c) => String((c as Tree).children[0])); // each trailer's NAME
-      return this.reference([name, ...segments].join("."));
-    }
+    if (callSuffix === undefined) return this.reference(referencePath(node), referenceText(node));
     const constructor = this.isConstructor(name);
     let value: Walked;
     if (name === ISINSTANCE) value = this.isinstanceCall(callSuffix);
     else if (constructor) value = this.construct(name, callSuffix);
     else value = this.callBuiltin(name, callSuffix);
-    const after = children.filter((c): c is Tree => c instanceof Tree && c.data === "trailer");
-    for (const trailer of after) value = this.dottedStep(value, String(trailer.children[0]));
-    if (value === MISSING) {
-      this.#missPath = `${name}(...)` + after.map((trailer) => `.${String(trailer.children[0])}`).join("");
-    }
+    for (const step of steps) value = this.dottedStep(value, step.name);
+    if (value === MISSING) this.#missPath = `${name}(...)` + stepsText(steps);
     if (this.#trace) {
       const frame = this.#frames.at(-1)!;
-      const steps = after.map((trailer) => String(trailer.children[0]));
       if (constructor) {
-        frame.route = this.constructorRoute(name, callSuffix).project(steps);
+        frame.route = this.constructorRoute(name, callSuffix).project(steps.map((step) => step.name));
       } else {
         const routes = frame.children;
         const names = valueArgs(name, callSuffix).map((arg) =>
@@ -937,12 +929,11 @@ class EvalExpr {
         );
         let args = names.map((key, i) => (key ? `${key}=${routes[i]!.expression}` : routes[i]!.expression)).join(", ");
         if (name === ISINSTANCE) args += `, ${isinstanceTypeName(callSuffix)}`;
-        const suffix = steps.map((step) => `.${step}`).join("");
         frame.route = ValueRoute.literal(value === MISSING ? null : value).with({
           kind: "opaque",
           children: routes,
           names,
-          expression: `${name}(${args})${suffix}`,
+          expression: `${name}(${args})${stepsText(steps)}`,
         });
       }
     }
@@ -954,8 +945,11 @@ class EvalExpr {
    * locally (record fields and file fields, see `dottedStep`); every other path goes whole to
    * `resolve`, which owns the dotted walk. A miss (an `item` miss, or `resolve` giving `null`)
    * is `MISSING`.
+   *
+   * @param path The flat dotted path, for the resolver and the `item` walk.
+   * @param text The read as written (`?.` included), for miss messages and routes.
    */
-  reference(path: string): Walked {
+  reference(path: string, text: string = path): Walked {
     const parts = path.split(".");
     if (parts[0] === "item") {
       // MAP-body-local scope (not a resolver head); a `null` item means no item scope.
@@ -976,21 +970,21 @@ class EvalExpr {
         value = this.dottedStep(value, step);
       }
       if (this.#trace && source === null) {
-        this.#frames.at(-1)!.route = ValueRoute.literal(value === MISSING ? null : value).with({ expression: path });
+        this.#frames.at(-1)!.route = ValueRoute.literal(value === MISSING ? null : value).with({ expression: text });
       } else if (this.#trace && present) {
         this.#frames.at(-1)!.route = resolvedRoute(item as ResolvedValue, "item").project(steps);
       }
-      if (value === MISSING) this.#missPath = path;
+      if (value === MISSING) this.#missPath = text;
       return value;
     }
     let resolved = this.#resolve(path);
     if (this.#trace) {
       if (!(resolved instanceof ResolvedValue)) throw new TypeError("a traced resolver must return ResolvedValue");
-      if (resolved.present) this.#frames.at(-1)!.route = resolvedRoute(resolved, path);
+      if (resolved.present) this.#frames.at(-1)!.route = resolvedRoute(resolved, text);
       resolved = resolved.present ? resolved.value : null;
     }
     if (resolved === null) {
-      this.#missPath = path;
+      this.#missPath = text;
       return MISSING;
     }
     return resolved as Value;
@@ -1111,12 +1105,14 @@ class EvalExpr {
     const binding = this.#vars.get(name);
     // Only a hand-built tree can read a variable outside its comprehension.
     if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
-    const steps = node.children.slice(1).map((trailer) => String((trailer as Tree).children[0]));
+    const { steps } = splitReference(node);
     // A null item is returned as is, as in Python; a `.field` on it misses.
     let value: Walked = binding.value;
-    for (const step of steps) value = this.dottedStep(value, step);
-    if (value === MISSING) this.#missPath = [name, ...steps].join(".");
-    else if (this.#trace && binding.route !== null) this.#frames.at(-1)!.route = binding.route.project(steps);
+    for (const step of steps) value = this.dottedStep(value, step.name);
+    if (value === MISSING) this.#missPath = name + stepsText(steps);
+    else if (this.#trace && binding.route !== null) {
+      this.#frames.at(-1)!.route = binding.route.project(steps.map((step) => step.name));
+    }
     return value;
   }
 
@@ -1433,7 +1429,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
 /**
  * Evaluate a unified `${...}` expression tree (from `parseExpr`).
  *
- * The one evaluator for every `${...}` construct: references (bare, dotted, `item`-scoped),
+ * The one evaluator for every `${...}` construct: references (bare, dotted, `item`-scoped; `?.`
+ * steps read as `.` here, see `splitReference`),
  * arithmetic and comparisons over values (so text + text and list + list concatenate), boolean
  * combinators, list literals, list slices (`xs[a:b]`, as Python's with step 1; a slice of a
  * miss or `null` is a miss), list comprehensions (as Python's; an elem miss is a `null` item and

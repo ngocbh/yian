@@ -982,3 +982,16 @@ test("a comprehension with 5,000 if clauses evaluates without overflowing the st
     2n,
   ]);
 });
+
+test("?. reads like . on today's resolvers", () => {
+  const resolve = fromRecord({ a: { k: 1n }, n: null });
+  expect(evaluate("a?.k", resolve)).toBe(1n);
+  expect(evaluate("n?.k", resolve)).toBeNull();
+  expect(evaluate("[m?.k for m in xs]", fromRecord({ xs: [{ k: 1n }, null] }))).toEqual([1n, null]);
+});
+
+test("a strict miss names the read as written", () => {
+  expect(errorOf("a?.b.c", undefined, ResolveMode.STRICT_RAISE).message).toBe(
+    "unresolved reference ${a?.b.c} in expression",
+  );
+});

@@ -416,6 +416,28 @@ test("a flow assert null check narrows a skippable producer of a non-null type",
   );
 });
 
+test("a flow assert on a skippable producer needs a null check", () => {
+  // The twin of the test above, without the null check: `d` may be skipped.
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n  Item:\n    qty: int\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  route:\n    kind: case\n    cases:\n" +
+    "      - when: \"input.s == 'go'\"\n        then: d\n" +
+    "    else: e\n" +
+    `  d:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: Item\n" +
+    `  e:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: str\n" +
+    "output: ${input.s}\n" +
+    'asserts:\n  - "d.output.qty > 0"\n';
+  expect(loadMessage(text)).toBe(
+    "assert 'd.output.qty > 0': ${d.output.qty} reads field 'qty' of d.output, which may be null " +
+      "(node 'd' may be skipped); write d.output?.qty, or check d.output != null first",
+  );
+});
+
 // --------------------------------------------------------------------------- //
 // Harvested conformance cases
 // --------------------------------------------------------------------------- //

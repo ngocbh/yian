@@ -2223,7 +2223,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     ]),
     producers,
     flowAssertionRanges,
-    { inputContracts: flowInputContracts, registry, diagnostics },
+    { inputContracts: flowInputContracts, registry, skips, diagnostics },
   );
 
   // DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the FULL

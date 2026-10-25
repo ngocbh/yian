@@ -14,8 +14,10 @@
 
 import { expect, test } from "bun:test";
 
+import { Edge } from "../../src/compile/model.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { lowerFlowAsserts } from "../../src/compose/validate/asserts.ts";
+import { SkipModel } from "../../src/compose/validate/skips.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { conditionRefs } from "../../src/expr/index.ts";
 import {
@@ -44,6 +46,7 @@ function lower(
     producers?: ReadonlyMap<string, OutputContract>;
     assertRanges?: readonly (SourceRange | null)[];
     diagnostics?: LoadDiagnostics;
+    skips?: SkipModel | null;
   } = {},
 ) {
   return lowerFlowAsserts(
@@ -52,7 +55,7 @@ function lower(
     options.validTargets ?? VALID_TARGETS,
     options.producers ?? PRODUCERS,
     options.assertRanges ?? null,
-    { diagnostics: options.diagnostics ?? null },
+    { diagnostics: options.diagnostics ?? null, skips: options.skips ?? null },
   );
 }
 
@@ -321,4 +324,51 @@ test("?. inside a flow assert's root is a load error", () => {
     "reference ${input?.age} puts ?. inside its root; ?. goes after the root, as in ${input.age}",
   );
   expect(loadError(() => lower(["emit?.output.n >= 1"])).message).toContain("as in ${emit.output?.n}");
+});
+
+// ---- nullable field reads: a producer that may skip is read through ?. or a null check ----
+
+const REC = new Map<string, OutputContract>([
+  [
+    "emit",
+    new ValueContract(
+      new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([["n", Type.scalar(ValueKind.INTEGER)]]),
+        required: new Set(["n"]),
+      }),
+    ),
+  ],
+]);
+// `gate` isn't exhaustive, so it may take no branch and skip `emit`.
+const SKIPS = new SkipModel(["gate", "emit"], [new Edge("t", "gate", "emit", { sourceHandle: "then" })], new Set());
+
+test("a flow assert on a producer that may skip needs ?. or a guard", () => {
+  const error = loadError(() => lower(["emit.output.n >= 1"], { producers: REC, skips: SKIPS }));
+  expect(error.message).toContain(
+    "${emit.output.n} reads field 'n' of emit.output, which may be null (node 'emit' may be skipped)",
+  );
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(expressions(lower(["emit.output?.n >= 1"], { producers: REC, skips: SKIPS }).endPost)).toEqual([
+    "__assert_emit?.n >= 1",
+  ]);
+  expect(
+    expressions(lower(["emit.output != null and emit.output.n >= 1"], { producers: REC, skips: SKIPS }).endPost),
+  ).toHaveLength(1);
+});
+
+test("a flow assert on a producer that always runs loads with .", () => {
+  expect(expressions(lower(["emit.output.n >= 1"], { producers: REC, skips: null }).endPost)).toEqual([
+    "__assert_emit.n >= 1",
+  ]);
+});
+
+// Design 2.6.6: `emit` is opaque here (absent from PRODUCERS), and it may skip.
+test("a flow assert on an untyped producer that may skip needs ?. or a guard", () => {
+  expect(loadError(() => lower(["emit.output.n >= 1"], { skips: SKIPS })).message).toContain(
+    "${emit.output.n} reads field 'n' of emit.output, which may be null (node 'emit' may be skipped)",
+  );
+  expect(expressions(lower(["emit.output?.n >= 1"], { skips: SKIPS }).endPost)).toHaveLength(1);
+  expect(expressions(lower(["emit.output != null and emit.output.n >= 1"], { skips: SKIPS }).endPost)).toHaveLength(1);
+  expect(expressions(lower(["emit.output.n >= 1"], { skips: null }).endPost)).toHaveLength(1);
 });

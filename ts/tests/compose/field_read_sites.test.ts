@@ -972,7 +972,8 @@ test.each([
   expect(loadMessage(skippableAssert(assertion))).toContain(expected);
 });
 
-const DECLARED_TYPE_READS: [string, string, string][] = [
+/** Each row: id, assertion, the expected error, and the always-run one when it differs. */
+const DECLARED_TYPE_READS: [string, string, string, string?][] = [
   [
     "narrowed-typo",
     "isinstance(d.output, Sell) or d.output.qtty > 0",
@@ -989,16 +990,18 @@ const DECLARED_TYPE_READS: [string, string, string][] = [
     "only-null-left",
     "d.output.action == 'buy' or d.output.action == 'sell' or d.output.zz > 0",
     "reference ${d.output.zz} reads unknown field 'zz' on record",
+    // A producer that always runs is never null, so no null is left to walk on the declared type.
+    "reference ${d.output.zz} reads field 'zz', which Sell doesn't have; d.output is Sell here",
   ],
 ];
 
 test.each(
-  DECLARED_TYPE_READS.flatMap(([id, assertion, expected]) => [
+  DECLARED_TYPE_READS.flatMap(([id, assertion, expected, alwaysRun]) => [
     [`${id}, skippable`, assertion, expected, true] as const,
-    [`${id}, always-run`, assertion, expected, false] as const,
+    [`${id}, always-run`, assertion, alwaysRun ?? expected, false] as const,
   ]),
 )("a flow assert read error names the declared type: %s", (_id, assertion, expected, skippable) => {
-  // A producer read may be null, but its read errors name the declared type.
+  // A producer that may be skipped reads null, but its read errors name the declared type.
   const text = skippable
     ? skippableAssert(assertion)
     : flow(producer("d", "Order"), "${step.output}", { tail: asserts(assertion) });

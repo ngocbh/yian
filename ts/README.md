@@ -479,7 +479,7 @@ be deleted and rebuilt. See [The run index][docs/api.md#the-run-index-with-updat
 `agentCalls(log)` lists a log's AGENT model calls from its `node_step` records (a call's retried
 attempts are one call). `agentCall(log, { nodeId, n })` replays the log as `foldRunLog` does and
 rebuilds that call's request (system prompt, messages, tool specs, model and config without
-credentials), checked against its `request_sha256` (`digestMismatch` instead of a throw; `request`
+credentials), checked against its purpose and `request_sha256` (`digestMismatch` instead of a throw; `request`
 is `null` when it can't be rebuilt), with its attempts, reply and tool results as recorded. A run
 started with `llmConfig.api_key` takes `apiKey` and `headers`, as `advance` does. See [An AGENT's model calls][docs/api.md#an-agents-model-calls-with-agentcalls-and-agentcall].
 

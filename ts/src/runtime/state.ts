@@ -1631,7 +1631,7 @@ export function prepareNodeSucceeded(
   if (!isExactly(state, RunState)) throw new TypeError("prepareNodeSucceeded expects a RunState");
   if (typeof nodeId !== "string") throw new TypeError("node_id must be a string");
   requireInitializedNonterminal(state);
-  requireSucceedingNode(state, nodeId);
+  requireOutcomeNode(state, nodeId, "NodeSucceeded");
   const pending = state.pendingCommits.get(nodeId);
   if (pending === undefined) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} has no pending pool_commit`);
   if (pending.valueJson === null && pending.take === null && !Object.hasOwn(options, "output")) {
@@ -1698,7 +1698,8 @@ export function prepareNodeRouted(
   if (typeof handle !== "string") throw new NodeDataError(new TypeError("handle must be a string"));
   if (!handle) throw new NodeDataError(new RangeError("handle must be non-empty"));
   requireInitializedNonterminal(state);
-  requireRoutingNode(state, nodeId);
+  requireOutcomeNode(state, nodeId, "NodeRouted");
+  requireNoPendingCommit(state, nodeId, "NodeRouted");
   return prepareRouteTransition(
     state,
     new NodeRoutedRecord(nodeId, handle, {
@@ -4657,52 +4658,26 @@ function requireNoPendingCommit(state: RunState, nodeId: string, kind: string): 
   }
 }
 
-/** Require an existing unknown node in the in-flight frontier. */
-function requireSucceedingNode(state: RunState, nodeId: string): void {
-  if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} does not exist in the flow`);
-  }
-  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} must have UNKNOWN disposition`);
-  }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeSucceeded node ${reprText(nodeId)} is not in-flight`);
-}
-
-/** Require an existing unknown router in the ordered in-flight frontier. */
-function requireRoutingNode(state: RunState, nodeId: string): void {
-  if (!nodeId) throw new RangeError("NodeRouted node_id must be non-empty");
-  if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeRouted node ${reprText(nodeId)} does not exist in the flow`);
-  }
-  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeRouted node ${reprText(nodeId)} must have UNKNOWN disposition`);
-  }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeRouted node ${reprText(nodeId)} is not in-flight`);
-  requireNoPendingCommit(state, nodeId, "NodeRouted");
-}
-
-/** Require an existing unknown node in the ordered in-flight frontier. */
-function requireFailingNode(state: RunState, nodeId: string): void {
-  if (!nodeId) throw new RangeError("NodeFailed node_id must be non-empty");
-  if (!state.flow.nodes.has(nodeId)) {
-    throw new RangeError(`NodeFailed node ${reprText(nodeId)} does not exist in the flow`);
-  }
-  if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeFailed node ${reprText(nodeId)} must have UNKNOWN disposition`);
-  }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeFailed node ${reprText(nodeId)} is not in-flight`);
-  requireNoPendingCommit(state, nodeId, "NodeFailed");
-}
-
-/** Require an existing unknown spawner in the ordered in-flight frontier. */
-function requireExpandingNode(state: RunState, nodeId: string): void {
-  if (!nodeId) throw new RangeError("NodeExpanded node_id must be non-empty");
+/**
+ * Require `nodeId` to name an existing node of `UNKNOWN` disposition in the in-flight frontier, as
+ * a `kind` outcome (`NodeSucceeded`, `NodeRouted`, `NodeFailed` or `NodeExpanded`) needs.
+ *
+ * @returns The node.
+ */
+function requireOutcomeNode(state: RunState, nodeId: string, kind: string): Node {
+  if (!nodeId) throw new RangeError(`${kind} node_id must be non-empty`);
   const node = state.flow.nodes.get(nodeId);
-  if (node === undefined) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} does not exist in the flow`);
+  if (node === undefined) throw new RangeError(`${kind} node ${reprText(nodeId)} does not exist in the flow`);
   if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`NodeExpanded node ${reprText(nodeId)} must have UNKNOWN disposition`);
+    throw new RangeError(`${kind} node ${reprText(nodeId)} must have UNKNOWN disposition`);
   }
-  if (!state.inFlight.has(nodeId)) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not in-flight`);
+  if (!state.inFlight.has(nodeId)) throw new RangeError(`${kind} node ${reprText(nodeId)} is not in-flight`);
+  return node;
+}
+
+/** Require an existing unknown spawner in the in-flight frontier, with no commit pending. */
+function requireExpandingNode(state: RunState, nodeId: string): void {
+  const node = requireOutcomeNode(state, nodeId, "NodeExpanded");
   if (node.isSpawner !== true) throw new RangeError(`NodeExpanded node ${reprText(nodeId)} is not a graph spawner`);
   requireNoPendingCommit(state, nodeId, "NodeExpanded");
 }
@@ -5469,7 +5444,8 @@ function validateRouteRecord(state: RunState, record: NodeRoutedRecord): void {
   if (record.terminalFailure !== null && !isExactly(record.terminalFailure, Failure)) {
     throw new TypeError("NodeRoutedRecord terminal failure must be a Failure or null");
   }
-  requireRoutingNode(state, nodeId);
+  requireOutcomeNode(state, nodeId, "NodeRouted");
+  requireNoPendingCommit(state, nodeId, "NodeRouted");
 }
 
 /** Whether two sets of ids hold the same ids, in any order. */
@@ -5527,7 +5503,8 @@ function validateFailureRecord(state: RunState, record: NodeFailedRecord): void 
   const nodeId: unknown = record.failure.nodeId;
   if (typeof nodeId !== "string") throw new TypeError("NodeFailedRecord failure node_id must be a string");
   if (!nodeId) throw new RangeError("NodeFailedRecord failure node_id must be non-empty");
-  requireFailingNode(state, nodeId);
+  requireOutcomeNode(state, nodeId, "NodeFailed");
+  requireNoPendingCommit(state, nodeId, "NodeFailed");
   validateLearnedScope(state, nodeId);
 }
 
@@ -5711,7 +5688,7 @@ function validateSend(state: RunState, record: PoolCommitRecord): void {
  *   commit.
  */
 function validateSuccessCommit(state: RunState, record: NodeSucceededRecord): void {
-  requireSucceedingNode(state, record.nodeId);
+  requireOutcomeNode(state, record.nodeId, "NodeSucceeded");
   const pending = state.pendingCommits.get(record.nodeId);
   if (pending?.seq !== record.commit) {
     throw new RangeError(

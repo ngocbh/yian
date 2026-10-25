@@ -445,3 +445,37 @@ test("too deeply nested input schema is unchecked", () => {
   for (let i = 0; i < 100_000; i++) deep = { type: "array", items: deep };
   expect(inputTypeFromJsonSchema(deep)).toBeNull();
 });
+
+/** `n` defs, each holding the next one twice, the last an int, or a ref back to the first. */
+function doublingDefs(n: number, cyclic = false): Schema {
+  const defs: Schema = {};
+  for (let i = 0; i < n; i++) {
+    const next = { $ref: `#/$defs/D${i + 1}` };
+    defs[`D${i}`] = { type: "object", properties: { a: next, b: next }, required: ["a", "b"] };
+  }
+  defs[`D${n}`] = cyclic ? { $ref: "#/$defs/D0" } : { type: "integer" };
+  return { $defs: defs, $ref: "#/$defs/D0" };
+}
+
+test("a def reached many ways is translated once", () => {
+  const start = performance.now();
+  const typ = typeFromJsonSchema(doublingDefs(22), { closed: true });
+  expect(performance.now() - start).toBeLessThan(1000);
+  expect(typ?.fields?.get("a")?.fields?.get("b")?.kind).toBe(ValueKind.OBJECT);
+});
+
+test("a cyclic schema reached many ways ends, unchecked past the node cap", () => {
+  const start = performance.now();
+  expect(typeFromJsonSchema(doublingDefs(22, true), { closed: true })).toBeNull();
+  expect(performance.now() - start).toBeLessThan(2000);
+});
+
+test("a frozen input schema is translated once", () => {
+  const schema = Object.freeze({ type: "integer", minimum: 0 });
+  const root = Object.freeze({ type: "object", properties: Object.freeze({ n: schema }) });
+  const typ = inputTypeFromJsonSchema(schema, root);
+  expect(inputTypeFromJsonSchema(schema, root)).toBe(typ);
+  // An unfrozen schema may change, so it is read again.
+  const open = { type: "integer" };
+  expect(inputTypeFromJsonSchema(open)).not.toBe(inputTypeFromJsonSchema(open));
+});

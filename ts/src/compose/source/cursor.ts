@@ -552,8 +552,11 @@ export class SourceCursor {
       });
     } else if (isList(snapshot)) {
       const current = this._value;
+      const retained = this._sequenceSources;
       const aligned = this._document !== null && !this._cycleCut && isList(current);
       sequenceSources = snapshot.map((_, index) => {
+        // The retained item source, not its projected overlay, as for a mapping above.
+        if (retained !== null) return retained[index] ?? null;
         if (!aligned || index >= current.length) return null;
         try {
           return this.child(index);

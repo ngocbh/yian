@@ -1063,6 +1063,16 @@ describe("projections", () => {
     ]);
   });
 
+  test("withValue after a placeholder round keeps the retained item and field sources", () => {
+    const root = SourceDocument.parse("m:\n  k:\n    a: 1\nl:\n  - a: 1\n").root;
+    const mapping = root.child("m").withValue({ k: "x" }).withValue({ k: { a: 2n } });
+    const sequence = root.child("l").withValue(["x"]).withValue([{ a: 2n }]);
+
+    expect(mapping.child("k").child("a").range).toEqual(root.child("m").child("k").child("a").range);
+    expect(sequence.child(0).child("a").range).toEqual(root.child("l").child(0).child("a").range);
+    expect(sequence.child(0).child("a").value).toBe(2n);
+  });
+
   test("a projected child keeps the source's document, path and range", () => {
     const base = SourceDocument.parse("original:\n  nested: old\n").root;
     const source = base.child("original");

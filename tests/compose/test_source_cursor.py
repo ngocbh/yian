@@ -1037,6 +1037,16 @@ def test_with_value_aligns_nested_mapping_and_sequence_sources():
     assert aligned.child("sequence").child(1).child("field").range is None
 
 
+def test_with_value_after_a_placeholder_round_keeps_retained_sources():
+    root = SourceDocument.parse("m:\n  k:\n    a: 1\nl:\n  - a: 1\n").root
+    mapping = root.child("m").with_value({"k": "x"}).with_value({"k": {"a": 2}})
+    sequence = root.child("l").with_value(["x"]).with_value([{"a": 2}])
+
+    assert mapping.child("k").child("a").range == root.child("m").child("k").child("a").range
+    assert sequence.child(0).child("a").range == root.child("l").child(0).child("a").range
+    assert sequence.child(0).child("a").value == 2
+
+
 def test_projected_child_retains_source_path_and_range():
     base = SourceDocument.parse(
         "original:\n"

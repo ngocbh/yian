@@ -1468,7 +1468,12 @@ class SourceCursor:
             sources: list[SourceCursor | None] = []
             for index in range(len(snapshot)):
                 source = None
-                if (
+                if self._sequence_sources is not None:
+                    # The retained item source, not its projected overlay, as
+                    # for a mapping above.
+                    if index < len(self._sequence_sources):
+                        source = self._sequence_sources[index]
+                elif (
                     self._document is not None
                     and not self._cycle_cut
                     and type(self._value) in (list, tuple)

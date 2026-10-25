@@ -36,6 +36,7 @@ const ADAPTIVE = `    adaptive_questions:
 test.each([
   ["nothing to ask", "    input:\n      to: lead\n", "ask needs input prompt:, input questions:, or adaptive_questions:"],
   ["no input at all", "", "ask needs input prompt:, input questions:, or adaptive_questions:"],
+  ["a non-mapping input", "    input: Ship?\n", "node 'q' (kind=tool): `input:` must be a mapping of"],
   [
     "questions and adaptive_questions together",
     `    input:\n      questions:\n        - question: Ship?\n${ADAPTIVE}`,

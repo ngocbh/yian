@@ -197,7 +197,8 @@ export class ToolDescriptor extends NodeDescriptor {
   /**
    * Check an `ask`'s question surface: one of input `prompt`, input `questions` or
    * `adaptive_questions:` (an error at the node), `questions` and `adaptive_questions:` not both,
-   * and an adaptive block with a brief and a valid `retries:` (errors at the block).
+   * and an adaptive block with a brief and a valid `retries:` (errors at the block). A non-mapping
+   * `input:` is left to the base shape check.
    *
    * @throws LoadError for the first rule broken.
    */
@@ -209,7 +210,10 @@ export class ToolDescriptor extends NodeDescriptor {
     diagnostics: LoadDiagnostics,
   ): void {
     const id = reprText(nodeId);
-    const inputs = isRecord(fields["inputs"]) ? fields["inputs"] : {};
+    const given = fields["inputs"] ?? null;
+    // The base check reports a malformed `input:`; reading it as empty would blame the questions.
+    if (given !== null && !isRecord(given)) return;
+    const inputs = isRecord(given) ? given : {};
     const hasQuestions = (inputs["questions"] ?? null) !== null;
     const auto = fields["adaptiveQuestions"] ?? null;
     const autoRange = ranges.get(siteKey("field", "adaptive_questions")) ?? ownRange;

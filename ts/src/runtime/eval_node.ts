@@ -124,21 +124,6 @@ function capabilityFault(error: unknown): CapabilityFault {
 }
 
 /**
- * @internal Append the note `text()` to `error`'s own `notes` array, creating it when absent
- * (Python's `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a
- * throwing `text`, is ignored. The engine notes a refused stop record with it.
- */
-export function addNote(error: unknown, text: () => string): void {
-  try {
-    if (typeof error !== "object" || error === null) return;
-    const target = error as { notes?: unknown };
-    const note = text();
-    if (!Object.hasOwn(target, "notes")) target.notes = [];
-    if (Array.isArray(target.notes)) target.notes.push(note);
-  } catch {}
-}
-
-/**
  * Carry a host observer fault out of a node body as a capability fault, so a failing
  * `onStream`/`onEvent` stays a host fault, never a node failure. `onFault` sees each fault before
  * it is thrown. Once `isClosed()` is true the sink drops what it gets.

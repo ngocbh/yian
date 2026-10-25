@@ -410,6 +410,7 @@ test("module imports only stdlib and lower memory modules", () => {
   const allowed = new Set([
     "node:crypto",
     "../defaults.ts",
+    "../diagnostics.ts",
     "../typesys/json.ts",
     "./contracts.ts",
     "./storage/sqlite.ts",

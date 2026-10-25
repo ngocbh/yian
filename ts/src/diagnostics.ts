@@ -8,7 +8,7 @@
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
  * `compareCodeUnits` is the one string order for sorting, `reprText` quotes text the
  * way Python's `repr` does, and `getCloseMatches` finds "did you mean" suggestions the
- * way Python's `difflib` does.
+ * way Python's `difflib` does. `addNote` and `errorTypeName` help report a thrown error.
  */
 
 /**
@@ -371,6 +371,32 @@ export function getCloseMatches(
   // What `heapq.nlargest(n, result)` returns; equal pairs are indistinguishable.
   result.sort(([scoreX, x], [scoreY, y]) => scoreY - scoreX || compareCodeUnits(y, x));
   return result.slice(0, n).map(([, x]) => x);
+}
+
+/**
+ * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
+ * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
+ * `text`, loses the note, as Python swallows a failing `add_note`.
+ */
+export function addNote(error: unknown, text: () => string): void {
+  try {
+    if (typeof error !== "object" || error === null) return;
+    const target = error as { notes?: unknown };
+    const note = text();
+    if (!Object.hasOwn(target, "notes")) target.notes = [];
+    if (Array.isArray(target.notes)) target.notes.push(note);
+  } catch {}
+}
+
+/**
+ * Python's `type(value).__name__` for a thrown value: the constructor's name, else a string
+ * `name`, else `Error`.
+ */
+export function errorTypeName(value: unknown): string {
+  const constructorName = (value as { constructor?: { name?: unknown } } | null | undefined)?.constructor?.name;
+  if (typeof constructorName === "string" && constructorName) return constructorName;
+  const name = (value as { name?: unknown } | null | undefined)?.name;
+  return typeof name === "string" ? name : "Error";
 }
 
 const CODES = [

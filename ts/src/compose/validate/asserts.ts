@@ -942,13 +942,19 @@ export function validateNodeAsserts(
       // Node asserts are node-local: an inline call (a whole-value `call(...)` directive or the
       // retired `${flow(args)}` span) belongs in a flow-level assert, not here.
       let directiveCalls: readonly unknown[];
-      let spanCallees: readonly string[];
       try {
         directiveCalls = desugarCallDirectives(a, () => "__a")[1];
+      } catch (error) {
+        if (!(error instanceof ExpressionError)) throw error;
+        directiveCalls = ["(malformed call)"];
+      }
+      // A span that doesn't parse is no call; `parseCondition` below reports its real error.
+      let spanCallees: readonly string[];
+      try {
         spanCallees = flowCallCalleesInSpans(a, typeNames);
       } catch (error) {
         if (!(error instanceof ExpressionError)) throw error;
-        [directiveCalls, spanCallees] = [["(malformed call)"], []];
+        spanCallees = [];
       }
       if (directiveCalls.length > 0 || spanCallees.length > 0) {
         errors.push([

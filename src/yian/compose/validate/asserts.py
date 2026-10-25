@@ -887,9 +887,13 @@ def validate_node_asserts(
             # or the retired `${flow(args)}` span) belongs in a flow-level assert, not here.
             try:
                 _, directive_calls = desugar_call_directives(a, lambda: "__a")
+            except ExpressionError:
+                directive_calls = ["(malformed call)"]
+            # A span that doesn't parse is no call; `parse_condition` below reports its real error.
+            try:
                 span_callees = flow_call_callees_in_spans(a, type_names)
             except ExpressionError:
-                directive_calls, span_callees = ["(malformed call)"], []
+                span_callees = []
             if directive_calls or span_callees:
                 errors.append(
                     (

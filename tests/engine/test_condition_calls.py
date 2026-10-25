@@ -220,6 +220,13 @@ def test_whole_span_unknown_call_in_an_assert_keeps_the_inline_call_message():
     assert "a flow call 'nosuchfn' inside ${...} is not supported" in str(flow)
 
 
+@pytest.mark.parametrize("cond", ["${n >}", "${n > (1}"], ids=["dangling-operator", "unclosed-paren"])
+def test_a_malformed_span_in_a_node_assert_reports_the_parse_error(cond):
+    message = str(_load_error(_NODE_ASSERT.replace("<cond>", cond)))
+    assert "not a valid boolean expression" in message
+    assert "inline call" not in message
+
+
 def test_a_condition_calling_a_builtin_correctly_loads_and_runs():
     flow = load_flow(_CASE.replace("<cond>", "upper(render_as_json(input.v, indent=0)) == '2'"))
     assert run_flow(flow, {"v": 2}).output == "hot"

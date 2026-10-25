@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,16 +15,18 @@ import { fileURLToPath } from "node:url";
 import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
-import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
+import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { cancel, inspectRun } from "../../src/run.ts";
 import {
   InboxClosedRecord,
+  InboxWithdrawnRecord,
   InterruptedRecord,
   NodeStepRecord,
   PoolCommitRecord,
   readRunLog,
   RunCancelledRecord,
   RunStoppedRecord,
+  RunWaitingRecord,
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -877,6 +879,135 @@ test(
     expect(stderr()).toContain("chat cancelled");
     expect(records(log).filter((record) => record instanceof InterruptedRecord).length).toBe(1);
     expect(records(log).at(-1)).toBeInstanceOf(RunCancelledRecord);
+  },
+  TIMEOUT,
+);
+
+/**
+ * The virtual scheduler with every sleep held until `open` is called, so a prompt the run's
+ * `wakeAt` would take down stays up meanwhile.
+ */
+function heldScheduler(): { scheduler: Scheduler; open: () => void } {
+  const base = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+  const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+  const scheduler: Scheduler = {
+    now: () => base.now(),
+    async sleep(ms, signal) {
+      await new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) return reject(signal.reason);
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        void gate.then(resolve);
+      });
+      return base.sleep(ms, signal);
+    },
+  };
+  return { scheduler, open };
+}
+
+/**
+ * A chat turn that takes the lines, sleeps 60 s, then replies with an agent reading the inbox as
+ * its steer inbox; the turn ends after the reply.
+ */
+const NAP_AGENT = `id: nap_agent
+name: nap_agent
+input:
+  messages: !Inbox(str)
+defs:
+  turn:
+    input:
+      said: !list(str)
+      closed: !bool
+      messages: !Inbox(str)
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.messages}
+          take: all
+${NAP_NODES}      reply:
+        kind: agent
+        input:
+          events: \${heard.output.events}
+          napped: \${nap.output}
+        steer_inbox: \${input.messages}
+        output: Optional(str)
+        prompt: "Reply to: \${events}"
+    output:
+      said: \${input.said + heard.output.events + [reply.output :- ""]}
+      closed: \${heard.output.closed}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      said: []
+      closed: false
+      messages: \${input.messages}
+    while: not closed
+output: \${chat.output.said}
+`;
+
+test(
+  "Esc at the prompt during a mid-turn sleep records the Stop; the reply after the sleep stops",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true, env: XAI });
+    const { scheduler, open } = heldScheduler();
+    let calls = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    try {
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(flowFile(NAP_AGENT), io, {}, { scheduler });
+      const log = join(tmp, "run.jsonl");
+      // The turn sleeps: the run waits again, with the prompt up.
+      const waits = () => records(log).filter((record) => record instanceof RunWaitingRecord).length;
+      await until(() => existsSync(log) && waits() === 2);
+      stdin.write(ESCAPE);
+      await until(() => stderr().includes(STOPPING));
+      open();
+      await until(() => stderr().includes("(interrupted)"));
+      stdin.write("/exit" + ENTER);
+      const { code } = await chatting;
+      expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stderr()).not.toContain("chat cancelled");
+      expect(stderr().split(STOPPING).length - 1).toBe(1);
+      const stops = records(log).filter((record) => record instanceof InterruptedRecord) as InterruptedRecord[];
+      expect(stops.map((record) => [...record.nodes])).toEqual([[], ["chat#0/reply"]]);
+      // Stopped before its first model call; only the closing turn's reply calls the model.
+      expect(calls).toBe(1);
+      expect(stdout()).toBe("7\n");
+    } finally {
+      globalThis.fetch = original;
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "Esc at the prompt while the chat waits at the take appends nothing and keeps the draft",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    stdin.write("hal");
+    const chatting = runChat(flowFile(ECHO), io);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stdin.write(ESCAPE);
+    await pastEscapeTimeout();
+    stdin.write("f" + ENTER);
+    await until(() => stdout().includes("echo: half"));
+    stdin.write("/exit" + ENTER);
+    const { code, log } = await chatting;
+    expect(code).toBe(0);
+    expect(stdout()).toBe("echo: half\necho: \n");
+    expect(stderr()).not.toContain(STOPPING);
+    expect(stderr()).not.toContain("withdrew");
+    const kept = records(log).filter(
+      (record) => record instanceof InterruptedRecord || record instanceof InboxWithdrawnRecord,
+    );
+    expect(kept).toEqual([]);
   },
   TIMEOUT,
 );

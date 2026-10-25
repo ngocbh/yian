@@ -430,12 +430,20 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         );
       }
       if (stop.signal.aborted) prompt.abort();
-      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft });
-      draft = "aborted" in read ? read.draft : "";
+      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft, escape: true });
+      draft = "aborted" in read || "escape" in read ? read.draft : "";
       timer.abort();
       line = null;
       stop.signal.throwIfAborted();
       if (cancelling !== null) continue;
+      if ("escape" in read) {
+        // Offline: a turn that waits mid-way (a sleep, an approval) has the Stop recorded for its
+        // reply; at the take it is a no-op.
+        escape();
+        await interrupting;
+        interrupting = null;
+        continue;
+      }
       if ("aborted" in read) {
         // A deadline passed.
         spent = wake;

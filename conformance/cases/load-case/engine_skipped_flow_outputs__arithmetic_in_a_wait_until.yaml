@@ -63,8 +63,8 @@ python_flow: |
 expect:
   load:
     diagnostics:
-      - code: compose.load
-        message: "node 'w' input 'until': ${order.output.s + '-01-01'} does arithmetic on order.output.s, which is null when node 'order' is skipped; give it a default with :-, e.g. (order.output?.s :- <default>)"
+      - code: expr.nullable_field_read
+        message: "node 'w' input 'until': ${order.output.s} reads field 's' of order.output, which may be null (node 'order' may be skipped while 'w' runs); write (order.output?.s :- <default>)"
         frames:
           - label: flow.yaml
             range: [28, 14, 28, 42]

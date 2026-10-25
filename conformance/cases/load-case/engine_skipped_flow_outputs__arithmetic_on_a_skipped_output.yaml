@@ -28,8 +28,8 @@ flow: |
 expect:
   load:
     diagnostics:
-      - code: compose.load
-        message: "output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null when node 'order' is skipped; give it a default with :-, e.g. (order.output?.qty :- <default>)"
+      - code: expr.nullable_field_read
+        message: "output 'q': ${order.output.qty} reads field 'qty' of order.output, which may be null (node 'order' may be skipped); write (order.output?.qty :- <default>)"
         frames:
           - label: flow.yaml
             range: [24, 6, 24, 29]

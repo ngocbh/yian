@@ -642,6 +642,14 @@ function arithmetic(
   );
 }
 
+/**
+ * Return the nullable-read error for arithmetic on field `field` of `root`, which may be null
+ * because of `why`: the field-read check reports it before the skipped-arithmetic check.
+ */
+function fieldArithmetic(root: string, field: string, why: string): string {
+  return `\${${root}.${field}} reads field '${field}' of ${root}, which may be null (${why}); write (${root}?.${field} :- <default>)`;
+}
+
 /** Return the lines of `text` the error's innermost frame covers. */
 const errorLines = (error: LoadError, text: string) => error.diagnostic.frames.at(-1)!.range.coveredLines(text);
 
@@ -652,9 +660,8 @@ test("arithmetic on a skipped output is a load error", () => {
   // `${order.output.qty + 1}` in an output asks for a `:-` default, at the output line.
   const text = flow(QTY, "\n  q: ${order.output.qty + 1}");
   const error = loadError(() => assembleText(text));
-  expect(error.message).toBe(
-    `output 'q': ${arithmetic("${order.output.qty + 1}", "order.output.qty", "node 'order' is")}`,
-  );
+  expect(error.message).toBe(`output 'q': ${fieldArithmetic("order.output", "qty", "node 'order' may be skipped")}`);
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
   expect(errorLines(error, text)).toEqual([lineOf(text, "  q: ${order.output.qty + 1}")]);
 });
 
@@ -664,7 +671,7 @@ test("arithmetic in a node input that still runs is a load error", () => {
   const text = flow(QTY + use, "\n  u: ${use.output}");
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    `node 'use' input 'q': ${arithmetic("${order.output.qty * 2}", "order.output.qty", "node 'order' is")}`,
+    `node 'use' input 'q': ${fieldArithmetic("order.output", "qty", "node 'order' may be skipped while 'use' runs")}`,
   );
   expect(errorLines(error, text)).toEqual([lineOf(text, "      q: ${order.output.qty * 2}")]);
 });
@@ -672,9 +679,7 @@ test("arithmetic in a node input that still runs is a load error", () => {
 test("arithmetic in an embedded template is a load error", () => {
   // Arithmetic inside surrounding text is checked too.
   const error = loadError(() => assembleText(flow(QTY, "\n  t: 'total ${order.output.qty + 1}'")));
-  expect(error.message).toBe(
-    `output 't': ${arithmetic("total ${order.output.qty + 1}", "order.output.qty", "node 'order' is")}`,
-  );
+  expect(error.message).toBe(`output 't': ${fieldArithmetic("order.output", "qty", "node 'order' may be skipped")}`);
 });
 
 test("arithmetic in a case on: is a load error", () => {
@@ -687,7 +692,7 @@ test("arithmetic in a case on: is a load error", () => {
     code("other", '"?"');
   const error = loadError(() => assembleText(flow(nodes, "\n  v: ${three.output | other.output}")));
   expect(error.message).toBe(
-    `node 'route' on: ${arithmetic("${order.output.qty + 1}", "order.output.qty", "node 'order' is")}`,
+    `node 'route' on: ${fieldArithmetic("order.output", "qty", "node 'order' may be skipped while 'route' runs")}`,
   );
 });
 
@@ -696,7 +701,7 @@ test.each(["-order.output.qty", "order.output.qty ** 2"])(
   (expr) => {
     // Unary minus and `**` are arithmetic too.
     const error = loadError(() => assembleText(flow(QTY, `\n  q: \${${expr}}`)));
-    expect(error.message).toBe(`output 'q': ${arithmetic(`\${${expr}}`, "order.output.qty", "node 'order' is")}`);
+    expect(error.message).toBe(`output 'q': ${fieldArithmetic("order.output", "qty", "node 'order' may be skipped")}`);
   },
 );
 
@@ -737,21 +742,21 @@ test("arithmetic in a node routed by a case on the value loads", async () => {
 test("arithmetic on a node that depends on a case loads", async () => {
   // A node with `depends_on` a CASE runs on every branch, so its output is never null.
   const note = code("note", "1", "int", "    depends_on: [gate]\n");
-  const text = flow(QTY + note, "\n  q: ${order.output.qty :- (note.output + 1)}");
+  const text = flow(QTY + note, "\n  q: ${order.output?.qty :- (note.output + 1)}");
   expect(await run(text, { approve: true })).toEqual({ q: 2n });
   expect(await run(text, { approve: false })).toEqual({ q: 2n });
 });
 
 test("arithmetic on a defaulted value loads", async () => {
-  // `(order.output.qty :- 0) + 1` gives an explicit default.
-  const text = flow(QTY, "\n  q: ${(order.output.qty :- 0) + 1}");
+  // `(order.output?.qty :- 0) + 1` gives an explicit default.
+  const text = flow(QTY, "\n  q: ${(order.output?.qty :- 0) + 1}");
   expect(await run(text, { approve: false })).toEqual({ q: 1n });
   expect(await run(text, { approve: true })).toEqual({ q: 3n });
 });
 
 test("a comparison on a skipped output loads", () => {
-  // A comparison is not arithmetic.
-  assembleText(flow(QTY, "\n  c: ${order.output.qty > 1}"));
+  // A comparison is not arithmetic; the field of a node that may be skipped is read through `?.`.
+  assembleText(flow(QTY, "\n  c: ${order.output?.qty > 1}"));
 });
 
 test("arithmetic on an exhaustive join loads", async () => {
@@ -789,16 +794,20 @@ test("the rewritten output fingerprints as the explicit null default", () => {
 });
 
 test("the hint names a placeholder default", () => {
-  // The hint asks for a default without guessing its value.
-  expect(loadError(() => assembleText(flow(QTY, "\n  q: ${order.output.qty + 1}"))).message).toEndWith(
-    "give it a default with :-, e.g. (order.output?.qty :- <default>)",
+  // The hint asks for a default without guessing its value, and names the operand as written.
+  expect(loadError(() => assembleText(flow(QTY, "\n  q: ${order.output?.qty + 1}"))).message).toBe(
+    `output 'q': ${arithmetic("${order.output?.qty + 1}", "order.output?.qty", "node 'order' is")}`,
   );
 });
 
 test("the hint replaces a null default", () => {
   // An operand already defaulted to null gets the placeholder in place of `null`.
-  expect(loadError(() => assembleText(flow(QTY, "\n  q: ${(order.output.qty :- null) + 1}"))).message).toEndWith(
+  expect(loadError(() => assembleText(flow(QTY, "\n  q: ${(order.output?.qty :- null) + 1}"))).message).toEndWith(
     "e.g. (order.output?.qty :- <default>)",
+  );
+  // A plain read is reported by the field-read check, with the same fix.
+  expect(loadError(() => assembleText(flow(QTY, "\n  q: ${(order.output.qty :- null) + 1}"))).message).toEndWith(
+    "write (order.output?.qty :- <default>)",
   );
 });
 
@@ -821,21 +830,24 @@ test("arithmetic in a searched when: under a default is a load error", () => {
   const when = "((a.output.n + 1) :- 0) > 1";
   const text = searchedGate(when);
   const error = loadError(() => assembleText(text));
-  expect(error.message).toBe(`node 'gate2' cases[0].when: ${arithmetic(when, "a.output.n", "node 'a' is")}`);
+  // `:-` doesn't catch the field read of a skipped `a`, so the field-read check reports it.
+  expect(error.message).toBe(
+    `node 'gate2' cases[0].when: ${fieldArithmetic("a.output", "n", "node 'a' may be skipped while 'gate2' runs")}`,
+  );
   expect(errorLines(error, text)).toEqual([lineOf(text, `      - when: "${when}"`)]);
 });
 
 test("arithmetic on a null default in a searched when: is a load error", () => {
-  // `(a.output.n :- null) + 1` in a searched `when:` asks for a real default.
-  const when = "(a.output.n :- null) + 1 > 1";
+  // `(a.output?.n :- null) + 1` in a searched `when:` asks for a real default.
+  const when = "(a.output?.n :- null) + 1 > 1";
   expect(loadError(() => assembleText(searchedGate(when))).message).toBe(
-    `node 'gate2' cases[0].when: ${arithmetic(when, "(a.output.n :- null)", "node 'a' is", "(a.output?.n :- <default>)")}`,
+    `node 'gate2' cases[0].when: ${arithmetic(when, "(a.output?.n :- null)", "node 'a' is", "(a.output?.n :- <default>)")}`,
   );
 });
 
 test("arithmetic on a defaulted value in a searched when: loads", async () => {
-  // `(a.output.n :- 0) + 1` in a searched `when:` gives the default.
-  const text = searchedGate("(a.output.n :- 0) + 1 > 1");
+  // `(a.output?.n :- 0) + 1` in a searched `when:` gives the default.
+  const text = searchedGate("(a.output?.n :- 0) + 1 > 1");
   expect(await run(text, { approve: true })).toEqual({ v: "hot" });
   expect(await run(text, { approve: false })).toEqual({ v: "cold" });
 });
@@ -917,7 +929,7 @@ test("arithmetic in a map over: names map over", () => {
   const text = flow(nodes, "\n  r: ${rejected.output}", { defs: CHILD });
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    `node 'm' map over: ${arithmetic("${order.output.items + [3]}", "order.output.items", "node 'order' is")}`,
+    `node 'm' map over: ${fieldArithmetic("order.output", "items", "node 'order' may be skipped while 'm' runs")}`,
   );
   expect(errorLines(error, text)).toEqual([lineOf(text, over)]);
 });
@@ -928,7 +940,7 @@ test("arithmetic in a sleep until: names the until input", () => {
   const text = flow(`${ITEMS}  w:\n    kind: tool\n    tool_id: sleep\n    input:\n${until}\n`, "\n  r: ${rejected.output}");
   const error = loadError(() => assembleText(text));
   expect(error.message).toBe(
-    `node 'w' input 'until': ${arithmetic("${order.output.s + '-01-01'}", "order.output.s", "node 'order' is")}`,
+    `node 'w' input 'until': ${fieldArithmetic("order.output", "s", "node 'order' may be skipped while 'w' runs")}`,
   );
   expect(errorLines(error, text)).toEqual([lineOf(text, until)]);
 });
@@ -1103,4 +1115,12 @@ function loopOver(output: string): string {
 test("a LOOP body's output is its body's flow output", () => {
   expect(loadError(() => assembleText(loopOver("'${order.output.qty} left'"))).message).toContain("may be null");
   expect(() => assembleText(loopOver("'${order.output?.qty} left'"))).not.toThrow();
+});
+
+test("a null guard lifts the skipped-arithmetic error", () => {
+  expect(() =>
+    assembleText(flow(ORDER, "\n  q: ${order.output != null and order.output.qty + 1 > 1}")),
+  ).not.toThrow();
+  const int = gate("n", "rejected") + code("n", "2", "int") + code("rejected", '"no"');
+  expect(() => assembleText(flow(int, "\n  q: ${n.output != null and n.output + 1 > 1}"))).not.toThrow();
 });

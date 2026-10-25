@@ -36,6 +36,7 @@ import {
   exprRefs,
   optionalAfterRoots,
   parseCondition,
+  referencePath,
   referenceText,
   scanTemplate,
 } from "../../expr/index.ts";
@@ -51,6 +52,15 @@ import {
 } from "../../nodes/contracts.ts";
 import { poolRootLength } from "../../typesys/pool.ts";
 import { bindingProducers, refProducer } from "../edges/producers.ts";
+import {
+  conjuncts,
+  type Guard,
+  guardedReads,
+  Holds,
+  IsinstanceCheck,
+  NOTHING,
+  NotNullCheck,
+} from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { directReferenceParts, directReferencePath } from "../../compile/output_contracts.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
@@ -532,9 +542,13 @@ function skippedOperandIn(
 ): SkippedOperand | null {
   // A lone token has no operator.
   if (!(expression instanceof Tree)) return null;
+  // Matched by node, not by position: an operand that is no plain read has no guard here.
+  const reads = guardedReads(expression);
   for (const tree of iterSubtreesTopdown(expression)) {
     if (!ARITHMETIC.has(tree.data)) continue;
     for (const operand of tree.children) {
+      const guard = reads.find((read) => read.node === operand)?.guard ?? NOTHING;
+      if (operand instanceof Tree && provesNotNull(guard, referencePath(operand))) continue;
       for (const group of nullGroups(operand, known)) {
         if (group.size > 0 && model.maySkipWhileRunning(group, consumer)) {
           const producers = new Set(exprRefs(operand).map(refProducer));
@@ -544,6 +558,27 @@ function skippedOperandIn(
     }
   }
   return null;
+}
+
+/**
+ * Return whether `guard` proves the root of the read `path` not null: a `!= null` check on it, or
+ * an `isinstance` of it to a type that excludes null, holds whenever the read runs.
+ */
+function provesNotNull(guard: Guard, path: string): boolean {
+  const names = path.split(".");
+  const root = names.slice(0, poolRootLength(names)).join(".");
+  return conjuncts(guard).some(
+    (part) =>
+      part instanceof Holds &&
+      part.value &&
+      part.check.base === root &&
+      (part.check instanceof NotNullCheck || (part.check instanceof IsinstanceCheck && !admitsNull(part.check.typeName))),
+  );
+}
+
+/** Whether an `isinstance` type name admits null. */
+function admitsNull(typeName: string): boolean {
+  return typeName === "None" || typeName.startsWith("Optional(");
 }
 
 /**

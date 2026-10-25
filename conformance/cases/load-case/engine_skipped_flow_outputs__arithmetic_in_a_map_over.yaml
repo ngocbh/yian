@@ -48,8 +48,8 @@ flow: |
 expect:
   load:
     diagnostics:
-      - code: compose.load
-        message: "node 'm' map over: ${order.output.items + [3]} does arithmetic on order.output.items, which is null when node 'order' is skipped; give it a default with :-, e.g. (order.output?.items :- <default>)"
+      - code: expr.nullable_field_read
+        message: "node 'm' map over: ${order.output.items} reads field 'items' of order.output, which may be null (node 'order' may be skipped while 'm' runs); write (order.output?.items :- <default>)"
         frames:
           - label: flow.yaml
             range: [39, 11, 39, 38]

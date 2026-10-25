@@ -185,15 +185,20 @@ interface Read {
   readonly arithmetic: boolean;
 }
 
-/** Return the refcalls that are direct operands of arithmetic; parentheses make no node. */
+/**
+ * Return the refcalls that are operands of arithmetic: direct ones (parentheses make no node), and
+ * the parts of a `:-` or `|` operand, whose fix is the same default.
+ */
 function arithmeticOperands(tree: ExprNode): Set<ExprNode> {
   const operands = new Set<ExprNode>();
   if (!(tree instanceof Tree)) return operands;
+  const add = (node: ExprNode): void => {
+    if (!(node instanceof Tree)) return;
+    if (node.data === "refcall") operands.add(node);
+    else if (node.data === "default_expr" || node.data === "coalesce") node.children.forEach(add);
+  };
   for (const node of iterSubtreesTopdown(tree)) {
-    if (!ARITHMETIC.has(node.data)) continue;
-    for (const child of node.children) {
-      if (child instanceof Tree && child.data === "refcall") operands.add(child);
-    }
+    if (ARITHMETIC.has(node.data)) node.children.forEach(add);
   }
   return operands;
 }

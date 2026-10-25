@@ -30,13 +30,13 @@
 
 import { Edge } from "../../compile/model.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import type { ExprNode, Tree } from "../../expr/grammar.ts";
 import { ExpressionError, parseCondition } from "../../expr/index.ts";
 import { ELSE_HANDLE } from "../../nodes/base.ts";
 import { isExactly, type OutputContract, PartialRecordContract, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { jsTypeName, type Type, typeEquals, unionTagFields, ValueKind } from "../../typesys/values.ts";
-import { type Guard, guardChecks, proves } from "../helpers/condition_guards.ts";
+import { type Guard, guardChecks, guardedReads, proves } from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import {
   type BaseTypeOf,
@@ -442,6 +442,58 @@ function baseTypeOf(
     const contract = baseContract(base, producers, inputs) ?? baseContract(base, ...view);
     return isExactly(contract, ValueContract) ? contract.type : null;
   };
+}
+
+/** One read occurrence of a searched `when:`, with what it is name-checked against; frozen. */
+export interface WhenRead {
+  /** The read's refcall. */
+  readonly node: Tree;
+  /** The contract maps the read sees: the CASE's routing view, narrowed by the checks before it. */
+  readonly views: Views;
+  /** The facts behind `views`, by base path. */
+  readonly facts: Env;
+  /** The bases of `facts` that only the routing narrows, not the checks before the read. */
+  readonly routed: ReadonlySet<string>;
+}
+
+/**
+ * Return each read occurrence of a searched CASE's `when:` with the contracts it is name-checked
+ * against; a read no value reaches (it follows a check `checkImpossibleWhens` reports) is left out.
+ *
+ * `and`, `or` and `not` short-circuit, so the checks before a read narrow what it sees, met with
+ * the CASE node's own routing facts.
+ *
+ * @param narrowing The flow's narrowing results.
+ * @param caseId The searched CASE.
+ * @param tree Its `when:`, parsed.
+ * @param registry The flow's typedefs.
+ * @returns The reads, in source order.
+ */
+export function searchedWhenReads(
+  narrowing: Narrowing,
+  caseId: string,
+  tree: ExprNode,
+  registry: TypeRegistry,
+): WhenRead[] {
+  const { producers, inputs } = narrowing;
+  const env = narrowing.environment(caseId);
+  const view = narrowing.forNode(caseId);
+  const typeOf = baseTypeOf(producers, inputs, view);
+  const checked = checkedRefs(tree, typeOf, registry, { routing: env });
+  const reads: WhenRead[] = [];
+  guardedReads(tree).forEach((read, index) => {
+    const guard = checked[index]![1];
+    if (guard === null) return;
+    const guarded = guardChecks(guard).length > 0 ? guardEnv(guard, typeOf, registry) : new Map();
+    if (guarded.size === 0) {
+      reads.push({ node: read.node, views: view, facts: new Map(), routed: new Set() });
+      return;
+    }
+    const facts = intersectEnvs([env, guarded]);
+    const routed = new Set([...facts.keys()].filter((base) => !guarded.has(base)));
+    reads.push({ node: read.node, views: buildViews(facts, producers, inputs), facts, routed });
+  });
+  return reads;
 }
 
 /** A searched `when:` parsed, or `null` when it is no string or does not parse. */

@@ -42,8 +42,8 @@ import { readType } from "../../src/compose/helpers/types.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { narrows, rootBaseType } from "../../src/compose/validate/asserts.ts";
-import { computeNarrowing } from "../../src/compose/validate/narrowing.ts";
-import { parseCondition } from "../../src/expr/index.ts";
+import { computeNarrowing, searchedWhenReads } from "../../src/compose/validate/narrowing.ts";
+import { parseCondition, referenceText } from "../../src/expr/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
@@ -314,19 +314,15 @@ test("a null check alone does not prove a type", () => {
 });
 
 // --------------------------------------------------------------------------- //
-// Param views
+// Searched when: reads
 // --------------------------------------------------------------------------- //
 
 const PARAM_REGISTRY = readTypedefs({ Rec: { a: "str", b: "str" } });
 
-test("a case param read after a null check sees the value as not null", () => {
+test("a searched when: read after a null check sees the value as not null", () => {
   const rec = readType("Optional(Rec)", PARAM_REGISTRY);
-  const gate = new CaseDescriptor({
-    id: "gate",
-    on: null,
-    cases: [{ when: "x.output.a == 'p' and x.output != null and x.output.b == 'q'", then: "use" }],
-    else_: null,
-  });
+  const when = "x.output.a == 'p' and x.output != null and x.output.b == 'q'";
+  const gate = new CaseDescriptor({ id: "gate", on: null, cases: [{ when, then: "use" }], else_: null });
   const descriptors = new Map<string, NodeDescriptor>([
     ["x", new NodeDescriptor({ id: "x" })],
     ["gate", gate],
@@ -336,14 +332,16 @@ test("a case param read after a null check sees the value as not null", () => {
   const narrowing = computeNarrowing(descriptors, edges, new Map([["x", new ValueContract(rec)]]), new Map(), {
     registry: PARAM_REGISTRY,
   });
-  // The params follow the reads: `x.output.a`, `x.output`, `x.output.b`.
-  const [before, after] = ["__r0", "__r2"];
-  const seen = (param: string) => (narrowing.forParam("gate", param)[0].get("x") as ValueContract).type;
-  expect(seen(after).nullable).toBe(false);
-  expect(typeEquals(seen(before), rec)).toBe(true);
+  // The reads, in order: `x.output.a`, `x.output`, `x.output.b`.
+  const reads = searchedWhenReads(narrowing, "gate", parseCondition(when), PARAM_REGISTRY);
+  expect(reads.map((read) => referenceText(read.node))).toEqual(["x.output.a", "x.output", "x.output.b"]);
+  const [before, , after] = reads;
+  const seen = (read: (typeof reads)[number]) => (read.views[0].get("x") as ValueContract).type;
+  expect(seen(after!).nullable).toBe(false);
+  expect(typeEquals(seen(before!), rec)).toBe(true);
   const notNull = new Exact(readType("Rec", PARAM_REGISTRY));
-  expect(narrowing.paramEnv("gate", after)).toStrictEqual(new Map([["x.output", notNull]]));
-  expect(narrowing.paramEnv("gate", before)).toStrictEqual(new Map());
+  expect(after!.facts).toStrictEqual(new Map([["x.output", notNull]]));
+  expect(before!.facts).toStrictEqual(new Map());
 });
 
 // --------------------------------------------------------------------------- //

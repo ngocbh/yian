@@ -44,9 +44,10 @@ import {
   ExpressionError,
   exprRefsOf,
   optionalInsideRoot,
+  parseCondition,
+  promptRefs,
   referencePath,
   referenceText,
-  promptRefs,
   scanTemplate,
 } from "../../expr/index.ts";
 import { Span } from "../../expr/template.ts";
@@ -94,7 +95,8 @@ import {
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
-import type { Narrowing } from "./narrowing.ts";
+import { type Narrowing, searchedWhenReads } from "./narrowing.ts";
+import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /**
@@ -284,9 +286,11 @@ export function validateReferences(
     registry?: TypeRegistry | null;
     resolveOrigin?: ResolveOrigin | null;
     diagnostics?: LoadDiagnostics | null;
+    searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
   } = {},
 ): void {
   const { outputsRange = null, narrowing = null, registry = null, resolveOrigin = null } = options;
+  const searchedWhens = options.searchedWhens ?? new Map<string, readonly SearchedWhen[]>();
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
   // An AGENT's new messages are read under their own pool name, `<id>.new_messages`.
@@ -713,6 +717,36 @@ export function validateReferences(
     // synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range is only the
     // fallback (a spanless flow has no ranges at all). `wiringRefLabel` gives a synthetic param
     // the author-facing name it was hoisted from instead of leaking `__rN`.
+    const whens = node instanceof CaseNode ? searchedWhens.get(nodeId) : undefined;
+    if (whens !== undefined && narrowing !== null) {
+      // A searched CASE's `__rN` inputs bind only the roots its `when:`s read; each read is
+      // checked as written, at its own `when:`, under the checks before it.
+      for (const [index, when, , whenRange] of whens) {
+        if (typeof when !== "string") continue;
+        let tree: ExprNode;
+        try {
+          tree = parseCondition(when);
+        } catch (error) {
+          // The CASE build reports a malformed `when:`.
+          if (error instanceof ExpressionError) continue;
+          throw error;
+        }
+        const where = `${result.siteName(nodeId, `cases[${index}].when`)} from`;
+        for (const read of searchedWhenReads(narrowing, nodeId, tree, registry ?? new Map())) {
+          scan(`\${${referenceText(read.node)}}`, where, whenRange ?? inputRng, {
+            siteProducers: read.views[0],
+            siteInputs: read.views[1],
+            partialUnionFields,
+            readFacts: read.facts,
+            routedBases: read.routed,
+            inboxTail: inboxSiteTail(nodeId, node, ""),
+            // A CASE's routing edges follow only `${x.output}` reads.
+            messages: false,
+          });
+        }
+      }
+      continue;
+    }
     const caseReads =
       node instanceof CaseNode
         ? new Set(

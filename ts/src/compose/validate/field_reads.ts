@@ -58,7 +58,7 @@ import {
   unresolvedType,
 } from "../helpers/narrowing_facts.ts";
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
-import { bindingSource } from "../../nodes/contracts.ts";
+import { Binding, bindingSource } from "../../nodes/contracts.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
@@ -67,7 +67,7 @@ import { namedTypeLabel } from "../helpers/tags.ts";
 import { bindingProducers } from "../edges/producers.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { ARITHMETIC, type SkipModel, stringSites } from "./skips.ts";
+import { ARITHMETIC, type SearchedWhen, type SkipModel, stringSites } from "./skips.ts";
 import { LocalInput, locatedError, type ResolveOrigin } from "./typed_bindings.ts";
 
 /** The code of a nullable field-read load error. */
@@ -814,11 +814,14 @@ export interface FieldReadLevel {
   readonly localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>>;
   /** The same, not narrowed: whether a local is untyped (default none). */
   readonly baseLocals?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>>;
+  /** Each searched CASE's authored `when:`s (default none). */
+  readonly searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]>;
 }
 
 /**
  * Check every nullable field read of one flow level at load (design 2.5, 2.6): node bindings
- * (CASE `on:` and reserved sources included), then flow outputs, then node-local sites (AGENT
+ * (CASE `on:` and reserved sources included), then each searched CASE's authored `when:`s (its
+ * wiring binds only the roots they read), then flow outputs, then node-local sites (AGENT
  * prompts and `render:`, LOOP predicates). The first error throws with code
  * `expr.nullable_field_read`.
  *
@@ -862,6 +865,30 @@ export function checkFieldReads(
           code: NULLABLE_FIELD_READ,
         });
       }
+    }
+  }
+  for (const [caseId, whens] of level.searchedWhens ?? []) {
+    const roots = poolRoots(level, caseId, flowWiring.get(caseId) ?? new Map());
+    for (const [index, when, origin, range] of whens) {
+      if (typeof when !== "string") continue;
+      let tree: ExprNode;
+      try {
+        tree = parseCondition(when);
+      } catch (error) {
+        // The CASE build reports a malformed `when:`.
+        if (error instanceof ExpressionError) continue;
+        throw error;
+      }
+      const [message] = nullableReadErrors(tree, roots, registry);
+      if (message === undefined) continue;
+      throw locatedError(
+        `node ${reprText(caseId)} cases[${index}].when: ${message}`,
+        new Binding(when, { origin }),
+        range,
+        resolveOrigin,
+        diagnostics,
+        { code: NULLABLE_FIELD_READ },
+      );
     }
   }
   const { skips, valueMode = false, outputsRange = null } = level;

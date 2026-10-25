@@ -52,6 +52,7 @@ import {
   Parameter,
   validateOptionalOrigin,
 } from "../../nodes/contracts.ts";
+import { poolRootLength } from "../../typesys/pool.ts";
 import { pythonTypeName } from "../../typesys/types.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
 import { type Guard, guardedRefs } from "../helpers/condition_guards.ts";
@@ -603,16 +604,24 @@ interface SearchedParams {
 
 /**
  * Return the binding source of one `when:` reference occurrence, also the key its local is
- * deduped by.
+ * deduped by: the read's root only (`x.output`, `input.k`), so the steps after it stay in the
+ * `when:`, where `and`/`or` guards keep them lazy.
  *
- * A node-output read inside an escape is `${read :- null}`: it reads the same value (a miss is
+ * A node-output read inside an escape is `${root :- null}`: it reads the same value (a miss is
  * already null) but takes an optional edge, so the escape decides as it does in a binding. Any
- * other read (outside an escape, or of an input or `system.*`, which has no producer edge) stays
- * the plain `${read}`. The read keeps its text as written, `?.` included.
+ * other read (outside an escape, or of an input or `system.*`, which has no producer edge) is the
+ * plain `${root}`.
  */
 function readSource(read: ConditionRead): string {
-  if (read.escape === null || outputsProducer(read.path) === null) return `\${${read.text}}`;
-  return `\${${read.text} :- null}`;
+  const root = readRoot(read);
+  if (read.escape === null || outputsProducer(read.path) === null) return `\${${root}}`;
+  return `\${${root} :- null}`;
+}
+
+/** Return a `when:` read's root, its first `poolRootLength` names. */
+function readRoot(read: ConditionRead): string {
+  const names = read.path.split(".");
+  return names.slice(0, poolRootLength(names)).join(".");
 }
 
 /**
@@ -639,8 +648,8 @@ function joinSources(reads: readonly ConditionRead[]): string[] {
 /**
  * Allocate one `__rN` local per distinct read across all searched `when:`s.
  *
- * A read is a reference (`${path}`), a node-output reference inside a `:-` / `:?` / `|`
- * (`${path :- null}`, an optional edge), or, once per co-skipping escape that reads a node output,
+ * A read is a reference's root (`${root}`), a node-output root read inside a `:-` / `:?` / `|`
+ * (`${root :- null}`, an optional edge), or, once per co-skipping escape that reads a node output,
  * a join input over its producers, which the `when:` doesn't read but whose required edges skip the
  * gate as that escape's binding would skip; its source is also its dedupe key. Per `when:`, its
  * reference reads are allocated before its join inputs. Locals and guards come from the same parse,
@@ -796,7 +805,7 @@ function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lo
 }
 
 /**
- * Rewrite each reference occurrence in `when` to its bare local `__rN`.
+ * Rewrite the root of each reference occurrence in `when` to its local `__rN`.
  *
  * Works in either condition spelling (bare, or one whole `${...}`) and keeps the surrounding
  * expression, so the `when:` still evaluates lazily case by case. `rewriteConditionReads` walks
@@ -808,6 +817,7 @@ function desugarSearched(desc: CaseDescriptor, diagnostics: LoadDiagnostics): Lo
  * @returns The `when:` over the case's locals.
  */
 function rewriteWhen(when: string, locals: readonly string[]): string {
-  // Each local binds its whole read, so the whole read is replaced.
-  return rewriteConditionReads(when, (i, read) => ({ text: locals[i]!, used: read.path.split(".").length }));
+  // Each local binds its read's root, so only the root is replaced; the steps after it stay as
+  // written, `?.` included.
+  return rewriteConditionReads(when, (i, read) => ({ text: locals[i]!, used: poolRootLength(read.path.split(".")) }));
 }

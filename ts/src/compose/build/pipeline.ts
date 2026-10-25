@@ -2193,6 +2193,22 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
   );
 
+  // Each searched CASE's authored `when:`s: their reads are checked as written, since the wiring
+  // binds only the roots they read.
+  const searchedWhens = new Map<string, SearchedWhen[]>();
+  for (const [nodeId, desc] of descriptors) {
+    if (!(desc instanceof CaseDescriptor) || desc.on !== null) continue;
+    searchedWhens.set(
+      nodeId,
+      desc.cases.map((case_, index) => [
+        index,
+        case_["when"] ?? null,
+        desc.whenOrigins[index] ?? null,
+        desc.whenRanges[index] ?? null,
+      ]),
+    );
+  }
+
   // Reference + assert validation over the built flow. Errors locate at the node's line (a bad
   // node-input ref) or the `output:` section line (a dangling flow-output ref).
   validateReferences(buildResults, flowInputs, producers, outputsSection, flowWiring, {
@@ -2203,6 +2219,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     registry,
     resolveOrigin,
     diagnostics,
+    searchedWhens,
   });
   // Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post + stamp
   // onto each built leaf/call node. Shared by defs (a def's internal nodes too).
@@ -2270,6 +2287,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       outputsRange,
       localContracts,
       baseLocals,
+      searchedWhens,
     },
     { resolveOrigin, diagnostics },
   );
@@ -2277,21 +2295,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // explicit null default makes its END edge optional, so the run returns null.
   outputs = nullSkippedOutputs(outputs, skips);
   const valueMode = outputsSection !== null && !isRecord(outputsSection);
-  // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default. A
-  // searched `when:` is checked as authored: its wiring holds only its `__rN` reads.
-  const searchedWhens = new Map<string, SearchedWhen[]>();
-  for (const [nodeId, desc] of descriptors) {
-    if (!(desc instanceof CaseDescriptor) || desc.on !== null) continue;
-    searchedWhens.set(
-      nodeId,
-      desc.cases.map((case_, index) => [
-        index,
-        case_["when"] ?? null,
-        desc.whenOrigins[index] ?? null,
-        desc.whenRanges[index] ?? null,
-      ]),
-    );
-  }
+  // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
   checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
     valueMode,
     outputsRange,

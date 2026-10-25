@@ -1186,7 +1186,7 @@ describe("isinstance of a type the base already fits does not narrow", () => {
   });
 });
 
-test("a read guarded by different members reads their shared fields", () => {
+test("a read guarded by different members is checked against each one", () => {
   const guarded = (field: string) =>
     flow(
       searched(
@@ -1199,8 +1199,12 @@ test("a read guarded by different members reads their shared fields", () => {
     );
 
   load(guarded("qty"));
+  // Each read is checked at its own `when:`: the Sell-guarded one lacks `limit`.
   const message = assembleError(guarded("limit"));
-  expect(message).toContain("reads field 'limit', which only union members with action buy have");
+  expect(message).toContain(
+    "node 'route' cases[1].when from: reference ${d.output.limit} reads field 'limit', which Sell doesn't have; " +
+      "d.output is Sell here, by the checks before this read",
+  );
 });
 
 test("isinstance narrows an untagged union to the member", () => {

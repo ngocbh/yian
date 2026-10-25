@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import {
+import fs, {
   cpSync,
   existsSync,
   mkdirSync,
@@ -74,6 +74,24 @@ test("the same bytes twice keep one file", () => {
   const first = writeRunFile(dir, PNG, "image/png");
   expect(writeRunFile(dir, PNG, "image/png")).toEqual(first);
   expect(readdirSync(join(dir, "media"))).toEqual([first.name!]);
+});
+
+test("writeRunFile syncs the run folder even when media already exists", () => {
+  // A crash right after `media` was made, before the run folder was synced, leaves it unsynced.
+  const dir = folder();
+  mkdirSync(join(dir, "media"), { mode: 0o700 });
+  const opened: string[] = [];
+  const real = fs.openSync;
+  const spy = spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+    opened.push(String(target));
+    return (real as (...args: unknown[]) => number)(target, ...rest);
+  }) as typeof fs.openSync);
+  try {
+    writeRunFile(dir, PNG, "image/png");
+  } finally {
+    spy.mockRestore();
+  }
+  expect(opened).toContain(dir);
 });
 
 test("writeRunFile refuses a missing run folder and makes nothing", () => {

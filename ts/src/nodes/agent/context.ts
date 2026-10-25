@@ -9,7 +9,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import fs from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
@@ -698,34 +698,33 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
-  let made = true;
   try {
-    mkdirSync(media, { mode: 0o700 });
+    fs.mkdirSync(media, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    made = false;
   }
-  // A new `media` entry is durable only once the run folder holding it is synced.
-  if (made) syncFolder(resolve(dir));
+  // A new `media` entry is durable only once the run folder holding it is synced. Synced every
+  // time: a crash after an earlier call made `media` may have left the folder unsynced.
+  syncFolder(resolve(dir));
   const ext = MEDIA_EXTENSIONS.get(mime.split(";")[0]!.trim().toLowerCase()) ?? "bin";
   const name = `${createHash("sha256").update(bytes).digest("hex")}.${ext}`;
   const path = join(media, name);
   // Two writers of the same bytes are harmless: each renames its own complete copy into place.
-  if (!existsSync(path)) {
+  if (!fs.existsSync(path)) {
     // Written under a temporary name and renamed, so a crash never leaves a short file at `path`.
     const temporary = join(media, `.${name}.${randomBytes(8).toString("hex")}`);
     try {
-      const fd = openSync(temporary, "wx", 0o600);
+      const fd = fs.openSync(temporary, "wx", 0o600);
       try {
         let offset = 0;
-        while (offset < bytes.length) offset += writeSync(fd, bytes, offset);
-        fsyncSync(fd);
+        while (offset < bytes.length) offset += fs.writeSync(fd, bytes, offset);
+        fs.fsyncSync(fd);
       } finally {
-        closeSync(fd);
+        fs.closeSync(fd);
       }
-      renameSync(temporary, path);
+      fs.renameSync(temporary, path);
     } finally {
-      if (existsSync(temporary)) unlinkSync(temporary);
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
     }
   }
   syncFolder(media);
@@ -734,11 +733,11 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
 
 /** Flush folder `path`'s entries to disk. */
 function syncFolder(path: string): void {
-  const fd = openSync(path, "r");
+  const fd = fs.openSync(path, "r");
   try {
-    fsyncSync(fd);
+    fs.fsyncSync(fd);
   } finally {
-    closeSync(fd);
+    fs.closeSync(fd);
   }
 }
 

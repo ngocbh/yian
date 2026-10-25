@@ -28,7 +28,6 @@ _FACTORY_SUPPORTED_PROVIDERS = (
 def test_capabilities_deepseek_reasoner_rejects_tool_choice():
     caps = get_capabilities("deepseek-reasoner")
     assert caps.supports_tool_choice is False
-    assert caps.requires_reasoning_content_roundtrip is True
 
 
 def test_capabilities_minimax_requires_reasoning_split():

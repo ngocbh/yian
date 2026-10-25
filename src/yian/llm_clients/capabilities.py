@@ -34,12 +34,7 @@ class ModelCapabilities:
     """What an OpenAI-compatible model accepts at the API level."""
 
     supports_tool_choice: bool
-    supports_json_mode: bool
-    supports_json_schema: bool
     preferred_structured_method: StructuredMethod
-    # DeepSeek thinking-mode models 400 if reasoning_content from prior
-    # assistant turns is not echoed back on the next request.
-    requires_reasoning_content_roundtrip: bool = False
     # MiniMax M2.x reasoning models need ``reasoning_split=True`` so the
     # <think> block lands in ``reasoning_details`` instead of polluting
     # ``content``. The flag is rejected by non-reasoning MiniMax models
@@ -53,19 +48,15 @@ class ModelCapabilities:
 # 400 response in issue #678). Their official tool-calling examples
 # (api-docs.deepseek.com/guides/tool_calls) pass ``tools=[...]`` without
 # ``tool_choice`` — we mirror that pattern by setting supports_tool_choice
-# to False and letting the client suppress the kwarg.
+# to False and letting the client suppress the kwarg. Their echo of
+# ``reasoning_content`` on later turns lives in ``DeepSeekChatOpenAI``.
 _DEEPSEEK_THINKING = ModelCapabilities(
     supports_tool_choice=False,
-    supports_json_mode=True,
-    supports_json_schema=False,
     preferred_structured_method="function_calling",
-    requires_reasoning_content_roundtrip=True,
 )
 
 _DEEPSEEK_CHAT = ModelCapabilities(
     supports_tool_choice=True,
-    supports_json_mode=True,
-    supports_json_schema=False,
     preferred_structured_method="function_calling",
 )
 
@@ -79,16 +70,12 @@ _DEEPSEEK_CHAT = ModelCapabilities(
 # MiniMax-Text-01, not M2.x.
 _MINIMAX_THINKING = ModelCapabilities(
     supports_tool_choice=False,
-    supports_json_mode=False,
-    supports_json_schema=False,
     preferred_structured_method="function_calling",
     requires_reasoning_split=True,
 )
 
 _DEFAULT = ModelCapabilities(
     supports_tool_choice=True,
-    supports_json_mode=True,
-    supports_json_schema=True,
     preferred_structured_method="function_calling",
 )
 
@@ -97,8 +84,6 @@ _DEFAULT = ModelCapabilities(
 # source on a concrete (provider, model) pair — no real provider is marked no-native today.
 _NO_NATIVE_STRUCTURED = ModelCapabilities(
     supports_tool_choice=False,
-    supports_json_mode=False,
-    supports_json_schema=False,
     preferred_structured_method="none",
 )
 
@@ -106,24 +91,13 @@ _NO_NATIVE_STRUCTURED = ModelCapabilities(
 # Exact-ID matches take precedence over pattern matches.
 _BY_ID: dict[str, ModelCapabilities] = {
     "deepseek-chat": _DEEPSEEK_CHAT,
-    "deepseek-reasoner": _DEEPSEEK_THINKING,
-    "deepseek-v4-flash": _DEEPSEEK_THINKING,
-    "deepseek-v4-pro": _DEEPSEEK_THINKING,
-    # MiniMax — full official model lineup per
-    # platform.minimax.io/docs/api-reference/text-openai-api
-    "MiniMax-M2.7": _MINIMAX_THINKING,
-    "MiniMax-M2.7-highspeed": _MINIMAX_THINKING,
-    "MiniMax-M2.5": _MINIMAX_THINKING,
-    "MiniMax-M2.5-highspeed": _MINIMAX_THINKING,
-    "MiniMax-M2.1": _MINIMAX_THINKING,
-    "MiniMax-M2.1-highspeed": _MINIMAX_THINKING,
-    "MiniMax-M2": _MINIMAX_THINKING,
     # Test/escape-hatch sentinel — the only entry with no native structured output.
     "no-structured-sentinel": _NO_NATIVE_STRUCTURED,
 }
 
-# Forward-compat patterns. New ``deepseek-v5-*`` / ``deepseek-reasoner-*``
-# or ``MiniMax-M3*`` variants inherit the thinking-mode quirks automatically.
+# Thinking-mode families: ``deepseek-reasoner``, ``deepseek-v4-*`` and MiniMax's
+# M2.x lineup (platform.minimax.io/docs/api-reference/text-openai-api), and future
+# ``deepseek-v5-*`` or ``MiniMax-M3*`` variants without a table edit.
 _BY_PATTERN: list[tuple[re.Pattern[str], ModelCapabilities]] = [
     (re.compile(r"^deepseek-v\d"), _DEEPSEEK_THINKING),
     (re.compile(r"^deepseek-reasoner"), _DEEPSEEK_THINKING),

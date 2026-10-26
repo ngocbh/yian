@@ -724,14 +724,6 @@ function isConstructorCallee(callee: string): boolean {
   return !TEMPLATE_FNS.has(callee) && callee !== ISINSTANCE;
 }
 
-/**
- * Return the callees in a parsed span that are neither a `TEMPLATE_FNS` builtin nor `isinstance`
- * (a flow or a constructor), in `callCallees` order (not deduped).
- */
-function callCalleesAbsentFromBuiltins(tree: ExprNode): string[] {
-  return callCallees(tree).filter(isConstructorCallee);
-}
-
 /** Return every callee a call inside a parsed span names, in Lark's `iter_subtrees` order. */
 function callCallees(tree: ExprNode): string[] {
   if (!(tree instanceof Tree)) return [];
@@ -749,10 +741,11 @@ function callCallees(tree: ExprNode): string[] {
  * input binding), and a prompt has no type table.
  */
 function rejectUnknownPromptBuiltin(tree: ExprNode): void {
-  if (callCallees(tree).includes(ISINSTANCE)) {
+  const callees = callCallees(tree);
+  if (callees.includes(ISINSTANCE)) {
     throw new ExpressionError("isinstance is not a prompt function; compute it in an input binding");
   }
-  const bad = callCallees(tree).filter((callee) => isConstructorCallee(callee) || isNonPromptBuiltin(callee));
+  const bad = callees.filter((callee) => isConstructorCallee(callee) || isNonPromptBuiltin(callee));
   if (bad.length > 0) {
     const builtins = [...TEMPLATE_FNS.keys()]
       .filter((name) => !isNonPromptBuiltin(name))
@@ -781,8 +774,9 @@ function rejectUnknownPromptBuiltin(tree: ExprNode): void {
 export function flowCallCalleesInSpans(text: string, typeNames: ReadonlySet<string> = new Set()): string[] {
   const callees: string[] = [];
   for (const segment of scanTemplate(text)) {
-    if (segment instanceof Span) {
-      callees.push(...callCalleesAbsentFromBuiltins(segment.tree).filter((callee) => !typeNames.has(callee)));
+    if (!(segment instanceof Span)) continue;
+    for (const callee of callCallees(segment.tree)) {
+      if (isConstructorCallee(callee) && !typeNames.has(callee)) callees.push(callee);
     }
   }
   return callees;

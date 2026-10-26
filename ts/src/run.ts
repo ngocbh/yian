@@ -524,11 +524,6 @@ export class RunBusyError extends Error {
   }
 }
 
-/** The error for a run this process is moving. */
-function busyInProcess(locator: string): RunBusyError {
-  return new RunBusyError(locator);
-}
-
 /**
  * Open the log at `locator` under its lock.
  *
@@ -552,7 +547,7 @@ function openLog(locator: string, clock: () => number): JsonlRunLog {
 async function holdForAdvance(key: string, locator: string): Promise<RunHold> {
   for (;;) {
     const entry = RUNS.get(key);
-    if (entry?.kind === "live" && entry.engine.looping) throw busyInProcess(locator);
+    if (entry?.kind === "live" && entry.engine.looping) throw new RunBusyError(locator);
     if (entry !== undefined && entry.kind !== "idle") {
       // A holder setting the run up, or one whose loop has ended and is closing it.
       await entry.done;
@@ -797,11 +792,10 @@ class BackwardHandle {
             snapshots: replayed.memorySnapshots,
           });
         };
-        const onEvent = options.onEvent ?? undefined;
         return await driveBackward(state, authority, feedback, {
           openMemory,
           models: this.models,
-          onEvent,
+          onEvent: options.onEvent ?? undefined,
         });
       } catch (error) {
         primary = { error };
@@ -1116,7 +1110,7 @@ function selectionHost(callTime: Readonly<CallTimeLlm> | null): Record<string, u
 function checkHostHeaderNames(
   effective: Readonly<Record<string, Readonly<AgentConfig>>>,
   headers: Readonly<Record<string, unknown>> | null,
-  callTime: Readonly<CallTimeLlm> | null = null,
+  callTime: Readonly<CallTimeLlm> | null,
 ): void {
   const expected: string[] = [];
   for (const config of Object.values(effective)) {
@@ -3532,9 +3526,8 @@ function scanRunRecords(envelopes: Iterable<RecordEnvelope>): RecordScan {
   }
   const status = scanStatus(scan);
   const failure = status === "failed" ? (nodeFailure ?? runFailure ?? unreachable) : null;
-  const starts = new Map(scan.inFlight);
   return {
-    starts,
+    starts: new Map(scan.inFlight),
     crashed: new Map(scan.crashed),
     lastStop: scan.lastStop,
     status,

@@ -179,6 +179,7 @@ test("a node's locals take their params' or bindings' declared types", async () 
   expectDeclares(use.get("t"), "opt"); // !Rec
   expectDeclares(use.get("output"), "opt"); // the node's own output, for a post assert
   expect(localTypes(flow, flow.nodes.get("use")!)).toBe(use); // memoized per node
+  expect([...use.keys()].sort()).toEqual(["output", "r", "t"]); // iterating computes every entry
   expectDeclares(localTypes(flow, flow.nodes.get("pick")!).get("__r0"), "opt"); // a searched CASE's hoisted root
   const event = localTypes(flow, flow.nodes.get("chat")!).get("event");
   expectDeclares(event, "text"); // the steer inbox's element type

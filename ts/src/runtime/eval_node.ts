@@ -14,8 +14,10 @@
  * node's aborted signal), host capability faults, unexpected binder faults, and malformed compiled
  * or setup state reject `evalNode` instead of becoming an `EvaluationFailure`.
  *
- * Knows about:   compile/model (types), diagnostics, expr lineage, llm_clients (types), memory
- *                contracts, nodes, runtime contracts and log, skills, tools, typesys.
+ * Knows about:   compile/model (types), compile/declared_types (the declared types reads go
+ *                through), compile/output_contracts (a binding's lone reference, to name an
+ *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), memory
+ *                contracts, nodes, platform, runtime contracts, log and trace, skills, tools, typesys.
  * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
  */
 

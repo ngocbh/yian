@@ -107,19 +107,29 @@ function endType(flow: Flow, end: EndNode): Type | null {
   return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(names) });
 }
 
+// Each node's output type. An expansion adds nodes but never changes one, so a node's entry stays right.
+const OUTPUT_TYPES = new WeakMap<Node, Type | null>();
+
 /**
- * The declared type of node `node`'s output: its output contract's type; a START's the record of
- * its params; an END's the record or value of its inputs' types; else `null` (untyped).
+ * The declared type of node `node`'s output, memoized per node: its output contract's type; a
+ * START's the record of its params; an END's the record or value of its inputs' types; else
+ * `null` (untyped).
  */
 export function nodeOutputType(flow: Flow, node: Node): Type | null {
+  const memo = OUTPUT_TYPES.get(node);
+  if (memo !== undefined) return memo;
+  let typ: Type | null = null;
   if (node.outputContract !== null) {
     // Checks the contract's shape first: a malformed one throws its own TypeError.
     outputContractType(node.outputContract);
-    return contractType(node.outputContract);
+    typ = contractType(node.outputContract);
+  } else if (node.kind === NodeKind.START) {
+    typ = paramsRecord(node);
+  } else if (node.kind === NodeKind.END) {
+    typ = endType(flow, node as EndNode);
   }
-  if (node.kind === NodeKind.START) return paramsRecord(node);
-  if (node.kind === NodeKind.END) return endType(flow, node as EndNode);
-  return null;
+  OUTPUT_TYPES.set(node, typ);
+  return typ;
 }
 
 /**
@@ -157,51 +167,118 @@ function joinedAlternatives(types: readonly Type[]): Type | null {
   return types[0]!;
 }
 
+/**
+ * A map of `names` that computes each entry with `compute` when it is first read, so a node whose
+ * reads never need a declared type pays nothing for its locals'. Iterating fills every entry.
+ */
+class LazyTypes extends Map<string, Type | null> {
+  readonly #names: ReadonlySet<string>;
+  readonly #compute: (name: string) => Type | null;
+  #filled = false;
+
+  constructor(names: Iterable<string>, compute: (name: string) => Type | null) {
+    super();
+    this.#names = new Set(names);
+    this.#compute = compute;
+  }
+
+  override get(name: string): Type | null | undefined {
+    if (!super.has(name) && this.#names.has(name)) super.set(name, this.#compute(name));
+    return super.get(name);
+  }
+
+  override has(name: string): boolean {
+    return this.#names.has(name);
+  }
+
+  /** Compute every entry not read yet. */
+  #fill(): void {
+    if (this.#filled) return;
+    for (const name of this.#names) this.get(name);
+    this.#filled = true;
+  }
+
+  override get size(): number {
+    this.#fill();
+    return super.size;
+  }
+
+  override entries(): MapIterator<[string, Type | null]> {
+    this.#fill();
+    return super.entries();
+  }
+
+  override keys(): MapIterator<string> {
+    this.#fill();
+    return super.keys();
+  }
+
+  override values(): MapIterator<Type | null> {
+    this.#fill();
+    return super.values();
+  }
+
+  override forEach(fn: (value: Type | null, key: string, map: Map<string, Type | null>) => void, thisArg?: unknown): void {
+    this.#fill();
+    super.forEach(fn, thisArg);
+  }
+
+  override [Symbol.iterator](): MapIterator<[string, Type | null]> {
+    return this.entries();
+  }
+}
+
 // Each node's locals' types. An expansion adds nodes but never changes one, so a node's entry stays right.
 const LOCAL_TYPES = new WeakMap<Node, ReadonlyMap<string, Type | null>>();
 
 /**
- * Return node `node`'s locals' declared types, memoized per node: each param's contract type, or
- * for an untyped param its wiring binding's types from `bindingAlternatives` (and a LOOP's carried
- * field), without narrowing; `output`, the node's own output type, for a post assert; and
- * `event`, the steer inbox's element type, for `render:`.
+ * Return node `node`'s locals' declared types, memoized per node and each computed when first
+ * read: each param's contract type, or for an untyped param its wiring binding's types from
+ * `bindingAlternatives` (and a LOOP's carried field), without narrowing; `output`, the node's own
+ * output type, for a post assert; and `event`, the steer inbox's element type, for `render:`.
  */
 export function localTypes(flow: Flow, node: Node): ReadonlyMap<string, Type | null> {
   const memo = LOCAL_TYPES.get(node);
   if (memo !== undefined) return memo;
-  const [producers, inputs] = flowContracts(flow);
   const wiring = flow.wiring.get(node.id) ?? new Map<string, unknown>();
   const typeFn = (name: string) => node.types.get(name) ?? null;
-  const types = new Map<string, Type | null>();
-  for (const param of node.params ?? []) {
-    if (param.contract !== null) {
-      types.set(param.name, param.contract.type);
-      continue;
+  const params = new Map((node.params ?? []).map((param) => [param.name, param]));
+  let contracts: ReturnType<typeof flowContracts> | null = null;
+  const compute = (name: string): Type | null => {
+    contracts ??= flowContracts(flow);
+    const [producers, inputs] = contracts;
+    if (name === "output") return nodeOutputType(flow, node);
+    if (name === "event" && wiring.has(STEER_INBOX_KEY)) {
+      const inbox = contractType(resolveOutputBindingContract(wiring.get(STEER_INBOX_KEY), producers, inputs, { typeFn }));
+      return inbox !== null && isInboxType(inbox) ? (inbox.element ?? null) : null;
     }
-    const alternatives = wiring.has(param.name)
-      ? (bindingAlternatives(wiring.get(param.name), producers, inputs, typeFn) ?? [])
-      : [];
+    const param = params.get(name)!;
+    if (param.contract !== null) return param.contract.type;
+    const alternatives = wiring.has(name) ? (bindingAlternatives(wiring.get(name), producers, inputs, typeFn) ?? []) : [];
     if (node.isLoop && node.outputContract !== null) {
-      const carried = projectOutputContract(node.outputContract, [param.name]);
+      const carried = projectOutputContract(node.outputContract, [name]);
       if (carried !== null) alternatives.push(carried);
     }
-    const known = alternatives.map(contractType).filter((typ): typ is Type => typ !== null);
-    types.set(param.name, joinedAlternatives(known));
-  }
-  types.set("output", nodeOutputType(flow, node));
-  if (wiring.has(STEER_INBOX_KEY)) {
-    const source = wiring.get(STEER_INBOX_KEY);
-    const inbox = contractType(resolveOutputBindingContract(source, producers, inputs, { typeFn }));
-    types.set("event", inbox !== null && isInboxType(inbox) ? (inbox.element ?? null) : null);
-  }
+    return joinedAlternatives(alternatives.map(contractType).filter((typ): typ is Type => typ !== null));
+  };
+  const names = [...params.keys(), "output"];
+  if (wiring.has(STEER_INBOX_KEY)) names.push("event");
+  const types = new LazyTypes(names, compute);
   LOCAL_TYPES.set(node, types);
   return types;
 }
 
-/** Return the element type `item` has in MAP node `node`, from `itemContract`; `null` when untyped. */
+// Each MAP node's item type, memoized like `OUTPUT_TYPES`.
+const ITEM_TYPES = new WeakMap<Node, Type | null>();
+
+/** Return the element type `item` has in MAP node `node`, from `itemContract`, memoized per node; `null` when untyped. */
 export function itemDeclaredType(flow: Flow, node: Node): Type | null {
+  const memo = ITEM_TYPES.get(node);
+  if (memo !== undefined) return memo;
   const [producers, inputs] = flowContracts(flow);
   const wiring = flow.wiring.get(node.id) ?? new Map<string, unknown>();
   const typeFn = (name: string) => node.types.get(name) ?? null;
-  return contractType(itemContract(node, wiring, producers, inputs, typeFn));
+  const typ = contractType(itemContract(node, wiring, producers, inputs, typeFn));
+  ITEM_TYPES.set(node, typ);
+  return typ;
 }

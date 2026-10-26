@@ -1150,6 +1150,16 @@ test("a declared field that is absent reads null; an undeclared one raises", () 
   expect(() => evd("r.opt.x", { r: { k: "a" } })).toThrow("cannot read ${r.opt.x}: r.opt is null");
 });
 
+test("a read looks its declared type up only when a record lacks a key", () => {
+  const asked: string[][] = [];
+  const declared = (names: readonly string[]) => (asked.push([...names]), declaredR(names));
+  expect(evalExpr(parseExpr("r.k"), rec({ r: { k: "a" } }), { declared })).toBe("a");
+  expect(evalExpr(parseExpr("r?.opt"), rec({ r: { k: "a" } }), { declared })).toBeNull();
+  expect(asked).toEqual([]);
+  expect(evalExpr(parseExpr("r.opt"), rec({ r: { k: "a" } }), { declared })).toBeNull();
+  expect(asked).toEqual([["r"]]);
+});
+
 test("a declared field is null through a union when any member declares it", () => {
   expect(evalExpr(parseExpr("v.x"), rec({ v: { y: "b" } }), { declared: () => U })).toBeNull();
   expect(() => evalExpr(parseExpr("v.z"), rec({ v: { y: "b" } }), { declared: () => U })).toThrow("no field 'z'");

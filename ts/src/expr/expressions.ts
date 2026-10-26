@@ -148,6 +148,16 @@ function declaredOf(typ: Type | null): readonly Type[] {
   return [typ.nullable ? typ.replace({ nullable: false }) : typ];
 }
 
+/** No declared members: an untyped value. */
+const NO_MEMBERS = (): readonly Type[] => [];
+
+/** The declared members of the receiver of `steps[index]`: `membersOf()` projected through the steps before it. */
+function membersBefore(membersOf: () => readonly Type[], steps: readonly RefStep[], index: number): readonly Type[] {
+  let members = membersOf();
+  for (let i = 0; i < index; i++) members = projectDeclared(members, steps[i]!.name);
+  return members;
+}
+
 /** Whether any of `members` declares field `name`. */
 function declares(members: readonly Type[], name: string): boolean {
   return members.some((member) => member.fields?.has(name) === true);
@@ -1006,8 +1016,8 @@ class EvalExpr {
     else if (constructor) value = this.construct(name, callSuffix);
     else value = this.callBuiltin(name, callSuffix);
     // A constructor's value has its type, as `inferExprType` types it.
-    const members = constructor ? declaredOf(this.#types!.get(name)!) : [];
-    [value] = this.walkSteps(value, members, steps, `${name}(...)`, null);
+    const membersOf = constructor ? () => declaredOf(this.#types!.get(name)!) : NO_MEMBERS;
+    [value] = this.walkSteps(value, membersOf, steps, `${name}(...)`, null);
     if (this.#trace) {
       const frame = this.#frames.at(-1)!;
       if (constructor) {
@@ -1055,8 +1065,8 @@ class EvalExpr {
         present = item !== undefined;
         value = item ?? null;
       }
-      const members = declaredOf(this.#itemType);
-      const [walked, complete] = this.walkSteps(present ? value : MISSING, members, steps, "item", null);
+      const membersOf = () => declaredOf(this.#itemType);
+      const [walked, complete] = this.walkSteps(present ? value : MISSING, membersOf, steps, "item", null);
       if (this.#trace && source === null) {
         this.#frames.at(-1)!.route = ValueRoute.literal(walked === MISSING ? null : walked).with({ expression: text });
       } else if (this.#trace && present && complete) {
@@ -1068,8 +1078,9 @@ class EvalExpr {
     const read = this.#resolve([head, ...stepNames]);
     const rootText = head + stepsText(steps.slice(0, read.used - 1));
     const rest = steps.slice(read.used - 1);
-    const members = declaredOf(this.#declared?.([head, ...stepNames.slice(0, read.used - 1)]) ?? null);
-    const [value, complete] = this.walkSteps(read.present ? read.value : MISSING, members, rest, rootText, read.why);
+    // The declared type is looked up only when a record lacks a key.
+    const membersOf = () => declaredOf(this.#declared?.([head, ...stepNames.slice(0, read.used - 1)]) ?? null);
+    const [value, complete] = this.walkSteps(read.present ? read.value : MISSING, membersOf, rest, rootText, read.why);
     if (this.#trace && read.present && complete) {
       const route = readRoute(read.source ?? null, value as Value, stepNames.slice(read.used - 1), text);
       this.#frames.at(-1)!.route = route;
@@ -1080,7 +1091,7 @@ class EvalExpr {
 
   /**
    * Walk `steps` from a root's or a call's value by the step table, given the value's declared
-   * `members`. `MISSING` is a missing root. `?.` on null or `MISSING` makes the whole read null,
+   * members (`membersOf`, called only when a record lacks a key). `MISSING` is a missing root. `?.` on null or `MISSING` makes the whole read null,
    * where `.` raises. A record without the key gives null under `?.` or when a member declares the
    * key; else `.` raises. Anything but a record (or a file's `uri` / `mime` / `name`) raises.
    * Only `fieldOf` reads, so a step never reaches a JS property such as `constructor`
@@ -1094,14 +1105,15 @@ class EvalExpr {
    */
   walkSteps(
     value: Walked,
-    members: readonly Type[],
+    membersOf: () => readonly Type[],
     steps: readonly RefStep[],
     head: string,
     why: string | null,
   ): [Walked, boolean] {
     let shown = head;
     let complete = true;
-    for (const step of steps) {
+    for (let index = 0; index < steps.length; index++) {
+      const step = steps[index]!;
       const read = `${shown}${step.optional ? "?." : "."}${step.name}`;
       if (value === MISSING || value === null) {
         if (step.optional) return [null, false];
@@ -1114,7 +1126,7 @@ class EvalExpr {
       const [present, next] = fieldOf(value, step.name);
       if (present) {
         value = next;
-      } else if (isRecord(value) && (step.optional || declares(members, step.name))) {
+      } else if (isRecord(value) && (step.optional || declares(membersBefore(membersOf, steps, index), step.name))) {
         value = null;
         complete = false;
       } else if (isRecord(value)) {
@@ -1124,7 +1136,6 @@ class EvalExpr {
       } else {
         throw new ExpressionError(`cannot read \${${read}}: ${shown} is ${kindName(value)}, which has no fields`);
       }
-      members = projectDeclared(members, step.name);
       shown = read;
     }
     return [value, complete];
@@ -1266,7 +1277,7 @@ class EvalExpr {
     if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
     const { steps } = splitReference(node);
     // A null item is returned as is, as in Python; a `.field` on it follows the step table.
-    const [value, complete] = this.walkSteps(binding.value, declaredOf(binding.type), steps, name, null);
+    const [value, complete] = this.walkSteps(binding.value, () => declaredOf(binding.type), steps, name, null);
     if (this.#trace && binding.route !== null && complete && value !== null) {
       this.#frames.at(-1)!.route = binding.route.project(steps.map((step) => step.name));
     }

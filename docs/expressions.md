@@ -621,8 +621,9 @@ each message names the fix. Yian gives a value where Python raises: an elem miss
 item and a condition miss is falsy outside strict mode, and a name read in a clause before its
 own `for` reads the outer name (`[y for x in xs if y for y in ys]`), where Python raises
 `UnboundLocalError`; in a flow the name checks usually make that an unknown-name load error.
-Reads through a variable aren't type-checked at load yet: `m.txt` on a `list(Msg)` loads and
-misses at run time.
+Changed (TS yian): a variable is typed from its iterable at load: `m.txt` on a `list(Msg)` is a
+load error, a field of an `Optional` element needs `?.` or an `if m != null` clause, and an `if`
+clause narrows the variable (and outer references) for later clauses and the elem.
 
 Feedback is ordinary text, a partial record, an exact-length positional list, or
 `None`. Whole-value text stays unchanged; interpretation context accompanies it

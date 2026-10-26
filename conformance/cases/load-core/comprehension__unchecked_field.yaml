@@ -1,6 +1,7 @@
 kind: load
+rules: [null-field-read]
 python_skip: "TS-only: list comprehensions (#1086)"
-# Reads through a variable are unchecked at load for now: m.txt on a Msg loads.
+# Reads through a variable are checked at load: m.txt on a Msg is a load error.
 flow: |
   id: p
   name: p
@@ -16,4 +17,10 @@ flow: |
       code: "return inputs['v']"
   output: ${use.output}
 expect:
-  load: ok
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'use' input 'v': reference ${m.txt} reads unknown field 'txt' on record"
+        frames:
+          - label: flow.yaml
+            range: [11, 10, 11, 38]

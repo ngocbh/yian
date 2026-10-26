@@ -1,0 +1,32 @@
+kind: load
+rules: [null-field-read]
+python_skip: "TS-only: list comprehensions (#1086)"
+# An untyped list's variable narrowed by `if isinstance(p, T)` needs ?. for a field T doesn't
+# require: the value is only checked against T at load.
+flow: |
+  id: p
+  name: p
+  typedefs:
+    T: {f: Optional(str)}
+  input:
+    go: !bool
+  nodes:
+    mk:
+      kind: code
+      input:
+        go: ${input.go}
+      code: "return []"
+    use:
+      kind: code
+      input:
+        v: ${[p.f for p in mk.output if isinstance(p, T)]}
+      code: "return inputs['v']"
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+      - code: expr.nullable_field_read
+        message: "node 'use' input 'v': ${p.f} reads field 'f', which T doesn't require, of p, which is untyped and only narrowed to T; write p?.f, or type the list p iterates as list(T)"
+        frames:
+          - label: flow.yaml
+            range: [16, 10, 16, 57]

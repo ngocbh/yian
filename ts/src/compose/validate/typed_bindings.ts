@@ -1,5 +1,5 @@
 /**
- * Graph-stage: reject typed bindings whose value can never fit the declared type.
+ * Graph stage: reject typed bindings whose value can never fit the declared type.
  *
  * A typed binding (`name: !Type value`, on a node input or a flow output) states the type its
  * value must have; the binder enforces it at runtime. A literal right side is already checked
@@ -305,9 +305,9 @@ export function localInputContracts(
     if (node !== null && node.bindsPerItem) continue;
     const reserved = node !== null ? node.reservedWiringKeys() : new Set<string>();
     const names = new Map<string, LocalInput>();
+    const [nodeProducers, nodeInputs] = narrowing !== null ? narrowing.forNode(nodeId) : [producers, flowInputs];
     for (const [name, binding] of wiring) {
       if (reserved.has(name)) continue;
-      const [nodeProducers, nodeInputs] = narrowing !== null ? narrowing.forNode(nodeId) : [producers, flowInputs];
       let alternatives = bindingAlternatives(binding, nodeProducers, nodeInputs, typeFn);
       if (alternatives === null) continue;
       if (node instanceof LoopNode) {

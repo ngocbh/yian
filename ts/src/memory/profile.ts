@@ -496,10 +496,9 @@ export class ProfileSession implements MemorySession {
     for (const entry of context.feedback) {
       const value = feedbackValue(entry);
       const key = logJson(value);
-      if (!seen.has(key)) {
-        seen.add(key);
-        feedback.push(value);
-      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      feedback.push(value);
     }
     const payload = {
       base_version: currentVersion,

@@ -4,7 +4,7 @@
  * A structured agent without tools or skills makes a single structured call; any other agent runs
  * the chat loop until the model answers (without tools or skills, every reply is an answer).
  *
- * A reply's tool calls run in groups (design 6.9): consecutive calls that are safe to run together
+ * A reply's tool calls run in groups: consecutive calls that are safe to run together
  * start together, an unsafe call runs alone, and results commit in call order whatever order the
  * calls finish in. Python runs them one at a time, which is what a reply without safe tools gets.
  *
@@ -687,12 +687,11 @@ async function failCall(
   index: number,
   failed: { readonly error: unknown; readonly granted: boolean },
 ): Promise<true> {
-  const { live } = turn;
   checkNodeStopped(turn);
   if (turn.interrupt?.aborted) return skipFrom(turn, index);
   if (failed.granted) {
     // Rejects with the failed check's error once its brackets are published.
-    await observeToolCall(live, () => Promise.reject(failed.error), identityOf(turn, call, index), {
+    await observeToolCall(turn.live, () => Promise.reject(failed.error), identityOf(turn, call, index), {
       signal: nodeSignal(turn),
       text: (value) => toolText(call.name, value),
     });
@@ -800,10 +799,10 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     checkNodeStopped(turn);
     if (failure !== null) throw failure.error;
     for (const { call, outcome } of settled) {
-      // A pended call has no result yet; the loop returns before the model reads any.
-      if ("pending" in outcome) continue;
-      // No outcome is an error: a failure was thrown above.
-      const { content, reported } = outcome as Extract<ToolOutcome, { content: string }>;
+      // A pended call has no result yet; the loop returns before the model reads any. No outcome
+      // is an error: a failure was thrown above.
+      if (!("content" in outcome)) continue;
+      const { content, reported } = outcome;
       const { id: callId, name } = call;
       const part = new ToolResultPart({ callId, name, content, isError: reported });
       turn.messages.push(new Message({ role: "tool", parts: [part] }));

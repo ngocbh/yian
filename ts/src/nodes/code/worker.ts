@@ -170,6 +170,8 @@ interface SwapFrame {
   /** The record's keys, or `null` for an array. */
   readonly keys: readonly string[] | null;
   readonly copy: unknown[] | Record<string, unknown>;
+  /** The number of items or keys to copy. */
+  readonly size: number;
   index: number;
 }
 
@@ -189,14 +191,15 @@ function swapLeaves(value: unknown, swap: (part: object) => unknown): unknown {
     if (shared !== undefined) return shared;
     const copy = list ? [] : {};
     copies.set(item, copy);
-    stack.push({ source: item as Record<string, unknown>, keys: list ? null : Object.keys(item), copy, index: 0 });
+    const keys = list ? null : Object.keys(item);
+    const size = keys === null ? (item as unknown[]).length : keys.length;
+    stack.push({ source: item as Record<string, unknown>, keys, copy, size, index: 0 });
     return copy;
   };
   const root = enter(value);
   while (stack.length > 0) {
     const frame = stack[stack.length - 1]!;
-    const size = frame.keys === null ? (frame.source as unknown as unknown[]).length : frame.keys.length;
-    if (frame.index === size) {
+    if (frame.index === frame.size) {
       stack.pop();
       continue;
     }

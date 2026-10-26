@@ -14,7 +14,7 @@
 
 import { type OriginRef, reprText } from "../../diagnostics.ts";
 import { ExpressionError, exprRefsOf, scanTemplate } from "../../expr/index.ts";
-import { Span } from "../../expr/template.ts";
+import { Span, type TemplateSegment } from "../../expr/template.ts";
 import {
   type HostConnection,
   hostOnlyFieldError,
@@ -225,11 +225,7 @@ export function contributing(lower: unknown, higher: unknown, nullable: Nullable
   }
   if (shielded.length === 0) return lower;
   // Only template layers have field values.
-  const template = lower as ValueTemplate;
-  return new ValueTemplate(
-    pruned(template.value, shielded, []) as ValueTemplate["value"],
-    template.origins.filter(([path]) => !shielded.some((field) => sameItems(path.slice(0, field.length), field))),
-  );
+  return withoutFields(lower as ValueTemplate, shielded);
 }
 
 /**
@@ -331,11 +327,7 @@ export function keepValues(layer: unknown, keep: (leaf: unknown) => boolean): un
   if (dropped.length === 0) return layer;
   if (dropped.some((field) => field.length === 0)) return {};
   // Only template layers have field values.
-  const template = layer as ValueTemplate;
-  return new ValueTemplate(
-    pruned(template.value, dropped, []) as ValueTemplate["value"],
-    template.origins.filter(([path]) => !dropped.some((field) => sameItems(path.slice(0, field.length), field))),
-  );
+  return withoutFields(layer as ValueTemplate, dropped);
 }
 
 /**
@@ -660,25 +652,26 @@ function unwrapped(node: unknown): unknown {
   }
 }
 
-/** Whether `text` holds a `${...}` span; malformed text counts, for later checks. */
-function hasSpan(text: string): boolean {
+/** Return `text`'s template segments, or `null` when it doesn't scan. */
+function segmentsOf(text: string): TemplateSegment[] | null {
   try {
-    return scanTemplate(text).some((segment) => segment instanceof Span);
+    return scanTemplate(text);
   } catch (error) {
-    if (error instanceof ExpressionError) return true;
+    if (error instanceof ExpressionError) return null;
     throw error;
   }
 }
 
-/** Whether `text` is exactly one `${...}` span, whose value keeps its type. */
+/** Whether `text` holds a `${...}` span; malformed text counts, for later checks. */
+function hasSpan(text: string): boolean {
+  const segments = segmentsOf(text);
+  return segments === null || segments.some((segment) => segment instanceof Span);
+}
+
+/** Whether `text` is exactly one `${...}` span, whose value keeps its type; malformed text counts. */
 function wholeSpan(text: string): boolean {
-  try {
-    const segments = scanTemplate(text);
-    return segments.length === 1 && segments[0] instanceof Span;
-  } catch (error) {
-    if (error instanceof ExpressionError) return true;
-    throw error;
-  }
+  const segments = segmentsOf(text);
+  return segments === null || (segments.length === 1 && segments[0] instanceof Span);
 }
 
 /** Whether a tree, looking through nested bindings, holds a `${...}` span. */
@@ -742,6 +735,14 @@ function alwaysSet(node: unknown, nullable: Nullable): boolean {
   }
   if (node instanceof Binding) return isValue(node) ? !nullable(node, []) : node.source !== null;
   return true;
+}
+
+/** Return `template` without the entries at `fields` and the origins under them. */
+function withoutFields(template: ValueTemplate, fields: readonly ValuePath[]): ValueTemplate {
+  return new ValueTemplate(
+    pruned(template.value, fields, []) as ValueTemplate["value"],
+    template.origins.filter(([path]) => !fields.some((field) => sameItems(path.slice(0, field.length), field))),
+  );
 }
 
 /** Rebuild a template tree without the entries at `fields`. */

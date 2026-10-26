@@ -70,7 +70,7 @@ export function closerResult(reason: CloserReason): { readonly output: string; r
 
 /**
  * Return a tool result as the text the model reads: text as itself, any other value in the text
- * form (design 3.2.3), `null` as `null`.
+ * form, `null` as `null`.
  *
  * Example: `toolText("lookup", {a: 1})` gives `{"a":1}`.
  *

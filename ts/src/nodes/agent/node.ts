@@ -222,7 +222,7 @@ function isTextMessage(value: unknown): value is { role: "user" | "assistant"; t
 function captureForm(message: Message): Value {
   const { protocol: _protocol, provider_payload: _payload, parts, ...rest } = message;
   const bare = parts.map(({ provider_payload: _partPayload, ...part }) => part);
-  return new TypedValue(ValueKind.OBJECT, { ...rest, parts: bare } as unknown as ValueRecord).toWire().value as Value;
+  return new TypedValue(ValueKind.OBJECT, { ...rest, parts: bare } as ValueRecord).toWire().value as Value;
 }
 
 /**
@@ -502,9 +502,8 @@ export class AgentNode extends Node {
           "Remove it and grant registered Yian tools explicitly.",
       );
     }
-    // ownLlmConfig is the authored source re-resolved by each cascade pass; llmConfig is the
-    // effective config baked for this run. A layer holding values (a template, or a binding for
-    // the whole record) has no config until they resolve.
+    // A layer holding values (a template, or a binding for the whole record) has no config until
+    // they resolve.
     if (llmConfig instanceof ValueTemplate || llmConfig instanceof Binding) {
       this.ownLlmConfig = llmConfig;
       this.llmConfig = null;
@@ -735,12 +734,11 @@ export class AgentNode extends Node {
     if (this.tools.includes(LOAD_SKILL)) {
       throw new SkillError(`${where}: ${reprText(LOAD_SKILL)} is a reserved tool name; remove it from tools`);
     }
-    if (this.skills !== "all") {
-      if (!isList(this.skills)) throw new SkillError(`${where}: skills must be a list of names or 'all'`);
-      for (const name of this.skills) checkSkillName(name);
-      if (new Set(this.skills).size !== this.skills.length) {
-        throw new SkillError(`${where}: duplicate skill grant in ${writeAsText([...this.skills])}`);
-      }
+    if (this.skills === "all") return;
+    if (!isList(this.skills)) throw new SkillError(`${where}: skills must be a list of names or 'all'`);
+    for (const name of this.skills) checkSkillName(name);
+    if (new Set(this.skills).size !== this.skills.length) {
+      throw new SkillError(`${where}: duplicate skill grant in ${writeAsText([...this.skills])}`);
     }
   }
 
@@ -1106,9 +1104,7 @@ export class AgentNode extends Node {
         );
       }
       const variables = this.resolveVariables();
-      if (captured !== null) {
-        captured["variables"] = captureValue(() => copyValue(variables));
-      }
+      if (captured !== null) captured["variables"] = captureValue(() => copyValue(variables));
       const record = { ...inputs, ...variables } as ValueRecord;
       // The inputs' declared types, and each variable's contract.
       const types = new Map(localTypes ?? []);

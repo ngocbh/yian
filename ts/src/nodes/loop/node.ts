@@ -57,6 +57,7 @@ import {
   type OriginMapper,
   Parameter,
   PartialRecordContract,
+  revalidateScope,
   rewriteOriginCarrier,
   sameExecutionPosition,
   ValueContract,
@@ -343,10 +344,8 @@ export class LoopNode extends Node {
     clone.memoryScope = this.memoryScope;
     if (this.executionScope !== null) {
       const scope = this.executionScope;
-      if (!isExactly(scope, ExecutionScope)) throw new TypeError("loop execution scope must be an ExecutionScope");
+      revalidateScope(scope, "loop execution scope");
       const { staticPath, flowPath, occurrencePath, boundary } = scope;
-      // Re-validate a scope that may have bypassed the constructor, as Python's rebuild does.
-      new ExecutionScope(staticPath, { flowPath, occurrencePath, boundary });
       const current = new ExecutionPosition("loop_driver", staticPath, this.iteration);
       const last = occurrencePath.at(-1);
       if (last === undefined || !sameExecutionPosition(last, current)) {

@@ -1164,7 +1164,6 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
   if (!Number.isSafeInteger(data.numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
   if (data.numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
 
-
   const candidate = new RunStartedRecord({
     flowFingerprint: data.flowFingerprint,
     startWiringOverride: data.startWiringOverride,
@@ -2503,7 +2502,7 @@ function liveGrowth(
   if (!nodeId) throw new RangeError("node_id must be non-empty");
   if (!isExactly(grow, Grow)) throw new TypeError("grow must be a Grow");
   if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
-  // Python's frozenset check has no counterpart: `Grow` always copies `prune` into a new `Set`.
+  // `Grow` always copies `prune` into a new `Set`, so only its items need checking.
   for (const pruneId of grow.prune as ReadonlySet<unknown>) {
     if (typeof pruneId !== "string") raiseGrowthRejected(new TypeError("Grow.prune must contain only strings"));
   }
@@ -3012,7 +3011,7 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
     if (terminal !== null) throw new RangeError("nonterminal outcome cannot install a terminal trace");
     return;
   }
-  // Python revalidates the frozen terminal; a TS `TraceTerminal` validated itself when built.
+  // A `TraceTerminal` validated itself when built.
   if (!isExactly(terminal, TraceTerminal)) throw new RangeError("terminal outcome requires an exact terminal trace");
   let terminalSource: SourceRef | null;
   if (expected.succeeded) {
@@ -3112,8 +3111,7 @@ export function replayRecords(
     try {
       next = prepareRecord(state, envelope.record, { growBuilder });
     } catch (error) {
-      // Python's node-data marker subclasses the original error's class, so a corrupt log reads
-      // as that error there; replay reports the original here too.
+      // A historical record is not a live node outcome: its rejection is a plain corrupt-log error.
       if (error instanceof NodeDataError) throw error.original;
       throw error;
     }
@@ -4478,7 +4476,7 @@ function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | unde
 /**
  * Drop a settled node's start count and recorded steps, and the values its steer reads consumed.
  *
- * @throws RangeError when the node has no start count, as Python's `del` raises `KeyError`.
+ * @throws RangeError when the node has no start count.
  */
 function forgetNodeSteps(state: RunState, nodeId: string): void {
   if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
@@ -4825,7 +4823,7 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
     if (error instanceof TypeError || error instanceof RangeError) raiseGrowthRejected(error);
     throw error;
   }
-  // Python's `ChainMap(fragment.nodes, state.flow.nodes)`: a lookup, not a merged copy.
+  // A lookup over the fragment and live nodes, not a merged copy.
   const combinedNodeIds = { has: (id: string): boolean => fragment.nodes.has(id) || state.flow.nodes.has(id) };
   // A reference may also read an AGENT's new messages, under their pool name `<id>.new_messages`.
   const readableNames = {
@@ -5178,7 +5176,7 @@ export function growthIndex(state: RunState): GrowthIndex {
   return state.growthIndex;
 }
 
-/** Python's `dict.setdefault`: return `map`'s value at `key`, first storing `make()` when absent. */
+/** Return `map`'s value at `key`, first storing `make()` when absent. */
 function setDefault<V>(map: Map<string, V>, key: string, make: () => V): V {
   let value = map.get(key);
   if (value === undefined) {
@@ -5448,7 +5446,7 @@ function validateLearnedScope(state: RunState, nodeId: string): void {
   if (state.learnable !== true || node.needsMemoryContext !== true) return;
   const scope = node.memoryScope;
   if (scope !== null) {
-    // Python rebuilds the frozen scope to revalidate it; a TS scope validated itself when built.
+    // A `MemoryScope` validated itself when built.
     if (!isExactly(scope, MemoryScope)) {
       throw new RangeError(`node ${reprText(nodeId)} has no exact compiled memory scope`);
     }
@@ -6131,7 +6129,7 @@ function validateGrowthRedirects(
   retiredEdgeIds: ReadonlySet<string>,
   index: GrowthIndex,
 ): void {
-  // Python's `_GrowthNodeIds`: membership after the growth, without copying the ids.
+  // Membership after the growth, without copying the ids.
   const finalIds = {
     has: (id: string): boolean => fragment.nodes.has(id) || (state.flow.nodes.has(id) && !retiredIds.has(id)),
   };

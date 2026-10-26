@@ -61,7 +61,7 @@ function validateMemories(memories: unknown): readonly string[] {
   if (!copy.every((spec) => isExactly(spec, MemorySpec))) {
     throw new TypeError("memories must be an array of MemorySpec values");
   }
-  const keys = (copy as MemorySpec[]).map((spec) => spec.key);
+  const keys = copy.map((spec) => spec.key);
   if (keys.some((key, i) => i > 0 && compareCodeUnits(keys[i - 1]!, key) >= 0)) {
     throw new RangeError("memories must be sorted by key and unique");
   }

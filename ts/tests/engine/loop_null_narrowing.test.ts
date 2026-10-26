@@ -1230,3 +1230,63 @@ test.each(["until: draft == null or draft.done", "until: draft?.done", "while: d
     assembleText(draftLoop(driver));
   },
 );
+
+// ---------- declared fields at run time (#1149) ----------
+
+/** A LOOP counting turns in `n`, carrying `draft` (typed `carried`, or `Any`) that `step` returns as `value`. */
+const countedLoop = (driver: string, carried: string | null, value: string) => `id: counted
+name: counted
+typedefs:
+  Draft: {done: bool, note: Optional(str)}
+input:
+  start: !${carried ?? "Any"}
+defs:
+  step:
+    input:
+      draft: !${carried ?? "Any"}
+      n: !int
+    nodes:
+      get:
+        kind: code
+        input:
+          d: \${input.draft}
+${carried === null ? "" : `        output: ${carried}\n`}        code: |
+          return ${value}
+    output:
+      draft: \${get.output}
+      n: \${input.n + 1}
+nodes:
+  loop:
+    kind: loop
+    ${driver}
+    max: 3
+    input:
+      draft: \${input.start}
+      n: 0
+    call: step
+output: \${loop.output.n}
+`;
+
+/** Load and run `text` from `start`. */
+async function runCounted(text: string, start: unknown): Promise<RunResult> {
+  return runFlow(await loadConformanceFlow(text, { env: hostEnv(dir) }), { start }, { env: hostEnv(dir) });
+}
+
+test("an until: over a declared absent carried field reads null and stops", async () => {
+  const result = await runCounted(countedLoop("until: draft.note == null", "Draft", "{done: false}"), { done: false });
+  expect(result.failure?.message).toBeUndefined();
+  expect(result.output).toBe(1n);
+});
+
+test("an until: over an untyped absent carried key fails the predicate", async () => {
+  const result = await runCounted(countedLoop("until: draft.k == 1", null, "{}"), {});
+  expect(result.failure?.code).toBe("condition.evaluate");
+  expect(result.failure?.message).toContain("cannot read ${draft.k}: draft has no field 'k'");
+});
+
+test("an until: guarded against a null carried value stops on null", async () => {
+  const text = countedLoop("until: draft == null or draft.done", "Optional(Draft)", "null");
+  const result = await runCounted(text, { done: false });
+  expect(result.failure?.message).toBeUndefined();
+  expect(result.output).toBe(1n);
+});

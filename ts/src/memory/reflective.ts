@@ -309,6 +309,14 @@ function snapshotJson(
   });
 }
 
+/** Return the validated form of model config `config`, with its saved connection as `_connection`. */
+function completeLlmConfig(config: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const [validated, connection] = splitModelConfig(config);
+  const complete: Record<string, unknown> = validated.dump();
+  if (connection !== null) complete._connection = connection;
+  return complete;
+}
+
 /** Return a stable final snapshot-validation failure, with `cause` when given. */
 function snapshotError(message: string, cause?: unknown): MemoryOperationError {
   return operationError("open_run", "reflective.invalid_snapshot", message, cause === undefined ? {} : { cause });
@@ -396,9 +404,7 @@ function parseSnapshot(value: unknown): [string, number, number, State, JsonObje
     if (data.format !== SNAPSHOT_FORMAT) throw new RangeError("snapshot format is unsupported");
     if (data.version !== SNAPSHOT_VERSION) throw new RangeError("snapshot version is unsupported");
     const llmConfig = copyObject(data.llm_config, "snapshot.llm_config");
-    const [validated, connection] = splitModelConfig(llmConfig);
-    const complete: Record<string, unknown> = validated.dump();
-    if (connection !== null) complete._connection = connection;
+    const complete = completeLlmConfig(llmConfig);
     if (logJson(llmConfig) !== logJson(complete)) {
       throw new RangeError("snapshot.llm_config must be complete and canonical");
     }
@@ -834,10 +840,7 @@ export class ReflectiveMemory implements Memory {
    */
   private effectiveLlmConfig(): JsonObject {
     try {
-      const resolved = resolveModelConfig(this.llmConfig, { env: this.env });
-      const [validated, connection] = splitModelConfig(resolved);
-      const complete: Record<string, unknown> = validated.dump();
-      if (connection !== null) complete._connection = connection;
+      const complete = completeLlmConfig(resolveModelConfig(this.llmConfig, { env: this.env }));
       nonemptyString(complete.provider, "llm_config.provider");
       const model = nonemptyString(complete.model, "llm_config.model");
       if (!model.trim()) throw new RangeError("llm_config.model must not be blank");

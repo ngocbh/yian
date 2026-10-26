@@ -860,12 +860,10 @@ function applyFlow(
     if (node instanceof AgentNode) {
       const key = pathKey(nodePath);
       if (Object.hasOwn(callTime, key)) {
-        if (selection === null) {
-          throw new RangeError(`call-time agent ${reprText(key)} has no recorded connection selection`);
-        }
         node.llmConfig = null;
-        // The selection is frozen, so the node may share it.
-        node.callTime = new CallTimeLLM({ path: key, base: copied(callTime[key]!), selection });
+        // The selection is frozen, so the node may share it. A call-time base is only ever recorded
+        // with its selection, so it is set here.
+        node.callTime = new CallTimeLLM({ path: key, base: copied(callTime[key]!), selection: selection! });
       } else {
         node.llmConfig = copied(effective[key]!);
         node.callTime = null;
@@ -936,7 +934,7 @@ function childOf(node: Node): Flow | null {
 /** Give `node` a private copy of its static child flow, and return the copy. */
 function setChild(node: Node, child: Flow): Flow {
   const copy = copyGraph(child);
-  (node as unknown as { child: Flow }).child = copy;
+  (node as { child?: unknown }).child = copy;
   return copy;
 }
 

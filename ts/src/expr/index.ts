@@ -36,6 +36,7 @@ export {
   ConstructorTypeError,
   conditionRefs,
   constructorNames,
+  declaredAt,
   ExpressionError,
   evalExpr,
   evaluateWhen,
@@ -43,6 +44,7 @@ export {
   inferExprType,
   isinstanceSubject,
   isinstanceTypeNames,
+  localDeclared,
   MISSING_ROOT,
   namesEnd,
   optionalAfterRoots,
@@ -57,7 +59,7 @@ export {
   splitReference,
   stepsText,
 } from "./expressions.ts";
-export type { RefRename, RefRenamed, RefStep, RootResolver } from "./expressions.ts";
+export type { DeclaredTypes, RefRename, RefRenamed, RefStep, RootResolver } from "./expressions.ts";
 export { parseExpr } from "./grammar.ts";
 export type { FeedbackValue, RootRead } from "./lineage.ts";
 export { hasFeedback, validateFeedback } from "./lineage.ts";

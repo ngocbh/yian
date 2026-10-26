@@ -134,6 +134,51 @@ export type RootResolver = (names: readonly string[]) => RootRead;
 /** The resolver for an evaluation with nothing in scope: every root is absent. */
 export const MISSING_ROOT: RootResolver = () => ({ used: 1, present: false, value: null, why: null });
 
+/** The declared type at the end of a reference's names (a root, or a root and fields); `null` is untyped. */
+export type DeclaredTypes = (names: readonly string[]) => Type | null;
+
+/**
+ * A value's declared members, each non-null: none for an untyped type (`Any`, `object`, a file,
+ * or unknown), a union's variants, else the type itself.
+ */
+function declaredOf(typ: Type | null): readonly Type[] {
+  if (typ === null || typ.kind === ValueKind.ANY || typ.kind === ValueKind.FILE) return [];
+  if (typ.variants !== undefined) return typ.variants.flatMap(declaredOf);
+  if (typ.kind === ValueKind.OBJECT && typ.fields === undefined) return [];
+  return [typ.nullable ? typ.replace({ nullable: false }) : typ];
+}
+
+/** Whether any of `members` declares field `name`. */
+function declares(members: readonly Type[], name: string): boolean {
+  return members.some((member) => member.fields?.has(name) === true);
+}
+
+/** The members after reading `name`: the declared members of the field in each member that declares it. */
+function projectDeclared(members: readonly Type[], name: string): readonly Type[] {
+  return members.flatMap((member) => declaredOf(member.fields?.get(name) ?? null));
+}
+
+/**
+ * Return `typ` projected through `names` by declared fields: a step strips `Optional`; a union
+ * projects through the members that declare the name, joined; from `Any`, `object`, an opaque
+ * field or a file onward, everything is untyped (`null`).
+ */
+export function declaredAt(typ: Type | null, names: readonly string[]): Type | null {
+  let members = declaredOf(typ);
+  for (const name of names) members = projectDeclared(members, name);
+  if (members.length === 0) return null;
+  if (members.length === 1) return members[0]!;
+  if (members.every((member) => member.fields !== undefined)) {
+    return new Type({ kind: ValueKind.OBJECT, variants: members });
+  }
+  return joinedType(members);
+}
+
+/** The `DeclaredTypes` of a record scope: a local's type from `types`, then its fields (`declaredAt`). */
+export function localDeclared(types: ReadonlyMap<string, Type | null> | null): DeclaredTypes {
+  return (names) => declaredAt(types?.get(names[0]!) ?? null, names.slice(1));
+}
+
 /** Throw when a reference has an empty name. */
 function checkNames(names: readonly string[]): void {
   if (names.some((name) => !name)) throw new ExpressionError(`invalid variable path: '\${${names.join(".")}}'`);

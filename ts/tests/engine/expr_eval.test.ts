@@ -22,9 +22,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import {
+  declaredAt,
   ExpressionError,
   evalExpr,
   exprRefs,
+  localDeclared,
   MISSING_ROOT,
   RequiredError,
   ResolveMode,
@@ -34,7 +36,7 @@ import {
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
 import { evalBinding, scanTemplate } from "../../src/expr/template.ts";
 import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.ts";
-import { fieldOf } from "../../src/typesys/values.ts";
+import { fieldOf, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
 /** Parse `text` then evaluate it, defaulting to an empty resolver (every reference misses). */
 function evaluate(
@@ -1004,4 +1006,29 @@ test("a resolver returns a root read; the evaluator walks the steps", () => {
   };
   expect(evalExpr(parseExpr("a.k.m"), resolve)).toBe(1n);
   expect(seen).toEqual([["a", "k", "m"]]);
+});
+
+// --- declared types --- //
+
+const str = Type.scalar(ValueKind.STRING);
+const Rec = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str], ["opt", str]]), required: new Set(["k"]) });
+const A = new Type({ kind: ValueKind.OBJECT, fields: new Map([["x", str]]), required: new Set() });
+const B = new Type({ kind: ValueKind.OBJECT, fields: new Map([["y", str]]), required: new Set() });
+const U = new Type({ kind: ValueKind.OBJECT, variants: [A, B] });
+
+test("declaredAt projects a type through declared fields", () => {
+  expect(typeEquals(declaredAt(Rec, ["opt"])!, str)).toBe(true);
+  expect(declaredAt(Rec, ["nope"])).toBeNull();
+  expect(declaredAt(Type.scalar(ValueKind.ANY), ["k"])).toBeNull();
+  expect(declaredAt(Type.scalar(ValueKind.OBJECT), ["k"])).toBeNull();
+  expect(typeEquals(declaredAt(U, ["x"])!, str)).toBe(true); // only A declares x
+  expect(typeEquals(declaredAt(U, [])!, U)).toBe(true);
+  expect(typeEquals(declaredAt(Rec.replace({ nullable: true }), [])!, Rec)).toBe(true);
+  expect(declaredAt(null, [])).toBeNull();
+});
+
+test("localDeclared reads a local's type, then its fields", () => {
+  expect(typeEquals(localDeclared(new Map([["r", Rec]]))(["r", "opt"])!, str)).toBe(true);
+  expect(localDeclared(new Map([["r", Rec]]))(["s"])).toBeNull();
+  expect(localDeclared(null)(["r"])).toBeNull();
 });

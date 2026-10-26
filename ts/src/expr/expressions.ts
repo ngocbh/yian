@@ -249,7 +249,6 @@ function evalComparison(op: string, lhs: Value, rhs: Value): boolean {
       return op === "in" ? contained : !contained;
     }
   }
-  // ordered comparisons: null on either side -> false (propagate falsy)
   if (lhs === null || rhs === null) return false;
   const x = numeric(lhs);
   const y = numeric(rhs);
@@ -2036,19 +2035,17 @@ export function exprRefs(tree: ExprNode): string[] {
 
 /** Walk `node`, collecting reference paths into `refs` (source order, no dedupe). */
 function collectExprRefs(node: ExprNode, refs: string[]): void {
-  if (node instanceof Token) return; // a lone NUMBER / STRING / BOOL / NULL literal names no reference
+  if (node instanceof Token) return;
   if (node.data === "refcall") {
     // Keep in sync with the evaluator's refcall decomposition, `collectRefEdits` and
     // `conditionReadLeaves` in `template.ts`: each finds the call_suffix and takes the path from
     // `splitReference`.
-    const children = node.children;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) {
       refs.push(referencePath(node));
       return;
     }
-    // A builtin call: the callee contributes no reference; walk each argument value only.
-    for (const arg of valueArgs(String(children[0]), callSuffix)) {
+    for (const arg of valueArgs(String(node.children[0]), callSuffix)) {
       // A keyword argument carries a leading NAME token; the value expression is the last child.
       collectExprRefs(arg.children.at(-1)!, refs);
     }
@@ -2110,7 +2107,7 @@ export function rewriteExprRefs(text: string, rename: RefRename): string {
  * refcall / builtin-argument decomposition, but capturing token source positions to edit in place.
  */
 function collectRefEdits(node: ExprNode, rename: RefRename, edits: [number, number, string][]): void {
-  if (node instanceof Token) return; // a lone literal holds no reference
+  if (node instanceof Token) return;
   if (node.data === "refcall") {
     const children = node.children;
     const callSuffix = callSuffixOf(node);
@@ -2119,7 +2116,6 @@ function collectRefEdits(node: ExprNode, rename: RefRename, edits: [number, numb
       if (renamed !== null) edits.push([(children[0] as Token).startPos, namesEnd(node, renamed.used), renamed.text]);
       return;
     }
-    // A builtin call: the callee is not a reference; rewrite each argument value only.
     for (const arg of valueArgs(String(children[0]), callSuffix)) {
       collectRefEdits(arg.children.at(-1)!, rename, edits);
     }

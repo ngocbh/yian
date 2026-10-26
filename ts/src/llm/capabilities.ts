@@ -33,13 +33,13 @@ export interface ModelCapabilities {
    * MiniMax M2.x reasoning models need it so the `<think>` block lands in
    * `reasoning_details` instead of polluting `content`. Non-reasoning MiniMax models
    * (Coding Plan, MiniMax-Text-01, etc.) reject the flag, so it is set only where the
-   * model consumes it. (#826)
+   * model consumes it.
    */
   readonly requiresReasoningSplit: boolean;
 }
 
 // DeepSeek's thinking models accept the `tools` array but reject the `tool_choice`
-// parameter (official Oh My Pi integration guide and the 400 response in issue #678).
+// parameter (official Oh My Pi integration guide and the 400 DeepSeek returns for it).
 // Their official tool-calling examples (api-docs.deepseek.com/guides/tool_calls) pass
 // `tools` without `tool_choice`; supportsToolChoice is false so the caller mirrors that
 // and leaves `tool_choice` out. Their echo of `reasoning_content` on later turns is

@@ -473,10 +473,7 @@ export class CompiledFlow extends Flow {
       this.nodes.delete(id);
       this.wiring.delete(id);
     }
-    // Drop every edge incident to a removed node (as producer or consumer).
     this.edges = this.edges.filter((e) => !nodeIds.has(e.from) && !nodeIds.has(e.to));
-    // Rebuild adjacency: drop keys for removed ids, and prune surviving lists of any edge that
-    // touches a removed id.
     const outgoing = new Map<string, Edge[]>();
     for (const [id, list] of this.outgoingEdges) {
       if (!nodeIds.has(id)) outgoing.set(id, list.filter((e) => !nodeIds.has(e.to)));

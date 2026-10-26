@@ -9,19 +9,26 @@
  * which its fingerprint covers, so a resume or a replay derives the same types.
  *
  * Knows about: `output_contracts`, `model` (`Flow`), the node kinds whose output has no contract
- * (START, END), `expr` (`declaredAt`) and `typesys`.
+ * (START, END) and the AGENT's steer inbox key, `expr` (`declaredAt`) and `typesys`.
  * Never imports: compose or runtime.
  */
 
 import { declaredAt, type DeclaredTypes } from "../expr/expressions.ts";
+import { STEER_INBOX_KEY } from "../nodes/agent/node.ts";
 import { type Node, NodeKind } from "../nodes/base.ts";
 import { type OutputContract, ValueContract } from "../nodes/contracts.ts";
 import type { EndNode } from "../nodes/end/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
-import { Type, ValueKind } from "../typesys/values.ts";
+import { isInboxType, joinedType, Type, ValueKind } from "../typesys/values.ts";
 import type { Flow } from "./model.ts";
-import { contractType, resolveOutputBindingContract } from "./output_contracts.ts";
+import {
+  bindingAlternatives,
+  contractType,
+  itemContract,
+  projectOutputContract,
+  resolveOutputBindingContract,
+} from "./output_contracts.ts";
 
 /** The record of `params`' types, untyped ones `Any`, the required ones required. */
 function paramsRecord(node: Node): Type {
@@ -112,4 +119,62 @@ export function poolDeclaredTypes(flow: Flow): DeclaredTypes {
     }
     return declaredAt(root, names.slice(used));
   };
+}
+
+/** The one type of a local's alternatives: their join when equal up to `Optional`, else a union of records. */
+function joinedAlternatives(types: readonly Type[]): Type | null {
+  if (types.length <= 1) return types[0] ?? null;
+  const joined = joinedType(types);
+  if (joined !== null) return joined;
+  if (types.every((typ) => typ.fields !== undefined)) return new Type({ kind: ValueKind.OBJECT, variants: types });
+  return types[0]!;
+}
+
+// Each node's locals' types. An expansion adds nodes but never changes one, so a node's entry stays right.
+const LOCAL_TYPES = new WeakMap<Node, ReadonlyMap<string, Type | null>>();
+
+/**
+ * Return node `node`'s locals' declared types, memoized per node: each param's contract type, or
+ * for an untyped param its wiring binding's types from `bindingAlternatives` (and a LOOP's carried
+ * field), without narrowing; `output`, the node's own output type, for a post assert; and
+ * `event`, the steer inbox's element type, for `render:`.
+ */
+export function localTypes(flow: Flow, node: Node): ReadonlyMap<string, Type | null> {
+  const memo = LOCAL_TYPES.get(node);
+  if (memo !== undefined) return memo;
+  const [producers, inputs] = flowContracts(flow);
+  const wiring = flow.wiring.get(node.id) ?? new Map<string, unknown>();
+  const typeFn = (name: string) => node.types.get(name) ?? null;
+  const types = new Map<string, Type | null>();
+  for (const param of node.params ?? []) {
+    if (param.contract !== null) {
+      types.set(param.name, param.contract.type);
+      continue;
+    }
+    const alternatives = wiring.has(param.name)
+      ? (bindingAlternatives(wiring.get(param.name), producers, inputs, typeFn) ?? [])
+      : [];
+    if (node.isLoop && node.outputContract !== null) {
+      const carried = projectOutputContract(node.outputContract, [param.name]);
+      if (carried !== null) alternatives.push(carried);
+    }
+    const known = alternatives.map(contractType).filter((typ): typ is Type => typ !== null);
+    types.set(param.name, joinedAlternatives(known));
+  }
+  types.set("output", nodeOutputType(flow, node));
+  if (wiring.has(STEER_INBOX_KEY)) {
+    const source = wiring.get(STEER_INBOX_KEY);
+    const inbox = contractType(resolveOutputBindingContract(source, producers, inputs, { typeFn }));
+    types.set("event", inbox !== null && isInboxType(inbox) ? (inbox.element ?? null) : null);
+  }
+  LOCAL_TYPES.set(node, types);
+  return types;
+}
+
+/** Return the element type `item` has in MAP node `node`, from `itemContract`; `null` when untyped. */
+export function itemDeclaredType(flow: Flow, node: Node): Type | null {
+  const [producers, inputs] = flowContracts(flow);
+  const wiring = flow.wiring.get(node.id) ?? new Map<string, unknown>();
+  const typeFn = (name: string) => node.types.get(name) ?? null;
+  return contractType(itemContract(node, wiring, producers, inputs, typeFn));
 }

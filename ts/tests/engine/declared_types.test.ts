@@ -6,7 +6,7 @@
 
 import { expect, test } from "bun:test";
 
-import { poolDeclaredTypes } from "../../src/compile/declared_types.ts";
+import { itemDeclaredType, localTypes, poolDeclaredTypes } from "../../src/compile/declared_types.ts";
 import { cloneChild } from "../../src/compile/expand.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -95,4 +95,99 @@ output: \${input.note :- "none"}
   const declared = poolDeclaredTypes(cloned);
   expectType(declared([start, "output", "note"]), str);
   expect(declared([start, "output", "nope"])).toBeNull();
+});
+
+const LOCALS_FLOW = `id: f
+name: f
+llm_config: {provider: anthropic, model: claude-test}
+typedefs:
+  Rec:
+    k: str
+    opt: Optional(str)
+  Ev:
+    text: str
+    opt: Optional(str)
+input:
+  notes: !Inbox(Ev)
+  xs: !list(Rec)
+nodes:
+  a:
+    kind: code
+    output: Rec
+    code: |
+      return {k: "x"}
+  use:
+    kind: code
+    output: Rec
+    input:
+      r: \${a.output :- null}
+      t: !Rec \${a.output}
+    asserts:
+      - "\${output.k != null}"
+    code: |
+      return r
+  pick:
+    kind: case
+    cases:
+      - when: \${a.output.opt == null}
+        then: yes
+    else: no
+  "yes":
+    kind: code
+    code: |
+      return 1
+  "no":
+    kind: code
+    code: |
+      return 2
+  chat:
+    kind: agent
+    steer_inbox:
+      from: \${input.notes}
+      render: "\${event.text}"
+    prompt: Help.
+    output: str
+  each:
+    kind: map
+    over: \${input.xs}
+    input:
+      v: !str \${item.opt :- "d"}
+    nodes:
+      one:
+        kind: code
+        code: |
+          return input.v
+    output: \${one.output}
+asserts:
+  - "\${a.output.k != null}"
+output:
+  x: \${use.output}
+  e: \${a.output}
+  c: \${chat.output}
+  m: \${each.output}
+`;
+
+/** Expect `actual` to be a record type declaring `field`. */
+function expectDeclares(actual: Type | null | undefined, field: string): void {
+  expect(actual?.fields?.has(field)).toBe(true);
+}
+
+test("a node's locals take their params' or bindings' declared types", async () => {
+  const flow = await compiled(LOCALS_FLOW);
+  const use = localTypes(flow, flow.nodes.get("use")!);
+  expectDeclares(use.get("r"), "opt"); // untyped, from its pass-through binding
+  expectDeclares(use.get("t"), "opt"); // !Rec
+  expectDeclares(use.get("output"), "opt"); // the node's own output, for a post assert
+  expect(localTypes(flow, flow.nodes.get("use")!)).toBe(use); // memoized per node
+  expectDeclares(localTypes(flow, flow.nodes.get("pick")!).get("__r0"), "opt"); // a searched CASE's hoisted root
+  const event = localTypes(flow, flow.nodes.get("chat")!).get("event");
+  expectDeclares(event, "text"); // the steer inbox's element type
+  expectDeclares(localTypes(flow, flow.nodes.get(flow.endId)!).get("__assert_a"), "opt"); // a flow assert's local
+  expect(localTypes(flow, flow.nodes.get("yes")!).get("anything")).toBeUndefined();
+});
+
+test("item in a MAP has the element type of its item source", async () => {
+  const flow = await compiled(LOCALS_FLOW);
+  expectDeclares(itemDeclaredType(flow, flow.nodes.get("each")!), "opt");
+  expect(itemDeclaredType(flow, flow.nodes.get("use")!)).toBeNull();
 });

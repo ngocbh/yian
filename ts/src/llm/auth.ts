@@ -352,10 +352,10 @@ export function dropCredentialTail(text: string, credentials: Iterable<string>):
   while (end > 0 && text.length - end < longest && !/\s/.test(text[end - 1]!)) end--;
   text = text.slice(0, end).trimEnd();
   let cut = text.length;
+  const lower = (value: string): string => value.replace(/[A-Z]/g, (char) => char.toLowerCase());
   for (const form of forms) {
     const max = Math.min(form.text.length - 1, text.length);
     // Lowered once per form, ASCII only so lengths stay; an ignoreCase form is all escapes.
-    const lower = (value: string): string => value.replace(/[A-Z]/g, (char) => char.toLowerCase());
     const tail = form.ignoreCase ? lower(text.slice(text.length - max)) : text.slice(text.length - max);
     const start = form.ignoreCase ? lower(form.text) : form.text;
     // Only a tail longer than the one already found can move the cut.

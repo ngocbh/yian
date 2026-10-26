@@ -295,12 +295,11 @@ function attach(snapshot: ConnectionSnapshot, config: AgentConfig): void {
  */
 function hostSettingsRecord(hostSettings: HostConnection | null): Record<string, unknown> {
   const recorded: Record<string, unknown> = {};
-  if (hostSettings !== null) {
-    if (hostSettings.organization !== null) recorded["organization"] = hostSettings.organization;
-    if (hostSettings.project !== null) recorded["project"] = hostSettings.project;
-    const names = Object.keys(hostSettings.headers ?? {});
-    if (names.length > 0) recorded[HEADER_NAMES_KEY] = names.sort(compareCodeUnits);
-  }
+  if (hostSettings === null) return recorded;
+  if (hostSettings.organization !== null) recorded["organization"] = hostSettings.organization;
+  if (hostSettings.project !== null) recorded["project"] = hostSettings.project;
+  const names = Object.keys(hostSettings.headers ?? {});
+  if (names.length > 0) recorded[HEADER_NAMES_KEY] = names.sort(compareCodeUnits);
   return recorded;
 }
 
@@ -591,8 +590,8 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
     }
     if (selection.method === "api_key") Object.assign(connections[selection.provider]!, selectionSettings(selection));
   }
-  for (const keyed of SUPPORTED_LLM_PROVIDERS) {
-    if (KEYED.has(keyed) && keyed !== "openai" && !Object.hasOwn(connections, keyed)) {
+  for (const keyed of KEYED) {
+    if (keyed !== "openai" && !Object.hasOwn(connections, keyed)) {
       connections[keyed] = structuredClone(ENVIRONMENT_CONNECTION);
     }
   }

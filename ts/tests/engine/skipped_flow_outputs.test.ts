@@ -1124,3 +1124,27 @@ test("a null guard lifts the skipped-arithmetic error", () => {
   const int = gate("n", "rejected") + code("n", "2", "int") + code("rejected", '"no"');
   expect(() => assembleText(flow(int, "\n  q: ${n.output != null and n.output + 1 > 1}"))).not.toThrow();
 });
+
+// --- declared fields at run time (#1149) --- //
+
+const REC = "typedefs:\n  Rec:\n    k: str\n    opt: Optional(str)\n";
+/** CODE `a` returns `{k: "x"}` under `output` (`Rec`, or none); `use` binds `v` from `source` and returns it. */
+function readsA(source: string, output: string | null): string {
+  const a = output === null ? '  a:\n    kind: code\n    code: |\n      return {k: "x"}\n' : code("a", '{k: "x"}', output);
+  const use = code("use", 'inputs["v"]', "str", `    input:\n      v: ${source}\n`);
+  return flow(a + use, " ${use.output}", { typedefs: REC });
+}
+
+test("a declared field that is absent reads null in a binding; an undeclared key raises", async () => {
+  expect(await run(readsA('${a.output.opt :- "d"}', "Rec"), { approve: true })).toBe("d");
+  await runFails(readsA('${a.output.opt :- "d"}', null), { approve: true }, "binding.evaluate");
+  expect(await run(readsA('${a.output?.opt :- "d"}', null), { approve: true })).toBe("d");
+});
+
+test("an omitted optional CALL input reads null through the renamed START", async () => {
+  const defs =
+    "defs:\n  child:\n    input:\n      k: !str\n      note: !Optional(str)\n    nodes: {}\n" +
+    '    output: ${input.note :- "none"}\n';
+  const nodes = '  c:\n    kind: call\n    call: child\n    input:\n      k: "a"\n';
+  expect(await run(flow(nodes, " ${c.output}", { defs }), { approve: true })).toBe("none");
+});

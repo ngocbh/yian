@@ -19,6 +19,7 @@
  * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
  */
 
+import { itemDeclaredType, localTypes, poolDeclaredTypes } from "../compile/declared_types.ts";
 import type { CompiledFlow, Flow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { ResolvedValue, type SourceRef, ValueRoute } from "../expr/lineage.ts";
@@ -569,6 +570,9 @@ async function evaluateNode(
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
   const usesBaseTemplate = node.run === Node.prototype.run;
+  // The declared types field reads go through: a declared field that is absent reads null.
+  const declared = flow !== null ? poolDeclaredTypes(flow) : null;
+  const itemType = flow !== null && node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
   const reservedSources = new Set<string>();
   const reservedBinder: ReservedBinder | null =
     collector === null
@@ -590,6 +594,7 @@ async function evaluateNode(
           types: node.types,
           labels: node.bindingLabels,
           finishCapture: false,
+          declared,
         });
     let reserved: Record<string, unknown>;
     try {
@@ -684,6 +689,8 @@ async function evaluateNode(
           sourceResolver,
           types: node.types,
           labels: node.bindingLabels,
+          declared,
+          itemType,
         });
       } catch (error) {
         if (error instanceof BindingError) {

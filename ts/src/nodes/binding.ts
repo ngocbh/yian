@@ -32,11 +32,12 @@
 import { compareCodeUnits, type OriginRef, reprText } from "../diagnostics.ts";
 import {
   ConstructorTypeError,
+  type DeclaredTypes,
   ExpressionError,
   evalBinding,
   evalTemplate,
-  resolveReference,
   type RootResolver,
+  resolveReference,
   scanTemplate,
 } from "../expr/index.ts";
 import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
@@ -502,17 +503,27 @@ class SourceReader {
   readonly trace: boolean;
   readonly sourceResolver: SourceResolver | null;
   readonly types: ReadonlyMap<string, Type> | null;
+  readonly declared: DeclaredTypes | null;
+  readonly itemType: Type | null;
 
   constructor(
     pool: VariablePool,
     item: Value | ResolvedValue,
-    options: { trace: boolean; sourceResolver: SourceResolver | null; types: ReadonlyMap<string, Type> | null },
+    options: {
+      trace: boolean;
+      sourceResolver: SourceResolver | null;
+      types: ReadonlyMap<string, Type> | null;
+      declared: DeclaredTypes | null;
+      itemType: Type | null;
+    },
   ) {
     this.pool = pool;
     this.item = item;
     this.trace = options.trace;
     this.sourceResolver = options.sourceResolver;
     this.types = options.types;
+    this.declared = options.declared;
+    this.itemType = options.itemType;
   }
 
   /**
@@ -528,12 +539,14 @@ class SourceReader {
     if (!this.trace) {
       // The item may be a traced caller's `ResolvedValue`; an untraced read needs just its value.
       const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
-      const value = evalBinding(text, (names) => resolveReference(names, this.pool), { item, types: this.types });
+      const { types, declared, itemType } = this;
+      const value = evalBinding(text, (names) => resolveReference(names, this.pool), { item, types, declared, itemType });
       return [value, null, false];
     }
     const resolve = this.sourceResolver ?? ((names: readonly string[]) => resolveReference(names, this.pool));
     const segments = scanTemplate(text);
-    const result = evalTemplate(segments, resolve, { trace: true, item: this.item, types: this.types });
+    const { item, types, declared, itemType } = this;
+    const result = evalTemplate(segments, resolve, { trace: true, item, types, declared, itemType });
     return [result.value, result.route, segments.some((segment) => segment instanceof Span)];
   }
 
@@ -639,6 +652,8 @@ class SourceReader {
  * (default `null`) pairs values with accepted producer identities in one read, and is used only
  * with a `collector`. Without it, capture records no producer identity. `types` (default `null`,
  * no types) is the table an `isinstance(x, T)` or a `T(...)` constructor looks `T` up in.
+ * `declared` (default `null`) gives a reference root's declared type and `itemType` (default
+ * `null`) `item`'s, so a field they declare reads null when it's absent.
  * `label`, when set, names the parameter in a template error message in place of
  * `binding '<name>'`; a function label names the path inside the template the error is at.
  * `name` defaults to `""` and `item` to `null`.
@@ -658,16 +673,19 @@ export function resolveSource(
     label?: ErrorLabel | null;
     sourceResolver?: SourceResolver | null;
     types?: ReadonlyMap<string, Type> | null;
+    declared?: DeclaredTypes | null;
+    itemType?: Type | null;
   } = {},
 ): unknown {
   const { item = null, collector = null, name = "", label = null, sourceResolver = null, types = null } = options;
+  const { declared = null, itemType = null } = options;
   const origin = sourceOrigin(source);
   const sourceValue = bindingSource(source);
   if (typeof sourceValue !== "string" && !(sourceValue instanceof ValueTemplate)) {
     collector?.recordSource(name, ValueRoute.literal(sourceValue), false);
     return sourceValue;
   }
-  const reader = new SourceReader(pool, item, { trace: collector !== null, sourceResolver, types });
+  const reader = new SourceReader(pool, item, { trace: collector !== null, sourceResolver, types, declared, itemType });
   let read: SourceRead;
   if (sourceValue instanceof ValueTemplate) {
     read = reader.tree(sourceValue.value, [], name, sourceValue, origin, label);
@@ -774,6 +792,9 @@ export function copyValue(value: Value, copies: Map<object, Value> = new Map()):
  *   bindings; `null` (the default) reads the pool and records no producer identity.
  * @param options.types The type table an `isinstance(x, T)` or a `T(...)` in a source looks `T`
  *   up in, keyed by type name (the node's `types`); `null` (the default) means no types.
+ * @param options.declared The declared type of a reference root, given its names (the flow's pool
+ *   roots); `null` (the default) leaves every field read undeclared.
+ * @param options.itemType The declared type of `item`; `null` (the default) leaves it undeclared.
  * @param options.labels Param name -> author-facing phrase an error message uses in place of
  *   `input '<param>'` / `binding '<param>'` (the node's binding labels); a param without one
  *   keeps the default text. Defaults to `null`.
@@ -799,10 +820,13 @@ export function bindParams(
     types?: ReadonlyMap<string, Type> | null;
     labels?: ReadonlyMap<string, string> | null;
     finishCapture?: boolean;
+    declared?: DeclaredTypes | null;
+    itemType?: Type | null;
   } = {},
 ): ValueRecord {
   const { item = null, collector = null, sourceResolver = null, types = null, labels = null, finishCapture = true } =
     options;
+  const { declared = null, itemType = null } = options;
   validateParameters(params);
   collector?.invalidate();
   const record: ValueRecord = {};
@@ -821,6 +845,8 @@ export function bindParams(
         label,
         sourceResolver,
         types,
+        declared,
+        itemType,
       });
       rejectInvalidBinding(value, inputWhere, sourceOrigin(source));
       if (present && source instanceof Binding && source.contract !== null) {

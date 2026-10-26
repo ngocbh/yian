@@ -824,10 +824,9 @@ export function outputContractType(contract: OutputContract | null): Type | null
   if (isExactly(contract, PartialRecordContract)) {
     contract.validateShape();
     for (const [, fieldContract] of contract.fields) {
-      if (fieldContract !== null) {
-        if (!(fieldContract.type instanceof Type)) throw new TypeError("value contract type must be a Type");
-        fieldContract.type.validateShape();
-      }
+      if (fieldContract === null) continue;
+      if (!(fieldContract.type instanceof Type)) throw new TypeError("value contract type must be a Type");
+      fieldContract.type.validateShape();
     }
     return null;
   }
@@ -1158,7 +1157,6 @@ export interface CallView {
   /** The call's deadline as a UTC record time, or null when it has none. */
   readonly deadline: string | null;
 }
-
 
 /**
  * The durable steps one start of a node reads and records, from the engine. Frozen.

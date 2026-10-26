@@ -982,6 +982,12 @@ export interface NodeCaps {
   readonly openSteerInbox?: (inbox: string) => SteerInbox;
   /** The run's environment and model builder; supplied to a node that declares `needsModels`. */
   readonly models?: ModelAccess;
+  /**
+   * The declared type of each of the node's locals (its inputs, `output` for a post assert,
+   * `event` for `render:`), so a field they declare reads null when it's absent; absent leaves
+   * every local undeclared.
+   */
+  readonly localTypes?: ReadonlyMap<string, Type | null>;
 }
 
 /**

@@ -540,7 +540,8 @@ class SourceReader {
       // The item may be a traced caller's `ResolvedValue`; an untraced read needs just its value.
       const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
       const { types, declared, itemType } = this;
-      const value = evalBinding(text, (names) => resolveReference(names, this.pool), { item, types, declared, itemType });
+      const resolve = (names: readonly string[]) => resolveReference(names, this.pool);
+      const value = evalBinding(text, resolve, { item, types, declared, itemType });
       return [value, null, false];
     }
     const resolve = this.sourceResolver ?? ((names: readonly string[]) => resolveReference(names, this.pool));

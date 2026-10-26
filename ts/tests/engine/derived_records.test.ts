@@ -658,3 +658,29 @@ test("a run that doesn't learn rebuilds no child START capture", async () => {
   // turn; a run that doesn't learn has no trace to give it to.
   expect(await childStarts(true)).toBe((await childStarts(false)) + 3);
 });
+
+test("a derived child END reads a declared field that is absent as null, learnable or not", async () => {
+  const text = `
+id: opt
+name: opt
+typedefs:
+  Rec: {k: str, opt: Optional(str)}
+defs:
+  child:
+    nodes:
+      a:
+        kind: code
+        output: Rec
+        code: |
+          return {k: "x"}
+    output: \${a.output.opt :- "d"}
+nodes:
+  c: {kind: call, call: child}
+output: \${c.output}
+`;
+  for (const learnable of [false, true]) {
+    const result = await runFlow(await load(text), {}, { learnable, log: freshLog(), runId: "r1", env: NO_ENV });
+    expect(result.failure?.message).toBeUndefined();
+    expect(result.output).toBe("d");
+  }
+});

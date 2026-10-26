@@ -945,7 +945,9 @@ function bindPool(
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow.wiring.get(node.id) ?? new Map());
   const params = node.params ?? [];
-  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels };
+  const declared = poolDeclaredTypes(flow);
+  const itemType = node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
+  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels, declared };
   const record: Record<string, unknown> = node.bindsPerItem
     ? {}
     : bindParams(params, nodeWiring, pool, { ...bindOptions, collector, finishCapture: false });
@@ -968,13 +970,17 @@ function bindPool(
   }
   const inputs = applyDefaults(params, record);
   collector?.finish(inputs as ValueRecord);
-  const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal: new AbortController().signal };
+  const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
+    signal: new AbortController().signal,
+    localTypes: localTypes(flow, node),
+  };
   if (node.bindsPerItem) {
     caps.bindItem = (element, index) => {
-      if (collector === null) return bindParams(params, nodeWiring, pool, { ...bindOptions, item: element });
+      if (collector === null) return bindParams(params, nodeWiring, pool, { ...bindOptions, item: element, itemType });
       const key = node.itemSourceKey;
       const item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
-      return bindParams(params, nodeWiring, pool, { ...bindOptions, item, collector: collector.forItem(index) });
+      const itemCollector = collector.forItem(index);
+      return bindParams(params, nodeWiring, pool, { ...bindOptions, item, itemType, collector: itemCollector });
     };
   }
   return { inputs, caps };

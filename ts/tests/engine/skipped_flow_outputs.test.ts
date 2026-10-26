@@ -1130,7 +1130,8 @@ test("a null guard lifts the skipped-arithmetic error", () => {
 const REC = "typedefs:\n  Rec:\n    k: str\n    opt: Optional(str)\n";
 /** CODE `a` returns `{k: "x"}` under `output` (`Rec`, or none); `use` binds `v` from `source` and returns it. */
 function readsA(source: string, output: string | null): string {
-  const a = output === null ? '  a:\n    kind: code\n    code: |\n      return {k: "x"}\n' : code("a", '{k: "x"}', output);
+  const untyped = '  a:\n    kind: code\n    code: |\n      return {k: "x"}\n';
+  const a = output === null ? untyped : code("a", '{k: "x"}', output);
   const use = code("use", 'inputs["v"]', "str", `    input:\n      v: ${source}\n`);
   return flow(a + use, " ${use.output}", { typedefs: REC });
 }

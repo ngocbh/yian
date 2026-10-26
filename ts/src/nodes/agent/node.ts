@@ -19,7 +19,13 @@
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import type { FeedbackValue } from "../../expr/lineage.ts";
-import { ExpressionError, ResolveMode, resolveInRecord } from "../../expr/expressions.ts";
+import {
+  type DeclaredTypes,
+  ExpressionError,
+  localDeclared,
+  ResolveMode,
+  resolveInRecord,
+} from "../../expr/expressions.ts";
 import { evalTemplate, renderTemplateRecord, scanTemplate } from "../../expr/template.ts";
 import type { HostConnection } from "../../llm_clients/config.ts";
 import { scrubCallCredentials } from "../../llm_clients/connection.ts";
@@ -264,16 +270,22 @@ function notAMessage(nodeId: string, index: number, ref: string, reason: string 
  *   can send (`checkModelConversation`); that error names the prompt item holding the offending
  *   message, for an unanswered call the assistant message that made it.
  */
-function renderPromptList(nodeId: string, items: readonly PromptItem[], record: ValueRecord): PromptMessage[] {
+function renderPromptList(
+  nodeId: string,
+  items: readonly PromptItem[],
+  record: ValueRecord,
+  declared: DeclaredTypes | null = null,
+): PromptMessage[] {
   const messages: PromptMessage[] = [];
   items.forEach((item, index) => {
     if (!("splice" in item)) {
-      messages.push(textMessage(item.role, renderTemplateRecord(item.text, record), index));
+      messages.push(textMessage(item.role, renderTemplateRecord(item.text, record, declared), index));
       return;
     }
     const ref = `\${${item.splice}}`;
     const value = evalTemplate(scanTemplate(ref), (names) => resolveInRecord(names, record), {
       mode: ResolveMode.STRICT_RAISE,
+      declared,
     });
     const spliced: readonly unknown[] = isList(value) ? value : [value];
     for (const one of spliced) messages.push(splicedMessage(nodeId, index, ref, one));
@@ -960,7 +972,8 @@ export class AgentNode extends Node {
     }
     // Opened before anything renders, so a replaying agent already reads its inbox.
     const steerInbox = this.steerInbox ? openSteerInbox(caps, inputs[STEER_INBOX_KEY] as string) : undefined;
-    const rendered = this.renderPrompt(inputs, caps.skills ?? null, { signal: caps.signal });
+    const { signal, localTypes } = caps;
+    const rendered = this.renderPrompt(inputs, caps.skills ?? null, { signal, localTypes });
     const { systemPrompt, promptText, baseSystemPrompt } = rendered;
     const config = this.callConfig(inputs);
     const models = caps.models ?? defaultModelAccess();
@@ -1056,9 +1069,13 @@ export class AgentNode extends Node {
   private renderPrompt(
     inputs: Readonly<Record<string, unknown>>,
     skills: ReadonlyMap<string, Skill> | null,
-    options: { capture?: (captured: Readonly<Record<string, unknown>>) => void; signal?: AbortSignal } = {},
+    options: {
+      capture?: (captured: Readonly<Record<string, unknown>>) => void;
+      signal?: AbortSignal;
+      localTypes?: ReadonlyMap<string, Type | null> | null;
+    } = {},
   ): AgentPrompt {
-    const { capture, signal } = options;
+    const { capture, signal, localTypes = null } = options;
     const template = typeof this.prompt === "string" ? this.prompt : logJson(authoredPrompt(this.prompt));
     const captured: Record<string, unknown> | null =
       capture === undefined
@@ -1084,14 +1101,19 @@ export class AgentNode extends Node {
         captured["variables"] = captureValue(() => copyValue(variables));
       }
       const record = { ...inputs, ...variables } as ValueRecord;
+      // The inputs' declared types, and each variable's contract.
+      const types = new Map(localTypes ?? []);
+      for (const variable of this.variables) types.set(variable.name, (variable.contract as ValueContract).type);
+      const declared = localDeclared(types);
       if (typeof this.prompt === "string") {
-        messages = [textMessage("user", renderTemplateRecord(this.prompt, record), 0)];
+        messages = [textMessage("user", renderTemplateRecord(this.prompt, record, declared), 0)];
         if (captured !== null) captured["rendered_prompt"] = messages[0]!.text;
       } else {
-        messages = renderPromptList(this.id, this.prompt, record);
+        messages = renderPromptList(this.id, this.prompt, record, declared);
         if (captured !== null) captured["rendered_prompt"] = logJson(messages.map((message) => message.captured));
       }
-      systemPrompt = this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record);
+      systemPrompt =
+        this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record, declared);
     } finally {
       if (captured !== null) capture?.(captured);
     }
@@ -1123,7 +1145,7 @@ export class AgentNode extends Node {
     let captured: Record<string, unknown> = {};
     try {
       // No skills: the grants are read after the capture, which is all this needs.
-      this.renderPrompt(inputs, null, { capture: (data) => void (captured = { ...data }) });
+      this.renderPrompt(inputs, null, { capture: (data) => void (captured = { ...data }), localTypes });
     } catch (error) {
       if (error instanceof CapabilityFault) throw error;
     }
@@ -1216,7 +1238,7 @@ export class AgentNode extends Node {
     let rendered: AgentPrompt;
     let memoryContext: MemoryContext;
     try {
-      rendered = this.renderPrompt(inputs, caps.skills);
+      rendered = this.renderPrompt(inputs, caps.skills, { localTypes: caps.localTypes });
       memoryContext = await caps.openMemoryContext(rendered.systemPrompt, rendered.promptText);
     } catch (error) {
       if (!isRebuildRefusal(error)) throw error;

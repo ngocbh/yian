@@ -668,6 +668,8 @@ export interface MaterialCaps {
   readonly models: ModelAccess | null;
   /** Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does. */
   readonly openMemoryContext: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+  /** The declared type of each of the node's locals, as `NodeCaps.localTypes` gives it. */
+  readonly localTypes?: ReadonlyMap<string, Type | null>;
 }
 
 /**

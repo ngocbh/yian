@@ -60,6 +60,7 @@ import { isNonPromptBuiltin, TEMPLATE_FNS } from "./builtins.ts";
 import {
   checkCalls,
   conversionHint,
+  type DeclaredTypes,
   type EvalOptions,
   evalExpr,
   ExpressionError,
@@ -663,14 +664,17 @@ export function rewriteConditionReads(
  *
  * @param text The prompt template.
  * @param record The node's bound input record.
+ * @param declared The declared type of each input, given a reference's names (`localDeclared`);
+ *   `null` (the default) leaves every field read undeclared.
  * @returns The rendered prompt.
  * @throws {RequiredError} When a span's `head :? message` head misses or is `null`.
  * @throws {ExpressionError} On a malformed span, an unresolved reference, a final `null` span
  *   value, an unknown builtin or one that fails, or a value the runtime can't write as text.
  */
-export function renderTemplateRecord(text: string, record: ValueRecord): string {
+export function renderTemplateRecord(text: string, record: ValueRecord, declared: DeclaredTypes | null = null): string {
   const value = evalTemplate(scanTemplate(text), (names) => resolveInRecord(names, record), {
     mode: ResolveMode.STRICT_RAISE,
+    declared,
   });
   return asText(value);
 }

@@ -770,7 +770,7 @@ function deadlineMs(call: Call): number | null {
 export function dueTimeouts(w: WaitsState, nowMs: number): ReadonlyMap<string, readonly string[]> {
   const due = new Map<string, readonly string[]>();
   for (const [nodeId, waiting] of w.waiting) {
-    const open = waiting.callIds.map((callId) => w.calls.get(callId)).filter((call) => call?.state === "open") as Call[];
+    const open = waiting.callIds.map((callId) => w.calls.get(callId)).filter((call): call is Call => call?.state === "open");
     const past = open.filter((call) => {
       const ms = deadlineMs(call);
       return ms !== null && ms <= nowMs;

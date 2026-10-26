@@ -208,3 +208,60 @@ test("call post assert survives recovery false", async () => {
   expect(failed[0]!.failure.causeType).toBe("NodeAssertFailed");
   expect(res.failure!.nodeId).toBe("gate/__end__");
 });
+
+// --- declared fields at run time (#1149) --- //
+
+// A child with an optional `note` input, returning its `k` input.
+const NOTED_CHILD = `
+id: noted
+name: noted
+typedefs:
+  Rec: {k: str, opt: Optional(str)}
+input:
+  k: !str
+  note: !Optional(str)
+  rec: !Optional(Rec)
+nodes: {}
+output: \${input.rec?.opt :- input.k}
+`;
+
+/** A parent calling `noted` with `k` and its own optional input `n` as `note`, carrying `asserts`. */
+function notedParent(asserts: string): string {
+  return `
+id: noted-parent
+name: noted_parent
+uses:
+  noted: noted
+input:
+  n: !Optional(str)
+nodes:
+  c:
+    kind: call
+    call: noted
+    input:
+      k: a
+      note: \${input.n}
+    asserts:
+${asserts}
+output: \${c.output}
+`;
+}
+
+test("a call post assert reads an optional input left out of the run as null through the child START", async () => {
+  // The END's synth binding `${c/__start__.output.note :- null}` reads a key START declares.
+  const loaded = await loadConformanceFlow(notedParent('      - note == null or note == "x"'), {
+    childResolver: childResolver({ noted: NOTED_CHILD }),
+  });
+  const res = await runFlow(loaded, {}, { env: hostEnv(dir) });
+  expect(res.failure?.message).toBeUndefined();
+  expect(res.output).toBe("a");
+});
+
+test("a child reading a field of an omitted Optional input needs ?.", async () => {
+  // `rec` isn't passed, so the child reads `${input.rec?.opt}` as null and falls back to `k`.
+  const child = NOTED_CHILD.replace("${input.rec?.opt :- input.k}", "${input.rec.opt :- input.k}");
+  const error = await rejected(
+    loadConformanceFlow(notedParent("      - output != null"), { childResolver: childResolver({ noted: child }) }),
+  );
+  expect((error as { diagnostic?: { code: string } }).diagnostic?.code).toBe("expr.nullable_field_read");
+});

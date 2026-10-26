@@ -52,6 +52,43 @@ export function messagesKey(nodeId: string): string {
   return `${nodeId}.${NEW_MESSAGES}`;
 }
 
+/**
+ * A reference root's pool entry: `name`, or `null` when the root names no entry here; how many
+ * names the root used; and the START record's key for `input.<k>`.
+ */
+export interface PoolRoot {
+  readonly name: string | null;
+  readonly used: number;
+  readonly key?: string;
+}
+
+/**
+ * Return the pool entry a reference's root reads: `<node>.output` reads `<node>`,
+ * `<node>.new_messages` reads `messagesKey(<node>)`, `input.<k>` reads key `k` of the START
+ * record (`startId`), and `system.<k>` reads the system value `system.<k>`. A node root names
+ * its entry only when `holds` says the pool holds it; any other head names none.
+ */
+export function referenceRoot(names: readonly string[], startId: string, holds: (name: string) => boolean): PoolRoot {
+  const used = poolRootLength(names);
+  if (used === 1) return { name: null, used };
+  const [head, second] = names as [string, string];
+  if (head === "input") return { name: startId, used, key: second };
+  if (head === "system") return { name: `system.${second}`, used };
+  const name = second === "output" ? head : messagesKey(head);
+  return { name: holds(name) ? name : null, used };
+}
+
+/**
+ * One root read without its source: how many names the root used, whether it is there, its
+ * value (`null` when absent), and why it is absent (`null` when present or unknown).
+ */
+export interface RootValue {
+  readonly used: number;
+  readonly present: boolean;
+  readonly value: Value;
+  readonly why: string | null;
+}
+
 /** A variable pool's wire object: each namespace's values as `{kind, value}`, and the START id. */
 export interface PoolWire {
   store: Record<string, TypedWire>;
@@ -120,6 +157,25 @@ export class VariablePool {
   get(nodeId: string, fallback: Value = null): Value {
     const seg = this.store.get(nodeId);
     return seg !== undefined ? seg.toObject() : fallback;
+  }
+
+  /**
+   * Read a reference's root (`referenceRoot`) from the pool; the evaluator walks the names after
+   * it. A root that names no entry, an `input.<k>` the START record lacks, or an unset system
+   * value is absent; a stored `null` is present.
+   */
+  readRoot(names: readonly string[]): RootValue {
+    const root = referenceRoot(names, this.startId, (name) => this.store.has(name));
+    const absent = (why: string | null): RootValue => ({ used: root.used, present: false, value: null, why });
+    if (root.used === 1) return absent(null);
+    const [head, key] = names as [string, string];
+    if (head === "input") {
+      const [present, value] = fieldOf(this.store.get(this.startId)?.toObject() ?? null, key);
+      return present ? { used: root.used, present, value, why: null } : absent(`input '${key}' was not given`);
+    }
+    const typed = head === "system" ? this.system.get(key) : root.name !== null ? this.store.get(root.name) : undefined;
+    if (typed !== undefined) return { used: root.used, present: true, value: typed.toObject(), why: null };
+    return absent(head === "system" ? `system value '${key}' is not set` : `node '${head}' was skipped`);
   }
 
   /**

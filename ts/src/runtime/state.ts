@@ -5494,7 +5494,7 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
   if (record.value === null) throw new RangeError("a run-start pool_commit holds its value, not from");
   const value = TypedValue.fromWire(record.value).toObject();
   if (key === startId) {
-    if (state.pool.resolve("system", ["run_id"]) !== state.runId) {
+    if (state.pool.readRoot(["system", "run_id"]).value !== state.runId) {
       throw new RangeError("the run start commits system.run_id, equal to the run id, before the START inputs");
     }
     if (!isRecord(value)) throw new RangeError("the START inputs' pool_commit must hold a record");

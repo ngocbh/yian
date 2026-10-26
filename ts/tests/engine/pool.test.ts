@@ -18,7 +18,7 @@ import { describe, expect, test } from "bun:test";
 import { optionalInsideRoot } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { JSONDecodeError } from "../../src/typesys/json.ts";
-import { poolRootLength, VariablePool } from "../../src/typesys/pool.ts";
+import { poolRootLength, referenceRoot, VariablePool } from "../../src/typesys/pool.ts";
 import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/values.ts";
 
 // The START node's id; `boundary_ids.test.ts` pins the pool's default to `StartNode.ID`.
@@ -304,4 +304,34 @@ test("a pool root takes two names under a namespace, else one", () => {
 test("a comprehension variable is a one-name root, so ?. after it is never inside its root", () => {
   expect(optionalInsideRoot(parseExpr("[m?.output for m in xs]"), poolRootLength)).toBeNull();
   expect(optionalInsideRoot(parseExpr("[m.output for m in a?.output]"), poolRootLength)).toContain("${a.output}");
+});
+
+test("referenceRoot names the pool entry and how many names the root used", () => {
+  const holds = (name: string) => name === "a" || name === "a.new_messages";
+  expect(referenceRoot(["a", "output", "k"], START_ID, holds)).toEqual({ name: "a", used: 2 });
+  expect(referenceRoot(["a", "new_messages"], START_ID, holds)).toEqual({ name: "a.new_messages", used: 2 });
+  expect(referenceRoot(["input", "k", "x"], START_ID, holds)).toEqual({ name: START_ID, used: 2, key: "k" });
+  expect(referenceRoot(["system", "now"], START_ID, holds)).toEqual({ name: "system.now", used: 2 });
+  expect(referenceRoot(["b", "output", "k"], START_ID, holds)).toEqual({ name: null, used: 2 });
+  expect(referenceRoot(["x", "k"], START_ID, holds)).toEqual({ name: null, used: 1 });
+});
+
+test("the pool reads a root: a present null is not missing", () => {
+  const pool = new VariablePool();
+  pool.set(START_ID, { k: null });
+  pool.set("a", { k: 1n });
+  pool.addSystem("now", "2026-10-25");
+  expect(pool.readRoot(["input", "k", "x"])).toEqual({ used: 2, present: true, value: null, why: null });
+  expect(pool.readRoot(["input", "j"])).toEqual({ used: 2, present: false, value: null, why: "input 'j' was not given" });
+  expect(pool.readRoot(["a", "output", "k"])).toEqual({ used: 2, present: true, value: { k: 1n }, why: null });
+  expect(pool.readRoot(["b", "output"])).toEqual({ used: 2, present: false, value: null, why: "node 'b' was skipped" });
+  expect(pool.readRoot(["b", "new_messages"])).toEqual({ used: 2, present: false, value: null, why: "node 'b' was skipped" });
+  expect(pool.readRoot(["system", "now"])).toEqual({ used: 2, present: true, value: "2026-10-25", why: null });
+  expect(pool.readRoot(["system", "later"])).toEqual({
+    used: 2,
+    present: false,
+    value: null,
+    why: "system value 'later' is not set",
+  });
+  expect(pool.readRoot(["x", "k"])).toEqual({ used: 1, present: false, value: null, why: null });
 });

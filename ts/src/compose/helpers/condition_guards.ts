@@ -32,13 +32,16 @@
  * true `or` chain) prove `NOTHING`, since it may be the operand that decided the chain. So guards
  * of authored conditions stay small.
  *
+ * A comprehension variable read is keyed by its binding occurrence (`compVarKey`, such as
+ * `m@12`), so its path is `m@12.k` and two comprehensions that both bind `m` don't mix.
+ *
  * Knows about: `expr` parse trees and `directReferenceParts`.
  * Never imports: types, `compose/validate`.
  */
 
 import { isinstanceSubject, isinstanceTypeNames } from "../../expr/index.ts";
-import { ISINSTANCE, referencePath, valueArgs } from "../../expr/expressions.ts";
-import { callSuffixOf, type ExprNode, Token, Tree } from "../../expr/grammar.ts";
+import { ISINSTANCE, referencePath, splitReference, valueArgs } from "../../expr/expressions.ts";
+import { callSuffixOf, compVarKey, type ExprNode, Token, Tree } from "../../expr/grammar.ts";
 import { directReferenceParts } from "../../compile/output_contracts.ts";
 
 /** An `isinstance(<base>, <typeName>)` check on a plain reference; frozen. */
@@ -245,10 +248,24 @@ function isNull(node: ExprNode): boolean {
   return node instanceof Token && node.type === "NULL";
 }
 
+/** Return a comprehension variable read's path parts, `[key, ...steps]`, else `null`. */
+function variableParts(node: ExprNode): string[] | null {
+  if (!(node instanceof Tree) || node.data !== "comp_var") return null;
+  const key = compVarKey(node);
+  return key === null ? null : [key, ...splitReference(node).steps.map((step) => step.name)];
+}
+
+/** Return the path parts of a check's subject: a plain reference or a comprehension variable read. */
+function subjectParts(node: ExprNode): string[] | null {
+  return variableParts(node) ?? directReferenceParts(node);
+}
+
 /**
  * Return the check a sub-expression is, and the value it has when the sub-expression is true.
  *
  * @param tree A parsed sub-expression of a condition.
+ * A comprehension variable read is a plain reference here, by its key.
+ *
  * @returns `[IsinstanceCheck, true]` for `isinstance(<plain ref>, T)`; `[TagCheck, true]` for
  *   `<plain ref>.<field> == "<text>"` either way round, and `[TagCheck, false]` for `!=`;
  *   `[NotNullCheck, true]` for `<plain ref> != null` either way round, and
@@ -262,7 +279,7 @@ function isNull(node: ExprNode): boolean {
 export function checkIn(tree: ExprNode): [Check, boolean] | null {
   const subject = isinstanceSubject(tree);
   if (subject !== null) {
-    const parts = directReferenceParts(subject);
+    const parts = subjectParts(subject);
     if (parts === null) return null;
     return [new IsinstanceCheck(parts.join("."), isinstanceTypeNames(tree)[0]!), true];
   }
@@ -272,13 +289,13 @@ export function checkIn(tree: ExprNode): [Check, boolean] | null {
   if (operator !== "==" && operator !== "!=") return null;
   if (isNull(left)) [left, right] = [right, left];
   if (isNull(right)) {
-    const parts = directReferenceParts(left);
+    const parts = subjectParts(left);
     if (parts === null) return null;
     return [new NotNullCheck(parts.join(".")), operator === "!="];
   }
   if (isText(left)) [left, right] = [right, left];
   if (!isText(right)) return null;
-  const parts = directReferenceParts(left);
+  const parts = subjectParts(left);
   if (parts === null || parts.length < 2) return null;
   // The evaluator decodes a string literal by dropping its quotes, with no unescaping.
   const value = right.value.slice(1, -1);
@@ -342,7 +359,10 @@ function operandContexts(node: Tree, context: Guard): [ExprNode, Guard][] {
   return contexts;
 }
 
-/** One read occurrence of a condition: its refcall, its flat path, and the guard it is read under. */
+/**
+ * One read occurrence of a condition: its refcall (or `comp_var`), its flat path, and the guard it
+ * is read under.
+ */
 export interface GuardedOccurrence {
   readonly node: Tree;
   readonly path: string;
@@ -356,8 +376,11 @@ export interface GuardedOccurrence {
  * The `i`-th operand of an `and` chain is evaluated only once the operands before it were true,
  * and of an `or` chain once they were false; every other node (`not`, `:-`, `|`, a call, a
  * comparison) evaluates its parts under its own guard. So a check after a read never guards it.
- * The occurrences are those of `exprRefs` and `conditionReads`, in the same order: plain
- * references, builtin-call argument values, and an `isinstance` call's subject.
+ * The occurrences are those of `exprRefs` and `conditionReads`, in the same order (plain
+ * references, builtin-call argument values, and an `isinstance` call's subject), plus each
+ * comprehension variable read, with path `<key>.<steps>`. A comprehension's clauses run left to
+ * right before its elem, and each `if` adds what it proves true for the clauses after it and the
+ * elem, as an `and` chain would; reads stay in source order (the elem first).
  *
  * @param tree A condition parsed with `parseCondition`, in any spelling.
  * @returns One occurrence per read, in source order.
@@ -379,8 +402,26 @@ export function guardedReads(tree: ExprNode): GuardedOccurrence[] {
       }
       return;
     }
+    if (node.data === "comp_var") {
+      const parts = variableParts(node);
+      if (parts !== null) reads.push({ node, path: parts.join("."), guard: context });
+      return;
+    }
     if (node.data === "and_expr" || node.data === "or_expr") {
       for (const [operand, operandContext] of operandContexts(node, context)) walk(operand, operandContext);
+      return;
+    }
+    if (node.data === "list_comp") {
+      const [elem, ...clauses] = node.children as Tree[];
+      const contexts: Guard[] = [];
+      let passed = context;
+      for (const clause of clauses) {
+        contexts.push(passed);
+        if (clause.data === "comp_if") passed = allOf(passed, proves(clause.children[0]!, true));
+      }
+      walk(elem!, passed);
+      // A `comp_for`'s iterable is its second child; a `comp_if`'s condition its only one.
+      clauses.forEach((clause, i) => walk(clause.children[clause.data === "comp_for" ? 1 : 0]!, contexts[i]!));
       return;
     }
     for (const child of node.children) walk(child, context);

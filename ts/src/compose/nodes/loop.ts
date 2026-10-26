@@ -489,8 +489,9 @@ function predicateErrors(
   const messages = impossibleChecks(tree, baseTypeOf, registry).map(impossibleCheckMessage);
   const seen: [string, Guard][] = [];
   for (const [ref, guard] of checkedRefs(tree, baseTypeOf, registry)) {
-    // A read after a reported check is reached by no value.
-    if (guard === null) continue;
+    // A read after a reported check is reached by no value; a comprehension variable read
+    // (`m@12.k`) is no field of the carried record.
+    if (guard === null || ref.split(".")[0]!.includes("@")) continue;
     if (seen.some(([seenRef, seenGuard]) => seenRef === ref && sameGuard(seenGuard, guard))) continue;
     seen.push([ref, guard]);
     const message = predicateFieldError(contract, ref, guard, baseTypeOf, registry);

@@ -145,6 +145,8 @@ function nullableReads(tree: ExprNode, roots: ReadRoots, registry: TypeRegistry)
   // What `checkedRefs` gives under each root's alternative, index-aligned with `guardedReads`.
   const checkedOf = new Map<string, (readonly [string, Guard | null][])[]>();
   for (const [index, { node, path }] of guardedReads(tree).entries()) {
+    // A comprehension variable read (`m@12.k`) has no root contract here yet.
+    if (path.split(".")[0]!.includes("@")) continue;
     const { head, steps } = splitReference(node);
     const used = roots.rootLength([head, ...steps.map((step) => step.name)]);
     const rest = steps.slice(used - 1);

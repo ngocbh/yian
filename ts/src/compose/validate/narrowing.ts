@@ -396,7 +396,8 @@ export function searchedWhenReads(
   const reads: WhenRead[] = [];
   guardedReads(tree).forEach((read, index) => {
     const guard = checked[index]![1];
-    if (guard === null) return;
+    // A comprehension variable is no reference; the field-read checks check its reads.
+    if (guard === null || read.node.data === "comp_var") return;
     const guarded = guardChecks(guard).length > 0 ? guardEnv(guard, typeOf, registry) : new Map();
     if (guarded.size === 0) {
       reads.push({ node: read.node, views: view, facts: new Map(), routed: new Set() });

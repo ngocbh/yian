@@ -147,10 +147,9 @@ export class CodeDescriptor extends NodeDescriptor {
    *
    * The node takes the body as text, or a value entry's built-in identity form, `ctx.baseDir` as
    * the directory a reference resolves against, `ctx.sourceFile` as the label a failing body's
-   * stack frames are named after, and the descriptor's code origins unchanged;
-   * nothing is compiled. Sets the node's `params`
-   * from the authored `input:` and its output contract from `output:`; `_finish` stamps the
-   * descriptor origin.
+   * stack frames are named after, and the descriptor's code origins unchanged; nothing is
+   * compiled. Sets the node's `params` from the authored `input:` and its output contract from
+   * `output:`; `_finish` stamps the descriptor origin.
    *
    * @throws LoadError when `output:` isn't a valid type expression.
    */

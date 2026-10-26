@@ -83,8 +83,10 @@ test("resolveInRecord reads own fields only", () => {
     value: null,
     why: "input 'toString' is not bound",
   });
-  expect(evaluateWhenRecord("a.constructor", { a: {} })).toBe(false);
-  expect(evaluateWhenRecord("a.b == null", { a: null })).toBe(true);
+  expect(() => evaluateWhenRecord("a.constructor", { a: {} })).toThrow("a has no field 'constructor'");
+  expect(evaluateWhenRecord("a?.constructor", { a: {} })).toBe(false);
+  expect(() => evaluateWhenRecord("a.b == null", { a: null })).toThrow("a is null");
+  expect(evaluateWhenRecord("a?.b == null", { a: null })).toBe(true);
 });
 
 test("when: numeric and boolean logic", () => {
@@ -253,9 +255,12 @@ test("evaluateWhenRecord resolves declared inputs", () => {
 });
 
 test("evaluateWhenRecord: a miss is falsy, not an error", () => {
-  // A declared input holding null, or a dotted miss, is falsy rather than an error.
+  // A declared input holding null is falsy rather than an error; a field of it needs `?.`.
   expect(evaluateWhenRecord("label == 'POSITIVE'", { label: null })).toBe(false);
-  expect(evaluateWhenRecord("rating.value > 0.7", { rating: null })).toBe(false);
+  expect(evaluateWhenRecord("rating?.value > 0.7", { rating: null })).toBe(false);
+  expect(() => evaluateWhenRecord("rating.value > 0.7", { rating: null })).toThrow(
+    "cannot read ${rating.value}: rating is null",
+  );
 });
 
 test("evaluateWhenRecord: in with a null operand raises", () => {

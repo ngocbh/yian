@@ -174,9 +174,18 @@ test("dotted access reads a record field", () => {
 test.each(["__class__", "constructor", "toString", "__proto__", "hasOwnProperty"])(
   "dotted access never reads the property %s",
   (name) => {
-    expect(evaluate(`obj.${name}`, fromRecord({ obj: { a: 1n } }))).toBeNull();
-    expect(evaluate(`item.${name}`, MISSING_ROOT, { item: { a: 1n } })).toBeNull();
-    expect(evaluate(`item.k.${name}`, MISSING_ROOT, { item: { k: "text" } })).toBeNull();
+    // `.` raises on a key the record lacks, `?.` reads null; neither reaches a JS property.
+    expect(errorOf(`obj.${name}`, fromRecord({ obj: { a: 1n } })).message).toBe(
+      `cannot read \${obj.${name}}: obj has no field '${name}'`,
+    );
+    expect(evaluate(`obj?.${name}`, fromRecord({ obj: { a: 1n } }))).toBeNull();
+    expect(() => evaluate(`item.${name}`, MISSING_ROOT, { item: { a: 1n } })).toThrow(
+      `item has no field '${name}'`,
+    );
+    expect(evaluate(`item?.${name}`, MISSING_ROOT, { item: { a: 1n } })).toBeNull();
+    expect(() => evaluate(`item.k.${name}`, MISSING_ROOT, { item: { k: "text" } })).toThrow(
+      "item.k is str, which has no fields",
+    );
   },
 );
 
@@ -197,12 +206,17 @@ test("condition-falsy: arithmetic over a miss is loud", () => {
 });
 
 test("strict-raise: a miss raises, naming the path", () => {
-  const error = errorOf("a.b", undefined, ResolveMode.STRICT_RAISE);
+  const error = errorOf("a", undefined, ResolveMode.STRICT_RAISE);
   expect(error).toBeInstanceOf(ExpressionError);
-  expect(error.message).toBe("unresolved reference ${a.b} in expression");
-  expect(errorOf("item.k", undefined, ResolveMode.STRICT_RAISE).message).toBe(
-    "unresolved reference ${item.k} in expression",
-  );
+  expect(error.message).toBe("unresolved reference ${a} in expression");
+  // A field of a missing root or a null item raises in every mode.
+  for (const mode of [ResolveMode.STRICT_RAISE, ResolveMode.BINDING_NONE]) {
+    expect(errorOf("a.b", undefined, mode).message).toBe("cannot read ${a.b}: a is missing");
+    expect(errorOf("item.k", undefined, mode).message).toBe(
+      "cannot read ${item.k}: item is null; write item?.k to read null instead, or check item != null first",
+    );
+  }
+  expect(evaluate("a?.b", undefined, { mode: ResolveMode.STRICT_RAISE })).toBeNull();
 });
 
 test("strict-raise: a slice of null names the slice, not a miss an operator handled", () => {
@@ -433,11 +447,15 @@ test("a bare item", () => {
 });
 
 test("item scope reads fields only", () => {
-  expect(evaluate("item.__class__", undefined, { item: { a: 1n } })).toBeNull();
+  expect(errorOf("item.__class__", undefined).message).toContain("item is null");
+  expect(() => evaluate("item.__class__", undefined, { item: { a: 1n } })).toThrow("item has no field '__class__'");
+  expect(evaluate("item?.__class__", undefined, { item: { a: 1n } })).toBeNull();
 });
 
 test("item-headed paths never reach resolve", () => {
-  expect(evaluate("item.k", () => ({ used: 1, present: true, value: { k: "resolved" }, why: null }))).toBeNull();
+  const resolve: RootResolver = () => ({ used: 1, present: true, value: { k: "resolved" }, why: null });
+  expect(evaluate("item?.k", resolve)).toBeNull();
+  expect(evaluate("item.k", resolve, { item: { k: "item" } })).toBe("item");
 });
 
 // --------------------------------------------------------------------------------------- //
@@ -659,10 +677,12 @@ describe("calls", () => {
 
   test("a strict miss on a call result's field names the call", () => {
     standIn("identity", [{ name: "v" }], (v) => v);
-    const error = errorOf("identity(d).nope.k", fromRecord({ d: { k: 1n } }), ResolveMode.STRICT_RAISE);
-    expect(error).toBeInstanceOf(ExpressionError);
-    expect(error.message).toBe("unresolved reference ${identity(...).nope.k} in expression");
-    expect(evaluate("identity(d).nope", fromRecord({ d: { k: 1n } }))).toBeNull();
+    for (const mode of [ResolveMode.STRICT_RAISE, ResolveMode.BINDING_NONE]) {
+      const error = errorOf("identity(d).nope.k", fromRecord({ d: { k: 1n } }), mode);
+      expect(error).toBeInstanceOf(ExpressionError);
+      expect(error.message).toBe("cannot read ${identity(...).nope}: identity(...) has no field 'nope'");
+    }
+    expect(evaluate("identity(d)?.nope", fromRecord({ d: { k: 1n } }))).toBeNull();
   });
 
   test("a strict miss in an argument raises", () => {
@@ -992,9 +1012,9 @@ test("?. reads like . on today's resolvers", () => {
   expect(evaluate("[m?.k for m in xs]", fromRecord({ xs: [{ k: 1n }, null] }))).toEqual([1n, null]);
 });
 
-test("a strict miss names the read as written", () => {
-  expect(errorOf("a?.b.c", undefined, ResolveMode.STRICT_RAISE).message).toBe(
-    "unresolved reference ${a?.b.c} in expression",
+test("a field-read error names the read as written", () => {
+  expect(errorOf("a?.b.c", fromRecord({ a: { b: null } }), ResolveMode.STRICT_RAISE).message).toBe(
+    "cannot read ${a?.b.c}: a?.b is null; write a?.b?.c to read null instead, or check a?.b != null first",
   );
 });
 

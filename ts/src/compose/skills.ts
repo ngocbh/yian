@@ -178,12 +178,7 @@ function splitFrontmatter(text: string, path: string): [ValueRecord, string] {
   return [meta, lines.slice(index + 1).join("").replace(/^\n+/, "")];
 }
 
-/** The parts of `directory` Python's `Path` keeps: empty and `.` segments drop out. */
-function pathParts(directory: string): string[] {
-  return directory.split("/").filter((part) => part !== "" && part !== ".");
-}
-
-/** `directory`'s last part, as Python's `Path(directory).name`. */
+/** `directory`'s last part, as Python's `Path(directory).name`: empty and `.` segments drop out. */
 function pathName(directory: string): string {
-  return pathParts(directory).at(-1) ?? "";
+  return directory.split("/").filter((part) => part !== "" && part !== ".").at(-1) ?? "";
 }

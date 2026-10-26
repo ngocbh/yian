@@ -4,6 +4,10 @@
  * field-read check (design 2.5), where a `.` step whose receiver may be null is a load error and a
  * `?.` step is not.
  *
+ * A comprehension variable is a one-name root keyed by its binding occurrence (`m@12`, as
+ * `condition_guards.ts` keys its reads), typed by the element type of its iterable, and narrowed
+ * by the `if` clauses before its read. Messages print the variable's name, not its key.
+ *
  * Knows about: `expr` (reference steps), `nodes/contracts` (the output-contract sum),
  * `compile/output_contracts` (the type a contract gives field reads), `typesys`, and the compose
  * peers `helpers/condition_guards` and `helpers/narrowing_facts`.
@@ -21,12 +25,27 @@ import {
 } from "../../compile/output_contracts.ts";
 import { END_ID, type FlowOutput } from "../../compile/model.ts";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
-import { ExpressionError, parseCondition } from "../../expr/expressions.ts";
-import { type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
-import { type RefStep, splitReference, stepsText } from "../../expr/expressions.ts";
+import {
+  elementType,
+  ExpressionError,
+  inferExprType,
+  parseCondition,
+  type RefStep,
+  splitReference,
+  stepsText,
+} from "../../expr/expressions.ts";
+import { bindingKey, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { fileFieldType, Type, typeEquals, unionField, unionTagFields, ValueKind } from "../../typesys/values.ts";
+import {
+  fileFieldType,
+  joinedType,
+  Type,
+  typeEquals,
+  unionField,
+  unionTagFields,
+  ValueKind,
+} from "../../typesys/values.ts";
 import {
   type Check,
   type CheckLiteral,
@@ -90,6 +109,11 @@ export interface ReadRoots {
    * alternative rejects it.
    */
   contracts(root: string): readonly (OutputContract | null)[] | undefined;
+  /**
+   * A root's un-narrowed contract (`null` when unknown, or when its alternatives differ);
+   * `undefined` when the name is no root at this site.
+   */
+  baseContract(root: string): OutputContract | null | undefined;
   /** How many names a reference's root takes at this site: `poolRootLength`, or `() => 1`. */
   rootLength(names: readonly string[]): number;
   /** Whether the root may be null besides its type: a producer that may skip while the reader runs. */
@@ -129,29 +153,42 @@ export function isUntyped(typ: Type | null): boolean {
  * each field `T` doesn't require (owner ruling, 2026-10-25). A read no value reaches (its guard
  * can never hold) is not checked; `checkImpossibleWhens` or the asserts' check reports the guard.
  *
+ * A comprehension variable read checks as a root's (see the module doc).
+ *
  * @param tree A parsed expression.
  * @param roots What the site knows of its roots.
  * @param registry The flow's typedefs.
+ * @param typeFn Resolves a constructor name in a comprehension's iterable (default none).
  * @returns The messages without a site prefix.
  */
-export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: TypeRegistry): string[] {
-  return [...new Set(nullableReads(tree, roots, registry).map(([, message]) => message))];
+export function nullableReadErrors(
+  tree: ExprNode,
+  roots: ReadRoots,
+  registry: TypeRegistry,
+  typeFn: TypeFn | null = null,
+): string[] {
+  return [...new Set(nullableReads(tree, roots, registry, typeFn).map(([, message]) => message))];
 }
 
 /** Return each nullable read of `nullableReadErrors` as `[the whole read as written, its message]`. */
-function nullableReads(tree: ExprNode, roots: ReadRoots, registry: TypeRegistry): [string, string][] {
+function nullableReads(
+  tree: ExprNode,
+  siteRoots: ReadRoots,
+  registry: TypeRegistry,
+  typeFn: TypeFn | null = null,
+): [string, string][] {
+  const roots = withVariables(tree, siteRoots, typeFn);
   const messages: [string, string][] = [];
   const operands = arithmeticOperands(tree);
   // What `checkedRefs` gives under each root's alternative, index-aligned with `guardedReads`.
   const checkedOf = new Map<string, (readonly [string, Guard | null][])[]>();
   for (const [index, { node, path }] of guardedReads(tree).entries()) {
-    // A comprehension variable read (`m@12.k`) has no root contract here yet.
-    if (path.split(".")[0]!.includes("@")) continue;
     const { head, steps } = splitReference(node);
-    const used = roots.rootLength([head, ...steps.map((step) => step.name)]);
+    const key = path.split(".")[0]!;
+    const used = isVariableKey(key) ? 1 : roots.rootLength([head, ...steps.map((step) => step.name)]);
     const rest = steps.slice(used - 1);
     if (rest.length === 0) continue;
-    const root = [head, ...steps.slice(0, used - 1).map((step) => step.name)].join(".");
+    const root = isVariableKey(key) ? key : [head, ...steps.slice(0, used - 1).map((step) => step.name)].join(".");
     const alternatives = roots.contracts(root);
     if (alternatives === undefined) continue;
     const read: Read = {
@@ -214,7 +251,7 @@ function arithmeticOperands(tree: ExprNode): Map<ExprNode, ReadFix> {
   if (!(tree instanceof Tree)) return operands;
   const add = (node: ExprNode, fix: ReadFix = "default"): void => {
     if (!(node instanceof Tree)) return;
-    if (node.data === "refcall") operands.set(node, fix);
+    if (node.data === "refcall" || node.data === "comp_var") operands.set(node, fix);
     else if (node.data === "default_expr" || node.data === "coalesce") {
       // A `:- null` default leaves the value null, so it still needs a real default.
       const last = node.children.at(-1);
@@ -293,7 +330,8 @@ function walk(
     const field = fieldRead(typ, step.name);
     if (field === null) return null; // the name checks report it
     if (field.nullable && !step.optional && roots.untyped(read.root, fields)) {
-      return narrowedUntypedMessage(prefix, step.name, namedTypeLabel(typ, registry), fields.length === 0);
+      const label = namedTypeLabel(typ, registry);
+      return narrowedUntypedMessage(prefix, step.name, label, fields.length === 0, isVariableKey(read.root));
     }
     typ = field.type?.replace({ nullable: field.nullable }) ?? null;
     why = field.optional ? `field '${step.name}' is Optional` : `field '${step.name}' is not required`;
@@ -358,12 +396,18 @@ export function untypedAt(contract: OutputContract | null, fields: readonly stri
   return typ === null || isUntyped(typ);
 }
 
-/** Return the message for `.name` read on `prefix`, untyped and only narrowed to `label`. */
-function narrowedUntypedMessage(prefix: string, name: string, label: string, atRoot: boolean): string {
-  // Only a root is bound by an `output:` or input declaration; a field is typed by its record.
-  const typeIt = atRoot
-    ? `type ${prefix} as ${label} where it is bound (\`output: ${label}\` or \`!${label}\`)`
-    : `declare ${prefix} as ${label} in the type that holds it`;
+/**
+ * Return the message for `.name` read on `prefix`, untyped and only narrowed to `label`; `variable`
+ * when `prefix` is a comprehension variable.
+ */
+function narrowedUntypedMessage(prefix: string, name: string, label: string, atRoot: boolean, variable: boolean): string {
+  // Only a root is bound by an `output:` or input declaration; a field is typed by its record, and
+  // a comprehension variable by the list it iterates.
+  const typeIt = variable
+    ? `type the list ${prefix} iterates as list(${label})`
+    : atRoot
+      ? `type ${prefix} as ${label} where it is bound (\`output: ${label}\` or \`!${label}\`)`
+      : `declare ${prefix} as ${label} in the type that holds it`;
   return (
     `\${${prefix}.${name}} reads field '${name}', which ${label} doesn't require, of ${prefix}, ` +
     `which is untyped and only narrowed to ${label}; write ${prefix}?.${name}, or ${typeIt}`
@@ -381,6 +425,152 @@ function nullableMessage(prefix: string, name: string, why: string, fix: ReadFix
     either: `write ${prefix}?.${name}, or check ${prefix} != null first`,
   }[fix];
   return `\${${prefix}.${name}} reads field '${name}' of ${prefix}, which may be null (${why}); ${write}`;
+}
+
+/** Return whether a path's first name is a comprehension variable's key (`m@12`). */
+function isVariableKey(name: string): boolean {
+  // `@` is no NAME character, so no reference root has one.
+  return name.includes("@");
+}
+
+/**
+ * Return each comprehension variable of `tree` by key, with the element type of its iterable
+ * (`elementType`), or `null` when untyped. `refType` types a reference path; a variable in scope
+ * types an iterable that reads it.
+ */
+function variableTypes(
+  tree: ExprNode,
+  refType: (path: string) => Type | null,
+  typeFn: TypeFn | null,
+): Map<string, Type | null> {
+  const types = new Map<string, Type | null>();
+  const visit = (node: ExprNode, scope: ReadonlyMap<string, Type | null>): void => {
+    if (!(node instanceof Tree)) return;
+    if (node.data !== "list_comp") {
+      for (const child of node.children) visit(child, scope);
+      return;
+    }
+    const local = new Map(scope);
+    for (const clause of node.children.slice(1) as Tree[]) {
+      if (clause.data === "comp_if") {
+        visit(clause.children[0]!, local);
+        continue;
+      }
+      const [target, iterable] = clause.children as [Token, ExprNode];
+      visit(iterable, local);
+      const typ = elementType(inferExprType(iterable, refType, typeFn, local));
+      types.set(bindingKey(target), typ);
+      local.set(target.value, typ);
+    }
+    visit(node.children[0]!, local);
+  };
+  visit(tree, new Map());
+  return types;
+}
+
+/**
+ * Return the type a reference path has at a site whose roots have `alternatives`: each
+ * alternative projected through the path, when they all agree; else `null`.
+ */
+function siteRefType(
+  roots: ReadRoots,
+  alternatives: (root: string) => readonly (OutputContract | null)[] | undefined,
+): (path: string) => Type | null {
+  return (path) => {
+    const names = path.split(".");
+    const used = roots.rootLength(names);
+    const contracts = alternatives(names.slice(0, used).join("."));
+    if (contracts === undefined || contracts.length === 0) return null;
+    const types = contracts.map((contract) =>
+      contract === null ? null : contractType(projectOutputContract(contract, names.slice(used))),
+    );
+    if (types.some((typ) => typ === null)) return null;
+    const joined = joinedType(types as Type[]);
+    return joined !== null && types.every((typ) => typeEquals(typ!, joined)) ? joined : null;
+  };
+}
+
+/**
+ * Return `roots` with the comprehension variables of `tree` added as one-name roots, by key: each
+ * one's contract is its element type under the site's (narrowed) contracts, and it is untyped when
+ * the element type under the un-narrowed ones is.
+ */
+function withVariables(tree: ExprNode, roots: ReadRoots, typeFn: TypeFn | null): ReadRoots {
+  const narrowed = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn);
+  if (narrowed.size === 0) return roots;
+  const base = variableTypes(
+    tree,
+    siteRefType(roots, (root) => {
+      const contract = roots.baseContract(root);
+      return contract === undefined ? undefined : [contract];
+    }),
+    typeFn,
+  );
+  const contractOf = (typ: Type | null | undefined) => (typ ? new ValueContract(typ) : null);
+  return {
+    contracts: (root) => (narrowed.has(root) ? [contractOf(narrowed.get(root))] : roots.contracts(root)),
+    baseContract: (root) => (base.has(root) ? contractOf(base.get(root)) : roots.baseContract(root)),
+    rootLength: (names) => (isVariableKey(names[0]!) ? 1 : roots.rootLength(names)),
+    nullable: (root) => !narrowed.has(root) && roots.nullable(root),
+    why: (root) => (narrowed.has(root) ? "it is Optional" : roots.why(root)),
+    untyped: (root, fields) =>
+      base.has(root) ? untypedAt(contractOf(base.get(root)), fields) : roots.untyped(root, fields),
+    routing: () => roots.routing(),
+  };
+}
+
+/** Return `message` with each comprehension variable key of `keys` printed as its name. */
+function unkeyed(message: string, keys: Iterable<string>): string {
+  // Never followed by a digit, so `m@3` doesn't match inside `m@31`. A key's characters (NAME
+  // characters and `@`) are none special in a pattern.
+  for (const key of keys) {
+    const pattern = new RegExp(`${key}(?!\\d)`, "g");
+    message = message.replace(pattern, key.slice(0, key.indexOf("@")));
+  }
+  return message;
+}
+
+/**
+ * Return the name errors of the reads through comprehension variables in `tree` (see
+ * `nameErrors`), as for a root's step: an unknown field, a field only some union members have, a
+ * field of a scalar, and an impossible check on a variable. A variable is checked on its element
+ * type, narrowed by the checks before the read; an untyped one only once a check narrows it.
+ *
+ * @param tree A parsed expression.
+ * @param roots What the site knows of its roots, which type the iterables.
+ * @param registry The flow's typedefs.
+ * @param typeFn Resolves a constructor name in a comprehension's iterable (default none).
+ * @returns The messages without a site prefix, printing each variable's name.
+ */
+export function variableNameErrors(
+  tree: ExprNode,
+  roots: ReadRoots,
+  registry: TypeRegistry,
+  typeFn: TypeFn | null = null,
+): string[] {
+  const types = variableTypes(tree, siteRefType(roots, (root) => roots.contracts(root)), typeFn);
+  if (types.size === 0) return [];
+  // An untyped variable walks as `Any`, which accepts every field until a check narrows it.
+  const any = new ValueContract(Type.scalar(ValueKind.ANY));
+  const keyed = new Map([...types].map(([key, typ]) => [key, [typ === null ? any : new ValueContract(typ)]] as const));
+  return nameErrors(tree, keyed, registry).map((message) => unkeyed(message, types.keys()));
+}
+
+/**
+ * Return the first field-read error of a parsed expression at a site: a name error through a
+ * comprehension variable (`variableNameErrors`, code `compose.load`), else a nullable read
+ * (`nullableReadErrors`); `null` when there is none.
+ */
+function firstTreeError(
+  tree: ExprNode,
+  roots: ReadRoots,
+  registry: TypeRegistry,
+  typeFn: TypeFn | null,
+): FieldReadError | null {
+  const [named] = variableNameErrors(tree, roots, registry, typeFn);
+  if (named !== undefined) return { message: named, code: "compose.load" };
+  const [nullable] = nullableReadErrors(tree, roots, registry, typeFn);
+  return nullable === undefined ? null : { message: nullable, code: NULLABLE_FIELD_READ };
 }
 
 /** Return the root `path` is at or below, else `null`. */
@@ -829,6 +1019,8 @@ function declaredReadError(
  * @param options.why Why a root in `nullableRoots` may be null (default "it is Optional").
  * @param options.untyped Whether a root's un-narrowed value is untyped (default: every one of its
  *   `roots` contracts is untyped, or it has none).
+ * Reads through comprehension variables get the same checks (`variableNameErrors`).
+ *
  * @returns The errors in order: name errors with code `compose.load`, then nullable ones.
  */
 export function fieldReadErrors(
@@ -855,15 +1047,16 @@ export function fieldReadErrors(
     untyped = (root: string, fields: readonly string[]) =>
       (roots.get(root) ?? []).every((contract) => untypedAt(contract, fields)),
   } = options;
-  const names = nameErrors(tree, roots, registry, options);
   const readRoots: ReadRoots = {
     contracts: (root) => roots.get(root) ?? (opaqueRoots.has(root) ? [null] : undefined),
+    baseContract: (root) => (roots.has(root) ? roots.get(root)![0] ?? null : opaqueRoots.has(root) ? null : undefined),
     rootLength,
     nullable: (root) => nullableRoots.has(root),
     why,
     untyped,
     routing: () => null,
   };
+  const names = [...nameErrors(tree, roots, registry, options), ...variableNameErrors(tree, readRoots, registry)];
   // A read the name checks reject gets no second message.
   const named = (read: string) => names.some((message) => message.includes("${" + read + "}"));
   const nullable = [
@@ -911,7 +1104,7 @@ export interface FieldReadLevel {
  * (CASE `on:` and reserved sources included), then each searched CASE's authored `when:`s (its
  * wiring binds only the roots they read), then flow outputs, then node-local sites (AGENT
  * prompts and `render:`, LOOP predicates). The first error throws with code
- * `expr.nullable_field_read`.
+ * `expr.nullable_field_read`, or `compose.load` for a name error through a comprehension variable.
  *
  * A flow output is read by END. A co-skipping output (a lone reference, or a coalesce of them) is
  * one required group of its producers: a producer may be null there only when it may be skipped
@@ -930,6 +1123,7 @@ export function checkFieldReads(
   const resolveOrigin = options.resolveOrigin ?? null;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const { flowWiring, buildResults, registry } = level;
+  const typeFn = level.typeFn ?? null;
   for (const [nodeId, wiring] of flowWiring) {
     const result = buildResults.get(nodeId) ?? null;
     const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
@@ -939,9 +1133,9 @@ export function checkFieldReads(
     for (const [param, binding] of wiring) {
       for (const site of stringSites(binding)) {
         const text = bindingSource(site);
-        const read = firstNullableRead(text, roots, registry);
+        const read = firstFieldReadError(text, roots, registry, typeFn);
         if (read === null) continue;
-        const message = caseReadsAsWritten(read, String(text), level.caseSpellings ?? new Map());
+        const message = caseReadsAsWritten(read.message, String(text), level.caseSpellings ?? new Map());
         let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
         let fallback: SourceRange | null = null;
         if (result !== null) {
@@ -953,9 +1147,7 @@ export function checkFieldReads(
           // A synthetic param's label may already end in a colon (`on:`); the message adds one.
           where = result.siteName(nodeId, label.replace(/:+$/, ""));
         }
-        throw locatedError(`${where}: ${message}`, site, fallback, resolveOrigin, diagnostics, {
-          code: NULLABLE_FIELD_READ,
-        });
+        throw locatedError(`${where}: ${message}`, site, fallback, resolveOrigin, diagnostics, { code: read.code });
       }
     }
   }
@@ -971,15 +1163,15 @@ export function checkFieldReads(
         if (error instanceof ExpressionError) continue;
         throw error;
       }
-      const [message] = nullableReadErrors(tree, roots, registry);
-      if (message === undefined) continue;
+      const error = firstTreeError(tree, roots, registry, typeFn);
+      if (error === null) continue;
       throw locatedError(
-        `node ${reprText(caseId)} cases[${index}].when: ${message}`,
+        `node ${reprText(caseId)} cases[${index}].when: ${error.message}`,
         new Binding(when, { origin }),
         range,
         resolveOrigin,
         diagnostics,
-        { code: NULLABLE_FIELD_READ },
+        { code: error.code },
       );
     }
   }
@@ -1005,44 +1197,43 @@ export function checkFieldReads(
           return producer !== null && mayBeNull(producer) ? `node ${reprText(producer)} may be skipped` : "it is Optional";
         },
       };
-      const read = firstNullableRead(text, roots, registry);
+      const read = firstFieldReadError(text, roots, registry, typeFn);
       if (read === null) continue;
-      const message = caseReadsAsWritten(read, String(text), level.caseSpellings ?? new Map());
+      const message = caseReadsAsWritten(read.message, String(text), level.caseSpellings ?? new Map());
       const which = valueMode ? "output" : `output ${reprText(output.name)}`;
       const label = level.outputsOwner ? `${level.outputsOwner} ${which}` : which;
-      throw locatedError(`${label}: ${message}`, site, outputsRange, resolveOrigin, diagnostics, {
-        code: NULLABLE_FIELD_READ,
-      });
+      throw locatedError(`${label}: ${message}`, site, outputsRange, resolveOrigin, diagnostics, { code: read.code });
     }
   }
   for (const [nodeId, result] of buildResults) {
     for (const [where, text, range] of localSites(nodeId, result)) {
-      const message = firstNullableRead(text, localRoots(level, nodeId, result), registry);
-      if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range, code: NULLABLE_FIELD_READ });
+      const error = firstFieldReadError(text, localRoots(level, nodeId, result), registry, typeFn);
+      if (error !== null) throw diagnostics.error(`${where}: ${error.message}`, { range, code: error.code });
     }
-    const predicate = loopPredicateError(nodeId, result, registry);
+    const predicate = loopPredicateError(nodeId, result, registry, typeFn);
     if (predicate !== null) {
-      const [message, range] = predicate;
-      throw diagnostics.error(message, { range, code: NULLABLE_FIELD_READ });
+      const [error, range] = predicate;
+      throw diagnostics.error(error.message, { range, code: error.code });
     }
     const render = steerRenderSite(level, nodeId, result);
     if (render !== null) {
       const [where, text, range, roots] = render;
-      const message = firstNullableRead(text, roots, registry);
-      if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range, code: NULLABLE_FIELD_READ });
+      const error = firstFieldReadError(text, roots, registry, typeFn);
+      if (error !== null) throw diagnostics.error(`${where}: ${error.message}`, { range, code: error.code });
     }
   }
 }
 
 /**
- * Return the first nullable read of a LOOP's `while:` or `until:` with its range, else `null`: the
- * predicate reads the carried record, typed by the loop's own output contract.
+ * Return the first field-read error of a LOOP's `while:` or `until:` with its range, else `null`:
+ * the predicate reads the carried record, typed by the loop's own output contract.
  */
 function loopPredicateError(
   nodeId: string,
   result: BuildResult,
   registry: TypeRegistry,
-): [message: string, range: SourceRange | null] | null {
+  typeFn: TypeFn | null,
+): [error: FieldReadError, range: SourceRange | null] | null {
   const node = result.node;
   if (!(node instanceof LoopNode) || node.predicate === null || node.predicateKind === "times") return null;
   const carried = node.outputContract;
@@ -1061,17 +1252,18 @@ function loopPredicateError(
       const contract = field(name);
       return contract === null ? undefined : [contract];
     },
+    baseContract: (name) => field(name) ?? undefined,
     rootLength: () => 1,
     nullable: () => false,
     why: () => "it is Optional",
     untyped: (name, fields) => untypedAt(field(name), fields),
     routing: () => null,
   };
-  const [message] = nullableReadErrors(tree, roots, registry);
-  if (message === undefined) return null;
+  const error = firstTreeError(tree, roots, registry, typeFn);
+  if (error === null) return null;
   const key = node.predicateKind;
   const range = result.fieldRanges.get(siteKey("field", key)) ?? result.nodeRange;
-  return [`loop node ${reprText(nodeId)} \`${key}:\` ${message}`, range];
+  return [{ message: `loop node ${reprText(nodeId)} \`${key}:\` ${error.message}`, code: error.code }, range];
 }
 
 /**
@@ -1097,6 +1289,7 @@ function steerRenderSite(
     result.nodeRange;
   const roots: ReadRoots = {
     contracts: (root) => (root === "event" ? [new ValueContract(element)] : undefined),
+    baseContract: (root) => (root === "event" ? new ValueContract(element) : undefined),
     rootLength: () => 1,
     nullable: () => false,
     why: () => "it is Optional",
@@ -1157,6 +1350,12 @@ function localRoots(level: FieldReadLevel, nodeId: string, result: BuildResult):
   };
   return {
     contracts: (local) => locals.get(local)?.alternatives,
+    baseContract: (local) => {
+      const alternatives = base.get(local)?.alternatives;
+      if (alternatives === undefined) return undefined;
+      const distinctOnes = distinct(alternatives);
+      return distinctOnes.length === 1 ? distinctOnes[0]! : null;
+    },
     rootLength: () => 1,
     nullable: (local) => skippedProducer(local) !== null,
     why: (local) => {
@@ -1176,8 +1375,13 @@ function producerOfLevel(level: FieldReadLevel, root: string): string | null {
   return null;
 }
 
-/** Return the first nullable-read message of a template string, else `null`. */
-function firstNullableRead(text: unknown, roots: ReadRoots, registry: TypeRegistry): string | null {
+/** Return the first field-read error of a template string (`firstTreeError` per span), else `null`. */
+function firstFieldReadError(
+  text: unknown,
+  roots: ReadRoots,
+  registry: TypeRegistry,
+  typeFn: TypeFn | null,
+): FieldReadError | null {
   if (typeof text !== "string") return null;
   let segments;
   try {
@@ -1189,8 +1393,8 @@ function firstNullableRead(text: unknown, roots: ReadRoots, registry: TypeRegist
   }
   for (const segment of segments) {
     if (!(segment instanceof Span)) continue;
-    const [message] = nullableReadErrors(segment.tree, roots, registry);
-    if (message !== undefined) return message;
+    const error = firstTreeError(segment.tree, roots, registry, typeFn);
+    if (error !== null) return error;
   }
   return null;
 }
@@ -1221,6 +1425,13 @@ function poolRoots(
         return [itemContract(node, wiring, producers, inputs, typeFn)];
       }
       return isRoot(root) ? [referenceContract(root, producers, inputs)] : undefined;
+    },
+    baseContract: (root) => {
+      if (root === "item") {
+        if (node === null || node.itemSourceKey === null) return undefined;
+        return itemContract(node, wiring, narrowing.producers, narrowing.inputs, typeFn);
+      }
+      return isRoot(root) ? referenceContract(root, narrowing.producers, narrowing.inputs) : undefined;
     },
     rootLength: poolRootLength,
     nullable: (root) => {

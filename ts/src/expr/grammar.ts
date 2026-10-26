@@ -713,7 +713,12 @@ const COMP_VAR_TARGETS = new WeakMap<Token, Token>();
 export function compVarKey(node: Tree): string | null {
   const head = node.children[0];
   const target = head instanceof Token ? COMP_VAR_TARGETS.get(head) : undefined;
-  return target === undefined ? null : `${target.value}@${target.startPos}`;
+  return target === undefined ? null : bindingKey(target);
+}
+
+/** Return the key of a comprehension's `for` target token, the key `compVarKey` gives its reads. */
+export function bindingKey(target: Token): string {
+  return `${target.value}@${target.startPos}`;
 }
 
 /**

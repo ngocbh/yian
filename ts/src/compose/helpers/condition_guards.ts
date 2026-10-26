@@ -472,9 +472,10 @@ export class CheckLiteral {
 /**
  * Return each literal in a condition's boolean positions with what holds when it is evaluated.
  *
- * Boolean positions are the condition itself, the operands of `and`, `or` and `not`, and the
- * first operand of `:-` and `:?`. A check anywhere else (a comparison operand, a call argument,
- * a list item, an operand of `|`) is no literal. Contexts follow the rules of `guardedRefs`.
+ * Boolean positions are the condition itself, the operands of `and`, `or` and `not`, the first
+ * operand of `:-` and `:?`, and a comprehension's `if` clause, wherever the comprehension is. A
+ * check anywhere else (a comparison operand, a call argument, a list item, an operand of `|`) is
+ * no literal. Contexts follow the rules of `guardedRefs`.
  *
  * @param tree A condition parsed with `parseCondition`, in any spelling.
  * @returns The literals in source order.
@@ -487,6 +488,7 @@ export class CheckLiteral {
 export function literalsInContext(tree: ExprNode): CheckLiteral[] {
   const literals: CheckLiteral[] = [];
 
+  // A boolean position.
   const walk = (node: ExprNode, context: Guard, negated: boolean): void => {
     const found = checkIn(node);
     if (found !== null) {
@@ -501,6 +503,31 @@ export function literalsInContext(tree: ExprNode): CheckLiteral[] {
       for (const [operand, operandContext] of operandContexts(node, context)) walk(operand, operandContext, false);
     } else if (node.data === "default_expr" || node.data === "required_expr") {
       walk(node.children[0]!, context, false);
+      scan(node.children[1]!, context);
+    } else {
+      scan(node, context);
+    }
+  };
+
+  // Any other position, searched only for comprehensions, whose `if` clauses are boolean positions.
+  const scan = (node: ExprNode, context: Guard): void => {
+    if (!(node instanceof Tree)) return;
+    if (node.data === "list_comp") {
+      const [elem, ...clauses] = node.children as Tree[];
+      let passed = context;
+      for (const clause of clauses) {
+        if (clause.data === "comp_for") {
+          scan(clause.children[1]!, passed);
+        } else {
+          walk(clause.children[0]!, passed, false);
+          passed = allOf(passed, proves(clause.children[0]!, true));
+        }
+      }
+      scan(elem!, passed);
+    } else if (node.data === "and_expr" || node.data === "or_expr") {
+      for (const [operand, operandContext] of operandContexts(node, context)) scan(operand, operandContext);
+    } else {
+      for (const child of node.children) scan(child, context);
     }
   };
 

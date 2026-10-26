@@ -451,3 +451,12 @@ test("masked and falsified copies keep comprehension reads", () => {
   expect(guardedRefs(masked(tree, [literal])).map(([path]) => path)).toEqual(paths);
   expect(guardedRefs(falsified(tree, [[literal, true]])).map(([path]) => path)).toEqual(paths);
 });
+
+test("a comprehension's if clause is a boolean position, under the clauses before it", () => {
+  const literals = literalsInContext(parseCondition("len([m.k for m in xs if m != null if isinstance(m.k, T)]) > 0"));
+  expect(literals.map(literalText).map((text) => text.replace(/@\d+/g, "@"))).toEqual([
+    "m@ != null",
+    "isinstance(m@.k, T)",
+  ]);
+  expect(literals[1]!.context).toEqual(new Holds(literals[0]!.check, true));
+});

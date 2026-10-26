@@ -986,37 +986,15 @@ export class TypedValue {
     if (storage === ValueKind.FILE) {
       if (!isRecord(value)) throw new RangeError("file typed value must contain a JSON object");
       requireFields(value, FILE_FIELDS, "file reference");
-      try {
-        return new TypedValue(storage, new FileRef(value as unknown as FileRefInit));
-      } catch (error) {
-        if (error instanceof RangeError) {
-          throw new RangeError(`invalid file typed value: ${error.message}`);
-        }
-        throw error;
-      }
+      return decodedAs("file", () => new TypedValue(storage, new FileRef(value as unknown as FileRefInit)));
     }
     if (storage === ValueKind.INBOX && isRecord(value)) {
       requireFields(value, INBOX_FIELDS, "inbox handle");
-      try {
-        return new TypedValue(storage, new InboxRef(value["inbox"] as string));
-      } catch (error) {
-        if (error instanceof RangeError) {
-          throw new RangeError(`invalid inbox typed value: ${error.message}`);
-        }
-        throw error;
-      }
+      return decodedAs("inbox", () => new TypedValue(storage, new InboxRef(value["inbox"] as string)));
     }
     if (storage === ValueKind.DATE || storage === ValueKind.DATETIME) {
       if (typeof value === "string") {
-        try {
-          if (storage === ValueKind.DATE) parseDate(value);
-          else parseDatetime(value);
-        } catch (error) {
-          if (error instanceof RangeError) {
-            throw new RangeError(`invalid ${storage} typed value: ${error.message}`);
-          }
-          throw error;
-        }
+        decodedAs(storage, () => (storage === ValueKind.DATE ? parseDate(value) : parseDatetime(value)));
         return new TypedValue(storage, value);
       }
     } else if (holdsScalar(storage, value)) {
@@ -1038,6 +1016,18 @@ export class TypedValue {
     throw new RangeError(
       `invalid ${storage} typed value: expected ${expected}, got ${valueRepr(value)}`,
     );
+  }
+}
+
+/** Return `build()`, prefixing a `RangeError` it throws with `invalid <label> typed value: `. */
+function decodedAs<T>(label: string, build: () => T): T {
+  try {
+    return build();
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new RangeError(`invalid ${label} typed value: ${error.message}`);
+    }
+    throw error;
   }
 }
 

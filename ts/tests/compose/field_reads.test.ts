@@ -39,7 +39,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { nullableReadErrors, type ReadRoots, untypedAt } from "../../src/compose/validate/field_reads.ts";
+import { fieldReadErrors, nullableReadErrors, type ReadRoots, untypedAt } from "../../src/compose/validate/field_reads.ts";
 import { parseCondition } from "../../src/expr/expressions.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
@@ -615,6 +615,14 @@ test("an arithmetic operand gets the whole fix in one message", () => {
   expect(errors("-(x.k) > 1", roots(Rec, true))[0]).toEndWith("write (x?.k :- <default>)");
 });
 
+test.each(["(x.k :- 0) + 1 > 1", "(x.k | 0) + 1 > 1"])("a defaulted arithmetic operand needs only ?. (%s)", (text) => {
+  expect(errors(text, roots(Rec, true))[0]).toEndWith("which may be null (it is Optional); write x?.k");
+});
+
+test("a :- null arithmetic operand still needs a default", () => {
+  expect(errors("(x.k :- null) + 1 > 1", roots(Rec, true))[0]).toEndWith("write (x?.k :- <default>)");
+});
+
 const types: TypeRegistry = new Map([
   [
     "T",
@@ -809,4 +817,89 @@ test.each([
   expect(failure(text)).toContain(PAYLOAD_ERROR);
   load(text.replace("w.output.payload.f", "w.output.payload?.f"));
   load(text.replace("w.output.payload.f", "w.output.payload.g"));
+});
+
+test("a case value read's error spells the read as written", () => {
+  const text = `id: f
+name: f
+typedefs:
+  Inner: {x: str}
+  Rec: {opt: Optional(Inner)}
+input:
+  s: !str
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: input.s == "a"
+        then: pro
+    else: con
+  pro:
+    kind: code
+    output: Rec
+    code: |
+      return {"opt": None}
+  con:
+    kind: code
+    output: Rec
+    code: |
+      return {"opt": None}
+  use:
+    kind: code
+    input:
+      v: \${gate.output.opt.x}
+    output: Any
+    code: |
+      return 1
+output: \${use.output}
+`;
+  expect(failure(text)).toContain(
+    "node 'use' input 'v': ${gate.output.opt.x} reads field 'x' of gate.output.opt, which may be null " +
+      "(field 'opt' is Optional); write gate.output.opt?.x, or check gate.output.opt != null first",
+  );
+  expect(failure(text.replace("v: ${gate.output.opt.x}", "v: ${input.s}").replace("${use.output}", "${gate.output.opt.x}"))).toContain(
+    "output: ${gate.output.opt.x} reads field 'x' of gate.output.opt",
+  );
+});
+
+test("a read with an unknown field gets no nullable-read message too", () => {
+  const holder = typeFor("Holder", NestedTypes);
+  const errors = (text: string) =>
+    fieldReadErrors(parseCondition(text), new Map([["v", [new ValueContract(holder)]]]), NestedTypes).map(
+      ({ message }) => message,
+    );
+  expect(errors("v.k.zz == 'a'")).toEqual(["reference ${v.k.zz} reads unknown field 'zz' on record"]);
+  expect(errors("v.k.y.zz == 'a'")).toEqual(["reference ${v.k.y.zz} reads field 'zz' on type str, which has no fields"]);
+  expect(errors("v.k.zz == 'a' and v.k.y == 'b'")).toEqual([
+    "reference ${v.k.zz} reads unknown field 'zz' on record",
+    "${v.k.y} reads field 'y' of v.k, which may be null (field 'k' is Optional); write v.k?.y, or check v.k != null first",
+  ]);
+});
+
+test("an inline body's output error names the node that owns the body", () => {
+  const text = `id: f
+name: f
+typedefs:
+  Inner: {x: str}
+  Rec: {k: Optional(Inner)}
+input:
+  s: !str
+nodes:
+  lp:
+    kind: loop
+    times: 1
+    input:
+      value: 0
+    nodes:
+      mk:
+        kind: code
+        output: Rec
+        code: |
+          return {"k": None}
+    output: \${mk.output.k.x}
+output: \${lp.output}
+`;
+  expect(failure(text)).toContain(
+    "inline body of node 'lp' output: ${mk.output.k.x} reads field 'x' of mk.output.k, which may be null",
+  );
 });

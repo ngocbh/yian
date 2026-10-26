@@ -71,9 +71,10 @@ export function expandCaseOutputs(
     outputsRange?: SourceRange | null;
     assertionRangeAt?: ((index: number) => SourceRange | null) | null;
     diagnostics?: LoadDiagnostics | null;
+    spellings?: Map<string, CaseRead> | null;
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
-  const { outputsRange = null, assertionRangeAt = null } = options;
+  const { outputsRange = null, assertionRangeAt = null, spellings = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const caseIds = caseIdsOf(descriptors);
   if (caseIds.size === 0) return [new Map(descriptors), outputsSection]; // fast path
@@ -87,6 +88,7 @@ export function expandCaseOutputs(
         expander(caseIds, targets, `node ${reprText(nodeId)}`, {
           range: bindingRange(descriptor, field, key),
           diagnostics,
+          spellings,
         })(value),
       ),
     );
@@ -94,7 +96,7 @@ export function expandCaseOutputs(
 
   const newOutputs = mapOutputsStrings(
     outputsSection,
-    expander(caseIds, targets, "flow outputs", { range: outputsRange, diagnostics }),
+    expander(caseIds, targets, "flow outputs", { range: outputsRange, diagnostics, spellings }),
   );
 
   // A case value in a condition / assert (not a binding) is unsupported — loud.
@@ -119,6 +121,25 @@ export function expandCaseOutputs(
   }
 
   return [newDescriptors, newOutputs];
+}
+
+/** A case value read as written: the case and the leaf targets its expansion reads instead. */
+export interface CaseRead {
+  readonly caseId: string;
+  readonly leaves: readonly string[];
+}
+
+/**
+ * Return `message`, about a binding whose text is `text`, with each expanded case read spelled as
+ * written (`gate.output.k` for `a.output?.k | b.output?.k`); `spellings` is what
+ * `expandCaseOutputs` recorded, by expanded span interior.
+ */
+export function caseReadsAsWritten(message: string, text: string, spellings: ReadonlyMap<string, CaseRead>): string {
+  for (const [expanded, { caseId, leaves }] of spellings) {
+    if (!text.includes("${" + expanded + "}")) continue;
+    for (const leaf of leaves) message = message.replaceAll(`${leaf}.output?.`, `${caseId}.output.`);
+  }
+  return message;
 }
 
 /**
@@ -217,7 +238,7 @@ function expander(
   caseIds: ReadonlySet<string>,
   targets: (caseId: string) => readonly unknown[],
   host: string,
-  options: { range: SourceRange | null; diagnostics: LoadDiagnostics },
+  options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): (value: string) => string {
   return (value) => {
     // Singular only: detect the `.output` marker.
@@ -263,9 +284,9 @@ function expandSpan(
   caseIds: ReadonlySet<string>,
   targets: (caseId: string) => readonly unknown[],
   host: string,
-  options: { range: SourceRange | null; diagnostics: LoadDiagnostics },
+  options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): string {
-  const { range, diagnostics } = options;
+  const { range, diagnostics, spellings } = options;
   const match = CASE_OUTPUT_INTERIOR.exec(interior.trim());
   if (match !== null) {
     const caseId = match[1]!;
@@ -282,7 +303,9 @@ function expandSpan(
       }
       // The first step after each branch root is ?.: a branch the route didn't take is skipped.
       const steps = suffix.startsWith(".") ? "?" + suffix : suffix;
-      return "${" + leaves.map((target) => `${String(target)}.output${steps}`).join(" | ") + "}";
+      const expanded = leaves.map((target) => `${String(target)}.output${steps}`).join(" | ");
+      spellings?.set(expanded, { caseId, leaves: leaves.map(String) });
+      return "${" + expanded + "}";
     }
   }
   rejectCaseRefs("${" + interior + "}", caseIds, host, { range, diagnostics }); // a non-clean read is loud

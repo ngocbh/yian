@@ -22,7 +22,7 @@ import {
 import { END_ID, type FlowOutput } from "../../compile/model.ts";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, parseCondition } from "../../expr/expressions.ts";
-import { type ExprNode, iterSubtreesTopdown, Tree } from "../../expr/grammar.ts";
+import { type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { type RefStep, splitReference, stepsText } from "../../expr/expressions.ts";
 import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
@@ -59,6 +59,7 @@ import {
   type NotNarrowable,
   unresolvedType,
 } from "../helpers/narrowing_facts.ts";
+import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import { Binding, bindingSource } from "../../nodes/contracts.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
@@ -122,7 +123,8 @@ export function isUntyped(typ: Type | null): boolean {
  * `?.` introduced doesn't count (TypeScript optional chains). A guard's narrowing lifts it.
  * Untyped receivers are never flagged, except a root that may be skipped: a `.` right after it is
  * flagged whatever the producer's type (design 2.6.6). An operand of arithmetic names the whole
- * fix, `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message. An
+ * fix, `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message; one
+ * already inside a `:-` or `|` operand of arithmetic has its default and is told only `?.`. An
  * untyped root narrowed to `T` (by a guard or the CASE branch routing the site) needs `?.` for
  * each field `T` doesn't require (owner ruling, 2026-10-25). A read no value reaches (its guard
  * can never hold) is not checked; `checkImpossibleWhens` or the asserts' check reports the guard.
@@ -133,7 +135,12 @@ export function isUntyped(typ: Type | null): boolean {
  * @returns The messages without a site prefix.
  */
 export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: TypeRegistry): string[] {
-  const messages: string[] = [];
+  return [...new Set(nullableReads(tree, roots, registry).map(([, message]) => message))];
+}
+
+/** Return each nullable read of `nullableReadErrors` as `[the whole read as written, its message]`. */
+function nullableReads(tree: ExprNode, roots: ReadRoots, registry: TypeRegistry): [string, string][] {
+  const messages: [string, string][] = [];
   const operands = arithmeticOperands(tree);
   // What `checkedRefs` gives under each root's alternative, index-aligned with `guardedReads`.
   const checkedOf = new Map<string, (readonly [string, Guard | null][])[]>();
@@ -149,7 +156,7 @@ export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: T
       root,
       rootText: head + stepsText(steps.slice(0, used - 1)),
       rest,
-      arithmetic: operands.has(node),
+      fix: operands.get(node) ?? "either",
     };
     let first: string | null = null;
     let accepted = alternatives.length === 0;
@@ -175,9 +182,9 @@ export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: T
       }
       first ??= error;
     }
-    if (!accepted && first !== null) messages.push(first);
+    if (!accepted && first !== null) messages.push([head + stepsText(steps), first]);
   }
-  return [...new Set(messages)];
+  return messages;
 }
 
 /** One read split at its root: the root's flat path, the root as written, and the steps after it. */
@@ -185,24 +192,36 @@ interface Read {
   readonly root: string;
   readonly rootText: string;
   readonly rest: readonly RefStep[];
-  /** Whether the read is a direct operand of arithmetic. */
-  readonly arithmetic: boolean;
+  /** The fix the message names (`ReadFix`). */
+  readonly fix: ReadFix;
 }
 
 /**
- * Return the refcalls that are operands of arithmetic: direct ones (parentheses make no node), and
- * the parts of a `:-` or `|` operand, whose fix is the same default.
+ * The fix a nullable read's message names: `default` for a direct operand of arithmetic, which
+ * needs `(x?.k :- <default>)`, as does a part of a `:- null` operand; `optional` for a part of
+ * another `:-` or `|` operand of arithmetic, which has its default already and needs only `?.`; `either` for any other read, `?.` or a null check.
  */
-function arithmeticOperands(tree: ExprNode): Set<ExprNode> {
-  const operands = new Set<ExprNode>();
+type ReadFix = "default" | "optional" | "either";
+
+/**
+ * Return the refcalls in arithmetic with their fix: direct operands (parentheses make no node), and
+ * the parts of a `:-` or `|` operand.
+ */
+function arithmeticOperands(tree: ExprNode): Map<ExprNode, ReadFix> {
+  const operands = new Map<ExprNode, ReadFix>();
   if (!(tree instanceof Tree)) return operands;
-  const add = (node: ExprNode): void => {
+  const add = (node: ExprNode, fix: ReadFix = "default"): void => {
     if (!(node instanceof Tree)) return;
-    if (node.data === "refcall") operands.add(node);
-    else if (node.data === "default_expr" || node.data === "coalesce") node.children.forEach(add);
+    if (node.data === "refcall") operands.set(node, fix);
+    else if (node.data === "default_expr" || node.data === "coalesce") {
+      // A `:- null` default leaves the value null, so it still needs a real default.
+      const last = node.children.at(-1);
+      const nullDefault = node.data === "default_expr" && last instanceof Token && last.type === "NULL";
+      node.children.forEach((part) => add(part, nullDefault ? "default" : "optional"));
+    }
   };
   for (const node of iterSubtreesTopdown(tree)) {
-    if (ARITHMETIC.has(node.data)) node.children.forEach(add);
+    if (ARITHMETIC.has(node.data)) node.children.forEach((child) => add(child));
   }
   return operands;
 }
@@ -264,11 +283,11 @@ function walk(
   // A root that may be skipped is a missing root at run time, whatever its type: check its step
   // before the untyped stop.
   if (nullable && (typ === null || typ.nullable) && !read.rest[0]!.optional) {
-    return nullableMessage(prefix, read.rest[0]!.name, why, read.arithmetic);
+    return nullableMessage(prefix, read.rest[0]!.name, why, read.fix);
   }
   for (const step of read.rest) {
     if (typ === null || isUntyped(typ)) return null;
-    if (typ.nullable && !step.optional) return nullableMessage(prefix, step.name, why, read.arithmetic);
+    if (typ.nullable && !step.optional) return nullableMessage(prefix, step.name, why, read.fix);
     const field = fieldRead(typ, step.name);
     if (field === null) return null; // the name checks report it
     if (field.nullable && !step.optional && roots.untyped(read.root, fields)) {
@@ -350,14 +369,16 @@ function narrowedUntypedMessage(prefix: string, name: string, label: string, atR
 }
 
 /**
- * Return the message for `.name` read on `prefix`, which may be null because of `why`; an
- * `arithmetic` operand's fix gives the default too.
+ * Return the message for `.name` read on `prefix`, which may be null because of `why`, naming
+ * the read's `fix`.
  */
-function nullableMessage(prefix: string, name: string, why: string, arithmetic: boolean): string {
-  const fix = arithmetic
-    ? `write (${prefix}?.${name} :- <default>)`
-    : `write ${prefix}?.${name}, or check ${prefix} != null first`;
-  return `\${${prefix}.${name}} reads field '${name}' of ${prefix}, which may be null (${why}); ${fix}`;
+function nullableMessage(prefix: string, name: string, why: string, fix: ReadFix): string {
+  const write = {
+    default: `write (${prefix}?.${name} :- <default>)`,
+    optional: `write ${prefix}?.${name}`,
+    either: `write ${prefix}?.${name}, or check ${prefix} != null first`,
+  }[fix];
+  return `\${${prefix}.${name}} reads field '${name}' of ${prefix}, which may be null (${why}); ${write}`;
 }
 
 /** Return the root `path` is at or below, else `null`. */
@@ -791,7 +812,7 @@ function declaredReadError(
 
 /**
  * Return a condition's name errors (see `nameErrors`), then its nullable field-read errors
- * (`nullableReadErrors`), each message once.
+ * (`nullableReadErrors`) on the reads with no name error, each message once.
  *
  * The nullable check reads each root's alternatives from `roots`, an `opaqueRoots` root as one
  * unknown contract (it gets no name check), and takes `nullableRoots` as the roots that may be
@@ -841,7 +862,15 @@ export function fieldReadErrors(
     untyped,
     routing: () => null,
   };
-  const nullable = nullableReadErrors(tree, readRoots, registry).filter((message) => !names.includes(message));
+  // A read the name checks reject gets no second message.
+  const named = (read: string) => names.some((message) => message.includes("${" + read + "}"));
+  const nullable = [
+    ...new Set(
+      nullableReads(tree, readRoots, registry)
+        .filter(([read, message]) => !named(read) && !names.includes(message))
+        .map(([, message]) => message),
+    ),
+  ];
   return [
     ...names.map((message) => ({ message, code: "compose.load" })),
     ...nullable.map((message) => ({ message, code: NULLABLE_FIELD_READ })),
@@ -869,6 +898,10 @@ export interface FieldReadLevel {
   readonly baseLocals?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>>;
   /** Each searched CASE's authored `when:`s (default none). */
   readonly searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]>;
+  /** Each expanded case value read, by expanded interior, to spell it as written (default none). */
+  readonly caseSpellings?: ReadonlyMap<string, CaseRead>;
+  /** What owns the level's outputs when it is no flow, such as `inline body of node 'lp'`. */
+  readonly outputsOwner?: string | null;
 }
 
 /**
@@ -903,8 +936,10 @@ export function checkFieldReads(
     const roots = poolRoots(level, nodeId, wiring, result !== null && result.fieldLabels.size > 0 ? null : nodeId);
     for (const [param, binding] of wiring) {
       for (const site of stringSites(binding)) {
-        const message = firstNullableRead(bindingSource(site), roots, registry);
-        if (message === null) continue;
+        const text = bindingSource(site);
+        const read = firstNullableRead(text, roots, registry);
+        if (read === null) continue;
+        const message = caseReadsAsWritten(read, String(text), level.caseSpellings ?? new Map());
         let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
         let fallback: SourceRange | null = null;
         if (result !== null) {
@@ -968,9 +1003,11 @@ export function checkFieldReads(
           return producer !== null && mayBeNull(producer) ? `node ${reprText(producer)} may be skipped` : "it is Optional";
         },
       };
-      const message = firstNullableRead(text, roots, registry);
-      if (message === null) continue;
-      const label = valueMode ? "output" : `output ${reprText(output.name)}`;
+      const read = firstNullableRead(text, roots, registry);
+      if (read === null) continue;
+      const message = caseReadsAsWritten(read, String(text), level.caseSpellings ?? new Map());
+      const which = valueMode ? "output" : `output ${reprText(output.name)}`;
+      const label = level.outputsOwner ? `${level.outputsOwner} ${which}` : which;
       throw locatedError(`${label}: ${message}`, site, outputsRange, resolveOrigin, diagnostics, {
         code: NULLABLE_FIELD_READ,
       });

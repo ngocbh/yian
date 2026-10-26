@@ -93,7 +93,7 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { ToolDescriptor } from "../nodes/tool.ts";
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
-import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
+import { type CaseRead, caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
 import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.ts";
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
@@ -1903,10 +1903,13 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // Expand `${<case>.output}` value refs to a coalesce over the case's branch targets. Runs after
   // the inline-call desugar (so synth-node bindings are covered too) and before the build loop —
   // downstream sees only ordinary branch-target refs.
+  // Each expanded case read, so a field-read error names the read as written.
+  const caseSpellings = new Map<string, CaseRead>();
   [descriptors, outputsSection] = expandCaseOutputs(descriptors, outputsSection, assertsSection, {
     outputsRange,
     assertionRangeAt: flowAssertionRangeAt,
     diagnostics,
+    spellings: caseSpellings,
   });
 
   // The inline-child builder and the binding-contract reader read it lazily; it is set just
@@ -2288,6 +2291,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       localContracts,
       baseLocals,
       searchedWhens,
+      caseSpellings,
+      // An inline body's lexical owner ends `node, <id>, inline`.
+      outputsOwner: owner.at(-1) === "inline" && owner.at(-3) === "node" ? `inline body of node ${reprText(owner.at(-2)!)}` : null,
     },
     { resolveOrigin, diagnostics },
   );

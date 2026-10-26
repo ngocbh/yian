@@ -36,8 +36,7 @@ import {
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { resolveFromPool, type RunState } from "../../src/runtime/state.ts";
-import { sourcePath } from "../../src/runtime/trace.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
+import { referenceRoot, VariablePool } from "../../src/typesys/pool.ts";
 import { crashAfter, NO_ENV, startedRun } from "./run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-producer-index-"));
@@ -256,7 +255,7 @@ test("in a learnable run, each name's commit is by the node whose start the reta
   let checked = 0;
   for (const [name, seq] of state.producers) {
     if (name.startsWith("system.")) continue;
-    const source = trace.resolve(`${name}.output`).source as SourceRef;
+    const source = trace.resolve([name, "output"]).source as SourceRef;
     const started = records[source.executionSeq]!;
     expect(started.kind).toBe("node_started");
     // A child START's commit is its expansion's, by the spawner, under the START's key.
@@ -516,26 +515,22 @@ test("a pool name missing from the producer index is a RangeError", () => {
   const pool = new VariablePool(StartNode.ID);
   pool.set("a", { x: 1n });
   pool.addSystem("run_id", "r1");
-  expect(() => resolveFromPool("a.output.x", pool, new Map(), "r1")).toThrow(
+  expect(() => resolveFromPool(["a", "output", "x"], pool, new Map(), "r1")).toThrow(
     new RangeError("pool name 'a' has no pool_commit in the producer index"),
   );
-  expect(() => resolveFromPool("system.run_id", pool, new Map(), "r1")).toThrow(RangeError);
+  expect(() => resolveFromPool(["system", "run_id"], pool, new Map(), "r1")).toThrow(RangeError);
   // A miss is still a miss, not an error.
-  expect(resolveFromPool("b.output", pool, new Map(), "r1").present).toBe(false);
-  expect(resolveFromPool("a.output.y", pool, new Map([["a", 7]]), "r1").present).toBe(false);
-  const found = resolveFromPool("a.output.x", pool, new Map([["a", 7]]), "r1");
-  expect([found.value, found.present, (found.source as SourceRef).executionSeq, (found.source as SourceRef).path]).toEqual([
-    1n,
-    true,
-    7,
-    ["x"],
-  ]);
+  expect(resolveFromPool(["b", "output"], pool, new Map(), "r1").present).toBe(false);
+  const found = resolveFromPool(["a", "output", "x"], pool, new Map([["a", 7]]), "r1");
+  const source = found.source as SourceRef;
+  expect([found.used, found.present, found.value]).toEqual([2, true, { x: 1n }]);
+  expect([source.executionSeq, source.path]).toEqual([7, []]);
 });
 
-test("sourcePath reads x.new_messages[.path] as that pool name when it is held", () => {
+test("referenceRoot reads x.new_messages[.path] as that pool name when it is held", () => {
   const holds = (name: string) => name === "x" || name === "x.new_messages";
-  expect(sourcePath("x.new_messages.0", "__start__", holds)).toEqual({ name: "x.new_messages", projection: ["0"] });
-  expect(sourcePath("x.new_messages", "__start__", holds)).toEqual({ name: "x.new_messages", projection: [] });
-  expect(sourcePath("y.new_messages", "__start__", holds)).toBeNull();
-  expect(sourcePath("x.output", "__start__", holds)).toEqual({ name: "x", projection: [] });
+  expect(referenceRoot(["x", "new_messages", "0"], "__start__", holds)).toEqual({ name: "x.new_messages", used: 2 });
+  expect(referenceRoot(["x", "new_messages"], "__start__", holds)).toEqual({ name: "x.new_messages", used: 2 });
+  expect(referenceRoot(["y", "new_messages"], "__start__", holds)).toEqual({ name: null, used: 2 });
+  expect(referenceRoot(["x", "output"], "__start__", holds)).toEqual({ name: "x", used: 2 });
 });

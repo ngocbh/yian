@@ -11,9 +11,9 @@
  * its new messages under their own pool name, `<id>.new_messages` (`messagesKey`).
  *
  * Two responsibilities:
- * - `resolve(head, rest)` backs the `${...}` expression evaluator. Because values are typed
- *   objects (not stringified), `${x.output.ratio}` traverses into an object output;
- *   `${x.output}` is the node's whole value.
+ * - `readRoot(names)` backs the `${...}` expression evaluator: it reads a reference's root
+ *   (`${x.output}` is the node's whole value), and the evaluator walks the typed value's fields
+ *   after it, so `${x.output.ratio}` traverses into an object output.
  * - `toWire()`/`fromWire()` and `dumps()`/`loads()` are a lossless whole-pool snapshot codec
  *   (each value's `{kind, value}` wire form keeps its exact type).
  */
@@ -79,6 +79,18 @@ export function referenceRoot(names: readonly string[], startId: string, holds: 
 }
 
 /**
+ * Return why a reference's root is absent, for a read's error: its node was skipped, its input
+ * was not given, or its system value is not set; `null` for a head that names no pool root.
+ */
+export function absentRootWhy(names: readonly string[]): string | null {
+  if (poolRootLength(names) === 1) return null;
+  const [head, second] = names as [string, string];
+  if (head === "input") return `input '${second}' was not given`;
+  if (head === "system") return `system value '${second}' is not set`;
+  return `node '${head}' was skipped`;
+}
+
+/**
  * One root read without its source: how many names the root used, whether it is there, its
  * value (`null` when absent), and why it is absent (`null` when present or unknown).
  */
@@ -102,7 +114,7 @@ export interface PoolWire {
  * Each node id has at most one stored typed value (`store.get(nodeId)`); a routing-only node
  * can have none. "Multiple outputs" are fields of one object. `${input.X}` reads the
  * synthesized START node's committed record; `${system.X}` reads host-injected ambients. Backs
- * the `${...}` resolver and snapshots the whole pool losslessly (`toWire`/`dumps`).
+ * the `${...}` root reads and snapshots the whole pool losslessly (`toWire`/`dumps`).
  */
 export class VariablePool {
   /** Node id to that node's single produced value. Read via `${<id>.output[.path]}`. */
@@ -166,53 +178,15 @@ export class VariablePool {
    */
   readRoot(names: readonly string[]): RootValue {
     const root = referenceRoot(names, this.startId, (name) => this.store.has(name));
-    const absent = (why: string | null): RootValue => ({ used: root.used, present: false, value: null, why });
-    if (root.used === 1) return absent(null);
-    const [head, key] = names as [string, string];
-    if (head === "input") {
-      const [present, value] = fieldOf(this.store.get(this.startId)?.toObject() ?? null, key);
-      return present ? { used: root.used, present, value, why: null } : absent(`input '${key}' was not given`);
-    }
-    const typed = head === "system" ? this.system.get(key) : root.name !== null ? this.store.get(root.name) : undefined;
-    if (typed !== undefined) return { used: root.used, present: true, value: typed.toObject(), why: null };
-    return absent(head === "system" ? `system value '${key}' is not set` : `node '${head}' was skipped`);
-  }
-
-  /**
-   * Resolve a parsed `${head.rest...}` reference to a plain value.
-   *
-   * Recognizes three namespaces: `input.<key>[.<path>]` reads the START record,
-   * `<node>.output[.<path>]` reads a node's value (`.output` is a syntactic discriminator the
-   * resolver skips), and `system.<key>` reads a host ambient. `<node>.new_messages[.<path>]`
-   * reads the node's new messages, stored under `messagesKey(<node>)`. An unrecognized head resolves to
-   * `null` (the missing-ref-is-falsy contract); legacy plural surfaces
-   * (`${outputs.X}`/`${inputs.X}`) are rejected at load time, so the load-time guard, not this
-   * method, is the authoritative defense.
-   *
-   * `head` is the first reference segment (`input`, `system`, or a node id) and `rest` the
-   * remaining dotted segments (e.g. `["output", "ratio"]`). Returns the resolved plain value,
-   * or `null` if any step is absent.
-   */
-  resolve(head: string, rest: readonly string[]): Value {
-    // Node-first head: `${<node>.output[.path]}` reads `store[<node>]`'s interior. The literal
-    // `output` token is a syntactic discriminator and is skipped.
-    if (this.store.has(head) && rest[0] === "output") {
-      return traverse(this.store.get(head), rest.slice(1));
-    }
-    // `${<node>.new_messages[.path]}` reads the node's messages under their own pool name.
-    if (rest[0] === NEW_MESSAGES && this.store.has(messagesKey(head))) {
-      return traverse(this.store.get(messagesKey(head)), rest.slice(1));
-    }
-    // Singular input head: `${input.k}` ≡ `store[startId].k`.
-    if (head === "input") {
-      if (rest.length === 0) return null;
-      return traverse(this.store.get(this.startId), rest);
-    }
-    if (head === "system") {
-      const seg = rest.length > 0 ? this.system.get(rest[0]!) : undefined;
-      return seg !== undefined ? seg.toObject() : null;
-    }
-    return null;
+    const absent: RootValue = { used: root.used, present: false, value: null, why: absentRootWhy(names) };
+    if (root.name === null) return absent;
+    let typed: TypedValue | undefined;
+    if (names[0] === "system") typed = this.system.get(names[1]!);
+    else typed = this.store.get(root.name);
+    if (typed === undefined) return absent;
+    if (root.key === undefined) return { used: root.used, present: true, value: typed.toObject(), why: null };
+    const [present, value] = fieldOf(typed.toObject(), root.key);
+    return present ? { used: root.used, present, value, why: null } : absent;
   }
 
   // --- serialization ------------------------------------------------------ //
@@ -277,20 +251,6 @@ export class VariablePool {
   static loads(text: string): VariablePool {
     return VariablePool.fromWire(parseJson(text, "codec"));
   }
-}
-
-/**
- * Object-walk a stored typed value along `path` (the `${<id>.output.a.b}` / `${input.x.y}`
- * dotted read); a missing step resolves to `null` (propagates falsy).
- */
-function traverse(seg: TypedValue | undefined, path: readonly string[]): Value {
-  if (seg === undefined) return null;
-  let value = seg.toObject();
-  for (const step of path) {
-    value = fieldOf(value, step)[1];
-    if (value === null) return null;
-  }
-  return value;
 }
 
 /**

@@ -27,7 +27,7 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
-import { ResolvedValue, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { type RootRead, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { BindingCollector, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import {
   Binding,
@@ -429,10 +429,11 @@ test("template routes record each part and route feedback", () => {
   const template = new ValueTemplate({ a: "${n.output}", b: [1n, "${m.output}"], c: "lit" });
   const roots: Record<string, ValueRecord> = { n: { output: 3n }, m: { output: "x" } };
 
-  const resolve = (path: string): ResolvedValue => {
-    const [node, field] = path.split(".") as [string, string];
+  const resolve = (names: readonly string[]): RootRead => {
+    const [node, field] = names as [string, string];
     const seq = node === "n" ? 1 : 2;
-    return new ResolvedValue(roots[node]![field]!, true, new SourceRef("run", seq, [field]));
+    const source = new SourceRef("run", seq, [field]);
+    return { used: 2, present: true, value: roots[node]![field]!, why: null, source };
   };
 
   const collector = new BindingCollector();

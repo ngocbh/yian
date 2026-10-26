@@ -368,7 +368,7 @@ test("the success puts the value under writer.new_messages and points the produc
   expect(state.producers.get("writer.new_messages")).toBe(seq);
   const value = state.pool.store.get("writer.new_messages")!.toObject() as MessageValue[];
   expect(value).toEqual((await foldedAt(log, seq))!);
-  expect(state.pool.resolve("writer", ["new_messages"])).toEqual(value);
+  expect(state.pool.readRoot(["writer", "new_messages"]).value).toEqual(value);
 });
 
 // --- crashes --- //

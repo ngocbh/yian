@@ -403,7 +403,7 @@ test("unresolvable declared type is not enforced", async () => {
 test("undeclared output is not enforced", async () => {
   const built = engine(contracted("a", () => ({ other: "x" }), null));
   expect((await built.run()).at(-1)).toBeInstanceOf(RunSucceeded);
-  expect(built.state.pool.resolve("a", ["output", "other"])).toBe("x");
+  expect(built.state.pool.get("a")).toEqual({ other: "x" });
 });
 
 // --- the num_workers knob ---

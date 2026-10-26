@@ -36,6 +36,7 @@ import {
   evalBinding,
   evalTemplate,
   resolveReference,
+  type RootResolver,
   scanTemplate,
 } from "../expr/index.ts";
 import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
@@ -79,8 +80,8 @@ export const BINDING_FAILURE_CODES = ["binding.evaluate", "binding.type", "contr
 /** The semantic stage a `BindingError` failed at. */
 export type BindingFailureCode = (typeof BINDING_FAILURE_CODES)[number];
 
-/** Resolves a reference path to its value and route. */
-export type SourceResolver = (path: string) => ResolvedValue;
+/** Reads a reference's root, with its value and route (`RootResolver`). */
+export type SourceResolver = RootResolver;
 
 /**
  * Resolves a node's reserved source by name and applies the node's normalization to the value
@@ -527,14 +528,10 @@ class SourceReader {
     if (!this.trace) {
       // The item may be a traced caller's `ResolvedValue`; an untraced read needs just its value.
       const item = this.item instanceof ResolvedValue ? this.item.value : this.item;
-      const value = evalBinding(text, (path) => resolveReference(path, this.pool), { item, types: this.types });
+      const value = evalBinding(text, (names) => resolveReference(names, this.pool), { item, types: this.types });
       return [value, null, false];
     }
-    const resolve = (path: string): ResolvedValue => {
-      if (this.sourceResolver !== null) return this.sourceResolver(path);
-      const value = resolveReference(path, this.pool);
-      return new ResolvedValue(value, value !== null);
-    };
+    const resolve = this.sourceResolver ?? ((names: readonly string[]) => resolveReference(names, this.pool));
     const segments = scanTemplate(text);
     const result = evalTemplate(segments, resolve, { trace: true, item: this.item, types: this.types });
     return [result.value, result.route, segments.some((segment) => segment instanceof Span)];

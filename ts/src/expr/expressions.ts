@@ -1,8 +1,9 @@
 /**
  * `${...}` evaluation plus conservative compile-time type/reference analysis.
  *
- * Variable resolution goes through `VariablePool.resolve`, so expressions read typed segments
- * and can traverse into object outputs such as `${x.output.output.ratio}`.
+ * A resolver reads a reference's root (`VariablePool.readRoot`, or a field of a node's input
+ * record) and the evaluator walks the field steps after it, so expressions read typed values and
+ * can traverse into object outputs such as `${x.output.output.ratio}`.
  *
  * Grammar: comparisons (`==` `!=` `<` `<=` `>` `>=` `in` `not in`) and arithmetic over
  * references and literals, combined with `and` / `or` / `not` and parentheses. The same parsed
@@ -43,7 +44,7 @@ import {
   valueRepr,
 } from "../typesys/values.ts";
 import { bindArguments, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
-import { ResolvedValue, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
+import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 // grammar.ts imports this module too, so its exports are used only inside functions here.
 import {
   callSuffixOf,
@@ -125,42 +126,44 @@ export function constructorShapeError(name: string, callSuffix: Tree): string | 
 }
 
 /**
- * Resolve a `${path}` reference against the pool.
- *
- * @returns The value, or `null` for a miss.
- * @throws {ExpressionError} If a dotted segment of `path` is empty.
+ * Reads a reference's root, given all its names; the evaluator walks the names after the root.
+ * With `trace`, a root read also gives its producer or route.
  */
-export function resolveReference(path: string, pool: VariablePool): Value {
-  const parts = path.trim().split(".");
-  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
-  const [head, ...rest] = parts;
-  return pool.resolve(head!, rest);
+export type RootResolver = (names: readonly string[]) => RootRead;
+
+/** The resolver for an evaluation with nothing in scope: every root is absent. */
+export const MISSING_ROOT: RootResolver = () => ({ used: 1, present: false, value: null, why: null });
+
+/** Throw when a reference has an empty name. */
+function checkNames(names: readonly string[]): void {
+  if (names.some((name) => !name)) throw new ExpressionError(`invalid variable path: '\${${names.join(".")}}'`);
 }
 
 /**
- * Resolve a `${path}` against a node's bound input record (dotted walk).
+ * Read a reference's root from the pool (`VariablePool.readRoot`).
  *
- * Bare local-input refs only. A missing input, a dotted miss, or a `null` step gives `null`,
- * which gives `when:` its missing-is-falsy behavior. Compose rejects undeclared names
- * everywhere, and field reads a known type can't have in bindings, CASE conditions, LOOP
- * predicates, and flow outputs. Asserts check less (a node assert's reads of its inputs and a
- * flow assert's `${input.X.f}` check only the head name), so there a `null` can also be a
- * misspelled field.
- *
- * The head is read only as an own field of `record`, and each step through `fieldOf`, so a
- * path never reaches a JS property such as `constructor`.
- *
- * @throws {ExpressionError} If a dotted segment of `path` is empty.
+ * @throws {ExpressionError} If a name is empty.
  */
-export function resolveInRecord(path: string, record: ValueRecord): Value {
-  const parts = path
-    .trim()
-    .split(".")
-    .map((part) => part.trim());
-  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
-  let value = fieldOf(record, parts[0]!)[1];
-  for (const step of parts.slice(1)) value = fieldOf(value, step)[1];
-  return value;
+export function resolveReference(names: readonly string[], pool: VariablePool): RootRead {
+  checkNames(names);
+  return pool.readRoot(names);
+}
+
+/**
+ * Read a reference's root from a node's bound input record: the head, as an own field of
+ * `record`, so a read never reaches a JS property such as `constructor`.
+ *
+ * Bare local-input refs only. The evaluator walks the steps after the head. Compose rejects
+ * undeclared names everywhere, and field reads a known type can't have in bindings, CASE
+ * conditions, LOOP predicates, and flow outputs. Asserts check less (a node assert's reads of its
+ * inputs and a flow assert's `${input.X.f}` check only the head name).
+ *
+ * @throws {ExpressionError} If a name is empty.
+ */
+export function resolveInRecord(names: readonly string[], record: ValueRecord): RootRead {
+  checkNames(names);
+  const [present, value] = fieldOf(record, names[0]!);
+  return { used: 1, present, value, why: present ? null : `input '${names[0]}' is not bound` };
 }
 
 /**
@@ -360,7 +363,7 @@ export function conditionRefs(expression: string): string[] {
  */
 function evaluate(
   expression: string,
-  resolve: (path: string) => Value,
+  resolve: RootResolver,
   types: ReadonlyMap<string, Type> | null,
 ): boolean {
   const tree = parseCondition(expression, types ?? new Map());
@@ -395,7 +398,7 @@ export function evaluateWhen(
   pool: VariablePool,
   types: ReadonlyMap<string, Type> | null = null,
 ): boolean {
-  return evaluate(expression, (path) => resolveReference(path, pool), types);
+  return evaluate(expression, (names) => resolveReference(names, pool), types);
 }
 
 /**
@@ -422,7 +425,7 @@ export function evaluateWhenRecord(
   record: ValueRecord,
   types: ReadonlyMap<string, Type> | null = null,
 ): boolean {
-  return evaluate(expression, (path) => resolveInRecord(path, record), types);
+  return evaluate(expression, (names) => resolveInRecord(names, record), types);
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -739,6 +742,28 @@ function resolvedRoute(resolved: ResolvedValue, path: string): ValueRoute {
   return ValueRoute.literal(resolved.value);
 }
 
+/**
+ * The route of a reference whose root and every step were present: the root's source extended
+ * by `steps`, a projection of its prior route, else a literal of the value read. `text` is the
+ * read as written.
+ */
+function readRoute(
+  source: SourceRef | ValueRoute | null,
+  value: Value,
+  steps: readonly string[],
+  text: string,
+): ValueRoute {
+  if (source instanceof SourceRef) {
+    const extended = new SourceRef(source.runId, source.executionSeq, [...source.path, ...steps]);
+    return new ValueRoute("source", { source: extended, expression: text });
+  }
+  if (source instanceof ValueRoute) {
+    const selected = new ValueRoute("selected", { children: [source], expression: text });
+    return selected.project(steps).with({ expression: text });
+  }
+  return ValueRoute.literal(value);
+}
+
 /** The routes collected by one traced subtree evaluation: its operands', and its own if it sets one. */
 interface TraceFrame {
   children: ValueRoute[];
@@ -760,7 +785,7 @@ const OP_TOKEN_TYPES: ReadonlySet<string> = new Set(["NOT", "AND", "OR"]);
  * in `STRICT_RAISE`.
  */
 class EvalExpr {
-  readonly #resolve: (path: string) => Value | ResolvedValue;
+  readonly #resolve: RootResolver;
   readonly #item: Value | ResolvedValue;
   readonly #mode: ResolveMode;
   readonly #types: ReadonlyMap<string, Type> | null;
@@ -772,7 +797,7 @@ class EvalExpr {
   readonly #vars = new Map<string, { value: Value; route: ValueRoute | null }>();
 
   constructor(
-    resolve: (path: string) => Value | ResolvedValue,
+    resolve: RootResolver,
     item: Value | ResolvedValue,
     mode: ResolveMode,
     types: ReadonlyMap<string, Type> | null,
@@ -919,7 +944,7 @@ class EvalExpr {
   refcall(node: Tree): Walked {
     const { head: name, steps } = splitReference(node);
     const callSuffix = callSuffixOf(node);
-    if (callSuffix === undefined) return this.reference(referencePath(node), referenceText(node));
+    if (callSuffix === undefined) return this.reference([name, ...steps.map((step) => step.name)], referenceText(node));
     const constructor = this.isConstructor(name);
     let value: Walked;
     if (name === ISINSTANCE) value = this.isinstanceCall(callSuffix);
@@ -950,17 +975,16 @@ class EvalExpr {
   }
 
   /**
-   * Resolve a dotted reference path. An `item`-headed path walks the MAP-body `item` scope
-   * locally (record fields and file fields, see `dottedStep`); every other path goes whole to
-   * `resolve`, which owns the dotted walk. A miss (an `item` miss, or `resolve` giving `null`)
-   * is `MISSING`.
+   * Read a reference. An `item`-headed one walks the MAP-body `item` scope locally (record fields
+   * and file fields, see `dottedStep`); any other goes to `resolve`, which reads its root, and
+   * the names after the root are walked here with `fieldOf`. A miss (an absent root or step, or a
+   * `null` on the way or at the end) is `MISSING`.
    *
-   * @param path The flat dotted path, for the resolver and the `item` walk.
+   * @param names The reference's head and step names.
    * @param text The read as written (`?.` included), for miss messages and routes.
    */
-  reference(path: string, text: string = path): Walked {
-    const parts = path.split(".");
-    if (parts[0] === "item") {
+  reference(names: readonly string[], text: string): Walked {
+    if (names[0] === "item") {
       // MAP-body-local scope (not a resolver head); a `null` item means no item scope.
       const item = this.#item;
       let present: boolean;
@@ -973,7 +997,7 @@ class EvalExpr {
         value = item as Value;
       }
       if (value === null || !present) value = MISSING;
-      const steps = parts.slice(1);
+      const steps = names.slice(1);
       for (const step of steps) {
         if (source !== null) present = present && value !== MISSING && fieldOf(value, step)[0];
         value = this.dottedStep(value, step);
@@ -986,17 +1010,19 @@ class EvalExpr {
       if (value === MISSING) this.#missPath = text;
       return value;
     }
-    let resolved = this.#resolve(path);
-    if (this.#trace) {
-      if (!(resolved instanceof ResolvedValue)) throw new TypeError("a traced resolver must return ResolvedValue");
-      if (resolved.present) this.#frames.at(-1)!.route = resolvedRoute(resolved, text);
-      resolved = resolved.present ? resolved.value : null;
+    const read = this.#resolve(names);
+    const steps = names.slice(read.used);
+    let { present, value } = read;
+    for (const step of steps) {
+      if (!present) break;
+      [present, value] = fieldOf(value, step);
     }
-    if (resolved === null) {
+    if (this.#trace && present) this.#frames.at(-1)!.route = readRoute(read.source ?? null, value, steps, text);
+    if (!present || value === null) {
       this.#missPath = text;
       return MISSING;
     }
-    return resolved as Value;
+    return value;
   }
 
   /**
@@ -1456,9 +1482,9 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * (`fieldOf`), never a JS property, so `${x.constructor}` is a miss (safety-critical).
  *
  * @param tree The parsed expression: a `Tree`, or a lone literal `Token`.
- * @param resolve Resolves a reference path to its value; `null` is a miss. `item`-headed paths
- *   bypass it. With `trace`, it returns a `ResolvedValue` holding the value, whether it is
- *   present, and its `SourceRef` or prior `ValueRoute`.
+ * @param resolve Reads a reference's root from its names (`RootResolver`); the evaluator walks the
+ *   names after the root. `item`-headed references bypass it. With `trace`, the root read also
+ *   gives its `SourceRef` or prior `ValueRoute`.
  * @param options.item The MAP-body-local scope for `item` / `item.path` (record and file
  *   fields); `null` (the default) means no item scope. With `trace`, a `ResolvedValue` may give
  *   the item's presence and its route through a composed collection.
@@ -1476,26 +1502,13 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *   the operator doesn't take (`null` included), a zero divisor, a NaN result, an int too large
  *   for the runtime, a slice of anything but a list or with a bound that is null or not an int,
  *   a comprehension over anything but a list (`null` or a miss included), or a strict-mode miss.
- * @throws {TypeError} When a traced resolver doesn't return a `ResolvedValue`.
  */
+export function evalExpr(tree: ExprNode, resolve: RootResolver, options: TraceOptions & { trace: true }): TracedValue;
+export function evalExpr(tree: ExprNode, resolve: RootResolver, options?: EvalOptions & { trace?: false }): Value;
+export function evalExpr(tree: ExprNode, resolve: RootResolver, options?: TraceOptions): Value | TracedValue;
 export function evalExpr(
   tree: ExprNode,
-  resolve: (path: string) => ResolvedValue,
-  options: TraceOptions & { trace: true },
-): TracedValue;
-export function evalExpr(
-  tree: ExprNode,
-  resolve: (path: string) => Value,
-  options?: EvalOptions & { trace?: false },
-): Value;
-export function evalExpr(
-  tree: ExprNode,
-  resolve: (path: string) => Value | ResolvedValue,
-  options?: TraceOptions,
-): Value | TracedValue;
-export function evalExpr(
-  tree: ExprNode,
-  resolve: (path: string) => Value | ResolvedValue,
+  resolve: RootResolver,
   {
     item = null,
     mode = ResolveMode.BINDING_NONE,

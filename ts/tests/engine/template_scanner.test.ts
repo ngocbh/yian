@@ -19,7 +19,7 @@
 
 import { expect, test } from "bun:test";
 
-import { ExpressionError, ResolveMode } from "../../src/expr/expressions.ts";
+import { ExpressionError, MISSING_ROOT, ResolveMode, type RootResolver } from "../../src/expr/expressions.ts";
 import {
   evalTemplate,
   Literal,
@@ -32,12 +32,10 @@ import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.t
 import { fieldOf } from "../../src/typesys/values.ts";
 
 /** Return a `resolve` over `values`: the head, then `fieldOf` per dotted step; a miss is `null`. */
-function from(values: ValueRecord): (path: string) => Value {
-  return (path) => {
-    const [head, ...steps] = path.split(".");
-    let value = fieldOf(values, head!)[1];
-    for (const step of steps) value = fieldOf(value, step)[1];
-    return value;
+function from(values: ValueRecord): RootResolver {
+  return (names) => {
+    const [present, value] = fieldOf(values, names[0]!);
+    return { used: 1, present, value, why: null };
   };
 }
 
@@ -61,7 +59,7 @@ function expectError(run: () => unknown, message: string): void {
 /** Scan and evaluate `text`. */
 function evaluate(
   text: string,
-  resolve: (path: string) => Value = () => null,
+  resolve: RootResolver = MISSING_ROOT,
   options: { item?: Value; mode?: ResolveMode } = {},
 ): Value {
   return evalTemplate(scanTemplate(text), resolve, options);
@@ -237,5 +235,5 @@ test.each<[string, Value, string]>([
   ["a nested null", [null], "[null]"],
   ["a date text", "2024-01-02", "2024-01-02"],
 ])("an embedded span writes %s in the text form", (_label, value, text) => {
-  expect(evaluate("v=${x}", () => value)).toBe(`v=${text}`);
+  expect(evaluate("v=${x}", from({ x: value }))).toBe(`v=${text}`);
 });

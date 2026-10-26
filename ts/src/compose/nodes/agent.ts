@@ -17,6 +17,7 @@
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { current } from "../../defaults.ts";
+import { MISSING_ROOT } from "../../expr/expressions.ts";
 import { wholeSpanInterior } from "../../expr/grammar.ts";
 import { evalBinding } from "../../expr/template.ts";
 import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
@@ -238,7 +239,7 @@ function blockProblemRange(
 /** Return the value a literal template part binds: tags dropped, strings `$$`-unescaped. */
 function literalPart(tree: unknown): unknown {
   if (tree instanceof Binding) return literalPart(tree.source);
-  if (typeof tree === "string") return evalBinding(tree, () => null);
+  if (typeof tree === "string") return evalBinding(tree, MISSING_ROOT);
   if (isRecord(tree)) return Object.fromEntries(Object.entries(tree).map(([key, item]) => [key, literalPart(item)]));
   if (Array.isArray(tree)) return tree.map(literalPart);
   return tree;

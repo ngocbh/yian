@@ -149,7 +149,7 @@ test("inputs resolve to the START node", () => {
   const pool = new VariablePool();
   // START commits the bound input record, so `${input.x}` reads START's `x`.
   pool.set(START_ID, { x: "ACME" });
-  expect(pool.resolve("input", ["x"])).toBe("ACME");
+  expect(pool.readRoot(["input", "x"]).value).toBe("ACME");
 });
 
 test("the engine schedules START and emits its success", async () => {

@@ -434,10 +434,10 @@ test("RunStarted preparation is immutable and commit restores the complete state
   expect(state.pool).not.toBe(given);
   expect(state.pool.startId).toBe(owned.startId);
   expect(state.pool.get(owned.startId)).toEqual({ name: "Ada", count: 2n, aliases: ["A", "B"] });
-  expect(state.pool.resolve("system", ["run_id"])).toBe(RUN_ID);
-  expect(state.pool.resolve("system", ["today"])).toBe("2026-08-13");
-  expect(state.pool.resolve("system", ["now"])).toBe("2026-08-13T12:34:56+00:00");
-  expect(state.pool.resolve("system", ["tenant"])).toBe("tests");
+  expect(state.pool.readRoot(["system", "run_id"]).value).toBe(RUN_ID);
+  expect(state.pool.readRoot(["system", "today"]).value).toBe("2026-08-13");
+  expect(state.pool.readRoot(["system", "now"]).value).toBe("2026-08-13T12:34:56+00:00");
+  expect(state.pool.readRoot(["system", "tenant"]).value).toBe("tests");
   expect(state.input).toEqual({ name: "Ada", count: 2n, aliases: ["A", "B"] });
   expect(state.wiringOverrides).toEqual(
     new Map([[owned.startId, { name: "${input.name}", metadata: { labels: ["one", "two"] } }]]),

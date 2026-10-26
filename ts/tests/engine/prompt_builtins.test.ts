@@ -31,7 +31,7 @@ import {
   type TemplateFn,
   type TemplateParam,
 } from "../../src/expr/builtins.ts";
-import { evalExpr, ResolveMode, resolveInRecord } from "../../src/expr/expressions.ts";
+import { evalExpr, MISSING_ROOT, ResolveMode, resolveInRecord, type RootResolver } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { ExpressionError, evalBinding, promptRefs, RequiredError, renderTemplateRecord } from "../../src/expr/index.ts";
 import type { TextPart } from "../../src/llm/messages.ts";
@@ -157,8 +157,8 @@ test.each(["null", "null | null"])("a strict prompt rejects a final null, whole 
 });
 
 test("a binding's embedded null is still empty text", () => {
-  expect(evalBinding("${null}", () => null)).toBeNull();
-  expect(evalBinding("value=${null}", () => null)).toBe("value=");
+  expect(evalBinding("${null}", MISSING_ROOT)).toBeNull();
+  expect(evalBinding("value=${null}", MISSING_ROOT)).toBe("value=");
 });
 
 test("a strict prompt allows a null intermediate with a non-null result", () => {
@@ -287,9 +287,9 @@ test("the loader rejects an unknown builtin", () => {
 // A call-result dotted miss is a miss: non-strict modes may coalesce, default, or treat it as
 // falsy; only strict mode raises.
 
-/** Return a `resolve` doing the dotted walk over `record` (a miss is `null`). */
-function recordResolve(record: ValueRecord): (path: string) => Value {
-  return (path) => resolveInRecord(path, record);
+/** Return a `resolve` reading each root from `record`. */
+function recordResolve(record: ValueRecord): RootResolver {
+  return (names) => resolveInRecord(names, record);
 }
 
 test("a binding coalesce falls through a call-result miss", () => {

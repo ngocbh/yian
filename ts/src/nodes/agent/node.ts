@@ -272,7 +272,7 @@ function renderPromptList(nodeId: string, items: readonly PromptItem[], record: 
       return;
     }
     const ref = `\${${item.splice}}`;
-    const value = evalTemplate(scanTemplate(ref), (path) => resolveInRecord(path, record), {
+    const value = evalTemplate(scanTemplate(ref), (names) => resolveInRecord(names, record), {
       mode: ResolveMode.STRICT_RAISE,
     });
     const spliced: readonly unknown[] = isList(value) ? value : [value];

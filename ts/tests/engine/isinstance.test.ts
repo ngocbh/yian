@@ -45,11 +45,12 @@ import {
   isinstanceSubject,
   isinstanceTypeNames,
   ResolveMode,
+  type RootResolver,
   rewriteConditionRefs,
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token } from "../../src/expr/grammar.ts";
-import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
+import { SourceRef } from "../../src/expr/lineage.ts";
 import {
   bindingCoSkips,
   evalBinding,
@@ -88,19 +89,17 @@ const A_BUY: ValueRecord = { action: "buy", qty: 3n };
 const A_SELL: ValueRecord = { action: "sell", price: 1.5 };
 
 /** Return a `resolve` over `values`: the head, then `fieldOf` per dotted step; a miss is `null`. */
-function resolver(values: ValueRecord = {}): (path: string) => Value {
-  return (path) => {
-    const [head, ...parts] = path.split(".");
-    let value = fieldOf(values, head!)[1];
-    for (const part of parts) value = fieldOf(value, part)[1];
-    return value;
+function resolver(values: ValueRecord = {}): RootResolver {
+  return (names) => {
+    const [present, value] = fieldOf(values, names[0]!);
+    return { used: 1, present, value, why: null };
   };
 }
 
 /** Evaluate `text` against `resolve` with the type table `types`. */
 function evaluate(
   text: string,
-  resolve: (path: string) => Value,
+  resolve: RootResolver,
   types: ReadonlyMap<string, Type> | null = TYPES,
 ): Value {
   return evalExpr(parseExpr(text), resolve, { types });
@@ -344,7 +343,8 @@ test("isinstance is not a prompt function", () => {
 // --- tracing --- //
 
 test("traced isinstance records one route over the first argument", () => {
-  const resolve = (path: string) => new ResolvedValue(A_BUY, true, new SourceRef("run", 0, path.split(".").slice(1)));
+  const source = new SourceRef("run", 0, ["output"]);
+  const resolve = () => ({ used: 2, present: true, value: A_BUY, why: null, source });
   const traced = evalBinding("${isinstance(d.output, Buy)}", resolve, { trace: true, types: TYPES });
   expect(traced.value).toBe(true);
   const route = traced.route;

@@ -52,6 +52,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { toolCallId } from "../tools/context.ts";
 import { ToolSet } from "../tools/registry.ts";
+import { referenceRoot } from "../typesys/pool.ts";
 import { jsTypeName, type ValueRecord } from "../typesys/values.ts";
 import {
   EvaluatedOutcome,
@@ -109,7 +110,7 @@ import {
   resolveFromPool,
   stepsWithSteerValues,
 } from "./state.ts";
-import { captureBindings, sourcePath } from "./trace.ts";
+import { captureBindings } from "./trace.ts";
 import { availableUnread, decideWait, dueTimeouts, isWakeable, nodeCalls, wakeAt } from "./waits.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
@@ -987,20 +988,20 @@ export class FlowEngine {
     const derived = node.derived;
     const resolver: SourceResolver | null =
       trace !== null
-        ? (path) => trace.resolve(path)
+        ? (names) => trace.resolve(names)
         : derived
-          ? (path) => resolveFromPool(path, state.pool, state.producers, state.runId!)
+          ? (names) => resolveFromPool(names, state.pool, state.producers, state.runId!)
           : null;
     // A derived node's commit names each pool name its binding read, in both modes alike.
     let sourceResolver = resolver;
     if (derived) {
       const reads = new Map<string, number>();
       this.#reads.set(nodeId, reads);
-      sourceResolver = (path) => {
-        const read = sourcePath(path, state.flow.startId, (name) => state.producers.has(name));
-        const seq = read === null ? undefined : state.producers.get(read.name);
-        if (seq !== undefined) reads.set(read!.name, seq);
-        return resolver!(path);
+      sourceResolver = (names) => {
+        const { name } = referenceRoot(names, state.flow.startId, (held) => state.producers.has(held));
+        const seq = name === null ? undefined : state.producers.get(name);
+        if (seq !== undefined) reads.set(name!, seq);
+        return resolver!(names);
       };
     }
     // A per-node controller, linked while the node runs, so the listeners node code leaves on its

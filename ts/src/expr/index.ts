@@ -43,6 +43,7 @@ export {
   inferExprType,
   isinstanceSubject,
   isinstanceTypeNames,
+  MISSING_ROOT,
   namesEnd,
   optionalAfterRoots,
   optionalInsideRoot,
@@ -56,9 +57,9 @@ export {
   splitReference,
   stepsText,
 } from "./expressions.ts";
-export type { RefRename, RefRenamed, RefStep } from "./expressions.ts";
+export type { RefRename, RefRenamed, RefStep, RootResolver } from "./expressions.ts";
 export { parseExpr } from "./grammar.ts";
-export type { FeedbackValue } from "./lineage.ts";
+export type { FeedbackValue, RootRead } from "./lineage.ts";
 export { hasFeedback, validateFeedback } from "./lineage.ts";
 export type { ConditionRead } from "./template.ts";
 export {

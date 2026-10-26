@@ -17,15 +17,17 @@
 
 import { expect, test } from "bun:test";
 
-import { evalBinding, exprRefsOf, RequiredError } from "../../src/expr/index.ts";
-import { ResolvedValue } from "../../src/expr/lineage.ts";
+import { evalBinding, exprRefsOf, MISSING_ROOT, RequiredError, type RootResolver } from "../../src/expr/index.ts";
 import { BindingCollector, bindParams } from "../../src/nodes/binding.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
-import { type Value, type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
+import { type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
 
-/** Return a `resolve` over a flat record: a path it lacks is `null`, the binding miss. */
-function from(values: ValueRecord): (path: string) => Value {
-  return (path) => (Object.hasOwn(values, path) ? values[path]! : null);
+/** Return a `resolve` over a flat record: a name it lacks is absent, the binding miss. */
+function from(values: ValueRecord): RootResolver {
+  return (names) => {
+    const present = Object.hasOwn(values, names[0]!);
+    return { used: 1, present, value: present ? values[names[0]!]! : null, why: null };
+  };
 }
 
 // --- binding value semantics --- //
@@ -106,7 +108,7 @@ test("capture marks actual template evaluation in a materialized seed", () => {
       ["literal", null],
     ]),
     new VariablePool(),
-    { collector, sourceResolver: () => new ResolvedValue(null, false) },
+    { collector, sourceResolver: MISSING_ROOT },
   );
   const captured = collector.freeze();
   expect(result).toEqual({ evaluated: null, escaped: "${missing | absent}", literal: null });

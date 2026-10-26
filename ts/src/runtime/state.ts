@@ -39,7 +39,7 @@ import {
   RunWaiting,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { ResolvedValue, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
+import { type RootRead, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import {
   MemoryScope,
@@ -545,23 +545,22 @@ export interface PendingMessages {
 }
 
 /**
- * Pair one lookup's value and presence in `pool` with the commit that wrote it, as
- * `RetainedTrace.resolve` pairs them from the retained trace, but with the seq of the name's
- * accepted `PoolCommitRecord` (`producers`) as its source, so a run without a trace can build a
- * node's input route. The paths read the same names (`sourcePath`). The one difference: a system
- * value gets its run-start commit as its source, where the trace gives it none.
+ * Read a reference's root in `pool` with the commit that wrote it, as `RetainedTrace.resolve`
+ * reads it from the retained trace, but with the seq of the name's accepted `PoolCommitRecord`
+ * (`producers`) as its source, so a run without a trace can build a node's input route. Both read
+ * the same pool names (`referenceRoot`). The one difference: a system value gets its run-start
+ * commit as its source, where the trace gives it none.
  *
- * @throws ExpressionError when a dotted segment of `path` is empty.
  * @throws RangeError when a name the pool holds has no entry in `producers`, which always names
  *   every pool name.
  */
 export function resolveFromPool(
-  path: string,
+  names: readonly string[],
   pool: VariablePool,
   producers: ReadonlyMap<string, number>,
   runId: string,
-): ResolvedValue {
-  return resolvePoolPath(path, pool, (name) => {
+): RootRead {
+  return resolvePoolPath(names, pool, (name) => {
     const seq = producers.get(name);
     if (seq === undefined) throw new RangeError(`pool name ${reprText(name)} has no pool_commit in the producer index`);
     return new SourceRef(runId, seq);

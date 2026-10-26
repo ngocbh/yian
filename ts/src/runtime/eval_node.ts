@@ -903,7 +903,7 @@ function bindFrom(
     if (name.startsWith(SYSTEM_PREFIX)) pool.system.set(name.slice(SYSTEM_PREFIX.length), entry.value);
     else pool.store.set(name, entry.value);
   }
-  const sourceResolver: SourceResolver = (path) => resolvePoolPath(path, pool, (name) => entries.get(name)!.source);
+  const sourceResolver: SourceResolver = (names) => resolvePoolPath(names, pool, (name) => entries.get(name)!.source);
   return bindPool(node, flow, pool, sourceResolver, wiringOverride, collector, reserved);
 }
 

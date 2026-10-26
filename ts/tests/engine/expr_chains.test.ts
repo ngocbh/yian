@@ -10,11 +10,11 @@
 
 import { expect, test } from "bun:test";
 
-import { ExpressionError, evalExpr, ResolveMode } from "../../src/expr/expressions.ts";
+import { ExpressionError, evalExpr, MISSING_ROOT, ResolveMode, type RootResolver } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
 import {
   type FeedbackValue,
-  ResolvedValue,
+  type RootRead,
   type RoutedFeedback,
   routeFeedback,
   routeValue,
@@ -26,7 +26,7 @@ import { validateRoute } from "../../src/runtime/contracts.ts";
 import { routeFromPayload, routePayload } from "../../src/runtime/log.ts";
 import type { Value, ValueRecord } from "../../src/typesys/index.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { fieldOf, isRecord } from "../../src/typesys/values.ts";
+import { fieldOf } from "../../src/typesys/values.ts";
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
 type Plain = { type: string; value: string } | { data: string; children: Plain[] };
@@ -77,19 +77,17 @@ for (const [text, expected] of cases) {
 /** Parse `text` then evaluate it, defaulting to an empty resolver (every reference misses). */
 function evaluate(
   text: string,
-  resolve: (path: string) => Value = () => null,
+  resolve: RootResolver = MISSING_ROOT,
   mode: ResolveMode = ResolveMode.BINDING_NONE,
 ): Value {
   return evalExpr(parseExpr(text), resolve, { mode });
 }
 
 /** Return a `resolve` backed by a record, reading a field per dotted step; a miss is `null`. */
-function fromRecord(mapping: ValueRecord): (path: string) => Value {
-  return (path) => {
-    const [head, ...steps] = path.split(".");
-    let value = fieldOf(mapping, head!)[1];
-    for (const step of steps) value = fieldOf(value, step)[1];
-    return value;
+function fromRecord(mapping: ValueRecord): RootResolver {
+  return (names) => {
+    const [present, value] = fieldOf(mapping, names[0]!);
+    return { used: 1, present, value, why: null };
   };
 }
 
@@ -363,16 +361,10 @@ class Sources {
     this.identities = Object.fromEntries(Object.keys(values).map((name, i) => [name, new SourceRef("run", i)]));
   }
 
-  resolve = (path: string): ResolvedValue => {
-    const [head, ...parts] = path.split(".") as [string, ...string[]];
-    if (!Object.hasOwn(this.values, head)) return new ResolvedValue(null, false);
-    let value = this.values[head]!;
-    for (const part of parts) {
-      if (!isRecord(value) || !Object.hasOwn(value, part)) return new ResolvedValue(null, false);
-      value = value[part]!;
-    }
-    const root = this.identities[head]!;
-    return new ResolvedValue(value, true, new SourceRef(root.runId, root.executionSeq, parts));
+  resolve = (names: readonly string[]): RootRead => {
+    const head = names[0]!;
+    if (!Object.hasOwn(this.values, head)) return { used: 1, present: false, value: null, why: null };
+    return { used: 1, present: true, value: this.values[head]!, why: null, source: this.identities[head]! };
   };
 
   lookup = (source: SourceRef): unknown => {

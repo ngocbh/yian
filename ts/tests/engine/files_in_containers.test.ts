@@ -84,7 +84,7 @@ import { afterAll, describe, expect, spyOn, test } from "bun:test";
 
 import { NodeSucceeded, RunSucceeded } from "../../src/events.ts";
 
-import { evalExpr } from "../../src/expr/expressions.ts";
+import { evalExpr, MISSING_ROOT } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import { bindParams } from "../../src/nodes/binding.ts";
@@ -605,7 +605,7 @@ describe("fieldOf", () => {
 test("a traced item read of a file field routes to its source", () => {
   const item = new ResolvedValue(REF, true, new SourceRef("run", 1, ["xs", 0]));
 
-  const traced = evalExpr(parseExpr("item.uri"), () => new ResolvedValue(null, false), { item, trace: true });
+  const traced = evalExpr(parseExpr("item.uri"), MISSING_ROOT, { item, trace: true });
 
   expect(traced.value).toBe("f");
   expect(traced.route.source).toEqual(new SourceRef("run", 1, ["xs", 0, "uri"]));
@@ -614,7 +614,7 @@ test("a traced item read of a file field routes to its source", () => {
 test("a traced item read of another file field has no source route", () => {
   const item = new ResolvedValue(REF, true, new SourceRef("run", 1, ["xs", 0]));
 
-  const traced = evalExpr(parseExpr("item.other"), () => new ResolvedValue(null, false), { item, trace: true });
+  const traced = evalExpr(parseExpr("item.other"), MISSING_ROOT, { item, trace: true });
 
   expect(traced.value).toBeNull();
   expect(traced.route.source).toBeNull();

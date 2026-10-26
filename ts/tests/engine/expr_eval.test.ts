@@ -25,8 +25,10 @@ import {
   ExpressionError,
   evalExpr,
   exprRefs,
+  MISSING_ROOT,
   RequiredError,
   ResolveMode,
+  type RootResolver,
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
@@ -37,7 +39,7 @@ import { fieldOf } from "../../src/typesys/values.ts";
 /** Parse `text` then evaluate it, defaulting to an empty resolver (every reference misses). */
 function evaluate(
   text: string,
-  resolve: (path: string) => Value = () => null,
+  resolve: RootResolver = MISSING_ROOT,
   { item = null, mode = ResolveMode.BINDING_NONE }: { item?: Value; mode?: ResolveMode } = {},
 ): Value {
   return evalExpr(parseExpr(text), resolve, { item, mode });
@@ -47,17 +49,15 @@ function evaluate(
  * Return a `resolve` backed by a record, with the field-only dotted walk the production
  * resolvers do: the head, then `fieldOf` per step, never a property read. A miss is `null`.
  */
-function fromRecord(mapping: ValueRecord): (path: string) => Value {
-  return (path) => {
-    const [head, ...steps] = path.split(".");
-    let value = fieldOf(mapping, head!)[1];
-    for (const step of steps) value = fieldOf(value, step)[1];
-    return value;
+function fromRecord(mapping: ValueRecord): RootResolver {
+  return (names) => {
+    const [present, value] = fieldOf(mapping, names[0]!);
+    return { used: 1, present, value, why: null };
   };
 }
 
 /** Return the error `evaluate(text, resolve, options)` throws, failing if it returns. */
-function errorOf(text: string, resolve?: (path: string) => Value, mode?: ResolveMode): Error {
+function errorOf(text: string, resolve?: RootResolver, mode?: ResolveMode): Error {
   try {
     evaluate(text, resolve, { mode });
   } catch (error) {
@@ -67,7 +67,7 @@ function errorOf(text: string, resolve?: (path: string) => Value, mode?: Resolve
 }
 
 /** Expect `text` to fail with an `ExpressionError` whose message is exactly `message`. */
-function expectMessage(text: string, message: string, resolve?: (path: string) => Value): void {
+function expectMessage(text: string, message: string, resolve?: RootResolver): void {
   const error = errorOf(text, resolve);
   expect(error).toBeInstanceOf(ExpressionError);
   expect(error.message).toBe(message);
@@ -173,8 +173,8 @@ test.each(["__class__", "constructor", "toString", "__proto__", "hasOwnProperty"
   "dotted access never reads the property %s",
   (name) => {
     expect(evaluate(`obj.${name}`, fromRecord({ obj: { a: 1n } }))).toBeNull();
-    expect(evaluate(`item.${name}`, () => null, { item: { a: 1n } })).toBeNull();
-    expect(evaluate(`item.k.${name}`, () => null, { item: { k: "text" } })).toBeNull();
+    expect(evaluate(`item.${name}`, MISSING_ROOT, { item: { a: 1n } })).toBeNull();
+    expect(evaluate(`item.k.${name}`, MISSING_ROOT, { item: { k: "text" } })).toBeNull();
   },
 );
 
@@ -435,7 +435,7 @@ test("item scope reads fields only", () => {
 });
 
 test("item-headed paths never reach resolve", () => {
-  expect(evaluate("item.k", () => "resolved")).toBeNull();
+  expect(evaluate("item.k", () => ({ used: 1, present: true, value: { k: "resolved" }, why: null }))).toBeNull();
 });
 
 // --------------------------------------------------------------------------------------- //
@@ -549,7 +549,7 @@ describe("tokens", () => {
   });
 
   test("an unknown token or node is an error", () => {
-    const resolve = () => null;
+    const resolve = MISSING_ROOT;
     expect(() => evalExpr(new Token("WEIRD", "x"), resolve)).toThrow("unexpected token WEIRD 'x'");
     expect(() => evalExpr(new Tree("weird", []), resolve)).toThrow("unsupported expression node 'weird'");
   });
@@ -977,7 +977,7 @@ function mulberry32(seed: number): () => number {
 }
 
 test("a comprehension with 5,000 if clauses evaluates without overflowing the stack", () => {
-  expect(evaluate(`[x for x in xs${" if true".repeat(5000)}]`, (path) => (path === "xs" ? [1n, 2n] : null))).toEqual([
+  expect(evaluate(`[x for x in xs${" if true".repeat(5000)}]`, fromRecord({ xs: [1n, 2n] }))).toEqual([
     1n,
     2n,
   ]);
@@ -994,4 +994,14 @@ test("a strict miss names the read as written", () => {
   expect(errorOf("a?.b.c", undefined, ResolveMode.STRICT_RAISE).message).toBe(
     "unresolved reference ${a?.b.c} in expression",
   );
+});
+
+test("a resolver returns a root read; the evaluator walks the steps", () => {
+  const seen: string[][] = [];
+  const resolve = (names: readonly string[]) => {
+    seen.push([...names]);
+    return { used: 1, present: true, value: { k: { m: 1n } }, why: null };
+  };
+  expect(evalExpr(parseExpr("a.k.m"), resolve)).toBe(1n);
+  expect(seen).toEqual([["a", "k", "m"]]);
 });

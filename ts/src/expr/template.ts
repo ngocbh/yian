@@ -45,13 +45,12 @@
  * the paren-, quote- and span-aware splitters the directive's recognizer uses.
  *
  * Knows about: `expressions` (the evaluator, `ResolveMode`, `exprRefs`, `rewriteExprRefs`,
- * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`,
- * `ExpressionError`, `EvalOptions`, `TraceOptions`), `lineage` (`ValueRoute`, `ResolvedValue`,
- * `TracedValue`), `builtins` (`TEMPLATE_FNS`, `isNonPromptBuiltin`), `grammar` (`parseExpr`,
- * `findSpanEnd`, `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`,
- * `ExprNode`, `Token`, `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`,
- * `compareCodeUnits`). Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool
- * (pool-agnostic via `resolve`).
+ * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`, `RootResolver`,
+ * `ExpressionError`, `EvalOptions`, `TraceOptions`), `lineage` (`ValueRoute`, `TracedValue`),
+ * `builtins` (`TEMPLATE_FNS`, `isNonPromptBuiltin`), `grammar` (`parseExpr`, `findSpanEnd`,
+ * `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`, `ExprNode`, `Token`,
+ * `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`, `compareCodeUnits`). Never
+ * imports: `nodes`, `compile`, `compose`, `runtime`, or the pool (pool-agnostic via `resolve`).
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
@@ -73,6 +72,7 @@ import {
   referencePath,
   referenceText,
   resolveInRecord,
+  type RootResolver,
   rewriteExprRefs,
   type TraceOptions,
   valueArgs,
@@ -88,7 +88,7 @@ import {
   Tree,
   wholeSpanInterior,
 } from "./grammar.ts";
-import { type ResolvedValue, type TracedValue, ValueRoute } from "./lineage.ts";
+import { type TracedValue, ValueRoute } from "./lineage.ts";
 
 /** A literal run of a template: raw text with `$$` already collapsed to `$`, never parsed. */
 export class Literal {
@@ -276,8 +276,7 @@ export function splitCallsAware(text: string, sep: string): string[] {
  * embedded. A template with no segments gives `""`.
  *
  * @param segments The scan from `scanTemplate`.
- * @param resolve Resolves a reference path to its value; `null` is a miss. With `trace`, it
- *   returns a `ResolvedValue` (see `evalExpr`).
+ * @param resolve Reads a reference's root from its names (see `evalExpr`).
  * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
  *   means no item scope. With `trace`, it may be a `ResolvedValue`.
  * @param options.mode How a missing reference is treated inside a span (default
@@ -291,26 +290,25 @@ export function splitCallsAware(text: string, sep: string): string[] {
  * @throws {RequiredError} When a span's `head :? message` head misses or is `null`.
  * @throws {ExpressionError} On any error `evalExpr` raises for a span, a final `null` in
  *   `STRICT_RAISE` mode, or an embedded value the runtime can't write as text.
- * @throws {TypeError} When a traced resolver doesn't return a `ResolvedValue`.
  */
 export function evalTemplate(
   segments: readonly TemplateSegment[],
-  resolve: (path: string) => ResolvedValue,
+  resolve: RootResolver,
   options: TraceOptions & { trace: true },
 ): TracedValue;
 export function evalTemplate(
   segments: readonly TemplateSegment[],
-  resolve: (path: string) => Value,
+  resolve: RootResolver,
   options?: EvalOptions & { trace?: false },
 ): Value;
 export function evalTemplate(
   segments: readonly TemplateSegment[],
-  resolve: (path: string) => Value | ResolvedValue,
+  resolve: RootResolver,
   options?: TraceOptions,
 ): Value | TracedValue;
 export function evalTemplate(
   segments: readonly TemplateSegment[],
-  resolve: (path: string) => Value | ResolvedValue,
+  resolve: RootResolver,
   { item = null, mode = ResolveMode.BINDING_NONE, types = null, trace = false }: TraceOptions = {},
 ): Value | TracedValue {
   const evalSpan = (span: Span): Value | TracedValue => {
@@ -383,8 +381,7 @@ function asText(value: Value): string {
  *
  * @param source The binding-value template. (A value that isn't text is a literal and never
  *   reaches here.)
- * @param resolve Resolves a reference path to its value; `null` is a miss. With `trace`, it
- *   returns a `ResolvedValue` (see `evalExpr`).
+ * @param resolve Reads a reference's root from its names (see `evalExpr`).
  * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
  *   means no item scope (a `null` element and no scope coincide). With `trace`, it may be a
  *   `ResolvedValue`.
@@ -397,26 +394,25 @@ function asText(value: Value): string {
  * @throws {RequiredError} When a `${ref :? message}` head is unbound.
  * @throws {ExpressionError} On a malformed span (unbalanced, nested, or not parsing) or any
  *   error a span's evaluation raises.
- * @throws {TypeError} When a traced resolver doesn't return a `ResolvedValue`.
  */
 export function evalBinding(
   source: string,
-  resolve: (path: string) => ResolvedValue,
+  resolve: RootResolver,
   options: Omit<TraceOptions, "mode"> & { trace: true },
 ): TracedValue;
 export function evalBinding(
   source: string,
-  resolve: (path: string) => Value,
+  resolve: RootResolver,
   options?: Omit<EvalOptions, "mode"> & { trace?: false },
 ): Value;
 export function evalBinding(
   source: string,
-  resolve: (path: string) => Value | ResolvedValue,
+  resolve: RootResolver,
   options?: Omit<TraceOptions, "mode">,
 ): Value | TracedValue;
 export function evalBinding(
   source: string,
-  resolve: (path: string) => Value | ResolvedValue,
+  resolve: RootResolver,
   { item = null, types = null, trace = false }: Omit<TraceOptions, "mode"> = {},
 ): Value | TracedValue {
   return evalTemplate(scanTemplate(source), resolve, { item, mode: ResolveMode.BINDING_NONE, types, trace });
@@ -665,7 +661,7 @@ export function rewriteConditionReads(
  *   value, an unknown builtin or one that fails, or a value the runtime can't write as text.
  */
 export function renderTemplateRecord(text: string, record: ValueRecord): string {
-  const value = evalTemplate(scanTemplate(text), (path) => resolveInRecord(path, record), {
+  const value = evalTemplate(scanTemplate(text), (names) => resolveInRecord(names, record), {
     mode: ResolveMode.STRICT_RAISE,
   });
   return asText(value);

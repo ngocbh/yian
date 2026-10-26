@@ -535,25 +535,20 @@ function build(
     const arcs: MapArc[] = [];
     for (const pair of pairs) {
       const keyNode = target(aliasTargets, pair.key);
-      if (!isScalar(keyNode)) {
-        throw new SourceSyntaxError(
+      const collectionKey = (): SourceSyntaxError =>
+        new SourceSyntaxError(
           "a list or mapping can't be a mapping key; mapping keys must be text",
           pointRange(starts, spanOf(keyNode).start),
         );
-      }
+      if (!isScalar(keyNode)) throw collectionKey();
       const keyDefinition = intern(keyNode);
+      const keyScalar = definitions[keyDefinition];
       // A scalar tagged `!!seq` or `!!map` builds a list or record; it fails here, as PyYAML's
       // unhashable key does, before the value is built.
-      if (definitions[keyDefinition]?.kind !== "scalar") {
-        throw new SourceSyntaxError(
-          "a list or mapping can't be a mapping key; mapping keys must be text",
-          pointRange(starts, spanOf(keyNode).start),
-        );
-      }
+      if (keyScalar?.kind !== "scalar") throw collectionKey();
       // A missing value sits where the key ends.
       const valueDefinition =
         pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
-      const keyScalar = definitions[keyDefinition] as ScalarDef;
       const key = keyText(keyScalar);
       // Fills don't run in document order, so the key that starts first wins; an alias key
       // is its anchored node.
@@ -803,16 +798,13 @@ function firstRepeatedKey(
       const key = keyText(keyScalar);
       // An alias key is located where it is written, not at its anchor, so a key repeated
       // through an alias of itself points at the repeat.
-      const written = pair.key as ParsedNode;
+      const written = pair.key;
       const range = isAlias(written)
         ? toRange(starts, written.range![0], written.range![1])
         : keyScalar.range!;
       const first = firstKeys.get(key);
-      if (first === undefined) {
-        firstKeys.set(key, range);
-      } else {
-        return Object.freeze({ key, first, second: range });
-      }
+      if (first !== undefined) return Object.freeze({ key, first, second: range });
+      firstKeys.set(key, range);
     }
     for (let i = node.items.length - 1; i >= 0; i--) {
       const pair = node.items[i]!;

@@ -35,7 +35,7 @@
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, exprRefsOf } from "../../expr/index.ts";
-import { isExactly, type OutputContract, PartialRecordContract, ValueContract } from "../../nodes/contracts.ts";
+import { isExactly, type OutputContract, ValueContract } from "../../nodes/contracts.ts";
 import {
   buildValueAs,
   canonicalTypeLabel,
@@ -525,7 +525,7 @@ function resolveOnType(
  * @param covered The case's typed `when:` values.
  * @param producers The producer contracts the case sees.
  * @param inputs The flow-input contracts the case sees.
- * @param diagnostics Source ownership for located errors (`null`, the default: unlocated).
+ * @param diagnostics Source ownership for located errors.
  * @throws LoadError when an enum tag is not covered and the case has no `else:`, located at the
  *   case.
  */
@@ -534,9 +534,8 @@ function checkExhaustive(
   covered: readonly unknown[],
   producers: ReadonlyMap<string, OutputContract>,
   inputs: ReadonlyMap<string, ValueContract>,
-  diagnostics: LoadDiagnostics | null = null,
+  diagnostics: LoadDiagnostics,
 ): void {
-  const located = diagnostics ?? new LoadDiagnostics();
   // A searched case, or an `else:` that satisfies coverage.
   if (desc.on === null || desc.else_ !== null) return;
   const typ = resolveOnType(desc.on, producers, inputs);
@@ -545,7 +544,7 @@ function checkExhaustive(
   const tags = coveredTags(covered);
   const missing = [...typ.tags].filter((tag) => !tags.has(tag)).sort(compareCodeUnits);
   if (missing.length > 0) {
-    throw located.error(
+    throw diagnostics.error(
       `case node ${reprText(desc.id)} on ${desc.on}: non-exhaustive — enum tag(s) ` +
         `${writeAsText(missing)} not covered by a case \`when:\` or an \`else:\``,
       { range: desc.range },

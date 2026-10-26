@@ -34,8 +34,7 @@
  *
  * Imports flow down only: this module composes the compose package's own components plus
  * `compile`, `defaults`, `diagnostics`, `llm_clients`, `memory`, `nodes` and `typesys`, and the
- * `FlowSource` type of `runtime/log`; nothing
- * in the engine imports it back.
+ * `FlowSource` type of `runtime/log`; nothing in the engine imports it back.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -108,6 +107,12 @@ const UNLOCATED_DIAGNOSTICS = new LoadDiagnostics();
 // The fatal decoder refuses a file that isn't UTF-8; a BOM stays in the text, and the reader
 // turns `\r\n` and a lone `\r` into `\n`, as Python's `Path.read_text()` reads it.
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/** Say whether a file-system error means the path doesn't exist. */
+function isMissingPath(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
+}
 
 /** Return how a message shows a thrown value: an error's message, anything else as text. */
 function errorText(error: unknown): string {
@@ -565,8 +570,7 @@ export function makeFileResolver(
         real = await fsp.realpath(resolvePath(dir, path + ".yaml"));
       } catch (error) {
         // A search directory or file that doesn't exist is skipped; any other failure is loud.
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") continue;
+        if (isMissingPath(error)) continue;
         throw error;
       }
       from?.refs.set(usesRef(path, version), real);
@@ -861,8 +865,7 @@ async function realOr(path: string): Promise<string> {
   try {
     return await fsp.realpath(path);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return path;
+    if (isMissingPath(error)) return path;
     throw error;
   }
 }
@@ -875,6 +878,11 @@ function sameFile(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
 /** Say whether two frames start at one place in one file. */
 function sameLocation(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
   return sameFile(a, b) && a.range.startLine === b.range.startLine && a.range.startCol === b.range.startCol;
+}
+
+/** Return `origin`'s frame through `resolver`, or `null` when either is missing. */
+function frameOf(resolver: OriginResolver | null, origin: OriginRef | null): DiagnosticFrame | null {
+  return origin === null || resolver === null ? null : resolver.resolve(origin);
 }
 
 /**
@@ -890,10 +898,7 @@ export function memorySetupLoadError(
   flow: { readonly originResolver: OriginResolver | null },
   error: MemorySetupError,
 ): LoadError {
-  const resolver = flow.originResolver;
-  const frame = (origin: OriginRef | null): DiagnosticFrame | null =>
-    origin === null || resolver === null ? null : resolver.resolve(origin);
-
+  const frame = (origin: OriginRef | null) => frameOf(flow.originResolver, origin);
   const primary = frame(error.origin);
   const notes = [...(error.notes ?? [])];
   // Aliases of one file map distinct origins to one source location; two files may share a label,
@@ -928,10 +933,7 @@ export function memorySetupLoadError(
 function refuseInheritedLlmValues(flow: ComposedFlow): void {
   const found = findInheritedLlmValue(flow.compiled);
   if (found === null) return;
-  const resolver = flow.originResolver;
-  const frame = (origin: OriginRef | null): DiagnosticFrame | null =>
-    origin === null || resolver === null ? null : resolver.resolve(origin);
-
+  const frame = (origin: OriginRef | null) => frameOf(flow.originResolver, origin);
   const valueFrame = frame(found.origin);
   const field = fieldLabel(found.field);
   let subject: string;
@@ -942,10 +944,13 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
     const name = reprText((found.callsite as Node & { flowId: string }).flowId);
     const called = `called by node ${reprText(found.owner.join("/"))}`;
     const callsiteFrame = frame(found.callsite.origin);
-    if (valueFrame === null || callsiteFrame === null) subject = `${field} of the flow ${name} (${called})`;
-    else if (!sameFile(valueFrame, callsiteFrame)) {
+    if (valueFrame === null || callsiteFrame === null) {
+      subject = `${field} of the flow ${name} (${called})`;
+    } else if (!sameFile(valueFrame, callsiteFrame)) {
       subject = `${field} of the flow imported through uses: ${name} (${called})`;
-    } else subject = `defs entry ${name} ${field} (${called})`;
+    } else {
+      subject = `defs entry ${name} ${field} (${called})`;
+    }
   }
   const agent = found.gate ?? `agent ${reprText(found.agent.join("/"))} in a child flow`;
   throw UNLOCATED_DIAGNOSTICS.error(
@@ -1384,6 +1389,19 @@ export class CallableScope implements AssemblyScope {
     }
   }
 
+  /** Build callable `flowId` transactionally, marked in progress while it builds, and cache it. */
+  #buildOnce(flowId: string, builder: () => ComposedFlow): ComposedFlow {
+    this.#inProgress.add(flowId);
+    let loaded: ComposedFlow;
+    try {
+      loaded = this.#buildTransactionally(builder);
+    } finally {
+      this.#inProgress.delete(flowId);
+    }
+    this.#built.set(flowId, loaded);
+    return loaded;
+  }
+
   /**
    * Register one lazy compiler-owned callable in this file scope.
    *
@@ -1412,9 +1430,11 @@ export class CallableScope implements AssemblyScope {
       );
     }
 
-    let authoredSection: string | null = null;
-    if (Object.hasOwn(this.#defsSection, flowId)) authoredSection = "defs";
-    else if (Object.hasOwn(this.#uses, flowId)) authoredSection = "uses";
+    const authoredSection = Object.hasOwn(this.#defsSection, flowId)
+      ? "defs"
+      : Object.hasOwn(this.#uses, flowId)
+        ? "uses"
+        : null;
     if (authoredSection !== null) {
       throw this.#diagnostics.error(
         "compiler-generated callable collision in reserved prefix " +
@@ -1451,15 +1471,7 @@ export class CallableScope implements AssemblyScope {
             "(the baked call graph must be finite)",
         );
       }
-      this.#inProgress.add(flowId);
-      let loaded: ComposedFlow;
-      try {
-        loaded = this.#buildTransactionally(privateCallable.builder);
-      } finally {
-        this.#inProgress.delete(flowId);
-      }
-      this.#built.set(flowId, loaded);
-      return loaded;
+      return this.#buildOnce(flowId, privateCallable.builder);
     }
     if (Object.hasOwn(this.#defsSection, flowId)) {
       const defCursor = sourceChild(this.#defsCursor, flowId);
@@ -1470,17 +1482,9 @@ export class CallableScope implements AssemblyScope {
           { range: defCursor?.range ?? null },
         );
       }
-      this.#inProgress.add(flowId);
-      let loaded: ComposedFlow;
-      try {
-        loaded = this.#buildTransactionally(() =>
-          loadDef(flowId, this.#defsSection[flowId]!, this.#registry, this, defCursor),
-        );
-      } finally {
-        this.#inProgress.delete(flowId);
-      }
-      this.#built.set(flowId, loaded);
-      return loaded;
+      return this.#buildOnce(flowId, () =>
+        loadDef(flowId, this.#defsSection[flowId]!, this.#registry, this, defCursor),
+      );
     }
     if (Object.hasOwn(this.#uses, flowId)) {
       throw this.#diagnostics.error(`uses: alias ${reprText(flowId)} was not resolved before assembly`, {

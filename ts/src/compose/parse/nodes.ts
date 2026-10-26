@@ -380,16 +380,14 @@ function joined(first: Type, second: Type): Type | null {
     result = a;
   } else if (isNumberType(a) && isNumberType(b)) {
     result = FLOAT;
-  } else if (isListKind(a.kind) && isListKind(b.kind)) {
-    if (a.element === undefined || b.element === undefined) {
-      result = a.element === undefined ? b : a;
-    } else {
-      const element = joined(a.element, b.element);
-      if (element === null) return null;
-      result = listOf(element);
-    }
-  } else {
+  } else if (!isListKind(a.kind) || !isListKind(b.kind)) {
     return null;
+  } else if (a.element === undefined || b.element === undefined) {
+    result = a.element === undefined ? b : a;
+  } else {
+    const element = joined(a.element, b.element);
+    if (element === null) return null;
+    result = listOf(element);
   }
   return nullable ? result.replace({ nullable: true }) : result;
 }

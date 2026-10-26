@@ -4,8 +4,8 @@
  * The two functions here map a binding value to the producer node ids it depends on: the
  * primitive the edges phase (`edges/data.ts`) and the later boundary synthesis
  * (`build/boundary.ts`, via `synthesizeBoundaryGraph`) both build on. A ref head of
- * `<id>.output[.…]` or an AGENT's `<id>.new_messages[.…]` produces from node `<id>`; an `input.X` ref produces from the synthesized
- * `START_ID`; `system.X`/`item` produce nothing.
+ * `<id>.output[.…]` or an AGENT's `<id>.new_messages[.…]` produces from node `<id>`; an
+ * `input.X` ref produces from the synthesized `START_ID`; `system.X`/`item` produce nothing.
  *
  * Knows about: the compile model (`START_ID`), `expr` reference scanning, binding sources, and
  * the pool name of an AGENT's new messages (`typesys/pool.ts`).

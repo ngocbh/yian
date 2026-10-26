@@ -148,23 +148,21 @@ export function hostControlEdges(descriptors: ReadonlyMap<string, NodeDescriptor
 
   /** `nodeId`'s hosts, nearest first. */
   const ancestors = (nodeId: string): readonly string[] => {
-    let chain = chains.get(nodeId);
-    if (chain === undefined) {
-      const found: string[] = [];
-      let current = nodeId;
-      let host: string | null;
-      while ((host = descriptors.get(current)!.host) !== null) {
-        host = checkedHost(current, host);
-        if (host === nodeId || found.includes(host)) {
-          throw new RangeError(`lifted-node hosts form a cycle: ${[nodeId, ...found, host].join(" -> ")}`);
-        }
-        found.push(host);
-        current = host;
+    const known = chains.get(nodeId);
+    if (known !== undefined) return known;
+    const found: string[] = [];
+    let current = nodeId;
+    let host: string | null;
+    while ((host = descriptors.get(current)!.host) !== null) {
+      host = checkedHost(current, host);
+      if (host === nodeId || found.includes(host)) {
+        throw new RangeError(`lifted-node hosts form a cycle: ${[nodeId, ...found, host].join(" -> ")}`);
       }
-      chain = found;
-      chains.set(nodeId, chain);
+      found.push(host);
+      current = host;
     }
-    return chain;
+    chains.set(nodeId, found);
+    return found;
   };
 
   /** The data gates of lifted node `nodeId`, in visiting order. */

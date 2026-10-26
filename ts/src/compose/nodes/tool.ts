@@ -570,7 +570,7 @@ export function checkAdaptiveBlock(
   if (brief === null) return;
   const briefRange = rangeAt(cursor, ["adaptive_questions", "prompt"]) ?? cursor.keyRangeOf("adaptive_questions");
   if (typeof brief !== "string") {
-    throw diagnostics.error(`${subject}: ` + notTextError("adaptive_questions.prompt", brief), { range: briefRange });
+    throw diagnostics.error(`${subject}: ${notTextError("adaptive_questions.prompt", brief)}`, { range: briefRange });
   }
   checkWrittenValue(brief, `node ${reprText(nodeId)} field 'adaptive_questions.prompt'`, briefRange, diagnostics);
 }
@@ -675,11 +675,16 @@ function fieldSchema(name: string, typ: Type, required: boolean): Readonly<Recor
     // A list of a Literal enum: the element's values.
     entry["enum"] = [...typ.element.tags].sort(compareCodeUnits);
   }
-  if (typ.kind === ValueKind.OBJECT && typ.fields !== undefined && typ.fields.size > 0) {
-    const requiredKeys = typ.required ?? new Set<string>();
-    entry["fields"] = [...typ.fields].map(([key, field]) => fieldSchema(key, field, requiredKeys.has(key)));
-  }
+  const fields = recordFieldSchemas(typ);
+  if (fields !== null) entry["fields"] = fields;
   return entry;
+}
+
+/** Return one answer-schema entry per field of a non-empty record type, else `null`. */
+function recordFieldSchemas(typ: Type): Readonly<Record<string, unknown>>[] | null {
+  if (typ.kind !== ValueKind.OBJECT || typ.fields === undefined || typ.fields.size === 0) return null;
+  const requiredKeys = typ.required ?? new Set<string>();
+  return [...typ.fields].map(([key, field]) => fieldSchema(key, field, requiredKeys.has(key)));
 }
 
 /**
@@ -695,9 +700,5 @@ function fieldSchema(name: string, typ: Type, required: boolean): Readonly<Recor
  */
 export function answerSchema(typ: Type | null): Readonly<Record<string, unknown>>[] {
   if (typ === null) return [];
-  if (typ.kind === ValueKind.OBJECT && typ.fields !== undefined && typ.fields.size > 0) {
-    const requiredKeys = typ.required ?? new Set<string>();
-    return [...typ.fields].map(([key, field]) => fieldSchema(key, field, requiredKeys.has(key)));
-  }
-  return [fieldSchema("answer", typ, !typ.nullable)];
+  return recordFieldSchemas(typ) ?? [fieldSchema("answer", typ, !typ.nullable)];
 }

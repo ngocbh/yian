@@ -687,7 +687,7 @@ export function validateReferences(
     // A per-item binder (MAP) reads its iteration source above, then validates each element
     // input with the body-local `${item}` scope enabled.
     if (node.bindsPerItem) {
-      const item = itemContract(result?.node ?? null, nwiring, nodeProducers, nodeInputs, typeFn);
+      const item = itemContract(node, nwiring, nodeProducers, nodeInputs, typeFn);
       for (const [param, src] of nwiring) {
         if (reserved.has(param)) continue;
         scan(
@@ -720,6 +720,7 @@ export function validateReferences(
     if (whens !== undefined) {
       // A searched CASE's `__rN` inputs bind only the roots its `when:`s read; each read is
       // checked as written, at its own `when:`, under the checks before it.
+      const views = narrowing ?? new Narrowing({ producers, inputs: inputContracts });
       for (const [index, when, , whenRange] of whens) {
         if (typeof when !== "string") continue;
         let tree: ExprNode;
@@ -731,7 +732,6 @@ export function validateReferences(
           throw error;
         }
         const where = `${result.siteName(nodeId, `cases[${index}].when`)} from`;
-        const views = narrowing ?? new Narrowing({ producers, inputs: inputContracts });
         for (const read of searchedWhenReads(views, nodeId, tree, registry ?? new Map())) {
           scan(`\${${referenceText(read.node)}}`, where, whenRange ?? inputRng, {
             siteProducers: read.views[0],

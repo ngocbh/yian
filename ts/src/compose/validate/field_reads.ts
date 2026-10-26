@@ -1,8 +1,8 @@
 /**
  * Field-read checks of one condition or expression: the name checks of a read against its root's
  * contracts, narrowed by the checks before it, with the impossible-check report; and the nullable
- * field-read check (design 2.5), where a `.` step whose receiver may be null is a load error and a
- * `?.` step is not.
+ * field-read check, where a `.` step whose receiver may be null is a load error and a `?.` step is
+ * not.
  *
  * A comprehension variable is a one-name root keyed by its binding occurrence (`m@12`, as
  * `condition_guards.ts` keys its reads), typed by the element type of its iterable, and narrowed
@@ -148,12 +148,12 @@ export function isUntyped(typ: Type | null): boolean {
  * step's receiver when the previous field is `Optional` or not required. Nullability an earlier
  * `?.` introduced doesn't count (TypeScript optional chains). A guard's narrowing lifts it.
  * Untyped receivers are never flagged, except a root that may be skipped: a `.` right after it is
- * flagged whatever the producer's type (design 2.6.6). An operand of arithmetic names the whole
- * fix, `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message; one
- * already inside a `:-` or `|` operand of arithmetic has its default and is told only `?.`. An
- * untyped root narrowed to `T` (by a guard or the CASE branch routing the site) needs `?.` for
- * each field `T` doesn't require (owner ruling, 2026-10-25). A read no value reaches (its guard
- * can never hold) is not checked; `checkImpossibleWhens` or the asserts' check reports the guard.
+ * flagged whatever the producer's type. An operand of arithmetic names the whole fix,
+ * `(x?.k :- <default>)`, so the skipped-arithmetic check needn't add a second message; one already
+ * inside a `:-` or `|` operand of arithmetic has its default and is told only `?.`. An untyped root
+ * narrowed to `T` (by a guard or the CASE branch routing the site) needs `?.` for each field `T`
+ * doesn't require. A read no value reaches (its guard can never hold) is not checked;
+ * `checkImpossibleWhens` or the asserts' check reports the guard.
  *
  * A comprehension variable read checks as a root's (see the module doc).
  *
@@ -207,8 +207,8 @@ function nullableReads(
     let first: FieldReadError | null = null;
     let accepted = alternatives.length === 0;
     if (!checkedOf.has(root)) checkedOf.set(root, []);
+    const nullable = roots.nullable(root);
     for (const [which, contract] of alternatives.entries()) {
-      const nullable = roots.nullable(root);
       // An opaque root walks as `Any`: untyped, unless a guard narrows it or it may be skipped.
       const chosen = contract ?? new ValueContract(Type.scalar(ValueKind.ANY));
       const baseTypeOf = rootBaseType(new Map([[root, chosen]]), nullable ? new Set([root]) : new Set());
@@ -245,7 +245,8 @@ interface Read {
 /**
  * The fix a nullable read's message names: `default` for a direct operand of arithmetic, which
  * needs `(x?.k :- <default>)`, as does a part of a `:- null` operand; `optional` for a part of
- * another `:-` or `|` operand of arithmetic, which has its default already and needs only `?.`; `either` for any other read, `?.` or a null check.
+ * another `:-` or `|` operand of arithmetic, which has its default already and needs only `?.`;
+ * `either` for any other read, `?.` or a null check.
  */
 type ReadFix = "default" | "optional" | "either";
 
@@ -951,7 +952,7 @@ function readError(
     for (const contract of unnarrowed) {
       const error = site.error(contract, fields, ref, { partialUnionFields, unionRoot });
       if (error === null) return null;
-      first = first ?? error;
+      first ??= error;
     }
     return first;
   }
@@ -1028,7 +1029,8 @@ function declaredReadError(
  *
  * The nullable check reads each root's alternatives from `roots`, an `opaqueRoots` root as one
  * unknown contract (it gets no name check), and takes `nullableRoots` as the roots that may be
- * null besides their type.
+ * null besides their type. Reads through comprehension variables get the same checks
+ * (`variableNameErrors`).
  *
  * @param tree The parsed condition.
  * @param roots The checked roots and the contracts each may have.
@@ -1039,8 +1041,6 @@ function declaredReadError(
  * @param options.why Why a root in `nullableRoots` may be null (default "it is Optional").
  * @param options.untyped Whether a root's un-narrowed value is untyped (default: every one of its
  *   `roots` contracts is untyped, or it has none).
- * Reads through comprehension variables get the same checks (`variableNameErrors`).
- *
  * @returns The errors in order: name errors with code `compose.load`, then `nullableReads`'.
  */
 export function fieldReadErrors(
@@ -1116,11 +1116,11 @@ export interface FieldReadLevel {
 }
 
 /**
- * Check every nullable field read of one flow level at load (design 2.5, 2.6): node bindings
- * (CASE `on:` and reserved sources included), then each searched CASE's authored `when:`s (its
- * wiring binds only the roots they read), then flow outputs, then node-local sites (AGENT
- * prompts and `render:`, LOOP predicates). The first error throws with code
- * `expr.nullable_field_read`, or `compose.load` for a name error through a comprehension variable.
+ * Check every nullable field read of one flow level at load: node bindings (CASE `on:` and
+ * reserved sources included), then each searched CASE's authored `when:`s (its wiring binds only
+ * the roots they read), then flow outputs, then node-local sites (AGENT prompts and `render:`,
+ * LOOP predicates). The first error throws with code `expr.nullable_field_read`, or
+ * `compose.load` for a name error through a comprehension variable.
  *
  * A flow output is read by END. A co-skipping output (a lone reference, or a coalesce of them) is
  * one required group of its producers: a producer may be null there only when it may be skipped
@@ -1342,8 +1342,8 @@ function localSites(nodeId: string, result: BuildResult): [where: string, text: 
 /**
  * Return the local-scope roots of node `nodeId`: its inputs (and an AGENT's variables), each tried
  * under every alternative, nullable when bound straight from a producer that may be skipped while
- * the node runs (design 2.7: from the authored root, not from a `:- null`), untyped by their
- * un-narrowed contracts.
+ * the node runs (from the authored root, not from a `:- null`), untyped by their un-narrowed
+ * contracts.
  */
 function localRoots(level: FieldReadLevel, nodeId: string, result: BuildResult): ReadRoots {
   const { skips, narrowing } = level;
@@ -1417,9 +1417,9 @@ function firstFieldReadError(
 
 /**
  * Return the pool-scope roots node `nodeId` reads (`reader` names it in messages, `null` for "this
- * node"): producers,
- * flow inputs and `item`, typed by the routing-narrowed view of the node, nullable when the
- * producer may be skipped while the node runs, untyped by their un-narrowed contracts.
+ * node"): producers, flow inputs and `item`, typed by the routing-narrowed view of the node,
+ * nullable when the producer may be skipped while the node runs, untyped by their un-narrowed
+ * contracts.
  */
 function poolRoots(
   level: FieldReadLevel,

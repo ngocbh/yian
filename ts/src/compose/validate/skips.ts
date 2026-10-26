@@ -66,7 +66,7 @@ import { directReferenceParts, directReferencePath } from "../../compile/output_
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
 
-// The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus.
+/** The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus. */
 export const ARITHMETIC: ReadonlySet<string> = new Set(["sum", "product", "power", "neg"]);
 
 /** One searched CASE's authored `when:`: its case index, text, origin and range. */
@@ -330,8 +330,8 @@ export class SkipModel {
  * @param model The skip model of the same level.
  * @returns The outputs in order. A co-skipping source `${E}` whose producers may all be skipped
  *   becomes `${E:-null}` when `E` is one reference, else `${(E) :- null}`, with `?.` on the first
- *   step after each producer root; its origin and declared contract are kept. Each string nested in a value template is rewritten on its own the same
- *   way. Every other source is kept as is.
+ *   step after each producer root; its origin and declared contract are kept. Each string nested
+ *   in a value template is rewritten on its own the same way. Every other source is kept as is.
  *
  * @example
  * const model = new SkipModel(["c", "a"], [new Edge("t", "c", "a", { sourceHandle: "then" })], new Set());
@@ -552,7 +552,7 @@ function skippedOperandIn(
       for (const group of nullGroups(operand, known)) {
         if (group.size > 0 && model.maySkipWhileRunning(group, consumer)) {
           const producers = new Set(exprRefs(operand).map(refProducer));
-          return [operand, [...producers].filter((producer) => producer !== null && group.has(producer)) as string[]];
+          return [operand, [...producers].filter((producer): producer is string => producer !== null && group.has(producer))];
         }
       }
     }
@@ -696,8 +696,7 @@ function operandText(operand: ExprNode): string {
   if (operand instanceof Token) return String(operand);
   // A slice prints its base, the value that may be null.
   if (operand.data === "subscript") return operandText(operand.children[0]!);
-  const parts = directReferenceParts(operand);
-  if (parts !== null) return referenceText(operand as Tree);
+  if (directReferenceParts(operand) !== null) return referenceText(operand);
   const joiner = operand.data === "coalesce" ? " | " : " :- ";
   return "(" + operand.children.map(operandText).join(joiner) + ")";
 }

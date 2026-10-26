@@ -111,10 +111,10 @@ export function readTagType(
     let message =
       `${reprText(label)}: a tag can't contain \`[\`, \`]\`, \`{\` or \`}\` (strict YAML 1.2)`;
     const spelled = respelled(tag, registry);
-    if (spelled !== null && writableAsTag(spelled)) {
-      message += `; write \`!${spelled}\``;
-    } else if (spelled !== null) {
-      message += `; name \`${spelled}\` in \`typedefs:\` and tag with its name`;
+    if (spelled !== null) {
+      message += writableAsTag(spelled)
+        ? `; write \`!${spelled}\``
+        : `; name \`${spelled}\` in \`typedefs:\` and tag with its name`;
     }
     throw diagnostics.error(message, { range });
   }

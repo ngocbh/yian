@@ -4,10 +4,11 @@
  * Each node id has at most one stored value: an `Output` commits one `TypedValue` (scalar,
  * object, or list), while a CASE `Route` commits none. "Multiple outputs" are fields of one
  * object. `${input.X}` resolves to `store[<startId>].X`: the synthesized START node's committed
- * bound-input record is the flow's run-arguments object. The one side namespace is `system` (host-injected ambient: run id / clock / tenant;
- * reserved, run-global). There is no engine-private key-addressed namespace; live
- * AGENT and TOOL effects all return the leaf's ordinary Output. An AGENT's success also stores
- * its new messages under their own pool name, `<id>.new_messages` (`messagesKey`).
+ * bound-input record is the flow's run-arguments object. The one side namespace is `system`
+ * (host-injected ambient: run id / clock / tenant; reserved, run-global). There is no
+ * engine-private key-addressed namespace; live AGENT and TOOL effects all return the leaf's
+ * ordinary Output. An AGENT's success also stores its new messages under their own pool name,
+ * `<id>.new_messages` (`messagesKey`).
  *
  * Two responsibilities:
  * - `readRoot(names)` backs the `${...}` expression evaluator: it reads a reference's root

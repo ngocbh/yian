@@ -821,13 +821,17 @@ test("a default ref resolves and a nested span raises", () => {
 });
 
 test("the item scope combines with coalesce and default", () => {
-  // `${item.x | b.output}`: an item miss falls to the ref peer; a present item wins.
+  // `${item?.x | b.output}`: an item without `x` falls to the ref peer; a present item wins.
   const pool = new VariablePool();
   pool.set("b", "b-text");
-  expect(bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { y: 1n } })).toEqual({
+  expect(bindInputs([{ name: "v", source: "${item?.x | b.output}" }], pool, { item: { y: 1n } })).toEqual({
     v: "b-text",
   });
-  expect(bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { x: 7n } })).toEqual({ v: 7n });
+  expect(bindInputs([{ name: "v", source: "${item?.x | b.output}" }], pool, { item: { x: 7n } })).toEqual({ v: 7n });
+  // `.` on a key the untyped item lacks raises; the coalesce never sees it.
+  expect(() => bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { y: 1n } })).toThrow(
+    "cannot read ${item.x}: item has no field 'x'",
+  );
 });
 
 test("a whole ref is typed, an embedded one stringified, and $$ escapes", () => {

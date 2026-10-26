@@ -378,8 +378,6 @@ export function coerceParam(parameter: Parameter, value: unknown): unknown {
     const spelling = raw.toLowerCase();
     if (TRUE_SPELLINGS.has(spelling)) return true;
     if (FALSE_SPELLINGS.has(spelling)) return false;
-    // Any other text stays a string so the bool contract rejects it.
-    return value;
   }
   return value;
 }

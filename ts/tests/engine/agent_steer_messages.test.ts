@@ -787,7 +787,11 @@ const EV = new Type({
 });
 
 /** The texts of the user message an agent rendering `render` rebuilds from one steer of `event`. */
-function rebuiltSteer(render: string, event: ValueRecord, localTypes: ReadonlyMap<string, Type | null> | null): string[] {
+function rebuiltSteer(
+  render: string,
+  event: ValueRecord,
+  localTypes: ReadonlyMap<string, Type | null> | null,
+): string[] {
   const node = new AgentNode("chat", { steerInbox: true, steerRender: render });
   const steer: ValueRecord = { kind: "steer", inbox: "notes", from: [1n], values: [event] };
   const rebuilt = node.rebuildMessages([steer as JsonObject], null, localTypes);

@@ -44,7 +44,6 @@ import {
   Node,
   NodeBodyError,
   type NodeCaps,
-  NodeKind,
   type NodeResult,
   Output,
   Pending,
@@ -122,8 +121,9 @@ export function evaluationFailure(
 
 /**
  * Return `failed` with each searched CASE local `__rN` in its message written as the root it
- * hoists (its binding's reference, `x.output` for `${x.output :- null}`), so a `when:` that
- * fails to evaluate names what the author wrote.
+ * hoists (its binding's reference, `x.output` for `${x.output :- null}`), so a `when:` that fails
+ * to evaluate names what the author wrote. Other nodes have no `__rN` wiring, so their messages
+ * stay as they are.
  */
 function withAuthoredRoots(failed: EvaluationFailure, wiring: ReadonlyMap<string, unknown>): EvaluationFailure {
   const { failure } = failed;
@@ -791,8 +791,7 @@ async function evaluateNode(
     const { error } = rejection;
     // A template default that fails to bind leaves no usable input record.
     if (usesBaseTemplate && error instanceof BindingStageError) collector?.invalidate();
-    const failed = stageFailure(node, error, usesBaseTemplate);
-    return node.kind === NodeKind.CASE ? withAuthoredRoots(failed, nodeWiring) : failed;
+    return withAuthoredRoots(stageFailure(node, error, usesBaseTemplate), nodeWiring);
   }
   const contractError = resultContractError(node, result);
   if (contractError !== null) return evaluationFailure(node, "contract.node_result", contractError);

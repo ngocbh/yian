@@ -16,7 +16,7 @@
 import { declaredAt, type DeclaredTypes } from "../expr/expressions.ts";
 import { STEER_INBOX_KEY } from "../nodes/agent/node.ts";
 import { type Node, NodeKind } from "../nodes/base.ts";
-import { type OutputContract, ValueContract } from "../nodes/contracts.ts";
+import { type OutputContract, outputContractType, ValueContract } from "../nodes/contracts.ts";
 import type { EndNode } from "../nodes/end/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
@@ -40,22 +40,45 @@ function paramsRecord(node: Node): Type {
 }
 
 /**
- * The producer and flow-input contracts of `flow`, as the loader's inference reads them: each
- * node's output contract by id (a START's the record of its params), each message producer's
- * `list(Message)` under its messages key, and the root START's typed params by name.
+ * The producer contracts of `flow`, as the loader's inference reads them, looked up on demand in
+ * its live nodes: a node's output contract by id (a START's the record of its params), and a
+ * message producer's `list(Message)` under its messages key. The inference only calls `get` and
+ * `has`, so a lookup costs the same however many nodes an expansion added.
  */
-function flowContracts(flow: Flow): [Map<string, OutputContract>, Map<string, ValueContract>] {
-  const producers = new Map<string, OutputContract>();
-  for (const [id, node] of flow.nodes) {
-    if (node.outputContract !== null) producers.set(id, node.outputContract);
-    else if (node.kind === NodeKind.START) producers.set(id, new ValueContract(paramsRecord(node)));
-    if (node.producesMessages) producers.set(messagesKey(id), new ValueContract(newMessagesType()));
+class FlowProducers extends Map<string, OutputContract> {
+  readonly #flow: Flow;
+
+  constructor(flow: Flow) {
+    super();
+    this.#flow = flow;
   }
+
+  override get(name: string): OutputContract | undefined {
+    const node = this.#flow.nodes.get(name);
+    if (node !== undefined) {
+      if (node.outputContract !== null) return node.outputContract;
+      return node.kind === NodeKind.START ? new ValueContract(paramsRecord(node)) : undefined;
+    }
+    const suffix = `.${NEW_MESSAGES}`;
+    if (!name.endsWith(suffix)) return undefined;
+    const producer = this.#flow.nodes.get(name.slice(0, -suffix.length));
+    return producer?.producesMessages === true && messagesKey(producer.id) === name
+      ? new ValueContract(newMessagesType())
+      : undefined;
+  }
+
+  override has(name: string): boolean {
+    return this.get(name) !== undefined;
+  }
+}
+
+/** The producer and flow-input contracts of `flow`: `FlowProducers`, and the root START's typed params by name. */
+function flowContracts(flow: Flow): [Map<string, OutputContract>, Map<string, ValueContract>] {
   const inputs = new Map<string, ValueContract>();
   for (const param of flow.nodes.get(flow.startId)?.params ?? []) {
     if (param.contract !== null) inputs.set(param.name, param.contract);
   }
-  return [producers, inputs];
+  return [new FlowProducers(flow), inputs];
 }
 
 /** The type of a binding of `node`'s wiring, or `null` when unproven. */
@@ -89,7 +112,11 @@ function endType(flow: Flow, end: EndNode): Type | null {
  * its params; an END's the record or value of its inputs' types; else `null` (untyped).
  */
 export function nodeOutputType(flow: Flow, node: Node): Type | null {
-  if (node.outputContract !== null) return contractType(node.outputContract);
+  if (node.outputContract !== null) {
+    // Checks the contract's shape first: a malformed one throws its own TypeError.
+    outputContractType(node.outputContract);
+    return contractType(node.outputContract);
+  }
   if (node.kind === NodeKind.START) return paramsRecord(node);
   if (node.kind === NodeKind.END) return endType(flow, node as EndNode);
   return null;

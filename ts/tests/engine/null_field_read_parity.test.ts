@@ -117,3 +117,47 @@ for (const c of CASES) {
     expect(resumed.failure?.code).toEqual(result.failure?.code);
   });
 }
+
+/** Flows whose failing read sits behind a rewritten root, with the message naming the authored one. */
+const MESSAGES: { name: string; flow: string; inputs?: Record<string, unknown>; message: string }[] = [
+  {
+    name: "a flow assert names its producer, not END's local",
+    flow: `id: f\nname: f\nnodes:\n${code("a", "null")}asserts:\n  - a.output.k == 1\noutput: \${a.output}\n`,
+    message:
+      "node '__end__' post-assert 'a.output.k == 1' (`a.output.k == 1`) could not be evaluated: cannot read " +
+      "${a.output.k}: a.output is null; write a.output?.k to read null instead, or check a.output != null first",
+  },
+  {
+    name: "a flow assert names a flow input, not END's local",
+    flow:
+      `id: f\nname: f\ninput:\n  r: !object\nnodes:\n${code("a", "1")}` +
+      "asserts:\n  - a.output == 1 and input.r.k == 1\noutput: ${a.output}\n",
+    inputs: { r: {} },
+    message:
+      "node '__end__' post-assert 'a.output == 1 and input.r.k == 1' (`a.output == 1 and input.r.k == 1`) " +
+      "could not be evaluated: cannot read ${input.r.k}: input.r has no field 'k'",
+  },
+  {
+    name: "a CALL child's node binding names the child's input",
+    flow:
+      "id: f\nname: f\ndefs:\n  child:\n    input:\n      r: !object\n    nodes:\n" +
+      code("u", 'inputs["v"]', null, "    input:\n      v: ${input.r.nosuch}\n").replace(/^ {2}/gm, "      ") +
+      "    output: ${u.output}\nnodes:\n  c: {kind: call, call: child, input: {r: {}}}\noutput: ${c.output}\n",
+    message: "cannot read ${input.r.nosuch}: input.r has no field 'nosuch'",
+  },
+  {
+    name: "a CALL child's output names the child's input",
+    flow:
+      "id: f\nname: f\ndefs:\n  child:\n    input:\n      r: !object\n    nodes: {}\n" +
+      "    output: ${input.r.nosuch}\nnodes:\n  c: {kind: call, call: child, input: {r: {}}}\noutput: ${c.output}\n",
+    message: "cannot read ${input.r.nosuch}: input.r has no field 'nosuch'",
+  },
+];
+
+for (const c of MESSAGES) {
+  test(`${c.name}`, async () => {
+    const result = await runFlow(await loadFlow(c.flow), c.inputs ?? {}, { log: freshLog() });
+    expect(result.status).toBe("failed");
+    expect(result.failure?.message).toBe(c.message);
+  });
+}

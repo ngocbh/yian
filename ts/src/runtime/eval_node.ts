@@ -119,19 +119,27 @@ export function evaluationFailure(
   );
 }
 
+// A local the loader binds for the author: a searched CASE's hoisted root, or a flow assert's END param.
+const SYNTH_LOCAL = /\b__(?:r[0-9]+|assert_\w+)\b/g;
+// A cloned child START's output, `<callsite>/__start__.output`, which the child wrote as `input`.
+const CHILD_INPUT = /(?<![\w#~/])(?:[\w#~]+\/)+__start__\.output\b/g;
+
 /**
- * Return `failed` with each searched CASE local `__rN` in its message written as the root it
- * hoists (its binding's reference, `x.output` for `${x.output :- null}`), so a `when:` that fails
- * to evaluate names what the author wrote. Other nodes have no `__rN` wiring, so their messages
- * stay as they are.
+ * Return `failed` with the rewritten roots in its message written as the author wrote them, so a
+ * read that fails names what the author wrote: a synthesized local (a searched CASE's `__rN`, a
+ * flow assert's `__assert_*`) as the root its binding reads (`x.output` for `${x.output :- null}`),
+ * and a cloned CALL, LOOP or MAP child's `<callsite>/__start__.output` as `input`.
  */
 function withAuthoredRoots(failed: EvaluationFailure, wiring: ReadonlyMap<string, unknown>): EvaluationFailure {
   const { failure } = failed;
-  const message = failure.message.replace(/\b__r[0-9]+\b/g, (local) => {
-    let tree = loneSpanTree(wiring.get(local));
-    if (tree instanceof Tree && tree.data === "default_expr") tree = tree.children[0]!;
-    return (tree !== null ? directReferenceParts(tree)?.join(".") : undefined) ?? local;
-  });
+  const message = failure.message
+    .replace(SYNTH_LOCAL, (local) => {
+      if (!wiring.has(local)) return local;
+      let tree = loneSpanTree(wiring.get(local));
+      if (tree instanceof Tree && tree.data === "default_expr") tree = tree.children[0]!;
+      return (tree !== null ? directReferenceParts(tree)?.join(".") : undefined) ?? local;
+    })
+    .replace(CHILD_INPUT, "input");
   if (message === failure.message) return failed;
   const { code, nodeId, trace, causeType, traceback } = failure;
   return new EvaluationFailure(new Failure({ code, message, nodeId, trace, causeType, traceback }));
@@ -649,7 +657,7 @@ async function evaluateNode(
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
     collector?.invalidate();
-    return evaluationFailure(node, error.failureCode, error, error.origin);
+    return withAuthoredRoots(evaluationFailure(node, error.failureCode, error, error.origin), nodeWiring);
   }
 
   if (captureInputs !== null && !usesBaseTemplate) captureInputs(record);

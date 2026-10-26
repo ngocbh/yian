@@ -28,8 +28,8 @@ import { bindingProducers } from "./producers.ts";
  *
  * For each consuming node, scan its sources and emit a data `Edge` per `${<id>.output[.…]}` ref,
  * tagged with the input group that identifies which sink it feeds (the param or arg name for a
- * leaf or call input; `over` for a map's `over:`). A coalesce sink's
- * alternatives share one group. Each string nested in a `ValueTemplate` source is its own group
+ * leaf or call input; `over` for a map's `over:`). A coalesce sink's alternatives share one
+ * group. Each string nested in a `ValueTemplate` source is its own group
  * (`bindingInputGroups`), with its own co-skip stance: the edge is optional unless the string
  * co-skips (`bindingCoSkips`). Edges are the projection of the flow wiring for leaf and call/map
  * nodes, named `<from>-><to>#<i>`.

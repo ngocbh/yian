@@ -77,7 +77,7 @@ export function expandCaseOutputs(
   const { outputsRange = null, assertionRangeAt = null, spellings = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const caseIds = caseIdsOf(descriptors);
-  if (caseIds.size === 0) return [new Map(descriptors), outputsSection]; // fast path
+  if (caseIds.size === 0) return [new Map(descriptors), outputsSection];
   const targets = caseLeafTargets(descriptors, caseIds);
 
   const newDescriptors = new Map<string, NodeDescriptor>();

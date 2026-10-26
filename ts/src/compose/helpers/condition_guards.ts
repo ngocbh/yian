@@ -263,9 +263,9 @@ function subjectParts(node: ExprNode): string[] | null {
 /**
  * Return the check a sub-expression is, and the value it has when the sub-expression is true.
  *
- * @param tree A parsed sub-expression of a condition.
  * A comprehension variable read is a plain reference here, by its key.
  *
+ * @param tree A parsed sub-expression of a condition.
  * @returns `[IsinstanceCheck, true]` for `isinstance(<plain ref>, T)`; `[TagCheck, true]` for
  *   `<plain ref>.<field> == "<text>"` either way round, and `[TagCheck, false]` for `!=`;
  *   `[NotNullCheck, true]` for `<plain ref> != null` either way round, and

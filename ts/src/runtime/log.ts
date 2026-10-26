@@ -733,14 +733,8 @@ export class InboxWithdrawnRecord {
    */
   constructor(inbox: string, events: readonly number[]) {
     this.inbox = requireName(inbox, "inbox");
-    if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
-      throw new RangeError("events must be positive integers");
-    }
-    const seqs = [...events] as number[];
+    const seqs = validatedEventSeqs(events, "events");
     if (seqs.length === 0) throw new RangeError("events must be non-empty");
-    if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {
-      throw new RangeError("events must be strictly increasing");
-    }
     this.events = Object.freeze(seqs);
     Object.freeze(this);
   }
@@ -938,16 +932,26 @@ export interface TakeCommit {
 function validatedTake(take: unknown): TakeCommit {
   if (!isRecord(take)) throw new TypeError("take must be an object");
   const inbox = requireName(take["inbox"], "take inbox");
-  const events = take["events"];
+  const seqs = validatedEventSeqs(take["events"], "take events");
+  if (typeof take["closed"] !== "boolean") throw new TypeError("take closed must be a boolean");
+  return Object.freeze({ inbox, events: Object.freeze(seqs), closed: take["closed"] });
+}
+
+/**
+ * Return a copy of `events` when it is a list of strictly increasing positive safe integers;
+ * `label` names it in errors.
+ *
+ * @throws RangeError otherwise.
+ */
+function validatedEventSeqs(events: unknown, label: string): number[] {
   if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
-    throw new RangeError("take events must be positive integers");
+    throw new RangeError(`${label} must be positive integers`);
   }
   const seqs = [...events] as number[];
   if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {
-    throw new RangeError("take events must be strictly increasing");
+    throw new RangeError(`${label} must be strictly increasing`);
   }
-  if (typeof take["closed"] !== "boolean") throw new TypeError("take closed must be a boolean");
-  return Object.freeze({ inbox, events: Object.freeze(seqs), closed: take["closed"] });
+  return seqs;
 }
 
 /**

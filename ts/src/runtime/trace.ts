@@ -1304,10 +1304,9 @@ export function prepareTrace(
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
     if (!record.learnable) return null;
-    if (typeof rootEndId !== "string" || rootInputNames === null) {
+    if (typeof rootStartId !== "string" || typeof rootEndId !== "string" || rootInputNames === null) {
       throw new RangeError("retained RunStarted requires verified root metadata");
     }
-    if (typeof rootStartId !== "string") throw new RangeError("retained RunStarted requires verified root metadata");
     const initial = new RetainedTrace(envelope.runId, rootStartId, rootEndId, rootInputNames);
     return new TraceDelta(null, envelope.seq, { initialized: initial });
   }

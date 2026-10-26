@@ -242,7 +242,6 @@ export class OpenAIAuth {
   ): Promise<HttpResponse> {
     const { signal, jsonBody, form } = options;
     signal.throwIfAborted();
-    // Python sent `yian`; design 7.4 gives every request, auth included, `yian/<version>`.
     const headers: Record<string, string> = { "User-Agent": USER_AGENT, ...options.headers };
     const sent: AuthRequestOptions = { headers, timeoutMs: this.#requestTimeoutMs, signal };
     if (jsonBody !== undefined) {

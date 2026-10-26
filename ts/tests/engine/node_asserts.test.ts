@@ -63,7 +63,7 @@ import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { type NodeDescriptor, siteKey } from "../../src/compose/nodes/base.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { POOL_HEADS, validateNodeAsserts } from "../../src/compose/validate/asserts.ts";
-import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
+import { type FailureCode, OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { Node, NodeKind } from "../../src/nodes/base.ts";
 import {
@@ -73,6 +73,7 @@ import {
   PartialRecordContract,
   ValueContract,
 } from "../../src/nodes/contracts.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import {
@@ -590,4 +591,50 @@ test.each([
   ["isinstance", "isinstance(r, Rec) and r.a == 'x'"],
 ])("a node assert narrowed by %s loads", (_name, assertion) => {
   assembleText(localAssert("${input.maybe}", assertion));
+});
+
+// ---------- declared fields at run time (#1149) ----------
+
+/** A flow whose CODE node `x` binds `input` and returns `{k: "x"}` under `output`, carrying `asserts`. */
+function declaredFlow(asserts: readonly string[], input: string, output = "Rec"): string {
+  const lines = asserts.map((q) => `      - "${q}"`).join("\n");
+  return `
+id: na
+name: na
+typedefs:
+  Rec: {k: str, opt: Optional(str)}
+nodes:
+  a:
+    kind: code
+    code: |
+      return {}
+  b:
+    kind: code
+    code: |
+      return {k: "a"}
+  x:
+    kind: code
+    code: |
+      return {k: "x"}
+    input:
+      ${input}
+    output: ${output}
+    asserts:
+${lines}
+output: \${x.output.k}
+`;
+}
+
+test.each<[string, string[], string, FailureCode | null]>([
+  ["a pre assert over a declared absent field holds", ["r.opt == null"], "r: !Rec ${b.output}", null],
+  ["a post assert over a declared absent field holds", ["output.opt == null"], "n: 1", null],
+  ["a pre assert over an untyped absent key fails", ["u.k == 1"], "u: ${a.output}", "condition.evaluate"],
+])("%s", async (_name, asserts, input, code) => {
+  const result = await runFlow(await loadFlow(declaredFlow(asserts, input)), {});
+  if (code === null) {
+    expect(result.failure?.message).toBeUndefined();
+    expect(result.output).toBe("x");
+  } else {
+    expect(result.failure?.code).toBe(code);
+  }
 });

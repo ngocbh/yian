@@ -14,6 +14,7 @@
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
+import { localTypes } from "../compile/declared_types.ts";
 import { expansionDigest } from "../compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, Flow, GrowthRejected, validateGrowthMetadata } from "../compile/model.ts";
 import { classifyPath } from "../compile/validation.ts";
@@ -2844,7 +2845,9 @@ function nodeDataRebuilder(
   node: Node,
 ): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
   const llm = state.effectiveLlmByStaticPath;
-  return (inputs) => rebuildNodeData(node, inputs, llm);
+  // Typed now, while the node is in the flow; learning may prune it later.
+  const types = localTypes(state.flow, node);
+  return (inputs) => rebuildNodeData(node, inputs, llm, types);
 }
 
 /**

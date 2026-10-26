@@ -1116,7 +1116,10 @@ export class AgentNode extends Node {
    *
    * @throws CapabilityFault when the capture fails.
    */
-  override renderCapture(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  override renderCapture(
+    inputs: Readonly<Record<string, unknown>>,
+    localTypes: ReadonlyMap<string, Type | null> | null = null,
+  ): Record<string, unknown> {
     let captured: Record<string, unknown> = {};
     try {
       // No skills: the grants are read after the capture, which is all this needs.

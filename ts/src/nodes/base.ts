@@ -38,7 +38,7 @@ import {
   promptRefs,
   validateFeedback,
 } from "../expr/index.ts";
-import { evaluateWhenRecord } from "../expr/expressions.ts";
+import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/expressions.ts";
 import { sameFeedback } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
@@ -1493,7 +1493,8 @@ export abstract class Node {
     }
     if (captureInputs !== null) captureInputs(record);
     this.validateExecutionSetup();
-    const preFailure = this.failingAssertion("pre-assert", this.preAsserts, record);
+    const declared = localDeclared(caps.localTypes ?? null);
+    const preFailure = this.failingAssertion("pre-assert", this.preAsserts, record, declared);
     if (preFailure !== null) throw classify ? new AssertionStageError(preFailure) : preFailure;
     // A snapshot for the post-asserts, taken before `forward`: a kind's `forward` may change the
     // record it receives, and the post-asserts must see the inputs as bound. Only paid when the
@@ -1520,7 +1521,7 @@ export abstract class Node {
     if (result instanceof Output && postRecord !== null) {
       // `setField`, so an input named `__proto__` stays data; the snapshot is this run's own.
       setField(postRecord, "output", result.value as Value);
-      const postFailure = this.failingAssertion("post-assert", this.postAsserts, postRecord);
+      const postFailure = this.failingAssertion("post-assert", this.postAsserts, postRecord, declared);
       if (postFailure !== null) throw classify ? new AssertionStageError(postFailure) : postFailure;
     }
     return result;
@@ -1609,9 +1610,13 @@ export abstract class Node {
    * material backward reads beside `captureBackwardContext`'s, with the parts established before
    * a render that fails. Pure: it renders with the node's authored fields and calls no model.
    *
+   * @param localTypes The declared type of each local, as `NodeCaps.localTypes` gives it.
    * @returns The render material, or `null` (the default) for a kind that renders nothing.
    */
-  renderCapture(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
+  renderCapture(
+    inputs: Readonly<Record<string, unknown>>,
+    localTypes: ReadonlyMap<string, Type | null> | null = null,
+  ): Record<string, unknown> | null {
     return null;
   }
 
@@ -1619,11 +1624,15 @@ export abstract class Node {
    * Return whether the `run` template's pre-asserts hold for bound `inputs` (defaults applied), so
    * the template calls `forward`. The node's setup is validated first, as the template does.
    *
+   * @param localTypes The declared type of each local, as `NodeCaps.localTypes` gives it.
    * @throws as `validateExecutionSetup`.
    */
-  preAssertsHold(inputs: Readonly<Record<string, unknown>>): boolean {
+  preAssertsHold(
+    inputs: Readonly<Record<string, unknown>>,
+    localTypes: ReadonlyMap<string, Type | null> | null = null,
+  ): boolean {
     this.validateExecutionSetup();
-    return this.failingAssertion("pre-assert", this.preAsserts, { ...inputs }) === null;
+    return this.failingAssertion("pre-assert", this.preAsserts, { ...inputs }, localDeclared(localTypes)) === null;
   }
 
   /**
@@ -1733,21 +1742,23 @@ export abstract class Node {
   /**
    * Return the first assertion that doesn't hold on `record`, as the error to throw, or `null`.
    *
-   * Each assertion is evaluated with this node's type table. A false condition fails with
-   * `assertion.failed`; one that throws an `ExpressionError` while evaluating fails with
-   * `condition.evaluate`, that error as the `cause`. Callers run `validateExecutionSetup` first,
-   * which has parsed every assertion and named the node in any parse error.
+   * Each assertion is evaluated with this node's type table and its locals' `declared` types. A
+   * false condition fails with `assertion.failed`; one that throws an `ExpressionError` while
+   * evaluating fails with `condition.evaluate`, that error as the `cause`. Callers run
+   * `validateExecutionSetup` first, which has parsed every assertion and named the node in any
+   * parse error.
    */
   private failingAssertion(
     label: string,
     assertions: readonly Assertion[],
     record: Record<string, unknown>,
+    declared: DeclaredTypes,
   ): NodeAssertFailed | null {
     const subject = `node ${reprText(this.id)} ${label}`;
     for (const assertion of assertions) {
       let holds: boolean;
       try {
-        holds = evaluateWhenRecord(assertion.expression, record as ValueRecord, this.types);
+        holds = evaluateWhenRecord(assertion.expression, record as ValueRecord, this.types, declared);
       } catch (error) {
         if (!(error instanceof ExpressionError)) throw error;
         return new NodeAssertFailed(

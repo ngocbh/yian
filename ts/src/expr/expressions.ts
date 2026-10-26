@@ -410,9 +410,10 @@ function evaluate(
   expression: string,
   resolve: RootResolver,
   types: ReadonlyMap<string, Type> | null,
+  declared: DeclaredTypes | null = null,
 ): boolean {
   const tree = parseCondition(expression, types ?? new Map());
-  return truthy(evalExpr(tree, resolve, { mode: ResolveMode.CONDITION_FALSY, types }));
+  return truthy(evalExpr(tree, resolve, { mode: ResolveMode.CONDITION_FALSY, types, declared }));
 }
 
 /**
@@ -449,28 +450,29 @@ export function evaluateWhen(
 /**
  * Evaluate a strict-CASE `when:` against the node's bound input record.
  *
- * `name` / `name.path` resolve against `record` (`resolveInRecord`); a miss is `null`, compared
- * as a plain value: `==` and ordered comparisons against a non-null value are `false`, and `!=`
- * is `true`. A bare `name` miss is falsy, which gives `when:` its missing-is-falsy behavior. A
- * `null` left side of `in`/`not in` is an ordinary value (`miss in [...]` is `false`); a `null`
- * right side throws, since `null` is no container. Pool namespaces are not in scope (they belong
- * in the node's input `from:` bindings).
- *
- * Unlike the strict prompt render, which throws on the same dotted miss, `when:` stays falsy so
- * the CASE's `else:` route can fire.
+ * `name` reads `record` (`resolveInRecord`) and `name.path` walks its fields by the step table
+ * (see `evalExpr`). A missing `name` is `null`, compared as a plain value: `==` and ordered
+ * comparisons against a non-null value are `false`, and `!=` is `true`. A bare missing `name` is
+ * falsy, which gives `when:` its missing-is-falsy behavior. A `null` left side of `in`/`not in`
+ * is an ordinary value (`miss in [...]` is `false`); a `null` right side throws, since `null` is
+ * no container. Pool namespaces are not in scope (they belong in the node's input `from:`
+ * bindings).
  *
  * @param types The type table `isinstance(x, T)` and a constructor look `T` up in; `null` means
  *   no types.
- * @throws {ExpressionError} As `evaluateWhen` does: a call to a function that isn't a builtin,
- *   or to a builtin with arguments it doesn't take, throws even where `and`/`or` would not
- *   evaluate the call.
+ * @param declared The declared type of each input, given a reference's names (`localDeclared`);
+ *   `null` (the default) leaves every field read undeclared.
+ * @throws {ExpressionError} On a field read the step table rejects, and as `evaluateWhen` does: a
+ *   call to a function that isn't a builtin, or to a builtin with arguments it doesn't take,
+ *   throws even where `and`/`or` would not evaluate the call.
  */
 export function evaluateWhenRecord(
   expression: string,
   record: ValueRecord,
   types: ReadonlyMap<string, Type> | null = null,
+  declared: DeclaredTypes | null = null,
 ): boolean {
-  return evaluate(expression, (names) => resolveInRecord(names, record), types);
+  return evaluate(expression, (names) => resolveInRecord(names, record), types, declared);
 }
 
 // --------------------------------------------------------------------------------------- //

@@ -65,7 +65,7 @@ import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
 import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isRecord, jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
+import { isRecord, jsTypeName, setField, type Type, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
 import { canonicalSeed } from "./log.ts";
 import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
@@ -669,6 +669,7 @@ async function evaluateNode(
   // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker from inside the
   // body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
+  if (flow !== null) caps.localTypes = localTypes(flow, node);
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
   if (runDir !== null) caps.runDir = runDir;
@@ -833,6 +834,7 @@ export function nodeBackwardCapture(node: Node): BackwardCapture {
  *
  * @param inputs The bound inputs, as binding the node again gives them.
  * @param effectiveLlmByStaticPath The run's recorded model config by static path.
+ * @param localTypes The node's locals' declared types (`localTypes`); `null` leaves them undeclared.
  * @returns Canonical JSON.
  * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
  *   isn't JSON, and the hooks' own errors.
@@ -843,13 +845,14 @@ export function rebuildNodeData(
   node: Node,
   inputs: Readonly<Record<string, unknown>> | null,
   effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
+  localTypes: ReadonlyMap<string, Type | null> | null = null,
 ): WireObject {
   if (inputs === null) return {};
   const captured: unknown = node.captureBackwardContext();
   if (!isRecord(captured)) throw new TypeError("capture_backward_context must return a record");
   const data: Record<string, unknown> = { ...captured };
-  const render = node.renderCapture(inputs);
-  if (render !== null && node.preAssertsHold(inputs)) {
+  const render = node.renderCapture(inputs, localTypes);
+  if (render !== null && node.preAssertsHold(inputs, localTypes)) {
     if (Object.hasOwn(render, "effective_llm_config")) {
       throw new RangeError("effective_llm_config belongs to the run's model config");
     }

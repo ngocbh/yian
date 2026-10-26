@@ -200,8 +200,7 @@ export function jsTypeName(value: unknown): string {
 // are separate from `textForm`, which writes any JS value for a message and stops at the cap.
 
 /**
- * Return a value's text form (design 3.2.3): text as itself, anything else as `writeAsJson`'s
- * compact JSON.
+ * Return a value's text form: text as itself, anything else as `writeAsJson`'s compact JSON.
  *
  * @throws TypeError as `writeAsJson` does.
  */
@@ -591,7 +590,7 @@ interface ToHostFrame {
 }
 
 /**
- * Return a yian value as a fresh host value, by design 3.2.1's host boundary (D9A).
+ * Return a yian value as a fresh host value.
  *
  * An int within ±(2^53−1) becomes a `number`; a bigger one stays a `bigint`. A float
  * (`±Infinity` included), text, a boolean, `null`, a `FileRef` and an `InboxRef` are handed over
@@ -2189,7 +2188,6 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
     if (FileRef.isFileRef(value)) {
       if (files === "keep") return value;
       if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
-      // Under "refuse" a file is not a JSON value.
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (InboxRef.isInboxRef(value)) {

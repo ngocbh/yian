@@ -174,8 +174,8 @@ export function typesCompatible(source: Type, sink: Type): boolean {
     if (!(sourceIsList && sinkIsList)) return false;
     return typesCompatible(listElement(source), listElement(sink));
   }
-  if (source.kind !== sink.kind) {
-    if (!(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER)) return false;
+  if (source.kind !== sink.kind && !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER)) {
+    return false;
   }
   if (sink.bounds !== undefined && !intervalWithin(source, sink)) return false;
   if (sink.variants !== undefined) {
@@ -469,7 +469,6 @@ export function classifyPath(
   const ref = "reference ${" + path + "}";
   const parts = path.split(".");
   const head = parts[0]!;
-  // Singular `input` head.
   if (head === "input") {
     if (parts.length < 2) return `${ref} must be input.<name>`;
     if (!flowInputs.has(parts[1]!)) {

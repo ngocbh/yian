@@ -14,7 +14,14 @@
  */
 
 import { type OriginRef, reprText } from "../diagnostics.ts";
-import { ExpressionError, evalBinding, exprRefs, inferExprType, scanTemplate } from "../expr/index.ts";
+import {
+  ExpressionError,
+  evalBinding,
+  exprRefs,
+  inferExprType,
+  scanTemplate,
+  splitReference,
+} from "../expr/index.ts";
 import { type ExprNode, Token, Tree } from "../expr/grammar.ts";
 import { Span, templateRefs } from "../expr/template.ts";
 import {
@@ -304,7 +311,12 @@ export function resolveOutputBindingContract(
   const expression = only.tree;
   if (isDirectReference(expression)) {
     if (refs.length !== 1) return null;
-    return referenceContracts.get(refs[0]!) ?? null;
+    const contract = referenceContracts.get(refs[0]!) ?? null;
+    // A `?.` step reads null when its receiver is null or lacks the key, as `inferExprType` types it.
+    if (isExactly(contract, ValueContract) && hasOptionalStep(expression as Tree)) {
+      return new ValueContract(contract.type.replace({ nullable: true }), contract.origins);
+    }
+    return contract;
   }
   const nullDefault = nullDefaultContract(expression, referenceContracts);
   if (nullDefault !== null) return nullDefault;
@@ -582,6 +594,11 @@ export function directReferencePathParts(binding: unknown): string[] | null {
  */
 export function directReferencePath(binding: unknown): string | null {
   return directReferencePathParts(binding)?.join(".") ?? null;
+}
+
+/** Return whether a reference has a `?.` step. */
+export function hasOptionalStep(reference: Tree): boolean {
+  return splitReference(reference).steps.some((step) => step.optional);
 }
 
 /**

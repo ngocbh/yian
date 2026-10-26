@@ -2987,3 +2987,32 @@ test.each<CaseRow>([
   { id: "load-map-call/engine_templates_load__inline_composites_template_loads", call: assembled },
   { id: "load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts", call: assembled },
 ])("assemble: $id", runCase);
+
+test("a ?. read of a field that is never null types the generated input as Optional", () => {
+  // `?.` reads null when its receiver is null or lacks the key, so the input is `Optional`, as
+  // `inferExprType` types the read.
+  const { flow } = assembleText(`id: inline-question-dot
+name: inline_question_dot
+typedefs:
+  Inner:
+    value: str
+input:
+  root: !Inner
+nodes:
+  wrapper:
+    kind: call
+    input:
+      v: \${input.root?.value}
+    nodes:
+      collect:
+        kind: code
+        code: return inputs["v"]
+        input:
+          v: \${input.v}
+        output: Optional(str)
+    output: \${collect.output}
+output: \${wrapper.output}
+`);
+  const [v] = driver<CallNode>(flow, "wrapper").childInputs;
+  expect(parameterType(v!).nullable).toBe(true);
+});

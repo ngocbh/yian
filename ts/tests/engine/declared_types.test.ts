@@ -5,7 +5,12 @@
 
 import { expect, test } from "bun:test";
 
-import { bindingAlternatives, contractType, itemContract } from "../../src/compile/output_contracts.ts";
+import {
+  bindingAlternatives,
+  contractType,
+  itemContract,
+  resolveOutputBindingContract,
+} from "../../src/compile/output_contracts.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { listKindForElement, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
@@ -37,4 +42,13 @@ test("contractType gives a partial record its names, opaque ones untyped", () =>
   expect(typ.fields!.get("o")!.kind).toBe(ValueKind.ANY);
   expect(contractType(null)).toBeNull();
   expect(typeEquals(contractType(new ValueContract(strs))!, strs)).toBe(true);
+});
+
+test("a whole-span ?. read is typed Optional, as inferExprType types it", () => {
+  const rec = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str]]), required: new Set(["k"]) });
+  const recs = new Map([["a", new ValueContract(rec)]]);
+  const read = resolveOutputBindingContract("${a.output?.k}", recs, new Map()) as ValueContract;
+  expect(typeEquals(read.type, str.replace({ nullable: true }))).toBe(true);
+  const plain = resolveOutputBindingContract("${a.output.k}", recs, new Map()) as ValueContract;
+  expect(typeEquals(plain.type, str)).toBe(true);
 });

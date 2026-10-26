@@ -133,7 +133,7 @@ export function checkCallMapTypes(
     const scope: Scope = {
       producers: nodeProducers,
       flowInputs: nodeInputs,
-      item: itemContract(result?.node ?? null, wiring, nodeProducers, nodeInputs),
+      item: itemContract(node, wiring, nodeProducers, nodeInputs),
       items: literalItems(result, wiring),
       typeFn,
       registry,

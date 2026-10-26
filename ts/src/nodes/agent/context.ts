@@ -720,10 +720,9 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  * Store `bytes` as a file of the run in folder `dir` and return its reference.
  *
  * The file is `<dir>/media/<sha256>.<ext>`, mode 0600, in a `media` folder made with mode 0700
- * (`dir` must exist);
- * `ext` follows `mime` (`.bin` when unknown). The same bytes of the same type keep one file. The
- * file and the folder are synced before this returns, so a record naming the file can be
- * written next.
+ * (`dir` must exist); `ext` follows `mime` (`.bin` when unknown). The same bytes of the same type
+ * keep one file. The file and the folder are synced before this returns, so a record naming the
+ * file can be written next.
  *
  * @returns The file's reference: its path relative to the run folder (`media/<sha256>.<ext>`) as
  *   `uri`, so it still holds when the folder is copied elsewhere; `mime`; and its file name as `name`.
@@ -816,7 +815,7 @@ export function inlineToFile(message: Message, dir: string | null): Message {
   );
   const parts = message.parts.map((part, index) => {
     const bytes = decoded[index];
-    if (!(part instanceof MediaPart) || bytes === null || bytes === undefined) return part;
+    if (!(part instanceof MediaPart) || bytes == null) return part;
     return new MediaPart({
       mime: part.mime,
       file: writeRunFile(dir, bytes, part.mime),

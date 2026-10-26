@@ -94,7 +94,10 @@ function recordedMaterial(context: BackwardContext): Readonly<Record<string, unk
   const config = data["effective_llm_config"];
   if (
     !isRecord(config) ||
-    ["provider", "model"].some((name) => typeof config[name] !== "string" || (config[name] as string).trim() === "")
+    ["provider", "model"].some((name) => {
+      const value = config[name];
+      return typeof value !== "string" || value.trim() === "";
+    })
   ) {
     throw new RangeError("AGENT backward requires a recorded concrete provider and model");
   }
@@ -117,12 +120,14 @@ function parseResult(text: string): BackwardResult {
   // three levels don't count against the message's own nesting.
   rejectDeepNesting(value, "backward response", { enclosingLevels: -3 });
   // Python checks for over-long ints next; TS has no digit limit (`parseJson` reads any int).
-  const keys = isRecord(value) ? Object.keys(value) : null;
-  if (keys === null || keys.length !== CHANNELS.length || !CHANNELS.every((name) => keys.includes(name))) {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== CHANNELS.length ||
+    !CHANNELS.every((name) => Object.hasOwn(value, name))
+  ) {
     throw new RangeError("backward response must contain exactly the three feedback channels");
   }
-  const record = value as Record<string, unknown>;
-  const [inputs, own, variables] = CHANNELS.map((name) => record[name]);
+  const [inputs, own, variables] = CHANNELS.map((name) => value[name]);
   if (!isRecord(inputs) || !isRecord(variables) || !isList(own)) {
     throw new TypeError("backward response channels must be object, array, and object");
   }

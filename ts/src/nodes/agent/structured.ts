@@ -502,19 +502,15 @@ export async function generateStructured(
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
-    let value: Value;
     try {
-      value = checkReply(plan.parse(response), typ);
+      return checkReply(plan.parse(response), typ);
     } catch (error) {
       if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
       if (call >= retries) {
         throw new OutputInvalidError(error.message, { cause: error, path: outputPath(error, typ) });
       }
-      const correction = userMessage(plan.correction(error.message));
-      conversation = [...conversation, correction];
-      continue;
+      conversation = [...conversation, userMessage(plan.correction(error.message))];
     }
-    return value;
   }
 }
 

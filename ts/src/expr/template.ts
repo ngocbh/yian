@@ -112,6 +112,23 @@ export class Span {
 /** A segment of a scanned template: a literal run or a parsed `${...}` span. */
 export type TemplateSegment = Literal | Span;
 
+/** The reference a span's value comes from: the span itself, or a default chain's last operand. */
+function nullSource(tree: ExprNode): string | null {
+  if (!(tree instanceof Tree)) return null;
+  if (tree.data === "refcall") return callSuffixOf(tree) === undefined ? referenceText(tree) : null;
+  if (tree.data === "coalesce" || tree.data === "default_expr") return nullSource(tree.children.at(-1)!);
+  return null;
+}
+
+/** The strict render's refusal of a null span, naming the reference it comes from when there is one. */
+function strictNullError(tree: ExprNode): ExpressionError {
+  const source = nullSource(tree);
+  if (source === null) return new ExpressionError("null value in strict template");
+  return new ExpressionError(
+    `null value in strict template: \${${source}} is null; give it a default, e.g. \${${source} :- "none"}`,
+  );
+}
+
 /**
  * Scan a template into its literal runs and `${...}` spans.
  *
@@ -322,9 +339,7 @@ export function evalTemplate(
   const evalSpan = (span: Span): Value | TracedValue => {
     const result = evalExpr(span.tree, resolve, { item, mode, types, trace, declared, itemType });
     const value = trace ? (result as TracedValue).value : (result as Value);
-    if (value === null && mode === ResolveMode.STRICT_RAISE) {
-      throw new ExpressionError("null value in strict template");
-    }
+    if (value === null && mode === ResolveMode.STRICT_RAISE) throw strictNullError(span.tree);
     return result;
   };
 

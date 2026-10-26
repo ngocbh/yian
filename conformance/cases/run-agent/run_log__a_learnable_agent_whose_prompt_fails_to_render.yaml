@@ -27,7 +27,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [6, 3, 6, 9]
-      message: null value in strict template
+      message: 'null value in strict template: ${note} is null; give it a default, e.g. ${note :- "none"}'
       node: writer
   trace:
   - - run_started
@@ -75,7 +75,7 @@ expect:
     - writer
     - failure:
         code: node.execute
-        message: null value in strict template
+        message: 'null value in strict template: ${note} is null; give it a default, e.g. ${note :- "none"}'
         frames:
         - label: flow.yaml
           range: [6, 3, 6, 9]

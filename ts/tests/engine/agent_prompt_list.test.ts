@@ -381,5 +381,7 @@ test("a prompt reads a declared field that is absent as null", async () => {
 });
 
 test("a prompt span that reads null through ?. still fails: prompts stay strict", async () => {
-  await expect(renderOverR("${r?.k}", null)).rejects.toThrow("null value in strict template");
+  await expect(renderOverR("${r?.k}", null)).rejects.toThrow(
+    'null value in strict template: ${r?.k} is null; give it a default, e.g. ${r?.k :- "none"}',
+  );
 });

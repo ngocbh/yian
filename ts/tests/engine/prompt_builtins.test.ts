@@ -156,6 +156,18 @@ test.each(["null", "null | null"])("a strict prompt rejects a final null, whole 
   expect(messages).toEqual(["null value in strict template", "null value in strict template"]);
 });
 
+test.each([
+  ["${note}", "${note}"],
+  ["value=${note}", "${note}"],
+  ["${x :- note}", "${note}"],
+  ["${x | note}", "${note}"],
+  ["${sig?.nope}", "${sig?.nope}"],
+])("a strict prompt names the span a null comes from: %s", (template, span) => {
+  const message = expectRenderError(template, { note: null, x: null, sig: {} }).message;
+  const inner = span.slice(2, -1);
+  expect(message).toBe(`null value in strict template: ${span} is null; give it a default, e.g. \${${inner} :- "none"}`);
+});
+
 test("a binding's embedded null is still empty text", () => {
   expect(evalBinding("${null}", MISSING_ROOT)).toBeNull();
   expect(evalBinding("value=${null}", MISSING_ROOT)).toBe("value=");

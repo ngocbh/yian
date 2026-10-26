@@ -9,7 +9,7 @@ mode: strict
 expect:
   raises:
     class: ExpressionError
-    message: null value in strict template
+    message: 'null value in strict template: ${y} is null; give it a default, e.g. ${y :- "none"}'
 python_expect:
   raises:
     class: ExpressionError

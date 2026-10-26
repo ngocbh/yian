@@ -123,7 +123,7 @@ export class BackwardMessage {
   }
 }
 
-/** Python's tuple order over two message orders. */
+/** Compare two message orders item by item; a prefix sorts first. */
 function compareOrder(a: readonly number[], b: readonly number[]): number {
   for (let index = 0; index < Math.min(a.length, b.length); index++) {
     if (a[index] !== b[index]) return a[index]! - b[index]!;
@@ -1136,8 +1136,8 @@ export function failureJson(failure: Failure): JsonObject {
  *
  * `committed` is a success's committed value, as `RetainedTrace.lookupSource` reads it from the
  * commit the success names, or an expansion's seed (`TraceOccurrence.seed`); other outcomes ignore
- * it. Returns the episode status, the success
- * output (`null` on failure) and the failure JSON (`null` on success).
+ * it. Returns the episode status, the success output (`null` on failure) and the failure JSON
+ * (`null` on success).
  *
  * @throws TypeError when `record` isn't exactly one of the outcome record classes.
  */
@@ -1261,29 +1261,23 @@ function ownerFeedback(
       });
     });
   }
-  result.selfFeedback.forEach((feedback, index) => {
-    entries.push({
-      channel: "self",
-      target_name: null,
-      value: feedback,
-      message_index: BigInt(index),
-      contribution_context: {},
-    });
-  });
+  entries.push(...localEntries("self", null, result.selfFeedback));
   const variables = result.variableFeedback;
   for (const name of context.variableNames) {
-    if (!Object.hasOwn(variables, name)) continue;
-    variables[name]!.forEach((feedback, index) => {
-      entries.push({
-        channel: "variable",
-        target_name: name,
-        value: feedback,
-        message_index: BigInt(index),
-        contribution_context: {},
-      });
-    });
+    if (Object.hasOwn(variables, name)) entries.push(...localEntries("variable", name, variables[name]!));
   }
   return entries;
+}
+
+/** One `self` or `variable` channel entry per message of `batch`, in order. */
+function localEntries(channel: "self" | "variable", name: string | null, batch: readonly string[]): JsonObject[] {
+  return batch.map((feedback, index) => ({
+    channel,
+    target_name: name,
+    value: feedback,
+    message_index: BigInt(index),
+    contribution_context: {},
+  }));
 }
 
 /** Keep the source-free and root-input fallback channels without duplicating START. */
@@ -1299,25 +1293,9 @@ function rootOwnerFeedback(result: BackwardResult): JsonObject[] {
       });
     });
   }
-  result.selfFeedback.forEach((feedback, index) => {
-    entries.push({
-      channel: "self",
-      target_name: null,
-      value: feedback,
-      message_index: BigInt(index),
-      contribution_context: {},
-    });
-  });
+  entries.push(...localEntries("self", null, result.selfFeedback));
   for (const [name, batch] of Object.entries(result.variableFeedback)) {
-    batch.forEach((feedback, index) => {
-      entries.push({
-        channel: "variable",
-        target_name: name,
-        value: feedback,
-        message_index: BigInt(index),
-        contribution_context: {},
-      });
-    });
+    entries.push(...localEntries("variable", name, batch));
   }
   const coordinates = { execution_seq: null, owner_static_path: null, occurrence_path: null, execution_scope: null };
   return entries.map((entry) => ({ ...coordinates, root: true, ...entry }));
@@ -1480,8 +1458,7 @@ export function projectOwnerContexts(
  * The SHA-256 input is the UTF-8 run-log text (`logJson`: keys in code-unit order, ints of any
  * size, floats marked by `.0`, `-0` written as `0.0`) of
  * `[runId, attemptId, memory, [[mutationId, payload], ...]]`, the attempt id written as an int.
- * Batch order is semantic. The result is
- * `ac-memory-v3:<hex digest>`.
+ * Batch order is semantic. The result is `ac-memory-v3:<hex digest>`.
  *
  * @throws RangeError when `attemptId` isn't a positive safe integer, or `runId` or `memory` isn't
  *   a non-empty string.
@@ -1493,7 +1470,7 @@ export function memoryCommitId(
   mutations: readonly MemoryMutation[],
   attemptId: number,
 ): string {
-  if (typeof attemptId !== "number" || !Number.isSafeInteger(attemptId) || attemptId < 1) {
+  if (!Number.isSafeInteger(attemptId) || attemptId < 1) {
     throw new RangeError("attempt_id must be a positive integer");
   }
   if (typeof runId !== "string" || runId === "") throw new RangeError("run_id must be a non-empty string");

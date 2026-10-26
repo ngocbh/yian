@@ -1133,9 +1133,9 @@ class EvalExpr {
   /**
    * `base[lower:upper]` on a list, as Python's `slice.indices` with step 1: an omitted lower is 0
    * and an omitted upper the length, a negative bound counts from the end, and both clamp to
-   * `[0, n]`. A null or missing base is a miss, as a `.field` on null is, and its bounds aren't
-   * read; a null base's miss is named `base[...]`, with a non-literal, non-variable base as
-   * `(...)`. When tracing, the route is a `list` of the base route projected to each kept index.
+   * `[0, n]`. A null or missing base is a miss (a slice of null misses, where a `.field` of
+   * null raises), so `${xs[1:] :- []}` falls back, and its bounds aren't read; a null base's
+   * miss is named `base[...]`, with a non-literal, non-variable base as `(...)`. When tracing, the route is a `list` of the base route projected to each kept index.
    *
    * @throws {ExpressionError} If a bound is null or not an int (a bool counts as 0 or 1), or the
    *   base is not a list.

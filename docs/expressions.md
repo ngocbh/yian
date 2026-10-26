@@ -148,11 +148,31 @@ expression nests deeper than 100 levels, the limit for a yian expression (each c
 construct. It is pool-agnostic — `resolve` turns a reference path into a value, so the same
 evaluator serves the pool, a prompt's local record, and the map-body `item` scope.
 
-**Three locked semantics** (`case` routing to `else:` depends on them):
+**Locked semantics** (`case` routing to `else:` depends on them). Changed (TS yian), #1149:
 
-1. a **missing reference is `None`** (non-strict modes),
-2. **arithmetic over that `None` raises** — a missing operand never silently becomes `0`,
-3. an **ordered comparison with `None` is `False`** — so an absent value routes to `else:`.
+1. a **missing root** (a skipped node, an absent input or local) is `None` in the non-strict
+   modes; a `.` after it raises and `?.` after it gives `None`;
+2. **`.` on a null value, on a non-record, or for a key the receiver's declared type doesn't
+   declare raises**; a declared field that is absent reads `None`;
+3. **arithmetic over `None` raises** — a missing operand never silently becomes `0`;
+4. an **ordered comparison with `None` is `False`** — so an absent value routes to `else:`.
+
+A reference is a root (`a.output`, `input.k`, a local, `item`, a comprehension variable), then
+`.` and `?.` steps. The run-time result of one step, after the loader accepted it:
+
+| Receiver | `.k` | `?.k` |
+|---|---|---|
+| null, or a missing root | raises (load error when typed) | null |
+| record with `k` | its value | its value |
+| record without `k`, declared type declares `k` | null | null |
+| record without `k`, untyped or not declared | raises | null |
+| text, number, bool, list, file (`k` not `uri`/`mime`/`name`) | raises | raises |
+
+`?.` short-circuits the rest of the chain: `a?.b.c` is null when `a` is null; when `a` exists
+and `a.b` is null, `.c` raises. In a union, any member declaring the key counts; `Any`,
+`object` and `dict(...)` are untyped. The error names the read and the fix:
+`cannot read ${n.k}: n is null; write n?.k to read null instead, or check n != null first`.
+Python yian keeps the old rule: a field of a null or a missing key reads `None`.
 
 Changed (TS yian): comparisons. `==` and `!=` compare deeply across kinds: numbers by exact
 value (`${2 ** 60 == 2.0 ** 60}` is `true`; a bool counts as 0 or 1), text by code units, lists
@@ -175,7 +195,7 @@ bool counts as 0 or 1, as in arithmetic.
 
 | Case | Binding / condition | Strict (prompt) |
 |---|---|---|
-| the base is `null` or misses | a miss, as `.field` on null is, so `${xs[1:] :- []}` falls back; the bounds aren't read | raises `unresolved reference ${xs}` |
+| the base is `null` or misses | a miss (slices keep the old rule), so `${xs[1:] :- []}` falls back; the bounds aren't read | raises `unresolved reference ${xs}` |
 | the base is text, a record or a number | raises `slicing takes a list, got str` | same |
 | a bound is `null` or misses | raises `slice bound is null; omit it to mean the end` | same |
 | a bound is a float or text | raises `slice bounds take int, got float` | same |
@@ -185,13 +205,14 @@ enclosing scope; each later clause runs once per binding of the clauses before i
 those variables. An `if` keeps a binding when its condition is truthy, and after the last clause
 the elem is appended, so the result is a new list in iteration order. Variables are local:
 `[[y for y in xs], y]` reads the outer `y` (a miss if there is none). An item is returned as
-is, as in Python, so `[x for x in [null, 1]]` gives `[null, 1]`; `.field` on a null item misses,
-as on any null. The clauses run in a loop, not by recursion, so any number of them evaluates.
+is, as in Python, so `[x for x in [null, 1]]` gives `[null, 1]`; `.field` on a null item raises,
+as on any null (`m?.field` reads null). The clauses run in a loop, not by recursion, so any number of them evaluates.
 
 | Case | Binding / condition | Strict (prompt) |
 |---|---|---|
-| the elem misses | a `null` item, as `[a, 1]` gives `[null, 1]` | raises `unresolved reference ${m.text} in expression` |
-| a condition misses | `null`, falsy: the item is dropped | raises |
+| the elem reads a field of a null item | raises: write `m?.text` | same |
+| a condition reads a field of a null item | raises: write `m?.text` | same |
+| the elem is a missing root | a `null` item, as `[a, 1]` gives `[null, 1]` | raises `unresolved reference ${a} in expression` |
 | an iterable is `null` or misses | raises ``comprehension `for m in input.history` iterates over null; give a default, e.g. `(input.history :- [])` `` | same |
 | an iterable is text, a record or a number | raises ``comprehension `for c in name` takes a list, got str`` | same |
 
@@ -207,8 +228,10 @@ In bindings, CASE conditions, LOOP predicates, flow outputs, prompts, and assert
 loader rejects field reads a known type can't have, including a field only some members of
 a union have outside a narrowing `case` branch (or, in a condition, without a check before
 it that narrows it; see
-[Flow syntax → Narrowing inside a condition](syntax.md#narrowing-inside-a-condition)), so a
-`None` there is a null, skipped, or untyped value, not a misspelled field.
+[Flow syntax → Narrowing inside a condition](syntax.md#narrowing-inside-a-condition)), and a
+plain `.` on a value that may be null (an `Optional` type, or a node a `case` may skip) asking
+for `?.` or a null check. So at run time a `.` read finds its field, reads a declared absent
+field as `None`, or raises on a null or untyped value; it is never a misspelled field.
 
 **`ResolveMode`** — how the caller wants a miss treated:
 
@@ -220,12 +243,15 @@ it that narrows it; see
 
 In every mode, `|`, `:-`, and `:?` see a miss on a non-final operand as `None`, so
 `${note :- "none"}` works in a prompt; the fallback (the last `|` operand) stays strict.
+They see only null and missing roots, never an error from their left side: a field read of a
+null value raises through them, so write `${x?.k :- "none"}`.
 Strictness also applies to the span's final value: a prompt span that evaluates to
 null raises before whole-value return or embedded concatenation. Bindings remain
 non-strict, so an embedded null contributes an empty string.
 
 **Two safety rules:** dotted access reads only a dict key or a file's `uri`, `mime`, or
-`name`, never `getattr` (so `${x.__class__}` is just a missing key, on a file too);
+`name`, never `getattr` (so `${x.__class__}` is just a missing key, on a file too; TS yian
+raises "no field" on a record, and `?.` reads null);
 builtin calls dispatch through `TEMPLATE_FNS` only (no arbitrary callable is reachable).
 So `${doc.output.uri}` reads a file's `uri` in bindings, templates and prompts, `case`
 `on:` and `when:`, and asserts. When the loader knows the value is a `file`, it checks
@@ -235,8 +261,8 @@ load error (see [Flow syntax → References](syntax.md#references-naming-a-value
 Changed (TS yian): **`?.`** reads a field that may be missing. `x?.k` is null when `x` is null
 or missing, or is a record without `k`, and it is typed `Optional`. It short-circuits the rest of
 the chain, so `a?.b.c` is null when `a` is null. `?.` goes after a reference's root
-(`a.output?.k`, `input.k?.x`); `a?.output` and `input?.k` are load errors. Until #1149 lands, a
-plain `.` still reads null on a null value at run time.
+(`a.output?.k`, `input.k?.x`); `a?.output` and `input?.k` are load errors. A plain `.` on a null
+value raises at run time (#1149).
 
 Changed (TS yian): **a `.` on a value that may be null is a load error** (code
 `expr.nullable_field_read`).
@@ -610,7 +636,7 @@ node.
 Changed (TS yian): where `len()` and list slicing differ from Python. Yian refuses slicing text,
 `len` of a record, a `null` slice bound, a step and an index, where Python gives a value; each
 message names the fix. A slice of `null` or a miss is a miss (`:-` catches it), where Python
-raises. `len(obj=x)` works, since a builtin has no positional-only parameters. A prompt can't
+raises; slices keep this rule, while a field read of `null` raises (#1149). `len(obj=x)` works, since a builtin has no positional-only parameters. A prompt can't
 call `len` (`unknown prompt function 'len'; prompts call only formatting builtins ...`).
 
 Changed (TS yian): where list comprehensions differ from Python. Yian refuses iterating text

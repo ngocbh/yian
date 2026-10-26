@@ -570,6 +570,11 @@ proves `x`. A check on each step lifts each step (`x != null and x.k != null and
 that is untyped and only narrowed to `T`, a root or an `Any` field alike, still needs `?.` for a
 field `T` doesn't require (`x?.f`), or a type where it is declared (`output: T` or `!T`).
 
+At run time (TS yian) a `.` on a null value, or for a field an untyped record lacks, raises and
+names the read. A check the loader doesn't follow yet, such as an `if` of an earlier
+comprehension clause or an `or` of `isinstance` checks (yian #1175), leaves the read to that
+run-time rule: `cannot read ${p.text}: p has no field 'text'`. Write `p?.text` there.
+
 The narrowed type replaces the declared one for the reads after the check, the same way for
 `and`, `or` and `not`. With `Order: Union(Buy, Sell)`, where only `Buy` has `qty`, each of
 these may read `v.qty`:
@@ -2800,10 +2805,12 @@ nodes:
   [API](api.md#interrupting-an-agent-ts-yian). One interrupt stops every later
   reader of the inbox until the flow next picks up from the inbox or waits, so a
   LOOP whose body runs steer-reading agents with nothing that waits stops every
-  round. With `output: Optional(Draft)` and `until: draft.done`, a stopped round
-  reads as "not done": `draft` is null, and a read of null is false in a
-  condition, so the loop runs again. Set `max:`, or make the predicate say what a
-  stopped round means (`until: draft == null or draft.done`).
+  round. With `output: Optional(Draft)`, say what a stopped round means:
+  `until: draft == null or draft.done` ends the loop when a round is stopped. (In
+  Python yian, and in TS yian with `until: draft?.done`, a stopped round reads as
+  "not done", since `draft` is null and a null condition is false, so the loop runs
+  again; `until: draft.done` is a load error in TS yian.) Set `max:` on such a loop;
+  Ctrl-C twice cancels it.
 - An AGENT without `tools:` or `skills:` makes one model call. Steers queued
   before it go with that request, and an interrupt cuts its streaming text reply
   at the last chunk shown.
@@ -3357,7 +3364,10 @@ or `|` decides as a binding of just that part, `${...}`, would:
 - `a.output > 5 or (a.output :- 0) < 1` is skipped with `a`, by its plain read.
 
 Cases are still tested in order, and `and` / `or` short-circuit, so a later case's `:?`
-isn't evaluated once an earlier case matches. `:-` binds loosest:
+isn't evaluated once an earlier case matches. Changed (TS yian): the `case` binds each node a
+`when:` reads, not each field, and reads the fields as the condition runs, so
+`when: x.output != null and x.output.k > 1` reads `x.output.k` only once `x.output` is not
+null. `:-` binds loosest:
 `x.output and a.output :- false` defaults the whole condition, so write
 `x.output and (a.output :- false)`.
 
@@ -3532,7 +3542,13 @@ A flow output field that reads only nodes a `case` may skip returns `null` when 
 were skipped. This covers a reference (`${order.output}`, `${order.output.qty}`), a
 coalesce (`${a.output | b.output}`), and a default chain (`${a.output :- b.output}`),
 in a root flow, a `defs:` child, and an inline CALL/LOOP/MAP body. The loader reads it
-as if `:- null` were written: `${order.output}` becomes `${order.output:-null}`.
+as if `:- null` were written: `${order.output}` becomes `${order.output:-null}`, and, in TS
+yian, `${order.output.qty}` becomes `${order.output?.qty:-null}`.
+
+Changed (TS yian): a skipped producer is a missing root, so a `.` after it raises at run time.
+A binding of a node that is skipped with its producer never runs, and the loader writes `?.`
+in the flow outputs above; anywhere else that may run with the producer skipped, read its
+fields through `?.`.
 
 ```yaml
 id: orders

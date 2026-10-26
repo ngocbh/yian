@@ -364,9 +364,8 @@ export function rebuildMessages(
   let results = new Map<string, Readonly<JsonObject>>();
   const flush = (): void => {
     if (reply === null) return;
-    const answered = results;
     const kept = reply.parts.filter((part) =>
-      part instanceof ToolCallPart ? answered.has(part.id) : !(part instanceof MediaPart && part.file === null),
+      part instanceof ToolCallPart ? results.has(part.id) : !(part instanceof MediaPart && part.file === null),
     );
     if (kept.length > 0) {
       const { author, protocol, providerPayload } = reply;
@@ -374,7 +373,7 @@ export function rebuildMessages(
     }
     for (const part of kept) {
       if (!(part instanceof ToolCallPart)) continue;
-      const step = answered.get(part.id)!;
+      const step = results.get(part.id)!;
       const content = step["output"] as string;
       const answer = new ToolResultPart({ callId: part.id, name: part.name, content, isError: step["is_error"] === true });
       messages.push(fromModelMessage(new ModelMessage({ role: "tool", parts: [answer] })));

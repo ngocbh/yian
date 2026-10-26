@@ -1007,3 +1007,39 @@ test("a LOOP predicate checks reads through a comprehension variable", () => {
   );
   expect(() => load(variableLoop("${len([m.text for m in ms]) < 3}"))).not.toThrow();
 });
+
+// ---------- isinstance on an untyped value, after a null check ----------
+
+/** A flow whose `use` node binds `v` to `binding`; `u.output` is `Any`, `mk.output` an `Optional(W)` with `u: Any`. */
+function untypedFlow(binding: string): string {
+  return (
+    "id: p\nname: p\n" +
+    "typedefs:\n  T: {f: Optional(str), g: str}\n  W: {u: Any}\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Any\n    code: return 1\n" +
+    "  mk:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Optional(W)\n    code: return None\n" +
+    `  use:\n    kind: code\n    input:\n      v: ${binding}\n    output: Any\n    code: return 1\n` +
+    "output: ${use.output}\n"
+  );
+}
+
+test.each([
+  ["${u.output != null and isinstance(u.output, T) and u.output.g}"],
+  ["${u.output != null and isinstance(u.output, T) and u.output?.f}"],
+  ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.g}"],
+])("an isinstance after a null check narrows an untyped value: %s loads", (binding) => {
+  expect(() => load(untypedFlow(binding))).not.toThrow();
+});
+
+test.each([
+  ["${u.output != null and isinstance(u.output, T) and u.output.f}", NULLABLE_FIELD_READ, "only narrowed to T; write u.output?.f"],
+  ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.f}", NULLABLE_FIELD_READ, "only narrowed to T; write mk.output.u?.f"],
+  ["${isinstance(u.output, T) and u.output.zz}", "compose.load", "reference ${u.output.zz} reads field 'zz', which T doesn't have; u.output is T here"],
+  ["${u.output != null and isinstance(u.output, T) and u.output.zz}", "compose.load", "reads field 'zz', which T doesn't have"],
+  ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.zz}", "compose.load", "reference ${mk.output.u.zz} reads field 'zz', which T doesn't have"],
+])("an isinstance after a null check narrows an untyped value: %s", (binding, code, message) => {
+  const error = loadError(() => load(untypedFlow(binding)));
+  expect(error.message).toContain(message);
+  expect(error.diagnostic.code).toBe(code);
+});

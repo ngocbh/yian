@@ -75,6 +75,8 @@ import {
   NOT_NARROWABLE,
   type NarrowedRead,
   narrowedReadError,
+  narrowedReadMessage,
+  narrowedTypeLabel,
   type NotNarrowable,
   unresolvedType,
 } from "../helpers/narrowing_facts.ts";
@@ -167,18 +169,23 @@ export function nullableReadErrors(
   registry: TypeRegistry,
   typeFn: TypeFn | null = null,
 ): string[] {
-  return [...new Set(nullableReads(tree, roots, registry, typeFn).map(([, message]) => message))];
+  return [...new Set(nullableReads(tree, roots, registry, typeFn).map(([, error]) => error.message))];
 }
 
-/** Return each nullable read of `nullableReadErrors` as `[the whole read as written, its message]`. */
+/**
+ * Return each problem of `nullableReadErrors` as `[the whole read as written, its error]`: a
+ * nullable read (code `expr.nullable_field_read`), or a field the type an untyped value is
+ * narrowed to doesn't have (code `compose.load`), which the name checks, stopping at the untyped
+ * value, don't see.
+ */
 function nullableReads(
   tree: ExprNode,
   siteRoots: ReadRoots,
   registry: TypeRegistry,
   typeFn: TypeFn | null = null,
-): [string, string][] {
+): [string, FieldReadError][] {
   const roots = withVariables(tree, siteRoots, typeFn);
-  const messages: [string, string][] = [];
+  const messages: [string, FieldReadError][] = [];
   const operands = arithmeticOperands(tree);
   // What `checkedRefs` gives under each root's alternative, index-aligned with `guardedReads`.
   const checkedOf = new Map<string, (readonly [string, Guard | null][])[]>();
@@ -197,7 +204,7 @@ function nullableReads(
       rest,
       fix: operands.get(node) ?? "either",
     };
-    let first: string | null = null;
+    let first: FieldReadError | null = null;
     let accepted = alternatives.length === 0;
     if (!checkedOf.has(root)) checkedOf.set(root, []);
     for (const [which, contract] of alternatives.entries()) {
@@ -275,8 +282,8 @@ function alternativeError(
   envs: readonly Env[],
   roots: ReadRoots,
   registry: TypeRegistry,
-): string | null {
-  let first: string | null = null;
+): FieldReadError | null {
+  let first: FieldReadError | null = null;
   for (const env of envs.length === 0 ? [new Map() as Env] : envs) {
     const error = walk(read, contract, env, roots, registry);
     if (error === null) return null;
@@ -286,12 +293,13 @@ function alternativeError(
 }
 
 /**
- * Return the first `.` step of `read` through a value that may be null, as a message, else `null`.
+ * Return the first `.` step of `read` through a value that may be null, as an error, else `null`.
  *
  * The guard's facts in `env` apply at every prefix of the read: a fact on a prefix gives its type,
  * and a non-null fact on a deeper path proves the prefix is not null either. A walk through a value
  * that is untyped at run time but narrowed to a type (by a guard, or by the CASE branch routing the
- * site) may find any field that type doesn't require absent there.
+ * site) may find any field that type doesn't require absent there. A guard's narrowing of an
+ * untyped value also checks each field's name, since the name checks stop at the untyped value.
  */
 function walk(
   read: Read,
@@ -299,13 +307,15 @@ function walk(
   env: Env,
   roots: ReadRoots,
   registry: TypeRegistry,
-): string | null {
+): FieldReadError | null {
   const nullable = roots.nullable(read.root);
   let typ = contractType(contract);
   if (typ !== null && nullable) typ = typ.replace({ nullable: true });
   let path = read.root;
   let prefix = read.rootText;
   const fields: string[] = [];
+  // Whether a guard's fact gave the type at this step or an earlier one.
+  let guarded = false;
   const narrowed = (): boolean => {
     const fact = env.get(path);
     if (fact !== undefined) {
@@ -313,6 +323,7 @@ function walk(
       // No value fits the facts: the impossible-check report explains it.
       if (proven === null) return false;
       typ = proven;
+      guarded = true;
     }
     if (typ !== null && typ.nullable && provesBelow(env, path)) typ = typ.replace({ nullable: false });
     return true;
@@ -321,17 +332,27 @@ function walk(
   let why = roots.why(read.root);
   // A root that may be skipped is a missing root at run time, whatever its type: check its step
   // before the untyped stop.
+  const nullableError = (message: string): FieldReadError => ({ message, code: NULLABLE_FIELD_READ });
   if (nullable && (typ === null || typ.nullable) && !read.rest[0]!.optional) {
-    return nullableMessage(prefix, read.rest[0]!.name, why, read.fix);
+    return nullableError(nullableMessage(prefix, read.rest[0]!.name, why, read.fix));
   }
   for (const step of read.rest) {
     if (typ === null || isUntyped(typ)) return null;
-    if (typ.nullable && !step.optional) return nullableMessage(prefix, step.name, why, read.fix);
+    if (typ.nullable && !step.optional) return nullableError(nullableMessage(prefix, step.name, why, read.fix));
     const field = fieldRead(typ, step.name);
-    if (field === null) return null; // the name checks report it
+    if (field === null) {
+      // The name checks report a field a typed value lacks; below an untyped value they stop.
+      if (!guarded || !roots.untyped(read.root, fields)) return null;
+      const ref = prefix + (step.optional ? "?." : ".") + step.name;
+      const names = [...(typ.fields?.keys() ?? []), ...(typ.variants ?? []).flatMap((m) => [...m.fields!.keys()])];
+      const label = narrowedTypeLabel(typ.replace({ nullable: false }), registry);
+      return { message: narrowedReadMessage(ref, step.name, label, prefix, new Set(names)), code: "compose.load" };
+    }
     if (field.nullable && !step.optional && roots.untyped(read.root, fields)) {
       const label = namedTypeLabel(typ, registry);
-      return narrowedUntypedMessage(prefix, step.name, label, fields.length === 0, isVariableKey(read.root));
+      return nullableError(
+        narrowedUntypedMessage(prefix, step.name, label, fields.length === 0, isVariableKey(read.root)),
+      );
     }
     typ = field.type?.replace({ nullable: field.nullable }) ?? null;
     why = field.optional ? `field '${step.name}' is Optional` : `field '${step.name}' is not required`;
@@ -558,8 +579,8 @@ export function variableNameErrors(
 
 /**
  * Return the first field-read error of a parsed expression at a site: a name error through a
- * comprehension variable (`variableNameErrors`, code `compose.load`), else a nullable read
- * (`nullableReadErrors`); `null` when there is none.
+ * comprehension variable (`variableNameErrors`, code `compose.load`), else the first of
+ * `nullableReads`; `null` when there is none.
  */
 function firstTreeError(
   tree: ExprNode,
@@ -569,8 +590,7 @@ function firstTreeError(
 ): FieldReadError | null {
   const [named] = variableNameErrors(tree, roots, registry, typeFn);
   if (named !== undefined) return { message: named, code: "compose.load" };
-  const [nullable] = nullableReadErrors(tree, roots, registry, typeFn);
-  return nullable === undefined ? null : { message: nullable, code: NULLABLE_FIELD_READ };
+  return nullableReads(tree, roots, registry, typeFn)[0]?.[1] ?? null;
 }
 
 /** Return the root `path` is at or below, else `null`. */
@@ -1021,7 +1041,7 @@ function declaredReadError(
  *   `roots` contracts is untyped, or it has none).
  * Reads through comprehension variables get the same checks (`variableNameErrors`).
  *
- * @returns The errors in order: name errors with code `compose.load`, then nullable ones.
+ * @returns The errors in order: name errors with code `compose.load`, then `nullableReads`'.
  */
 export function fieldReadErrors(
   tree: ExprNode,
@@ -1059,17 +1079,13 @@ export function fieldReadErrors(
   const names = [...nameErrors(tree, roots, registry, options), ...variableNameErrors(tree, readRoots, registry)];
   // A read the name checks reject gets no second message.
   const named = (read: string) => names.some((message) => message.includes("${" + read + "}"));
-  const nullable = [
-    ...new Set(
-      nullableReads(tree, readRoots, registry)
-        .filter(([read, message]) => !named(read) && !names.includes(message))
-        .map(([, message]) => message),
-    ),
-  ];
-  return [
-    ...names.map((message) => ({ message, code: "compose.load" })),
-    ...nullable.map((message) => ({ message, code: NULLABLE_FIELD_READ })),
-  ];
+  const reads = nullableReads(tree, readRoots, registry).filter(
+    ([read, error]) => !named(read) && !names.includes(error.message),
+  );
+  const nullable = reads
+    .map(([, error]) => error)
+    .filter((error, index, all) => all.findIndex((seen) => seen.message === error.message) === index);
+  return [...names.map((message) => ({ message, code: "compose.load" })), ...nullable];
 }
 
 /** What `checkFieldReads` checks: one assembled flow level. */

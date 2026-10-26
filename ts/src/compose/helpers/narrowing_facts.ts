@@ -525,13 +525,23 @@ export function unresolvedType(guard: Guard, registry: TypeRegistry): boolean {
 }
 
 /**
- * Return the distinct facts of `guard` and of each of its top-level conjuncts: the candidates a
- * read under `guard` is checked against, as for `guardedReadTypes`, by base path.
+ * Return the distinct facts of `guard`, and of each of its top-level conjuncts on the bases the
+ * guard's meet lost: the candidates a read under `guard` is checked against, as for
+ * `guardedReadTypes`, by base path.
+ *
+ * A meet drops a base whose facts can't be combined (two unrelated exact types), and a conjunct's
+ * candidate keeps its fact there. Elsewhere the candidate keeps the meet's facts, which are at
+ * least as narrow: a conjunct alone would forget the others (in `x != null and isinstance(x, T)`,
+ * the null check alone says nothing of `T`).
  */
 export function candidateEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env[] {
-  const envs: Env[] = [];
-  for (const part of [guard, ...conjuncts(guard)]) {
-    const env = guardEnv(part, baseTypeOf, registry);
+  const met = guardEnv(guard, baseTypeOf, registry);
+  const envs: Env[] = [met];
+  for (const part of conjuncts(guard)) {
+    const env = new Map(met);
+    for (const [base, fact] of guardEnv(part, baseTypeOf, registry)) {
+      if (!env.has(base)) env.set(base, fact);
+    }
     if (!envs.some((seen) => sameEnv(seen, env))) envs.push(env);
   }
   return envs;

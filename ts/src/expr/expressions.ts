@@ -2044,6 +2044,7 @@ function collectExprRefs(node: ExprNode, refs: string[]): void {
       refs.push(referencePath(node));
       return;
     }
+    // A builtin call: the callee contributes no reference; walk each argument value only.
     for (const arg of valueArgs(String(node.children[0]), callSuffix)) {
       // A keyword argument carries a leading NAME token; the value expression is the last child.
       collectExprRefs(arg.children.at(-1)!, refs);
@@ -2115,6 +2116,7 @@ function collectRefEdits(node: ExprNode, rename: RefRename, edits: [number, numb
       if (renamed !== null) edits.push([(children[0] as Token).startPos, namesEnd(node, renamed.used), renamed.text]);
       return;
     }
+    // A builtin call: the callee is not a reference; rewrite each argument value only.
     for (const arg of valueArgs(String(children[0]), callSuffix)) {
       collectRefEdits(arg.children.at(-1)!, rename, edits);
     }

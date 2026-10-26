@@ -245,15 +245,13 @@ function jsonDiffs(recorded: JsonValue, actual: JsonValue, path: string, out: st
   if (recorded === CASSETTE_REDACTED) return;
   const where = path || "(root)";
   if (isPlainObject(recorded) && isPlainObject(actual)) {
-    const expected = recorded as JsonObject;
-    const got = actual as JsonObject;
-    for (const key of Object.keys(expected)) {
+    for (const key of Object.keys(recorded)) {
       const child = path ? `${path}.${key}` : key;
-      if (!Object.hasOwn(got, key)) out.push(`body ${child}: missing`);
-      else jsonDiffs(expected[key]!, got[key]!, child, out);
+      if (!Object.hasOwn(actual, key)) out.push(`body ${child}: missing`);
+      else jsonDiffs(recorded[key]!, actual[key]!, child, out);
     }
-    for (const key of Object.keys(got)) {
-      if (!Object.hasOwn(expected, key)) out.push(`body ${path ? `${path}.` : ""}${key}: unexpected`);
+    for (const key of Object.keys(actual)) {
+      if (!Object.hasOwn(recorded, key)) out.push(`body ${path ? `${path}.` : ""}${key}: unexpected`);
     }
   } else if (Array.isArray(recorded) && Array.isArray(actual)) {
     if (recorded.length !== actual.length) out.push(`body ${where}: length ${actual.length}, recorded ${recorded.length}`);
@@ -562,7 +560,7 @@ function redactJson(value: JsonValue, secrets: readonly string[]): JsonValue {
   if (Array.isArray(value)) return value.map((item) => redactJson(item, secrets));
   if (!isPlainObject(value)) return value;
   const out: JsonObject = {};
-  for (const [key, item] of Object.entries(value as JsonObject)) put(out, redact(key, secrets), redactJson(item, secrets));
+  for (const [key, item] of Object.entries(value)) put(out, redact(key, secrets), redactJson(item, secrets));
   return out;
 }
 

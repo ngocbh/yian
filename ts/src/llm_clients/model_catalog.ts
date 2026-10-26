@@ -152,16 +152,10 @@ export const MODEL_OPTIONS: Readonly<Record<string, ModeOptions>> = table({
       ["Custom model ID", "custom"],
     ),
   }),
-  // Qwen: same model IDs across global (dashscope-intl) and China
-  // (dashscope) endpoints, so the two provider keys share one model list.
   qwen: QWEN_MODELS,
   "qwen-cn": QWEN_MODELS,
-  // GLM: Z.AI (international) and BigModel (China) host the same model
-  // IDs; the two provider keys share one model list.
   glm: GLM_MODELS,
   "glm-cn": GLM_MODELS,
-  // MiniMax: same model IDs across global (.io) and China (.com) regions,
-  // so the two provider keys share one model list.
   minimax: MINIMAX_MODELS,
   "minimax-cn": MINIMAX_MODELS,
   // OpenRouter: fetched dynamically. Azure: any deployed model name.

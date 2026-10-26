@@ -836,6 +836,7 @@ class EvalExpr {
   readonly #mode: ResolveMode;
   readonly #types: ReadonlyMap<string, Type> | null;
   readonly #trace: boolean;
+  readonly #declared: DeclaredTypes | null;
   readonly #frames: TraceFrame[] = [];
   #lastRoute: ValueRoute | null = null;
   #missPath: string | null = null;
@@ -848,12 +849,14 @@ class EvalExpr {
     mode: ResolveMode,
     types: ReadonlyMap<string, Type> | null,
     trace: boolean,
+    declared: DeclaredTypes | null,
   ) {
     this.#resolve = resolve;
     this.#item = item;
     this.#mode = mode;
     this.#types = types;
     this.#trace = trace;
+    this.#declared = declared;
   }
 
   // --- top-level entry: turn a `MISSING` head into a value per mode --- //
@@ -996,7 +999,9 @@ class EvalExpr {
     if (name === ISINSTANCE) value = this.isinstanceCall(callSuffix);
     else if (constructor) value = this.construct(name, callSuffix);
     else value = this.callBuiltin(name, callSuffix);
-    [value] = this.walkSteps(value, [], steps, `${name}(...)`, null);
+    // A constructor's value has its type, as `inferExprType` types it.
+    const members = constructor ? declaredOf(this.#types!.get(name)!) : [];
+    [value] = this.walkSteps(value, members, steps, `${name}(...)`, null);
     if (this.#trace) {
       const frame = this.#frames.at(-1)!;
       if (constructor) {
@@ -1056,7 +1061,8 @@ class EvalExpr {
     const read = this.#resolve([head, ...stepNames]);
     const rootText = head + stepsText(steps.slice(0, read.used - 1));
     const rest = steps.slice(read.used - 1);
-    const [value, complete] = this.walkSteps(read.present ? read.value : MISSING, [], rest, rootText, read.why);
+    const members = declaredOf(this.#declared?.([head, ...stepNames.slice(0, read.used - 1)]) ?? null);
+    const [value, complete] = this.walkSteps(read.present ? read.value : MISSING, members, rest, rootText, read.why);
     if (this.#trace && read.present && complete) {
       const route = readRoute(read.source ?? null, value as Value, stepNames.slice(read.used - 1), text);
       this.#frames.at(-1)!.route = route;
@@ -1528,6 +1534,8 @@ export interface EvalOptions {
   item?: Value;
   mode?: ResolveMode;
   types?: ReadonlyMap<string, Type> | null;
+  /** The declared type of a reference's root, given its names; `null` leaves every step undeclared. */
+  declared?: DeclaredTypes | null;
 }
 
 /**
@@ -1578,6 +1586,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * @param options.mode How a missing root is treated (default `BINDING_NONE`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in, keyed by type name; `null` (the default) means no types.
+ * @param options.declared The declared type of a reference's root, given its names, so a declared
+ *   field that is absent reads `null`; `null` (the default) leaves every step undeclared.
  * @param options.trace Record the value's route while evaluating, and return both as a
  *   `TracedValue` (default `false`).
  * @returns The value: `null`, a boolean, a `bigint`, a number, text, a list, a record or a file
@@ -1602,9 +1612,10 @@ export function evalExpr(
     mode = ResolveMode.BINDING_NONE,
     types = null,
     trace = false,
+    declared = null,
   }: TraceOptions = {},
 ): Value | TracedValue {
-  return new EvalExpr(resolve, item, mode, types, trace).eval(tree);
+  return new EvalExpr(resolve, item, mode, types, trace, declared).eval(tree);
 }
 
 // --------------------------------------------------------------------------------------- //

@@ -1116,3 +1116,33 @@ test("a variable the loader could not narrow names the variable and the field it
     "cannot read ${p.text}: p has no field 'text'",
   );
 });
+
+// --- declared fields --- //
+
+const declaredR = (names: readonly string[]) => (names[0] === "r" ? declaredAt(Rec, names.slice(1)) : null);
+const evd = (text: string, record: ValueRecord) => evalExpr(parseExpr(text), rec(record), { declared: declaredR });
+
+test("a declared field that is absent reads null; an undeclared one raises", () => {
+  expect(evd("r.opt", { r: { k: "a" } })).toBeNull();
+  expect(evd("r?.opt", { r: { k: "a" } })).toBeNull();
+  expect(evd("r.opt :- 'd'", { r: { k: "a" } })).toBe("d");
+  expect(() => evd("r.nope", { r: { k: "a" } })).toThrow("r has no field 'nope'");
+  expect(() => evd("r.opt.x", { r: { k: "a" } })).toThrow("cannot read ${r.opt.x}: r.opt is null");
+});
+
+test("a declared field is null through a union when any member declares it", () => {
+  expect(evalExpr(parseExpr("v.x"), rec({ v: { y: "b" } }), { declared: () => U })).toBeNull();
+  expect(() => evalExpr(parseExpr("v.z"), rec({ v: { y: "b" } }), { declared: () => U })).toThrow("no field 'z'");
+});
+
+test("Any and object are untyped", () => {
+  for (const typ of [Type.scalar(ValueKind.ANY), Type.scalar(ValueKind.OBJECT)]) {
+    expect(() => evalExpr(parseExpr("v.k"), rec({ v: {} }), { declared: () => typ })).toThrow("no field 'k'");
+  }
+});
+
+test("a constructor's result is declared by its type", () => {
+  const types = new Map([["R", Rec]]);
+  expect(evalExpr(parseExpr("R(k='a').opt"), MISSING_ROOT, { types })).toBeNull();
+  expect(() => evalExpr(parseExpr("upper('a').opt"), MISSING_ROOT, { types })).toThrow("upper(...) is str");
+});

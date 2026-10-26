@@ -12,10 +12,9 @@
  * attempt's too, before its end frame), when its node settles, or when a record ends the run. A
  * late viewer calls `follow`, which sends the snapshot, then every later frame; it reads the log up
  * to the snapshot's `last_seq` (this may be async), then applies the frames that came meanwhile and
- * follows. Every frame after the
- * snapshot is new to it: records continue after `last_seq` and each call's chunks after its
- * `next_index`, so it skips nothing. Yian ships no transport: a host sends the frames over its own
- * channel, and the reading side folds them with a `LiveView`.
+ * follows. Every frame after the snapshot is new to it: records continue after `last_seq` and each
+ * call's chunks after its `next_index`, so it skips nothing. Yian ships no transport: a host sends
+ * the frames over its own channel, and the reading side folds them with a `LiveView`.
  *
  * The stream is ephemeral: a subscriber's failure never reaches the run. A subscriber that throws is
  * dropped and reported to the host.
@@ -163,11 +162,11 @@ export class LiveChannel {
   }
 
   /**
-   * @internal Run boundary only: return a log that appends to `log` and sends each appended record to this
-   * channel once the append returns; a `node_step` drops its call, and a `node_failed`,
-   * `run_stopped` or `run_cancelled`, which end the run, drop every call. The other members read `log`;
-   * closing it closes `log`. The records `log` already holds (a resumed run's) count as seen: the
-   * snapshot's `last_seq` starts at the last.
+   * @internal Run boundary only: return a log that appends to `log` and sends each appended record
+   * to this channel once the append returns; a `node_step` drops its call, and a `node_failed`,
+   * `run_stopped` or `run_cancelled`, which end the run, drop every call. The other members read
+   * `log`; closing it closes `log`. The records `log` already holds (a resumed run's) count as seen:
+   * the snapshot's `last_seq` starts at the last.
    */
   wrap(log: RunLog): RunLog {
     this.#nextSeq = log.nextSequence;
@@ -175,8 +174,8 @@ export class LiveChannel {
       const { seq, record } = envelope;
       this.#nextSeq = seq + 1;
       if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
-      // A node failure, a stop or a cancel ends the run: its calls get no record, and their nodes settle only
-      // later, so a snapshot taken in between would list calls that nothing ever drops.
+      // A node failure, a stop or a cancel ends the run: its calls get no record, and their nodes
+      // settle only later, so a snapshot taken in between would list calls that nothing ever drops.
       else if (endsRun(record)) this.#calls.clear();
       this.#send({ type: "record", seq, line: encodeRecord(envelope) });
     };
@@ -250,8 +249,8 @@ export interface LiveViewCall {
  * and changes nothing; a record past the next seq, a chunk past its call's next index, or a chunk of
  * a call not in flight is a gap: `apply` returns false and changes nothing, and the host asks
  * `follow` again. A call goes when its step record arrives or when it ends with an error; a node
- * failure, a run stop or a cancel ends the run and drops every call. A run that ends without one (a host fault, or its
- * process gone) sends nothing more, so the host drops the view when the run ends.
+ * failure, a run stop or a cancel ends the run and drops every call. A run that ends without one (a
+ * host fault, or its process gone) sends nothing more, so the host drops the view when the run ends.
  */
 export class LiveView {
   /** The text and next chunk index of each call in flight by node, then by `n`, in start order. */

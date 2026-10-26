@@ -59,7 +59,7 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
-import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import { callId, eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 import { STREAM_ERROR_KINDS } from "./openai_responses.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
@@ -596,12 +596,7 @@ function callPieces(toolCalls: JsonValue | undefined, provider: string): CallPie
  */
 function callPart(call: CallAssembly, n: number, taken: Set<string>, provider: string): ToolCallPart {
   if (call.name === null) throw new ProviderError("protocol", `${provider} tool call ${n} has no name`);
-  let id = call.id;
-  if (id === null) {
-    id = `yian_call_${n}`;
-    for (let k = 1; taken.has(id); k++) id = `yian_call_${n}_${k}`;
-    taken.add(id);
-  }
+  const id = call.id ?? callId(null, n, taken);
   const [args, rawArguments] = parseArguments(call.args);
   return new ToolCallPart({ id, name: call.name, arguments: args, rawArguments });
 }

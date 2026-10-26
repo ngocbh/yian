@@ -111,11 +111,6 @@ export class Narrowing {
     return this.views.get(nodeId) ?? [this.producers, this.inputs];
   }
 
-
-
-
-
-
   /** Return node `nodeId`'s facts by base path; an empty map when it has none. */
   environment(nodeId: string): Env {
     return this.environments.get(nodeId) ?? new Map();

@@ -210,7 +210,7 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
       : node.items.flatMap((pair) => [pair.key, pair.value]);
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
-      if (child !== null && child !== undefined) stack.push([child as ParsedNode, level]);
+      if (child !== null && child !== undefined) stack.push([child, level]);
     }
   }
   // The library's errors are not in source order.

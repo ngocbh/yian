@@ -218,7 +218,6 @@ function rejectNestedLegacyKeys(cursor: SourceCursor, diagnostics: LoadDiagnosti
     for (const [name, entry] of Object.entries(entries)) {
       if (!isRecord(entry)) continue;
       const entryCursor = sectionCursor.child(name);
-      // A tagged `nodes:` entry is a value, whose keys mean nothing to yian.
       if (section === "nodes" && entryCursor.tag !== null) continue;
       for (const [legacy, replacement] of LEGACY_KEYS) {
         if (Object.hasOwn(entry, legacy)) {
@@ -406,8 +405,6 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
     fallbackRange: root.range,
     diagnostics,
   });
-  // The node body is the kind and its logic fields. The flow inputs are auto-wired by name, and
-  // the flow `output:` is carried through as the node's output type.
   const nodeBody = signatureNodeBody(body, params, { input: "input", output: "output", drop: COMPACT_FLOW_KEYS });
 
   const canonical: ValueRecord = Object.fromEntries(
@@ -415,7 +412,7 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
   );
   canonical["input"] = params;
   canonical["nodes"] = Object.fromEntries([[flowId, nodeBody]]);
-  canonical["output"] = `\${${flowId}.output}`; // re-export the single node's output
+  canonical["output"] = `\${${flowId}.output}`;
   return canonical;
 }
 

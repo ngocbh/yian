@@ -99,7 +99,7 @@ export function checkLoopTypeContract(
   assertExactContracts(producers, flowInputs);
   for (const [nodeId, result] of buildResults) {
     if (!result.node.isLoop) continue;
-    // A loop is recognised by `isLoop`, as Python does, so a hand-built loop is checked too.
+    // A loop is recognised by `isLoop`, so a hand-built loop is checked too.
     const node = result.node as LoopNode;
     // The node's carried-record contract: the body's own contract for a total loop, or the merged
     // returned-plus-seeded contract for a partial loop.

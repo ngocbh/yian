@@ -854,8 +854,7 @@ export function narrowedTypeLabel(typ: Type, registry: TypeRegistry): string {
 
 /** The label of the type a base has under `fact`, else of `fallback`. */
 function factLabel(fact: Fact | null, fallback: Type | null, registry: TypeRegistry): string {
-  let typ = fact !== null ? factType(fact) : null;
-  if (typ === null) typ = fallback;
+  const typ = (fact !== null ? factType(fact) : null) ?? fallback;
   return typ !== null ? narrowedTypeLabel(typ, registry) : "unknown";
 }
 

@@ -224,7 +224,6 @@ class SequenceMatcher {
     for (let i = alo; i < ahi; i++) {
       const newj2len = new Map<number, number>();
       for (const j of b2j.get(a[i]!) ?? []) {
-        // a[i] matches b[j]
         if (j < blo) continue;
         if (j >= bhi) break;
         const k = (j2len.get(j - 1) ?? 0) + 1;
@@ -491,7 +490,6 @@ export class SourceRange {
         0 < last && last <= lineCount ? lines[last - 1]!.slice(0, this.endCol - 1) : "";
       if (!prefix.trim()) last -= 1;
     }
-    last = Math.min(last, lineCount);
     const end = Math.max(last, this.startLine);
     const covered: number[] = [];
     for (let line = this.startLine; line <= end; line++) {

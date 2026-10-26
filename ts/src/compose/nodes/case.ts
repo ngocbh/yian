@@ -161,7 +161,6 @@ export class CaseDescriptor extends NodeDescriptor {
     // Not `?? []`: a YAML `cases: null` must stay null so `_checkCasesShape` can reject it.
     this.cases = fields.cases === undefined ? [] : fields.cases;
     this.else_ = fields.else_ ?? null;
-    // A directly constructed `else_` implies the key was written.
     this.hasElse = (fields.hasElse ?? false) || this.else_ !== null;
     this.on = fields.on ?? null;
     this.whenRanges = fields.whenRanges ?? [];

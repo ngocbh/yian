@@ -423,7 +423,6 @@ function checkedCount(subject: string, key: "times" | "max", value: unknown, err
     // A bool, a float, text or anything else: a count is a plain integer.
     errors.push(`${field} must be an integer (got ${valueRepr(value)})`);
   } else if (value < 1n) {
-    // A count must permit at least one body run.
     errors.push(`${field} must be >= 1 (got ${value})`);
   } else if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
     errors.push(`${field} must be at most ${Number.MAX_SAFE_INTEGER} (got ${value})`);

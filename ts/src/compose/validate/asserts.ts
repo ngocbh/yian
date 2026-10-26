@@ -275,7 +275,7 @@ export function lowerFlowAsserts(
     const expr = assertion.expression;
     const rng = ranges[i] ?? null;
     checkWrittenValue(expr, `flow field 'asserts[${i}]'`, rng, diagnostics);
-    // 1. Parse-check and collect refs on the one unified condition walk (any brace spelling).
+    // Parse-check and collect refs on the one unified condition walk (any brace spelling).
     let authored: ExprNode;
     try {
       authored = parseCondition(expr);
@@ -287,13 +287,14 @@ export function lowerFlowAsserts(
       );
     }
     // An unqualified input `X` reads as `input.X`, a two-name root.
-    const insideRoot = optionalInsideRoot(parseCondition(rewriteConditionRefs(expr, qualifiedOrNull)), poolRootLength);
+    const qualified = parseCondition(rewriteConditionRefs(expr, qualifiedOrNull));
+    const insideRoot = optionalInsideRoot(qualified, poolRootLength);
     if (insideRoot !== null) {
       throw diagnostics.error(`assert ${reprText(assertion.display)}: ${insideRoot}`, { range: rng });
     }
     const refs = exprRefs(authored).map(qualifyFlowInput);
 
-    // 2. Validate each ref, forbid `${system}`, and detect any producer ref (which makes it POST).
+    // Validate each ref, forbid `${system}`, and detect any producer ref (which makes it POST).
     let isPost = false;
     for (const path of new Set(refs)) {
       const err = classifyPath(path, validTargets, flowInputs);
@@ -317,10 +318,9 @@ export function lowerFlowAsserts(
       if (head !== "input") isPost = true;
     }
 
-    // 3. Impossible checks and field reads, narrowed by the assert's own checks. END binds each
+    // Impossible checks and field reads, narrowed by the assert's own checks. END binds each
     // producer it reads as `${<id>.output :- null}`, so a producer the flow's routing skips reads
     // null.
-    const qualified = parseCondition(rewriteConditionRefs(expr, qualifiedOrNull));
     const errors = fieldReadErrors(qualified, roots, registry, {
       nullableRoots: producerRoots,
       authored,
@@ -329,12 +329,12 @@ export function lowerFlowAsserts(
       why: (root) => `node ${reprText(root.split(".")[0]!)} may be skipped`,
     });
     if (errors.length > 0) {
-      const [{ message, code }] = errors as [(typeof errors)[0]];
+      const { message, code } = errors[0]!;
       throw diagnostics.error(`assert ${reprText(assertion.display)}: ${message}`, { range: rng, code });
     }
 
     if (!isPost) {
-      // 4. PRE (boundary): START fires these from its ordinary `postAsserts` against its bound
+      // PRE (boundary): START fires these from its ordinary `postAsserts` against its bound
       // output record, so `${output.X}` sees the validated, defaulted value START binds.
       // Unqualified flow-input names first acquire the `input.` prefix, which then maps to
       // `output.`.
@@ -351,7 +351,7 @@ export function lowerFlowAsserts(
       return;
     }
 
-    // 5. POST: turn each non-`output` ref into a synth END param, wired as an edge.
+    // POST: turn each non-`output` ref into a synth END param, wired as an edge.
     const postRename = (ref: string): RefRenamed | null => {
       const segs = qualifyFlowInput(ref).split(".");
       const head = segs[0]!;

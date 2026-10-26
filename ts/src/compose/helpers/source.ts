@@ -3,9 +3,9 @@
  *
  * This module projects synthesized boundary-input ranges from an existing source cursor,
  * slices authored text out of a document, reads positional metadata, and spells a file path
- * as Python does. It never parses,
- * keeping the helper layer below parsing. Assertion origins and temporary ranges are
- * deliberately absent: the build conductor derives both from one retained item cursor.
+ * as Python does. It never parses, keeping the helper layer below parsing. Assertion origins
+ * and temporary ranges are deliberately absent: the build conductor derives both from one
+ * retained item cursor.
  */
 
 import type { SourceRange } from "../../diagnostics.ts";

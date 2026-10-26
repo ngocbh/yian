@@ -14,11 +14,16 @@
  * node's aborted signal), host capability faults, unexpected binder faults, and malformed compiled
  * or setup state reject `evalNode` instead of becoming an `EvaluationFailure`.
  *
- * Knows about:   compile/model (types), diagnostics, expr lineage, llm_clients (types), memory
- *                contracts, nodes, runtime contracts and log, skills, tools, typesys.
+ * Knows about:   compile/model (types), compile/declared_types (the declared types reads go
+ *                through), compile/output_contracts (a binding's lone reference, to name an
+ *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), memory
+ *                contracts, nodes, platform, runtime contracts, log and trace, skills, tools, typesys.
  * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
  */
 
+import { itemDeclaredType, localTypes, poolDeclaredTypes } from "../compile/declared_types.ts";
+import { directReferenceParts, loneSpanTree } from "../compile/output_contracts.ts";
+import { Tree } from "../expr/grammar.ts";
 import type { CompiledFlow, Flow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { ResolvedValue, type SourceRef, ValueRoute } from "../expr/lineage.ts";
@@ -64,7 +69,15 @@ import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
 import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isRecord, jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
+import {
+  isRecord,
+  jsTypeName,
+  setField,
+  type Type,
+  type TypedValue,
+  type Value,
+  type ValueRecord,
+} from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
 import { canonicalSeed } from "./log.ts";
 import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
@@ -106,6 +119,32 @@ export function evaluationFailure(
       traceback: tracebackText(error),
     }),
   );
+}
+
+// A local the loader binds for the author: a searched CASE's hoisted root, or a flow assert's END param.
+const SYNTH_LOCAL = /\b__(?:r[0-9]+|assert_\w+)\b/g;
+// A cloned child START's output, `<callsite>/__start__.output`, which the child wrote as `input`.
+const CHILD_INPUT = /(?<![\w#~/])(?:[\w#~]+\/)+__start__\.output\b/g;
+
+/**
+ * Return `failed` with the rewritten roots in its message written as the author wrote them, so a
+ * read that fails names what the author wrote: a synthesized local (a searched CASE's `__rN`, a
+ * flow assert's `__assert_*`) as the root its binding reads (`x.output` for `${x.output :- null}`),
+ * and a cloned CALL, LOOP or MAP child's `<callsite>/__start__.output` as `input`.
+ */
+function withAuthoredRoots(failed: EvaluationFailure, wiring: ReadonlyMap<string, unknown>): EvaluationFailure {
+  const { failure } = failed;
+  const message = failure.message
+    .replace(SYNTH_LOCAL, (local) => {
+      if (!wiring.has(local)) return local;
+      let tree = loneSpanTree(wiring.get(local));
+      if (tree instanceof Tree && tree.data === "default_expr") tree = tree.children[0]!;
+      return (tree !== null ? directReferenceParts(tree)?.join(".") : undefined) ?? local;
+    })
+    .replace(CHILD_INPUT, "input");
+  if (message === failure.message) return failed;
+  const { code, nodeId, trace, causeType, traceback } = failure;
+  return new EvaluationFailure(new Failure({ code, message, nodeId, trace, causeType, traceback }));
 }
 
 /** Return `error` as a capability fault: a `CapabilityFault` as it is, anything else wrapped. */
@@ -569,6 +608,9 @@ async function evaluateNode(
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
   const usesBaseTemplate = node.run === Node.prototype.run;
+  // The declared types field reads go through: a declared field that is absent reads null.
+  const declared = flow !== null ? poolDeclaredTypes(flow) : null;
+  const itemType = flow !== null && node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
   const reservedSources = new Set<string>();
   const reservedBinder: ReservedBinder | null =
     collector === null
@@ -590,6 +632,7 @@ async function evaluateNode(
           types: node.types,
           labels: node.bindingLabels,
           finishCapture: false,
+          declared,
         });
     let reserved: Record<string, unknown>;
     try {
@@ -616,7 +659,7 @@ async function evaluateNode(
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
     collector?.invalidate();
-    return evaluationFailure(node, error.failureCode, error, error.origin);
+    return withAuthoredRoots(evaluationFailure(node, error.failureCode, error, error.origin), nodeWiring);
   }
 
   if (captureInputs !== null && !usesBaseTemplate) captureInputs(record);
@@ -664,6 +707,7 @@ async function evaluateNode(
   // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker from inside the
   // body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
+  if (flow !== null) caps.localTypes = localTypes(flow, node);
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
   if (runDir !== null) caps.runDir = runDir;
@@ -684,6 +728,8 @@ async function evaluateNode(
           sourceResolver,
           types: node.types,
           labels: node.bindingLabels,
+          declared,
+          itemType,
         });
       } catch (error) {
         if (error instanceof BindingError) {
@@ -755,7 +801,7 @@ async function evaluateNode(
     const { error } = rejection;
     // A template default that fails to bind leaves no usable input record.
     if (usesBaseTemplate && error instanceof BindingStageError) collector?.invalidate();
-    return stageFailure(node, error, usesBaseTemplate);
+    return withAuthoredRoots(stageFailure(node, error, usesBaseTemplate), nodeWiring);
   }
   const contractError = resultContractError(node, result);
   if (contractError !== null) return evaluationFailure(node, "contract.node_result", contractError);
@@ -826,6 +872,7 @@ export function nodeBackwardCapture(node: Node): BackwardCapture {
  *
  * @param inputs The bound inputs, as binding the node again gives them.
  * @param effectiveLlmByStaticPath The run's recorded model config by static path.
+ * @param localTypes The node's locals' declared types (`localTypes`); `null` leaves them undeclared.
  * @returns Canonical JSON.
  * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
  *   isn't JSON, and the hooks' own errors.
@@ -836,13 +883,14 @@ export function rebuildNodeData(
   node: Node,
   inputs: Readonly<Record<string, unknown>> | null,
   effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
+  localTypes: ReadonlyMap<string, Type | null> | null = null,
 ): WireObject {
   if (inputs === null) return {};
   const captured: unknown = node.captureBackwardContext();
   if (!isRecord(captured)) throw new TypeError("capture_backward_context must return a record");
   const data: Record<string, unknown> = { ...captured };
-  const render = node.renderCapture(inputs);
-  if (render !== null && node.preAssertsHold(inputs)) {
+  const render = node.renderCapture(inputs, localTypes);
+  if (render !== null && node.preAssertsHold(inputs, localTypes)) {
     if (Object.hasOwn(render, "effective_llm_config")) {
       throw new RangeError("effective_llm_config belongs to the run's model config");
     }
@@ -903,7 +951,7 @@ function bindFrom(
     if (name.startsWith(SYSTEM_PREFIX)) pool.system.set(name.slice(SYSTEM_PREFIX.length), entry.value);
     else pool.store.set(name, entry.value);
   }
-  const sourceResolver: SourceResolver = (path) => resolvePoolPath(path, pool, (name) => entries.get(name)!.source);
+  const sourceResolver: SourceResolver = (names) => resolvePoolPath(names, pool, (name) => entries.get(name)!.source);
   return bindPool(node, flow, pool, sourceResolver, wiringOverride, collector, reserved);
 }
 
@@ -938,7 +986,9 @@ function bindPool(
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow.wiring.get(node.id) ?? new Map());
   const params = node.params ?? [];
-  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels };
+  const declared = poolDeclaredTypes(flow);
+  const itemType = node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
+  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels, declared };
   const record: Record<string, unknown> = node.bindsPerItem
     ? {}
     : bindParams(params, nodeWiring, pool, { ...bindOptions, collector, finishCapture: false });
@@ -961,13 +1011,17 @@ function bindPool(
   }
   const inputs = applyDefaults(params, record);
   collector?.finish(inputs as ValueRecord);
-  const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal: new AbortController().signal };
+  const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
+    signal: new AbortController().signal,
+    localTypes: localTypes(flow, node),
+  };
   if (node.bindsPerItem) {
     caps.bindItem = (element, index) => {
-      if (collector === null) return bindParams(params, nodeWiring, pool, { ...bindOptions, item: element });
+      if (collector === null) return bindParams(params, nodeWiring, pool, { ...bindOptions, item: element, itemType });
       const key = node.itemSourceKey;
       const item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
-      return bindParams(params, nodeWiring, pool, { ...bindOptions, item, collector: collector.forItem(index) });
+      const itemCollector = collector.forItem(index);
+      return bindParams(params, nodeWiring, pool, { ...bindOptions, item, itemType, collector: itemCollector });
     };
   }
   return { inputs, caps };

@@ -3394,7 +3394,7 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
         for (const name of isinstanceTypeNames(tree)) types.set(name, resolveIsinstanceType(name, registry));
         for (const name of constructorNames(tree)) types.set(name, resolveConstructorType(name, registry));
       }
-      const resolve = (path: string) => resolveInRecord(path, values);
+      const resolve = (names: readonly string[]) => resolveInRecord(names, values);
       if (template !== null) return { value: dataForm(evalBinding(template, resolve, { item, types })) };
       if (mode === "condition") {
         // What every `when:`, `while:` and assert runs.

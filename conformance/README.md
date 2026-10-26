@@ -182,7 +182,7 @@ Evaluates one expression, or one template.
 | `template` | instead of `expr`: a template with `${...}` spans |
 | `values` | the names in scope; a dotted reference walks into them |
 | `item` | the MAP item in scope (`item`, `item.path`), when present (not with a strict `template`) |
-| `mode` | `binding` (the default): a missing reference is null, and a template is a binding value (one whole span gives its value; embedded spans give text, null as empty); `condition`: the `expr` is evaluated as a `when:` condition (either spelling, `a > 1` or `${a > 1}`) and gives a bool, with no `item`; `strict`: a missing reference is an error, and a template is a prompt rendered with the AGENT and HUMAN_INPUT prompt rules |
+| `mode` | `binding` (the default): a missing root is null, and a template is a binding value (one whole span gives its value; embedded spans give text, null as empty); `condition`: the `expr` is evaluated as a `when:` condition (either spelling, `a > 1` or `${a > 1}`) and gives a bool, with no `item`; `strict`: a missing root is an error, and a template is a prompt rendered with the AGENT and HUMAN_INPUT prompt rules. In every mode (TS, rule `null-field-read`), a `.` field read on null, on a missing root, or of a key the declared type doesn't declare raises (`?.` reads null) |
 | `typedefs` | a `typedefs:` mapping as in a flow, for `isinstance` and constructors (not with a strict `template`) |
 
 `expect.value` is the result; `expect.raises` the error.

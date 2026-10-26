@@ -263,12 +263,12 @@ import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam }
 import { Failure } from "../../src/diagnostics.ts";
 import { NodeExpanded, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
-import { ExpressionError } from "../../src/expr/expressions.ts";
+import { MISSING_ROOT } from "../../src/expr/expressions.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   type FeedbackValue,
-  ResolvedValue,
+  type RootRead,
   routeFeedback,
   SourceRef,
   sourceKey,
@@ -342,6 +342,7 @@ import {
   type PrepareTraceOptions,
   prepareTrace,
   type ReboundSource,
+  resolvePoolPath,
   type Rebinder,
   RetainedTrace,
   SeedRoutes,
@@ -369,7 +370,7 @@ import {
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
-import { FileRef, Type, type Value, ValueKind } from "../../src/typesys/index.ts";
+import { FileRef, Type, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import {
   aborted,
@@ -883,10 +884,11 @@ afterEach(() => {
 });
 
 /** A traced resolver over `a`, `b` and `n`, each its own run input. */
-function resolveVariants(path: string): ResolvedValue {
+function resolveVariants(names: readonly string[]): RootRead {
   const values: Record<string, Value> = { a: [1n], b: [2n], n: 3n };
-  if (!Object.hasOwn(values, path)) return new ResolvedValue(null, false);
-  return new ResolvedValue(values[path]!, true, new SourceRef("run", 0, [path]));
+  const head = names[0]!;
+  if (!Object.hasOwn(values, head)) return { used: 1, present: false, value: null, why: null };
+  return { used: 1, present: true, value: values[head]!, why: null, source: new SourceRef("run", 0, [head]) };
 }
 
 test.each([
@@ -934,7 +936,7 @@ test.each(OPAQUE_ARGUMENTS)("the codec preserves opaque argument labels: %s", (a
       { name: "value", default: 0 },
     ],
   );
-  const traced = evalBinding("${collect_args(" + args + ")}", () => new ResolvedValue(null, false), {
+  const traced = evalBinding("${collect_args(" + args + ")}", MISSING_ROOT, {
     trace: true,
   });
   const capture = new ForwardCapture(ValueRoute.record([["x", traced.route]]));
@@ -1336,20 +1338,31 @@ test("lookupSource reads a root value or a path inside it as fresh canonical JSO
   );
 });
 
-test("resolve pairs each read's value, presence and producer", () => {
+test("resolve reads each root's value, presence and producer", () => {
   const trace = learnableTrace();
   install(trace, "b", new SourceEntry(new SourceRef(RUN, 3), 4, typedJson({ f: "text" })));
   trace.system.set("k", typedJson("ambient"));
+  const present = (value: Value, source: SourceRef | null) => ({ used: 2, present: true, value, why: null, source });
+  const absent = (why: string) => ({ used: 2, present: false, value: null, why });
 
-  expect(trace.resolve("input.x")).toEqual(new ResolvedValue(1n, true, new SourceRef(RUN, 0, ["x"])));
-  expect(trace.resolve(" b.output.f ")).toEqual(new ResolvedValue("text", true, new SourceRef(RUN, 3, ["f"])));
-  expect(trace.resolve("b.output")).toEqual(new ResolvedValue({ f: "text" }, true, new SourceRef(RUN, 3)));
-  expect(trace.resolve("system.k")).toEqual(new ResolvedValue("ambient", true));
-  expect(trace.resolve("system.absent")).toEqual(new ResolvedValue(null, false));
-  expect(trace.resolve("unknown.output")).toEqual(new ResolvedValue(null, false));
-  expect(trace.resolve("input.y")).toEqual(new ResolvedValue(null, false));
-  expect(trace.resolve("b.output.g")).toEqual(new ResolvedValue(null, false));
-  expectError(() => trace.resolve("input..x"), ExpressionError, "invalid variable path: '${input..x}'");
+  expect(trace.resolve(["input", "x"])).toEqual(present(1n, new SourceRef(RUN, 0, ["x"])));
+  expect(trace.resolve(["b", "output", "f"])).toEqual(present({ f: "text" }, new SourceRef(RUN, 3)));
+  expect(trace.resolve(["b", "output"])).toEqual(present({ f: "text" }, new SourceRef(RUN, 3)));
+  expect(trace.resolve(["system", "k"])).toEqual(present("ambient", null));
+  expect(trace.resolve(["system", "absent"])).toEqual(absent("system value 'absent' is not set"));
+  expect(trace.resolve(["unknown", "output"])).toEqual(absent("node 'unknown' was skipped"));
+  expect(trace.resolve(["input", "y"])).toEqual(absent("input 'y' was not given"));
+  expect(trace.resolve(["x", "k"])).toEqual({ used: 1, present: false, value: null, why: null });
+});
+
+test("a traced pool read returns the root, with its source projected to nothing", () => {
+  const pool = new VariablePool();
+  pool.set("a", { k: { m: 1n } });
+  const read = resolvePoolPath(["a", "output", "k", "m"], pool, () => new SourceRef("r", 3));
+  expect(read.used).toBe(2);
+  expect(read.present).toBe(true);
+  expect(read.value).toEqual({ k: { m: 1n } });
+  expect(read.source).toEqual(new SourceRef("r", 3, []));
 });
 
 test("occurrence finds an accepted occurrence by its start", () => {
@@ -1642,7 +1655,7 @@ test("the run start's commits install the system values and the START inputs, th
   expect(sameSourceEntry(start, new SourceEntry(new SourceRef(RUN, 0), 0, typedJson({ x: 1n })))).toBe(true);
   expect(trace.rootWriter).toBe(start);
   expect([...trace.sources.keys()]).toEqual([sourceKey(new SourceRef(RUN, 0))]);
-  expect(trace.resolve("system.k")).toEqual(new ResolvedValue("ambient", true));
+  expect(trace.resolve(["system", "k"])).toEqual({ used: 2, present: true, value: "ambient", why: null, source: null });
   expect(trace.nextSequence).toBe(3);
 });
 
@@ -2073,7 +2086,7 @@ test("an expansion prunes current names only, and other outcomes ignore retired 
   expect(trace.sources.has(sourceKey(new SourceRef(RUN, 1)))).toBe(true);
   expect(trace.occurrences.map((item) => item.nodeId)).toEqual(["a", "g"]);
   expect(trace.boundaries).toHaveLength(1);
-  expect(trace.resolve("a.output")).toEqual(new ResolvedValue(null, false));
+  expect(trace.resolve(["a", "output"]).present).toBe(false);
 });
 
 test("a resumed record clears the unfinished starts", () => {
@@ -2097,7 +2110,8 @@ test("an applied delta never changes an earlier occurrence", () => {
   expect(Object.isFrozen(occurrence)).toBe(true);
   expect(occurrences).toHaveLength(1);
   expect(trace.lookupSource(new SourceRef(RUN, 1))).toBe(2n);
-  expect(trace.resolve("a.output")).toEqual(new ResolvedValue(5n, true, new SourceRef(RUN, 3)));
+  const read = trace.resolve(["a", "output"]);
+  expect(read).toEqual({ used: 2, present: true, value: 5n, why: null, source: new SourceRef(RUN, 3) });
 });
 
 test("a trace delta holds frozen copies of its arrays and defaults to an empty change", () => {
@@ -2836,23 +2850,23 @@ test.each(OUTCOME_KINDS.flatMap((kind) => [true, false].map((scoped) => [kind, s
 test.each<[string, Value, boolean, (string | number)[] | null]>([
   ["input.x", null, true, ["x"]],
   ["input.absent", null, false, null],
-  ["input.x.more", null, false, null],
-  ["input.items.0", null, false, null],
+  ["input.x.more", null, true, ["x"]],
+  ["input.items.0", [1n], true, ["items"]],
   [`${START_ID}.output`, { x: null, items: [1n] }, true, []],
   ["system.run_id.ignored", RUN_ID, true, null],
   ["system", null, false, null],
   ["input", null, false, null],
-  [" input.x ", null, true, ["x"]],
   ["input. x", null, false, null],
 ])("the paired resolver preserves pool namespaces: %s", (path, value, present, sourcePath) => {
   const { state } = learnableStarted(startEndFlow(), { inputs: { x: null, items: [1n] } });
-  const resolved = state.trace!.resolve(path);
+  const names = path.split(".");
+  const resolved = state.trace!.resolve(names);
 
   expect(resolved.value).toEqual(value);
   expect(resolved.present).toBe(present);
-  expect(resolved.source).toEqual(sourcePath === null ? null : new SourceRef(state.runId!, 0, sourcePath));
-  const [head, ...rest] = path.trim().split(".");
-  expect(resolved.value).toEqual(state.pool.resolve(head!, rest));
+  expect(resolved.source ?? null).toEqual(sourcePath === null ? null : new SourceRef(state.runId!, 0, sourcePath));
+  const pooled = state.pool.readRoot(names);
+  expect([resolved.value, resolved.present]).toEqual([pooled.value, pooled.present]);
 });
 
 test("the reducer requires a capture exactly when learning", () => {
@@ -3224,9 +3238,10 @@ test("a pooled lookup keeps value and producer identity together", async () => {
   // in flight and `late` binds after it committed.
   const consumerDone = Promise.withResolvers<void>();
   const peer = new BlockingNode("peer", consumerDone.promise.then(() => ({ value: 7n, null: null })));
-  const consumer = new FuncNode("consumer", (inputs) => inputs, { reads: { before: "${peer.output.value | 0}" } });
+  // `?.` reads null while `peer` has no output yet, and for its absent key.
+  const consumer = new FuncNode("consumer", (inputs) => inputs, { reads: { before: "${peer.output?.value | 0}" } });
   const late = new FuncNode("late", (inputs) => inputs, {
-    reads: { after: "${peer.output.value | 0}", null: "${peer.output.null}", missing: "${peer.output.missing}" },
+    reads: { after: "${peer.output.value | 0}", null: "${peer.output.null}", missing: "${peer.output?.missing}" },
   });
   const built = engine(
     graph([peer, consumer, late], [
@@ -3346,7 +3361,7 @@ test("a retry clears the unfinished start identity and the primed input is repla
   const node = new FuncNode("read", (inputs) => inputs, { reads: { x: "${input.x}" } });
   const built = learnableSingle(node, { inputs: { x: 2n } });
   const { state, log } = built;
-  expect(state.trace!.resolve("input.x").source).toEqual(new SourceRef(RUN_ID, 0, ["x"]));
+  expect(state.trace!.resolve(["input", "x"]).source).toEqual(new SourceRef(RUN_ID, 0, ["x"]));
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
   const abandoned = state.trace!.started.get(START_ID)!;
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
@@ -3361,7 +3376,7 @@ test("a retry clears the unfinished start identity and the primed input is repla
   expect((start.record as NodeSucceededRecord).forwardCapture!.route.children[0]!.source).toEqual(
     new SourceRef(RUN_ID, 0, ["x"]),
   );
-  expect(trace.resolve("input.x").source).toEqual(new SourceRef(RUN_ID, start.source.executionSeq, ["x"]));
+  expect(trace.resolve(["input", "x"]).source).toEqual(new SourceRef(RUN_ID, start.source.executionSeq, ["x"]));
 });
 
 test("the capture canonicalizes supported binding objects", async () => {
@@ -3839,7 +3854,7 @@ function evaluateStarted(state: RunState, nodeId: string): Promise<EvaluatedOutc
   return evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
     wiringOverride: state.wiringOverrides.get(nodeId) ?? null,
     captureBindings: true,
-    sourceResolver: (path) => trace.resolve(path),
+    sourceResolver: (names) => trace.resolve(names),
   });
 }
 

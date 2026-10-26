@@ -27,7 +27,7 @@
  */
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
-import { evaluateWhenRecord } from "../../expr/expressions.ts";
+import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
 import type { FeedbackValue } from "../../expr/index.ts";
 import {
   isInboxType,
@@ -463,6 +463,18 @@ export class LoopNode extends Node {
     return carried;
   }
 
+  /** The declared type of each carried name, read from the loop's output contract as `readCarried` reads it. */
+  private carriedTypes(): ReadonlyMap<string, Type | null> {
+    const contract = this.outputContract;
+    const types = new Map<string, Type | null>();
+    if (isExactly(contract, ValueContract)) {
+      for (const [name, field] of contract.type.fields ?? []) types.set(name, field);
+    } else if (isExactly(contract, PartialRecordContract)) {
+      for (const [name, field] of contract.fields) types.set(name, field?.type ?? null);
+    }
+    return types;
+  }
+
   /** The names of the fields the body takes as inboxes. */
   private inboxNames(): string[] {
     return this.childInputs.filter((param) => isInboxType(param.contract?.type)).map((param) => param.name);
@@ -485,7 +497,7 @@ export class LoopNode extends Node {
     let truth: boolean;
     try {
       // The setup check has parsed the `while`/`until` predicate, a string.
-      truth = evaluateWhenRecord(this.predicate as string, carried, this.types);
+      truth = evaluateWhenRecord(this.predicate as string, carried, this.types, localDeclared(this.carriedTypes()));
     } catch (error) {
       if (isWeakKey(error)) failedPredicates.add(error);
       throw error;

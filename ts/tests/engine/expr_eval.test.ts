@@ -22,22 +22,26 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import {
+  declaredAt,
   ExpressionError,
   evalExpr,
   exprRefs,
+  localDeclared,
+  MISSING_ROOT,
   RequiredError,
   ResolveMode,
+  type RootResolver,
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
 import { evalBinding, scanTemplate } from "../../src/expr/template.ts";
 import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.ts";
-import { fieldOf } from "../../src/typesys/values.ts";
+import { fieldOf, listKindForElement, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
 /** Parse `text` then evaluate it, defaulting to an empty resolver (every reference misses). */
 function evaluate(
   text: string,
-  resolve: (path: string) => Value = () => null,
+  resolve: RootResolver = MISSING_ROOT,
   { item = null, mode = ResolveMode.BINDING_NONE }: { item?: Value; mode?: ResolveMode } = {},
 ): Value {
   return evalExpr(parseExpr(text), resolve, { item, mode });
@@ -47,17 +51,15 @@ function evaluate(
  * Return a `resolve` backed by a record, with the field-only dotted walk the production
  * resolvers do: the head, then `fieldOf` per step, never a property read. A miss is `null`.
  */
-function fromRecord(mapping: ValueRecord): (path: string) => Value {
-  return (path) => {
-    const [head, ...steps] = path.split(".");
-    let value = fieldOf(mapping, head!)[1];
-    for (const step of steps) value = fieldOf(value, step)[1];
-    return value;
+function fromRecord(mapping: ValueRecord): RootResolver {
+  return (names) => {
+    const [present, value] = fieldOf(mapping, names[0]!);
+    return { used: 1, present, value, why: null };
   };
 }
 
 /** Return the error `evaluate(text, resolve, options)` throws, failing if it returns. */
-function errorOf(text: string, resolve?: (path: string) => Value, mode?: ResolveMode): Error {
+function errorOf(text: string, resolve?: RootResolver, mode?: ResolveMode): Error {
   try {
     evaluate(text, resolve, { mode });
   } catch (error) {
@@ -67,7 +69,7 @@ function errorOf(text: string, resolve?: (path: string) => Value, mode?: Resolve
 }
 
 /** Expect `text` to fail with an `ExpressionError` whose message is exactly `message`. */
-function expectMessage(text: string, message: string, resolve?: (path: string) => Value): void {
+function expectMessage(text: string, message: string, resolve?: RootResolver): void {
   const error = errorOf(text, resolve);
   expect(error).toBeInstanceOf(ExpressionError);
   expect(error.message).toBe(message);
@@ -172,9 +174,18 @@ test("dotted access reads a record field", () => {
 test.each(["__class__", "constructor", "toString", "__proto__", "hasOwnProperty"])(
   "dotted access never reads the property %s",
   (name) => {
-    expect(evaluate(`obj.${name}`, fromRecord({ obj: { a: 1n } }))).toBeNull();
-    expect(evaluate(`item.${name}`, () => null, { item: { a: 1n } })).toBeNull();
-    expect(evaluate(`item.k.${name}`, () => null, { item: { k: "text" } })).toBeNull();
+    // `.` raises on a key the record lacks, `?.` reads null; neither reaches a JS property.
+    expect(errorOf(`obj.${name}`, fromRecord({ obj: { a: 1n } })).message).toBe(
+      `cannot read \${obj.${name}}: obj has no field '${name}'`,
+    );
+    expect(evaluate(`obj?.${name}`, fromRecord({ obj: { a: 1n } }))).toBeNull();
+    expect(() => evaluate(`item.${name}`, MISSING_ROOT, { item: { a: 1n } })).toThrow(
+      `item has no field '${name}'`,
+    );
+    expect(evaluate(`item?.${name}`, MISSING_ROOT, { item: { a: 1n } })).toBeNull();
+    expect(() => evaluate(`item.k.${name}`, MISSING_ROOT, { item: { k: "text" } })).toThrow(
+      "item.k is str, which has no fields",
+    );
   },
 );
 
@@ -195,12 +206,17 @@ test("condition-falsy: arithmetic over a miss is loud", () => {
 });
 
 test("strict-raise: a miss raises, naming the path", () => {
-  const error = errorOf("a.b", undefined, ResolveMode.STRICT_RAISE);
+  const error = errorOf("a", undefined, ResolveMode.STRICT_RAISE);
   expect(error).toBeInstanceOf(ExpressionError);
-  expect(error.message).toBe("unresolved reference ${a.b} in expression");
-  expect(errorOf("item.k", undefined, ResolveMode.STRICT_RAISE).message).toBe(
-    "unresolved reference ${item.k} in expression",
-  );
+  expect(error.message).toBe("unresolved reference ${a} in expression");
+  // A field of a missing root or a null item raises in every mode.
+  for (const mode of [ResolveMode.STRICT_RAISE, ResolveMode.BINDING_NONE]) {
+    expect(errorOf("a.b", undefined, mode).message).toBe("cannot read ${a.b}: a is missing");
+    expect(errorOf("item.k", undefined, mode).message).toBe(
+      "cannot read ${item.k}: item is null; write item?.k to read null instead, or check item != null first",
+    );
+  }
+  expect(evaluate("a?.b", undefined, { mode: ResolveMode.STRICT_RAISE })).toBeNull();
 });
 
 test("strict-raise: a slice of null names the slice, not a miss an operator handled", () => {
@@ -431,11 +447,15 @@ test("a bare item", () => {
 });
 
 test("item scope reads fields only", () => {
-  expect(evaluate("item.__class__", undefined, { item: { a: 1n } })).toBeNull();
+  expect(errorOf("item.__class__", undefined).message).toContain("item is null");
+  expect(() => evaluate("item.__class__", undefined, { item: { a: 1n } })).toThrow("item has no field '__class__'");
+  expect(evaluate("item?.__class__", undefined, { item: { a: 1n } })).toBeNull();
 });
 
 test("item-headed paths never reach resolve", () => {
-  expect(evaluate("item.k", () => "resolved")).toBeNull();
+  const resolve: RootResolver = () => ({ used: 1, present: true, value: { k: "resolved" }, why: null });
+  expect(evaluate("item?.k", resolve)).toBeNull();
+  expect(evaluate("item.k", resolve, { item: { k: "item" } })).toBe("item");
 });
 
 // --------------------------------------------------------------------------------------- //
@@ -549,7 +569,7 @@ describe("tokens", () => {
   });
 
   test("an unknown token or node is an error", () => {
-    const resolve = () => null;
+    const resolve = MISSING_ROOT;
     expect(() => evalExpr(new Token("WEIRD", "x"), resolve)).toThrow("unexpected token WEIRD 'x'");
     expect(() => evalExpr(new Tree("weird", []), resolve)).toThrow("unsupported expression node 'weird'");
   });
@@ -657,10 +677,12 @@ describe("calls", () => {
 
   test("a strict miss on a call result's field names the call", () => {
     standIn("identity", [{ name: "v" }], (v) => v);
-    const error = errorOf("identity(d).nope.k", fromRecord({ d: { k: 1n } }), ResolveMode.STRICT_RAISE);
-    expect(error).toBeInstanceOf(ExpressionError);
-    expect(error.message).toBe("unresolved reference ${identity(...).nope.k} in expression");
-    expect(evaluate("identity(d).nope", fromRecord({ d: { k: 1n } }))).toBeNull();
+    for (const mode of [ResolveMode.STRICT_RAISE, ResolveMode.BINDING_NONE]) {
+      const error = errorOf("identity(d).nope.k", fromRecord({ d: { k: 1n } }), mode);
+      expect(error).toBeInstanceOf(ExpressionError);
+      expect(error.message).toBe("cannot read ${identity(...).nope}: identity(...) has no field 'nope'");
+    }
+    expect(evaluate("identity(d)?.nope", fromRecord({ d: { k: 1n } }))).toBeNull();
   });
 
   test("a strict miss in an argument raises", () => {
@@ -977,7 +999,7 @@ function mulberry32(seed: number): () => number {
 }
 
 test("a comprehension with 5,000 if clauses evaluates without overflowing the stack", () => {
-  expect(evaluate(`[x for x in xs${" if true".repeat(5000)}]`, (path) => (path === "xs" ? [1n, 2n] : null))).toEqual([
+  expect(evaluate(`[x for x in xs${" if true".repeat(5000)}]`, fromRecord({ xs: [1n, 2n] }))).toEqual([
     1n,
     2n,
   ]);
@@ -990,8 +1012,195 @@ test("?. reads like . on today's resolvers", () => {
   expect(evaluate("[m?.k for m in xs]", fromRecord({ xs: [{ k: 1n }, null] }))).toEqual([1n, null]);
 });
 
-test("a strict miss names the read as written", () => {
-  expect(errorOf("a?.b.c", undefined, ResolveMode.STRICT_RAISE).message).toBe(
-    "unresolved reference ${a?.b.c} in expression",
+test("a field-read error names the read as written", () => {
+  expect(errorOf("a?.b.c", fromRecord({ a: { b: null } }), ResolveMode.STRICT_RAISE).message).toBe(
+    "cannot read ${a?.b.c}: a?.b is null; write a?.b?.c to read null instead, or check a?.b != null first",
   );
+});
+
+test("a resolver returns a root read; the evaluator walks the steps", () => {
+  const seen: string[][] = [];
+  const resolve = (names: readonly string[]) => {
+    seen.push([...names]);
+    return { used: 1, present: true, value: { k: { m: 1n } }, why: null };
+  };
+  expect(evalExpr(parseExpr("a.k.m"), resolve)).toBe(1n);
+  expect(seen).toEqual([["a", "k", "m"]]);
+});
+
+// --- declared types --- //
+
+const str = Type.scalar(ValueKind.STRING);
+const Rec = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str], ["opt", str]]), required: new Set(["k"]) });
+const A = new Type({ kind: ValueKind.OBJECT, fields: new Map([["x", str]]), required: new Set() });
+const B = new Type({ kind: ValueKind.OBJECT, fields: new Map([["y", str]]), required: new Set() });
+const U = new Type({ kind: ValueKind.OBJECT, variants: [A, B] });
+
+test("declaredAt projects a type through declared fields", () => {
+  expect(typeEquals(declaredAt(Rec, ["opt"])!, str)).toBe(true);
+  expect(declaredAt(Rec, ["nope"])).toBeNull();
+  expect(declaredAt(Type.scalar(ValueKind.ANY), ["k"])).toBeNull();
+  expect(declaredAt(Type.scalar(ValueKind.OBJECT), ["k"])).toBeNull();
+  expect(typeEquals(declaredAt(U, ["x"])!, str)).toBe(true); // only A declares x
+  expect(typeEquals(declaredAt(U, [])!, U)).toBe(true);
+  expect(typeEquals(declaredAt(Rec.replace({ nullable: true }), [])!, Rec)).toBe(true);
+  expect(declaredAt(null, [])).toBeNull();
+});
+
+test("localDeclared reads a local's type, then its fields", () => {
+  expect(typeEquals(localDeclared(new Map([["r", Rec]]))(["r", "opt"])!, str)).toBe(true);
+  expect(localDeclared(new Map([["r", Rec]]))(["s"])).toBeNull();
+  expect(localDeclared(null)(["r"])).toBeNull();
+});
+
+// --- the step table (field reads) --- //
+
+/** A root reader over `record` whose absent names say why. */
+const rec = (record: ValueRecord): RootResolver => (names) => {
+  const [present, value] = fieldOf(record, names[0]!);
+  return { used: 1, present, value, why: present ? null : `input '${names[0]}' is not bound` };
+};
+const ev = (text: string, record: ValueRecord, mode: ResolveMode = ResolveMode.BINDING_NONE) =>
+  evalExpr(parseExpr(text), rec(record), { mode });
+
+test.each([
+  ["n.k", { n: null }, "cannot read ${n.k}: n is null; write n?.k to read null instead, or check n != null first"],
+  ["gone.k", {}, "cannot read ${gone.k}: gone is missing (input 'gone' is not bound)"],
+  ["u.k", { u: {} }, "cannot read ${u.k}: u has no field 'k'"],
+  ["t.k", { t: "text" }, "cannot read ${t.k}: t is str, which has no fields"],
+  [
+    "f.k",
+    { f: new FileRef({ uri: "file:///x" }) },
+    "cannot read ${f.k}: f is a file, which has only uri, mime and name",
+  ],
+  [
+    "a.b.c",
+    { a: { b: null } },
+    "cannot read ${a.b.c}: a.b is null; write a.b?.c to read null instead, or check a.b != null first",
+  ],
+])(". raises: %s", (text, record, message) => {
+  expect(() => ev(text, record as ValueRecord)).toThrow(message);
+});
+
+test.each([
+  ["n?.k", { n: null }, null],
+  ["gone?.k", {}, null],
+  ["u?.k", { u: {} }, null],
+  ["n?.k.m", { n: null }, null],
+  ["n", { n: null }, null],
+  ["gone :- 'd'", {}, "d"],
+  ["n?.k :- 'd'", { n: null }, "d"],
+  ["f.mime", { f: new FileRef({ uri: "file:///x" }) }, null],
+])("value: %s", (text, record, value) => {
+  expect(ev(text, record as ValueRecord)).toEqual(value);
+});
+
+test("?. still raises on a non-record", () => {
+  expect(() => ev("t?.k", { t: "text" })).toThrow("cannot read ${t?.k}: t is str, which has no fields");
+});
+
+test(":- and :? don't catch a field-read error", () => {
+  expect(() => ev("n.k :- 'd'", { n: null })).toThrow("n is null");
+  expect(() => ev('n.k :? "need k"', { n: null })).toThrow("n is null");
+  expect(() => ev('gone :? "need it"', {})).toThrow("need it");
+  expect(() => ev("n.k | 'd'", { n: null })).toThrow("n is null");
+});
+
+test("a?.b.c: when a exists and a.b is null, .c raises", () => {
+  expect(() => ev("a?.b.c", { a: { b: null } })).toThrow("cannot read ${a?.b.c}: a?.b is null");
+});
+
+test("a bare missing root keeps today's per-mode handling", () => {
+  expect(ev("gone", {})).toBeNull();
+  expect(ev("gone", {}, ResolveMode.CONDITION_FALSY)).toBeNull();
+  expect(() => ev("gone", {}, ResolveMode.STRICT_RAISE)).toThrow("unresolved reference ${gone} in expression");
+});
+
+test("comprehension variables, item and call results follow the same table", () => {
+  expect(() => ev("[x.k for x in xs]", { xs: [null] })).toThrow("cannot read ${x.k}: x is null");
+  expect(ev("[x?.k for x in xs]", { xs: [null, { k: 1n }] })).toEqual([null, 1n]);
+  expect(() => evalExpr(parseExpr("item.k"), MISSING_ROOT, { item: null })).toThrow(
+    "cannot read ${item.k}: item is null",
+  );
+  expect(evalExpr(parseExpr("item?.k"), MISSING_ROOT, { item: null })).toBeNull();
+  expect(() => ev("upper(t).k", { t: "a" })).toThrow("cannot read ${upper(...).k}: upper(...) is str");
+});
+
+test("a variable the loader could not narrow names the variable and the field it lacks", () => {
+  // `or`-combined isinstance doesn't narrow at load (#1175); the read raises at run time.
+  const T = new Type({ kind: ValueKind.OBJECT, fields: new Map([["text", str]]), required: new Set(["text"]) });
+  const N = new Type({ kind: ValueKind.OBJECT, fields: new Map([["n", str]]), required: new Set(["n"]) });
+  const types = new Map([["T", T], ["N", N]]);
+  const text = "[p.text for p in ps if isinstance(p, T) or isinstance(p, N)]";
+  expect(() => evalExpr(parseExpr(text), rec({ ps: [{ text: "a" }, { n: "b" }] }), { types })).toThrow(
+    "cannot read ${p.text}: p has no field 'text'",
+  );
+});
+
+// --- declared fields --- //
+
+const declaredR = (names: readonly string[]) => (names[0] === "r" ? declaredAt(Rec, names.slice(1)) : null);
+const evd = (text: string, record: ValueRecord) => evalExpr(parseExpr(text), rec(record), { declared: declaredR });
+
+test("a declared field that is absent reads null; an undeclared one raises", () => {
+  expect(evd("r.opt", { r: { k: "a" } })).toBeNull();
+  expect(evd("r?.opt", { r: { k: "a" } })).toBeNull();
+  expect(evd("r.opt :- 'd'", { r: { k: "a" } })).toBe("d");
+  expect(() => evd("r.nope", { r: { k: "a" } })).toThrow("r has no field 'nope'");
+  expect(() => evd("r.opt.x", { r: { k: "a" } })).toThrow("cannot read ${r.opt.x}: r.opt is null");
+});
+
+test("a read looks its declared type up only when a record lacks a key", () => {
+  const asked: string[][] = [];
+  const declared = (names: readonly string[]) => (asked.push([...names]), declaredR(names));
+  expect(evalExpr(parseExpr("r.k"), rec({ r: { k: "a" } }), { declared })).toBe("a");
+  expect(evalExpr(parseExpr("r?.opt"), rec({ r: { k: "a" } }), { declared })).toBeNull();
+  expect(asked).toEqual([]);
+  expect(evalExpr(parseExpr("r.opt"), rec({ r: { k: "a" } }), { declared })).toBeNull();
+  expect(asked).toEqual([["r"]]);
+});
+
+test("a declared field is null through a union when any member declares it", () => {
+  expect(evalExpr(parseExpr("v.x"), rec({ v: { y: "b" } }), { declared: () => U })).toBeNull();
+  expect(() => evalExpr(parseExpr("v.z"), rec({ v: { y: "b" } }), { declared: () => U })).toThrow("no field 'z'");
+});
+
+test("Any and object are untyped", () => {
+  for (const typ of [Type.scalar(ValueKind.ANY), Type.scalar(ValueKind.OBJECT)]) {
+    expect(() => evalExpr(parseExpr("v.k"), rec({ v: {} }), { declared: () => typ })).toThrow("no field 'k'");
+  }
+});
+
+test("a constructor's result is declared by its type", () => {
+  const types = new Map([["R", Rec]]);
+  expect(evalExpr(parseExpr("R(k='a').opt"), MISSING_ROOT, { types })).toBeNull();
+  expect(() => evalExpr(parseExpr("upper('a').opt"), MISSING_ROOT, { types })).toThrow("upper(...) is str");
+});
+
+test("a comprehension variable is declared by its iterable's element type", () => {
+  const list = new Type({ kind: listKindForElement(Rec), element: Rec });
+  const declaredXs = (names: readonly string[]) => (names[0] === "xs" ? declaredAt(list, names.slice(1)) : null);
+  const xs = { xs: [{ k: "a" }] };
+  expect(evalExpr(parseExpr("[m.opt for m in xs]"), rec(xs), { declared: declaredXs })).toEqual([null]);
+  const guarded = parseExpr("[m.opt for m in xs if m.opt == null]");
+  expect(evalExpr(guarded, rec(xs), { declared: declaredXs })).toEqual([null]);
+  expect(evalExpr(parseExpr("[m.opt for m in (xs :- [])]"), rec(xs), { declared: declaredXs })).toEqual([null]);
+  expect(() => evalExpr(parseExpr("[m.opt for m in xs]"), rec(xs))).toThrow("m has no field 'opt'");
+  expect(() => evalExpr(parseExpr("[m.nope for m in xs]"), rec(xs), { declared: declaredXs })).toThrow(
+    "m has no field 'nope'",
+  );
+});
+
+test("a nested comprehension variable is declared through the outer variable", () => {
+  const inner = new Type({ kind: listKindForElement(Rec), element: Rec });
+  const Outer = new Type({ kind: ValueKind.OBJECT, fields: new Map([["items", inner]]), required: new Set(["items"]) });
+  const list = new Type({ kind: listKindForElement(Outer), element: Outer });
+  const declared = (names: readonly string[]) => (names[0] === "os" ? declaredAt(list, names.slice(1)) : null);
+  const os = { os: [{ items: [{ k: "a" }] }] };
+  expect(evalExpr(parseExpr("[i.opt for o in os for i in o.items]"), rec(os), { declared })).toEqual([null]);
+});
+
+test("item is declared by the MAP's item type", () => {
+  expect(evalExpr(parseExpr("item.opt"), MISSING_ROOT, { item: { k: "a" }, itemType: Rec })).toBeNull();
+  expect(() => evalExpr(parseExpr("item.opt"), MISSING_ROOT, { item: { k: "a" } })).toThrow("item has no field 'opt'");
 });

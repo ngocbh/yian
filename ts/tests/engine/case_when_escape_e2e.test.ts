@@ -218,3 +218,51 @@ test("an unknown field in a searched when: names the authored read", () => {
   expect(message).toContain("reference ${x.output.nosuch} reads unknown field 'nosuch'");
   expect(message).not.toContain("__r");
 });
+
+// --- declared fields at run time (#1149) --- //
+
+/** A searched CASE `pick` on `when` over CODE `x`, typed `output` (or untyped), returning `value`. */
+function pickFlow(when: string, output: string | null, value: string): string {
+  return `
+id: pick
+name: pick
+typedefs:
+  Rec: {k: int, opt: Optional(str)}
+nodes:
+  x:
+    kind: code
+${output !== null ? `    output: ${output}\n` : ""}    code: |
+      return ${value}
+  pick:
+    kind: case
+    cases:
+      - when: "${when}"
+        then: hit
+    else: miss
+  hit:
+    kind: code
+    code: |
+      return "hit"
+  miss:
+    kind: code
+    code: |
+      return "miss"
+output: \${hit.output | miss.output}
+`;
+}
+
+test.each<[string, string, string | null, string, string | null, string | null]>([
+  ["a declared absent field reads null through __r0", "x.output.opt == null", "Rec", "{k: 2}", "hit", null],
+  ["an untyped absent key raises", "x.output.opt == null", null, "{k: 2}", null, "condition.evaluate"],
+  ["a null guard keeps the read lazy", "x.output != null and x.output.k > 1", "Optional(Rec)", "null", "miss", null],
+  ["?. on a null producer reads null", "x.output?.k > 1", "Optional(Rec)", "null", "miss", null],
+])("%s", async (_name, when, output, value, expected, code) => {
+  const result = await runFlow(await loadConformanceFlow(pickFlow(when, output, value), { env }), {}, { env });
+  if (code !== null) {
+    expect(result.failure?.code).toBe(code as never);
+    expect(result.failure?.message).toBe("cannot read ${x.output.opt}: x.output has no field 'opt'");
+  } else {
+    expect(result.failure?.message).toBeUndefined();
+    expect(result.output).toBe(expected);
+  }
+});

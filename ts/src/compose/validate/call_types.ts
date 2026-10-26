@@ -25,7 +25,7 @@
 import { typesCompatible } from "../../compile/validation.ts";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { type ExprNode, Token, Tree } from "../../expr/grammar.ts";
-import { ExpressionError, evalExpr, exprRefs } from "../../expr/index.ts";
+import { ExpressionError, evalExpr, exprRefs, MISSING_ROOT } from "../../expr/index.ts";
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import {
   Binding,
@@ -376,7 +376,7 @@ function operandMismatch(node: ExprNode, decl: Parameter, scope: Scope, options:
   if (exprRefs(node).length > 0) return null;
   let value: unknown;
   try {
-    value = evalExpr(node, () => null);
+    value = evalExpr(node, MISSING_ROOT);
   } catch (error) {
     if (error instanceof ExpressionError) return null; // a malformed constant fails when the binding is evaluated
     throw error;

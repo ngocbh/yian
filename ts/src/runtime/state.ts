@@ -14,6 +14,7 @@
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
+import { localTypes } from "../compile/declared_types.ts";
 import { expansionDigest } from "../compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, Flow, GrowthRejected, validateGrowthMetadata } from "../compile/model.ts";
 import { classifyPath } from "../compile/validation.ts";
@@ -39,7 +40,7 @@ import {
   RunWaiting,
 } from "../events.ts";
 import { ExpressionError } from "../expr/expressions.ts";
-import { ResolvedValue, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
+import { type RootRead, SourceRef, sameSource, type ValueRoute } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
 import {
   MemoryScope,
@@ -545,23 +546,22 @@ export interface PendingMessages {
 }
 
 /**
- * Pair one lookup's value and presence in `pool` with the commit that wrote it, as
- * `RetainedTrace.resolve` pairs them from the retained trace, but with the seq of the name's
- * accepted `PoolCommitRecord` (`producers`) as its source, so a run without a trace can build a
- * node's input route. The paths read the same names (`sourcePath`). The one difference: a system
- * value gets its run-start commit as its source, where the trace gives it none.
+ * Read a reference's root in `pool` with the commit that wrote it, as `RetainedTrace.resolve`
+ * reads it from the retained trace, but with the seq of the name's accepted `PoolCommitRecord`
+ * (`producers`) as its source, so a run without a trace can build a node's input route. Both read
+ * the same pool names (`referenceRoot`). The one difference: a system value gets its run-start
+ * commit as its source, where the trace gives it none.
  *
- * @throws ExpressionError when a dotted segment of `path` is empty.
  * @throws RangeError when a name the pool holds has no entry in `producers`, which always names
  *   every pool name.
  */
 export function resolveFromPool(
-  path: string,
+  names: readonly string[],
   pool: VariablePool,
   producers: ReadonlyMap<string, number>,
   runId: string,
-): ResolvedValue {
-  return resolvePoolPath(path, pool, (name) => {
+): RootRead {
+  return resolvePoolPath(names, pool, (name) => {
     const seq = producers.get(name);
     if (seq === undefined) throw new RangeError(`pool name ${reprText(name)} has no pool_commit in the producer index`);
     return new SourceRef(runId, seq);
@@ -2845,7 +2845,9 @@ function nodeDataRebuilder(
   node: Node,
 ): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
   const llm = state.effectiveLlmByStaticPath;
-  return (inputs) => rebuildNodeData(node, inputs, llm);
+  // Typed now, while the node is in the flow; learning may prune it later.
+  const types = localTypes(state.flow, node);
+  return (inputs) => rebuildNodeData(node, inputs, llm, types);
 }
 
 /**
@@ -5494,7 +5496,7 @@ function validateInitialCommit(state: RunState, record: PoolCommitRecord): void 
   if (record.value === null) throw new RangeError("a run-start pool_commit holds its value, not from");
   const value = TypedValue.fromWire(record.value).toObject();
   if (key === startId) {
-    if (state.pool.resolve("system", ["run_id"]) !== state.runId) {
+    if (state.pool.readRoot(["system", "run_id"]).value !== state.runId) {
       throw new RangeError("the run start commits system.run_id, equal to the run id, before the START inputs");
     }
     if (!isRecord(value)) throw new RangeError("the START inputs' pool_commit must hold a record");
@@ -5614,7 +5616,8 @@ function validateMessagesCommit(state: RunState, record: PoolCommitRecord): stri
   // A steer step's events are rebuilt into messages, so it needs its values.
   const picked = numbers.map((n) => stepWithSteerValues(state, nodeId, steps[n - 1]!) as unknown as Readonly<JsonObject>);
   try {
-    const [wire] = canonicalTyped(node.rebuildMessages(picked, decodeTyped(output.valueJson)), newMessagesType());
+    const value = node.rebuildMessages(picked, decodeTyped(output.valueJson), localTypes(state.flow, node));
+    const [wire] = canonicalTyped(value, newMessagesType());
     return logJson(wire);
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;

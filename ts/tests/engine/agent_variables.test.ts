@@ -425,7 +425,10 @@ test("nullable variable defaults follow the existing strict prompt rules", async
   node.prompt = "${note}";
   const error = await rejected(node.forward({}, { models }));
   expect(error).toBeInstanceOf(ExpressionError);
-  expect((error as Error).message).toMatch(/unresolved reference \$\{note\}/);
+  // A present null is a value: the strict prompt refuses the null span, naming it.
+  expect((error as Error).message).toBe(
+    'null value in strict template: ${note} is null; give it a default, e.g. ${note :- "none"}',
+  );
   expect(models.prompts).toHaveLength(2);
   expect(node.variables[0]!.default).toBeNull();
 });

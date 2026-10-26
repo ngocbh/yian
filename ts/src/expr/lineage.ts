@@ -12,14 +12,15 @@
  * escaped with `$record`. Its keys are sorted, so a record read back from a snapshot may list its
  * fields in another order than the forward value; feedback selects fields by name.
  *
- * Knows about: `typesys` (`logJson`, `parseJson`, `buildValue`, `TypeCheckError`, `isRecord`),
- * `diagnostics` (`reprText`), `builtins` (`kindName`). Never imports: `expressions`,
- * `template`, `nodes`, `runtime`.
+ * Knows about: `typesys` (`logJson`, `parseJson`, `buildValue`, `TypeCheckError`, `isRecord`,
+ * `RootValue`), `diagnostics` (`reprText`), `builtins` (`kindName`). Never imports:
+ * `expressions`, `template`, `nodes`, `runtime`.
  */
 
 import { reprText } from "../diagnostics.ts";
 import { buildValue, isRecord, TypeCheckError, type Value } from "../typesys/index.ts";
 import { logJson, parseJson } from "../typesys/json.ts";
+import type { RootValue } from "../typesys/pool.ts";
 import { kindName } from "./builtins.ts";
 
 /** One feedback message: a string, absent feedback, a partial field selection, or a positional list. */
@@ -217,6 +218,11 @@ export class ResolvedValue {
     this.source = source;
     Object.freeze(this);
   }
+}
+
+/** One reference root read for the evaluator: a `RootValue` and, when tracing, its producer or route. */
+export interface RootRead extends RootValue {
+  readonly source?: SourceRef | ValueRoute | null;
 }
 
 /** The actual evaluated value together with its immutable routing recipe. */

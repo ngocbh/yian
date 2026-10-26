@@ -47,7 +47,7 @@ import { describe, expect, test } from "bun:test";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { TEMPLATE_FNS, registerTemplateFn } from "../../src/expr/builtins.ts";
 import { RequiredError } from "../../src/expr/index.ts";
-import { ResolvedValue, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { type RootRead, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { Grow, Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import {
   applyDefaults,
@@ -145,10 +145,11 @@ test("binding capture matches the value actually delivered", () => {
   const reads: string[] = [];
   const calls: Value[] = [];
 
-  const resolve = (path: string): ResolvedValue => {
+  const resolve = (names: readonly string[]): RootRead => {
+    const path = names.join(".");
     reads.push(path);
     const value = path === "count" ? 12n : original;
-    return new ResolvedValue(value, true, new SourceRef("run", 1, [path]));
+    return { used: 1, present: true, value, why: null, source: new SourceRef("run", 1, [path]) };
   };
 
   const previous = TEMPLATE_FNS.get("observe");
@@ -199,7 +200,10 @@ test("an omitted default has no upstream source", () => {
     ],
     new Map([["null", "${present}"]]),
     poolOf(),
-    { collector, sourceResolver: () => new ResolvedValue(null, true, new SourceRef("run", 3)) },
+    {
+      collector,
+      sourceResolver: () => ({ used: 1, present: true, value: null, why: null, source: new SourceRef("run", 3) }),
+    },
   );
   const captured = collector.freeze();
   expect(captured.boundInputs).toEqual(delivered);
@@ -679,7 +683,7 @@ test("binding isolates an object from the pool", () => {
   const x = rec["x"] as ValueRecord;
   x["k"] = 999n;
   (x["nested"] as ValueRecord)["a"] = 999n; // nested mutation must not leak either
-  expect(pool.resolve("up", ["output"])).toEqual({ k: 1n, nested: { a: 2n } });
+  expect(pool.get("up")).toEqual({ k: 1n, nested: { a: 2n } });
 });
 
 test("binding isolates an untyped value from the pool", () => {
@@ -704,7 +708,7 @@ test("an untyped binding resolves and isolates", () => {
   );
   expect(rec).toEqual({ topic: "ACME", cfg: { k: 1n }, lit: 5n });
   (rec["cfg"] as ValueRecord)["k"] = 999n; // mutation must not leak (deep-copied)
-  expect(pool.resolve("up", ["output"])).toEqual({ k: 1n });
+  expect(pool.get("up")).toEqual({ k: 1n });
 });
 
 // --- coalesce, `:-` default and `:?` required --- //
@@ -817,13 +821,17 @@ test("a default ref resolves and a nested span raises", () => {
 });
 
 test("the item scope combines with coalesce and default", () => {
-  // `${item.x | b.output}`: an item miss falls to the ref peer; a present item wins.
+  // `${item?.x | b.output}`: an item without `x` falls to the ref peer; a present item wins.
   const pool = new VariablePool();
   pool.set("b", "b-text");
-  expect(bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { y: 1n } })).toEqual({
+  expect(bindInputs([{ name: "v", source: "${item?.x | b.output}" }], pool, { item: { y: 1n } })).toEqual({
     v: "b-text",
   });
-  expect(bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { x: 7n } })).toEqual({ v: 7n });
+  expect(bindInputs([{ name: "v", source: "${item?.x | b.output}" }], pool, { item: { x: 7n } })).toEqual({ v: 7n });
+  // `.` on a key the untyped item lacks raises; the coalesce never sees it.
+  expect(() => bindInputs([{ name: "v", source: "${item.x | b.output}" }], pool, { item: { y: 1n } })).toThrow(
+    "cannot read ${item.x}: item has no field 'x'",
+  );
 });
 
 test("a whole ref is typed, an embedded one stringified, and $$ escapes", () => {
@@ -944,7 +952,10 @@ test("an invalidated capture keeps partial routes without usable inputs", () => 
       [new Parameter("a"), new Parameter("b", { required: true })],
       new Map([["a", "${x}"]]),
       poolOf(),
-      { collector, sourceResolver: () => new ResolvedValue(1n, true, new SourceRef("run", 1)) },
+      {
+        collector,
+        sourceResolver: () => ({ used: 1, present: true, value: 1n, why: null, source: new SourceRef("run", 1) }),
+      },
     ),
   );
   const captured = collector.freeze();

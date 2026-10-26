@@ -704,7 +704,7 @@ const tagged = (node: string, flow = "{provider: openai}") => TAGGED.replace("NO
 
 test("a flow value that breaks its tag names the flow field", async () => {
   await failsBeforeAnyNode(
-    tagged("{}", "{provider: openai, model: !str '${input.d.zzz}'}"),
+    tagged("{}", "{provider: openai, model: !str '${input.d?.zzz}'}"),
     { d: {} },
     /^flow llm_config\.model: null does not match declared type str$/,
   );
@@ -724,7 +724,7 @@ nodes:
       prompt: hi
     adaptive_questions:
       prompt: Q
-      llm_config: {model: !str '\${input.d.zzz}'}
+      llm_config: {model: !str '\${input.d?.zzz}'}
 output: \${ask.output}
 `;
   await failsBeforeAnyNode(

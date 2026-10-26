@@ -17,6 +17,7 @@ import type { Skill } from "../../src/skills/catalog.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { logJson } from "../../src/typesys/json.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { callReply, rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 /** The node's private render, which `forward` and `learningMaterial` share. */
@@ -352,4 +353,35 @@ test("a spliced Message's author reaches the request", async () => {
   const history = [{ role: "user", author: "ana", parts: [{ type: "text", text: "Hi" }] }];
   const { model } = await run(agent(CHAT), history);
   expect(model.requests[0]!.messages[1]!.toJSON().author).toBe("ana");
+});
+
+// --- declared fields at run time (#1149) --- //
+
+const REC = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([
+    ["k", Type.scalar(ValueKind.STRING)],
+    ["opt", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
+  ]),
+  required: new Set(["k"]),
+});
+
+/** Render `prompt` over input `r` (`Rec`, declared through `localTypes`) and return the user message. */
+async function renderOverR(prompt: string | readonly PromptItem[], r: unknown): Promise<string> {
+  const node = new AgentNode("reply", { prompt, systemPrompt: "Be kind.", llmConfig: CONFIG });
+  node.params = [new Parameter("r", { required: true })];
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  await node.forward({ r }, { models: serving(model), localTypes: new Map([["r", REC]]) });
+  return sent(model).at(-1)![1];
+}
+
+test("a prompt reads a declared field that is absent as null", async () => {
+  expect(await renderOverR("${r.opt :- 'none'}", { k: "a" })).toBe("none");
+  expect(await renderOverR([{ role: "user", text: "${r.opt :- 'none'}" }], { k: "a" })).toBe("none");
+});
+
+test("a prompt span that reads null through ?. still fails: prompts stay strict", async () => {
+  await expect(renderOverR("${r?.k}", null)).rejects.toThrow(
+    'null value in strict template: ${r?.k} is null; give it a default, e.g. ${r?.k :- "none"}',
+  );
 });

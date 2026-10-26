@@ -1,10 +1,16 @@
 kind: expr
+rules: [null-field-read]
+# TS yian (#1149): a present null is a value, so the strict render refuses the null span.
 template: ${x :- y}
 values:
   x: null
   y: null
 mode: strict
 expect:
+  raises:
+    class: ExpressionError
+    message: 'null value in strict template: ${y} is null; give it a default, e.g. ${y :- "none"}'
+python_expect:
   raises:
     class: ExpressionError
     message: unresolved reference ${y} in expression

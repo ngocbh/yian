@@ -45,11 +45,12 @@ import {
   isinstanceSubject,
   isinstanceTypeNames,
   ResolveMode,
+  type RootResolver,
   rewriteConditionRefs,
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token } from "../../src/expr/grammar.ts";
-import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
+import { SourceRef } from "../../src/expr/lineage.ts";
 import {
   bindingCoSkips,
   evalBinding,
@@ -88,19 +89,17 @@ const A_BUY: ValueRecord = { action: "buy", qty: 3n };
 const A_SELL: ValueRecord = { action: "sell", price: 1.5 };
 
 /** Return a `resolve` over `values`: the head, then `fieldOf` per dotted step; a miss is `null`. */
-function resolver(values: ValueRecord = {}): (path: string) => Value {
-  return (path) => {
-    const [head, ...parts] = path.split(".");
-    let value = fieldOf(values, head!)[1];
-    for (const part of parts) value = fieldOf(value, part)[1];
-    return value;
+function resolver(values: ValueRecord = {}): RootResolver {
+  return (names) => {
+    const [present, value] = fieldOf(values, names[0]!);
+    return { used: 1, present, value, why: null };
   };
 }
 
 /** Evaluate `text` against `resolve` with the type table `types`. */
 function evaluate(
   text: string,
-  resolve: (path: string) => Value,
+  resolve: RootResolver,
   types: ReadonlyMap<string, Type> | null = TYPES,
 ): Value {
   return evalExpr(parseExpr(text), resolve, { types });
@@ -128,7 +127,8 @@ test("evalExpr checks the value against the named type", () => {
 });
 
 test("a missing value is not an instance of a record", () => {
-  expect(evaluate("isinstance(d.output, Buy)", resolver())).toBe(false);
+  expect(evaluate("isinstance(d, Buy)", resolver())).toBe(false);
+  expect(evaluate("isinstance(d?.output, Buy)", resolver())).toBe(false);
 });
 
 test("isinstance composes with other operators", () => {
@@ -191,16 +191,16 @@ test("record evaluation without types names the type", () => {
 });
 
 test("a missing value raises under STRICT_RAISE", () => {
-  const tree = parseExpr("isinstance(d.output, Buy)");
+  const tree = parseExpr("isinstance(d, Buy)");
   expectError(
     () => evalExpr(tree, resolver(), { mode: ResolveMode.STRICT_RAISE, types: TYPES }),
-    "unresolved reference ${d.output} in expression",
+    "unresolved reference ${d} in expression",
   );
 });
 
 test("an Optional alias accepts a missing value", () => {
   const types = new Map([["MaybeBuy", BUY.replace({ nullable: true })]]);
-  expect(evaluate("isinstance(d.output, MaybeBuy)", resolver(), types)).toBe(true);
+  expect(evaluate("isinstance(d?.output, MaybeBuy)", resolver(), types)).toBe(true);
   expect(evaluate("isinstance(d.output, MaybeBuy)", resolver({ d: { output: A_BUY } }), types)).toBe(true);
   expect(evaluate("isinstance(d.output, MaybeBuy)", resolver({ d: { output: A_SELL } }), types)).toBe(false);
 });
@@ -344,7 +344,8 @@ test("isinstance is not a prompt function", () => {
 // --- tracing --- //
 
 test("traced isinstance records one route over the first argument", () => {
-  const resolve = (path: string) => new ResolvedValue(A_BUY, true, new SourceRef("run", 0, path.split(".").slice(1)));
+  const source = new SourceRef("run", 0, ["output"]);
+  const resolve = () => ({ used: 2, present: true, value: A_BUY, why: null, source });
   const traced = evalBinding("${isinstance(d.output, Buy)}", resolve, { trace: true, types: TYPES });
   expect(traced.value).toBe(true);
   const route = traced.route;

@@ -178,6 +178,19 @@ values whose type isn't known at load (`object`, `Any`, an untyped output, or an
 below them) aren't checked. `a.output?.k` reads null when `a` was skipped or `k` is
 absent (TS yian).
 
+In TS yian a `.` read must find its value at run time: `x.k` raises when `x` is null or
+missing (a skipped node), is not a record, or lacks a `k` its declared type doesn't declare.
+The fix is `x?.k` (with a default where a value is needed: `${x?.k :- "none"}`; `:-` doesn't
+catch the raise), or a check (`x != null and x.k`). One step:
+
+| Receiver | `.k` | `?.k` |
+|---|---|---|
+| null, or a skipped node / absent input | raises | null |
+| record with `k` | its value | its value |
+| record without `k`, `k` declared by its type | null | null |
+| record without `k`, untyped or not declared | raises | null |
+| text, number, bool, list, file (other than `uri`/`mime`/`name`) | raises | raises |
+
 A local name is typed by its binding: a typed binding by its declared type (plus its
 inferred type when that fits, e.g. a case branch's member or a literal tag), a literal by
 its value, else the inferred type. So a CALL input can't read a field only the child's

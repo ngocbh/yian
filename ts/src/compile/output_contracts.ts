@@ -19,6 +19,7 @@ import {
   evalBinding,
   exprRefs,
   inferExprType,
+  MISSING_ROOT,
   scanTemplate,
   splitReference,
 } from "../expr/index.ts";
@@ -456,7 +457,7 @@ export function literalValue(source: unknown): unknown {
   try {
     const segments = scanTemplate(source);
     if (segments.some((segment) => segment instanceof Span)) return NOT_LITERAL;
-    return evalBinding(source, () => null);
+    return evalBinding(source, MISSING_ROOT);
   } catch (error) {
     if (error instanceof ExpressionError) return NOT_LITERAL; // malformed text is reported by reference validation
     throw error;

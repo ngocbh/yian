@@ -18,10 +18,11 @@ import {
   exprRefs,
   inferExprType,
   parseCondition,
+  type RootResolver,
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { ResolvedValue, routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
+import { routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -41,12 +42,10 @@ const A_BUY: ValueRecord = { action: "buy", conviction: 0.5 };
 const A_SELL: ValueRecord = { action: "sell", price: 1.5 };
 
 /** Return a `resolve` over `values`: the head, then `fieldOf` per dotted step; a miss is `null`. */
-function resolver(values: ValueRecord = {}): (path: string) => Value {
-  return (path) => {
-    const [head, ...parts] = path.split(".");
-    let value = fieldOf(values, head!)[1];
-    for (const part of parts) value = fieldOf(value, part)[1];
-    return value;
+function resolver(values: ValueRecord = {}): RootResolver {
+  return (names) => {
+    const [present, value] = fieldOf(values, names[0]!);
+    return { used: 1, present, value, why: null };
   };
 }
 
@@ -129,7 +128,9 @@ test("a value missing a required field fails naming it", () => {
 });
 
 test("a missing value fails the check", () => {
-  expectError(() => evaluate("Buy(d.output)"), "Buy(...): null is not an object for a record type", ConstructorTypeError);
+  // A missing root is null in a binding; a field of it would raise before the check.
+  expectError(() => evaluate("Buy(d)"), "Buy(...): null is not an object for a record type", ConstructorTypeError);
+  expectError(() => evaluate("Buy(d.output)"), "cannot read ${d.output}: d is missing");
 });
 
 test("a union typedef checks against every member", () => {
@@ -299,13 +300,10 @@ test("a prompt call with several arguments is an unknown prompt function", () =>
 
 // --- lineage --- //
 
-/** Return a traced `resolve` over `values`: present unless `null`, sourced at the whole path of run 1. */
-function tracedResolver(values: ValueRecord): (path: string) => ResolvedValue {
+/** Return a traced `resolve` over `values`: each head is sourced at its name in run 1. */
+function tracedResolver(values: ValueRecord): RootResolver {
   const resolve = resolver(values);
-  return (path) => {
-    const value = resolve(path);
-    return new ResolvedValue(value, value !== null, new SourceRef("run", 1, path.split(".")));
-  };
+  return (names) => ({ ...resolve(names), source: new SourceRef("run", 1, [names[0]!]) });
 }
 
 test("a positional constructor routes to its argument", () => {
@@ -453,12 +451,9 @@ test("inference without types leaves a call unknown", () => {
 
 test("feedback on a built field reaches its argument", () => {
   const sources: Record<number, ValueRecord> = { 1: { output: 0.7 }, 2: { output: A_BUY } };
-  const resolve = (path: string) => {
-    const [head, ...parts] = path.split(".");
-    const seq = head === "s" ? 1 : 2;
-    let value: Value = sources[seq]!;
-    for (const part of parts) value = (value as ValueRecord)[part]!;
-    return new ResolvedValue(value, true, new SourceRef("run", seq, parts));
+  const resolve: RootResolver = (names) => {
+    const seq = names[0] === "s" ? 1 : 2;
+    return { used: 1, present: true, value: sources[seq]!, why: null, source: new SourceRef("run", seq) };
   };
   const lookup = (source: SourceRef) => sources[source.executionSeq];
   const built = evalBinding('${Buy(action="buy", conviction=s.output)}', resolve, { trace: true, types: TYPES });

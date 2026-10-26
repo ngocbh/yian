@@ -49,14 +49,15 @@ test("node without trait receives no sinks", async () => {
   expect(
     await drive(node, { emitStream: (chunk) => chunks.push(chunk), emitEvent: (event) => events.push(event) }),
   ).toEqual(new Output("done"));
-  expect([node.seen, chunks, events]).toEqual([["signal"], [], []]);
+  // Every node in a flow gets its signal and its locals' declared types.
+  expect([node.seen, chunks, events]).toEqual([["localTypes", "signal"], [], []]);
 });
 
 for (const [stream, event, expected] of [
-  [true, true, ["emitEvent", "emitStream", "signal"]],
-  [true, false, ["emitStream", "signal"]],
-  [false, true, ["emitEvent", "signal"]],
-  [false, false, ["signal"]],
+  [true, true, ["emitEvent", "emitStream", "localTypes", "signal"]],
+  [true, false, ["emitStream", "localTypes", "signal"]],
+  [false, true, ["emitEvent", "localTypes", "signal"]],
+  [false, false, ["localTypes", "signal"]],
 ] as const) {
   test(`opted in node receives only supplied sinks (stream ${stream}, event ${event})`, async () => {
     const node = new LiveProbe("probe");

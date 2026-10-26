@@ -1,6 +1,8 @@
 kind: expr
 python_skip: "TS-only: len() and list slicing (#1086)"
-expr: "[missing.output[1:], missing.output[1:] :- []]"
+# The base is a missing root: a field read of it would raise (#1149), a slice of it misses.
+rules: [null-field-read]
+expr: "[missing[1:], missing[1:] :- []]"
 values: {xs: [1, 2, 3, 4], ys: [5], a: 1, b: 1, m: 2, n: null, s: abc}
 expect:
   value: [null, []]

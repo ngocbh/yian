@@ -58,25 +58,35 @@ function expectError(run: () => unknown, message: string): void {
 
 // --- expression evaluation --- //
 
-test("resolveReference walks a structured value", () => {
-  // `.output` is skipped, not a stored key: `a.output.pe` reads store["a"]["pe"].
+test("resolveReference reads a structured value's root; the evaluator walks its fields", () => {
+  // `.output` is part of the root, not a stored key: `a.output.pe` reads store["a"], then `pe`.
   const pool = poolWith({ a: { pe: 21.0 } });
-  expect(resolveReference("a.output.pe", pool)).toBe(21.0);
-  expect(resolveReference("a.output", pool)).toEqual({ pe: 21.0 });
+  const read = resolveReference(["a", "output", "pe"], pool);
+  expect(read).toEqual({ used: 2, present: true, value: { pe: 21.0 }, why: null });
+  expect(evaluateWhen("a.output.pe == 21.0", pool)).toBe(true);
 });
 
-test("resolveReference and resolveInRecord reject an empty path segment", () => {
-  for (const path of ["a..b", "a.", ".a", ""]) {
-    expectError(() => resolveReference(path, new VariablePool()), `invalid variable path: '\${${path}}'`);
-    expectError(() => resolveInRecord(path, {}), `invalid variable path: '\${${path}}'`);
+test("resolveReference and resolveInRecord reject an empty name", () => {
+  for (const names of [["a", "", "b"], ["a", ""], ["", "a"], [""]]) {
+    const path = names.join(".");
+    expectError(() => resolveReference(names, new VariablePool()), `invalid variable path: '\${${path}}'`);
+    expectError(() => resolveInRecord(names, {}), `invalid variable path: '\${${path}}'`);
   }
 });
 
-test("resolveInRecord reads own fields only, segments trimmed", () => {
-  expect(resolveInRecord(" a . b ", { a: { b: 1n } })).toBe(1n);
-  expect(resolveInRecord("toString", {})).toBeNull();
-  expect(resolveInRecord("a.constructor", { a: {} })).toBeNull();
-  expect(resolveInRecord("a.b", { a: null })).toBeNull();
+test("resolveInRecord reads own fields only", () => {
+  const read = resolveInRecord(["a", "b"], { a: { b: 1n } });
+  expect(read).toEqual({ used: 1, present: true, value: { b: 1n }, why: null });
+  expect(resolveInRecord(["toString"], {})).toEqual({
+    used: 1,
+    present: false,
+    value: null,
+    why: "input 'toString' is not bound",
+  });
+  expect(() => evaluateWhenRecord("a.constructor", { a: {} })).toThrow("a has no field 'constructor'");
+  expect(evaluateWhenRecord("a?.constructor", { a: {} })).toBe(false);
+  expect(() => evaluateWhenRecord("a.b == null", { a: null })).toThrow("a is null");
+  expect(evaluateWhenRecord("a?.b == null", { a: null })).toBe(true);
 });
 
 test("when: numeric and boolean logic", () => {
@@ -245,9 +255,12 @@ test("evaluateWhenRecord resolves declared inputs", () => {
 });
 
 test("evaluateWhenRecord: a miss is falsy, not an error", () => {
-  // A declared input holding null, or a dotted miss, is falsy rather than an error.
+  // A declared input holding null is falsy rather than an error; a field of it needs `?.`.
   expect(evaluateWhenRecord("label == 'POSITIVE'", { label: null })).toBe(false);
-  expect(evaluateWhenRecord("rating.value > 0.7", { rating: null })).toBe(false);
+  expect(evaluateWhenRecord("rating?.value > 0.7", { rating: null })).toBe(false);
+  expect(() => evaluateWhenRecord("rating.value > 0.7", { rating: null })).toThrow(
+    "cannot read ${rating.value}: rating is null",
+  );
 });
 
 test("evaluateWhenRecord: in with a null operand raises", () => {

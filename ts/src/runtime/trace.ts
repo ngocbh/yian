@@ -21,8 +21,7 @@
  */
 
 import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
-import { ExpressionError } from "../expr/expressions.ts";
-import { type FeedbackValue, ResolvedValue, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
+import { type FeedbackValue, type RootRead, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
 import {
   type MemoryOccurrenceSegment,
   MemoryScope,
@@ -52,7 +51,7 @@ import {
   sameOptional,
 } from "../nodes/contracts.ts";
 import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
-import { messagesKey, NEW_MESSAGES, type VariablePool } from "../typesys/pool.ts";
+import { absentRootWhy, messagesKey, referenceRoot, type VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
 import {
   fieldOf,
@@ -866,36 +865,31 @@ export class RetainedTrace {
   }
 
   /**
-   * Pair each actual lookup's value, presence and producer in one read.
-   *
-   * `<id>.output...` reads a current writer, `input...` the START writer and `system.<key>` a
-   * system value; anything else is a miss.
-   *
-   * @throws ExpressionError when a dotted segment of `path` is empty.
+   * Read a reference's root with its producer: `<id>.output` reads a current writer, `input.<k>`
+   * key `k` of the START writer's value and `system.<key>` a system value, which has no producer;
+   * anything else is absent. The evaluator walks the names after the root.
    */
-  resolve(path: string): ResolvedValue {
-    const read = sourcePath(path, this.startId, (name) => this._currentWriters.has(name));
-    if (read === null) return new ResolvedValue(null, false);
-    const { name, projection } = read;
-    if (name.startsWith(SYSTEM_PREFIX)) {
-      const encoded = this.system.get(name.slice(SYSTEM_PREFIX.length));
-      if (encoded === undefined) return new ResolvedValue(null, false);
-      return new ResolvedValue(decodeTyped(encoded).toObject(), true);
+  resolve(names: readonly string[]): RootRead {
+    const root = referenceRoot(names, this.startId, (name) => this._currentWriters.has(name));
+    const absent: RootRead = { used: root.used, present: false, value: null, why: absentRootWhy(names) };
+    if (root.name === null) return absent;
+    if (names[0] === "system") {
+      const encoded = this.system.get(names[1]!);
+      if (encoded === undefined) return absent;
+      return { used: root.used, present: true, value: decodeTyped(encoded).toObject(), why: null, source: null };
     }
-    const entry = this._currentWriters.get(name);
-    if (entry === undefined) return new ResolvedValue(null, false);
+    const entry = this._currentWriters.get(root.name);
+    if (entry === undefined) return absent;
     let value = entry.value;
-    for (const part of projection) {
-      const [present, next] = fieldOf(value, part);
-      if (!present) return new ResolvedValue(null, false);
-      value = next;
+    if (root.key !== undefined) {
+      const [present, field] = fieldOf(value, root.key);
+      if (!present) return absent;
+      value = field;
     }
     const producer = entry.source;
-    return new ResolvedValue(
-      value,
-      true,
-      producer === null ? null : new SourceRef(producer.runId, producer.executionSeq, projection),
-    );
+    const path = root.key === undefined ? [] : [root.key];
+    const source = producer === null ? null : new SourceRef(producer.runId, producer.executionSeq, path);
+    return { used: root.used, present: true, value, why: null, source };
   }
 }
 
@@ -1198,54 +1192,23 @@ const OUTCOME_RECORDS = [NodeSucceededRecord, NodeRoutedRecord, NodeExpandedReco
 export const SYSTEM_PREFIX = "system.";
 
 /**
- * Parse a `${path}` lookup into the pool name it reads and the field path inside that value, or
- * `null` for a miss: `<id>.output...` reads `<id>` when `holds(id)`, `<id>.new_messages...` reads
- * `messagesKey(<id>)` when it is held, `input...` the START's value (`startId`) and
- * `system.<key>` the system value `system.<key>`, which is read whole.
+ * Read a reference's root in `pool` (`VariablePool.readRoot`) with the source `sourceOf` names for
+ * the pool name it reads (`referenceRoot`); an `input.<k>` root's source is the START's, at path
+ * `[k]`. The evaluator walks the names after the root.
  *
- * @throws ExpressionError when a dotted segment of `path` is empty.
- */
-export function sourcePath(
-  path: string,
-  startId: string,
-  holds: (name: string) => boolean,
-): { name: string; projection: string[] } | null {
-  const parts = path.trim().split(".");
-  if (parts.some((part) => !part)) throw new ExpressionError(`invalid variable path: '\${${path}}'`);
-  const [head, ...rest] = parts as [string, ...string[]];
-  if (holds(head) && rest[0] === "output") return { name: head, projection: rest.slice(1) };
-  if (rest[0] === NEW_MESSAGES && holds(messagesKey(head))) return { name: messagesKey(head), projection: rest.slice(1) };
-  if (head === "input" && rest.length) return { name: startId, projection: rest };
-  if (head === "system" && rest.length) return { name: `${SYSTEM_PREFIX}${rest[0]}`, projection: [] };
-  return null;
-}
-
-/**
- * Pair one `${path}` lookup's value and presence in `pool` with the source `sourceOf` names for
- * the pool name it reads (`sourcePath`), projected to the lookup's field path; a miss, or a field
- * the value lacks, is absent.
- *
- * @throws ExpressionError when a dotted segment of `path` is empty.
  * @throws whatever `sourceOf` throws.
  */
 export function resolvePoolPath(
-  path: string,
+  names: readonly string[],
   pool: VariablePool,
   sourceOf: (name: string) => SourceRef | null,
-): ResolvedValue {
-  const read = sourcePath(path, pool.startId, (name) => pool.store.has(name));
-  if (read === null) return new ResolvedValue(null, false);
-  const { name, projection } = read;
-  const typed = name.startsWith(SYSTEM_PREFIX) ? pool.system.get(name.slice(SYSTEM_PREFIX.length)) : pool.store.get(name);
-  if (typed === undefined) return new ResolvedValue(null, false);
-  let value = typed.toObject();
-  for (const part of projection) {
-    const [present, next] = fieldOf(value, part);
-    if (!present) return new ResolvedValue(null, false);
-    value = next;
-  }
-  const source = sourceOf(name);
-  return new ResolvedValue(value, true, source === null ? null : new SourceRef(source.runId, source.executionSeq, projection));
+): RootRead {
+  const read = pool.readRoot(names);
+  if (!read.present) return read;
+  const root = referenceRoot(names, pool.startId, (name) => pool.store.has(name));
+  const source = sourceOf(root.name!);
+  const path = root.key === undefined ? [] : [root.key];
+  return { ...read, source: source === null ? null : new SourceRef(source.runId, source.executionSeq, path) };
 }
 
 /** The options of `prepareTrace`. */

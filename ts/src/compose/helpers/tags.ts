@@ -21,7 +21,7 @@ import {
   reprText,
   type SourceRange,
 } from "../../diagnostics.ts";
-import { ExpressionError } from "../../expr/expressions.ts";
+import { ExpressionError, MISSING_ROOT } from "../../expr/expressions.ts";
 import { evalBinding, scanTemplate, Span } from "../../expr/template.ts";
 import {
   Binding,
@@ -869,7 +869,7 @@ class TaggedValueReader {
   literal(tree: unknown): unknown {
     if (tree instanceof Binding) return this.literal(tree.source);
     if (typeof tree === "string") {
-      return this.literalOnly ? tree : evalBinding(tree, () => null);
+      return this.literalOnly ? tree : evalBinding(tree, MISSING_ROOT);
     }
     if (isRecord(tree)) {
       return Object.fromEntries(

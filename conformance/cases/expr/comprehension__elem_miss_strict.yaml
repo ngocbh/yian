@@ -1,9 +1,10 @@
 kind: expr
 python_skip: "TS-only: list comprehensions (#1086)"
+rules: [null-field-read]
 template: "${[m.text for m in ms]}"
 mode: strict
 values: {ms: [{text: a}, {role: user}]}
 expect:
   raises:
     class: ExpressionError
-    message: "unresolved reference ${m.text} in expression"
+    message: "cannot read ${m.text}: m has no field 'text'"

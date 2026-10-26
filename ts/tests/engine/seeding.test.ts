@@ -60,8 +60,8 @@ describe("seeding the system namespace", () => {
       expect(pool.system.get("today")!.kind).toBe(ValueKind.DATE);
       expect(pool.system.get("now")!.kind).toBe(ValueKind.DATETIME);
       expect(pool.system.get("today")!.value).toBe("2026-10-18");
-      expect(pool.resolve("system", ["today"])).toBe("2026-10-18");
-      expect(pool.resolve("system", ["now"])).toBe("2026-10-18T14:30:05+00:00");
+      expect(pool.readRoot(["system", "today"]).value).toBe("2026-10-18");
+      expect(pool.readRoot(["system", "now"]).value).toBe("2026-10-18T14:30:05+00:00");
     },
   );
 
@@ -75,8 +75,8 @@ describe("seeding the system namespace", () => {
   test("seedSystemClock reads the clock once, so today is now's date", () => {
     const pool = new VariablePool();
     seedSystemClock(pool, Date.UTC(2026, 9, 18, 23, 59, 59, 999));
-    expect(pool.resolve("system", ["today"])).toBe("2026-10-18");
-    expect(pool.resolve("system", ["now"])).toBe("2026-10-18T23:59:59.999000+00:00");
+    expect(pool.readRoot(["system", "today"]).value).toBe("2026-10-18");
+    expect(pool.readRoot(["system", "now"]).value).toBe("2026-10-18T23:59:59.999000+00:00");
   });
 });
 

@@ -44,6 +44,7 @@ import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
+import { localTypes } from "./compile/declared_types.ts";
 import { applyExecutionLayout, resolveExecutionLayout } from "./compile/execution_layout.ts";
 import { buildGrow } from "./compile/expand.ts";
 import {
@@ -2860,6 +2861,7 @@ export async function agentCall(
     const caps: MaterialCaps = {
       ...recordedGrants(state),
       models: options.models ?? defaultModelAccess(env),
+      localTypes: localTypes(state.flow, agent),
       openMemoryContext: async (baseSystemPrompt, prompt) => {
         if (opened === null || !recalls) return new MemoryContext();
         const hidden = agent.modelHiddenInputs();

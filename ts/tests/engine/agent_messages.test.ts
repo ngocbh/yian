@@ -265,10 +265,10 @@ test("${x.new_messages[.path]} reads the pool name x.new_messages", () => {
   const said = [{ role: "assistant", parts: [{ type: "text", text: "hi" }] }];
   pool.set("x", "answer");
   pool.set(messagesKey("x"), said, newMessagesType());
-  expect(pool.resolve("x", ["output"])).toBe("answer");
-  expect(pool.resolve("x", ["new_messages"])).toEqual(said);
-  expect(pool.resolve("y", ["new_messages"])).toBeNull();
-  expect(pool.resolve("x", ["new_messages", "role"])).toBeNull();
+  expect(pool.readRoot(["x", "output"]).value).toBe("answer");
+  expect(pool.readRoot(["x", "new_messages"]).value).toEqual(said);
+  expect(pool.readRoot(["y", "new_messages"]).value).toBeNull();
+  expect(pool.readRoot(["x", "new_messages", "role"]).used).toBe(2);
 });
 
 /** A chat `model_call` step whose reply arrived, as `AgentSteps` writes it. */

@@ -1,7 +1,13 @@
 kind: expr
+rules: [null-field-read]
+# TS yian (#1149): `.` on a null value raises; Python reads it as a falsy miss.
 expr: rating.value > 0.7
 values:
   rating: null
 mode: condition
 expect:
+  raises:
+    class: ExpressionError
+    message: "cannot read ${rating.value}: rating is null; write rating?.value to read null instead, or check rating != null first"
+python_expect:
   value: false

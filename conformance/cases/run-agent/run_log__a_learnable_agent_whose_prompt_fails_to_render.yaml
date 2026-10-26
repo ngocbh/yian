@@ -2,7 +2,8 @@
 # variables, so its node data holds the template, the variables and their domains, no rendered
 # prompt, and the run's model config; learning renders the occurrence again up to the same failure.
 kind: run
-rules: [run-log]
+# A present null is a value, so the strict prompt refuses the null span (#1149).
+rules: [run-log, null-field-read]
 flow: |
   id: noted
   name: noted
@@ -26,7 +27,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [6, 3, 6, 9]
-      message: unresolved reference ${note} in expression
+      message: 'null value in strict template: ${note} is null; give it a default, e.g. ${note :- "none"}'
       node: writer
   trace:
   - - run_started
@@ -74,7 +75,7 @@ expect:
     - writer
     - failure:
         code: node.execute
-        message: unresolved reference ${note} in expression
+        message: 'null value in strict template: ${note} is null; give it a default, e.g. ${note :- "none"}'
         frames:
         - label: flow.yaml
           range: [6, 3, 6, 9]

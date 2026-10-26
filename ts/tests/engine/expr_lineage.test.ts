@@ -51,12 +51,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { isDeepStrictEqual } from "node:util";
 
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
-import { evalExpr, ExpressionError, ResolveMode } from "../../src/expr/expressions.ts";
+import { evalExpr, ExpressionError, MISSING_ROOT, ResolveMode, type RootResolver } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { hasFeedback, validateFeedback } from "../../src/expr/index.ts";
 import {
   type FeedbackValue,
   ResolvedValue,
+  type RootRead,
   type RouteKind,
   type RoutedFeedback,
   RouteContext,
@@ -75,7 +76,7 @@ import { Parameter } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { validateRoute } from "../../src/runtime/contracts.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
-import { FileRef, isRecord, type Value, type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
+import { FileRef, type Value, type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 
 const FILE = new FileRef({ uri: "file:///tmp/x" });
@@ -553,17 +554,11 @@ class Sources {
     this.identities = Object.fromEntries(Object.keys(values).map((name, i) => [name, new SourceRef("run", i)]));
   }
 
-  resolve = (path: string): ResolvedValue => {
-    this.reads.push(path);
-    const [head, ...parts] = path.split(".") as [string, ...string[]];
-    if (!Object.hasOwn(this.values, head)) return new ResolvedValue(null, false);
-    let value = this.values[head]!;
-    for (const part of parts) {
-      if (!isRecord(value) || !Object.hasOwn(value, part)) return new ResolvedValue(null, false);
-      value = value[part]!;
-    }
-    const root = this.identities[head]!;
-    return new ResolvedValue(value, true, new SourceRef(root.runId, root.executionSeq, parts));
+  resolve = (names: readonly string[]): RootRead => {
+    this.reads.push(names.join("."));
+    const head = names[0]!;
+    if (!Object.hasOwn(this.values, head)) return { used: 1, present: false, value: null, why: null };
+    return { used: 1, present: true, value: this.values[head]!, why: null, source: this.identities[head]! };
   };
 
   lookup = (source: SourceRef): unknown => {
@@ -586,7 +581,7 @@ class Sources {
 }
 
 /** A traced resolver that resolves nothing. */
-const nothing = (): ResolvedValue => new ResolvedValue(null, false);
+const nothing = MISSING_ROOT;
 
 // Each registration's previous entry (or its absence), put back after the test, as Python's
 // `monkeypatch.setitem` does.
@@ -678,12 +673,13 @@ test("direct projection lifts feedback into source shape", () => {
   const original = { tags: ["one", "two"], summary: "text" };
   const root = new SourceRef("run", 7);
   const reads: string[] = [];
-  const resolve = (path: string) => {
+  const resolve: RootResolver = (names) => {
+    const path = names.join(".");
     reads.push(path);
     if (path === "producer.output.tags") {
-      return new ResolvedValue(original.tags, true, new SourceRef("run", 7, ["tags"]));
+      return { used: 3, present: true, value: original.tags, why: null, source: new SourceRef("run", 7, ["tags"]) };
     }
-    return new ResolvedValue("two", true, new SourceRef("run", 7, ["tags", 1]));
+    return { used: 1, present: true, value: "two", why: null, source: new SourceRef("run", 7, ["tags", 1]) };
   };
 
   const result = evalExpr(parseExpr("producer.output.tags"), resolve, { trace: true });
@@ -707,13 +703,13 @@ test("accepted null has a source but absence does not", () => {
   expect(messages(sources.feedback(absent, "Supply a value."))).toEqual([]);
   expect(messages(sources.feedback(present, null))).toEqual([]);
   expect(messages(sources.feedback(present, ""))).toEqual([[accepted, ""]]);
-  for (const name of ["accepted", "absent"]) {
-    const error = thrown(() =>
-      evalExpr(parseExpr(name), sources.resolve, { mode: ResolveMode.STRICT_RAISE, trace: true }),
-    );
-    expect(error).toBeInstanceOf(ExpressionError);
-    expect((error as Error).message).toMatch(/unresolved/);
-  }
+  // A strict read of an absent root raises; an accepted null is a value (a strict template refuses it).
+  const strict = (name: string) =>
+    evalExpr(parseExpr(name), sources.resolve, { mode: ResolveMode.STRICT_RAISE, trace: true });
+  expect(strict("accepted").value).toBeNull();
+  const error = thrown(() => strict("absent"));
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toMatch(/unresolved/);
 });
 
 test.each([0n, false, "", ["item"]] as Value[])("coalesce and default drop losing arm routes (%p)", (winning) => {
@@ -961,15 +957,15 @@ test("composed item route projects fields and preserves null presence", () => {
   expect(messages(sources.feedback(result, "Fill this."))).toEqual([
     [sources.identities.right!, [{ answer: "Fill this." }]],
   ]);
-  const missing = evalBinding("${item.absent}", sources.resolve, { item, trace: true });
+  const missing = evalBinding("${item?.absent}", sources.resolve, { item, trace: true });
   expect(messages(sources.feedback(missing, "Fill this."))).toEqual([]);
   const fallback = evalBinding('${item.answer :- "default"}', sources.resolve, { item, trace: true });
   expect(fallback.value).toBe("default");
   expect(messages(sources.feedback(fallback, "Feedback."))).toEqual([]);
   const localReads: string[] = [];
-  const local = (path: string) => {
-    localReads.push(path);
-    return new ResolvedValue(null, true, over.route.project([1, "answer"]));
+  const local: RootResolver = (names) => {
+    localReads.push(names.join("."));
+    return { used: 1, present: true, value: null, why: null, source: over.route.project([1, "answer"]) };
   };
   const localResult = evalBinding("${local}", local, { trace: true });
   expect(localReads).toEqual(["local"]);
@@ -980,7 +976,7 @@ test("composed item route projects fields and preserves null presence", () => {
 
 test("a file temporary preserves interpolation and projection", () => {
   const calls = countedStandIn("temporary", FILE);
-  const untraced = evalBinding("value=${temporary()}", () => null);
+  const untraced = evalBinding("value=${temporary()}", MISSING_ROOT);
   expect(untraced).toBe('value={"uri":"file:///tmp/x","mime":null,"name":null}');
   expect(calls).toEqual(["temporary"]);
   const traced = evalBinding("value=${temporary()}", nothing, { trace: true });
@@ -1063,7 +1059,7 @@ test("a deep temporary keeps a complete snapshot", () => {
     },
     [{ name: "value" }],
   );
-  expect(evalBinding("${ignore(nested())}", () => null)).toBe("ok");
+  expect(evalBinding("${ignore(nested())}", MISSING_ROOT)).toBe("ok");
   const traced = evalBinding("${ignore(nested())}", nothing, { trace: true });
   expect(traced.value).toBe("ok");
   expect(traced.route.children[0]!.valueJson).not.toBeNull();
@@ -1156,7 +1152,7 @@ test.each(["Note.", null] as FeedbackValue[])(
   "a deep temporary composes with text or absent feedback (%p)",
   (feedback) => {
     const calls = countedStandIn("deep", nested(1n, 10_000));
-    expect(Array.isArray(evalBinding("${deep() + []}", () => null))).toBe(true);
+    expect(Array.isArray(evalBinding("${deep() + []}", MISSING_ROOT))).toBe(true);
     const traced = evalBinding("${deep() + []}", nothing, { trace: true });
     expect(Array.isArray(traced.value)).toBe(true);
     const routed = routeFeedback(traced.route, feedback, () => null);
@@ -1169,7 +1165,7 @@ test.each(["Note.", null] as FeedbackValue[])(
 
 test("a plain item has no route to follow", () => {
   const item = { answer: "ok" };
-  expect(evalBinding("${item.answer}", () => null, { item })).toBe("ok");
+  expect(evalBinding("${item.answer}", MISSING_ROOT, { item })).toBe("ok");
   const traced = evalBinding("${item.answer}", nothing, { item, trace: true });
   expect(traced.value).toBe("ok");
   const routed = routeFeedback(traced.route, "Note.", () => null);
@@ -1208,13 +1204,6 @@ test.each([
     expect(calls).toEqual(["nested"]);
   },
 );
-
-test("a traced resolver must return ResolvedValue", () => {
-  const resolve = (() => 1n) as unknown as (path: string) => ResolvedValue;
-  const error = thrown(() => evalExpr(parseExpr("a"), resolve, { trace: true }));
-  expect(error).toBeInstanceOf(TypeError);
-  expect((error as Error).message).toBe("a traced resolver must return ResolvedValue");
-});
 
 test("a slice route projects each kept item of its base", () => {
   const sources = new Sources({ producer: { tags: ["a", "b", "c"] } });
@@ -1270,8 +1259,10 @@ test("a comprehension's conditions are not part of its route", () => {
 });
 
 test("a traced ?. read keeps ?. in its route expression", () => {
-  const resolve = (path: string) =>
-    path === "a.output.k" ? new ResolvedValue("v", true, new SourceRef("r", 1, ["k"])) : new ResolvedValue(null, false);
+  const resolve: RootResolver = (names) =>
+    names[0] === "a"
+      ? { used: 2, present: true, value: { k: "v" }, why: null, source: new SourceRef("r", 1) }
+      : { used: 1, present: false, value: null, why: null };
   expect(evalExpr(parseExpr("a.output?.k"), resolve, { trace: true }).route.expression).toBe("a.output?.k");
   expect(evalExpr(parseExpr("upper(a.output?.k)"), resolve, { trace: true }).route.expression).toBe(
     "upper(a.output?.k)",

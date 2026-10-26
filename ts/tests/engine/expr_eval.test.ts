@@ -1032,3 +1032,87 @@ test("localDeclared reads a local's type, then its fields", () => {
   expect(localDeclared(new Map([["r", Rec]]))(["s"])).toBeNull();
   expect(localDeclared(null)(["r"])).toBeNull();
 });
+
+// --- the step table (field reads) --- //
+
+/** A root reader over `record` whose absent names say why. */
+const rec = (record: ValueRecord): RootResolver => (names) => {
+  const [present, value] = fieldOf(record, names[0]!);
+  return { used: 1, present, value, why: present ? null : `input '${names[0]}' is not bound` };
+};
+const ev = (text: string, record: ValueRecord, mode: ResolveMode = ResolveMode.BINDING_NONE) =>
+  evalExpr(parseExpr(text), rec(record), { mode });
+
+test.each([
+  ["n.k", { n: null }, "cannot read ${n.k}: n is null; write n?.k to read null instead, or check n != null first"],
+  ["gone.k", {}, "cannot read ${gone.k}: gone is missing (input 'gone' is not bound)"],
+  ["u.k", { u: {} }, "cannot read ${u.k}: u has no field 'k'"],
+  ["t.k", { t: "text" }, "cannot read ${t.k}: t is str, which has no fields"],
+  [
+    "f.k",
+    { f: new FileRef({ uri: "file:///x" }) },
+    "cannot read ${f.k}: f is a file, which has only uri, mime and name",
+  ],
+  [
+    "a.b.c",
+    { a: { b: null } },
+    "cannot read ${a.b.c}: a.b is null; write a.b?.c to read null instead, or check a.b != null first",
+  ],
+])(". raises: %s", (text, record, message) => {
+  expect(() => ev(text, record as ValueRecord)).toThrow(message);
+});
+
+test.each([
+  ["n?.k", { n: null }, null],
+  ["gone?.k", {}, null],
+  ["u?.k", { u: {} }, null],
+  ["n?.k.m", { n: null }, null],
+  ["n", { n: null }, null],
+  ["gone :- 'd'", {}, "d"],
+  ["n?.k :- 'd'", { n: null }, "d"],
+  ["f.mime", { f: new FileRef({ uri: "file:///x" }) }, null],
+])("value: %s", (text, record, value) => {
+  expect(ev(text, record as ValueRecord)).toEqual(value);
+});
+
+test("?. still raises on a non-record", () => {
+  expect(() => ev("t?.k", { t: "text" })).toThrow("cannot read ${t?.k}: t is str, which has no fields");
+});
+
+test(":- and :? don't catch a field-read error", () => {
+  expect(() => ev("n.k :- 'd'", { n: null })).toThrow("n is null");
+  expect(() => ev('n.k :? "need k"', { n: null })).toThrow("n is null");
+  expect(() => ev('gone :? "need it"', {})).toThrow("need it");
+  expect(() => ev("n.k | 'd'", { n: null })).toThrow("n is null");
+});
+
+test("a?.b.c: when a exists and a.b is null, .c raises", () => {
+  expect(() => ev("a?.b.c", { a: { b: null } })).toThrow("cannot read ${a?.b.c}: a?.b is null");
+});
+
+test("a bare missing root keeps today's per-mode handling", () => {
+  expect(ev("gone", {})).toBeNull();
+  expect(ev("gone", {}, ResolveMode.CONDITION_FALSY)).toBeNull();
+  expect(() => ev("gone", {}, ResolveMode.STRICT_RAISE)).toThrow("unresolved reference ${gone} in expression");
+});
+
+test("comprehension variables, item and call results follow the same table", () => {
+  expect(() => ev("[x.k for x in xs]", { xs: [null] })).toThrow("cannot read ${x.k}: x is null");
+  expect(ev("[x?.k for x in xs]", { xs: [null, { k: 1n }] })).toEqual([null, 1n]);
+  expect(() => evalExpr(parseExpr("item.k"), MISSING_ROOT, { item: null })).toThrow(
+    "cannot read ${item.k}: item is null",
+  );
+  expect(evalExpr(parseExpr("item?.k"), MISSING_ROOT, { item: null })).toBeNull();
+  expect(() => ev("upper(t).k", { t: "a" })).toThrow("cannot read ${upper(...).k}: upper(...) is str");
+});
+
+test("a variable the loader could not narrow names the variable and the field it lacks", () => {
+  // `or`-combined isinstance doesn't narrow at load (#1175); the read raises at run time.
+  const T = new Type({ kind: ValueKind.OBJECT, fields: new Map([["text", str]]), required: new Set(["text"]) });
+  const N = new Type({ kind: ValueKind.OBJECT, fields: new Map([["n", str]]), required: new Set(["n"]) });
+  const types = new Map([["T", T], ["N", N]]);
+  const text = "[p.text for p in ps if isinstance(p, T) or isinstance(p, N)]";
+  expect(() => evalExpr(parseExpr(text), rec({ ps: [{ text: "a" }, { n: "b" }] }), { types })).toThrow(
+    "cannot read ${p.text}: p has no field 'text'",
+  );
+});

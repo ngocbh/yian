@@ -309,7 +309,7 @@ export function evalTemplate(
 export function evalTemplate(
   segments: readonly TemplateSegment[],
   resolve: RootResolver,
-  { item = null, mode = ResolveMode.BINDING_NONE, types = null, trace = false }: TraceOptions = {},
+  { item, mode = ResolveMode.BINDING_NONE, types = null, trace = false }: TraceOptions = {},
 ): Value | TracedValue {
   const evalSpan = (span: Span): Value | TracedValue => {
     const result = evalExpr(span.tree, resolve, { item, mode, types, trace });
@@ -413,7 +413,7 @@ export function evalBinding(
 export function evalBinding(
   source: string,
   resolve: RootResolver,
-  { item = null, types = null, trace = false }: Omit<TraceOptions, "mode"> = {},
+  { item, types = null, trace = false }: Omit<TraceOptions, "mode"> = {},
 ): Value | TracedValue {
   return evalTemplate(scanTemplate(source), resolve, { item, mode: ResolveMode.BINDING_NONE, types, trace });
 }

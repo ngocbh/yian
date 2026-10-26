@@ -481,14 +481,15 @@ export function evaluateWhenRecord(
 // --------------------------------------------------------------------------------------- //
 
 /**
- * How a missing reference (one `resolve` maps to `null`) is treated.
+ * How a missing root (one `resolve` reads as absent, with no step after it) is treated. A field
+ * read follows the step table in every mode (see `evalExpr`).
  *
- * - `STRICT_RAISE`: a missing reference is an error: throw `ExpressionError`. For a context
- *   where every reference must be present (a strict render). A miss on a non-final operand of
- *   `|`, `:-`, or `:?` is still `null`, so the operator fires.
- * - `BINDING_NONE`: a missing reference is `null`, the binding contract (a coalesce or default
- *   may then fire, or the whole value is `null`).
- * - `CONDITION_FALSY`: a missing reference is `null`, which is falsy through comparisons, so a
+ * - `STRICT_RAISE`: a missing root is an error: throw `ExpressionError`. For a context where
+ *   every reference must be present (a strict render). A miss on a non-final operand of `|`,
+ *   `:-`, or `:?` is still `null`, so the operator fires.
+ * - `BINDING_NONE`: a missing root is `null`, the binding contract (a coalesce or default may
+ *   then fire, or the whole value is `null`).
+ * - `CONDITION_FALSY`: a missing root is `null`, which is falsy through comparisons, so a
  *   `when:` treats a miss as false. The same `null` as `BINDING_NONE`; the distinct name marks
  *   the intent at the call site (a `when:`/`asserts:` predicate).
  */
@@ -831,7 +832,7 @@ const OP_TOKEN_TYPES: ReadonlySet<string> = new Set(["NOT", "AND", "OR"]);
  */
 class EvalExpr {
   readonly #resolve: RootResolver;
-  readonly #item: Value | ResolvedValue;
+  readonly #item: Value | ResolvedValue | undefined;
   readonly #mode: ResolveMode;
   readonly #types: ReadonlyMap<string, Type> | null;
   readonly #trace: boolean;
@@ -843,7 +844,7 @@ class EvalExpr {
 
   constructor(
     resolve: RootResolver,
-    item: Value | ResolvedValue,
+    item: Value | ResolvedValue | undefined,
     mode: ResolveMode,
     types: ReadonlyMap<string, Type> | null,
     trace: boolean,
@@ -989,14 +990,13 @@ class EvalExpr {
   refcall(node: Tree): Walked {
     const { head: name, steps } = splitReference(node);
     const callSuffix = callSuffixOf(node);
-    if (callSuffix === undefined) return this.reference([name, ...steps.map((step) => step.name)], referenceText(node));
+    if (callSuffix === undefined) return this.reference(name, steps, referenceText(node));
     const constructor = this.isConstructor(name);
     let value: Walked;
     if (name === ISINSTANCE) value = this.isinstanceCall(callSuffix);
     else if (constructor) value = this.construct(name, callSuffix);
     else value = this.callBuiltin(name, callSuffix);
-    for (const step of steps) value = this.dottedStep(value, step.name);
-    if (value === MISSING) this.#missPath = `${name}(...)` + stepsText(steps);
+    [value] = this.walkSteps(value, [], steps, `${name}(...)`, null);
     if (this.#trace) {
       const frame = this.#frames.at(-1)!;
       if (constructor) {
@@ -1020,54 +1020,101 @@ class EvalExpr {
   }
 
   /**
-   * Read a reference. An `item`-headed one walks the MAP-body `item` scope locally (record fields
-   * and file fields, see `dottedStep`); any other goes to `resolve`, which reads its root, and
-   * the names after the root are walked here with `fieldOf`. A miss (an absent root or step, or a
-   * `null` on the way or at the end) is `MISSING`.
+   * Read a reference: its root, then its steps by the step table (`walkSteps`). An `item`-headed
+   * one reads the MAP-body `item` scope; any other root comes from `resolve`. Only a missing root
+   * with no steps after it is `MISSING`.
    *
-   * @param names The reference's head and step names.
+   * @param head The reference's first name.
+   * @param steps Its steps as written.
    * @param text The read as written (`?.` included), for miss messages and routes.
+   * @throws {ExpressionError} When a step raises (see `walkSteps`).
    */
-  reference(names: readonly string[], text: string): Walked {
-    if (names[0] === "item") {
-      // MAP-body-local scope (not a resolver head); a `null` item means no item scope.
+  reference(head: string, steps: readonly RefStep[], text: string): Walked {
+    const stepNames = steps.map((step) => step.name);
+    if (head === "item") {
+      // MAP-body-local scope (not a resolver head); an absent item means no item scope.
       const item = this.#item;
       let present: boolean;
-      let value: Walked;
+      let value: Value;
       let source: SourceRef | ValueRoute | null = null;
-      if (this.#trace && item instanceof ResolvedValue) {
+      if (item instanceof ResolvedValue) {
         ({ present, value, source } = item);
+        if (!this.#trace) source = null;
       } else {
-        present = item !== null;
-        value = item as Value;
+        present = item !== undefined;
+        value = item ?? null;
       }
-      if (value === null || !present) value = MISSING;
-      const steps = names.slice(1);
-      for (const step of steps) {
-        if (source !== null) present = present && value !== MISSING && fieldOf(value, step)[0];
-        value = this.dottedStep(value, step);
-      }
+      const [walked, complete] = this.walkSteps(present ? value : MISSING, [], steps, "item", null);
       if (this.#trace && source === null) {
-        this.#frames.at(-1)!.route = ValueRoute.literal(value === MISSING ? null : value).with({ expression: text });
-      } else if (this.#trace && present) {
-        this.#frames.at(-1)!.route = resolvedRoute(item as ResolvedValue, "item").project(steps);
+        this.#frames.at(-1)!.route = ValueRoute.literal(walked === MISSING ? null : walked).with({ expression: text });
+      } else if (this.#trace && present && complete) {
+        this.#frames.at(-1)!.route = resolvedRoute(item as ResolvedValue, "item").project(stepNames);
       }
-      if (value === MISSING) this.#missPath = text;
-      return value;
+      if (walked === MISSING) this.#missPath = text;
+      return walked;
     }
-    const read = this.#resolve(names);
-    const steps = names.slice(read.used);
-    let { present, value } = read;
-    for (const step of steps) {
-      if (!present) break;
-      [present, value] = fieldOf(value, step);
+    const read = this.#resolve([head, ...stepNames]);
+    const rootText = head + stepsText(steps.slice(0, read.used - 1));
+    const rest = steps.slice(read.used - 1);
+    const [value, complete] = this.walkSteps(read.present ? read.value : MISSING, [], rest, rootText, read.why);
+    if (this.#trace && read.present && complete) {
+      const route = readRoute(read.source ?? null, value as Value, stepNames.slice(read.used - 1), text);
+      this.#frames.at(-1)!.route = route;
     }
-    if (this.#trace && present) this.#frames.at(-1)!.route = readRoute(read.source ?? null, value, steps, text);
-    if (!present || value === null) {
-      this.#missPath = text;
-      return MISSING;
-    }
+    if (value === MISSING) this.#missPath = text;
     return value;
+  }
+
+  /**
+   * Walk `steps` from a root's or a call's value by the step table, given the value's declared
+   * `members`. `MISSING` is a missing root. `?.` on null or `MISSING` makes the whole read null,
+   * where `.` raises. A record without the key gives null under `?.` or when a member declares the
+   * key; else `.` raises. Anything but a record (or a file's `uri` / `mime` / `name`) raises.
+   * Only `fieldOf` reads, so a step never reaches a JS property such as `constructor`
+   * (safety-critical).
+   *
+   * @param head The root or call as written, for messages.
+   * @param why Why a missing root is missing, for its message.
+   * @returns The value, and whether every step found its key (no `?.` short-circuit or absent
+   *   declared key on the way).
+   * @throws {ExpressionError} When a step raises.
+   */
+  walkSteps(
+    value: Walked,
+    members: readonly Type[],
+    steps: readonly RefStep[],
+    head: string,
+    why: string | null,
+  ): [Walked, boolean] {
+    let shown = head;
+    let complete = true;
+    for (const step of steps) {
+      const read = `${shown}${step.optional ? "?." : "."}${step.name}`;
+      if (value === MISSING || value === null) {
+        if (step.optional) return [null, false];
+        const reason =
+          value === MISSING
+            ? `${shown} is missing${why !== null ? ` (${why})` : ""}`
+            : `${shown} is null; write ${shown}?.${step.name} to read null instead, or check ${shown} != null first`;
+        throw new ExpressionError(`cannot read \${${read}}: ${reason}`);
+      }
+      const [present, next] = fieldOf(value, step.name);
+      if (present) {
+        value = next;
+      } else if (isRecord(value) && (step.optional || declares(members, step.name))) {
+        value = null;
+        complete = false;
+      } else if (isRecord(value)) {
+        throw new ExpressionError(`cannot read \${${read}}: ${shown} has no field ${reprText(step.name)}`);
+      } else if (FileRef.isFileRef(value)) {
+        throw new ExpressionError(`cannot read \${${read}}: ${shown} is a file, which has only uri, mime and name`);
+      } else {
+        throw new ExpressionError(`cannot read \${${read}}: ${shown} is ${kindName(value)}, which has no fields`);
+      }
+      members = projectDeclared(members, step.name);
+      shown = read;
+    }
+    return [value, complete];
   }
 
   /**
@@ -1177,7 +1224,7 @@ class EvalExpr {
   }
 
   /**
-   * A comprehension variable read, then any `.field` trailers as `dottedStep` walks them. When
+   * A comprehension variable read, then any `.field` trailers as `walkSteps` walks them. When
    * tracing, its route is its item's route projected through the trailers.
    */
   compVar(node: Tree): Walked {
@@ -1186,11 +1233,9 @@ class EvalExpr {
     // Only a hand-built tree can read a variable outside its comprehension.
     if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
     const { steps } = splitReference(node);
-    // A null item is returned as is, as in Python; a `.field` on it misses.
-    let value: Walked = binding.value;
-    for (const step of steps) value = this.dottedStep(value, step.name);
-    if (value === MISSING) this.#missPath = name + stepsText(steps);
-    else if (this.#trace && binding.route !== null) {
+    // A null item is returned as is, as in Python; a `.field` on it follows the step table.
+    const [value, complete] = this.walkSteps(binding.value, [], steps, name, null);
+    if (this.#trace && binding.route !== null && complete && value !== null) {
       this.#frames.at(-1)!.route = binding.route.project(steps.map((step) => step.name));
     }
     return value;
@@ -1204,18 +1249,6 @@ class EvalExpr {
     if (typeof value === "boolean") return value ? 1n : 0n;
     if (typeof value !== "bigint") throw new ExpressionError(`slice bounds take int, got ${kindName(value)}`);
     return value;
-  }
-
-  /**
-   * One dotted step: `fieldOf` only (a record's own field, or a file's `uri` / `mime` /
-   * `name`), never a property read (safety-critical: so `${x.constructor}` can never reach a JS
-   * property). Any other value, a missing field, or a `null` field is `MISSING`, and so is a
-   * step into `MISSING`.
-   */
-  dottedStep(value: Walked, step: string): Walked {
-    if (value === MISSING) return MISSING;
-    const stepped = fieldOf(value, step)[1];
-    return stepped === null ? MISSING : stepped;
   }
 
   /**
@@ -1509,22 +1542,31 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
 /**
  * Evaluate a unified `${...}` expression tree (from `parseExpr`).
  *
- * The one evaluator for every `${...}` construct: references (bare, dotted, `item`-scoped; `?.`
- * steps read as `.` here, see `splitReference`),
- * arithmetic and comparisons over values (so text + text and list + list concatenate), boolean
- * combinators, list literals, list slices (`xs[a:b]`, as Python's with step 1; a slice of a
- * miss or `null` is a miss), list comprehensions (as Python's; an elem miss is a `null` item and
- * a condition miss is falsy outside strict mode, and a `null` item is returned as is), and
- * coalesce / default / required. The operators follow the TS
+ * The one evaluator for every `${...}` construct: references (bare, dotted with `.` and `?.`,
+ * `item`-scoped), arithmetic and comparisons over values (so text + text and list + list
+ * concatenate), boolean combinators, list literals, list slices (`xs[a:b]`, as Python's with step
+ * 1; a slice of a miss or `null` is a miss), list comprehensions (as Python's; a `null` item is
+ * returned as is), and coalesce / default / required. The operators follow the TS
  * number model: an int is a `bigint` at any size, a bool counts as 0 or 1, `/` always gives a
  * float, and a float result is IEEE's (`Infinity` is a value, NaN an error).
  *
- * Three semantics support a CASE's `else:` routing: a missing reference is `null` (in the
- * non-strict modes); arithmetic over that `null` throws; an ordered comparison with a `null`
- * operand is `false`.
+ * A reference is a root, then `.` and `?.` steps. A missing root (a skipped node, an absent input
+ * or local) is `null` in the non-strict modes. Each step follows the step table:
+ *
+ * | Receiver | `.k` | `?.k` |
+ * |---|---|---|
+ * | null, or a missing root | raises | null |
+ * | record with `k` | its value | its value |
+ * | record without `k`, its declared type declares `k` | null | null |
+ * | record without `k`, untyped or not declared | raises | null |
+ * | text, number, bool, list, file (`k` not `uri`/`mime`/`name`) | raises | raises |
+ *
+ * `?.` on null short-circuits the rest of the chain. `|`, `:-` and `:?` see only null and missing
+ * roots, never an error from their left side. Arithmetic over `null` throws; an ordered
+ * comparison with a `null` operand is `false`.
  *
  * Dotted access reads only a record's own field or a file's `uri`, `mime` or `name`
- * (`fieldOf`), never a JS property, so `${x.constructor}` is a miss (safety-critical).
+ * (`fieldOf`), never a JS property, so `${x.constructor}` raises "no field" (safety-critical).
  *
  * @param tree The parsed expression: a `Tree`, or a lone literal `Token`.
  * @param resolve Reads a reference's root from its names (`RootResolver`); the evaluator walks the
@@ -1533,7 +1575,7 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  * @param options.item The MAP-body-local scope for `item` / `item.path` (record and file
  *   fields); `null` (the default) means no item scope. With `trace`, a `ResolvedValue` may give
  *   the item's presence and its route through a composed collection.
- * @param options.mode How a missing reference is treated (default `BINDING_NONE`).
+ * @param options.mode How a missing root is treated (default `BINDING_NONE`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in, keyed by type name; `null` (the default) means no types.
  * @param options.trace Record the value's route while evaluating, and return both as a
@@ -1542,11 +1584,12 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *   (`FileRef`). With `trace`, the same value with its route.
  * @throws {RequiredError} When a `head :? message` head misses or is `null`.
  * @throws {ConstructorTypeError} When a `T(...)` constructor's value does not fit `T`.
- * @throws {ExpressionError} On an unsupported node, a call to an unknown function or one that
- *   fails, an `isinstance` type absent from `types`, arithmetic or ordering over operand kinds
- *   the operator doesn't take (`null` included), a zero divisor, a NaN result, an int too large
- *   for the runtime, a slice of anything but a list or with a bound that is null or not an int,
- *   a comprehension over anything but a list (`null` or a miss included), or a strict-mode miss.
+ * @throws {ExpressionError} On a field read the step table rejects, an unsupported node, a call to
+ *   an unknown function or one that fails, an `isinstance` type absent from `types`, arithmetic or
+ *   ordering over operand kinds the operator doesn't take (`null` included), a zero divisor, a NaN
+ *   result, an int too large for the runtime, a slice of anything but a list or with a bound that
+ *   is null or not an int, a comprehension over anything but a list (`null` or a miss included),
+ *   or a strict-mode miss.
  */
 export function evalExpr(tree: ExprNode, resolve: RootResolver, options: TraceOptions & { trace: true }): TracedValue;
 export function evalExpr(tree: ExprNode, resolve: RootResolver, options?: EvalOptions & { trace?: false }): Value;
@@ -1555,7 +1598,7 @@ export function evalExpr(
   tree: ExprNode,
   resolve: RootResolver,
   {
-    item = null,
+    item,
     mode = ResolveMode.BINDING_NONE,
     types = null,
     trace = false,

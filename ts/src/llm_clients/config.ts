@@ -16,8 +16,10 @@ import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
-// One provider vocabulary shared by the validated config carrier and the factory that consumes it.
-/** Every provider an `llm_config` may name, in Python yian's order. */
+/**
+ * Every provider an `llm_config` may name, in Python yian's order; the validated config carrier and
+ * the factory that consumes it share this one list.
+ */
 export const SUPPORTED_LLM_PROVIDERS = Object.freeze([
   "openai",
   "xai",
@@ -778,10 +780,10 @@ export function mergeLlmConfig(
   }
   for (const [key, value] of Object.entries(specific)) {
     if (value === null || value === undefined) continue;
-    const current = out.get(key);
-    if (Object.hasOwn(PROVIDER_BLOCKS, key) && current !== undefined) {
+    const existing = out.get(key);
+    if (Object.hasOwn(PROVIDER_BLOCKS, key) && existing !== undefined) {
       if (!isRecord(value)) out.set(key, value);
-      else if (isRecord(current)) out.set(key, { ...current, ...(unsetDropped(key, value) as object) });
+      else if (isRecord(existing)) out.set(key, { ...existing, ...(unsetDropped(key, value) as object) });
       // Otherwise the base block is not a record and stays for validation to refuse.
     } else {
       out.set(key, unsetDropped(key, value));

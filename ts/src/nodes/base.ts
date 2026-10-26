@@ -1346,9 +1346,15 @@ export abstract class Node {
    * Rebuild this node's new messages from `steps`, the bodies `messageSteps` picked, in order, and
    * `output`, the value its output commit holds, as a typed value. Pure and deterministic.
    *
+   * @param _localTypes The declared type of each of the node's locals, as `NodeCaps.localTypes`
+   *   gives it.
    * @throws TypeError for a node that doesn't produce messages.
    */
-  rebuildMessages(_steps: readonly Readonly<JsonObject>[], _output: TypedValue | null): TypedValue {
+  rebuildMessages(
+    _steps: readonly Readonly<JsonObject>[],
+    _output: TypedValue | null,
+    _localTypes: ReadonlyMap<string, Type | null> | null = null,
+  ): TypedValue {
     throw new TypeError(`node ${reprText(this.id)} produces no messages`);
   }
 

@@ -680,10 +680,15 @@ export class AgentNode extends Node {
     return isRecord(config) ? config : null;
   }
 
-  /** Render one steer event through this agent's `render:` template over `${event}`; `null` without one. */
-  private steerRenderer(): SteerRender | null {
+  /**
+   * Render one steer event through this agent's `render:` template over `${event}`, typed by
+   * `localTypes` (which holds `event`); `null` without one.
+   */
+  private steerRenderer(localTypes: ReadonlyMap<string, Type | null> | null = null): SteerRender | null {
     const template = this.steerRender;
-    return template === null ? null : (value) => renderTemplateRecord(template, { event: value } as ValueRecord);
+    if (template === null) return null;
+    const declared = localDeclared(localTypes);
+    return (value) => renderTemplateRecord(template, { event: value } as ValueRecord, declared);
   }
 
   /** Pick the steps of this agent's new messages (see `messageSteps` in `messages.ts`). */
@@ -692,8 +697,12 @@ export class AgentNode extends Node {
   }
 
   /** Rebuild this agent's new messages (see `rebuildMessages` in `messages.ts`). */
-  override rebuildMessages(steps: readonly Readonly<JsonObject>[], output: TypedValue | null): TypedValue {
-    return rebuildMessages(steps, output, this.steerRenderer());
+  override rebuildMessages(
+    steps: readonly Readonly<JsonObject>[],
+    output: TypedValue | null,
+    localTypes: ReadonlyMap<string, Type | null> | null = null,
+  ): TypedValue {
+    return rebuildMessages(steps, output, this.steerRenderer(localTypes));
   }
 
   /**
@@ -885,7 +894,7 @@ export class AgentNode extends Node {
       baseSystemPrompt: options.baseSystemPrompt,
       skills: options.skills,
       steerInbox: options.steerInbox,
-      renderSteer: this.steerRenderer() ?? undefined,
+      renderSteer: this.steerRenderer(caps.localTypes ?? null) ?? undefined,
       models: options.models,
       sent: () => [],
       steps: caps.steps,
@@ -1271,7 +1280,7 @@ export class AgentNode extends Node {
       tools,
       structured,
       baseSystemPrompt: rendered.baseSystemPrompt,
-      renderSteer: this.steerRenderer(),
+      renderSteer: this.steerRenderer(caps.localTypes ?? null),
     });
     return {
       interactions,

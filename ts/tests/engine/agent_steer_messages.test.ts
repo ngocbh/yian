@@ -32,7 +32,7 @@ import { withWarnings } from "../../src/platform.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { FileRef, InboxRef, type Value, type ValueRecord } from "../../src/typesys/values.ts";
+import { FileRef, InboxRef, Type, type Value, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
 import { callReply, crashAfter, NO_ENV, resumeWith, runWith, serving, textReply } from "./run_state_fixtures.ts";
 
 /** A pool whose START holds the handle of inbox `name`, as START binds an Inbox input. */
@@ -773,4 +773,32 @@ test("two steers before one call: new_messages holds both in order, live and reb
     ["user", ["b"]],
     ["assistant", ["done"]],
   ]);
+});
+
+// --- declared fields at run time (#1149) --- //
+
+const EV = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([
+    ["text", Type.scalar(ValueKind.STRING)],
+    ["opt", Type.scalar(ValueKind.STRING).replace({ nullable: true })],
+  ]),
+  required: new Set(["text"]),
+});
+
+/** The texts of the user message an agent rendering `render` rebuilds from one steer of `event`. */
+function rebuiltSteer(render: string, event: ValueRecord, localTypes: ReadonlyMap<string, Type | null> | null): string[] {
+  const node = new AgentNode("chat", { steerInbox: true, steerRender: render });
+  const steer: ValueRecord = { kind: "steer", inbox: "notes", from: [1n], values: [event] };
+  const rebuilt = node.rebuildMessages([steer as JsonObject], null, localTypes);
+  const [message] = rebuilt.toObject() as { parts: { text: string }[] }[];
+  return message!.parts.map((part) => part.text);
+}
+
+test("render: reads a declared field of the event that is absent as null", () => {
+  expect(rebuiltSteer("${event.opt :- 'd'}", { text: "x" }, new Map([["event", EV]]))).toEqual(["d"]);
+});
+
+test("render: over an untyped event falls back to default rendering on an absent key", () => {
+  expect(rebuiltSteer("${event.k :- 'd'}", { text: "x" }, null)).toEqual(['{"text":"x"}']);
 });

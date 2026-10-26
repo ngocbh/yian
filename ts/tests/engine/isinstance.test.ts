@@ -127,7 +127,8 @@ test("evalExpr checks the value against the named type", () => {
 });
 
 test("a missing value is not an instance of a record", () => {
-  expect(evaluate("isinstance(d.output, Buy)", resolver())).toBe(false);
+  expect(evaluate("isinstance(d, Buy)", resolver())).toBe(false);
+  expect(evaluate("isinstance(d?.output, Buy)", resolver())).toBe(false);
 });
 
 test("isinstance composes with other operators", () => {
@@ -190,16 +191,16 @@ test("record evaluation without types names the type", () => {
 });
 
 test("a missing value raises under STRICT_RAISE", () => {
-  const tree = parseExpr("isinstance(d.output, Buy)");
+  const tree = parseExpr("isinstance(d, Buy)");
   expectError(
     () => evalExpr(tree, resolver(), { mode: ResolveMode.STRICT_RAISE, types: TYPES }),
-    "unresolved reference ${d.output} in expression",
+    "unresolved reference ${d} in expression",
   );
 });
 
 test("an Optional alias accepts a missing value", () => {
   const types = new Map([["MaybeBuy", BUY.replace({ nullable: true })]]);
-  expect(evaluate("isinstance(d.output, MaybeBuy)", resolver(), types)).toBe(true);
+  expect(evaluate("isinstance(d?.output, MaybeBuy)", resolver(), types)).toBe(true);
   expect(evaluate("isinstance(d.output, MaybeBuy)", resolver({ d: { output: A_BUY } }), types)).toBe(true);
   expect(evaluate("isinstance(d.output, MaybeBuy)", resolver({ d: { output: A_SELL } }), types)).toBe(false);
 });

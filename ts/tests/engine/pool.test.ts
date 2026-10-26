@@ -83,8 +83,9 @@ describe("VariablePool.readRoot through the evaluator", () => {
     // ${reviewer.output.ratio} (3-segment) walks one level in
     expect(read(pool, "reviewer.output.ratio")).toBe(21.5);
     expect(read(pool, "reviewer.output.nested.k")).toBe("v");
-    // missing path -> null, not an error
-    expect(read(pool, "reviewer.output.absent")).toBeNull();
+    // an absent field raises under `.` and reads null under `?.`
+    expect(() => read(pool, "reviewer.output.absent")).toThrow("reviewer.output has no field 'absent'");
+    expect(read(pool, "reviewer.output?.absent")).toBeNull();
     expect(read(pool, "ghost.output")).toBeNull();
   });
 
@@ -92,8 +93,9 @@ describe("VariablePool.readRoot through the evaluator", () => {
     // `node` and `ref_outputs` were unified into `<id>.output`; they are now just unknown heads.
     const pool = new VariablePool();
     pool.set("reviewer", "txt");
-    expect(read(pool, "node.reviewer.output")).toBeNull();
-    expect(read(pool, "ref_outputs.reviewer.output")).toBeNull();
+    expect(read(pool, "node?.reviewer.output")).toBeNull();
+    expect(read(pool, "ref_outputs?.reviewer.output")).toBeNull();
+    expect(() => read(pool, "node.reviewer.output")).toThrow("cannot read ${node.reviewer}: node is missing");
   });
 
   test("input and system heads (test_resolve_inputs_and_system)", () => {
@@ -103,9 +105,9 @@ describe("VariablePool.readRoot through the evaluator", () => {
     expect(read(pool, "input.missing")).toBeNull();
     expect(read(pool, "system.anything")).toBeNull(); // ambient namespace, unseeded
     // `parent` is retired: it is now just an unknown head
-    expect(read(pool, "parent.threshold")).toBeNull();
+    expect(read(pool, "parent?.threshold")).toBeNull();
     expect("parent" in pool).toBe(false);
-    expect(read(pool, "unknown_ns.x")).toBeNull();
+    expect(read(pool, "unknown_ns?.x")).toBeNull();
   });
 
   test(
@@ -138,11 +140,11 @@ describe("VariablePool.readRoot through the evaluator", () => {
     expect(read(pool, "input.x")).toBe("inner");
   });
 
-  test("system reads the whole ambient; a field of its text misses", () => {
+  test("system reads the whole ambient; a field of its text raises", () => {
     const pool = new VariablePool();
     pool.addSystem("today", "2026-10-18");
     expect(read(pool, "system.today")).toBe("2026-10-18");
-    expect(read(pool, "system.today.x")).toBeNull();
+    expect(() => read(pool, "system.today.x")).toThrow("system.today is str, which has no fields");
     expect(read(pool, "system")).toBeNull();
   });
 
@@ -157,7 +159,7 @@ describe("VariablePool.readRoot through the evaluator", () => {
     pool.set("doc", new FileRef({ uri: "s3://bucket/a.txt" }), ValueKind.FILE);
     expect(read(pool, "doc.output.uri")).toBe("s3://bucket/a.txt");
     expect(read(pool, "doc.output.mime")).toBeNull();
-    expect(read(pool, "doc.output.size")).toBeNull();
+    expect(() => read(pool, "doc.output.size")).toThrow("doc.output is a file, which has only uri, mime and name");
   });
 });
 

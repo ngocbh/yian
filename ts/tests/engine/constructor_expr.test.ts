@@ -128,7 +128,9 @@ test("a value missing a required field fails naming it", () => {
 });
 
 test("a missing value fails the check", () => {
-  expectError(() => evaluate("Buy(d.output)"), "Buy(...): null is not an object for a record type", ConstructorTypeError);
+  // A missing root is null in a binding; a field of it would raise before the check.
+  expectError(() => evaluate("Buy(d)"), "Buy(...): null is not an object for a record type", ConstructorTypeError);
+  expectError(() => evaluate("Buy(d.output)"), "cannot read ${d.output}: d is missing");
 });
 
 test("a union typedef checks against every member", () => {

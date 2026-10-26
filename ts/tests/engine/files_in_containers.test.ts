@@ -611,13 +611,14 @@ test("a traced item read of a file field routes to its source", () => {
   expect(traced.route.source).toEqual(new SourceRef("run", 1, ["xs", 0, "uri"]));
 });
 
-test("a traced item read of another file field has no source route", () => {
+test("a traced item read of another file field raises, under . and ?. alike", () => {
   const item = new ResolvedValue(REF, true, new SourceRef("run", 1, ["xs", 0]));
 
-  const traced = evalExpr(parseExpr("item.other"), MISSING_ROOT, { item, trace: true });
-
-  expect(traced.value).toBeNull();
-  expect(traced.route.source).toBeNull();
+  for (const text of ["item.other", "item?.other"]) {
+    expect(() => evalExpr(parseExpr(text), MISSING_ROOT, { item, trace: true })).toThrow(
+      "item is a file, which has only uri, mime and name",
+    );
+  }
 });
 
 describe("FileRef", () => {
@@ -1258,10 +1259,12 @@ const UNTYPED_FILE_PRODUCER = `\
       return ${F}
 `;
 
-test.each(["other", "__class__"])("another field of a file is missing like a missing key: %s", async (field) => {
-  const expected = await missingOutcome(OBJECT_PRODUCER, `a.output.${field}`);
-  expect(expected).toEqual(["succeeded", "null"]);
-  expect(await missingOutcome(UNTYPED_FILE_PRODUCER, `a.output.${field}`)).toEqual(expected);
+test.each(["other", "__class__"])("another field of a file raises, as a missing key does: %s", async (field) => {
+  expect((await missingOutcome(OBJECT_PRODUCER, `a.output.${field}`))[0]).toBe("failed");
+  expect((await missingOutcome(UNTYPED_FILE_PRODUCER, `a.output.${field}`))[0]).toBe("failed");
+  // `?.` reads a record's missing key as null, but a file still has only uri, mime and name.
+  expect(await missingOutcome(OBJECT_PRODUCER, `a.output?.${field}`)).toEqual(["succeeded", "null"]);
+  expect((await missingOutcome(UNTYPED_FILE_PRODUCER, `a.output?.${field}`))[0]).toBe("failed");
 });
 
 test("render_as_json writes a file as its mapping", async () => {
@@ -1278,14 +1281,13 @@ test.each([false, true])("a run reads the fields of a file through its trace: le
       "  n:\n    kind: code\n    output: file\n" +
       `    code: |\n      return ${NAMED_F}\n` +
       "  b:\n    kind: code\n    input:\n" +
-      "      u: ${a.output.uri}\n      k: ${n.output.name}\n" +
-      "      x: ${a.output.other}\n      c: ${a.output.__class__}\n      t: ${a.output}\n" +
+      "      u: ${a.output.uri}\n      k: ${n.output.name}\n      m: ${a.output.mime}\n      t: ${a.output}\n" +
       "    code: |\n" +
-      "      return [inputs['u'], inputs['k'], inputs['x'], inputs['c'], inputs['t'].constructor.name]\n" +
+      "      return [inputs['u'], inputs['k'], inputs['m'], inputs['t'].constructor.name]\n" +
       "output: ${b.output}\n",
     { learnable },
   );
-  expect(output).toEqual(["f", "a.txt", null, null, "FileRef"]);
+  expect(output).toEqual(["f", "a.txt", null, "FileRef"]);
 });
 
 // --- readers, events and results hold the files of a typed output --- //

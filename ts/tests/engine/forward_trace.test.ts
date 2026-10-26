@@ -3238,9 +3238,10 @@ test("a pooled lookup keeps value and producer identity together", async () => {
   // in flight and `late` binds after it committed.
   const consumerDone = Promise.withResolvers<void>();
   const peer = new BlockingNode("peer", consumerDone.promise.then(() => ({ value: 7n, null: null })));
-  const consumer = new FuncNode("consumer", (inputs) => inputs, { reads: { before: "${peer.output.value | 0}" } });
+  // `?.` reads null while `peer` has no output yet, and for its absent key.
+  const consumer = new FuncNode("consumer", (inputs) => inputs, { reads: { before: "${peer.output?.value | 0}" } });
   const late = new FuncNode("late", (inputs) => inputs, {
-    reads: { after: "${peer.output.value | 0}", null: "${peer.output.null}", missing: "${peer.output.missing}" },
+    reads: { after: "${peer.output.value | 0}", null: "${peer.output.null}", missing: "${peer.output?.missing}" },
   });
   const built = engine(
     graph([peer, consumer, late], [

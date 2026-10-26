@@ -703,13 +703,13 @@ test("accepted null has a source but absence does not", () => {
   expect(messages(sources.feedback(absent, "Supply a value."))).toEqual([]);
   expect(messages(sources.feedback(present, null))).toEqual([]);
   expect(messages(sources.feedback(present, ""))).toEqual([[accepted, ""]]);
-  for (const name of ["accepted", "absent"]) {
-    const error = thrown(() =>
-      evalExpr(parseExpr(name), sources.resolve, { mode: ResolveMode.STRICT_RAISE, trace: true }),
-    );
-    expect(error).toBeInstanceOf(ExpressionError);
-    expect((error as Error).message).toMatch(/unresolved/);
-  }
+  // A strict read of an absent root raises; an accepted null is a value (a strict template refuses it).
+  const strict = (name: string) =>
+    evalExpr(parseExpr(name), sources.resolve, { mode: ResolveMode.STRICT_RAISE, trace: true });
+  expect(strict("accepted").value).toBeNull();
+  const error = thrown(() => strict("absent"));
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toMatch(/unresolved/);
 });
 
 test.each([0n, false, "", ["item"]] as Value[])("coalesce and default drop losing arm routes (%p)", (winning) => {
@@ -957,7 +957,7 @@ test("composed item route projects fields and preserves null presence", () => {
   expect(messages(sources.feedback(result, "Fill this."))).toEqual([
     [sources.identities.right!, [{ answer: "Fill this." }]],
   ]);
-  const missing = evalBinding("${item.absent}", sources.resolve, { item, trace: true });
+  const missing = evalBinding("${item?.absent}", sources.resolve, { item, trace: true });
   expect(messages(sources.feedback(missing, "Fill this."))).toEqual([]);
   const fallback = evalBinding('${item.answer :- "default"}', sources.resolve, { item, trace: true });
   expect(fallback.value).toBe("default");

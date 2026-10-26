@@ -529,8 +529,7 @@ export async function chatModelFromConfig(
   const provider = validated.provider!;
   const model = validated.model!;
   const wiring: Wiring = { env, send, scheduler, onReplayDegraded };
-  const read: Read = async (pinned, name) =>
-    connectionCredentials(pinned, name, { env, signal, scheduler });
+  const read: Read = (pinned, name) => connectionCredentials(pinned, name, { env, signal, scheduler });
 
   if (validated.apiKey === null && connection !== null && connection.method === "subscription") {
     return subscriptionModel(connection, model, validated.blockFor("openai"), wiring, read);

@@ -97,7 +97,9 @@ export function redactKey(text: string, key: string | null | undefined): string 
     const start = prefixStart(head, key, keySize);
     const stop = suffixStop(tail, key, keySize);
     if (start === null && stop === null) return token;
-    // Text on a side that does not match the key is kept only when the other side matched.
+    // When only the tail matches, the whole head goes too, which over-redacts (a short key
+    // prefix included). When only the head matches, the tail is kept, so up to two key
+    // characters there may survive, under the three-character minimum.
     const left = start === null ? "" : head.slice(0, start);
     const right = stop === null ? tail : tail.slice(stop);
     return left + REDACTED + right;

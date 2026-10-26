@@ -25,6 +25,7 @@ import {
   OPENAI_COMPATIBLE,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
+
 // The largest page Anthropic and Google serve, so most listings take one request.
 const PAGE_SIZE = "1000";
 
@@ -180,8 +181,8 @@ export async function listModels(
     return data;
   };
   const ids = await pages(getPage);
-  if (!ids.every((id) => typeof id === "string")) throw new ModelListError("invalid response");
-  return Object.freeze([...new Set(ids as string[])].sort(compareCodeUnits));
+  if (!ids.every((id): id is string => typeof id === "string")) throw new ModelListError("invalid response");
+  return Object.freeze([...new Set(ids)].sort(compareCodeUnits));
 }
 
 /** Whether the URL, key and timeout can make a request; `checkUrl` holds `base` to `validateBaseUrl`. */

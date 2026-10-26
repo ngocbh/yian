@@ -42,7 +42,7 @@ import {
   Grow,
   markerMessage,
   Output,
-  Pending,
+  type Pending,
   Route,
   type SteerInbox,
 } from "../nodes/base.ts";
@@ -53,9 +53,8 @@ import type { Skill } from "../skills/catalog.ts";
 import { toolCallId } from "../tools/context.ts";
 import { ToolSet } from "../tools/registry.ts";
 import { referenceRoot } from "../typesys/pool.ts";
-import { jsTypeName, type ValueRecord } from "../typesys/values.ts";
 import {
-  EvaluatedOutcome,
+  type EvaluatedOutcome,
   EvaluationFailure,
   evalNode,
   evaluationFailure,
@@ -240,9 +239,9 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
 
 /**
  * One host delivery: a send, a withdraw of an inbox's unread sends, a completed call, an inbox
- * close, an interrupt or a cancel. An
- * interrupt's `running` are the in-flight readers of its inbox, which only the engine knows;
- * absent offline: then any in-flight node counts as an open reader for the idle rule.
+ * close, an interrupt or a cancel. An interrupt's `running` are the in-flight readers of its
+ * inbox, which only the engine knows; absent offline: then any in-flight node counts as an open
+ * reader for the idle rule.
  */
 export type DeliveryOp =
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown }
@@ -255,8 +254,9 @@ export type DeliveryOp =
 /**
  * @internal Prepare `op` on `state`; the engine and the run boundary share it.
  *
- * @returns null for a no-op (nothing to withdraw, an identical repeat complete, closing a closed inbox, or an interrupt
- *   while the run waits for the inbox's next message or is already stopping).
+ * @returns null for a no-op (nothing to withdraw, an identical repeat complete, closing a closed
+ *   inbox, or an interrupt while the run waits for the inbox's next message or is already
+ *   stopping).
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
@@ -388,7 +388,7 @@ export class FlowEngine {
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
     if (!isRunLog(log)) throw new TypeError("FlowEngine expects a RunLog");
     if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
-    if (typeof numWorkers !== "number" || !Number.isSafeInteger(numWorkers)) {
+    if (!Number.isSafeInteger(numWorkers)) {
       throw new TypeError("num_workers must be a non-negative integer");
     }
     if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
@@ -546,13 +546,7 @@ export class FlowEngine {
           nodeId = state.ready[0]!;
           this.#publish(commitPrepared(log, state, prepareNodeStarted(state, nodeId)), events);
         } else {
-          this.#quiesce(events);
-          // A delivery made from the run_waiting observer can leave work; then go on.
-          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) {
-            // Decided with no await, so no delivery can land after this check and before the flag.
-            this.#looping = false;
-            break;
-          }
+          if (this.#quiesceEnds(events)) break;
           continue;
         }
         signal.throwIfAborted();
@@ -627,13 +621,7 @@ export class FlowEngine {
           startWorker(nodeId);
         }
         if (active.size === 0) {
-          this.#quiesce(events);
-          // A delivery made from the run_waiting observer can leave work; then go on.
-          if (state.result !== null || (state.ready.length === 0 && this.#nextWake() === null)) {
-            // Decided with no await, so no delivery can land after this check and before the flag.
-            this.#looping = false;
-            break;
-          }
+          if (this.#quiesceEnds(events)) break;
           continue;
         }
         this.#armTimer(blocked);
@@ -668,6 +656,20 @@ export class FlowEngine {
     }
     // A cancel taken through a nudge ends the loop with workers still running; they drain here.
     await Promise.all(active.values());
+  }
+
+  /**
+   * Quiesce, and end the loop unless a delivery made from the run_waiting observer left work.
+   *
+   * @returns Whether the loop ends.
+   */
+  #quiesceEnds(events: RunEvent[]): boolean {
+    const { state } = this;
+    this.#quiesce(events);
+    if (state.result === null && (state.ready.length > 0 || this.#nextWake() !== null)) return false;
+    // Decided with no await, so no delivery can land after this check and before the flag.
+    this.#looping = false;
+    return true;
   }
 
   /**
@@ -727,9 +729,9 @@ export class FlowEngine {
    * `readsSteerInbox`, else `null`. Opening registers the node as reading that inbox until its
    * outcome commits, with an interrupt signal that an interrupt of the inbox aborts (aborted at
    * once when the node holds a pending interrupt). A node that opens an inbox while a Stop on it
-   * stands is interrupted at once by its own `interrupted` record. A read is zero-wait: in one synchronous section it takes every event a read
-   * may take now, appends them as one `steer` step and returns their values, so no delivery lands
-   * between reading the queue and the append.
+   * stands is interrupted at once by its own `interrupted` record. A read is zero-wait: in one
+   * synchronous section it takes every event a read may take now, appends them as one `steer` step
+   * and returns their values, so no delivery lands between reading the queue and the append.
    */
   #steerInbox(nodeId: string, signal: AbortSignal): ((inbox: string) => SteerInbox) | null {
     const { state, log } = this;
@@ -794,7 +796,6 @@ export class FlowEngine {
 
   /** Prepare one outcome's record, append it and apply its plan, returning its observers. */
   #commitOutcome(nodeId: string, evaluated: EvaluatedOutcome): readonly RunEvent[] {
-    if (!isExactly(evaluated, EvaluatedOutcome)) throw new TypeError("FlowEngine outcome must be an EvaluatedOutcome");
     const { state } = this;
     const { outcome } = evaluated;
     const steerInbox = this.#steerInboxes.get(nodeId)?.inbox ?? null;
@@ -847,10 +848,8 @@ export class FlowEngine {
         if (!(error instanceof GrowthRejected)) throw error;
         prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);
       }
-    } else if (outcome instanceof Pending) {
-      return this.#commitPending(nodeId, outcome, carriers, steerInbox);
     } else {
-      throw new TypeError(`raw evaluator returned an unsupported outcome ${jsTypeName(outcome)}`);
+      return this.#commitPending(nodeId, outcome, carriers, steerInbox);
     }
     return commitPrepared(this.log, state, prepared);
   }

@@ -89,9 +89,7 @@ export function backoff(failure: number, error: unknown, random: () => number): 
     // A foreign branded error may hold anything here, or throw from a getter.
     try {
       after = (error as { retryAfter?: unknown }).retryAfter;
-    } catch {
-      after = null;
-    }
+    } catch {}
     if (typeof after === "number" && Number.isFinite(after) && after >= 0) return Math.min(cap, after);
   }
   // The cap is a safe integer, below 2^53, so exponent 53 reaches it for any base of at least 1;
@@ -219,8 +217,8 @@ function deadlineAfter(caps: NodeCaps, seconds: number, tool: string, name: stri
  * Every evaluation reads `caps.steps.calls` first: an open call waits again without calling the
  * handler, an answered one returns its output or fails with its error (never retried), and an
  * `ask` closed `timed_out` returns null when the declared output is `Optional(...)`, else (no
- * `output:` included) fails with `tool.timeout`. `ask` sends yian's base surface (prompt, questions, a `timeout` as a deadline)
- * plus the host's declared extras.
+ * `output:` included) fails with `tool.timeout`. `ask` sends yian's base surface (prompt,
+ * questions, a `timeout` as a deadline) plus the host's declared extras.
  *
  * `inputTypes` maps each input name to the type the loader proved its binding has (a literal's
  * exact type, a typed binding's declared type, or a reference's inferred type); an input whose

@@ -507,7 +507,7 @@ export interface PromptContext {
  */
 export async function ensureEnvKey(provider: string, { env, terminal }: PromptContext): Promise<string | null> {
   const envVar = getApiKeyEnv(provider);
-  if (envVar === null) return null; // keyless or unknown: nothing to ensure
+  if (envVar === null) return null;
   const existing = env.read(envVar);
   if (existing) return existing;
   if (OPTIONAL_API_KEY_PROVIDERS.has(provider.toLowerCase())) return null;

@@ -130,20 +130,26 @@ export function assertExactContracts(
   producers: ReadonlyMap<string, unknown>,
   flowInputs: ReadonlyMap<string, unknown> = new Map(),
 ): void {
-  for (const [name, contract] of producers) {
-    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
-        "output producer contracts must be ValueContract or PartialRecordContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
+  for (const [name, contract] of producers) checkProducerContract(name, contract);
+  for (const [name, contract] of flowInputs) checkFlowInputContract(name, contract);
+}
+
+/** @throws TypeError when `contract` is not an exact `ValueContract` or `PartialRecordContract`. */
+function checkProducerContract(name: string, contract: unknown): void {
+  if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
+    throw new TypeError(
+      "output producer contracts must be ValueContract or PartialRecordContract values, " +
+        `got ${jsTypeName(contract)} for ${reprText(name)}`,
+    );
   }
-  for (const [name, contract] of flowInputs) {
-    if (!isExactly(contract, ValueContract)) {
-      throw new TypeError(
-        `flow input contracts must be exact ValueContract values, got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
+}
+
+/** @throws TypeError when `contract` is not an exact `ValueContract`. */
+function checkFlowInputContract(name: string, contract: unknown): void {
+  if (!isExactly(contract, ValueContract)) {
+    throw new TypeError(
+      `flow input contracts must be exact ValueContract values, got ${jsTypeName(contract)} for ${reprText(name)}`,
+    );
   }
 }
 
@@ -170,12 +176,7 @@ export function referenceContract(
     const name = parts[1]!;
     const contract = flowInputs.get(name);
     if (contract === undefined) return null;
-    if (!isExactly(contract, ValueContract)) {
-      throw new TypeError(
-        "flow input contracts must be exact ValueContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
+    checkFlowInputContract(name, contract);
     return projectOutputContract(contract, parts.slice(2));
   }
   if (parts.length >= 2 && parts[1] === NEW_MESSAGES) {
@@ -187,13 +188,7 @@ export function referenceContract(
   const producerId = parts[0]!;
   const contract = producers.get(producerId);
   if (contract === undefined) return null;
-  if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-    throw new TypeError(
-      "output producer contracts must be ValueContract or " +
-        "PartialRecordContract values, " +
-        `got ${jsTypeName(contract)} for ${reprText(producerId)}`,
-    );
-  }
+  checkProducerContract(producerId, contract);
   return projectOutputContract(contract, parts.slice(2));
 }
 
@@ -314,7 +309,7 @@ export function resolveOutputBindingContract(
     if (refs.length !== 1) return null;
     const contract = referenceContracts.get(refs[0]!) ?? null;
     // A `?.` step reads null when its receiver is null or lacks the key, as `inferExprType` types it.
-    if (isExactly(contract, ValueContract) && hasOptionalStep(expression as Tree)) {
+    if (isExactly(contract, ValueContract) && hasOptionalStep(expression)) {
       return new ValueContract(contract.type.replace({ nullable: true }), contract.origins);
     }
     return contract;
@@ -422,8 +417,8 @@ export function literalContract(value: unknown, options: { exactLiterals?: boole
 function listContract(items: readonly (OutputContract | null)[]): ValueContract | null {
   // Unlike an inline body's strict element join, this leaves a list it can't join unproven (the
   // runtime check covers it) instead of failing the load.
-  if (items.length === 0 || items.some((item) => !isExactly(item, ValueContract))) return null;
-  const types = (items as ValueContract[]).map((item) => item.type);
+  if (items.length === 0 || !items.every((item) => isExactly(item, ValueContract))) return null;
+  const types = items.map((item) => item.type);
   const element = joinedType(types) ?? joinedType(types.map(widened));
   if (element === null) return null;
   return new ValueContract(new Type({ kind: listKindForElement(element), element }));
@@ -519,8 +514,8 @@ function nullDefaultContract(
   const head = expression.children[0]!;
   if (head instanceof Tree && head.data === "coalesce") {
     const operands = head.children.map((operand) => directValueContract(operand, referenceContracts));
-    if (operands.some((operand) => operand === null)) return null;
-    const types = (operands as ValueContract[]).map((operand) => operand.type.replace({ nullable: false }));
+    if (!operands.every((operand) => operand !== null)) return null;
+    const types = operands.map((operand) => operand.type.replace({ nullable: false }));
     if (types.slice(1).some((typ) => !typeEquals(typ, types[0]!))) return null;
     return new ValueContract(types[0]!.replace({ nullable: true }));
   }
@@ -601,7 +596,7 @@ export function hasOptionalStep(reference: Tree): boolean {
  * @param expression The parsed tree of a template's single span.
  * @returns `true` for a bare or dotted reference with no call suffix.
  */
-function isDirectReference(expression: ExprNode): boolean {
+function isDirectReference(expression: ExprNode): expression is Tree {
   return (
     expression instanceof Tree &&
     expression.data === "refcall" &&
@@ -776,7 +771,7 @@ export function contractType(contract: OutputContract | null): Type | null {
   if (contract === null) return null;
   if (isExactly(contract, ValueContract)) return contract.type;
   const fields = new Map<string, Type>();
-  for (const [name, field] of (contract as PartialRecordContract).fields) {
+  for (const [name, field] of contract.fields) {
     fields.set(name, field !== null ? field.type : Type.scalar(ValueKind.ANY));
   }
   return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });

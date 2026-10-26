@@ -200,8 +200,7 @@ export function jsTypeName(value: unknown): string {
 // are separate from `textForm`, which writes any JS value for a message and stops at the cap.
 
 /**
- * Return a value's text form (design 3.2.3): text as itself, anything else as `writeAsJson`'s
- * compact JSON.
+ * Return a value's text form: text as itself, anything else as `writeAsJson`'s compact JSON.
  *
  * @throws TypeError as `writeAsJson` does.
  */
@@ -591,7 +590,7 @@ interface ToHostFrame {
 }
 
 /**
- * Return a yian value as a fresh host value, by design 3.2.1's host boundary (D9A).
+ * Return a yian value as a fresh host value.
  *
  * An int within ±(2^53−1) becomes a `number`; a bigger one stays a `bigint`. A float
  * (`±Infinity` included), text, a boolean, `null`, a `FileRef` and an `InboxRef` are handed over
@@ -987,37 +986,15 @@ export class TypedValue {
     if (storage === ValueKind.FILE) {
       if (!isRecord(value)) throw new RangeError("file typed value must contain a JSON object");
       requireFields(value, FILE_FIELDS, "file reference");
-      try {
-        return new TypedValue(storage, new FileRef(value as unknown as FileRefInit));
-      } catch (error) {
-        if (error instanceof RangeError) {
-          throw new RangeError(`invalid file typed value: ${error.message}`);
-        }
-        throw error;
-      }
+      return decodedAs("file", () => new TypedValue(storage, new FileRef(value as unknown as FileRefInit)));
     }
     if (storage === ValueKind.INBOX && isRecord(value)) {
       requireFields(value, INBOX_FIELDS, "inbox handle");
-      try {
-        return new TypedValue(storage, new InboxRef(value["inbox"] as string));
-      } catch (error) {
-        if (error instanceof RangeError) {
-          throw new RangeError(`invalid inbox typed value: ${error.message}`);
-        }
-        throw error;
-      }
+      return decodedAs("inbox", () => new TypedValue(storage, new InboxRef(value["inbox"] as string)));
     }
     if (storage === ValueKind.DATE || storage === ValueKind.DATETIME) {
       if (typeof value === "string") {
-        try {
-          if (storage === ValueKind.DATE) parseDate(value);
-          else parseDatetime(value);
-        } catch (error) {
-          if (error instanceof RangeError) {
-            throw new RangeError(`invalid ${storage} typed value: ${error.message}`);
-          }
-          throw error;
-        }
+        decodedAs(storage, () => (storage === ValueKind.DATE ? parseDate(value) : parseDatetime(value)));
         return new TypedValue(storage, value);
       }
     } else if (holdsScalar(storage, value)) {
@@ -1039,6 +1016,18 @@ export class TypedValue {
     throw new RangeError(
       `invalid ${storage} typed value: expected ${expected}, got ${valueRepr(value)}`,
     );
+  }
+}
+
+/** Return `build()`, prefixing a `RangeError` it throws with `invalid <label> typed value: `. */
+function decodedAs<T>(label: string, build: () => T): T {
+  try {
+    return build();
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new RangeError(`invalid ${label} typed value: ${error.message}`);
+    }
+    throw error;
   }
 }
 
@@ -2189,7 +2178,6 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
     if (FileRef.isFileRef(value)) {
       if (files === "keep") return value;
       if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
-      // Under "refuse" a file is not a JSON value.
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (InboxRef.isInboxRef(value)) {

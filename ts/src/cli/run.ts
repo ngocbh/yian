@@ -116,6 +116,11 @@ function paint(text: string, style: Style, out: Writer, env: Env): string {
   return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
 }
 
+/** Write `text` in `style` and a newline to `io.stderr`. */
+function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
+  return io.stderr.write(`${paint(text, style, io.stderr, io.env)}\n`);
+}
+
 /** Return `text`'s lines as source ranges count them, with no empty line after a final break. */
 function splitLines(text: string): string[] {
   const lines = text.split(/\r\n|\r|\n/);
@@ -754,7 +759,7 @@ async function indexRun(log: string, io: CliIo): Promise<void> {
     withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000 }));
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    await io.stderr.write(`${paint(`warning: run index not updated: ${error.message}`, "yellow", io.stderr, io.env)}\n`);
+    await printStyled(io, `warning: run index not updated: ${error.message}`, "yellow");
   }
 }
 
@@ -1345,6 +1350,14 @@ async function startRun(
     if (json) await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
     return 1;
   };
+  const cancelled = async () => {
+    await printStyled(io, "run cancelled", "yellow");
+    return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
+  };
+  const refused = async (message: string) => {
+    await printStyled(io, message, "red");
+    return fail(new Diagnostic({ code: "run.setup", message }));
+  };
   const writeStack = async (error: Error) => {
     if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
   };
@@ -1388,7 +1401,7 @@ async function startRun(
     } catch (error) {
       if (!(error instanceof NotUtf8Error)) throw error;
       const message = `can't read ${path}: not UTF-8 text`;
-      await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+      await printStyled(io, message, "red");
       return fail(new Diagnostic({ code: "compose.load", message }));
     }
     try {
@@ -1420,7 +1433,7 @@ async function startRun(
   const warn = (message: string) => void warned.push(message);
   const writeWarnings = async () => {
     for (const message of warned.splice(0)) {
-      await io.stderr.write(`${paint(`warning: ${message}`, "yellow", io.stderr, io.env)}\n`);
+      await printStyled(io, `warning: ${message}`, "yellow");
     }
   };
 
@@ -1451,8 +1464,7 @@ async function startRun(
         } catch (error) {
           if (!(error instanceof McpConfigError)) throw error;
           await writeWarnings();
-          await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
-          return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+          return refused(error.message);
         }
         await writeWarnings();
       }
@@ -1463,12 +1475,12 @@ async function startRun(
       const onEvent = reporter === null ? null : (event: RunEvent) => reporter.handle(event);
       const memory = registry.size > 0 ? registry : null;
       const selection = { signal: controller.signal, warn };
+      type Start = (tools: Record<string, ToolEntry>) => Promise<RunResult>;
       /**
        * Print `log`, then start the run with `start`, given the run's tools and MCP servers. With
        * `runDir`, the run folder this command made for `log`, the folder is removed when the
        * command ends before the run created the log in it.
        */
-      type Start = (tools: Record<string, ToolEntry>) => Promise<RunResult>;
       const startLogged = async (log: string, start: Start, runDir: string | null = null) => {
         try {
           // Not after the log path is printed: a stopped run creates no log.
@@ -1531,10 +1543,7 @@ async function startRun(
       const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
       // A stop closes the prompt, which then answers null: that is the stop, not a cancel.
       controller.signal.throwIfAborted();
-      if (gathered === null) {
-        await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
-        return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
-      }
+      if (gathered === null) return cancelled();
       Object.assign(supplied, gathered);
 
       // The flags supply the outermost cascade layer (fill the gap), not an override: an agent's
@@ -1549,8 +1558,7 @@ async function startRun(
         // A key prompt the stop closed is the stop, not a missing key.
         controller.signal.throwIfAborted();
         if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
-        await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
-        return fail(new Diagnostic({ code: "run.setup", message: error.message }));
+        return refused(error.message);
       }
 
       const runId = defaultRunId();
@@ -1576,18 +1584,12 @@ async function startRun(
   } catch (error) {
     if (error instanceof HostStop) {
       // No document: as Ctrl-C, the stop ends the command with nothing on stdout.
-      await io.stderr.write(`${paint("cancelled by user", "yellow", io.stderr, io.env)}\n`);
+      await printStyled(io, "cancelled by user", "yellow");
       return 130;
     }
     // The end of input isn't Ctrl-C: the same outcome as a cancelled prompt before the run.
-    if (error instanceof TerminalStopped && error.reason === "eof") {
-      await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
-      return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
-    }
-    if (error instanceof ResumeKeyError) {
-      await io.stderr.write(`${paint(error.message, "red", io.stderr, io.env)}\n`);
-      return fail(new Diagnostic({ code: "run.setup", message: error.message }));
-    }
+    if (error instanceof TerminalStopped && error.reason === "eof") return cancelled();
+    if (error instanceof ResumeKeyError) return refused(error.message);
     if (!isSetupError(error)) throw error;
     return setupFailed(error);
   }
@@ -1605,10 +1607,7 @@ async function startRun(
     else await io.stderr.write(waitingText(result));
     return 0;
   }
-  if (result.status === "cancelled") {
-    await io.stderr.write(`${paint("run cancelled", "yellow", io.stderr, io.env)}\n`);
-    return fail(new Diagnostic({ code: "run.cancelled", message: "run cancelled" }));
-  }
+  if (result.status === "cancelled") return cancelled();
   const diagnostic = await renderRunError(result, flow, engineTrace, io.stderr, io.env);
   if (json) {
     const failure = { ...diagnosticJson(diagnostic), node: result.failure?.nodeId ?? null };
@@ -1802,7 +1801,7 @@ export async function check(
       if (result.ok) {
         await io.stdout.write(`${result.path}: ok\n`);
       } else {
-        await io.stderr.write(`${paint(`${result.path}:`, "red", io.stderr, io.env)}\n`);
+        await printStyled(io, `${result.path}:`, "red");
         await renderDiagnostic(result.diagnostic, io.stderr, io.env);
       }
     }
@@ -1830,7 +1829,7 @@ export async function status(log: string | undefined, { json }: { json: boolean 
     if (error instanceof RangeError) message = error.message;
     else if (isSystemError(error)) message = `can't read ${log}: ${osReason(error)}`;
     else throw error;
-    await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+    await printStyled(io, message, "red");
     if (json) {
       const diagnostic = new Diagnostic({ code: "run.setup", message });
       await printJson({ error: diagnosticJson(diagnostic) }, io.stdout);
@@ -1882,7 +1881,7 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
     let message = error.message;
     if (sqliteErrorCode(error) !== undefined) message = `can't use ${join(runsDir, "index.sqlite")}: ${error.message}`;
     else if (isSystemError(error)) message = `can't read ${runsDir}: ${osReason(error)}`;
-    await io.stderr.write(`${paint(message, "red", io.stderr, io.env)}\n`);
+    await printStyled(io, message, "red");
     if (json) await printJson({ error: diagnosticJson(new Diagnostic({ code: "run.setup", message })) }, io.stdout);
     return 1;
   }

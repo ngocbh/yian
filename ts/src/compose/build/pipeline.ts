@@ -810,8 +810,7 @@ export function splitTypedInputs(
 /**
  * Read each AGENT's and adaptive asking node's `llm_config:` with the values and tags in it.
  *
- * An AGENT's own layer and the `adaptive_questions.llm_config` of a TOOL `ask`
- * are read. A layer
+ * An AGENT's own layer and the `adaptive_questions.llm_config` of a TOOL `ask` are read. A layer
  * holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one value),
  * and the value range of each key in it lands in the descriptor's `fieldRanges` under
  * `siteKey("llm_config", "<dotted.path>")`, so its errors point at the field; the adaptive desugar
@@ -1754,11 +1753,10 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   } else {
     inputs = [...inputParameters!];
   }
-  const authoredInputContracts = new Map(
+  const flowInputContracts = new Map(
     inputs.flatMap((parameter) => (parameter.contract === null ? [] : [[parameter.name, parameter.contract] as const])),
   );
-  assertExactContracts(new Map(), authoredInputContracts);
-  const flowInputContracts = authoredInputContracts as Map<string, ValueContract>;
+  assertExactContracts(new Map(), flowInputContracts);
   const flowInputTypes = new Map([...flowInputContracts].map(([inputName, contract]) => [inputName, contract.type]));
   // Static inference types a `T(...)` constructor by this flow's own typedefs.
   const constructorType = constructorTypeFn(registry);
@@ -2254,12 +2252,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     { inputContracts: flowInputContracts, registry, skips, diagnostics },
   );
 
-  // DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the FULL
-  // reconciled body-edge set (the __start__/__end__ sentinels retire; the strings persist as the
-  // boundary node ids). synthesizeBoundaryGraph mints the END_ID producer edges (one per producer
-  // per output, keyed by output name, with the coalesce/optional stance) + the START_ID root
-  // edges + (0-output) the bare START_ID->END_ID root edge, and returns parity-clean
-  // START_ID/END_ID wiring.
   let outputs = stampFlowOutputOrigins(flowOutputs(outputsSection), outputsSection, outputsCursor, {
     owner,
     catalogBuilder,
@@ -2275,6 +2267,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     if (contract === undefined) return output;
     return new FlowOutput(output.name, new Binding(output.binding.source, { origin: output.binding.origin, contract }));
   });
+  const valueMode = outputsSection !== null && !isRecord(outputsSection);
   // A `.` step through a value that may be null (an `Optional`, or a producer that may be skipped
   // while the reader runs) is a load error; it runs before the outputs get their null defaults.
   checkFieldReads(
@@ -2286,7 +2279,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       registry,
       typeFn: constructorType,
       outputs,
-      valueMode: outputsSection !== null && !isRecord(outputsSection),
+      valueMode,
       outputsRange,
       localContracts,
       baseLocals,
@@ -2300,7 +2293,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
   outputs = nullSkippedOutputs(outputs, skips);
-  const valueMode = outputsSection !== null && !isRecord(outputsSection);
   // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
   checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
     valueMode,
@@ -2319,6 +2311,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     resolveOrigin,
     diagnostics,
   });
+  // The START_ID/END_ID boundary nodes, their edges and wiring, over the full structural edge set.
   const [boundaryNodes, boundaryEdges, boundaryWiring] = synthesizeBoundaryGraph(
     inputs,
     outputs,

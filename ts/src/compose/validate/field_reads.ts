@@ -45,7 +45,9 @@ import {
 import {
   type BaseTypeOf,
   checkedRefs,
+  candidateEnvs,
   type Env,
+  factType,
   guardedReadTypes,
   ImpossibleCheck,
   impossibleCheckMessage,
@@ -93,8 +95,11 @@ export interface ReadRoots {
   nullable(root: string): boolean;
   /** Why a root may be null, for the message. */
   why(root: string): string;
-  /** Whether the root's un-narrowed value is untyped, so a type it is narrowed to holds only at load. */
-  untyped(root: string): boolean;
+  /**
+   * Whether the un-narrowed value `fields` below the root is untyped, so a type it is narrowed to
+   * holds only at load.
+   */
+  untyped(root: string, fields: readonly string[]): boolean;
   /** The facts the CASE branch routing this site proves; `null` for none. */
   routing(): Env | null;
 }
@@ -163,8 +168,7 @@ export function nullableReadErrors(tree: ExprNode, roots: ReadRoots, registry: T
         accepted = true;
         break;
       }
-      const candidates = guardedReadTypes(path, guard, baseTypeOf, registry);
-      const error = alternativeError(read, chosen, candidates, roots, registry);
+      const error = alternativeError(read, chosen, candidateEnvs(guard, baseTypeOf, registry), roots, registry);
       if (error === null) {
         accepted = true;
         break;
@@ -205,18 +209,18 @@ function arithmeticOperands(tree: ExprNode): Set<ExprNode> {
 
 /**
  * Return the read's error under one alternative `contract` of its root, else `null`: it is an error
- * when every candidate's walk (or the one un-narrowed walk) gives one, and the first is returned.
+ * when the walk under every candidate's facts (`candidateEnvs`) gives one, and the first is returned.
  */
 function alternativeError(
   read: Read,
   contract: OutputContract,
-  candidates: readonly NarrowedRead[],
+  envs: readonly Env[],
   roots: ReadRoots,
   registry: TypeRegistry,
 ): string | null {
   let first: string | null = null;
-  for (const candidate of candidates.length === 0 ? [null] : candidates) {
-    const error = walk(read, contract, candidate, roots, registry);
+  for (const env of envs.length === 0 ? [new Map() as Env] : envs) {
+    const error = walk(read, contract, env, roots, registry);
     if (error === null) return null;
     first ??= error;
   }
@@ -226,13 +230,15 @@ function alternativeError(
 /**
  * Return the first `.` step of `read` through a value that may be null, as a message, else `null`.
  *
- * A walk from an untyped root narrowed to a type (by a guard, or by the CASE branch routing the
- * site) is untyped at run time, so every field that type doesn't require may be absent there.
+ * The guard's facts in `env` apply at every prefix of the read: a fact on a prefix gives its type,
+ * and a non-null fact on a deeper path proves the prefix is not null either. A walk through a value
+ * that is untyped at run time but narrowed to a type (by a guard, or by the CASE branch routing the
+ * site) may find any field that type doesn't require absent there.
  */
 function walk(
   read: Read,
   contract: OutputContract,
-  candidate: NarrowedRead | null,
+  env: Env,
   roots: ReadRoots,
   registry: TypeRegistry,
 ): string | null {
@@ -241,9 +247,20 @@ function walk(
   if (typ !== null && nullable) typ = typ.replace({ nullable: true });
   let path = read.root;
   let prefix = read.rootText;
-  if (candidate !== null && candidate[2] === path) typ = candidate[0];
+  const fields: string[] = [];
+  const narrowed = (): boolean => {
+    const fact = env.get(path);
+    if (fact !== undefined) {
+      const proven = factType(fact);
+      // No value fits the facts: the impossible-check report explains it.
+      if (proven === null) return false;
+      typ = proven;
+    }
+    if (typ !== null && typ.nullable && provesBelow(env, path)) typ = typ.replace({ nullable: false });
+    return true;
+  };
+  if (!narrowed()) return null;
   let why = roots.why(read.root);
-  const narrowedUntyped = roots.untyped(read.root) && typ !== null && !isUntyped(typ);
   // A root that may be skipped is a missing root at run time, whatever its type: check its step
   // before the untyped stop.
   if (nullable && (typ === null || typ.nullable) && !read.rest[0]!.optional) {
@@ -254,16 +271,27 @@ function walk(
     if (typ.nullable && !step.optional) return nullableMessage(prefix, step.name, why, read.arithmetic);
     const field = fieldRead(typ, step.name);
     if (field === null) return null; // the name checks report it
-    if (narrowedUntyped && field.nullable && !step.optional) {
-      return narrowedUntypedMessage(prefix, step.name, namedTypeLabel(typ, registry));
+    if (field.nullable && !step.optional && roots.untyped(read.root, fields)) {
+      return narrowedUntypedMessage(prefix, step.name, namedTypeLabel(typ, registry), fields.length === 0);
     }
     typ = field.type?.replace({ nullable: field.nullable }) ?? null;
     why = field.optional ? `field '${step.name}' is Optional` : `field '${step.name}' is not required`;
     path += "." + step.name;
     prefix += (step.optional ? "?." : ".") + step.name;
-    if (candidate !== null && candidate[2] === path) typ = candidate[0];
+    fields.push(step.name);
+    if (!narrowed()) return null;
   }
   return null;
+}
+
+/** Return whether `env` has a fact below `path` that rules out null, which a null `path` can't meet. */
+function provesBelow(env: Env, path: string): boolean {
+  for (const [base, fact] of env) {
+    if (!base.startsWith(path + ".")) continue;
+    const typ = factType(fact);
+    if (typ !== null && !typ.nullable) return true;
+  }
+  return false;
 }
 
 /**
@@ -293,12 +321,31 @@ function fieldRead(typ: Type, name: string): { type: Type | null; nullable: bool
   return { type: field, nullable: optional || !(typ.required?.has(name) ?? false), optional };
 }
 
+/**
+ * Return whether the value `fields` below a root of `contract` is untyped: the root has no
+ * contract, or some value on the path is untyped (`isUntyped`), so everything below it is too. A
+ * field the path's type doesn't have, or that union members type differently, is not untyped.
+ */
+export function untypedAt(contract: OutputContract | null, fields: readonly string[]): boolean {
+  let typ = contractType(contract);
+  for (const name of fields) {
+    if (typ === null || isUntyped(typ)) return true;
+    const field = fieldRead(typ.replace({ nullable: false }), name);
+    if (field === null || field.type === null) return false;
+    typ = field.type;
+  }
+  return typ === null || isUntyped(typ);
+}
+
 /** Return the message for `.name` read on `prefix`, untyped and only narrowed to `label`. */
-function narrowedUntypedMessage(prefix: string, name: string, label: string): string {
+function narrowedUntypedMessage(prefix: string, name: string, label: string, atRoot: boolean): string {
+  // Only a root is bound by an `output:` or input declaration; a field is typed by its record.
+  const typeIt = atRoot
+    ? `type ${prefix} as ${label} where it is bound (\`output: ${label}\` or \`!${label}\`)`
+    : `declare ${prefix} as ${label} in the type that holds it`;
   return (
     `\${${prefix}.${name}} reads field '${name}', which ${label} doesn't require, of ${prefix}, ` +
-    `which is untyped and only narrowed to ${label}; ` +
-    `write ${prefix}?.${name}, or type ${prefix} as ${label} where it is bound (\`output: ${label}\` or \`!${label}\`)`
+    `which is untyped and only narrowed to ${label}; write ${prefix}?.${name}, or ${typeIt}`
   );
 }
 
@@ -774,7 +821,7 @@ export function fieldReadErrors(
     opaqueRoots?: ReadonlySet<string>;
     rootLength?: (names: readonly string[]) => number;
     why?: (root: string) => string;
-    untyped?: (root: string) => boolean;
+    untyped?: (root: string, fields: readonly string[]) => boolean;
   } = {},
 ): FieldReadError[] {
   const {
@@ -782,7 +829,8 @@ export function fieldReadErrors(
     opaqueRoots = new Set<string>(),
     rootLength = () => 1,
     why = () => "it is Optional",
-    untyped = (root: string) => (roots.get(root) ?? []).every((contract) => isUntyped(contractType(contract))),
+    untyped = (root: string, fields: readonly string[]) =>
+      (roots.get(root) ?? []).every((contract) => untypedAt(contract, fields)),
   } = options;
   const names = nameErrors(tree, roots, registry, options);
   const readRoots: ReadRoots = {
@@ -977,7 +1025,7 @@ function loopPredicateError(
     rootLength: () => 1,
     nullable: () => false,
     why: () => "it is Optional",
-    untyped: (name) => isUntyped(contractType(field(name))),
+    untyped: (name, fields) => untypedAt(field(name), fields),
     routing: () => null,
   };
   const [message] = nullableReadErrors(tree, roots, registry);
@@ -1013,7 +1061,7 @@ function steerRenderSite(
     rootLength: () => 1,
     nullable: () => false,
     why: () => "it is Optional",
-    untyped: () => isUntyped(element),
+    untyped: (_root, fields) => untypedAt(new ValueContract(element), fields),
     routing: () => null,
   };
   return [where, node.steerRender, range, roots];
@@ -1076,7 +1124,7 @@ function localRoots(level: FieldReadLevel, nodeId: string, result: BuildResult):
       const producer = skippedProducer(local);
       return producer === null ? "it is Optional" : `node ${reprText(producer)} may be skipped while ${reprText(nodeId)} runs`;
     },
-    untyped: (local) => (base.get(local)?.alternatives ?? []).every((contract) => isUntyped(contractType(contract))),
+    untyped: (local, fields) => (base.get(local)?.alternatives ?? []).every((contract) => untypedAt(contract, fields)),
     routing: () => narrowing.environment(nodeId),
   };
 }
@@ -1145,11 +1193,11 @@ function poolRoots(
       if (producer === null || !skips.maySkipWhileRunning([producer], nodeId)) return "it is Optional";
       return `node ${reprText(producer)} may be skipped while ${reader === null ? "this node" : reprText(reader)} runs`;
     },
-    untyped: (root) => {
+    untyped: (root, fields) => {
       if (root === "item") {
-        return isUntyped(contractType(itemContract(node, wiring, narrowing.producers, narrowing.inputs, typeFn)));
+        return untypedAt(itemContract(node, wiring, narrowing.producers, narrowing.inputs, typeFn), fields);
       }
-      return isUntyped(contractType(referenceContract(root, narrowing.producers, narrowing.inputs)));
+      return untypedAt(referenceContract(root, narrowing.producers, narrowing.inputs), fields);
     },
     routing: () => narrowing.environment(nodeId),
   };

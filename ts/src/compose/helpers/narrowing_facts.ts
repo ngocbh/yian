@@ -524,8 +524,11 @@ export function unresolvedType(guard: Guard, registry: TypeRegistry): boolean {
   return false;
 }
 
-/** The distinct facts of `guard` and of each of its top-level conjuncts. */
-function candidateEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env[] {
+/**
+ * Return the distinct facts of `guard` and of each of its top-level conjuncts: the candidates a
+ * read under `guard` is checked against, as for `guardedReadTypes`, by base path.
+ */
+export function candidateEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env[] {
   const envs: Env[] = [];
   for (const part of [guard, ...conjuncts(guard)]) {
     const env = guardEnv(part, baseTypeOf, registry);

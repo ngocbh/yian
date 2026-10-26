@@ -1,5 +1,5 @@
 kind: run
-rules: [run-log]
+rules: [run-log, null-field-read]
 flow: |
   id: p
   name: p
@@ -15,8 +15,8 @@ flow: |
       output: Optional(Rec)
       code: "return null"
   output:
-    a: ${step.output.a}
-    note: 'a=${step.output.a}'
+    a: ${step.output?.a}
+    note: 'a=${step.output?.a}'
 python_flow: |
   id: p
   name: p

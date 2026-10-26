@@ -1,5 +1,5 @@
 kind: run
-rules: [run-log]
+rules: [run-log, null-field-read]
 flow: |
   id: nullable-projection
   name: nullable_projection
@@ -13,7 +13,7 @@ flow: |
       input:
         payload: !Optional(Payload)
       nodes: {}
-      output: ${input.payload.value}
+      output: ${input.payload?.value}
   nodes:
     invoke:
       kind: call

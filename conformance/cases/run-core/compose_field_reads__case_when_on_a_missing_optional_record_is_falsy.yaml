@@ -1,5 +1,5 @@
 kind: run
-rules: [run-log]
+rules: [run-log, null-field-read]
 flow: |
   id: p
   name: p
@@ -12,7 +12,7 @@ flow: |
     route:
       kind: case
       cases:
-        - when: ${input.maybe.a == 'x'}
+        - when: ${input.maybe?.a == 'x'}
           then: hit
       else: miss
     hit:

@@ -1528,10 +1528,10 @@ class EvalExpr {
       values !== null &&
       node.data === "sum" &&
       operators.every((op) => op === "+") &&
-      values.every((value) => Array.isArray(value))
+      values.every((value): value is Value[] => Array.isArray(value))
     ) {
       const frame = this.#frames.at(-1)!;
-      frame.route = balancedConcat(frame.children, values.map((value) => (value as Value[]).length));
+      frame.route = balancedConcat(frame.children, values.map((value) => value.length));
     }
     return acc;
   }
@@ -1861,11 +1861,10 @@ export function isinstanceTypeNames(tree: ExprNode): string[] {
   const names: string[] = [];
   for (const node of iterSubtreesTopdown(tree)) {
     if (node.data !== "refcall" || String(node.children[0]) !== ISINSTANCE) continue;
-    const callSuffix = node.children.at(-1);
-    if (callSuffix instanceof Tree && callSuffix.data === "call_suffix") {
-      const name = isinstanceTypeName(callSuffix);
-      if (!names.includes(name)) names.push(name);
-    }
+    const callSuffix = callSuffixOf(node);
+    if (callSuffix === undefined) continue;
+    const name = isinstanceTypeName(callSuffix);
+    if (!names.includes(name)) names.push(name);
   }
   return names;
 }

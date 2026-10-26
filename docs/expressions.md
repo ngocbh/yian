@@ -245,7 +245,8 @@ Changed (TS yian): **a `.` on a value that may be null is a load error** (code
   skip while the reader runs, and an untyped value narrowed (by `isinstance` or a `case` type
   branch) to a type that doesn't require the field.
 - The message names the fix: `x?.k`, a null check (`x != null and x.k`, `x == null or x.k`), or
-  for arithmetic `(x?.k :- <default>)`. `:-` doesn't catch the read: write `x?.k :- "none"`.
+  for arithmetic `(x?.k :- <default>)` (just `x?.k` when the operand already has a `:-` or `|`
+  default). `:-` doesn't catch the read: write `x?.k :- "none"`.
 - A bare reference, or a coalesce of references, co-skips with its producer, so
   `${order.output.qty}` loads in a binding or a lone output.
 - At the skip-search bound the check can under-report; the run-time error is the backstop.

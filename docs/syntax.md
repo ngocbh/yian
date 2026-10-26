@@ -566,8 +566,9 @@ Changed (TS yian): a `.` read through a value that may be null is a load error, 
 checks lift it at every expression site (bindings, flow and LOOP-body outputs, prompts,
 `render:`, conditions and asserts): a null check (`x != null and x.k`, `x == null or x.k`),
 `isinstance(x, T) and x.f`, a tag test (`x?.kind == "a" and x.k`), or a `case` branch that
-proves `x`. A value that is untyped and only narrowed to `T` still needs `?.` for a field `T`
-doesn't require (`x?.f`), or a type where it is bound (`output: T` or `!T`).
+proves `x`. A check on each step lifts each step (`x != null and x.k != null and x.k.y`). A value
+that is untyped and only narrowed to `T`, a root or an `Any` field alike, still needs `?.` for a
+field `T` doesn't require (`x?.f`), or a type where it is declared (`output: T` or `!T`).
 
 The narrowed type replaces the declared one for the reads after the check, the same way for
 `and`, `or` and `not`. With `Order: Union(Buy, Sell)`, where only `Buy` has `qty`, each of

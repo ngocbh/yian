@@ -17,9 +17,9 @@
  */
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
-import { evaluateWhenRecord } from "../../expr/expressions.ts";
+import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
 import type { ValueRecord } from "../../typesys/values.ts";
-import { ELSE_HANDLE, isWeakKey, Node, NodeKind, parseNamedCondition, Route } from "../base.ts";
+import { ELSE_HANDLE, isWeakKey, Node, type NodeCaps, NodeKind, parseNamedCondition, Route } from "../base.ts";
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 
 /**
@@ -201,14 +201,16 @@ export class CaseNode extends Node {
 
   /**
    * Route on the bound input record: the first case whose `when` is truthy, else the else handle.
-   * Each `when` reads this node's declared inputs by bare name, not the pool.
+   * Each `when` reads this node's declared inputs by bare name, not the pool, through their
+   * declared types (`caps.localTypes`).
    *
    * @throws ExpressionError (unchanged) when a `when` fails to evaluate.
    */
-  override forward(inputs: Record<string, unknown>): Route {
+  override forward(inputs: Record<string, unknown>, caps: NodeCaps = {}): Route {
+    const declared = localDeclared(caps.localTypes ?? null);
     for (const branch of this.cases) {
       try {
-        if (evaluateWhenRecord(branch.when as string, inputs as ValueRecord, this.types)) {
+        if (evaluateWhenRecord(branch.when as string, inputs as ValueRecord, this.types, declared)) {
           return new Route(branch.handle);
         }
       } catch (error) {

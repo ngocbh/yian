@@ -20,6 +20,8 @@
  */
 
 import { itemDeclaredType, localTypes, poolDeclaredTypes } from "../compile/declared_types.ts";
+import { directReferenceParts, loneSpanTree } from "../compile/output_contracts.ts";
+import { Tree } from "../expr/grammar.ts";
 import type { CompiledFlow, Flow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { ResolvedValue, type SourceRef, ValueRoute } from "../expr/lineage.ts";
@@ -42,6 +44,7 @@ import {
   Node,
   NodeBodyError,
   type NodeCaps,
+  NodeKind,
   type NodeResult,
   Output,
   Pending,
@@ -65,7 +68,15 @@ import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
 import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { isRecord, jsTypeName, setField, type Type, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
+import {
+  isRecord,
+  jsTypeName,
+  setField,
+  type Type,
+  type TypedValue,
+  type Value,
+  type ValueRecord,
+} from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
 import { canonicalSeed } from "./log.ts";
 import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
@@ -107,6 +118,23 @@ export function evaluationFailure(
       traceback: tracebackText(error),
     }),
   );
+}
+
+/**
+ * Return `failed` with each searched CASE local `__rN` in its message written as the root it
+ * hoists (its binding's reference, `x.output` for `${x.output :- null}`), so a `when:` that
+ * fails to evaluate names what the author wrote.
+ */
+function withAuthoredRoots(failed: EvaluationFailure, wiring: ReadonlyMap<string, unknown>): EvaluationFailure {
+  const { failure } = failed;
+  const message = failure.message.replace(/\b__r[0-9]+\b/g, (local) => {
+    let tree = loneSpanTree(wiring.get(local));
+    if (tree instanceof Tree && tree.data === "default_expr") tree = tree.children[0]!;
+    return (tree !== null ? directReferenceParts(tree)?.join(".") : undefined) ?? local;
+  });
+  if (message === failure.message) return failed;
+  const { code, nodeId, trace, causeType, traceback } = failure;
+  return new EvaluationFailure(new Failure({ code, message, nodeId, trace, causeType, traceback }));
 }
 
 /** Return `error` as a capability fault: a `CapabilityFault` as it is, anything else wrapped. */
@@ -763,7 +791,8 @@ async function evaluateNode(
     const { error } = rejection;
     // A template default that fails to bind leaves no usable input record.
     if (usesBaseTemplate && error instanceof BindingStageError) collector?.invalidate();
-    return stageFailure(node, error, usesBaseTemplate);
+    const failed = stageFailure(node, error, usesBaseTemplate);
+    return node.kind === NodeKind.CASE ? withAuthoredRoots(failed, nodeWiring) : failed;
   }
   const contractError = resultContractError(node, result);
   if (contractError !== null) return evaluationFailure(node, "contract.node_result", contractError);

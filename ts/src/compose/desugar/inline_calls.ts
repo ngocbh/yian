@@ -79,7 +79,7 @@ import { INLINE_FLOW_PREFIX } from "./inline_bodies.ts";
 // them unique; the collision guard reserves the namespace from users.
 export const SYNTH_PREFIX = "__call_";
 // Text before a lone `=` that ends in a separate word: `1 b` in `a=1 b=2`, a missing comma.
-const WORD_BEFORE_EQUALS = /\s([A-Za-z_][A-Za-z0-9_-]*)\s*$/;
+const WORD_BEFORE_EQUALS = /\s[A-Za-z_][A-Za-z0-9_-]*\s*$/;
 
 /** The address of the binding a `call(...)` was written in, as `CallDescriptor.callSite`. */
 type CallSite = readonly (string | number | null)[];
@@ -190,8 +190,6 @@ export function desugarInlineCalls(
   for (const [nodeId, desc] of descriptors) {
     const [newDesc, calls, origins, sites, callSites] = desugarDescriptor(desc, mint, {
       host: nodeId,
-      range: desc.range,
-      fieldRanges: desc.fieldRanges,
       styleAt: bindingStyleAt === null ? null : (field, key) => bindingStyleAt(nodeId, field, key),
       typeNames,
       diagnostics,
@@ -316,17 +314,12 @@ export function mapOutputsStrings(outputs: unknown, fn: (text: string) => unknow
  * `call(...)` directive was written on. Falls back to the host node's range when there is no
  * stamped entry (a spanless flow, or a binding shape with no per-entry range).
  */
-function bindingOrigin(
-  field: string,
-  key: string,
-  fieldRanges: ReadonlyMap<string, SourceRange> | null,
-  hostRange: SourceRange | null,
-): SourceRange | null {
-  const ranges = fieldRanges ?? new Map<string, SourceRange>();
+function bindingOrigin(desc: NodeDescriptor, field: string, key: string): SourceRange | null {
+  const ranges = desc.fieldRanges;
   if (field === "inputs") {
-    return ranges.get(siteKey("input", key)) ?? ranges.get(siteKey("field", "inputs")) ?? hostRange;
+    return ranges.get(siteKey("input", key)) ?? ranges.get(siteKey("field", "inputs")) ?? desc.range;
   }
-  return ranges.get(siteKey("field", field)) ?? hostRange;
+  return ranges.get(siteKey("field", field)) ?? desc.range;
 }
 
 /**
@@ -348,8 +341,6 @@ function desugarDescriptor(
   mint: () => string,
   options: {
     host: string;
-    range: SourceRange | null;
-    fieldRanges: ReadonlyMap<string, SourceRange> | null;
     styleAt: ((field: string, key: string) => ScalarStyle | null) | null;
     typeNames: ReadonlySet<string>;
     diagnostics: LoadDiagnostics;
@@ -361,14 +352,14 @@ function desugarDescriptor(
   Map<string, string>,
   Map<string, CallSite>,
 ] {
-  const { host, range, fieldRanges, styleAt, typeNames, diagnostics } = options;
+  const { host, styleAt, typeNames, diagnostics } = options;
   const calls: InlineCall[] = [];
   const origins = new Map<string, SourceRange | null>();
   const sites = new Map<string, string>();
   const callSites = new Map<string, CallSite>();
 
   const mapper = (field: string, key: string, source: string | ValueTemplate): unknown => {
-    const origin = bindingOrigin(field, key, fieldRanges, range);
+    const origin = bindingOrigin(desc, field, key);
     let site: string;
     let callSite: CallSite;
     if (field === "inputs") {
@@ -397,8 +388,7 @@ function desugarDescriptor(
     return newSource;
   };
 
-  const newDesc = mapBindingSources(desc, mapper);
-  return [newDesc, calls, origins, sites, callSites];
+  return [mapBindingSources(desc, mapper), calls, origins, sites, callSites];
 }
 
 /**
@@ -555,8 +545,8 @@ function rejectSpanFlowCalls(
  * arg is a `name=value` keyword, each at most once. Each keyword value passes through
  * `argSource`: a bare value reads like a named `input:` value (`window=30` gives `30n`, `1e3`
  * gives `1000`), a quoted value loses only its outer quotes (no escape processing), and a
- * `${…}`-bearing value stays a binding string. An unquoted arg value starting with `call(` is ITSELF a directive, under the same rule,
- * desugared inner-first.
+ * `${…}`-bearing value stays a binding string. An unquoted arg value starting with `call(` is
+ * ITSELF a directive, under the same rule, desugared inner-first.
  *
  * @param value The binding text.
  * @param mint Mints each synth node id.
@@ -594,7 +584,7 @@ export function desugarCallDirectives(value: string, mint: () => string): [strin
       );
     }
     const argValue = parts.slice(1).join("=");
-    if (innerKeywords(parts.slice(1)).length > 0) {
+    if (hasInnerKeyword(parts.slice(1))) {
       throw new ExpressionError(
         `call(${flowId}, ...) keyword ${reprText(name)} value ${reprText(argValue.trim())} looks ` +
           "like two keywords; add the missing comma, or quote the value",
@@ -624,8 +614,8 @@ export function desugarCallDirectives(value: string, mint: () => string): [strin
  *
  * @param value The keyword's raw value text.
  * @returns For a value that starts and ends with the same quote (`"…"`/`'…'`), the text between
- *   them, a binding template if it interpolates (`"hi ${name}"` gives `hi ${name}`); for an unquoted `${…}`-bearing value, the
- *   binding string; else the trimmed text read as one plain scalar like a named `input:` value
+ *   them, a binding template if it interpolates (`"hi ${name}"` gives `hi ${name}`); for an
+ *   unquoted `${…}`-bearing value, the binding string; else the trimmed text read as one plain scalar like a named `input:` value
  *   (`30` gives `30n`, `1e3` a number, `~` or an empty value `null`, `None` text). YAML
  *   structure such as `[1]` stays text: a bare argument is one scalar.
  * @throws SourceSyntaxError when the bare text resolves to a type that can't build it, such as an
@@ -641,25 +631,21 @@ function argSource(value: string): Value {
 }
 
 /**
- * The would-be keywords a keyword value, split on its top-level `=`, holds as `... name=...`.
+ * Whether a keyword value, split on its top-level `=`, holds a would-be keyword `... name=...`.
  *
  * Only a lone `=` after a separate word counts (`1 b=2`); `==`, `!=`, `<=`, `>=`, and a glued
  * `a=b` stay part of the value's text.
  *
  * @param parts The value split on each top-level `=`.
- * @returns The word before each such `=` and the text after that `=` to the end of the value;
- *   empty when there is none.
  */
-function innerKeywords(parts: readonly string[]): [string, string][] {
-  const keywords: [string, string][] = [];
+function hasInnerKeyword(parts: readonly string[]): boolean {
   for (let index = 0; index + 1 < parts.length; index++) {
     const left = parts[index]!;
     const right = parts[index + 1]!;
     if (!left || !right || "!<>".includes(left.at(-1)!)) continue;
-    const match = WORD_BEFORE_EQUALS.exec(left);
-    if (match !== null) keywords.push([match[1]!, parts.slice(index + 1).join("=")]);
+    if (WORD_BEFORE_EQUALS.test(left)) return true;
   }
-  return keywords;
+  return false;
 }
 
 /**
@@ -705,8 +691,7 @@ function desugarOutputs(
     return newSource;
   };
 
-  const newOutputs = mapOutputSources(outputs, desugar);
-  return [newOutputs, calls, sites, callSites];
+  return [mapOutputSources(outputs, desugar), calls, sites, callSites];
 }
 
 /**

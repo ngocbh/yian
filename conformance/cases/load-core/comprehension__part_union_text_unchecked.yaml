@@ -1,0 +1,24 @@
+kind: load
+rules: [null-field-read]
+python_skip: "TS-only: list comprehensions (#1086)"
+# p.text on Message parts with no tag check is a load error: not every member has text.
+flow: |
+  id: p
+  name: p
+  input:
+    ms: !list(Message)
+  nodes:
+    use:
+      kind: code
+      input:
+        unchecked: ${[p.text for m in input.ms for p in m.parts]}
+      code: "return inputs['unchecked']"
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'use' input 'unchecked': reference ${p.text} reads field 'text', which only union members with type reasoning, refusal, text have; check the member first with `isinstance(p, <Type>) and ...`"
+        frames:
+          - label: flow.yaml
+            range: [9, 18, 9, 64]

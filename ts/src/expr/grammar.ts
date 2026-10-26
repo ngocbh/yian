@@ -699,6 +699,28 @@ function parseRaw(text: string): ExprNode {
   }
 }
 
+// Keyed by the read's head token, not its `comp_var` Tree: `masked` and `falsified` in
+// compose/helpers/condition_guards.ts copy every Tree of a condition but keep its Tokens.
+/** Each comprehension variable read's head NAME token, to its `for` target token. */
+const COMP_VAR_TARGETS = new WeakMap<Token, Token>();
+
+/**
+ * Return the key of a comprehension variable read's binding occurrence, `<name>@<offset of its
+ * for target>`, or `null` for a `comp_var` the parser didn't scope. `@` is no NAME character, so a
+ * key never equals a reference path. Copies of the read's Tree that keep its head Token keep the
+ * key.
+ */
+export function compVarKey(node: Tree): string | null {
+  const head = node.children[0];
+  const target = head instanceof Token ? COMP_VAR_TARGETS.get(head) : undefined;
+  return target === undefined ? null : bindingKey(target);
+}
+
+/** Return the key of a comprehension's `for` target token, the key `compVarKey` gives its reads. */
+export function bindingKey(target: Token): string {
+  return `${target.value}@${target.startPos}`;
+}
+
 /**
  * Turn each read of a comprehension variable in `root` into `comp_var[NAME, trailer*]`, in place,
  * and return `root`.
@@ -713,11 +735,14 @@ function parseRaw(text: string): ExprNode {
  */
 function scopeComprehensions(root: ExprNode, cursor: Cursor): ExprNode {
   if (!(root instanceof Tree)) return root;
-  const stack: [Tree, ReadonlySet<string>][] = [[root, new Set()]];
-  const visit = (parent: Tree, i: number, scope: ReadonlySet<string>): void => {
+  // A scope maps each variable name to its `for` target token.
+  const stack: [Tree, ReadonlyMap<string, Token>][] = [[root, new Map()]];
+  const visit = (parent: Tree, i: number, scope: ReadonlyMap<string, Token>): void => {
     const child = parent.children[i];
     if (!(child instanceof Tree)) return;
-    if (child.data === "refcall" && scope.has(String(child.children[0])) && callSuffixOf(child) === undefined) {
+    const target = child.data === "refcall" ? scope.get(String(child.children[0])) : undefined;
+    if (target !== undefined && callSuffixOf(child) === undefined) {
+      COMP_VAR_TARGETS.set(child.children[0] as Token, target);
       parent.children[i] = new Tree("comp_var", child.children);
     } else {
       stack.push([child, scope]);
@@ -732,7 +757,7 @@ function scopeComprehensions(root: ExprNode, cursor: Cursor): ExprNode {
           const target = clause.children[0] as Token;
           if (bound.has(target.value)) cursor.fail(target.startPos, COMP_REBOUND(target.value));
           visit(clause, 1, bound);
-          bound = new Set([...bound, target.value]);
+          bound = new Map([...bound, [target.value, target]]);
         } else {
           visit(clause, 0, bound);
         }

@@ -621,3 +621,9 @@ test("a read inside an escape hoists its root with :- null and keeps ?.", () => 
   expect(result.wiring.get("__r0")).toBe("${x.output :- null}");
   expect(caseNode(result).cases[0]!.when).toBe("(__r0?.k :- 0) > 1");
 });
+
+test("a searched when: that reads comprehension variables builds", () => {
+  const result = searched("len([p.text for p in x.output.parts if p.type == 'text']) > 0");
+  expect(result.wiring).toEqual(new Map([["__r0", "${x.output}"]]));
+  expect(caseNode(result).cases[0]!.when).toBe("len([p.text for p in __r0.parts if p.type == 'text']) > 0");
+});

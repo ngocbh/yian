@@ -1,0 +1,26 @@
+kind: load
+rules: [null-field-read]
+python_skip: "TS-only: list comprehensions (#1086)"
+# A field of an Optional element needs ?. or an `if m != null` clause.
+flow: |
+  id: p
+  name: p
+  typedefs:
+    Msg: {role: str, text: str}
+  input:
+    maybe: !list(Optional(Msg))
+  nodes:
+    use:
+      kind: code
+      input:
+        v: ${[m.text for m in input.maybe]}
+      code: "return inputs['v']"
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+      - code: expr.nullable_field_read
+        message: "node 'use' input 'v': ${m.text} reads field 'text' of m, which may be null (it is Optional); write m?.text, or check m != null first"
+        frames:
+          - label: flow.yaml
+            range: [11, 10, 11, 42]

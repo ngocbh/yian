@@ -15,7 +15,8 @@
  * and an expression error such as division by zero (decision 35) fails a whole binding without
  * its label, as in Python. So each of these rows fails the same value check with a value nested
  * too deep instead: the runs see `YIAN_MAX_VALUE_NESTING=3`, `x` is an `!Any` input nested three
- * lists deep, and the binding is `${[input.x]}`; the message ends
+ * lists deep, and the binding is `${[[v] for v in input.x]}`, which nests it one level deeper and
+ * is untyped at load (an `Any` list's items are), so it reaches the run time; the message ends
  * `at [0][0][0]: value nests deeper than 3 levels, ...` where Python's ends
  * `: non-finite number inf is not a yian value`:
  * `test_a_case_on_failure_names_the_on_field`,
@@ -58,10 +59,10 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 /** The test's environment, with a value nesting limit a short binding can pass. */
 const env = hostEnv(dir, { YIAN_MAX_VALUE_NESTING: "3" });
 
-/** A flow input at the nesting limit; `${[input.x]}` nests it one level deeper. */
+/** A flow input at the nesting limit; `${[[v] for v in input.x]}` nests it one level deeper. */
 const DEEP = [[[1n]]];
 
-/** The message a binding of `${[input.x]}` fails with, after its label. */
+/** The message a binding of `${[[v] for v in input.x]}` fails with, after its label. */
 const DEEPER = " at [0][0][0]: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)";
 
 /** Load `text` and run it in the test's environment. */
@@ -87,7 +88,7 @@ input:
 nodes:
   g:
     kind: case
-    on: \${[input.x]}
+    on: \${[[v] for v in input.x]}
     cases:
       - when: 1
         then: a
@@ -116,7 +117,7 @@ defs:
     nodes:
       g:
         kind: case
-        on: \${[input.x]}
+        on: \${[[v] for v in input.x]}
         cases:
           - when: 1
             then: a
@@ -145,7 +146,7 @@ name: f
 input:
   x: !Any
 nodes:
-  v: !float \${[input.x]}
+  v: !float \${[[v] for v in input.x]}
 output: \${v.output}
 `,
     { x: DEEP },
@@ -187,7 +188,7 @@ nodes:
       - when: true
         then: a
     else: a
-  a: !float \${[input.x]}
+  a: !float \${[[v] for v in input.x]}
 output: \${g.output}
 `,
     { x: DEEP, flag: true },
@@ -208,7 +209,7 @@ nodes:
   n:
     kind: code
     input:
-      y: \${[input.x]}
+      y: \${[[v] for v in input.x]}
     code: |
       return inputs["y"]
 output: \${n.output}
@@ -233,14 +234,14 @@ output: ${output}
 `;
 
 test("a single flow output failure names the flow output", async () => {
-  const result = await run(codeAnd("${[input.x]}"), { x: DEEP });
+  const result = await run(codeAnd("${[[v] for v in input.x]}"), { x: DEEP });
 
   expectFails(result, "binding.evaluate", "__end__", `flow output${DEEPER}`);
   expect(result.failure!.trace.at(-1)!.key).toBe("/s:root/s:output/i:0/s:binding");
 });
 
 test("a record flow output failure names the field", async () => {
-  const result = await run(codeAnd("\n  r: ${[input.x]}"), { x: DEEP });
+  const result = await run(codeAnd("\n  r: ${[[v] for v in input.x]}"), { x: DEEP });
 
   expectFails(result, "binding.evaluate", "__end__", `flow output 'r'${DEEPER}`);
 });
@@ -274,7 +275,7 @@ nodes:
     kind: code
     code: "return inputs['a']"
     input:
-      a: call(child, y=\${[input.x]})
+      a: call(child, y=\${[[v] for v in input.x]})
     output: float
 output: \${n.output}
 `;
@@ -322,7 +323,7 @@ defs:
     output: \${c.output}
 `;
 
-const BAD_ARG = "${[input.x]}";
+const BAD_ARG = "${[[v] for v in input.x]}";
 
 /** Return a flow with the `child`, `check`, and `lister` defs and the given body. */
 const callFlow = (body: string, inputs = "  x: !Any\n") =>

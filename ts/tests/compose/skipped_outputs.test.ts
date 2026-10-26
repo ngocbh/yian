@@ -103,10 +103,10 @@ test("a null default over a partial or unknown producer is untyped", () => {
   expect(resolve("${q.output :- null}", {})).toBe(null);
 });
 
-test("other defaults stay untyped", () => {
+test("a default of the head's type has that type; a null default over a default stays untyped", () => {
   const producers = { p: new ValueContract(STR), a: new ValueContract(STR), b: new ValueContract(STR) };
 
-  expect(resolve('${p.output :- "x"}', producers)).toBe(null);
+  expect(typeEquals(exact(resolve('${p.output :- "x"}', producers)).type, STR)).toBe(true);
   expect(resolve("${(a.output :- b.output) :- null}", producers)).toBe(null);
 });
 

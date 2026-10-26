@@ -32,7 +32,16 @@ import {
   type ValueRecord,
   type VariablePool,
 } from "../typesys/index.ts";
-import { fieldOf, fileFieldType, fromHost, isRecord, valueRepr } from "../typesys/values.ts";
+import {
+  fieldOf,
+  fileFieldType,
+  fromHost,
+  isListKind,
+  isRecord,
+  joinedType,
+  listKindForElement,
+  valueRepr,
+} from "../typesys/values.ts";
 import { bindArguments, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
 import { ResolvedValue, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 // grammar.ts imports this module too, so its exports are used only inside functions here.
@@ -1517,10 +1526,20 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  * Inference is deliberately conservative: literal tokens, exact references, comparisons,
  * boolean combinators, and `isinstance(x, T)` have fixed result types, and a `T(...)`
  * constructor has type `T` (its value is checked against `T`), with field reads on the result
- * typed through `T`. A read with a `?.` step (`a?.b`) is `Optional` of the field. Other forms
- * stay unknown until their runtime value semantics can be modeled without guessing. Reference
- * and constructor lookup are injected so this source-neutral expression layer knows nothing of a
- * flow graph or compose document.
+ * typed through `T`. A read with a `?.` step (`a?.b`) is `Optional` of the field. Also typed:
+ *
+ * - a comprehension variable: its element type in scope (`elementType`), with field reads typed
+ *   through it;
+ * - `a | b`, `a :- b`: the non-null left operands joined with the last (`joinedType`, equal up
+ *   to `Optional`), where an empty `[]` adds nothing, so `(xs :- [])` types like `xs` made
+ *   non-null; `a :? m`: the non-null `a` (`m` is the error message);
+ * - `xs[a:b]`: `xs`'s list type, non-null;
+ * - `[e for ...]`: `list` of `e`'s type in its scope;
+ * - a list literal: `list` of its items joined.
+ *
+ * Other forms stay unknown until their runtime value semantics can be modeled without guessing.
+ * Reference and constructor lookup are injected so this source-neutral expression layer knows
+ * nothing of a flow graph or compose document.
  *
  * Example: `inferExprType(parseExpr("answer == 42"), () => Type.scalar(ValueKind.INTEGER))`
  * gives `Type.scalar(ValueKind.BOOLEAN)`.
@@ -1530,13 +1549,17 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  *   the type is not statically known. Anything it throws propagates unchanged.
  * @param typeFn Resolves a constructor name to its type, or gives `null` for a name that is no
  *   constructor; `null` leaves every constructor unknown.
+ * @param vars The comprehension variables in scope, by name, to their element types (`null`
+ *   when untyped).
  * @returns The proven expression type, or `null` when inference is inconclusive.
  */
 export function inferExprType(
   tree: ExprNode,
   refTypeFn: (path: string) => Type | null,
   typeFn: ((name: string) => Type | null) | null = null,
+  vars: ReadonlyMap<string, Type | null> = new Map(),
 ): Type | null {
+  const infer = (node: ExprNode, scope = vars): Type | null => inferExprType(node, refTypeFn, typeFn, scope);
   if (tree instanceof Token) {
     switch (tree.type) {
       case "NUMBER":
@@ -1557,18 +1580,75 @@ export function inferExprType(
     if (callSuffixOf(tree) !== undefined) {
       // `parseExpr` rejects dotted access on an `isinstance(...)` result.
       if (name === ISINSTANCE) return Type.scalar(ValueKind.BOOLEAN);
-      let typ = typeFn === null || TEMPLATE_FNS.has(name) ? null : typeFn(name);
-      for (const step of steps) {
-        if (typ === null) return null;
-        typ = fieldReadType(typ, step.name);
-        if (typ !== null && step.optional) typ = typ.replace({ nullable: true });
-      }
-      return typ;
+      return stepsType(typeFn === null || TEMPLATE_FNS.has(name) ? null : typeFn(name), steps);
     }
     const typ = refTypeFn(referencePath(tree));
     return typ !== null && steps.some((step) => step.optional) ? typ.replace({ nullable: true }) : typ;
   }
+  switch (tree.data) {
+    case "comp_var": {
+      const { head, steps } = splitReference(tree);
+      return stepsType(vars.get(head) ?? null, steps);
+    }
+    case "coalesce":
+    case "default_expr": {
+      const last = tree.children.length - 1;
+      const types: Type[] = [];
+      for (const [i, operand] of tree.children.entries()) {
+        if (operand instanceof Tree && operand.data === "list_lit" && operand.children.length === 0) continue;
+        const typ = infer(operand);
+        if (typ === null) return null;
+        types.push(i === last ? typ : typ.replace({ nullable: false }));
+      }
+      return joinedType(types);
+    }
+    case "required_expr":
+      return infer(tree.children[0]!)?.replace({ nullable: false }) ?? null;
+    case "subscript": {
+      const typ = infer(tree.children[0]!);
+      return typ !== null && isListKind(typ.kind) ? typ.replace({ nullable: false }) : null;
+    }
+    case "list_comp": {
+      const scope = new Map(vars);
+      for (const clause of tree.children.slice(1) as Tree[]) {
+        // A `comp_if` narrows only in the load checker, which has the facts.
+        if (clause.data === "comp_for") {
+          scope.set(String(clause.children[0]), elementType(infer(clause.children[1]!, scope)));
+        }
+      }
+      return listOf(infer(tree.children[0]!, scope));
+    }
+    case "list_lit": {
+      const items = tree.children.map((item) => infer(item));
+      return items.some((typ) => typ === null) ? null : listOf(joinedType(items as Type[]));
+    }
+  }
   return BOOLEAN_NODES.has(tree.data) ? Type.scalar(ValueKind.BOOLEAN) : null;
+}
+
+/** Return the type of reading `steps` from a value of type `typ`, if proven; a `?.` step makes it `Optional`. */
+function stepsType(typ: Type | null, steps: readonly RefStep[]): Type | null {
+  for (const step of steps) {
+    if (typ === null) return null;
+    typ = fieldReadType(typ, step.name);
+    if (typ !== null && step.optional) typ = typ.replace({ nullable: true });
+  }
+  return typ;
+}
+
+/** Return the list type of elements of type `element`, or `null` when `element` is unknown. */
+function listOf(element: Type | null): Type | null {
+  return element === null ? null : new Type({ kind: listKindForElement(element), element });
+}
+
+/**
+ * Return the element type a comprehension variable gets from an iterable of type `iterable`, or
+ * `null` when untyped: `list(E)` and `Optional(list(E))` give `E`; `Any`, `object`, a union (its
+ * members are records, which raise when iterated), an untyped list or an unknown type give `null`.
+ */
+export function elementType(iterable: Type | null): Type | null {
+  if (iterable === null || !isListKind(iterable.kind)) return null;
+  return iterable.element ?? null;
 }
 
 /**

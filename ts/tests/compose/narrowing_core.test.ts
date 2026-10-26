@@ -529,10 +529,8 @@ test("guardedReadTypes reads below the narrowed base", () => {
 
 test("guardedReadTypes takes the longest base", () => {
   const condition = "isinstance(v, Buy) and isinstance(v.leg, Limit)";
-  expect(reads("v.leg.price", condition, { v: DECISION })).toStrictEqual([
-    [LIMIT, ["price"], "v.leg"],
-    [BUY, ["leg", "price"], "v"],
-  ]);
+  // A conjunct's candidate keeps the meet's facts, so the `Buy` conjunct doesn't forget `Limit`.
+  expect(reads("v.leg.price", condition, { v: DECISION })).toStrictEqual([[LIMIT, ["price"], "v.leg"]]);
 });
 
 test("guardedReadTypes without a fact for the read", () => {

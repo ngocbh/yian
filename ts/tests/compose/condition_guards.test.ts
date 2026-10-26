@@ -386,11 +386,12 @@ test("sameGuard, sameCheck and unknownCheck", () => {
   expect(error.message).toBe("unhandled check kind OtherCheck");
 });
 
-test("a comprehension's reads match conditionReads, in order", () => {
+test("a comprehension's reference reads match conditionReads, in order, around its variable reads", () => {
   const when = 'len(join([m.text for t in input.history for m in t], "")) > input.budget';
   const paths = guards(when).map(([path]) => path);
-  expect(paths).toEqual(conditionReads(parseCondition(when)).map((r) => r.path));
-  expect(paths).toEqual(["input.history", "input.budget"]);
+  const references = paths.filter((path) => !path.split(".")[0]!.includes("@"));
+  expect(references).toEqual(conditionReads(parseCondition(when)).map((r) => r.path));
+  expect(paths.map((path) => path.replace(/@\d+/, "@"))).toEqual(["m@.text", "input.history", "t@", "input.budget"]);
 });
 
 test("a comprehension proves nothing", () => {
@@ -408,4 +409,54 @@ test("guardedReads gives each read occurrence its node, path and guard", () => {
   expect(reads.map((read) => read.path)).toEqual(["x", "x.k.m"]);
   expect(referenceText(reads[1]!.node)).toBe("x?.k.m");
   expect(reads[1]!.guard).toEqual(new Holds(new NotNullCheck("x"), true));
+});
+
+// ---------- comprehension variables ----------
+
+test("an if clause guards the elem and later clauses, by binding occurrence", () => {
+  const reads = guardedReads(parseCondition('[p.text for m in ms for p in m.parts if p.type == "text"]'));
+  const text = reads.find((r) => r.path.startsWith("p@") && r.path.endsWith(".text"))!;
+  expect(text.guard).toEqual(new Holds(new TagCheck(text.path.split(".")[0]!, "type", "text"), true));
+  // `m.parts` is read in the clause after `m`'s for, before the if.
+  expect(reads.find((r) => r.path.startsWith("m@"))!.guard).toEqual(NOTHING);
+});
+
+test("an if null check narrows its variable, and another comprehension's m is another key", () => {
+  const reads = guardedReads(parseCondition("[[m.k for m in xs if m != null], [m.k for m in ys]]"));
+  const [first, second] = reads.filter((r) => r.path.endsWith(".k"));
+  expect(first!.guard).toEqual(new Holds(new NotNullCheck(first!.path.split(".")[0]!), true));
+  expect(second!.guard).toEqual(NOTHING);
+  expect(first!.path).not.toBe(second!.path);
+});
+
+test("an if clause narrows an outer reference read after it", () => {
+  const reads = guardedReads(parseCondition("[input.maybe.a for m in ms if input.maybe != null]"));
+  const outer = reads.find((r) => r.path === "input.maybe.a")!;
+  expect(outer.guard).toEqual(new Holds(new NotNullCheck("input.maybe"), true));
+});
+
+test("clause guards build on the context around the comprehension", () => {
+  const reads = guardedReads(parseCondition("x != null and len([m.k for m in xs if m != null]) > 0"));
+  const read = reads.find((r) => r.path.endsWith(".k"))!;
+  expect(read.guard).toEqual(
+    allOf(new Holds(new NotNullCheck("x"), true), new Holds(new NotNullCheck(read.path.split(".")[0]!), true)),
+  );
+});
+
+test("masked and falsified copies keep comprehension reads", () => {
+  const tree = parseCondition("isinstance(x, Text) and len([m.k for m in xs]) > 0");
+  const literal = literalsInContext(tree)[0]!.node!;
+  const paths = guardedRefs(tree).map(([path]) => path);
+  expect(paths.some((path) => path.startsWith("m@"))).toBe(true);
+  expect(guardedRefs(masked(tree, [literal])).map(([path]) => path)).toEqual(paths);
+  expect(guardedRefs(falsified(tree, [[literal, true]])).map(([path]) => path)).toEqual(paths);
+});
+
+test("a comprehension's if clause is a boolean position, under the clauses before it", () => {
+  const literals = literalsInContext(parseCondition("len([m.k for m in xs if m != null if isinstance(m.k, T)]) > 0"));
+  expect(literals.map(literalText).map((text) => text.replace(/@\d+/g, "@"))).toEqual([
+    "m@ != null",
+    "isinstance(m@.k, T)",
+  ]);
+  expect(literals[1]!.context).toEqual(new Holds(literals[0]!.check, true));
 });

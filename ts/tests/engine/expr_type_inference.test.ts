@@ -5,9 +5,10 @@
 
 import { expect, test } from "bun:test";
 
-import { inferExprType } from "../../src/expr/expressions.ts";
+import { elementType, inferExprType } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
+import { listKindForElement, typeEquals } from "../../src/typesys/values.ts";
 
 /** A reference lookup no test here should reach. */
 function unexpectedRef(path: string): Type | null {
@@ -69,10 +70,6 @@ test.each([
   "left % right",
   "left ** right",
   "-value",
-  "[left, right]",
-  "left | right",
-  "left :- right",
-  'left :? "required"',
   "upper(value)",
 ])("%s stays unknown", (source) => {
   expect(inferExprType(parseExpr(source), unexpectedRef)).toBeNull();
@@ -95,4 +92,58 @@ test("a ?. read is Optional of its field", () => {
   const Rec = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str]]), required: new Set(["k"]) });
   expect(inferExprType(parseExpr("R(k='x').k"), () => null, (n) => (n === "R" ? Rec : null))?.nullable).toBe(false);
   expect(inferExprType(parseExpr("R(k='x')?.k"), () => null, (n) => (n === "R" ? Rec : null))?.nullable).toBe(true);
+});
+
+const str = Type.scalar(ValueKind.STRING);
+const listOf = (e: Type) => new Type({ kind: listKindForElement(e), element: e });
+const Msg = new Type({ kind: ValueKind.OBJECT, fields: new Map([["text", str]]), required: new Set(["text"]) });
+const Other = new Type({ kind: ValueKind.OBJECT, fields: new Map([["n", str]]), required: new Set(["n"]) });
+
+test.each([
+  [listOf(Msg), Msg, false],
+  [listOf(Msg.replace({ nullable: true })), Msg, true],
+  [listOf(Msg).replace({ nullable: true }), Msg, false],
+  [new Type({ kind: ValueKind.ANY }), null, false],
+  [new Type({ kind: listKindForElement(str) }), null, false],
+  [null, null, false],
+  // A union's members are records, never lists, so iterating one has no element type.
+  [new Type({ kind: ValueKind.OBJECT, variants: [Msg, Other] }), null, false],
+] as [Type | null, Type | null, boolean][])("elementType(%#)", (iterable, element, nullable) => {
+  const got = elementType(iterable);
+  if (element === null) expect(got).toBeNull();
+  else {
+    expect(typeEquals(got!.replace({ nullable: false }), element)).toBe(true);
+    expect(got!.nullable).toBe(nullable);
+  }
+});
+
+const refs = (types: Record<string, Type>) => (path: string) => types[path] ?? null;
+
+test.each([
+  ["a.output?.items :- []", { "a.output.items": listOf(Msg) }, listOf(Msg)],
+  ["xs | ys", { xs: listOf(Msg), ys: listOf(Msg) }, listOf(Msg)],
+  ["xs | ys", { xs: listOf(Msg), ys: listOf(Msg).replace({ nullable: true }) }, listOf(Msg).replace({ nullable: true })],
+  ["xs :? 'no xs'", { xs: listOf(Msg).replace({ nullable: true }) }, listOf(Msg)],
+  ["xs[1:]", { xs: listOf(Msg).replace({ nullable: true }) }, listOf(Msg)],
+  ["[m.text for m in xs]", { xs: listOf(Msg) }, listOf(str)],
+  ["[m?.text for m in xs]", { xs: listOf(Msg) }, listOf(str.replace({ nullable: true }))],
+  ["[m.text for m in xs if m.text != '']", { xs: listOf(Msg) }, listOf(str)],
+  ["[[n for n in m.text] for m in xs]", { xs: listOf(Msg) }, null],
+  ["[m for m in (xs :- [])]", { xs: listOf(Msg).replace({ nullable: true }) }, listOf(Msg)],
+  ["['a', 'b']", {}, listOf(str)],
+] as [string, Record<string, Type>, Type | null][])("inferExprType types %s", (text, types, expected) => {
+  const got = inferExprType(parseExpr(text), refs(types));
+  if (expected === null) expect(got).toBeNull();
+  else expect(typeEquals(got!, expected)).toBe(true);
+});
+
+test.each([
+  ["[m.text for m in xs]", "an untyped iterable"],
+  ["xs | 'a'", "operands of different types"],
+  ["xs :- []", "an untyped left operand"],
+  ["['a', 1]", "list items of different types"],
+  ["[]", "an empty list"],
+  ["'abc'[1:]", "a slice of a non-list"],
+])("inferExprType leaves %s untyped (%s)", (text) => {
+  expect(inferExprType(parseExpr(text), refs({}))).toBeNull();
 });

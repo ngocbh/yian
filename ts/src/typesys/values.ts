@@ -1407,6 +1407,17 @@ export function listKindForElement(element: Type): ValueKind {
 }
 
 /**
+ * Return the join of `types` when they are equal up to `Optional`: that type, nullable when any
+ * of them is. Return `null` when they differ otherwise, or when `types` is empty.
+ */
+export function joinedType(types: readonly Type[]): Type | null {
+  if (types.length === 0) return null;
+  const bare = types.map((typ) => typ.replace({ nullable: false }));
+  if (bare.slice(1).some((typ) => !typeEquals(typ, bare[0]!))) return null;
+  return bare[0]!.replace({ nullable: types.some((typ) => typ.nullable) });
+}
+
+/**
  * Return whether two types are structurally equal, as Python's dataclass `==` compares
  * them: maps and sets by content (a record's field order doesn't count), bounds by
  * numeric value (`1n` equals `1`), union members in order.

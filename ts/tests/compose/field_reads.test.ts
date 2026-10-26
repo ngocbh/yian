@@ -39,7 +39,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { fieldReadErrors, nullableReadErrors, type ReadRoots, untypedAt } from "../../src/compose/validate/field_reads.ts";
+import { fieldReadErrors, NULLABLE_FIELD_READ, nullableReadErrors, type ReadRoots, untypedAt } from "../../src/compose/validate/field_reads.ts";
 import { parseCondition } from "../../src/expr/expressions.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
@@ -520,7 +520,7 @@ test("an unknown field read through ?. is named as written", () => {
 
 test("?. after a root loads, and a comprehension variable is a one-name root", () => {
   assembleText(FLOW_WITH_A.replace("${a.output.k}", "${a.output?.k}"));
-  assembleText(FLOW_WITH_A.replace("${a.output.k}", "${[x?.output for x in [a.output]]}"));
+  assembleText(FLOW_WITH_A.replace("${a.output.k}", "${[x?.k for x in [a.output]]}"));
 });
 
 // The nullable field-read check over one expression (`nullableReadErrors`): a `.` step whose
@@ -543,6 +543,7 @@ const Nested = new Type({
 /** One root `x` of type `typ`, and an untyped root `u`. */
 const roots = (typ: Type, nullable = false): ReadRoots => ({
   contracts: (root) => (root === "x" ? [new ValueContract(typ)] : root === "u" ? [null] : undefined),
+  baseContract: (root) => (root === "x" ? new ValueContract(typ) : root === "u" ? null : undefined),
   rootLength: () => 1,
   nullable: () => nullable,
   why: () => "it is Optional",
@@ -661,23 +662,29 @@ test("a root a CASE branch narrowed is untyped by its base, not its routed view"
   expect(nullableReadErrors(parseCondition("m.output.g == 'a'"), r, types)).toEqual([]);
 });
 
+const TextTypes: TypeRegistry = new Map([
+  ["Inner", { kind: "record", fields: new Map([["y", "str"]]) }],
+  [
+    "Text",
+    {
+      kind: "record",
+      fields: new Map([
+        ["body", "str"],
+        ["t", "Optional(Inner)"],
+      ]),
+    },
+  ],
+]);
+const Plain = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str]]), required: new Set(["k"]) });
+
 test("a read under a check that can never hold is not checked", () => {
-  const registry: TypeRegistry = new Map([
-    ["Inner", { kind: "record", fields: new Map([["y", "str"]]) }],
-    [
-      "Text",
-      {
-        kind: "record",
-        fields: new Map([
-          ["body", "str"],
-          ["t", "Optional(Inner)"],
-        ]),
-      },
-    ],
-  ]);
-  const Plain = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str]]), required: new Set(["k"]) });
   // No Plain value fits Text (it lacks the required body), so the isinstance is never true.
-  expect(nullableReadErrors(parseCondition("isinstance(x, Text) and x.t.y == 'a'"), roots(Plain), registry)).toEqual([]);
+  expect(nullableReadErrors(parseCondition("isinstance(x, Text) and x.t.y == 'a'"), roots(Plain), TextTypes)).toEqual([]);
+});
+
+test("an impossible isinstance next to a comprehension doesn't break checkedRefs", () => {
+  const tree = parseCondition("isinstance(x, Text) and len([m.k for m in xs]) > 0");
+  expect(() => nullableReadErrors(tree, roots(Plain), TextTypes)).not.toThrow();
 });
 
 // Guards apply at every prefix of a read, and owner ruling 1 holds at any depth.
@@ -902,4 +909,137 @@ output: \${lp.output}
   expect(failure(text)).toContain(
     "inline body of node 'lp' output: ${mk.output.k.x} reads field 'x' of mk.output.k, which may be null",
   );
+});
+
+// ---------- comprehension variables ----------
+
+/** A flow whose `use` node binds `v` to `binding`, over inputs of Msg lists and Messages. */
+function variableFlow(binding: string): string {
+  return (
+    "id: p\nname: p\n" +
+    "typedefs:\n" +
+    "  Msg: {role: str, text: str, opt: Optional(Inner)}\n" +
+    "  Inner: {x: str}\n" +
+    "  T: {f: Optional(str)}\n" +
+    "input:\n" +
+    "  ms: !list(Msg)\n" +
+    "  maybe: !list(Optional(Msg))\n" +
+    "  one: !Optional(Inner)\n" +
+    "  hist: !list(Message)\n" +
+    "  om: !Optional(list(Msg))\n" +
+    "nodes:\n" +
+    "  mk:\n" +
+    "    kind: code\n" +
+    "    code: return []\n" +
+    "  use:\n" +
+    "    kind: code\n" +
+    "    input:\n" +
+    `      v: ${binding}\n` +
+    "      after: ${mk.output}\n" +
+    "    output: Any\n" +
+    "    code: return 1\n" +
+    "output: ${use.output}\n"
+  );
+}
+
+test.each([
+  ["${[m.opt for m in input.ms]}"],
+  ["${[m.opt?.x for m in input.ms]}"],
+  ["${[m.text for m in input.maybe if m != null]}"],
+  ["${[input.one.x for m in input.ms if input.one != null]}"],
+  [`'\${[p.text for m in input.hist for p in m.parts if p.type == "text"]}'`],
+  ["${[m.text for m in (input.om :- [])]}"],
+])("a read through a comprehension variable loads: %s", (binding) => {
+  expect(() => load(variableFlow(binding))).not.toThrow();
+});
+
+test.each([
+  ["${[m.txt for m in input.ms]}", "compose.load", "reference ${m.txt} reads unknown field 'txt' on record"],
+  ["${[m.opt.x for m in input.ms]}", NULLABLE_FIELD_READ, "${m.opt.x} reads field 'x' of m.opt, which may be null (field 'opt' is Optional)"],
+  ["${[m.text for m in input.maybe]}", NULLABLE_FIELD_READ, "${m.text} reads field 'text' of m, which may be null (it is Optional)"],
+  ["${[input.one.x for m in input.ms]}", NULLABLE_FIELD_READ, "which may be null (it is Optional)"],
+  ["${[p.text for m in input.hist for p in m.parts]}", "compose.load", "reference ${p.text} reads field 'text'"],
+  ["${[m.k for m in (input.om :- [])]}", "compose.load", "reference ${m.k} reads unknown field 'k' on record"],
+  ["${[p.f for p in mk.output if isinstance(p, T)]}", NULLABLE_FIELD_READ, "only narrowed to T; write p?.f"],
+])("a read through a comprehension variable is checked: %s", (binding, code, message) => {
+  const error = loadError(() => load(variableFlow(binding)));
+  expect(error.message).toStartWith("node 'use' input 'v': ");
+  expect(error.message).toContain(message);
+  expect(error.diagnostic.code).toBe(code);
+});
+
+/** A LOOP that carries `ms: list(Msg)`, driven by `predicate`. */
+function variableLoop(predicate: string): string {
+  return `id: p
+name: p
+typedefs:
+  Msg: {role: str, text: str}
+defs:
+  body:
+    input:
+      ms: !list(Msg)
+    nodes:
+      keep:
+        kind: code
+        input:
+          ms: \${input.ms}
+        output:
+          ms: list(Msg)
+        code: "return ({ms: inputs['ms']})"
+    output: \${keep.output}
+input:
+  ms: !list(Msg)
+nodes:
+  drive:
+    kind: loop
+    call: body
+    while: ${predicate}
+    max: 3
+    input:
+      ms: \${input.ms}
+output: \${drive.output}
+`;
+}
+
+test("a LOOP predicate checks reads through a comprehension variable", () => {
+  expect(failure(variableLoop("${len([m.txt for m in ms]) < 3}"))).toContain(
+    "loop node 'drive' `while:` reference ${m.txt} reads unknown field 'txt' on record",
+  );
+  expect(() => load(variableLoop("${len([m.text for m in ms]) < 3}"))).not.toThrow();
+});
+
+// ---------- isinstance on an untyped value, after a null check ----------
+
+/** A flow whose `use` node binds `v` to `binding`; `u.output` is `Any`, `mk.output` an `Optional(W)` with `u: Any`. */
+function untypedFlow(binding: string): string {
+  return (
+    "id: p\nname: p\n" +
+    "typedefs:\n  T: {f: Optional(str), g: str}\n  W: {u: Any}\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Any\n    code: return 1\n" +
+    "  mk:\n    kind: code\n    input:\n      s: ${input.s}\n    output: Optional(W)\n    code: return None\n" +
+    `  use:\n    kind: code\n    input:\n      v: ${binding}\n    output: Any\n    code: return 1\n` +
+    "output: ${use.output}\n"
+  );
+}
+
+test.each([
+  ["${u.output != null and isinstance(u.output, T) and u.output.g}"],
+  ["${u.output != null and isinstance(u.output, T) and u.output?.f}"],
+  ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.g}"],
+])("an isinstance after a null check narrows an untyped value: %s loads", (binding) => {
+  expect(() => load(untypedFlow(binding))).not.toThrow();
+});
+
+test.each([
+  ["${u.output != null and isinstance(u.output, T) and u.output.f}", NULLABLE_FIELD_READ, "only narrowed to T; write u.output?.f"],
+  ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.f}", NULLABLE_FIELD_READ, "only narrowed to T; write mk.output.u?.f"],
+  ["${isinstance(u.output, T) and u.output.zz}", "compose.load", "reference ${u.output.zz} reads field 'zz', which T doesn't have; u.output is T here"],
+  ["${u.output != null and isinstance(u.output, T) and u.output.zz}", "compose.load", "reads field 'zz', which T doesn't have"],
+  ["${mk.output != null and isinstance(mk.output.u, T) and mk.output.u.zz}", "compose.load", "reference ${mk.output.u.zz} reads field 'zz', which T doesn't have"],
+])("an isinstance after a null check narrows an untyped value: %s", (binding, code, message) => {
+  const error = loadError(() => load(untypedFlow(binding)));
+  expect(error.message).toContain(message);
+  expect(error.diagnostic.code).toBe(code);
 });

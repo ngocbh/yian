@@ -169,12 +169,18 @@ test.each<[string, ValueRecord, string]>([
   ['Note: ${note :- "none"}', { note: null }, "Note: none"],
   ['Note: ${note :- "none"}', {}, "Note: none"],
   ['Note: ${note :- "none"}', { note: "hi" }, "Note: hi"],
-  ["v=${sig.nope :- 0}", REC, "v=0"],
+  ["v=${sig?.nope :- 0}", REC, "v=0"],
   ["Hi ${x | y}", { x: null, y: "Y" }, "Hi Y"],
   ["Hi ${x | y | 'z'}", { x: null, y: null }, "Hi z"],
   ["${x | y}", { x: null, y: "Y" }, "Y"],
 ])("a strict prompt's default and coalesce fire on a miss: %s", (template, record, expected) => {
   expect(renderTemplateRecord(template, record)).toBe(expected);
+});
+
+test("a strict prompt's default doesn't catch a field-read error", () => {
+  expect(() => renderTemplateRecord("v=${sig.nope :- 0}", REC)).toThrow(
+    "cannot read ${sig.nope}: sig has no field 'nope'",
+  );
 });
 
 test("a strict prompt's required raises its own message on a miss", () => {
@@ -283,29 +289,37 @@ test("the loader rejects an unknown builtin", () => {
   expect(loadError(() => assembleText(loaderFlow("${frobnicate(topic)}"))).message).toContain("frobnicate");
 });
 
-// --- mode interaction for call-result dotted misses --- //
-// A call-result dotted miss is a miss: non-strict modes may coalesce, default, or treat it as
-// falsy; only strict mode raises.
+// --- mode interaction for call-result field reads --- //
+// A call result's `.` read of a key it lacks raises in every mode; `?.` reads null, which a
+// coalesce, a default or a condition then handles.
 
 /** Return a `resolve` reading each root from `record`. */
 function recordResolve(record: ValueRecord): RootResolver {
   return (names) => resolveInRecord(names, record);
 }
 
-test("a binding coalesce falls through a call-result miss", () => {
+test("a binding coalesce falls through a call result's ?. read", () => {
   mkrec();
-  expect(evalBinding("${_mkrec(name).nope | 'fallback'}", recordResolve(REC))).toBe("fallback");
+  expect(evalBinding("${_mkrec(name)?.nope | 'fallback'}", recordResolve(REC))).toBe("fallback");
+  expect(() => evalBinding("${_mkrec(name).nope | 'fallback'}", recordResolve(REC))).toThrow(
+    "_mkrec(...) has no field 'nope'",
+  );
 });
 
-test("a binding default fires on a call-result miss", () => {
+test("a binding default fires on a call result's ?. read", () => {
   mkrec();
-  expect(evalBinding('${_mkrec(name).nope :- "x"}', recordResolve(REC))).toBe("x");
+  expect(evalBinding('${_mkrec(name)?.nope :- "x"}', recordResolve(REC))).toBe("x");
+  expect(() => evalBinding('${_mkrec(name).nope :- "x"}', recordResolve(REC))).toThrow(
+    "_mkrec(...) has no field 'nope'",
+  );
 });
 
-test("a condition's call-result miss stays falsy", () => {
+test("a condition's call-result ?. read stays falsy", () => {
   mkrec();
-  const tree = parseExpr("_mkrec(name).nope == 1");
-  expect(evalExpr(tree, recordResolve(REC), { mode: ResolveMode.CONDITION_FALSY })).toBe(false);
+  const mode = ResolveMode.CONDITION_FALSY;
+  const condition = (text: string) => evalExpr(parseExpr(text), recordResolve(REC), { mode });
+  expect(condition("_mkrec(name)?.nope == 1")).toBe(false);
+  expect(() => condition("_mkrec(name).nope == 1")).toThrow("_mkrec(...) has no field 'nope'");
 });
 
 // --- result types --- //

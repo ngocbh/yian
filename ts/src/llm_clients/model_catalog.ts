@@ -152,6 +152,7 @@ export const MODEL_OPTIONS: Readonly<Record<string, ModeOptions>> = table({
       ["Custom model ID", "custom"],
     ),
   }),
+  // Each region pair serves the same model ids, so its two provider keys share one list.
   qwen: QWEN_MODELS,
   "qwen-cn": QWEN_MODELS,
   glm: GLM_MODELS,

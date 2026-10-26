@@ -81,7 +81,7 @@ export function loadMcpConfig(
   env: Env,
   {
     reserved = [],
-    warn = (message: string) => platformWarn(message),
+    warn = platformWarn,
   }: { reserved?: Iterable<string>; warn?: (message: string) => void } = {},
 ): Record<string, McpServer> {
   // Null-prototype records, so a server named `__proto__` stays data.

@@ -324,11 +324,6 @@ export async function openBrowser(
   }
 }
 
-/** Present the verification page and one-time user code. */
-async function deviceCode(url: string, code: string, io: CliIo): Promise<void> {
-  await io.stdout.write(`Open ${url} and enter code: ${code}\n`);
-}
-
 /** Offer general text-model families from the authenticated API catalog. */
 function textModels(models: readonly string[]): string[] {
   return models.filter(
@@ -504,7 +499,7 @@ async function setupOpenai(
     const openUrl = ctx.deps.openUrl ?? ((url: string) => openBrowser(url, ctx.io.stdout));
     credentials =
       login === "device"
-        ? await service.deviceLogin((url, code) => deviceCode(url, code, ctx.io))
+        ? await service.deviceLogin((url, code) => ctx.io.stdout.write(`Open ${url} and enter code: ${code}\n`))
         : await service.browserLogin(openUrl);
     models = await service.subscriptionModels(credentials);
     choices = models;
@@ -965,7 +960,7 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
     try {
       layer = parseJson(text, "plain");
     } catch {
-      layer = null;
+      // Not JSON: refused below like any other non-object.
     }
   }
   if (!isRecord(layer)) throw new UsageError("Invalid value: stdin must be a JSON object (an llm_config layer)");

@@ -25,6 +25,11 @@ import { StartNode } from "../nodes/start/node.ts";
 import { writeAsText } from "../typesys/values.ts";
 import { Flow, flowNodes, nodeChild, validateUniqueTargets } from "./model.ts";
 
+/** The occurrence path a static `node` at `locator` starts with: a LOOP's initial driver position, else none. */
+function initialOccurrence(node: Node, locator: readonly string[]): ExecutionPosition[] {
+  return node.isLoop ? [new ExecutionPosition("loop_driver", locator, 0)] : [];
+}
+
 /** One exact static node target and its root-relative execution scope. Frozen. */
 export class ResolvedExecutionTarget {
   /** The node's root-relative authored path; a frozen copy. */
@@ -55,8 +60,7 @@ export class ResolvedExecutionTarget {
       throw new RangeError("target scope flow_path must name its containing flow");
     }
     if (!(node instanceof Node)) throw new TypeError("target node must be a Node");
-    const initial = node.isLoop ? [new ExecutionPosition("loop_driver", locator, 0)] : [];
-    if (!sameItems(scope.occurrencePath, initial, sameExecutionPosition)) {
+    if (!sameItems(scope.occurrencePath, initialOccurrence(node, locator), sameExecutionPosition)) {
       throw new RangeError("static execution layout requires only the initial driver position");
     }
     this.locator = Object.freeze([...locator]);
@@ -120,7 +124,7 @@ function* walkTargets(
         new ExecutionScope(locator, {
           flowPath,
           boundary,
-          occurrencePath: node.isLoop ? [new ExecutionPosition("loop_driver", locator, 0)] : [],
+          occurrencePath: initialOccurrence(node, locator),
         }),
         node,
       );

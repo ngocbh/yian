@@ -36,8 +36,8 @@ type Input = NodeJS.ReadableStream & {
   destroyed?: boolean;
 };
 
-/** The output a `Terminal` draws on. */
-type Output = NodeJS.WritableStream & { columns?: number };
+/** The output a `Terminal` draws on: only `write` and `columns` are used. */
+type Output = Pick<NodeJS.WritableStream, "write"> & { columns?: number };
 
 export interface TerminalOptions {
   /** Where keys come from; defaults to process.stdin. Raw mode is set only when it is a TTY. */
@@ -108,10 +108,10 @@ const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 
 /**
  * `output` for a plain terminal: what is written loses its escape codes and carriage returns, and
- * a write left empty is skipped. Only `write` and `columns`, which the terminal uses, are kept.
+ * a write left empty is skipped.
  */
 function plainOutput(output: Output): Output {
-  const plain = {
+  return {
     write(chunk: unknown, ...rest: unknown[]): boolean {
       const text = String(chunk).replace(ANSI, "").replaceAll("\r", "");
       if (text === "") return true;
@@ -121,7 +121,6 @@ function plainOutput(output: Output): Output {
       return output.columns;
     },
   };
-  return plain as unknown as Output;
 }
 
 /** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
@@ -497,7 +496,7 @@ export class Terminal {
    * `{interrupt}` for Ctrl-C, `{eof}` for the end of input or a closed terminal, `{aborted}` with
    * the text typed so far (`draft`) when `signal` aborts first, which erases the prompt. With
    * `escape`, Escape ends the prompt as `{escape}` with the draft, erasing it the same way;
-   * elsewhere Escape is ignored, as before. Ctrl-C and Escape leave the terminal open, so the next
+   * elsewhere Escape is ignored. Ctrl-C and Escape leave the terminal open, so the next
    * `readLine` works; keys typed after the prompt ends wait for the next one.
    */
   async readLine<E extends boolean = false>(

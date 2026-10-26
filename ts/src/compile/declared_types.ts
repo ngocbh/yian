@@ -39,6 +39,11 @@ function paramsRecord(node: Node): Type {
   return new Type({ kind: ValueKind.OBJECT, fields, required });
 }
 
+/** The function the contract inference reads `node`'s declared `types:` through. */
+function nodeTypeFn(node: Node): (name: string) => Type | null {
+  return (name) => node.types.get(name) ?? null;
+}
+
 /**
  * The producer contracts of `flow`, as the loader's inference reads them, looked up on demand in
  * its live nodes: a node's output contract by id (a START's the record of its params), and a
@@ -87,8 +92,7 @@ function bindingType(
   binding: unknown,
   contracts: [Map<string, OutputContract>, Map<string, ValueContract>],
 ): Type | null {
-  const typeFn = (name: string) => node.types.get(name) ?? null;
-  return contractType(resolveOutputBindingContract(binding, contracts[0], contracts[1], { typeFn }));
+  return contractType(resolveOutputBindingContract(binding, contracts[0], contracts[1], { typeFn: nodeTypeFn(node) }));
 }
 
 /** An END's output type: the record (or, in value mode, the value) of its inputs' types. */
@@ -241,7 +245,7 @@ export function localTypes(flow: Flow, node: Node): ReadonlyMap<string, Type | n
   const memo = LOCAL_TYPES.get(node);
   if (memo !== undefined) return memo;
   const wiring = flow.wiring.get(node.id) ?? new Map<string, unknown>();
-  const typeFn = (name: string) => node.types.get(name) ?? null;
+  const typeFn = nodeTypeFn(node);
   const params = new Map((node.params ?? []).map((param) => [param.name, param]));
   let contracts: ReturnType<typeof flowContracts> | null = null;
   const compute = (name: string): Type | null => {
@@ -277,8 +281,7 @@ export function itemDeclaredType(flow: Flow, node: Node): Type | null {
   if (memo !== undefined) return memo;
   const [producers, inputs] = flowContracts(flow);
   const wiring = flow.wiring.get(node.id) ?? new Map<string, unknown>();
-  const typeFn = (name: string) => node.types.get(name) ?? null;
-  const typ = contractType(itemContract(node, wiring, producers, inputs, typeFn));
+  const typ = contractType(itemContract(node, wiring, producers, inputs, nodeTypeFn(node)));
   ITEM_TYPES.set(node, typ);
   return typ;
 }

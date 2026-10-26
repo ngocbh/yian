@@ -110,10 +110,8 @@ export class CallNode extends Node {
    * @returns A `Grow` seeded with a copy of the undefaulted call-arg record, with nothing to prune.
    */
   override forward(inputs: Record<string, unknown>): Grow {
-    // The call-args go raw: the spliced child START fills omitted inputs from its params'
-    // defaults, so the driver doesn't pre-default. The seed is the builder's only durable input;
-    // the compile-owned builder constructs the child and lowers its post-asserts onto the child
-    // END, for live execution and replay alike.
+    // The seed is the builder's only durable input: the compile-owned builder constructs the
+    // child and lowers its post-asserts onto the child END, for live execution and replay alike.
     return new Grow({ ...inputs });
   }
 }

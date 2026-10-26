@@ -287,6 +287,12 @@ function requireDeliverable(state: RunState): void {
   if (!state.inputsCommitted) throw new DeliveryRefused("not_started", "the run hasn't started");
 }
 
+/** Require a dispatcher worker count: a non-negative safe integer. */
+function requireWorkerCount(numWorkers: number): void {
+  if (!Number.isSafeInteger(numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
+  if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+}
+
 /** Mark one explicit live node-produced growth rejection. */
 function raiseGrowthRejected(original: TypeError | RangeError): never {
   throw new GrowthRejected(original);
@@ -1161,8 +1167,7 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
   requirePristine(state);
   const startId = state.flow.startId;
   if (!state.flow.nodes.has(startId)) throw new RangeError(`flow START node ${reprText(startId)} is missing`);
-  if (!Number.isSafeInteger(data.numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
-  if (data.numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+  requireWorkerCount(data.numWorkers);
 
   const candidate = new RunStartedRecord({
     flowFingerprint: data.flowFingerprint,
@@ -1269,8 +1274,7 @@ export function prepareSend(state: RunState, inbox: string, event: unknown): Pre
   if (!isExactly(state, RunState)) throw new TypeError("prepareSend expects a RunState");
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   requireDeliverable(state);
-  const element = inboxElementType(state, inbox);
-  if (element === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  const element = requireDeclaredInbox(state, inbox);
   if (state.waits.inboxes.get(inbox)?.closed === true) {
     throw new DeliveryRefused("inbox_closed", `inbox ${reprText(inbox)} is closed`);
   }
@@ -1288,6 +1292,17 @@ export function prepareSend(state: RunState, inbox: string, event: unknown): Pre
     throw new DeliveryRefused("too_large", eventTooLarge(`the event to inbox ${reprText(inbox)}`, size, state));
   }
   return prepareRecord(state, new PoolCommitRecord(state.flow.startId, sendKey(state, inbox), wire));
+}
+
+/**
+ * Return the element type of the START's top-level inbox `inbox`.
+ *
+ * @throws DeliveryRefused `unknown_inbox` when the START declares no such inbox.
+ */
+function requireDeclaredInbox(state: RunState, inbox: string): Type {
+  const element = inboxElementType(state, inbox);
+  if (element === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  return element;
 }
 
 /** The message for a value of `size` bytes over the run's `MAX_EVENT_BYTES`; `what` names it. */
@@ -1324,7 +1339,7 @@ export function prepareInboxClosed(state: RunState, inbox: string): PreparedTran
   if (!isExactly(state, RunState)) throw new TypeError("prepareInboxClosed expects a RunState");
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   requireDeliverable(state);
-  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  requireDeclaredInbox(state, inbox);
   if (state.waits.inboxes.get(inbox)?.closed === true) return null;
   return prepareRecord(state, new InboxClosedRecord(inbox));
 }
@@ -1347,7 +1362,7 @@ export function prepareWithdraw(state: RunState, inbox: string): PreparedTransit
   if (!isExactly(state, RunState)) throw new TypeError("prepareWithdraw expects a RunState");
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   requireDeliverable(state);
-  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  requireDeclaredInbox(state, inbox);
   const events = withdrawableEvents(state.waits, inbox);
   if (events.length === 0) return null;
   return prepareRecord(state, new InboxWithdrawnRecord(inbox, events));
@@ -1402,7 +1417,7 @@ export function prepareInterrupt(state: RunState, inbox: string, running: readon
     throw new TypeError("running must be null or an array of node ids");
   }
   requireDeliverable(state);
-  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  requireDeclaredInbox(state, inbox);
   const w = state.waits;
   // Offline no engine says which in-flight node opened the inbox, so any counts as a reader.
   const readersOpen = running === null ? state.inFlight.size > 0 : running.length > 0;
@@ -1443,7 +1458,7 @@ export function prepareAppliedStop(state: RunState, inbox: string, nodeId: strin
   if (typeof inbox !== "string") throw new TypeError("inbox must be a string");
   if (typeof nodeId !== "string") throw new TypeError("nodeId must be a string");
   requireDeliverable(state);
-  if (inboxElementType(state, inbox) === null) throw new DeliveryRefused("unknown_inbox", `the run has no inbox ${reprText(inbox)}`);
+  requireDeclaredInbox(state, inbox);
   const waiting = waitingReaders(state, inbox).filter((id) => id !== nodeId && !state.waits.interrupts.has(id));
   return prepareRecord(state, new InterruptedRecord(inbox, [nodeId, ...waiting]));
 }
@@ -1503,8 +1518,7 @@ export function prepareComplete(state: RunState, callId: string, result: Complet
   const view = callView(state, call);
   if (call.state !== "open") {
     if (call.state === "answered" && sameStep(shapedRepeat(node, view, result), view.result)) return null;
-    const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
-    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${why}`, { callState: call.state });
+    throw new DeliveryRefused("call_settled", `call ${reprText(callId)} is already ${settledText(call)}`, { callState: call.state });
   }
   let step: JsonObject;
   try {
@@ -1518,6 +1532,11 @@ export function prepareComplete(state: RunState, callId: string, result: Complet
     throw new DeliveryRefused("too_large", eventTooLarge(`the answer to ${reprText(callId)}`, size, state));
   }
   return prepareNodeStep(state, call.nodeId, step);
+}
+
+/** How a settled call's state reads in a message: `closed (<reason>)`, `answered` or `timed out`. */
+function settledText(call: Call): string {
+  return call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
 }
 
 /** The step `node` shapes for a repeated answer, or `null` when it refuses the answer. */
@@ -1817,8 +1836,7 @@ export function prepareNodeFailed(
 export function prepareRunResumed(state: RunState, options: { numWorkers: number }): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareRunResumed expects a RunState");
   const { numWorkers } = options;
-  if (!Number.isSafeInteger(numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
-  if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+  requireWorkerCount(numWorkers);
   requireInitializedNonterminal(state);
   return prepareRecord(state, new RunResumedRecord([...state.inFlight], numWorkers, retriedAgentCalls(state)));
 }
@@ -3907,8 +3925,7 @@ function validateNodeStarted(state: RunState, record: NodeStartedRecord): void {
 
 /** Require a resume record to name the exact ordered unfinished frontier. */
 function validateRunResumed(state: RunState, record: RunResumedRecord): void {
-  if (!Number.isSafeInteger(record.numWorkers)) throw new TypeError("num_workers must be a non-negative integer");
-  if (record.numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
+  requireWorkerCount(record.numWorkers);
   const retries: unknown = record.retryNodeIds;
   if (!Array.isArray(retries) || retries.some((nodeId) => typeof nodeId !== "string")) {
     throw new TypeError("RunResumedRecord retry_node_ids must be an array of strings");
@@ -4331,9 +4348,7 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
   }
   if (Object.hasOwn(step, "deadline")) {
     if (tool !== ASK) throw new RangeError(`a pending ${reprText(tool)} call has no deadline; only ask times out`);
-    const deadline = step["deadline"];
-    if (typeof deadline !== "string") throw new RangeError("pending deadline must be a record time");
-    requireRecordTime(deadline, "pending deadline");
+    requirePendingDeadline(step);
   }
   if (!isRecord(step["arguments"])) throw new RangeError("pending arguments must be an object");
   requireNewPendingCall(state, callId, step);
@@ -4374,11 +4389,16 @@ function validateAgentPendingStep(state: RunState, nodeId: string, step: Readonl
   }
   if (Object.hasOwn(step, "deadline")) {
     if (tool !== ASK_USER) throw new RangeError(`an agent's pending ${reprText(tool)} call has no deadline; only ask_user times out`);
-    const deadline = step["deadline"];
-    if (typeof deadline !== "string") throw new RangeError("pending deadline must be a record time");
-    requireRecordTime(deadline, "pending deadline");
+    requirePendingDeadline(step);
   }
   requireNewPendingCall(state, callId, step);
+}
+
+/** Require a `pending` step's `deadline` to be a record time. */
+function requirePendingDeadline(step: Readonly<JsonObject>): void {
+  const deadline = step["deadline"];
+  if (typeof deadline !== "string") throw new RangeError("pending deadline must be a record time");
+  requireRecordTime(deadline, "pending deadline");
 }
 
 /** Require a `pending` step within the run's `MAX_EVENT_BYTES` whose call isn't registered yet. */
@@ -4431,14 +4451,12 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   const agent = state.flow.nodes.get(nodeId)!.hostToolCall() === null;
   const closed = step["closed"];
   if (closed !== undefined && call.state === "open") {
-    const why = "only a record closes a call";
-    throw new RangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; ${why}`);
+    throw new RangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; only a record closes a call`);
   }
   if (agent && !waiting && call.state === "closed" && closed === call.closedReason) {
     if (call.resultSeq !== null) throw new RangeError(`call ${reprText(call.callId)} already has its closer`);
   } else if (call.state !== "open") {
-    const why = call.state === "closed" ? `closed (${call.closedReason})` : call.state === "answered" ? "answered" : "timed out";
-    throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${why}`);
+    throw new RangeError(`tool_result for call ${reprText(call.callId)}, which is already ${settledText(call)}`);
   }
   const size = eventBytes(step);
   if (size > state.runDefaults.maxEventBytes) throw new RangeError(eventTooLarge(`the answer to ${reprText(call.callId)}`, size, state));
@@ -5730,9 +5748,7 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
     edgeHeads.push(edge.to);
     seenOutgoingEdgeIds.add(edgeId);
     remainingBySuccessor.set(edge.to, (remainingBySuccessor.get(edge.to) ?? 0) + 1);
-    const ids = edgeIdsBySuccessor.get(edge.to);
-    if (ids === undefined) edgeIdsBySuccessor.set(edge.to, [edgeId]);
-    else ids.push(edgeId);
+    setDefault(edgeIdsBySuccessor, edge.to, () => []).push(edgeId);
   }
 
   for (const edge of outgoing) {
@@ -6213,9 +6229,7 @@ function skippedOutputOwners(state: RunState): Map<string, string[]> {
     if (state.nodeState.get(nodeId) !== NodeState.UNKNOWN) continue;
     const target = skippedOutputTarget(state, nodeId);
     if (target === nodeId) continue;
-    const ids = owners.get(target);
-    if (ids === undefined) owners.set(target, [nodeId]);
-    else ids.push(nodeId);
+    setDefault(owners, target, () => []).push(nodeId);
   }
   return owners;
 }

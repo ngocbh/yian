@@ -196,8 +196,7 @@ function copyObject(value: unknown, name: string): JsonObject {
 
 /** Split text into case-insensitive alphanumeric retrieval terms. */
 function lexicalTerms(value: string): Set<string> {
-  // Upper then lower case is the design's stand-in for Python's `casefold`; `\p{L}\p{N}` is
-  // `isalnum`.
+  // Upper then lower case stands in for Python's `casefold`; `\p{L}\p{N}` is `isalnum`.
   return new Set(
     value
       .toUpperCase()

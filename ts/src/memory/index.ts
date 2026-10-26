@@ -33,9 +33,8 @@
  *
  * Knows about: `diagnostics` and `defaults`, through `contracts.ts`; `storage/` also knows
  * `platform` and `typesys`; the backends `episodic.ts`, `reflective.ts` and `profile.ts` also know
- * `typesys`;
- * `reflective.ts` and `profile.ts` also know `llm` and `llm_clients`; `profile.ts` also knows
- * `reflective.ts`, `storage/markdown.ts` and `storage/sqlite.ts`.
+ * `typesys`; `reflective.ts` and `profile.ts` also know `llm` and `llm_clients`; `profile.ts` also
+ * knows `reflective.ts`, `storage/markdown.ts` and `storage/sqlite.ts`.
  * Never imports (this facade and `contracts.ts`): `nodes`, `compile`, `compose`, `runtime`, `run`,
  * the CLI, `llm`, or persistence frameworks.
  */

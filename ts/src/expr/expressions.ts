@@ -837,11 +837,13 @@ class EvalExpr {
   readonly #types: ReadonlyMap<string, Type> | null;
   readonly #trace: boolean;
   readonly #declared: DeclaredTypes | null;
+  readonly #itemType: Type | null;
   readonly #frames: TraceFrame[] = [];
   #lastRoute: ValueRoute | null = null;
   #missPath: string | null = null;
-  // Comprehension variables in scope: name -> its item and, when tracing, the item's route.
-  readonly #vars = new Map<string, { value: Value; route: ValueRoute | null }>();
+  // Comprehension variables in scope: name -> its item, its declared type (the element type of its
+  // un-narrowed iterable) and, when tracing, the item's route.
+  readonly #vars = new Map<string, { value: Value; type: Type | null; route: ValueRoute | null }>();
 
   constructor(
     resolve: RootResolver,
@@ -850,6 +852,7 @@ class EvalExpr {
     types: ReadonlyMap<string, Type> | null,
     trace: boolean,
     declared: DeclaredTypes | null,
+    itemType: Type | null,
   ) {
     this.#resolve = resolve;
     this.#item = item;
@@ -857,6 +860,7 @@ class EvalExpr {
     this.#types = types;
     this.#trace = trace;
     this.#declared = declared;
+    this.#itemType = itemType;
   }
 
   // --- top-level entry: turn a `MISSING` head into a value per mode --- //
@@ -1049,7 +1053,8 @@ class EvalExpr {
         present = item !== undefined;
         value = item ?? null;
       }
-      const [walked, complete] = this.walkSteps(present ? value : MISSING, [], steps, "item", null);
+      const members = declaredOf(this.#itemType);
+      const [walked, complete] = this.walkSteps(present ? value : MISSING, members, steps, "item", null);
       if (this.#trace && source === null) {
         this.#frames.at(-1)!.route = ValueRoute.literal(walked === MISSING ? null : walked).with({ expression: text });
       } else if (this.#trace && present && complete) {
@@ -1181,7 +1186,7 @@ class EvalExpr {
     const out: Value[] = [];
     const routes: ValueRoute[] = [];
     // One entry per active `for`: its clause index, its items, the next index, and its iterable's route.
-    const loops: { at: number; items: Value[]; k: number; route: ValueRoute | null }[] = [];
+    const loops: { at: number; items: Value[]; k: number; type: Type | null; route: ValueRoute | null }[] = [];
     // Move to the next binding of the innermost loop that has one; return the next clause index, or -1.
     const next = (): number => {
       while (loops.length > 0) {
@@ -1189,7 +1194,7 @@ class EvalExpr {
         const name = String(clauses[loop.at]!.children[0]);
         if (loop.k < loop.items.length) {
           const route = loop.route?.project([loop.k]) ?? null;
-          this.#vars.set(name, { value: loop.items[loop.k++]!, route });
+          this.#vars.set(name, { value: loop.items[loop.k++]!, type: loop.type, route });
           return loop.at + 1;
         }
         this.#vars.delete(name);
@@ -1214,7 +1219,8 @@ class EvalExpr {
         if (!Array.isArray(items)) {
           throw new ExpressionError(`comprehension \`for ${target} in ${source}\` takes a list, got ${kindName(items)}`);
         }
-        loops.push({ at: i, items, k: 0, route: this.#trace ? this.#lastRoute : null });
+        const route = this.#trace ? this.#lastRoute : null;
+        loops.push({ at: i, items, k: 0, type: this.elementDeclared(iterable), route });
         i = next();
       } else {
         i = truthy(this.asValue(this.walk(clauses[i]!.children[0]!))) ? i + 1 : next();
@@ -1230,6 +1236,24 @@ class EvalExpr {
   }
 
   /**
+   * The declared element type of a comprehension's iterable: `elementType` of its type, inferred
+   * from the declared types of the references, `item`, constructors and the variables in scope,
+   * without narrowing; `null` when untyped.
+   */
+  elementDeclared(iterable: ExprNode): Type | null {
+    const untyped = this.#declared === null && this.#itemType === null && this.#types === null;
+    if (untyped && this.#vars.size === 0) return null;
+    const refType = (path: string): Type | null => {
+      const names = path.split(".");
+      if (names[0] === "item") return declaredAt(this.#itemType, names.slice(1));
+      return this.#declared?.(names) ?? null;
+    };
+    const typeFn = (name: string): Type | null => this.#types?.get(name) ?? null;
+    const vars = new Map([...this.#vars].map(([name, binding]): [string, Type | null] => [name, binding.type]));
+    return elementType(inferExprType(iterable, refType, typeFn, vars));
+  }
+
+  /**
    * A comprehension variable read, then any `.field` trailers as `walkSteps` walks them. When
    * tracing, its route is its item's route projected through the trailers.
    */
@@ -1240,7 +1264,7 @@ class EvalExpr {
     if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
     const { steps } = splitReference(node);
     // A null item is returned as is, as in Python; a `.field` on it follows the step table.
-    const [value, complete] = this.walkSteps(binding.value, [], steps, name, null);
+    const [value, complete] = this.walkSteps(binding.value, declaredOf(binding.type), steps, name, null);
     if (this.#trace && binding.route !== null && complete && value !== null) {
       this.#frames.at(-1)!.route = binding.route.project(steps.map((step) => step.name));
     }
@@ -1536,6 +1560,8 @@ export interface EvalOptions {
   types?: ReadonlyMap<string, Type> | null;
   /** The declared type of a reference's root, given its names; `null` leaves every step undeclared. */
   declared?: DeclaredTypes | null;
+  /** The declared type of `item`; `null` leaves its steps undeclared. */
+  itemType?: Type | null;
 }
 
 /**
@@ -1588,6 +1614,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *   in, keyed by type name; `null` (the default) means no types.
  * @param options.declared The declared type of a reference's root, given its names, so a declared
  *   field that is absent reads `null`; `null` (the default) leaves every step undeclared.
+ * @param options.itemType The declared type of `item`; `null` (the default) leaves its steps
+ *   undeclared.
  * @param options.trace Record the value's route while evaluating, and return both as a
  *   `TracedValue` (default `false`).
  * @returns The value: `null`, a boolean, a `bigint`, a number, text, a list, a record or a file
@@ -1613,9 +1641,10 @@ export function evalExpr(
     types = null,
     trace = false,
     declared = null,
+    itemType = null,
   }: TraceOptions = {},
 ): Value | TracedValue {
-  return new EvalExpr(resolve, item, mode, types, trace, declared).eval(tree);
+  return new EvalExpr(resolve, item, mode, types, trace, declared, itemType).eval(tree);
 }
 
 // --------------------------------------------------------------------------------------- //

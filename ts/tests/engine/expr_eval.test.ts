@@ -36,7 +36,7 @@ import {
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
 import { evalBinding, scanTemplate } from "../../src/expr/template.ts";
 import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.ts";
-import { fieldOf, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { fieldOf, listKindForElement, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 
 /** Parse `text` then evaluate it, defaulting to an empty resolver (every reference misses). */
 function evaluate(
@@ -1145,4 +1145,32 @@ test("a constructor's result is declared by its type", () => {
   const types = new Map([["R", Rec]]);
   expect(evalExpr(parseExpr("R(k='a').opt"), MISSING_ROOT, { types })).toBeNull();
   expect(() => evalExpr(parseExpr("upper('a').opt"), MISSING_ROOT, { types })).toThrow("upper(...) is str");
+});
+
+test("a comprehension variable is declared by its iterable's element type", () => {
+  const list = new Type({ kind: listKindForElement(Rec), element: Rec });
+  const declaredXs = (names: readonly string[]) => (names[0] === "xs" ? declaredAt(list, names.slice(1)) : null);
+  const xs = { xs: [{ k: "a" }] };
+  expect(evalExpr(parseExpr("[m.opt for m in xs]"), rec(xs), { declared: declaredXs })).toEqual([null]);
+  const guarded = parseExpr("[m.opt for m in xs if m.opt == null]");
+  expect(evalExpr(guarded, rec(xs), { declared: declaredXs })).toEqual([null]);
+  expect(evalExpr(parseExpr("[m.opt for m in (xs :- [])]"), rec(xs), { declared: declaredXs })).toEqual([null]);
+  expect(() => evalExpr(parseExpr("[m.opt for m in xs]"), rec(xs))).toThrow("m has no field 'opt'");
+  expect(() => evalExpr(parseExpr("[m.nope for m in xs]"), rec(xs), { declared: declaredXs })).toThrow(
+    "m has no field 'nope'",
+  );
+});
+
+test("a nested comprehension variable is declared through the outer variable", () => {
+  const inner = new Type({ kind: listKindForElement(Rec), element: Rec });
+  const Outer = new Type({ kind: ValueKind.OBJECT, fields: new Map([["items", inner]]), required: new Set(["items"]) });
+  const list = new Type({ kind: listKindForElement(Outer), element: Outer });
+  const declared = (names: readonly string[]) => (names[0] === "os" ? declaredAt(list, names.slice(1)) : null);
+  const os = { os: [{ items: [{ k: "a" }] }] };
+  expect(evalExpr(parseExpr("[i.opt for o in os for i in o.items]"), rec(os), { declared })).toEqual([null]);
+});
+
+test("item is declared by the MAP's item type", () => {
+  expect(evalExpr(parseExpr("item.opt"), MISSING_ROOT, { item: { k: "a" }, itemType: Rec })).toBeNull();
+  expect(() => evalExpr(parseExpr("item.opt"), MISSING_ROOT, { item: { k: "a" } })).toThrow("item has no field 'opt'");
 });

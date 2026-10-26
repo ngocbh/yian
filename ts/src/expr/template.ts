@@ -309,10 +309,17 @@ export function evalTemplate(
 export function evalTemplate(
   segments: readonly TemplateSegment[],
   resolve: RootResolver,
-  { item, mode = ResolveMode.BINDING_NONE, types = null, trace = false, declared = null }: TraceOptions = {},
+  {
+    item,
+    mode = ResolveMode.BINDING_NONE,
+    types = null,
+    trace = false,
+    declared = null,
+    itemType = null,
+  }: TraceOptions = {},
 ): Value | TracedValue {
   const evalSpan = (span: Span): Value | TracedValue => {
-    const result = evalExpr(span.tree, resolve, { item, mode, types, trace, declared });
+    const result = evalExpr(span.tree, resolve, { item, mode, types, trace, declared, itemType });
     const value = trace ? (result as TracedValue).value : (result as Value);
     if (value === null && mode === ResolveMode.STRICT_RAISE) {
       throw new ExpressionError("null value in strict template");
@@ -413,10 +420,10 @@ export function evalBinding(
 export function evalBinding(
   source: string,
   resolve: RootResolver,
-  { item, types = null, trace = false, declared = null }: Omit<TraceOptions, "mode"> = {},
+  { item, types = null, trace = false, declared = null, itemType = null }: Omit<TraceOptions, "mode"> = {},
 ): Value | TracedValue {
   const mode = ResolveMode.BINDING_NONE;
-  return evalTemplate(scanTemplate(source), resolve, { item, mode, types, trace, declared });
+  return evalTemplate(scanTemplate(source), resolve, { item, mode, types, trace, declared, itemType });
 }
 
 /**

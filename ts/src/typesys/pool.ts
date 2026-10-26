@@ -4,8 +4,7 @@
  * Each node id has at most one stored value: an `Output` commits one `TypedValue` (scalar,
  * object, or list), while a CASE `Route` commits none. "Multiple outputs" are fields of one
  * object. `${input.X}` resolves to `store[<startId>].X`: the synthesized START node's committed
- * bound-input record is the flow's run-arguments object (the standalone `inputs` namespace is
- * retired). The one side namespace is `system` (host-injected ambient: run id / clock / tenant;
+ * bound-input record is the flow's run-arguments object. The one side namespace is `system` (host-injected ambient: run id / clock / tenant;
  * reserved, run-global). There is no engine-private key-addressed namespace; live
  * AGENT and TOOL effects all return the leaf's ordinary Output. An AGENT's success also stores
  * its new messages under their own pool name, `<id>.new_messages` (`messagesKey`).
@@ -133,8 +132,7 @@ export class VariablePool {
   /** Build an empty pool whose `${input.X}` reads `store[startId]`. */
   constructor(startId: string = "__start__") {
     // The default mirrors `StartNode.ID` but isn't imported from it: `typesys` is a leaf below
-    // `nodes`, so it can't import the node class. The `nodes/` port adds a test pinning the two
-    // together.
+    // `nodes`, so it can't import the node class. A test pins the two together.
     this.startId = startId;
   }
 

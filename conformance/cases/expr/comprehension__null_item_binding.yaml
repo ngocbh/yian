@@ -1,6 +1,9 @@
 kind: expr
 python_skip: "TS-only: list comprehensions (#1086)"
-# An item is returned as is, as in Python; `.k` on a null item misses.
+rules: [null-field-read]
+# An item is returned as is, as in Python; `.k` on a null item raises (#1149), `?.k` reads null.
 expr: "[[x for x in [null, 1]], [x for x in [null, 1] if x], [x.k for x in [null]]]"
 expect:
-  value: [[null, 1], [1], [null]]
+  raises:
+    class: ExpressionError
+    message: "cannot read ${x.k}: x is null; write x?.k to read null instead, or check x != null first"

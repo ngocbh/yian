@@ -57,7 +57,11 @@ const CASES: { name: string; flow: string; inputs?: Record<string, unknown>; out
   { name: "?. on an untyped record reads null", flow: live(A_UNTYPED, '${a.output?.opt :- "d"}'), output: "d" },
   { name: "?. on an untyped record, derived", flow: derived(A_UNTYPED, '${a.output?.opt :- "d"}'), output: "d" },
   { name: "an untyped absent key raises", flow: live(A_UNTYPED, "${a.output.opt}"), code: "binding.evaluate" },
-  { name: "an untyped absent key raises, derived", flow: derived(A_UNTYPED, "${a.output.opt}"), code: "binding.evaluate" },
+  {
+    name: "an untyped absent key raises, derived",
+    flow: derived(A_UNTYPED, "${a.output.opt}"),
+    code: "binding.evaluate",
+  },
   {
     name: "a comprehension variable reads its element's declared field",
     flow: live(A_LIST, '${[m.opt :- "d" for m in a.output]}'),
@@ -73,7 +77,8 @@ const CASES: { name: string; flow: string; inputs?: Record<string, unknown>; out
     flow:
       `id: f\nname: f\n${TYPES}nodes:\n${A_LIST}` +
       "  each:\n    kind: map\n    over: ${a.output}\n    input:\n      v: !str ${item.opt :- \"d\"}\n" +
-      '    nodes:\n      one:\n        kind: code\n        input:\n          v: ${input.v}\n        code: return inputs["v"]\n' +
+      "    nodes:\n      one:\n        kind: code\n        input:\n          v: ${input.v}\n" +
+      '        code: return inputs["v"]\n' +
       "    output: ${one.output}\noutput: ${each.output}\n",
     output: ["d", "d"],
   },

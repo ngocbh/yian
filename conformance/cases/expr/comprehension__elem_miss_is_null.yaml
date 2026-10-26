@@ -1,6 +1,10 @@
 kind: expr
 python_skip: "TS-only: list comprehensions (#1086)"
+rules: [null-field-read]
+# A `.` read of a key an untyped item lacks raises (#1149); `m?.text` reads null (the ?. twin).
 expr: "[m.text for m in ms]"
 values: {ms: [{text: a}, {role: user}]}
 expect:
-  value: [a, null]
+  raises:
+    class: ExpressionError
+    message: "cannot read ${m.text}: m has no field 'text'"

@@ -320,12 +320,14 @@ export async function buildMemories(
       );
     }
   }
+  const storagePaths = new Map<string, string>();
   for (const [key, path] of paths) {
     // Backends take text paths only. Checked here so other values are not reported as a config
     // error, and null does not silently mean RAM.
     if (typeof path !== "string") {
       throw new MemorySetupError(`storage[${writeAsJson(key)}] must be a string path, not ${path === null ? "null" : jsTypeName(path)}`);
     }
+    storagePaths.set(key, path);
   }
   const shadowed = [...makers.keys()].filter((type) => BUILTIN_MEMORY_CONFIG_KEYS.has(type)).sort(compareCodeUnits);
   if (shadowed.length > 0) {
@@ -341,7 +343,7 @@ export async function buildMemories(
     for (const memory of table) {
       memories.set(
         memory.key,
-        await buildOne(memory, paths as Map<string, string>, given, makers, owned, base, seen, { env, models, onEvent }),
+        await buildOne(memory, storagePaths, given, makers, owned, base, seen, { env, models, onEvent }),
       );
     }
   } catch (primary) {

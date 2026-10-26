@@ -831,6 +831,8 @@ document, `{"format", "error": <diagnostic>}`. `error.code` is one of:
 
 - `compose.load`: the flow doesn't load (`yian run`); the frames, when present, locate the
   problem.
+- `expr.nullable_field_read`: the flow doesn't load because it reads a field through a value
+  that may be null; the message names the fix.
 - `defaults.invalid`: a `YIAN_<NAME>` variable holds a value it doesn't accept (any
   command).
 - `run.setup`: the run could not start or recover. This covers memory, MCP, and
@@ -860,8 +862,8 @@ result per argument, in argument order. `path` is the argument exactly as given.
 flow that loads gives `id`, `name`, `description` (a string or `null`), and `inputs`;
 each input's `type` is its canonical type label (`int`, `Optional(str)`, or a typedef
 expanded as `{"age":int,"name":str}`). A flow that doesn't load gives `diagnostics`,
-with code `compose.load` or `compose.outside_root`. A missing or unreadable file is a
-`compose.load` diagnostic without frames. The command exits 0 when every flow loads,
+with code `compose.load`, `compose.outside_root` or `expr.nullable_field_read`. A missing
+or unreadable file is a `compose.load` diagnostic without frames. The command exits 0 when every flow loads,
 and 1 otherwise. The document is shown wrapped here:
 
 ```json

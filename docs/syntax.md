@@ -374,6 +374,9 @@ AGENT's `system_prompt:`, a `human_input` question's text and
 `asserts:`. Reading a declared field through an `Optional(...)` record still gives
 `null` when the whole value is null, and values whose type isn't known at load
 (`object`, `Any`, an untyped output, or anything below them) aren't checked.
+Changed (TS yian): reading a field through a value that may be null is a load error
+(`expr.nullable_field_read`); write `x?.k` or check `x != null` first (see
+[Expressions](expressions.md)).
 
 Changed (TS yian): with `human_input` removed, an `ask`'s `prompt:` and question text are
 checked as bindings, and its `adaptive_questions.prompt:` as above.
@@ -559,6 +562,13 @@ plain reference `<ref>`:
   Changed (TS yian): `x?.k` reads null when `x` is null, without a check (see
   [Expressions](expressions.md)).
 
+Changed (TS yian): a `.` read through a value that may be null is a load error, and the same
+checks lift it at every expression site (bindings, flow and LOOP-body outputs, prompts,
+`render:`, conditions and asserts): a null check (`x != null and x.k`, `x == null or x.k`),
+`isinstance(x, T) and x.f`, a tag test (`x?.kind == "a" and x.k`), or a `case` branch that
+proves `x`. A value that is untyped and only narrowed to `T` still needs `?.` for a field `T`
+doesn't require (`x?.f`), or a type where it is bound (`output: T` or `!T`).
+
 The narrowed type replaces the declared one for the reads after the check, the same way for
 `and`, `or` and `not`. With `Order: Union(Buy, Sell)`, where only `Buy` has `qty`, each of
 these may read `v.qty`:
@@ -583,7 +593,7 @@ Two checks on one value meet, and when each proves a type, the narrower one wins
 `x != null and isinstance(x, Item)` over `x: Optional(Any)` sees `x` as `Item`, either
 way round. A check that proves a nested field is not null (`!= null` or `isinstance`) also
 proves each record above it is not null and has that field: with `A: {b: Optional(str),
-m: Literal(p, q)}` and `a: !Optional(A)`, in a branch under `when: input.a.b != null`,
+m: Literal(p, q)}` and `a: !Optional(A)`, in a branch under `when: input.a?.b != null`,
 `${input.a.b}` is `str`, `${input.a}` is `A`, and an `on: ${input.a.m}` that lists `p` and
 `q` is exhaustive. No check proves a value is null, so a null check narrows nothing when it
 is false: over `x: Optional(Order)`, `x == null or isinstance(x, Buy)` doesn't narrow `x`
@@ -3356,6 +3366,10 @@ Read the taken branch's output with `${gate.output}`:
 output: ${gate.output}         # bullish's output or cautious's output
 ```
 
+Changed (TS yian): a field of the case value reads each branch through `?.`, since a branch
+the route didn't take is skipped: `${gate.output.report}` is
+`${bullish.output?.report | cautious.output?.report}`.
+
 Routing on a `Literal` node output or flow input (a LOOP body's carried field, a child
 flow's input) is **exhaustiveness-checked**: omitting a tag with no `else:` is a
 load error. A routing-only `case` over any other value may match nothing; then no
@@ -3566,9 +3580,9 @@ output:
   it with a tag (`qty: !int ${c1.output.qty}`) or give it a default.
 - **Nested reads:** a `${...}` nested in a record or list of a flow output gives `null`
   at its own position when its node was skipped (see [Nested values](#nested-values)).
-- **Templates and comparisons** are unchanged:
-  `'${order.output.qty} and ${rejected.output}'` renders ` and no`, and
-  `${order.output.qty == 2}` is `false`.
+- **Templates and comparisons** run with the producer skipped. Changed (TS yian): so they
+  read its fields through `?.`: `'${order.output?.qty} and ${rejected.output}'` renders
+  ` and no`, and `${order.output?.qty == 2}` is `false`.
 - **Arithmetic** (`+ - * / % **`, unary minus) on such a value is a load error at the
   binding: in a flow output, and in a node binding (including a `case`'s `on:`) or a
   searched `case`'s `when:` whose node still runs when the value's node is skipped:
@@ -3578,14 +3592,24 @@ output:
   when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)
   ```
 
+  Changed (TS yian): a field operand is reported by the field-read check first:
+
+  ```
+  output 'q': ${order.output.qty} reads field 'qty' of order.output, which may be null (node
+  'order' may be skipped); write (order.output?.qty :- <default>)
+  ```
+
   A node that also plainly reads `${order.output}` is skipped with it, so its
   arithmetic loads. Arithmetic in flow-level `asserts:` is not checked. The default
   side of `:-` is checked as if it always runs: `${a.output :- (b.output + 1)}` is an
   error even when `b` runs whenever `a` is skipped, since `a` might be null while it runs.
   In a `when:`, `((a.output.n + 1) :- 0) > 1` is an error and
-  `(a.output.n :- 0) + 1 > 1` loads.
+  `(a.output.n :- 0) + 1 > 1` loads. Changed (TS yian): `:-` doesn't catch the field read of
+  a skipped `a`, so the loading form is `(a.output?.n :- 0) + 1 > 1`.
   A null guard is reported too: `${a.output != null and a.output.n + 1 > 1}` is an
   error though `and` stops at the guard; write `${(a.output.n :- 0) + 1 > 1}` instead.
+  Changed (TS yian): a null guard lifts it, so `${a.output != null and a.output.n + 1 > 1}`
+  loads.
 - In a LOOP body the null sets the carried field (see [`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count));
   a MAP returns null for each element whose branch was skipped.
 

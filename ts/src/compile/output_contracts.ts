@@ -52,7 +52,7 @@ import {
 } from "../typesys/index.ts";
 import type { Node } from "../nodes/base.ts";
 import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
-import { fileFieldType, isListKind, typeEquals } from "../typesys/values.ts";
+import { fileFieldType, isListKind, joinedType, typeEquals } from "../typesys/values.ts";
 import { typeRelation } from "./validation.ts";
 
 /** Marks a binding source that is a template, not a literal, in `literalValue`. */
@@ -423,16 +423,9 @@ function listContract(items: readonly (OutputContract | null)[]): ValueContract 
   // runtime check covers it) instead of failing the load.
   if (items.length === 0 || items.some((item) => !isExactly(item, ValueContract))) return null;
   const types = (items as ValueContract[]).map((item) => item.type);
-  const element = joined(types) ?? joined(types.map(widened));
+  const element = joinedType(types) ?? joinedType(types.map(widened));
   if (element === null) return null;
   return new ValueContract(new Type({ kind: listKindForElement(element), element }));
-}
-
-/** Return the types' common type when they are equal up to `Optional`, else `null`. */
-function joined(types: readonly Type[]): Type | null {
-  const bare = types.map((typ) => typ.replace({ nullable: false }));
-  if (bare.slice(1).some((typ) => !typeEquals(typ, bare[0]!))) return null;
-  return bare[0]!.replace({ nullable: types.some((typ) => typ.nullable) });
 }
 
 /** Return `typ` with literal refinements (tags, bounds) dropped, at every depth. */

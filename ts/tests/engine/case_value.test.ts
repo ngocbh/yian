@@ -95,14 +95,23 @@ test("whole ref expands to coalesce", () => {
   expect(inputOf(out, "c", "v")).toBe("${pro.output | caut.output}");
 });
 
-test("dotted case ref expands per branch", () => {
+test("dotted case ref expands per branch, each branch read through ?.", () => {
   const out = expanded({ gate: gate(), c: code("c", { v: "${gate.output.report}" }) });
-  expect(inputOf(out, "c", "v")).toBe("${pro.output.report | caut.output.report}");
+  expect(inputOf(out, "c", "v")).toBe("${pro.output?.report | caut.output?.report}");
+  const whole = expanded({ gate: gate(), c: code("c", { v: "${gate.output}" }) });
+  expect(inputOf(whole, "c", "v")).toBe("${pro.output | caut.output}");
 });
 
 test("a ?. case ref expands per branch, keeping ?.", () => {
   const out = expanded({ gate: gate(), c: code("c", { v: "${gate.output?.report.x}" }) });
   expect(inputOf(out, "c", "v")).toBe("${pro.output?.report.x | caut.output?.report.x}");
+});
+
+test("?. inside a case ref's root is the ?.-inside-root error", () => {
+  const error = expandFails({ gate: gate(), c: code("c", { v: "${gate?.output.report}" }) });
+  expect(error.message).toContain(
+    "reference ${gate?.output.report} puts ?. inside its root; ?. goes after the root, as in ${gate.output?.report}",
+  );
 });
 
 test("embedded case ref expands", () => {

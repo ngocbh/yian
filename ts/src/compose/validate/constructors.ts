@@ -33,7 +33,7 @@ import { outputContractFieldError, ValueContract } from "../../nodes/contracts.t
 import type { RefExpr, TypeRegistry } from "../../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, type Type } from "../../typesys/values.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { literalType, type TypeFn } from "../helpers/output_contracts.ts";
+import { literalType, type TypeFn } from "../../compile/output_contracts.ts";
 
 /** Resolves a reference path to its proven type, or `null` when it is unknown. */
 export type RefType = (path: string) => Type | null;

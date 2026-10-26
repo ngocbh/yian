@@ -27,10 +27,11 @@
  */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
-import { conditionRefs, ExpressionError } from "../../expr/expressions.ts";
+import { conditionRefs, ExpressionError, optionalInsideRoot, parseCondition } from "../../expr/expressions.ts";
 import { findSpanEnd } from "../../expr/grammar.ts";
-import { exprRefsOf } from "../../expr/template.ts";
+import { exprRefsOf, scanTemplate, Span } from "../../expr/template.ts";
 import { Assertion, iterSourceStrings } from "../../nodes/contracts.ts";
+import { poolRootLength } from "../../typesys/pool.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { nth } from "../helpers/source.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
@@ -70,9 +71,10 @@ export function expandCaseOutputs(
     outputsRange?: SourceRange | null;
     assertionRangeAt?: ((index: number) => SourceRange | null) | null;
     diagnostics?: LoadDiagnostics | null;
+    spellings?: Map<string, CaseRead> | null;
   } = {},
 ): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
-  const { outputsRange = null, assertionRangeAt = null } = options;
+  const { outputsRange = null, assertionRangeAt = null, spellings = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const caseIds = caseIdsOf(descriptors);
   if (caseIds.size === 0) return [new Map(descriptors), outputsSection]; // fast path
@@ -86,6 +88,7 @@ export function expandCaseOutputs(
         expander(caseIds, targets, `node ${reprText(nodeId)}`, {
           range: bindingRange(descriptor, field, key),
           diagnostics,
+          spellings,
         })(value),
       ),
     );
@@ -93,7 +96,7 @@ export function expandCaseOutputs(
 
   const newOutputs = mapOutputsStrings(
     outputsSection,
-    expander(caseIds, targets, "flow outputs", { range: outputsRange, diagnostics }),
+    expander(caseIds, targets, "flow outputs", { range: outputsRange, diagnostics, spellings }),
   );
 
   // A case value in a condition / assert (not a binding) is unsupported — loud.
@@ -118,6 +121,25 @@ export function expandCaseOutputs(
   }
 
   return [newDescriptors, newOutputs];
+}
+
+/** A case value read as written: the case and the leaf targets its expansion reads instead. */
+export interface CaseRead {
+  readonly caseId: string;
+  readonly leaves: readonly string[];
+}
+
+/**
+ * Return `message`, about a binding whose text is `text`, with each expanded case read spelled as
+ * written (`gate.output.k` for `a.output?.k | b.output?.k`); `spellings` is what
+ * `expandCaseOutputs` recorded, by expanded span interior.
+ */
+export function caseReadsAsWritten(message: string, text: string, spellings: ReadonlyMap<string, CaseRead>): string {
+  for (const [expanded, { caseId, leaves }] of spellings) {
+    if (!text.includes("${" + expanded + "}")) continue;
+    for (const leaf of leaves) message = message.replaceAll(`${leaf}.output?.`, `${caseId}.output.`);
+  }
+  return message;
 }
 
 /**
@@ -216,7 +238,7 @@ function expander(
   caseIds: ReadonlySet<string>,
   targets: (caseId: string) => readonly unknown[],
   host: string,
-  options: { range: SourceRange | null; diagnostics: LoadDiagnostics },
+  options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): (value: string) => string {
   return (value) => {
     // Singular only: detect the `.output` marker.
@@ -249,7 +271,8 @@ function expander(
  * Return the replacement `${…}` text for one TOP-LEVEL `${…}` span, given its interior.
  *
  * A clean case-output interior `<case>.output[.path]` becomes the branch coalesce over the case's
- * LEAF (non-case) targets (the path suffix re-applied per branch; a case-of-case is flattened by
+ * LEAF (non-case) targets (the path suffix re-applied per branch, its first step `?.` since a
+ * branch the route didn't take is skipped; a case-of-case is flattened by
  * `caseLeafTargets`). Any OTHER interior that reads a case value (via a nested ref / coalesce /
  * default operand) is a located `LoadError`. Everything else (a non-case ref, a `:?` message
  * literal) is returned unchanged.
@@ -261,9 +284,9 @@ function expandSpan(
   caseIds: ReadonlySet<string>,
   targets: (caseId: string) => readonly unknown[],
   host: string,
-  options: { range: SourceRange | null; diagnostics: LoadDiagnostics },
+  options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): string {
-  const { range, diagnostics } = options;
+  const { range, diagnostics, spellings } = options;
   const match = CASE_OUTPUT_INTERIOR.exec(interior.trim());
   if (match !== null) {
     const caseId = match[1]!;
@@ -278,7 +301,11 @@ function expandSpan(
           { range },
         );
       }
-      return "${" + leaves.map((target) => `${String(target)}.output${suffix}`).join(" | ") + "}";
+      // The first step after each branch root is ?.: a branch the route didn't take is skipped.
+      const steps = suffix.startsWith(".") ? "?" + suffix : suffix;
+      const expanded = leaves.map((target) => `${String(target)}.output${steps}`).join(" | ");
+      spellings?.set(expanded, { caseId, leaves: leaves.map(String) });
+      return "${" + expanded + "}";
     }
   }
   rejectCaseRefs("${" + interior + "}", caseIds, host, { range, diagnostics }); // a non-clean read is loud
@@ -306,6 +333,9 @@ function rejectCaseRefs(
     const parts = ref.split(".");
     // Singular only: a case id in head position of `<id>.output`.
     if (parts.length >= 2 && parts[1] === "output" && caseIds.has(parts[0]!)) {
+      // `${g?.output.k}` is misspelled, not a case value read in an unsupported position.
+      const misplaced = optionalInsideRootOf(source, condition);
+      if (misplaced !== null) throw diagnostics.error(`${where}: ${misplaced}`, { range });
       throw diagnostics.error(
         `${where}: \${${parts[0]}.output} — a case value can't be read in a coalesce operand, a ` +
           "default, an expression, a condition, or an assert; read it as a whole binding or inside text",
@@ -313,6 +343,30 @@ function rejectCaseRefs(
       );
     }
   }
+}
+
+/**
+ * Return the `?.`-inside-a-root error of the first reference in `source` that has one, else `null`.
+ * With `condition`, a string `source` is a condition (bare or one whole `${...}`).
+ */
+function optionalInsideRootOf(source: unknown, condition: boolean): string | null {
+  let texts: string[];
+  if (condition) texts = typeof source === "string" ? [source] : [];
+  else texts = [...iterSourceStrings(source)].map(([, text]) => text);
+  for (const text of texts) {
+    try {
+      const trees = condition
+        ? [parseCondition(text)]
+        : scanTemplate(text).flatMap((segment) => (segment instanceof Span ? [segment.tree] : []));
+      for (const tree of trees) {
+        const misplaced = optionalInsideRoot(tree, poolRootLength);
+        if (misplaced !== null) return misplaced;
+      }
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+    }
+  }
+  return null;
 }
 
 /**

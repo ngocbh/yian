@@ -28,7 +28,7 @@ import { type OutputContract, type ValueContract, type ValuePath, ValueTemplate 
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, type Type, ValueKind } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
-import { literalContract } from "../helpers/output_contracts.ts";
+import { literalContract } from "../../compile/output_contracts.ts";
 import { pathLabel, readTaggedValue, suggestTag } from "../helpers/tags.ts";
 import { type BuildContext, type NodeDescriptor, siteKey } from "../nodes/base.ts";
 import { CodeDescriptor, type CodeDescriptorFields } from "../nodes/code.ts";

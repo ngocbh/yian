@@ -42,8 +42,8 @@ import { readType } from "../../src/compose/helpers/types.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { narrows, rootBaseType } from "../../src/compose/validate/asserts.ts";
-import { computeNarrowing } from "../../src/compose/validate/narrowing.ts";
-import { parseCondition } from "../../src/expr/index.ts";
+import { computeNarrowing, searchedWhenReads } from "../../src/compose/validate/narrowing.ts";
+import { parseCondition, referenceText } from "../../src/expr/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
@@ -176,7 +176,7 @@ test.each(["call", "map"] as const)("a branch under a null check passes the valu
 test.each([
   ["input.x != null", "Optional(Item)", "Item", "${input.x}"],
   ["input.x.b != null", "A", "str", "${input.x.b}"],
-  ["input.x.b != null", "Optional(A)", "str", "${input.x.b}"],
+  ["input.x?.b != null", "Optional(A)", "str", "${input.x.b}"],
   ["input.x != null", "Optional(Any)", "Any", "${input.x}"],
 ])("a branch under a null check on an input passes it as not null: %s on %s", (when, xType, sinkType, source) => {
   load(inputFlow(when, xType, sinkType, source));
@@ -245,7 +245,8 @@ function onFlow(sinkType: string): string {
     ON_TYPEDEFS +
     "input:\n  v: !Optional(AB)\n" +
     "nodes:\n" +
-    "  gate:\n    kind: case\n    on: ${input.v.kind}\n    cases:\n" +
+    // `input.v` may be null, so its tag is read through `?.`.
+    "  gate:\n    kind: case\n    on: ${input.v?.kind}\n    cases:\n" +
     "      - when: a\n        then: use\n" +
     "    else: skip\n" +
     "  use:\n    kind: call\n    call: take\n    input:\n      v: ${input.v}\n" +
@@ -314,19 +315,15 @@ test("a null check alone does not prove a type", () => {
 });
 
 // --------------------------------------------------------------------------- //
-// Param views
+// Searched when: reads
 // --------------------------------------------------------------------------- //
 
 const PARAM_REGISTRY = readTypedefs({ Rec: { a: "str", b: "str" } });
 
-test("a case param read after a null check sees the value as not null", () => {
+test("a searched when: read after a null check sees the value as not null", () => {
   const rec = readType("Optional(Rec)", PARAM_REGISTRY);
-  const gate = new CaseDescriptor({
-    id: "gate",
-    on: null,
-    cases: [{ when: "x.output.a == 'p' and x.output != null and x.output.b == 'q'", then: "use" }],
-    else_: null,
-  });
+  const when = "x.output.a == 'p' and x.output != null and x.output.b == 'q'";
+  const gate = new CaseDescriptor({ id: "gate", on: null, cases: [{ when, then: "use" }], else_: null });
   const descriptors = new Map<string, NodeDescriptor>([
     ["x", new NodeDescriptor({ id: "x" })],
     ["gate", gate],
@@ -336,14 +333,16 @@ test("a case param read after a null check sees the value as not null", () => {
   const narrowing = computeNarrowing(descriptors, edges, new Map([["x", new ValueContract(rec)]]), new Map(), {
     registry: PARAM_REGISTRY,
   });
-  // The params follow the reads: `x.output.a`, `x.output`, `x.output.b`.
-  const [before, after] = ["__r0", "__r2"];
-  const seen = (param: string) => (narrowing.forParam("gate", param)[0].get("x") as ValueContract).type;
-  expect(seen(after).nullable).toBe(false);
-  expect(typeEquals(seen(before), rec)).toBe(true);
+  // The reads, in order: `x.output.a`, `x.output`, `x.output.b`.
+  const reads = searchedWhenReads(narrowing, "gate", parseCondition(when), PARAM_REGISTRY);
+  expect(reads.map((read) => referenceText(read.node))).toEqual(["x.output.a", "x.output", "x.output.b"]);
+  const [before, , after] = reads;
+  const seen = (read: (typeof reads)[number]) => (read.views[0].get("x") as ValueContract).type;
+  expect(seen(after!).nullable).toBe(false);
+  expect(typeEquals(seen(before!), rec)).toBe(true);
   const notNull = new Exact(readType("Rec", PARAM_REGISTRY));
-  expect(narrowing.paramEnv("gate", after)).toStrictEqual(new Map([["x.output", notNull]]));
-  expect(narrowing.paramEnv("gate", before)).toStrictEqual(new Map());
+  expect(after!.facts).toStrictEqual(new Map([["x.output", notNull]]));
+  expect(before!.facts).toStrictEqual(new Map());
 });
 
 // --------------------------------------------------------------------------- //
@@ -413,6 +412,28 @@ test("a flow assert null check narrows a skippable producer of a non-null type",
     "assert 'd.output != null and d.output.nosuch > 0': reference ${d.output.nosuch} reads " +
       "field 'nosuch', which Item doesn't have; d.output is Item here, by the checks before " +
       "this read",
+  );
+});
+
+test("a flow assert on a skippable producer needs a null check", () => {
+  // The twin of the test above, without the null check: `d` may be skipped.
+  const text =
+    "id: p\nname: p\n" +
+    "typedefs:\n  Item:\n    qty: int\n" +
+    "input:\n  s: !str\n" +
+    "nodes:\n" +
+    "  route:\n    kind: case\n    cases:\n" +
+    "      - when: \"input.s == 'go'\"\n        then: d\n" +
+    "    else: e\n" +
+    `  d:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: Item\n" +
+    `  e:\n    kind: code\n    code: ${ECHO}\n` +
+    "    input:\n      topic: ${input.s}\n    output: str\n" +
+    "output: ${input.s}\n" +
+    'asserts:\n  - "d.output.qty > 0"\n';
+  expect(loadMessage(text)).toBe(
+    "assert 'd.output.qty > 0': ${d.output.qty} reads field 'qty' of d.output, which may be null " +
+      "(node 'd' may be skipped); write d.output?.qty, or check d.output != null first",
   );
 });
 

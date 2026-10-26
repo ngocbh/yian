@@ -24,6 +24,7 @@ import {
   falsified,
   type Guard,
   guardChecks,
+  guardedReads,
   guardedRefs,
   Holds,
   IsinstanceCheck,
@@ -39,6 +40,7 @@ import {
   TagCheck,
   unknownCheck,
 } from "../../src/compose/helpers/condition_guards.ts";
+import { referenceText } from "../../src/expr/expressions.ts";
 import { conditionReads, exprRefs, parseCondition } from "../../src/expr/index.ts";
 
 const A = new IsinstanceCheck("v", "Buy");
@@ -399,4 +401,11 @@ test("a comprehension proves nothing", () => {
 test("a ?. read is a guarded read and a check subject", () => {
   expect(guardedRefs(parseCondition("x?.k != null and x?.k.m")).map(([path]) => path)).toEqual(["x.k", "x.k.m"]);
   expect(checkIn(parseCondition("x?.k != null"))).toStrictEqual([new NotNullCheck("x.k"), true]);
+});
+
+test("guardedReads gives each read occurrence its node, path and guard", () => {
+  const reads = guardedReads(parseCondition("x != null and x?.k.m"));
+  expect(reads.map((read) => read.path)).toEqual(["x", "x.k.m"]);
+  expect(referenceText(reads[1]!.node)).toBe("x?.k.m");
+  expect(reads[1]!.guard).toEqual(new Holds(new NotNullCheck("x"), true));
 });

@@ -1,0 +1,20 @@
+# A null check before the read lifts the need for `?.`.
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Rec: {a: str}
+  input:
+    maybe: !Optional(Rec)
+  nodes:
+    use:
+      kind: code
+      input:
+        v: ${input.maybe != null and input.maybe.a == 'x'}
+      output: str
+      code: |
+        return "x"
+  output: ${use.output}
+expect:
+  load: ok

@@ -45,10 +45,11 @@ import {
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import {
   directReferenceParts,
+  hasOptionalStep,
   outputContractPathError,
   projectOutputContract,
   type TypeFn,
-} from "../helpers/output_contracts.ts";
+} from "../../compile/output_contracts.ts";
 
 /**
  * Return the advice for an inline binding whose type can't be proven.
@@ -270,18 +271,23 @@ function inferBindingString(source: string, walk: Walk): Type {
   if (segments.length !== 1 || !(only instanceof Span)) return Type.scalar(ValueKind.STRING);
 
   const expression = only.tree;
+  // A `?.` step reads null when its receiver is null or lacks the key, as `inferExprType` types it.
   const directParts = directReferenceParts(expression);
-  if (directParts !== null) return inferDirectReference(directParts, walk);
+  if (directParts !== null) {
+    const typ = inferDirectReference(directParts, walk);
+    return hasOptionalStep(expression as Tree) ? typ.replace({ nullable: true }) : typ;
+  }
 
   const constructed = constructorType(expression, walk.typeFn);
   if (constructed !== null) {
     const [typ, name, steps] = constructed;
-    return walkRecordType(
+    const field = walkRecordType(
       typ,
       steps.map((step) => step.name),
       `${name}(...)` + stepsText(steps),
       walk,
     );
+    return steps.some((step) => step.optional) ? field.replace({ nullable: true }) : field;
   }
 
   if (expression instanceof Token) {

@@ -42,7 +42,7 @@ import {
 import { pythonTypeName, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, valueRepr, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
-import { directReferencePath } from "../helpers/output_contracts.ts";
+import { directReferencePath } from "../../compile/output_contracts.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { readType } from "../helpers/types.ts";
 import { checkEnvValues } from "../helpers/value_nesting.ts";

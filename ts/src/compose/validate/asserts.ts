@@ -68,48 +68,23 @@ import {
   type OutputContract,
   Parameter,
   PartialRecordContract,
-  sameOutputContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isInboxType, jsTypeName, Type, unionTagFields, ValueKind } from "../../typesys/values.ts";
+import { isInboxType, jsTypeName, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
-import {
-  type Check,
-  type CheckLiteral,
-  checkText,
-  type Guard,
-  guardedRefs,
-  IsinstanceCheck,
-  literalsInContext,
-  literalText,
-  NotNullCheck,
-  sameGuard,
-  TagCheck,
-  unknownCheck,
-} from "../helpers/condition_guards.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { collectConstructorNames, collectIsinstanceNames } from "../helpers/isinstance_types.ts";
-import {
-  type BaseTypeOf,
-  checkedRefs,
-  guardedReadTypes,
-  ImpossibleCheck,
-  impossibleCheckMessage,
-  impossibleChecks,
-  ImpossibleReason,
-  NOT_NARROWABLE,
-  type NarrowedRead,
-  narrowedReadError,
-  type NotNarrowable,
-  unresolvedType,
-} from "../helpers/narrowing_facts.ts";
-import { outputContractPathError, projectOutputContract } from "../helpers/output_contracts.ts";
-import { namedTypeLabel } from "../helpers/tags.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
+import { contractType } from "../../compile/output_contracts.ts";
+import { fieldReadErrors, isUntyped, ReadSite } from "./field_reads.ts";
+import type { SkipModel } from "./skips.ts";
 import type { LocalInput } from "./typed_bindings.ts";
+
+// Tests import these from here.
+export { narrows, rootBaseType } from "./field_reads.ts";
 
 // Reserved prefix for the END params synthesized from a lowered post-assert. Authors cannot write
 // `__`-prefixed ids, so a synth name never collides with an author id.
@@ -186,9 +161,10 @@ export class LoweredAsserts {
  * `not isinstance(input.o, Buy) or input.o.qty > 0`) decides which members it sees. A shorthand
  * check base (`isinstance(o, Buy)`) is qualified like a read, and reported as written. A check
  * that can never be true is a load error, and the `isinstance` types resolve in `registry` (the
- * flow's typedefs). A producer read may be null, since END binds it as `${<id>.output :- null}` and
- * a skipped producer reads null, so checks and reads take each producer's type as nullable; their
- * errors name the declared type.
+ * flow's typedefs). A producer that may be skipped reads null, since END binds it as
+ * `${<id>.output :- null}`, so checks and reads take its type as nullable (their errors name the
+ * declared type), and a `.` step right after it is a load error (`expr.nullable_field_read`): write
+ * `?.` or check it against null first. That holds for an opaque producer too.
  *
  * @param assertList The flow's authored assertion carriers, in order.
  * @param flowInputs The flow's input names.
@@ -198,6 +174,7 @@ export class LoweredAsserts {
  * @param assertRanges Each assert's range, aligned 1:1 with `assertList` (`null` where none).
  * @param options.inputContracts Each typed flow input's contract (default none).
  * @param options.registry The flow's typedefs (default none).
+ * @param options.skips Which producers may be skipped while END runs (default none may).
  * @param options.diagnostics Factory for located load errors (default an unlocated one).
  * @returns The lowered START/END asserts with the synth END params and their wiring.
  * @throws LoadError on the first assert holding a lone surrogate, malformed assert, bad ref,
@@ -214,10 +191,12 @@ export function lowerFlowAsserts(
   options: {
     inputContracts?: ReadonlyMap<string, ValueContract> | null;
     registry?: TypeRegistry | null;
+    skips?: SkipModel | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): LoweredAsserts {
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
+  const skips = options.skips ?? null;
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
   const registry = options.registry ?? new Map();
   // Retain exact and partial carriers so a closed partial root can reject an unknown field without
@@ -284,7 +263,13 @@ export function lowerFlowAsserts(
     ...[...inputContracts].map(([name, contract]): [string, OutputContract[]] => [`input.${name}`, [contract]]),
     ...[...producers].map(([key, contract]): [string, OutputContract[]] => [valueRoot(key), [contract]]),
   ]);
-  const producerRoots = new Set([...producers.keys()].map(valueRoot));
+  // An opaque producer (no contract) gets no name check, but its reads are still checked for null.
+  const targetRoots = [...validTargets].map(valueRoot);
+  const opaqueRoots = new Set(targetRoots.filter((root) => !roots.has(root)));
+  // The producers that may be skipped while END runs, which then read null.
+  const producerRoots = new Set(
+    targetRoots.filter((root) => skips !== null && skips.maySkipWhileRunning([root.split(".")[0]!], null)),
+  );
 
   assertList.forEach((assertion, i) => {
     const expr = assertion.expression;
@@ -336,9 +321,16 @@ export function lowerFlowAsserts(
     // producer it reads as `${<id>.output :- null}`, so a producer the flow's routing skips reads
     // null.
     const qualified = parseCondition(rewriteConditionRefs(expr, qualifiedOrNull));
-    const errors = conditionErrors(qualified, roots, registry, { nullableRoots: producerRoots, authored });
+    const errors = fieldReadErrors(qualified, roots, registry, {
+      nullableRoots: producerRoots,
+      authored,
+      opaqueRoots,
+      rootLength: poolRootLength,
+      why: (root) => `node ${reprText(root.split(".")[0]!)} may be skipped`,
+    });
     if (errors.length > 0) {
-      throw diagnostics.error(`assert ${reprText(assertion.display)}: ${errors[0]}`, { range: rng });
+      const [{ message, code }] = errors as [(typeof errors)[0]];
+      throw diagnostics.error(`assert ${reprText(assertion.display)}: ${message}`, { range: rng, code });
     }
 
     if (!isPost) {
@@ -413,435 +405,6 @@ export function lowerFlowAsserts(
 // node assert is already rejected.
 const SPAWNER_KINDS: ReadonlySet<NodeKind> = new Set([NodeKind.CALL, NodeKind.LOOP]);
 
-/** Return the root `path` is at or below, else `null`. */
-function rootOf(path: string, roots: Iterable<string>): string | null {
-  for (const root of roots) {
-    if (path === root || path.startsWith(root + ".")) return root;
-  }
-  return null;
-}
-
-/** Return the field names of `path` below `root`, which it is at or below. */
-function below(path: string, root: string): string[] {
-  return path === root ? [] : path.slice(root.length + 1).split(".");
-}
-
-/**
- * Return the declared type of a base path below one of `choice`'s roots, under that root's chosen
- * contract, made nullable below a root in `nullableRoots`; other bases are not narrowed. Exported
- * for tests.
- *
- * @param choice The contract chosen for each root.
- * @param nullableRoots The roots that may be null whatever their contracts say (default none).
- * @returns The site's `BaseTypeOf`: `null` for a base the contract doesn't prove, `NOT_NARROWABLE`
- *   for a base below no root.
- */
-export function rootBaseType(
-  choice: ReadonlyMap<string, OutputContract>,
-  nullableRoots: ReadonlySet<string> = new Set(),
-): BaseTypeOf {
-  return (base: string): Type | null | NotNarrowable => {
-    const root = rootOf(base, choice.keys());
-    if (root === null) return NOT_NARROWABLE;
-    const projected = projectOutputContract(choice.get(root)!, below(base, root));
-    if (!isExactly(projected, ValueContract)) return null;
-    if (nullableRoots.has(root)) return projected.type.replace({ nullable: true });
-    return projected.type;
-  };
-}
-
-/** Return `contracts` without repeats, in order. */
-function distinct(contracts: readonly OutputContract[]): OutputContract[] {
-  const kept: OutputContract[] = [];
-  for (const contract of contracts) {
-    if (!kept.some((seen) => sameOutputContract(contract, seen))) kept.push(contract);
-  }
-  return kept;
-}
-
-/**
- * Return whether `check` can prove or rule out anything about `root` under some contract. Exported
- * for tests.
- *
- * A tag comparison on a value that is no union with that tag field (`v.a == 'x'` on a record) is an
- * ordinary comparison, so it narrows nothing; nor does a null check on a value that is never null.
- *
- * @param check A check from a literal of the condition.
- * @param root The root path whose values the check may narrow.
- * @param contracts The contracts the root's value may have.
- * @param nullable Whether the root may be null whatever its contracts say, which makes every value
- *   below it nullable too (default `false`).
- * @returns Whether the check narrows the root.
- * @throws TypeError for a check of a kind this function doesn't know.
- */
-export function narrows(
-  check: Check,
-  root: string,
-  contracts: readonly OutputContract[],
-  nullable = false,
-): boolean {
-  if (rootOf(check.base, [root]) === null) return false;
-  if (check instanceof IsinstanceCheck) return true;
-  if (!(check instanceof TagCheck || check instanceof NotNullCheck)) throw unknownCheck(check);
-  // `rootBaseType` makes every base below such a root nullable, so a null check there narrows
-  // even when no contract lets the value be null.
-  if (check instanceof NotNullCheck && nullable) return true;
-  const rest = below(check.base, root);
-  for (const contract of contracts) {
-    const projected = projectOutputContract(contract, rest);
-    if (!isExactly(projected, ValueContract)) {
-      // An unproven base takes its type from the checks on the value around it.
-      return true;
-    }
-    const typ = projected.type;
-    if (check instanceof NotNullCheck) {
-      if (typ.nullable) return true;
-    } else if (typ.variants !== undefined && unionTagFields(typ).includes(check.field)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** What a condition proves under one choice of root contracts. */
-interface ChoiceView {
-  readonly choice: ReadonlyMap<string, OutputContract>;
-  readonly baseTypeOf: BaseTypeOf;
-  readonly impossible: readonly ImpossibleCheck[];
-  readonly checked: readonly [string, Guard | null][];
-}
-
-/** How a site words a field-read error; frozen. */
-class ReadSite {
-  /**
-   * Whether the condition runs in a spawned child flow, where `isinstance` is not allowed, so a
-   * member-only hint compares the tag instead.
-   */
-  readonly spawner: boolean;
-  /** The pool path each root is bound from, named by a spawner's case hint. */
-  readonly unionRoots: ReadonlyMap<string, string>;
-
-  constructor(options: { spawner?: boolean; unionRoots?: ReadonlyMap<string, string> } = {}) {
-    this.spawner = options.spawner ?? false;
-    this.unionRoots = options.unionRoots ?? new Map();
-    Object.freeze(this);
-  }
-
-  /** Return the read's error on `contract`, else `null`. */
-  error(
-    contract: OutputContract,
-    fields: readonly string[],
-    ref: string,
-    options: { partialUnionFields: boolean; unionRoot?: string | null },
-  ): string | null {
-    return outputContractPathError(contract, fields, ref, {
-      partialUnionFields: options.partialUnionFields,
-      unionRoot: this.spawner ? (options.unionRoot ?? null) : null,
-      isinstanceHint: !this.spawner,
-      tagHint: this.spawner,
-    });
-  }
-}
-
-/** Return `check` rebuilt with `changes`, as its frozen class can't be updated in place. */
-function replaceCheck(
-  check: ImpossibleCheck,
-  changes: { text?: string; base?: string; alwaysTrue?: string; baseLabel?: string },
-): ImpossibleCheck {
-  return new ImpossibleCheck(changes.text ?? check.text, changes.base ?? check.base, check.reason, {
-    baseLabel: changes.baseLabel ?? check.baseLabel,
-    declared: check.declared,
-    typeLabel: check.typeLabel,
-    alwaysTrue: changes.alwaysTrue ?? check.alwaysTrue,
-    value: check.value,
-    field: check.field,
-    tags: check.tags,
-  });
-}
-
-/**
- * Return a map from a report on `tree` back to how `authored`, the same condition before its
- * references were rewritten, spells the literal.
- */
-function authoredSpelling(
-  tree: ExprNode,
-  authored: ExprNode | null,
-): (check: ImpossibleCheck) => ImpossibleCheck {
-  const spelled = new Map<string, CheckLiteral>();
-  if (authored !== null) {
-    const rewritten = literalsInContext(tree);
-    const written = literalsInContext(authored);
-    if (rewritten.length === written.length) {
-      rewritten.forEach((literal, index) => {
-        const text = literalText(literal);
-        if (!spelled.has(text)) spelled.set(text, written[index]!);
-      });
-    }
-  }
-  return (check) => {
-    const original = spelled.get(check.text);
-    if (original === undefined) return check;
-    const alwaysTrue = check.alwaysTrue ? checkText(original.check, true) : "";
-    return replaceCheck(check, { text: literalText(original), base: original.check.base, alwaysTrue });
-  };
-}
-
-/**
- * Return an assert's impossible checks and field-read errors, each message once.
- *
- * `roots` maps each path whose field reads are checked (a node-local name, `output`, `input.X`,
- * `<id>.output`) to the contracts its value may have; reads below a root in `unwalkedRoots` are
- * left to the site, and a root in `nullableRoots` may also be null whatever its contract says.
- * `and`, `or` and `not` short-circuit, so the checks before a read (`isinstance`, union tag
- * comparisons and null checks) narrow the values it can see (`guardedReadTypes`): a read is fine
- * when any narrowed type allows it, and otherwise the first one's error is reported, naming the
- * narrowed type when it lacks the field. A read nothing narrows is walked on the root's contract.
- * A read that runs only when a reported impossible check is true (`checkedRefs`), or guarded by an
- * `isinstance` whose type name doesn't resolve, is not checked. `authored` is the condition as
- * written when `tree` has its references rewritten; reports spell checks as written.
- *
- * A root with several distinct contracts (a node-local name's alternatives, which carry the branch
- * that routes the node) is checked under each: a check is impossible only when it is impossible
- * under every contract of its base's root, a read is skipped only when it is dead under every
- * contract of some root, and a read is an error only when every contract of its root where it runs
- * rejects it. Facts never cross roots, so each root's contracts are tried with every other such
- * root left unnarrowed, which costs the sum of the alternatives rather than their product. Only
- * roots some check can narrow are tried; reads below the others are walked on each contract. Each
- * distinct (read, guard) pair is checked, since one path can be read both narrowed and not.
- *
- * @param tree The parsed condition.
- * @param roots The checked roots and the contracts each may have.
- * @param registry The flow's typedefs.
- * @param options.partialUnionRoots Roots below which a field only some union members have can be
- *   read (default none).
- * @param options.unwalkedRoots Roots whose reads the site checks itself (default none).
- * @param options.nullableRoots Roots that may be null whatever their contracts say (default none).
- * @param options.site How the site words a field-read error (default a non-spawner site).
- * @param options.authored The condition as written, when `tree` is rewritten (default `null`).
- * @returns The messages without a site prefix, in order, without repeats.
- */
-function conditionErrors(
-  tree: ExprNode,
-  roots: ReadonlyMap<string, readonly OutputContract[]>,
-  registry: TypeRegistry,
-  options: {
-    partialUnionRoots?: ReadonlySet<string>;
-    unwalkedRoots?: ReadonlySet<string>;
-    nullableRoots?: ReadonlySet<string>;
-    site?: ReadSite;
-    authored?: ExprNode | null;
-  } = {},
-): string[] {
-  const {
-    partialUnionRoots = new Set<string>(),
-    unwalkedRoots = new Set<string>(),
-    nullableRoots = new Set<string>(),
-    site = new ReadSite(),
-    authored = null,
-  } = options;
-  const refs = guardedRefs(tree);
-  const used = [...roots.keys()].filter((root) => refs.some(([ref]) => rootOf(ref, [root]) !== null));
-  if (used.length === 0) return [];
-  const contracts = new Map(used.map((root) => [root, distinct(roots.get(root)!)]));
-  const literals = literalsInContext(tree);
-  const narrowed = used.filter((root) =>
-    literals.some((literal) => narrows(literal.check, root, contracts.get(root)!, nullableRoots.has(root))),
-  );
-  const fixed = new Map<string, OutputContract>();
-  for (const root of narrowed) {
-    if (contracts.get(root)!.length === 1) fixed.set(root, contracts.get(root)![0]!);
-  }
-  const varied = narrowed.filter((root) => contracts.get(root)!.length > 1);
-  let choices = varied.flatMap((root) =>
-    contracts.get(root)!.map((contract) => new Map([...fixed, [root, contract]])),
-  );
-  if (narrowed.length > 0 && varied.length === 0) choices = [fixed];
-  const views: ChoiceView[] = choices.map((choice) => {
-    const baseTypeOf = rootBaseType(choice, nullableRoots);
-    return {
-      choice,
-      baseTypeOf,
-      impossible: impossibleChecks(tree, baseTypeOf, registry),
-      checked: checkedRefs(tree, baseTypeOf, registry),
-    };
-  });
-
-  /** The views that try each of `root`'s contracts; all views for any other root. */
-  const viewsOf = (root: string | null): ChoiceView[] =>
-    root === null || !varied.includes(root) ? views : views.filter((view) => view.choice.has(root));
-
-  const spell = authoredSpelling(tree, authored);
-  const order = new Map<string, number>();
-  literals.forEach((literal, index) => {
-    const text = literalText(literal);
-    if (!order.has(text)) order.set(text, index);
-  });
-  const reported = new Map<string, ImpossibleCheck>();
-  for (const view of views) {
-    for (const check of view.impossible) {
-      if (!reported.has(check.text)) reported.set(check.text, check);
-    }
-  }
-  const messages: string[] = [];
-  const rank = (text: string) => order.get(text) ?? order.size;
-  for (const text of [...reported.keys()].sort((a, b) => rank(a) - rank(b))) {
-    let check = reported.get(text)!;
-    const group = viewsOf(rootOf(check.base, narrowed));
-    if (group.every((view) => view.impossible.some((seen) => seen.text === text))) {
-      check = declaredLabel(check, group[0]!.choice, nullableRoots, registry);
-      messages.push(impossibleCheckMessage(spell(check)));
-    }
-  }
-  // A read is dead under every combination of contracts when every contract of one root kills it,
-  // since what kills it under one root's contract holds whatever the others are.
-  const groups = varied.length > 0 ? varied.map((root) => viewsOf(root)) : [views];
-  const seenReads = new Map<string, Guard[]>();
-  refs.forEach(([ref, guard], index) => {
-    const root = rootOf(ref, used);
-    if (root === null || ref === root || unwalkedRoots.has(root)) return;
-    const seenGuards = seenReads.get(ref) ?? [];
-    if (seenGuards.some((seen) => sameGuard(seen, guard))) return;
-    seenReads.set(ref, [...seenGuards, guard]);
-    if (unresolvedType(guard, registry)) {
-      // The type-table pass reports the unknown name.
-      return;
-    }
-    if (views.length > 0 && groups.some((group) => group.every((view) => view.checked[index]![1] === null))) {
-      // Reached by no value under any choice: a reported check explains it.
-      return;
-    }
-    const message = readError(
-      ref,
-      root,
-      index,
-      viewsOf(root).filter((view) => view.checked[index]![1] !== null),
-      narrowed.includes(root) ? null : contracts.get(root)!,
-      registry,
-      site,
-      { partialUnionFields: partialUnionRoots.has(root), nullable: nullableRoots.has(root) },
-    );
-    if (message !== null) messages.push(message);
-  });
-  return [...new Set(messages)];
-}
-
-/**
- * Return `check` with its declared base type labelled as declared, for a base below a root that is
- * nullable only because its producer may be skipped.
- */
-function declaredLabel(
-  check: ImpossibleCheck,
-  choice: ReadonlyMap<string, OutputContract>,
-  nullableRoots: ReadonlySet<string>,
-  registry: TypeRegistry,
-): ImpossibleCheck {
-  if (!check.declared || (check.reason !== ImpossibleReason.NO_OVERLAP && check.reason !== ImpossibleReason.ALWAYS)) {
-    return check;
-  }
-  if (rootOf(check.base, nullableRoots) === null) return check;
-  const declared = rootBaseType(choice)(check.base);
-  if (!(declared instanceof Type)) return check;
-  return replaceCheck(check, { baseLabel: namedTypeLabel(declared, registry) });
-}
-
-/**
- * Return why the `index`-th read `ref` below `root` can't work, else `null`.
- *
- * The read is an error when every view in `live` (those trying `root`'s contracts where it runs)
- * rejects it: on each of the `unnarrowed` contracts when no check narrows `root`, else on the
- * view's narrowed types or chosen contract. A narrowed error is preferred over an unnarrowed one.
- * When `root` is `nullable` only because its producer may be skipped, the error names the declared
- * type, not the nullable one the checks narrowed.
- */
-function readError(
-  ref: string,
-  root: string,
-  index: number,
-  live: readonly ChoiceView[],
-  unnarrowed: readonly OutputContract[] | null,
-  registry: TypeRegistry,
-  site: ReadSite,
-  options: { partialUnionFields: boolean; nullable?: boolean },
-): string | null {
-  const { partialUnionFields, nullable = false } = options;
-  const fields = below(ref, root);
-  const unionRoot = site.unionRoots.get(root) ?? null;
-  if (unnarrowed !== null) {
-    let first: string | null = null;
-    for (const contract of unnarrowed) {
-      const error = site.error(contract, fields, ref, { partialUnionFields, unionRoot });
-      if (error === null) return null;
-      first = first ?? error;
-    }
-    return first;
-  }
-  const errors: [narrowed: boolean, error: string][] = [];
-  for (const { choice, baseTypeOf, checked } of live) {
-    const guard = checked[index]![1]!;
-    const candidates = guardedReadTypes(ref, guard, baseTypeOf, registry);
-    if (candidates.length === 0) {
-      const error = site.error(choice.get(root)!, fields, ref, { partialUnionFields, unionRoot });
-      if (error === null) return null;
-      errors.push([false, error]);
-      continue;
-    }
-    let narrowedError: string | null = null;
-    for (const candidate of candidates) {
-      const [typ, rest] = candidate;
-      const error = site.error(new ValueContract(typ), rest, ref, { partialUnionFields });
-      if (error === null) return null;
-      if (narrowedError !== null) continue;
-      if (nullable) {
-        narrowedError = declaredReadError(
-          ref,
-          candidate,
-          error,
-          choice.get(root)!,
-          fields,
-          rootBaseType(choice)(candidate[2]),
-          registry,
-          site,
-          { partialUnionFields, unionRoot },
-        );
-      } else {
-        narrowedError = narrowedReadError(ref, candidate, error, registry);
-      }
-    }
-    errors.push([true, narrowedError!]);
-  }
-  if (errors.length === 0) return null;
-  return (errors.find(([narrowed]) => narrowed) ?? errors[0]!)[1];
-}
-
-/**
- * Return a narrowed read's error below a root that is nullable only because its producer may be
- * skipped, worded on the `declared` type of the candidate's base.
- *
- * The narrowed type loses that null, and when the checks leave only null the read (`fields` below
- * the root) is walked on the root's chosen `contract` instead.
- */
-function declaredReadError(
-  ref: string,
-  candidate: NarrowedRead,
-  error: string,
-  contract: OutputContract,
-  fields: readonly string[],
-  declared: Type | null | NotNarrowable,
-  registry: TypeRegistry,
-  site: ReadSite,
-  options: { partialUnionFields: boolean; unionRoot: string | null },
-): string {
-  const { partialUnionFields, unionRoot } = options;
-  const [typ, rest, base] = candidate;
-  if (!(declared instanceof Type) || declared.nullable) return narrowedReadError(ref, candidate, error, registry);
-  if (typ.kind === ValueKind.NONE) {
-    return site.error(contract, fields, ref, { partialUnionFields, unionRoot }) ?? error;
-  }
-  const stripped = typ.replace({ nullable: false });
-  const strippedError = site.error(new ValueContract(stripped), rest, ref, { partialUnionFields }) ?? error;
-  return narrowedReadError(ref, [stripped, rest, base], strippedError, registry);
-}
-
 /**
  * Pool heads forbidden in a node-local assert (use bare `${name}` / `${output}` instead); only the
  * singular heads exist. Exported for tests.
@@ -885,10 +448,15 @@ export const POOL_HEADS: ReadonlySet<string> = new Set(["input", "system", "item
  * @param options.typeNames The flow's `typedefs:` names (default none).
  * @param options.localContracts Each node's local input contracts (default none).
  * @param options.partialUnionNodes The nodes whose locals may read member-only fields (default none).
+ * @param options.skips Which producers may be skipped while a node runs: a local bound straight
+ *   from one reads null (default none may).
+ * @param options.baseLocals Each node's local input contracts without the CASE routing's narrowing,
+ *   to tell an untyped local the routing narrowed (default `localContracts`).
  * @param options.registry The flow's typedefs (default none).
  * @param options.diagnostics Factory for located load errors (default an unlocated one).
  * @throws LoadError holding every error, one per line, located at the first available exact
- *   assertion, offending field, or node range.
+ *   assertion, offending field, or node range; code `expr.nullable_field_read` when the first is a
+ *   nullable field read.
  * @throws TypeError when a node's output contract is neither an exact `ValueContract` nor a
  *   `PartialRecordContract`.
  */
@@ -902,17 +470,21 @@ export function validateNodeAsserts(
     typeNames?: ReadonlySet<string>;
     localContracts?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
     partialUnionNodes?: ReadonlySet<string>;
+    skips?: SkipModel | null;
+    baseLocals?: ReadonlyMap<string, ReadonlyMap<string, LocalInput>> | null;
     registry?: TypeRegistry | null;
     diagnostics?: LoadDiagnostics | null;
   } = {},
 ): void {
+  const skips = options.skips ?? null;
   const assertionSiteAt = options.assertionSiteAt ?? null;
   const typeNames = options.typeNames ?? new Set<string>();
   const localContracts = options.localContracts ?? new Map<string, ReadonlyMap<string, LocalInput>>();
   const partialUnionNodes = options.partialUnionNodes ?? new Set<string>();
   const registry = options.registry ?? new Map();
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
-  const errors: [message: string, range: SourceRange | null][] = [];
+  const baseLocals = options.baseLocals ?? localContracts;
+  const errors: [message: string, range: SourceRange | null, code?: string][] = [];
   for (const [nid, node] of nodes) {
     const desc = descriptors.get(nid);
     // Not every descriptor has `asserts` (WAIT doesn't).
@@ -1070,14 +642,37 @@ export function validateNodeAsserts(
       }
       // A spawner assert with `isinstance` was rejected above, so its impossible checks are never
       // reported on top of that error.
-      const messages = conditionErrors(tree, roots, registry, {
+      /** The producer a local is bound straight from, when it may be skipped while the node runs. */
+      const skippedProducer = (local: string): string | null => {
+        const source = nodeLocals.get(local)?.source ?? null;
+        if (skips === null || source === null) return null;
+        const names = source.split(".");
+        if (poolRootLength(names) !== 2 || (names[1] !== "output" && names[1] !== NEW_MESSAGES)) return null;
+        return skips.maySkipWhileRunning([names[0]!], nid) ? names[0]! : null;
+      };
+      const baseNodeLocals = baseLocals.get(nid) ?? new Map<string, LocalInput>();
+      const messages = fieldReadErrors(tree, roots, registry, {
         partialUnionRoots: partialUnionNodes.has(nid)
           ? new Set([...roots.keys()].filter((root) => root !== "output"))
           : new Set(),
         unwalkedRoots: unwalked,
         site: new ReadSite({ spawner: SPAWNER_KINDS.has(kind), unionRoots }),
+        nullableRoots: new Set([...roots.keys()].filter((root) => skippedProducer(root) !== null)),
+        why: (root) => {
+          const producer = skippedProducer(root);
+          return producer === null
+            ? "it is Optional"
+            : `node ${reprText(producer)} may be skipped while ${reprText(nid)} runs`;
+        },
+        // `output` keeps the node's own contract; a local is untyped by its unnarrowed binding.
+        untyped: (root) =>
+          ((root === "output" ? roots.get(root) : baseNodeLocals.get(root)?.alternatives) ?? []).every((contract) =>
+            isUntyped(contractType(contract)),
+          ),
       });
-      for (const message of messages) errors.push([`node ${reprText(nid)} assert: ${message}`, errorRange]);
+      for (const { message, code } of messages) {
+        errors.push([`node ${reprText(nid)} assert: ${message}`, errorRange, code]);
+      }
       (readsOutput ? post : pre).push(new Assertion(a, a, { origin }));
     });
     node.preAsserts = pre;
@@ -1087,7 +682,7 @@ export function validateNodeAsserts(
     const firstRange = errors.find(([, range]) => range !== null)?.[1] ?? null;
     throw diagnostics.error(
       "flow has invalid node asserts:\n  " + errors.map(([message]) => message).join("\n  "),
-      { range: firstRange },
+      { range: firstRange, code: errors[0]![2] },
     );
   }
 }

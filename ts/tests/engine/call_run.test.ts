@@ -126,7 +126,7 @@ defs:
     input:
       payload: !Optional(Payload)
     nodes: {}
-    output: \${input.payload.value}
+    output: \${input.payload?.value}
 nodes:
   invoke:
     kind: call

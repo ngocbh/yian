@@ -12,6 +12,8 @@ export interface LoadDiagnosticOptions {
   frames?: Iterable<DiagnosticFrame>;
   /** Explanatory context not owned by one frame. */
   notes?: Iterable<string>;
+  /** The diagnostic code; `compose.load` unless a narrower one applies. */
+  code?: string;
 }
 
 /**
@@ -81,13 +83,14 @@ export class LoadDiagnostics {
   }
 
   /**
-   * Construct one canonical Compose load diagnostic, code `compose.load`.
+   * Construct one canonical Compose load diagnostic, code `compose.load` unless `code` names a
+   * narrower one, such as `expr.nullable_field_read`.
    *
    * @throws TypeError for a malformed message, frame or note.
    * @throws RangeError when `range` and explicit frames are both given.
    */
   diagnostic(message: string, options: LoadDiagnosticOptions = {}): Diagnostic {
-    const { range = null, frames = [], notes = [] } = options;
+    const { range = null, frames = [], notes = [], code = "compose.load" } = options;
     if (typeof message !== "string") {
       throw new TypeError("load diagnostic message must be a string");
     }
@@ -109,7 +112,7 @@ export class LoadDiagnostics {
       throw new TypeError("load diagnostic notes must be strings");
     }
     return new Diagnostic({
-      code: "compose.load",
+      code,
       message,
       frames: ownedFrames,
       notes: ownedNotes,

@@ -41,7 +41,8 @@ test("case output interior accepts separators", () => {
   // The pattern accepts the node-first `<id>.output[.<seg>…]` shape with namespaced ids.
   for (const [caseId, read, expanded] of [
     ["each#0/leaf", "each#0/leaf.output", "${left.output | right.output}"],
-    ["research", "research.output.report", "${left.output.report | right.output.report}"],
+    // A branch the route didn't take is skipped, so each is read through `?.`.
+    ["research", "research.output.report", "${left.output?.report | right.output?.report}"],
   ] as const) {
     const gate = new CaseDescriptor({ id: caseId, cases: [{ when: "yes", then: "left" }], else_: "right" });
     const [, outputs] = expandCaseOutputs(new Map([[caseId, gate]]), `\${${read}}`, []);

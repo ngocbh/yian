@@ -1,0 +1,29 @@
+# A `.` step on an Optional value is a load error naming the fix (`?.` or a null check).
+kind: load
+rules: [null-field-read]
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Rec: {a: str}
+  input:
+    maybe: !Optional(Rec)
+  nodes:
+    use:
+      kind: code
+      input:
+        v: ${input.maybe.a}
+      output: str
+      code: |
+        return "x"
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+      - code: expr.nullable_field_read
+        message: "node 'use' input 'v': ${input.maybe.a} reads field 'a' of input.maybe, which may be null (it is Optional); write input.maybe?.a, or check input.maybe != null first"
+        frames:
+          - label: flow.yaml
+            range: [11, 10, 11, 26]
+python_expect:
+  load: ok

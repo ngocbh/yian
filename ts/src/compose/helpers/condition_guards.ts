@@ -39,7 +39,7 @@
 import { isinstanceSubject, isinstanceTypeNames } from "../../expr/index.ts";
 import { ISINSTANCE, referencePath, valueArgs } from "../../expr/expressions.ts";
 import { callSuffixOf, type ExprNode, Token, Tree } from "../../expr/grammar.ts";
-import { directReferenceParts } from "./output_contracts.ts";
+import { directReferenceParts } from "../../compile/output_contracts.ts";
 
 /** An `isinstance(<base>, <typeName>)` check on a plain reference; frozen. */
 export class IsinstanceCheck {
@@ -342,8 +342,16 @@ function operandContexts(node: Tree, context: Guard): [ExprNode, Guard][] {
   return contexts;
 }
 
+/** One read occurrence of a condition: its refcall, its flat path, and the guard it is read under. */
+export interface GuardedOccurrence {
+  readonly node: Tree;
+  readonly path: string;
+  readonly guard: Guard;
+}
+
 /**
- * Return each reference occurrence in a condition with the guard that holds when it is read.
+ * Return each reference occurrence in a condition with its refcall node and the guard that holds
+ * when it is read.
  *
  * The `i`-th operand of an `and` chain is evaluated only once the operands before it were true,
  * and of an `or` chain once they were false; every other node (`not`, `:-`, `|`, a call, a
@@ -352,21 +360,17 @@ function operandContexts(node: Tree, context: Guard): [ExprNode, Guard][] {
  * references, builtin-call argument values, and an `isinstance` call's subject.
  *
  * @param tree A condition parsed with `parseCondition`, in any spelling.
- * @returns One `[reference path, guard]` pair per occurrence.
- *
- * @example
- * For `not isinstance(r, Done) or r.answer == 'ok'`, the pairs are `["r", NOTHING]` and
- * `["r.answer", new Holds(new IsinstanceCheck("r", "Done"), true)]`.
+ * @returns One occurrence per read, in source order.
  */
-export function guardedRefs(tree: ExprNode): [string, Guard][] {
-  const reads: [string, Guard][] = [];
+export function guardedReads(tree: ExprNode): GuardedOccurrence[] {
+  const reads: GuardedOccurrence[] = [];
 
   const walk = (node: ExprNode, context: Guard): void => {
     if (node instanceof Token) return;
     if (node.data === "refcall") {
       const callSuffix = callSuffixOf(node);
       if (callSuffix === undefined) {
-        reads.push([referencePath(node), context]);
+        reads.push({ node, path: referencePath(node), guard: context });
         return;
       }
       for (const arg of valueArgs(String(node.children[0]), callSuffix)) {
@@ -384,6 +388,21 @@ export function guardedRefs(tree: ExprNode): [string, Guard][] {
 
   walk(tree, NOTHING);
   return reads;
+}
+
+/**
+ * Return each reference occurrence in a condition with the guard that holds when it is read: the
+ * pairs of `guardedReads`, in the same order.
+ *
+ * @param tree A condition parsed with `parseCondition`, in any spelling.
+ * @returns One `[reference path, guard]` pair per occurrence.
+ *
+ * @example
+ * For `not isinstance(r, Done) or r.answer == 'ok'`, the pairs are `["r", NOTHING]` and
+ * `["r.answer", new Holds(new IsinstanceCheck("r", "Done"), true)]`.
+ */
+export function guardedRefs(tree: ExprNode): [string, Guard][] {
+  return guardedReads(tree).map((read) => [read.path, read.guard]);
 }
 
 /** A check, or `not` applied to a check, in a boolean position of a condition; frozen. */

@@ -171,7 +171,9 @@ record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a 
 LOOP `while:`/`until:` predicate reads, a node's local names in its prompts
 (`prompt:`, `system_prompt:`, `adaptive_questions.prompt:`)
 and its own `asserts:`, and `${input.X...}` in flow `asserts:`. Reading a declared field
-through an `Optional(...)` record still gives `null` when the whole value is null, and
+through an `Optional(...)` record still gives `null` when the whole value is null (in TS yian a
+`.` through a value that may be null, such as an `Optional` record or a node a `case` may skip,
+is a load error: write `x?.k`, or check `x != null` first), and
 values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
 below them) aren't checked. `a.output?.k` reads null when `a` was skipped or `k` is
 absent (TS yian).

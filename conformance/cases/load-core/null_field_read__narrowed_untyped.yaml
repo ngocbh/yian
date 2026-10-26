@@ -1,0 +1,37 @@
+# An untyped value narrowed by isinstance is still untyped at run time, so a field its type doesn't
+# require is read through ?. (or the value is typed where it is bound).
+kind: load
+rules: [null-field-read]
+flow: |
+  id: f
+  name: f
+  typedefs:
+    T: {f: Optional(str)}
+  input:
+    s: !str
+  nodes:
+    mk:
+      kind: code
+      input:
+        s: ${input.s}
+      output: Any
+      code: |
+        return {"f": "a"}
+    use:
+      kind: code
+      input:
+        v: ${isinstance(mk.output, T) and mk.output.f == 'a'}
+      output: bool
+      code: |
+        return 1 == 1
+  output: ${use.output}
+expect:
+  load:
+    diagnostics:
+      - code: expr.nullable_field_read
+        message: "node 'use' input 'v': ${mk.output.f} reads field 'f', which T doesn't require, of mk.output, which is untyped and only narrowed to T; write mk.output?.f, or type mk.output as T where it is bound (`output: T` or `!T`)"
+        frames:
+          - label: flow.yaml
+            range: [18, 10, 18, 60]
+python_expect:
+  load: ok

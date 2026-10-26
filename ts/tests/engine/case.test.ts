@@ -327,15 +327,15 @@ test("a parsed searched case without when: is refused at cases:", () => {
 });
 
 test("searched reads are allocated in read order", () => {
-  const result = searched("x.output.a == 'p' and x.output != null and x.output.b == 'q'");
+  const result = searched("x.output.a == 'p' and input.k != null and x.output.b == 'q'");
 
   expect(result.wiring).toEqual(
     new Map([
-      ["__r0", "${x.output.a}"],
-      ["__r1", "${x.output}"],
-      ["__r2", "${x.output.b}"],
+      ["__r0", "${x.output}"],
+      ["__r1", "${input.k}"],
     ]),
   );
+  expect(caseNode(result).cases[0]!.when).toBe("__r0.a == 'p' and __r1 != null and __r0.b == 'q'");
 });
 
 test("a case node's local reads: the build half", () => {
@@ -604,8 +604,20 @@ test("an on: case without then: is refused at cases:, else at the node", () => {
   expect(errorRange(atNode)).toEqual(nodeRange);
 });
 
-test("a searched read keeps ?. in its __rN binding", () => {
+test("a searched read keeps ?. in its when:", () => {
   const result = searched("x.output?.k > 1");
-  expect(result.wiring).toEqual(new Map([["__r0", "${x.output?.k}"]]));
-  expect(caseNode(result).cases[0]!.when).toBe("__r0 > 1");
+  expect(result.wiring).toEqual(new Map([["__r0", "${x.output}"]]));
+  expect(caseNode(result).cases[0]!.when).toBe("__r0?.k > 1");
+});
+
+test("a searched case binds each root once and keeps the steps in when:", () => {
+  const result = searched("x.output != null and x.output.k > 1");
+  expect(result.wiring).toEqual(new Map([["__r0", "${x.output}"]]));
+  expect(caseNode(result).cases[0]!.when).toBe("__r0 != null and __r0.k > 1");
+});
+
+test("a read inside an escape hoists its root with :- null and keeps ?.", () => {
+  const result = searched("(x.output?.k :- 0) > 1");
+  expect(result.wiring.get("__r0")).toBe("${x.output :- null}");
+  expect(caseNode(result).cases[0]!.when).toBe("(__r0?.k :- 0) > 1");
 });

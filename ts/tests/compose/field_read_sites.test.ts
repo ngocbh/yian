@@ -277,7 +277,7 @@ test("optional binding field reads", () => {
   expect(loadMessage(flow(agent({ v: "${step.output :- null}" }, "${v.b}"), "${ag.output}"))).toContain(
     "node 'ag' prompt: reference ${v.b} reads unknown field 'b' on record",
   );
-  load(flow(agent({ v: "${step.output :- null}" }, "${v.a}"), "${ag.output}"));
+  load(flow(agent({ v: "${step.output :- null}" }, "${v?.a}"), "${ag.output}"));
 });
 
 test("adaptive brief field read is reported on the gate", () => {
@@ -377,7 +377,7 @@ test.each([
     "  u:\n    kind: code\n    input:\n      s: ${input.s}\n    code: return 1\n" +
       agent({ v: "${u.output}" }, "${v.x}"),
   ],
-  ["optional-record", producer("m", "Optional(Rec)") + agent({ v: "${m.output}" }, "${v.a}")],
+  ["optional-record", producer("m", "Optional(Rec)") + agent({ v: "${m.output}" }, "${v?.a}")],
 ])("readable fields still load: %s", (_id, nodes) => {
   load(flow(nodes, "${ag.output}"));
 });
@@ -972,7 +972,8 @@ test.each([
   expect(loadMessage(skippableAssert(assertion))).toContain(expected);
 });
 
-const DECLARED_TYPE_READS: [string, string, string][] = [
+/** Each row: id, assertion, the expected error, and the always-run one when it differs. */
+const DECLARED_TYPE_READS: [string, string, string, string?][] = [
   [
     "narrowed-typo",
     "isinstance(d.output, Sell) or d.output.qtty > 0",
@@ -989,16 +990,18 @@ const DECLARED_TYPE_READS: [string, string, string][] = [
     "only-null-left",
     "d.output.action == 'buy' or d.output.action == 'sell' or d.output.zz > 0",
     "reference ${d.output.zz} reads unknown field 'zz' on record",
+    // A producer that always runs is never null, so no null is left to walk on the declared type.
+    "reference ${d.output.zz} reads field 'zz', which Sell doesn't have; d.output is Sell here",
   ],
 ];
 
 test.each(
-  DECLARED_TYPE_READS.flatMap(([id, assertion, expected]) => [
+  DECLARED_TYPE_READS.flatMap(([id, assertion, expected, alwaysRun]) => [
     [`${id}, skippable`, assertion, expected, true] as const,
-    [`${id}, always-run`, assertion, expected, false] as const,
+    [`${id}, always-run`, assertion, alwaysRun ?? expected, false] as const,
   ]),
 )("a flow assert read error names the declared type: %s", (_id, assertion, expected, skippable) => {
-  // A producer read may be null, but its read errors name the declared type.
+  // A producer that may be skipped reads null, but its read errors name the declared type.
   const text = skippable
     ? skippableAssert(assertion)
     : flow(producer("d", "Order"), "${step.output}", { tail: asserts(assertion) });
@@ -1207,3 +1210,198 @@ test.each<CaseRow>([
   { id: `${CASES}prompt_inside_a_def_reads_unknown_field`, call: assembled, full: true },
   { id: `${CASES}loop_while_reads_a_field_on_a_builtin_result`, call: assembled, full: true },
 ])("assemble: $id", runCase);
+
+// --------------------------------------------------------------------------- //
+// Nullable field reads (`expr.nullable_field_read`): a `.` step on a value that may be null is a
+// load error at every site, and each narrowing form lifts it.
+// --------------------------------------------------------------------------- //
+
+const NULLABLE_PREAMBLE =
+  "id: nf\nname: nf\n" +
+  "typedefs:\n" +
+  "  Rec: {a: str}\n" +
+  "  RecK: {kind: 'Literal(rec)', a: str}\n" +
+  "  OtherK: {kind: 'Literal(other)', a: str, b: str}\n" +
+  "  Tagged: Union(RecK, OtherK)\n" +
+  "  T: {f: Optional(str), g: str}\n" +
+  "input:\n  maybe: !Optional(Rec)\n  tagged: !Optional(Tagged)\n  rec: !Rec\n";
+
+/** The narrowing forms of design rule 3, each a condition over subject `S` that reads `S.a`. */
+const FORMS: readonly [name: string, form: (s: string) => string][] = [
+  ["!= null and", (s) => `${s} != null and ${s}.a == 'x'`],
+  ["== null or", (s) => `${s} == null or ${s}.a == 'x'`],
+  ["isinstance", (s) => `isinstance(${s}, Rec) and ${s}.a == 'x'`],
+];
+/**
+ * The tag-test form, over a subject that is an `Optional` tagged union; both members have `a`, so
+ * only the null matters.
+ */
+const TAG_FORM = (s: string) => `${s}?.kind == 'rec' and ${s}.a == 'x'`;
+/** The read the forms guard, unguarded: a load error at every site. */
+const UNGUARDED = (s: string) => `${s}.a == 'x'`;
+
+/** A flow whose CODE node `use` binds `v: ${<text>}`. */
+const nullableBinding = (text: string) =>
+  NULLABLE_PREAMBLE +
+  "nodes:\n" +
+  `  use:\n    kind: code\n    input:\n      v: \${${text}}\n    code: return 1\n` +
+  "output: ${use.output}\n";
+
+/** A flow where a CASE routes `use` when `input.maybe` is set, and `use` binds `v: ${<text>}`. */
+const routedBinding = (text: string) =>
+  NULLABLE_PREAMBLE +
+  "nodes:\n" +
+  "  gate:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: use\n    else: skip\n" +
+  `  use:\n    kind: code\n    output: str\n    input:\n      v: \${${text}}\n    code: return 'u'\n` +
+  "  skip:\n    kind: code\n    output: str\n    code: return 'n'\n" +
+  "output: ${use.output | skip.output}\n";
+
+/**
+ * A flow where an untyped `mk` (`output: Any`) is routed by `isinstance(mk.output, T)` to `go`, and
+ * the `binding` sits on `reader`: `go`, or `other`, the `else:`.
+ */
+const typeBranch = (binding: string, reader: "go" | "other" = "go") => {
+  const node = (id: string) =>
+    `  ${id}:\n    kind: code\n    output: str\n` +
+    (id === reader ? `    input:\n      v: ${binding}\n` : "") +
+    `    code: return '${id}'\n`;
+  return (
+    NULLABLE_PREAMBLE +
+    "nodes:\n" +
+    "  mk:\n    kind: code\n    output: Any\n    code: \"return {'g': 'x'}\"\n" +
+    "  route:\n    kind: case\n    cases:\n      - when: isinstance(mk.output, T)\n        then: go\n    else: other\n" +
+    node("go") +
+    node("other") +
+    "output: ${go.output | other.output}\n"
+  );
+};
+
+test.each(FORMS)("a binding narrowed by %s loads", (_name, form) => {
+  load(nullableBinding(form("input.maybe")));
+});
+
+test("a binding narrowed by a tag test loads", () => {
+  load(nullableBinding(TAG_FORM("input.tagged")));
+});
+
+test("an unguarded Optional read in a binding is a load error", () => {
+  const error = loadError(() => load(nullableBinding(UNGUARDED("input.maybe"))));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain("reads field 'a' of input.maybe, which may be null (it is Optional)");
+});
+
+test("a CASE branch that proves the value lets a routed binding read it with .", () => {
+  load(routedBinding("input.maybe.a"));
+});
+
+test("an untyped producer narrowed by a CASE type branch needs ?. for an optional field", () => {
+  const message = loadError(() => load(typeBranch("${mk.output.f}"))).message;
+  expect(message).toContain("which is untyped and only narrowed to T; write mk.output?.f");
+  load(typeBranch("${mk.output?.f}"));
+  load(typeBranch("${mk.output.g}"));
+});
+
+test("an untyped producer narrowed by isinstance in a binding needs ?. for an optional field", () => {
+  expect(
+    loadError(() => load(typeBranch("${isinstance(mk.output, T) and mk.output.f == 'a'}", "other"))).message,
+  ).toContain("only narrowed to T; write mk.output?.f");
+});
+
+/** A flow whose output is `${<text>}`. */
+const nullableOutput = (text: string) =>
+  NULLABLE_PREAMBLE + "nodes:\n" + STEP.replace("${input.s}", "${input.rec}") + `output: \${${text}}\n`;
+
+test.each(FORMS)("a flow output narrowed by %s loads", (_name, form) => {
+  load(nullableOutput(form("input.maybe")));
+});
+
+test("an unguarded Optional read in a flow output is a load error", () => {
+  const error = loadError(() => load(nullableOutput(UNGUARDED("input.maybe"))));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain("output: ${input.maybe.a} reads field 'a' of input.maybe, which may be null");
+});
+
+/**
+ * A flow where `gate` may skip `ms` (`output: Rec`), and AGENT `ag` binds `r: <source>` and reads it
+ * in `prompt` (or in `extra` lines); `routed` puts `ag` behind a CASE that proves `input.maybe`.
+ */
+function promptFlow(source: string, prompt: string, options: { extra?: string; routed?: boolean } = {}): string {
+  const { extra = "", routed = false } = options;
+  const ag =
+    `  ag:\n    kind: agent\n    input:\n      r: ${source}\n` + (prompt !== "" ? `    prompt: "${prompt}"\n` : "") + extra;
+  const route = routed
+    ? "  route:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: ag\n    else: skip\n" +
+      "  skip:\n    kind: code\n    output: str\n    code: return 'n'\n"
+    : "";
+  return (
+    NULLABLE_PREAMBLE +
+    "nodes:\n" +
+    "  gate:\n    kind: case\n    cases:\n      - when: ${input.maybe != null}\n        then: ms\n" +
+    "  ms:\n    kind: code\n    output: Rec\n    code: \"return {'a': 'x'}\"\n" +
+    route +
+    ag +
+    `output: ${routed ? "${ag.output | skip.output}" : "${ag.output}"}\n`
+  );
+}
+
+const SKIPPED = "${ms.output :- null}";
+
+test.each([
+  ["a skippable producer", SKIPPED, "(node 'ms' may be skipped while 'ag' runs)"],
+  ["an Optional input", "${input.maybe}", "(it is Optional)"],
+])("an unguarded prompt read of %s is a load error", (_name, source, why) => {
+  const error = loadError(() => load(promptFlow(source, "Say ${r.a}")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toBe(
+    `node 'ag' prompt: \${r.a} reads field 'a' of r, which may be null ${why}; write r?.a, or check r != null first`,
+  );
+});
+
+test("a prompt read through ?. with a default loads", () => {
+  load(promptFlow(SKIPPED, "Say ${r?.a :- 'x'}"));
+});
+
+test("a system prompt and a prompt-list item check nullable reads", () => {
+  expect(loadError(() => load(promptFlow(SKIPPED, "hi", { extra: '    system_prompt: "${r.a}"\n' }))).message).toContain(
+    "node 'ag' system_prompt: ${r.a} reads field 'a' of r, which may be null",
+  );
+  expect(loadError(() => load(promptFlow(SKIPPED, "", { extra: '    prompt:\n      - user: "${r.a}"\n' }))).message).toContain(
+    "node 'ag' prompt[0]: ${r.a} reads field 'a' of r, which may be null",
+  );
+});
+
+test("a prompt in a node a CASE routes when the value is set reads it with .", () => {
+  load(promptFlow("${input.maybe}", "Say ${r.a}", { routed: true }));
+});
+
+test("a prompt read of a local that is never null loads", () => {
+  load(promptFlow("${input.rec}", "Say ${r.a}"));
+});
+
+// `isinstance` is not a prompt function.
+test.each(FORMS.filter(([name]) => name !== "isinstance"))("a prompt narrowed by %s loads", (_name, form) => {
+  load(promptFlow("${input.maybe}", `\${${form("r")}}`));
+});
+
+/** An AGENT whose steer inbox is `Inbox(Ev)`, with `Ev: {o: Optional(Inner)}`, rendering `render`. */
+const steerRender = (render: string) =>
+  "id: steer\nname: steer\n" +
+  "typedefs:\n  Inner: {x: str}\n  Ev: {o: Optional(Inner)}\n" +
+  "input:\n  notes: !Inbox(Ev)\n" +
+  "nodes:\n  chat:\n    kind: agent\n    prompt: Help the user.\n" +
+  `    steer_inbox:\n      from: \${input.notes}\n      render: |-\n        ${render}\n` +
+  "    output: str\n" +
+  "output: ${chat.output}\n";
+
+test("a render reading a field through an Optional field of event is a load error", () => {
+  const error = loadError(() => load(steerRender("${event.o.x}")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toBe(
+    "node 'chat' steer_inbox render: ${event.o.x} reads field 'x' of event.o, which may be null " +
+      "(field 'o' is Optional); write event.o?.x, or check event.o != null first",
+  );
+});
+
+test.each(["${event.o?.x :- ''}", "${event.o != null and event.o.x == 'a'}"])("a guarded render loads: %s", (render) => {
+  load(steerRender(render));
+});

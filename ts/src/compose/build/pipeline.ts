@@ -67,7 +67,7 @@ import { newMessagesType, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isListKind, isRecord, type Type, type Value, writeAsText } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../helpers/output_contracts.ts";
+import { assertExactContracts, resolveOutputBindingContract, type TypeFn } from "../../compile/output_contracts.ts";
 import {
   oldFormSuggestion,
   oldTypedText,
@@ -93,7 +93,7 @@ import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
 import { ToolDescriptor } from "../nodes/tool.ts";
 import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
-import { caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
+import { type CaseRead, caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
 import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.ts";
 import { desugarInlineCalls, synthIdGen } from "../desugar/inline_calls.ts";
@@ -152,6 +152,7 @@ import { lowerFlowAsserts, validateNodeAsserts } from "../validate/asserts.ts";
 import { checkCaseBranches } from "../validate/case_branches.ts";
 import { checkCaseExhaustive, checkCaseWhenValues, exhaustiveCases } from "../validate/case_exhaustive.ts";
 import { checkImpossibleWhens, computeNarrowing } from "../validate/narrowing.ts";
+import { checkFieldReads } from "../validate/field_reads.ts";
 import { checkSkippedArithmetic, nullSkippedOutputs, type SearchedWhen, SkipModel } from "../validate/skips.ts";
 import type { FlowSource } from "../../runtime/log.ts";
 
@@ -1902,10 +1903,13 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // Expand `${<case>.output}` value refs to a coalesce over the case's branch targets. Runs after
   // the inline-call desugar (so synth-node bindings are covered too) and before the build loop —
   // downstream sees only ordinary branch-target refs.
+  // Each expanded case read, so a field-read error names the read as written.
+  const caseSpellings = new Map<string, CaseRead>();
   [descriptors, outputsSection] = expandCaseOutputs(descriptors, outputsSection, assertsSection, {
     outputsRange,
     assertionRangeAt: flowAssertionRangeAt,
     diagnostics,
+    spellings: caseSpellings,
   });
 
   // The inline-child builder and the binding-contract reader read it lazily; it is set just
@@ -2171,6 +2175,42 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     narrowing,
     typeFn: constructorType,
   });
+  // The same, unnarrowed: a local the routing narrows from an untyped value is still untyped at run
+  // time.
+  const baseLocals = localInputContracts(flowWiring, producers, flowInputContracts, buildResults, {
+    typeFn: constructorType,
+  });
+
+  // Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in BEFORE root
+  // synthesis so an ordering-only dependent is demoted from root, and into the cycle check below
+  // so an ordering cycle is loud.
+  const nodeIds = new Set(descriptors.keys());
+  const orderingEdges = inferOrderingEdges(descriptors, nodeIds, { diagnostics });
+
+  // Which nodes may be skipped while a reader runs: the field-read checks need it, so it is built
+  // before them, over the structural edges (data, case, host and ordering).
+  const structural = [...reconciled, ...orderingEdges];
+  const skips = new SkipModel(
+    new Set(descriptors.keys()),
+    structural,
+    exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
+  );
+
+  // Each searched CASE's authored `when:`s: their reads are checked as written, since the wiring
+  // binds only the roots they read.
+  const searchedWhens = new Map<string, SearchedWhen[]>();
+  for (const [nodeId, desc] of descriptors) {
+    if (!(desc instanceof CaseDescriptor) || desc.on !== null) continue;
+    searchedWhens.set(
+      nodeId,
+      desc.cases.map((case_, index) => [
+        index,
+        case_["when"] ?? null,
+        desc.whenOrigins[index] ?? null,
+        desc.whenRanges[index] ?? null,
+      ]),
+    );
+  }
 
   // Reference + assert validation over the built flow. Errors locate at the node's line (a bad
   // node-input ref) or the `output:` section line (a dangling flow-output ref).
@@ -2182,6 +2222,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     registry,
     resolveOrigin,
     diagnostics,
+    searchedWhens,
   });
   // Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post + stamp
   // onto each built leaf/call node. Shared by defs (a def's internal nodes too).
@@ -2190,6 +2231,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     typeNames: new Set(registry.keys()),
     localContracts,
     partialUnionNodes: narrowing.unordered,
+    skips,
+    baseLocals,
     registry,
     diagnostics,
   });
@@ -2208,14 +2251,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     ]),
     producers,
     flowAssertionRanges,
-    { inputContracts: flowInputContracts, registry, diagnostics },
+    { inputContracts: flowInputContracts, registry, skips, diagnostics },
   );
-
-  // Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in BEFORE root
-  // synthesis so an ordering-only dependent is demoted from root, and into the cycle check below
-  // so an ordering cycle is loud.
-  const nodeIds = new Set(descriptors.keys());
-  const orderingEdges = inferOrderingEdges(descriptors, nodeIds, { diagnostics });
 
   // DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the FULL
   // reconciled body-edge set (the __start__/__end__ sentinels retire; the strings persist as the
@@ -2238,31 +2275,33 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     if (contract === undefined) return output;
     return new FlowOutput(output.name, new Binding(output.binding.source, { origin: output.binding.origin, contract }));
   });
+  // A `.` step through a value that may be null (an `Optional`, or a producer that may be skipped
+  // while the reader runs) is a load error; it runs before the outputs get their null defaults.
+  checkFieldReads(
+    {
+      flowWiring,
+      buildResults,
+      narrowing,
+      skips,
+      registry,
+      typeFn: constructorType,
+      outputs,
+      valueMode: outputsSection !== null && !isRecord(outputsSection),
+      outputsRange,
+      localContracts,
+      baseLocals,
+      searchedWhens,
+      caseSpellings,
+      // An inline body's lexical owner ends `node, <id>, inline`.
+      outputsOwner: owner.at(-1) === "inline" && owner.at(-3) === "node" ? `inline body of node ${reprText(owner.at(-2)!)}` : null,
+    },
+    { resolveOrigin, diagnostics },
+  );
   // An output that reads only nodes CASE routing may skip would leave END unreachable; the
   // explicit null default makes its END edge optional, so the run returns null.
-  const structural = [...reconciled, ...orderingEdges];
-  const skips = new SkipModel(
-    new Set(descriptors.keys()),
-    structural,
-    exhaustiveCases(descriptors, producers, flowInputContracts, { narrowing }),
-  );
   outputs = nullSkippedOutputs(outputs, skips);
   const valueMode = outputsSection !== null && !isRecord(outputsSection);
-  // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default. A
-  // searched `when:` is checked as authored: its wiring holds only its `__rN` reads.
-  const searchedWhens = new Map<string, SearchedWhen[]>();
-  for (const [nodeId, desc] of descriptors) {
-    if (!(desc instanceof CaseDescriptor) || desc.on !== null) continue;
-    searchedWhens.set(
-      nodeId,
-      desc.cases.map((case_, index) => [
-        index,
-        case_["when"] ?? null,
-        desc.whenOrigins[index] ?? null,
-        desc.whenRanges[index] ?? null,
-      ]),
-    );
-  }
+  // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
   checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
     valueMode,
     outputsRange,

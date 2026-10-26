@@ -27,8 +27,8 @@
  * phase, alongside the other cross-node checks.
  *
  * Knows about: `diagnostics` (`SourceRange`), `expr` (the ref scan), `nodes/contracts` (the
- * output-contract sum), `typesys` (`Type` and the strict value check), and the compose peers
- * `helpers/output_contracts`, `helpers/errors`, `helpers/tags`, `helpers/yaml_words`,
+ * output-contract sum), `typesys` (`Type` and the strict value check), `compile/output_contracts`,
+ * and the compose peers `helpers/errors`, `helpers/tags`, `helpers/yaml_words`,
  * `nodes/case`, `source`, `validate/narrowing` and `validate/typed_bindings`.
  * Never imports: build, the loader, or the runtime; nothing in the engine imports this back.
  */
@@ -45,7 +45,7 @@ import {
   writeAsText,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, sourceText } from "../helpers/errors.ts";
-import { assertExactContracts, resolveOutputBindingContract } from "../helpers/output_contracts.ts";
+import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
 import { valueFits, yamlQuoted } from "../helpers/tags.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";

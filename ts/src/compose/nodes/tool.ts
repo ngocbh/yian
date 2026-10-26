@@ -32,7 +32,7 @@ import {
   valueRepr,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
-import { literalValue, NOT_LITERAL } from "../helpers/output_contracts.ts";
+import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { MODE_REMOVED_FIX, retriesError } from "./agent.ts";

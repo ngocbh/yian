@@ -56,7 +56,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Edge, GrowthRejected } from "../../src/compile/model.ts";
-import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { projectOutputContract } from "../../src/compile/output_contracts.ts";
 import { inferExprType } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { Grow } from "../../src/nodes/base.ts";
@@ -387,7 +387,7 @@ test("the fields of a file load and read at run", async () => {
   const text = flow(
     "  b:\n    kind: code\n    input:\n" +
       "      u: ${a.output.f.uri}\n      m: ${a.output.f.mime}\n" +
-      "      k: ${a.output.f.name}\n      g: ${a.output.g.uri}\n" +
+      "      k: ${a.output.f.name}\n      g: ${a.output.g?.uri}\n" +
       '      t: "u=${a.output.f.uri}"\n' +
       "    code: return [inputs['u'], inputs['m'], inputs['k'], inputs['g'], inputs['t']]\n",
   );

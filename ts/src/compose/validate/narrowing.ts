@@ -30,13 +30,13 @@
 
 import { Edge } from "../../compile/model.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import type { ExprNode } from "../../expr/grammar.ts";
+import type { ExprNode, Tree } from "../../expr/grammar.ts";
 import { ExpressionError, parseCondition } from "../../expr/index.ts";
 import { ELSE_HANDLE } from "../../nodes/base.ts";
 import { isExactly, type OutputContract, PartialRecordContract, ValueContract } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { jsTypeName, type Type, typeEquals, unionTagFields, ValueKind } from "../../typesys/values.ts";
-import { type Guard, guardChecks, proves } from "../helpers/condition_guards.ts";
+import { guardChecks, guardedReads, proves } from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import {
   type BaseTypeOf,
@@ -59,9 +59,9 @@ import {
   directReferencePathParts,
   projectOutputContract,
   recordFieldOrigins,
-} from "../helpers/output_contracts.ts";
+} from "../../compile/output_contracts.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
-import { CaseDescriptor, type GuardedRead, searchedParamGuards } from "../nodes/case.ts";
+import { CaseDescriptor } from "../nodes/case.ts";
 
 export { Exact, intersectFacts, isinstanceFact, Members, unionFacts } from "../helpers/narrowing_facts.ts";
 export type { Env, Fact } from "../helpers/narrowing_facts.ts";
@@ -82,28 +82,6 @@ export class Narrowing {
   readonly environments: ReadonlyMap<string, Env>;
   /** The narrowed contract maps of nodes that narrow something. */
   readonly views: ReadonlyMap<string, Views>;
-  /**
-   * Per searched CASE, the narrowed contract maps of its params whose every read is guarded by
-   * checks before it in its `when:`.
-   */
-  readonly paramViews: ReadonlyMap<string, ReadonlyMap<string, Views>>;
-  /**
-   * Per searched CASE, the label and range to report a param at when its first read is guarded
-   * and a later one isn't: the first unguarded read's `when:`.
-   */
-  readonly paramSites: ReadonlyMap<string, ReadonlyMap<string, readonly [label: string, range: SourceRange | null]>>;
-  /** Per searched CASE, the facts each param in `paramViews` is read under. */
-  readonly paramEnvs: ReadonlyMap<string, ReadonlyMap<string, Env>>;
-  /**
-   * Per searched CASE, the bases of each param's `paramEnvs` that only the routing narrows, not
-   * the checks before the read.
-   */
-  readonly paramRouted: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>;
-  /**
-   * Per searched CASE, the params whose every read follows a check `checkImpossibleWhens`
-   * reports, so no value reaches them.
-   */
-  readonly uncheckedParams: ReadonlyMap<string, ReadonlySet<string>>;
   /** Nodes a topological order could not reach, on or after a cycle. They get no facts. */
   readonly unordered: ReadonlySet<string>;
 
@@ -113,22 +91,12 @@ export class Narrowing {
     inputs: ReadonlyMap<string, ValueContract>;
     environments?: ReadonlyMap<string, Env>;
     views?: ReadonlyMap<string, Views>;
-    paramViews?: ReadonlyMap<string, ReadonlyMap<string, Views>>;
-    paramSites?: ReadonlyMap<string, ReadonlyMap<string, readonly [label: string, range: SourceRange | null]>>;
-    paramEnvs?: ReadonlyMap<string, ReadonlyMap<string, Env>>;
-    paramRouted?: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>;
-    uncheckedParams?: ReadonlyMap<string, ReadonlySet<string>>;
     unordered?: ReadonlySet<string>;
   }) {
     this.producers = options.producers;
     this.inputs = options.inputs;
     this.environments = options.environments ?? new Map();
     this.views = options.views ?? new Map();
-    this.paramViews = options.paramViews ?? new Map();
-    this.paramSites = options.paramSites ?? new Map();
-    this.paramEnvs = options.paramEnvs ?? new Map();
-    this.paramRouted = options.paramRouted ?? new Map();
-    this.uncheckedParams = options.uncheckedParams ?? new Map();
     this.unordered = options.unordered ?? new Set();
     Object.freeze(this);
   }
@@ -143,65 +111,10 @@ export class Narrowing {
     return this.views.get(nodeId) ?? [this.producers, this.inputs];
   }
 
-  /**
-   * Return the producer and flow-input contracts param `param` of `nodeId` reads against.
-   *
-   * @param nodeId A node id.
-   * @param param One of the node's params. A searched CASE's guarded param gets its guarded view;
-   *   any other param gets the node's view.
-   * @returns The producer contracts and the flow-input contracts.
-   */
-  forParam(nodeId: string, param: string): Views {
-    return this.paramViews.get(nodeId)?.get(param) ?? this.forNode(nodeId);
-  }
 
-  /**
-   * Return the label and range to report param `param` of `nodeId` at, if moved.
-   *
-   * @param nodeId A node id.
-   * @param param One of the node's params.
-   * @returns The `cases[N].when` label and range of the param's first unguarded read when its
-   *   first read is guarded and a later one isn't; otherwise `null`, and the param keeps the site
-   *   of its first read.
-   */
-  paramSite(nodeId: string, param: string): readonly [label: string, range: SourceRange | null] | null {
-    return this.paramSites.get(nodeId)?.get(param) ?? null;
-  }
 
-  /**
-   * Return the facts a searched CASE's guarded param is read under; an empty map otherwise.
-   *
-   * @param nodeId A node id.
-   * @param param One of the node's params.
-   * @returns The facts behind `forParam`'s guarded view, by base path.
-   */
-  paramEnv(nodeId: string, param: string): Env {
-    return this.paramEnvs.get(nodeId)?.get(param) ?? new Map();
-  }
 
-  /**
-   * Return the bases of `paramEnv` that only the routing narrows.
-   *
-   * @param nodeId A node id.
-   * @param param One of the node's params.
-   * @returns The base paths whose facts come from the case branch that routes the node, not from
-   *   the checks before the read.
-   */
-  paramRoutedBases(nodeId: string, param: string): ReadonlySet<string> {
-    return this.paramRouted.get(nodeId)?.get(param) ?? new Set();
-  }
 
-  /**
-   * Return whether no value reaches any read of a searched CASE's param.
-   *
-   * @param nodeId A node id.
-   * @param param One of the node's params.
-   * @returns `true` when every read of the param follows a check that can never be true, which
-   *   `checkImpossibleWhens` reports; its fields are then not checked.
-   */
-  paramUnchecked(nodeId: string, param: string): boolean {
-    return this.uncheckedParams.get(nodeId)?.has(param) ?? false;
-  }
 
   /** Return node `nodeId`'s facts by base path; an empty map when it has none. */
   environment(nodeId: string): Env {
@@ -444,6 +357,58 @@ function baseTypeOf(
   };
 }
 
+/** One read occurrence of a searched `when:`, with what it is name-checked against; frozen. */
+export interface WhenRead {
+  /** The read's refcall. */
+  readonly node: Tree;
+  /** The contract maps the read sees: the CASE's routing view, narrowed by the checks before it. */
+  readonly views: Views;
+  /** The facts behind `views`, by base path. */
+  readonly facts: Env;
+  /** The bases of `facts` that only the routing narrows, not the checks before the read. */
+  readonly routed: ReadonlySet<string>;
+}
+
+/**
+ * Return each read occurrence of a searched CASE's `when:` with the contracts it is name-checked
+ * against; a read no value reaches (it follows a check `checkImpossibleWhens` reports) is left out.
+ *
+ * `and`, `or` and `not` short-circuit, so the checks before a read narrow what it sees, met with
+ * the CASE node's own routing facts.
+ *
+ * @param narrowing The flow's narrowing results.
+ * @param caseId The searched CASE.
+ * @param tree Its `when:`, parsed.
+ * @param registry The flow's typedefs.
+ * @returns The reads, in source order.
+ */
+export function searchedWhenReads(
+  narrowing: Narrowing,
+  caseId: string,
+  tree: ExprNode,
+  registry: TypeRegistry,
+): WhenRead[] {
+  const { producers, inputs } = narrowing;
+  const env = narrowing.environment(caseId);
+  const view = narrowing.forNode(caseId);
+  const typeOf = baseTypeOf(producers, inputs, view);
+  const checked = checkedRefs(tree, typeOf, registry, { routing: env });
+  const reads: WhenRead[] = [];
+  guardedReads(tree).forEach((read, index) => {
+    const guard = checked[index]![1];
+    if (guard === null) return;
+    const guarded = guardChecks(guard).length > 0 ? guardEnv(guard, typeOf, registry) : new Map();
+    if (guarded.size === 0) {
+      reads.push({ node: read.node, views: view, facts: new Map(), routed: new Set() });
+      return;
+    }
+    const facts = intersectEnvs([env, guarded]);
+    const routed = new Set([...facts.keys()].filter((base) => !guarded.has(base)));
+    reads.push({ node: read.node, views: buildViews(facts, producers, inputs), facts, routed });
+  });
+  return reads;
+}
+
 /** A searched `when:` parsed, or `null` when it is no string or does not parse. */
 function parsedWhen(when: unknown): ExprNode | null {
   if (typeof when !== "string") return null;
@@ -478,82 +443,6 @@ function searchedCaseFacts(desc: CaseDescriptor, typeOf: BaseTypeOf, registry: T
     if (env.size > 0) facts.set(handle, env);
   }
   return facts;
-}
-
-/** Each searched CASE param's occurrences with the guard each is checked under. */
-function checkedParamGuards(
-  desc: CaseDescriptor,
-  env: Env,
-  typeOf: BaseTypeOf,
-  registry: TypeRegistry,
-): Map<string, GuardedRead[]> {
-  const guardsOf = (tree: ExprNode): (Guard | null)[] =>
-    checkedRefs(tree, typeOf, registry, { routing: env }).map(([, guard]) => guard);
-  return searchedParamGuards(desc, guardsOf);
-}
-
-/**
- * The views and facts of a searched CASE's params whose every checked read is guarded.
- *
- * A param read under different guards gets the union of their facts, met with the CASE's own
- * environment. Occurrences that are not checked are left out. The third map holds each param's
- * bases that only the CASE's own environment (its routing) narrows.
- */
-function guardedParamViews(
-  params: ReadonlyMap<string, readonly GuardedRead[]>,
-  env: Env,
-  producers: ReadonlyMap<string, OutputContract>,
-  inputs: ReadonlyMap<string, ValueContract>,
-  typeOf: BaseTypeOf,
-  registry: TypeRegistry,
-): [Map<string, Views>, Map<string, Env>, Map<string, Set<string>>] {
-  const views = new Map<string, Views>();
-  const envs = new Map<string, Env>();
-  const routed = new Map<string, Set<string>>();
-  for (const [param, occurrences] of params) {
-    const guards = occurrences.flatMap(([, guard]) => (guard === null ? [] : [guard]));
-    if (guards.length === 0 || !guards.every((guard) => guardChecks(guard).length > 0)) continue;
-    const guarded = unionEnvs(guards.map((guard) => guardEnv(guard, typeOf, registry)));
-    if (guarded.size === 0) continue;
-    const met = intersectEnvs([env, guarded]);
-    const view = buildViews(met, producers, inputs);
-    if (view[0] !== producers || view[1] !== inputs) {
-      views.set(param, view);
-      envs.set(param, met);
-      routed.set(param, new Set([...met.keys()].filter((base) => !guarded.has(base))));
-    }
-  }
-  return [views, envs, routed];
-}
-
-/** The searched CASE params whose every read follows a reported impossible check. */
-function uncheckedParams(params: ReadonlyMap<string, readonly GuardedRead[]>): Set<string> {
-  const unchecked = new Set<string>();
-  for (const [param, occurrences] of params) {
-    if (occurrences.length > 0 && occurrences.every(([, guard]) => guard === null)) unchecked.add(param);
-  }
-  return unchecked;
-}
-
-/**
- * Where to report a searched CASE param whose first read is guarded and a later one isn't.
- *
- * The guarded read is fine, so an error on the param belongs to its first unguarded read: the
- * label and range of that read's `when:`. Reads that are not checked are left out.
- */
-function unguardedReadSites(
-  desc: CaseDescriptor,
-  params: ReadonlyMap<string, readonly GuardedRead[]>,
-): Map<string, readonly [label: string, range: SourceRange | null]> {
-  const sites = new Map<string, readonly [string, SourceRange | null]>();
-  for (const [param, occurrences] of params) {
-    const checked = occurrences.flatMap(([index, guard]) => (guard === null ? [] : [[index, guard] as const]));
-    if (checked.length === 0 || guardChecks(checked[0]![1]).length === 0) continue;
-    const unguarded = checked.find(([, guard]) => guardChecks(guard).length === 0)?.[0];
-    if (unguarded === undefined) continue;
-    sites.set(param, [`cases[${unguarded}].when`, desc.whenRanges[unguarded] ?? null]);
-  }
-  return sites;
 }
 
 /**
@@ -696,11 +585,6 @@ export function computeNarrowing(
 
   const environments = new Map<string, Env>();
   const views = new Map<string, Views>();
-  const paramViews = new Map<string, Map<string, Views>>();
-  const paramSites = new Map<string, Map<string, readonly [string, SourceRange | null]>>();
-  const paramEnvs = new Map<string, Map<string, Env>>();
-  const paramRouted = new Map<string, Map<string, Set<string>>>();
-  const unchecked = new Map<string, Set<string>>();
   const handleFacts = new Map<string, Map<string, Env>>();
   for (const nodeId of order) {
     const control: Env[] = [];
@@ -739,17 +623,6 @@ export function computeNarrowing(
     }
     const typeOf = baseTypeOf(producers, inputs, [producersView, inputsView]);
     handleFacts.set(nodeId, searchedCaseFacts(desc, typeOf, registry));
-    const params = checkedParamGuards(desc, env, typeOf, registry);
-    const [guarded, guardedEnvs, routed] = guardedParamViews(params, env, producers, inputs, typeOf, registry);
-    if (guarded.size > 0) {
-      paramViews.set(nodeId, guarded);
-      paramEnvs.set(nodeId, guardedEnvs);
-      paramRouted.set(nodeId, routed);
-    }
-    const uncheckedHere = uncheckedParams(params);
-    if (uncheckedHere.size > 0) unchecked.set(nodeId, uncheckedHere);
-    const sites = unguardedReadSites(desc, params);
-    if (sites.size > 0) paramSites.set(nodeId, sites);
   }
 
   const ordered = new Set(order);
@@ -758,11 +631,6 @@ export function computeNarrowing(
     inputs,
     environments,
     views,
-    paramViews,
-    paramSites,
-    paramEnvs,
-    paramRouted,
-    uncheckedParams: unchecked,
     unordered: new Set([...descriptors.keys()].filter((nodeId) => !ordered.has(nodeId))),
   });
 }

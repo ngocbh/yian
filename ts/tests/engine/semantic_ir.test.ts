@@ -42,7 +42,7 @@
  * `test_loaded_compose_flow_has_only_canonical_binding_storage` and
  * `test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring`.
  *
- * TS-only: the `compose/helpers/output_contracts.ts` rows Python covers only through `load_flow`:
+ * TS-only: the `compile/output_contracts.ts` rows Python covers only through `load_flow`:
  * `literalType` (an int, a float, ±Infinity, text, empty text, a bool, null, a record, a value
  * with no type), `literalValue` (`$$` unescaped, a span, a `ValueTemplate`, malformed text, a
  * non-string as is), `literalContract` (a nested record, exact literals, a list's join and
@@ -107,7 +107,7 @@ import {
   referenceContract,
   resolveOutputBindingContract,
   templateContract,
-} from "../../src/compose/helpers/output_contracts.ts";
+} from "../../src/compile/output_contracts.ts";
 import { synthesizeBoundaryGraph } from "../../src/compose/build/boundary.ts";
 import { inferInlineBindingType } from "../../src/compose/build/inline_inputs.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
@@ -631,7 +631,7 @@ test("wrapped wiring keeps its source text and identity", () => {
 });
 
 // --------------------------------------------------------------------------------------- //
-// Output-binding contracts (compose/helpers/output_contracts.ts)
+// Output-binding contracts (compile/output_contracts.ts)
 // --------------------------------------------------------------------------------------- //
 
 const STR = Type.scalar(ValueKind.STRING);

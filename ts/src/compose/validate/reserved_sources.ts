@@ -26,7 +26,7 @@ import { MapNode } from "../../nodes/map/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isListKind, ValueKind } from "../../typesys/values.ts";
 import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
-import { literalValue, NOT_LITERAL, type TypeFn } from "../helpers/output_contracts.ts";
+import { literalValue, NOT_LITERAL, type TypeFn } from "../../compile/output_contracts.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";

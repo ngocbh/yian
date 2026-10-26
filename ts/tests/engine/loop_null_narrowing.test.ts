@@ -525,7 +525,7 @@ function strictStep(returned: string): ComposedFlow {
   });
 }
 
-// `page.next != null` proves both `page` and `page.next` not null, so the `seed` def's
+// `page?.next != null` proves both `page` and `page.next` not null, so the `seed` def's
 // `Optional(Page)` output fills the `step` def's `Strict` input.
 const NESTED = `id: nl
 name: nl
@@ -546,7 +546,7 @@ nodes:
       s: \${input.start}
   pages:
     kind: loop
-    while: page.next != null
+    while: page?.next != null
     input:
       page: \${first.output}
     call: step
@@ -643,10 +643,12 @@ output: \${pages.output}
 test("a while null check lets a seed record omit the checked field", () => {
   // An absent `next` reads as null, so the `while:` never lets the record into the body.
   const step = strictStep("Optional(Page)");
-  expect(load(missingNext("while: page.next != null"), { step }).compiled.nodes.get("pages")).toBeInstanceOf(LoopNode);
+  expect(load(missingNext("while: page?.next != null"), { step }).compiled.nodes.get("pages")).toBeInstanceOf(
+    LoopNode,
+  );
 
   // `until:` is checked after the body, so it narrows nothing.
-  const error = loadError(() => load(missingNext("until: page.next == null"), { step }));
+  const error = loadError(() => load(missingNext("until: page?.next == null"), { step }));
 
   expect(error.message).toBe(
     "loop node 'pages': binding 'page' — child expects '{\"n\":int,\"next\":str}', " +
@@ -658,7 +660,7 @@ test("a while null check rejects a record seed the zero-iteration output cannot 
   // With zero iterations the loop outputs `{n: 0}` as the body's `Optional(Strict)` output, whose
   // `next` is required, so the `while:` can't admit the seed.
   const error = loadError(() =>
-    load(missingNext("while: page.next != null"), { step: strictStep("Optional(Strict)") }),
+    load(missingNext("while: page?.next != null"), { step: strictStep("Optional(Strict)") }),
   );
 
   expect(error.message).toBe(
@@ -918,7 +920,7 @@ input:
 nodes:
   pages:
     kind: loop
-    while: page.next != null and k < 2
+    while: page?.next != null and k < 2
     max: 5
     input:
       page: \${input.start}
@@ -1180,3 +1182,51 @@ test("assembled: load-types/engine_loop_null_narrowing__while_null_check_rejects
     call: assembledWith({ step: strictStep("Optional(Strict)") }),
   });
 });
+
+// ---------- a field read through a carried value that may be null ----------
+
+/** A LOOP carrying `draft: Optional(Draft)` (`Draft: {done: bool}`), driven by `driver`. */
+const draftLoop = (driver: string) => `id: drafts
+name: drafts
+typedefs:
+  Draft: {done: bool}
+input:
+  start: !Optional(Draft)
+defs:
+  step:
+    input:
+      draft: !Optional(Draft)
+    nodes:
+      get:
+        kind: code
+        input:
+          d: \${input.draft}
+        output: Optional(Draft)
+        code: return null
+    output:
+      draft: \${get.output}
+nodes:
+  loop:
+    kind: loop
+    ${driver}
+    max: 3
+    input:
+      draft: \${input.start}
+    call: step
+output: \${loop.output}
+`;
+
+test("a loop predicate reading a field of an Optional carried value is a load error", () => {
+  const error = loadError(() => assembleText(draftLoop("until: draft.done")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toContain(
+    "loop node 'loop' `until:` ${draft.done} reads field 'done' of draft, which may be null (it is Optional)",
+  );
+});
+
+test.each(["until: draft == null or draft.done", "until: draft?.done", "while: draft != null and not draft.done"])(
+  "a guarded loop predicate loads: %s",
+  (driver) => {
+    assembleText(draftLoop(driver));
+  },
+);

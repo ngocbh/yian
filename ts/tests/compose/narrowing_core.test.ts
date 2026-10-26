@@ -102,8 +102,9 @@
  * `did you mean "buy"?` (Python `'biy'` / `did you mean 'buy'?`). `declaredImpossible` and
  * `neverValue` are exported for these tests (Python's `_declared_impossible` and `_never_value`), as
  * is `narrows` (`asserts.ts`; Python's `_narrows`).
- * `searchedParamGuards` gives a `Map` of `[case index, guard]` arrays where Python gives a dict of
- * tuples. `narrowContractAt`'s contracts and the narrowed views compare with
+ * Changed (TS yian): a searched CASE binds only the roots its `when:`s read, so there are no
+ * per-param guards or views (Python's `searched_param_guards`); each `when:` read is checked on its
+ * own, under the checks before it (`searchedWhenReads`). `narrowContractAt`'s contracts and the narrowed views compare with
  * `sameOutputContract`, and their types with `typeEquals`, as Python's `==` compares them; a
  * `parametrize`d row is a `test.each` naming each type.
  */
@@ -151,10 +152,10 @@ import {
 } from "../../src/compose/helpers/narrowing_facts.ts";
 import * as narrowingFacts from "../../src/compose/helpers/narrowing_facts.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
-import { projectOutputContract } from "../../src/compose/helpers/output_contracts.ts";
+import { projectOutputContract } from "../../src/compile/output_contracts.ts";
 import { readType } from "../../src/compose/helpers/types.ts";
 import { BuildContext, NodeDescriptor } from "../../src/compose/nodes/base.ts";
-import { CaseDescriptor, searchedParamGuards } from "../../src/compose/nodes/case.ts";
+import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { narrows } from "../../src/compose/validate/asserts.ts";
 import { checkCaseWhenValues } from "../../src/compose/validate/case_exhaustive.ts";
 import * as narrowing from "../../src/compose/validate/narrowing.ts";
@@ -166,12 +167,13 @@ import {
   Members,
   Narrowing,
   narrowContractAt,
+  searchedWhenReads,
   unionFacts,
   type Views,
 } from "../../src/compose/validate/narrowing.ts";
 import { forget } from "../../src/defaults.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
-import { parseCondition } from "../../src/expr/index.ts";
+import { parseCondition, referenceText } from "../../src/expr/index.ts";
 import {
   ContractOrigins,
   isExactly,
@@ -295,59 +297,33 @@ test("the fact algebra lives in helpers and narrowing re-exports it", () => {
   // `Env` and `Fact` are types, re-exported with `export type`; nothing to compare at runtime.
 });
 
-test("an empty Narrowing gives every node and param the unchanged maps", () => {
+test("an empty Narrowing gives every node the unchanged maps", () => {
   const producers = new Map([["d", new ValueContract(DECISION)]]);
   const inputs = new Map([["x", new ValueContract(BOOL)]]);
   const empty = new Narrowing({ producers, inputs });
   const [nodeProducers, nodeInputs] = empty.forNode("n");
   expect(nodeProducers).toBe(producers);
   expect(nodeInputs).toBe(inputs);
-  const [paramProducers, paramInputs] = empty.forParam("n", "p");
-  expect(paramProducers).toBe(producers);
-  expect(paramInputs).toBe(inputs);
-  expect(empty.paramSite("n", "p")).toBeNull();
-  expect(empty.paramEnv("n", "p")).toStrictEqual(new Map());
   expect(empty.environment("n")).toStrictEqual(new Map());
-  expect(empty.paramRoutedBases("n", "p")).toStrictEqual(new Set());
-  expect(empty.paramUnchecked("n", "p")).toBe(false);
   expect(empty.unordered).toStrictEqual(new Set());
   expect(Object.isFrozen(empty)).toBe(true);
 });
 
-test("a Narrowing reads each node's and param's results", () => {
+test("a Narrowing reads each node's results", () => {
   const producers = new Map([["d", new ValueContract(DECISION)]]);
   const inputs = new Map<string, ValueContract>();
   const nodeView: Views = [new Map([["d", new ValueContract(BUY_OR_SELL)]]), inputs];
-  const paramView: Views = [new Map([["d", new ValueContract(BUY)]]), inputs];
   const env: Env = new Map([["d.output", new Members([BUY, SELL])]]);
-  const paramEnv: Env = new Map([["d.output", new Members([BUY])]]);
-  const site = ["cases[1].when", new SourceRange(3, 1, 3, 9)] as const;
   const result = new Narrowing({
     producers,
     inputs,
     environments: new Map([["n", env]]),
     views: new Map([["n", nodeView]]),
-    paramViews: new Map([["n", new Map([["p", paramView]])]]),
-    paramSites: new Map([["n", new Map([["p", site]])]]),
-    paramEnvs: new Map([["n", new Map([["p", paramEnv]])]]),
-    paramRouted: new Map([["n", new Map([["p", new Set(["d.output"])]])]]),
-    uncheckedParams: new Map([["n", new Set(["q"])]]),
     unordered: new Set(["loop"]),
   });
   expect(result.forNode("n")).toBe(nodeView);
-  // A guarded param gets its own view; any other param of the node gets the node's view.
-  expect(result.forParam("n", "p")).toBe(paramView);
-  expect(result.forParam("n", "q")).toBe(nodeView);
   expect(result.forNode("m")[0]).toBe(producers);
-  expect(result.paramSite("n", "p")).toBe(site);
-  expect(result.paramSite("n", "q")).toBeNull();
-  expect(result.paramEnv("n", "p")).toBe(paramEnv);
-  expect(result.paramEnv("n", "q")).toStrictEqual(new Map());
   expect(result.environment("n")).toBe(env);
-  expect(result.paramRoutedBases("n", "p")).toStrictEqual(new Set(["d.output"]));
-  expect(result.paramRoutedBases("n", "q")).toStrictEqual(new Set());
-  expect(result.paramUnchecked("n", "q")).toBe(true);
-  expect(result.paramUnchecked("n", "p")).toBe(false);
   expect(result.unordered).toStrictEqual(new Set(["loop"]));
 });
 
@@ -942,36 +918,6 @@ function caseOf(on: string | null, cases: readonly (readonly [string, string])[]
   return new CaseDescriptor({ id: "c", on, cases: cases.map(([when, then]) => ({ when, then })) });
 }
 
-test("searchedParamGuards lists the checks before each read", () => {
-  const buy = new Holds(new IsinstanceCheck("d.output", "Buy"), true);
-  const desc = caseOf(null, [
-    ["isinstance(d.output, Buy) and d.output.qty > 5", "b"],
-    ["d.output.qty > 1 and isinstance(d.output, Sell)", "s"],
-  ]);
-
-  expect(searchedParamGuards(desc)).toStrictEqual(
-    new Map([
-      [
-        "__r0",
-        [
-          [0, NOTHING],
-          [1, NOTHING],
-        ],
-      ],
-      [
-        "__r1",
-        [
-          [0, buy],
-          [1, NOTHING],
-        ],
-      ],
-    ]),
-  );
-  const negated = caseOf(null, [["not isinstance(d.output, Buy) or d.output.qty > 5", "b"]]);
-  expect(searchedParamGuards(negated).get("__r1")).toStrictEqual([[0, buy]]);
-  expect(searchedParamGuards(caseOf("${d.output.action}", [["buy", "b"]]))).toStrictEqual(new Map());
-});
-
 // --------------------------------------------------------------------------- //
 // Propagation fixtures
 // --------------------------------------------------------------------------- //
@@ -1090,20 +1036,28 @@ test("a case branch under a check that may not hold is not narrowed", () => {
   expect(typeEquals(searchedView([["not (isinstance(d.output, Buy) and x > 1)", "b"]]), DECISION)).toBe(true);
 });
 
-test("a case param after an impossible check is not checked", () => {
-  const cases = [["isinstance(d.output, Buy) and d.output.action == 'hold' and d.output.qty > 0", "b"]] as const;
-  const nodes = [node("d"), caseNode("c", null, cases), node("b")];
+/** The reads of searched CASE `c`'s `when` that some value reaches, with the type each sees for `d`. */
+function whenReads(narrowing: Narrowing, when: string): [text: string, type: Type][] {
+  return searchedWhenReads(narrowing, "c", parseCondition(when), REGISTRY).map((read) => [
+    referenceText(read.node),
+    (read.views[0].get("d") as ValueContract).type,
+  ]);
+}
+
+test("a when: read after an impossible check is not checked", () => {
+  const when = "isinstance(d.output, Buy) and d.output.action == 'hold' and d.output.qty > 0";
+  const nodes = [node("d"), caseNode("c", null, [[when, "b"]]), node("b")];
   const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
-  expect(narrowing.paramUnchecked("c", "__r2")).toBe(true);
-  expect(narrowing.paramUnchecked("c", "__r0")).toBe(false);
+  expect(whenReads(narrowing, when).map(([text]) => text)).toEqual(["d.output", "d.output.action"]);
 });
 
-test("a case param after a check the type decides sees the case's view", () => {
-  const cases = [["isinstance(d.output, Decision) or d.output.qty > 0", "b"]] as const;
-  const nodes = [node("d"), caseNode("c", null, cases), node("b")];
+test("a when: read after a check the type decides sees the case's view", () => {
+  const when = "isinstance(d.output, Decision) or d.output.qty > 0";
+  const nodes = [node("d"), caseNode("c", null, [[when, "b"]]), node("b")];
   const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
-  expect(narrowing.paramUnchecked("c", "__r1")).toBe(false);
-  expect(typeEquals((narrowing.forParam("c", "__r1")[0].get("d") as ValueContract).type, DECISION)).toBe(true);
+  const reads = whenReads(narrowing, when);
+  expect(reads.map(([text]) => text)).toEqual(["d.output", "d.output.qty"]);
+  expect(typeEquals(reads[1]![1], DECISION)).toBe(true);
 });
 
 test("an isinstance case on a non-union base gives the exact type", () => {
@@ -1182,23 +1136,29 @@ test("an unknown isinstance type gives no fact", () => {
   expect(narrowing.environment("b")).toStrictEqual(new Map());
 });
 
-test("a guarded case param gets the checked view", () => {
+test("a guarded when: read gets the checked view", () => {
+  const whens = [
+    "isinstance(d.output, Buy) and d.output.qty > 5",
+    "isinstance(d.output, Sell) and d.output.qty > 1",
+    "d.output.action == 'hold' and isinstance(d.output, Hold)",
+  ];
   const nodes = [
     node("d"),
     caseNode("c", null, [
-      ["isinstance(d.output, Buy) and d.output.qty > 5", "b"],
-      ["isinstance(d.output, Sell) and d.output.qty > 1", "s"],
-      ["d.output.action == 'hold' and isinstance(d.output, Hold)", "s"],
+      [whens[0]!, "b"],
+      [whens[1]!, "s"],
+      [whens[2]!, "s"],
     ]),
     node("b"),
     node("s"),
   ];
   const narrowing = compute(nodes, [], produced(new ValueContract(DECISION)));
-  const paramType = (param: string) => (narrowing.forParam("c", param)[0].get("d") as ValueContract).type;
-  expect(typeEquals(paramType("__r1"), BUY_OR_SELL)).toBe(true);
+  // Each read sees what the checks before it prove.
+  expect(typeEquals(whenReads(narrowing, whens[0]!)[1]![1], BUY)).toBe(true);
+  expect(typeEquals(whenReads(narrowing, whens[1]!)[1]![1], SELL)).toBe(true);
   // `d.output` and `d.output.action` are read unguarded: they see the CASE's own view.
-  expect(typeEquals(paramType("__r0"), DECISION)).toBe(true);
-  expect(typeEquals(paramType("__r2"), DECISION)).toBe(true);
+  expect(typeEquals(whenReads(narrowing, whens[0]!)[0]![1], DECISION)).toBe(true);
+  expect(typeEquals(whenReads(narrowing, whens[2]!)[0]![1], DECISION)).toBe(true);
 });
 
 // --------------------------------------------------------------------------- //

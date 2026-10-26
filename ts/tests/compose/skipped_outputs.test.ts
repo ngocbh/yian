@@ -17,9 +17,12 @@
 
 import { expect, test } from "bun:test";
 
-import { resolveOutputBindingContract } from "../../src/compose/helpers/output_contracts.ts";
+import { Edge, FlowOutput } from "../../src/compile/model.ts";
+import { resolveOutputBindingContract } from "../../src/compile/output_contracts.ts";
+import { nullSkippedOutputs, SkipModel } from "../../src/compose/validate/skips.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import {
+  bindingSource,
   ContractOrigins,
   isExactly,
   type OutputContract,
@@ -155,3 +158,19 @@ test("an on over a null default is checked for exhaustiveness", () => {
 test.each<CaseRow>([
   { id: "load-case/compose_skipped_outputs__on_over_a_null_default_is_checked_for_exhaustiveness", call: assembled },
 ])("assemble: $id", runCase);
+
+// `c` isn't exhaustive, so it may take no branch and skip both `a` and `b`.
+const MODEL = new SkipModel(
+  ["c", "a", "b"],
+  [new Edge("t", "c", "a", { sourceHandle: "then" }), new Edge("e", "c", "b", { sourceHandle: "else" })],
+  new Set(),
+);
+const rewritten = (source: string) =>
+  bindingSource(nullSkippedOutputs([new FlowOutput("v", source)], MODEL)[0]!.binding);
+
+test("a co-skipping output whose producers may all skip reads null through ?.", () => {
+  expect(rewritten("${a.output.qty}")).toBe("${a.output?.qty:-null}");
+  expect(rewritten("${a.output?.qty}")).toBe("${a.output?.qty:-null}");
+  expect(rewritten("${a.output}")).toBe("${a.output:-null}");
+  expect(rewritten("${a.output.x | b.output.x}")).toBe("${(a.output?.x | b.output?.x) :- null}");
+});

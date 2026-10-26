@@ -1,4 +1,5 @@
 kind: load
+rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -25,6 +26,14 @@ flow: |
   output:
     q: ${-order.output.qty}
 expect:
+  load:
+    diagnostics:
+      - code: expr.nullable_field_read
+        message: "output 'q': ${order.output.qty} reads field 'qty' of order.output, which may be null (node 'order' may be skipped); write (order.output?.qty :- <default>)"
+        frames:
+          - label: flow.yaml
+            range: [24, 6, 24, 26]
+python_expect:
   load:
     diagnostics:
     - code: compose.load

@@ -39,7 +39,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { fieldReadErrors, nullableReadErrors, type ReadRoots, untypedAt } from "../../src/compose/validate/field_reads.ts";
+import { parseCondition } from "../../src/expr/expressions.ts";
+import { ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
+import { type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "../engine/mcp_helpers.ts";
 import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
 
@@ -74,7 +79,7 @@ const load = (text: string) => assembleText(text);
 const failure = (text: string) => loadError(() => load(text)).message;
 
 test("case when on a missing optional record input is falsy", async () => {
-  // A `when:` reading a field of an omitted `Optional(Rec)` input takes the else branch.
+  // A `when:` reading a field of an omitted `Optional(Rec)` input through `?.` takes the else branch.
   const text =
     "id: p\nname: p\n" +
     "typedefs:\n  Rec: {a: str}\n" +
@@ -83,7 +88,7 @@ test("case when on a missing optional record input is falsy", async () => {
     "  route:\n" +
     "    kind: case\n" +
     "    cases:\n" +
-    "      - when: ${input.maybe.a == 'x'}\n" +
+    "      - when: ${input.maybe?.a == 'x'}\n" +
     "        then: hit\n" +
     "    else: miss\n" +
     "  hit:\n" +
@@ -325,7 +330,7 @@ test("a node assert on an exact record output checks typed fields", () => {
 
 test.each([
   ["object", "${step.output.anything.deeper}", ""], // opaque
-  ["Optional(Rec)", "${step.output.a}", "typedefs:\n  Rec: {a: str}\n"],
+  ["Optional(Rec)", "${step.output?.a}", "typedefs:\n  Rec: {a: str}\n"],
   ["{a: str, b: object}", "${step.output.b.anything}", ""], // object-typed field
   ["list(str)", "${step.output}", ""], // whole value
 ])("reads the type allows still load: %s %s", (stepOutput, ref, preamble) => {
@@ -499,12 +504,402 @@ test.each([
   ["${a?.output?.k}", "a?.output?.k", "a.output?.k"],
   ["${input?.go}", "input?.go", "input.go"],
 ])("?. inside a root is a load error (%s)", (source, read, fix) => {
-  expect(failure(FLOW_WITH_A.replace("${a.output.k}", source))).toContain(
-    `reference \${${read}} puts ?. inside its root; ?. goes after the root, as in \${${fix}}`,
+  const message = failure(FLOW_WITH_A.replace("${a.output.k}", source));
+  expect(message).toStartWith("flow has ?. inside a reference root:");
+  expect(message).toContain(`reference \${${read}} puts ?. inside its root; ?. goes after the root, as in \${${fix}}`);
+});
+
+test("an unknown field read through ?. is named as written", () => {
+  expect(failure(FLOW_WITH_A.replace("${a.output.k}", "${a.output?.nope}"))).toContain(
+    "reference ${a.output?.nope} reads unknown field 'nope'",
+  );
+  expect(failure(FLOW_WITH_A.replace("${a.output.k}", "'${a.output?.k.x} y'"))).toContain(
+    "reference ${a.output?.k.x} reads field 'x' on type str",
   );
 });
 
 test("?. after a root loads, and a comprehension variable is a one-name root", () => {
   assembleText(FLOW_WITH_A.replace("${a.output.k}", "${a.output?.k}"));
   assembleText(FLOW_WITH_A.replace("${a.output.k}", "${[x?.output for x in [a.output]]}"));
+});
+
+// The nullable field-read check over one expression (`nullableReadErrors`): a `.` step whose
+// receiver may be null is an error, a `?.` step is not.
+
+const str = Type.scalar(ValueKind.STRING);
+const Rec = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([
+    ["k", str],
+    ["o", str.replace({ nullable: true })],
+  ]),
+  required: new Set(["k", "o"]),
+});
+const Nested = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([["r", Rec.replace({ nullable: true })]]),
+  required: new Set(["r"]),
+});
+/** One root `x` of type `typ`, and an untyped root `u`. */
+const roots = (typ: Type, nullable = false): ReadRoots => ({
+  contracts: (root) => (root === "x" ? [new ValueContract(typ)] : root === "u" ? [null] : undefined),
+  rootLength: () => 1,
+  nullable: () => nullable,
+  why: () => "it is Optional",
+  untyped: (root) => root === "u",
+  routing: () => null,
+});
+const errors = (text: string, r: ReadRoots) => nullableReadErrors(parseCondition(text), r, new Map());
+
+test.each([
+  ["x.k", Rec.replace({ nullable: true }), "${x.k} reads field 'k' of x, which may be null (it is Optional)"],
+  ["x.r.k", Nested, "${x.r.k} reads field 'k' of x.r, which may be null (field 'r' is Optional)"],
+  // ?. short-circuits only a null x; x exists and x.r may be null, so .k follows rule 1.
+  ["x?.r.k", Nested, "${x?.r.k} reads field 'k' of x?.r, which may be null (field 'r' is Optional)"],
+])("a . step on a value that may be null is an error (%s)", (text, typ, message) => {
+  expect(errors(text, roots(typ))[0]).toStartWith(message);
+});
+
+test.each(["x?.k", "x != null and x.k", "x == null or x.k", "x.r?.k", "x?.r?.k == null", "u.k.m"])(
+  "no error (%s)",
+  (text) => {
+    const typ = text.includes(".r") ? Nested : Rec.replace({ nullable: true });
+    expect(errors(text, roots(typ))).toEqual([]);
+  },
+);
+
+test("a root that may be skipped needs ?. whatever its type", () => {
+  expect(errors("x.k", roots(Rec, true))[0]).toBe(
+    "${x.k} reads field 'k' of x, which may be null (it is Optional); write x?.k, or check x != null first",
+  );
+});
+
+test("a read is an error only when every alternative rejects it", () => {
+  const two: ReadRoots = {
+    ...roots(Rec),
+    contracts: () => [new ValueContract(Rec.replace({ nullable: true })), new ValueContract(Rec)],
+  };
+  expect(errors("x.k", two)).toEqual([]);
+});
+
+// Design 2.6.6: a skipped producer is a missing root whatever its type.
+test.each([
+  ["no contract", null],
+  ["Any", new ValueContract(Type.scalar(ValueKind.ANY))],
+  ["Optional(Any)", new ValueContract(Type.scalar(ValueKind.ANY).replace({ nullable: true }))],
+])("a root that may be skipped needs ?. even when untyped (%s)", (_name, contract) => {
+  const skippable: ReadRoots = {
+    ...roots(Rec, true),
+    contracts: (root) => (root === "x" ? [contract] : undefined),
+    untyped: () => true,
+  };
+  expect(errors("x.k.m", skippable)[0]).toStartWith("${x.k} reads field 'k' of x, which may be null (it is Optional)");
+  expect(errors("x?.k.m", skippable)).toEqual([]);
+  expect(errors("x != null and x.k.m", skippable)).toEqual([]);
+});
+
+test("an untyped root that can't be skipped is never flagged", () => {
+  const optionalAny: ReadRoots = {
+    ...roots(Rec),
+    contracts: () => [new ValueContract(Type.scalar(ValueKind.ANY).replace({ nullable: true }))],
+    untyped: () => true,
+  };
+  expect(errors("x.k.m", optionalAny)).toEqual([]);
+  expect(errors("u.k.m", roots(Rec))).toEqual([]);
+});
+
+test("an arithmetic operand gets the whole fix in one message", () => {
+  const message = errors("x.k + 1 > 1", roots(Rec, true))[0]!;
+  expect(message).toEndWith("write (x?.k :- <default>)");
+  expect(message).not.toContain("check x != null");
+  expect(errors("-(x.k) > 1", roots(Rec, true))[0]).toEndWith("write (x?.k :- <default>)");
+});
+
+test.each(["(x.k :- 0) + 1 > 1", "(x.k | 0) + 1 > 1"])("a defaulted arithmetic operand needs only ?. (%s)", (text) => {
+  expect(errors(text, roots(Rec, true))[0]).toEndWith("which may be null (it is Optional); write x?.k");
+});
+
+test("a :- null arithmetic operand still needs a default", () => {
+  expect(errors("(x.k :- null) + 1 > 1", roots(Rec, true))[0]).toEndWith("write (x?.k :- <default>)");
+});
+
+const types: TypeRegistry = new Map([
+  [
+    "T",
+    {
+      kind: "record",
+      fields: new Map([
+        ["f", "Optional(str)"],
+        ["g", "str"],
+      ]),
+    },
+  ],
+]);
+const T = typeFor("T", types);
+
+test("an untyped value narrowed by isinstance needs ?. for a field T doesn't require", () => {
+  const r = roots(Rec);
+  expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.f == 'a'"), r, types)[0]).toBe(
+    "${u.f} reads field 'f', which T doesn't require, of u, which is untyped and only narrowed to T; " +
+      "write u?.f, or type u as T where it is bound (`output: T` or `!T`)",
+  );
+  expect(nullableReadErrors(parseCondition("isinstance(u, T) and u?.f == 'a'"), r, types)).toEqual([]);
+  expect(nullableReadErrors(parseCondition("isinstance(u, T) and u.g == 'a'"), r, types)).toEqual([]);
+});
+
+test("a root a CASE branch narrowed is untyped by its base, not its routed view", () => {
+  // The routed view types m.output as T; its un-narrowed base is untyped (Any).
+  const r: ReadRoots = {
+    ...roots(Rec),
+    contracts: (root) => (root === "m.output" ? [new ValueContract(T)] : undefined),
+    rootLength: () => 2,
+    untyped: (root) => root === "m.output",
+  };
+  expect(nullableReadErrors(parseCondition("m.output.f == 'a'"), r, types)[0]).toContain(
+    "which is untyped and only narrowed to T; write m.output?.f",
+  );
+  expect(nullableReadErrors(parseCondition("m.output.g == 'a'"), r, types)).toEqual([]);
+});
+
+test("a read under a check that can never hold is not checked", () => {
+  const registry: TypeRegistry = new Map([
+    ["Inner", { kind: "record", fields: new Map([["y", "str"]]) }],
+    [
+      "Text",
+      {
+        kind: "record",
+        fields: new Map([
+          ["body", "str"],
+          ["t", "Optional(Inner)"],
+        ]),
+      },
+    ],
+  ]);
+  const Plain = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str]]), required: new Set(["k"]) });
+  // No Plain value fits Text (it lacks the required body), so the isinstance is never true.
+  expect(nullableReadErrors(parseCondition("isinstance(x, Text) and x.t.y == 'a'"), roots(Plain), registry)).toEqual([]);
+});
+
+// Guards apply at every prefix of a read, and owner ruling 1 holds at any depth.
+
+const NestedTypes: TypeRegistry = new Map([
+  ["Inner", { kind: "record", fields: new Map([["y", "str"]]) }],
+  ["Holder", { kind: "record", fields: new Map([["k", "Optional(Inner)"]]) }],
+  ["W", { kind: "record", fields: new Map([["payload", "Any"]]) }],
+  [
+    "T",
+    {
+      kind: "record",
+      fields: new Map([
+        ["f", "Optional(str)"],
+        ["g", "str"],
+      ]),
+    },
+  ],
+]);
+
+/** One root `x` of type `typ`, untyped wherever its un-narrowed value is. */
+const typedRoots = (typ: Type): ReadRoots => ({
+  ...roots(typ),
+  untyped: (root, fields) => root !== "x" || untypedAt(new ValueContract(typ), fields),
+});
+
+test.each([
+  "x != null and x.k != null and x.k.y == 'a'",
+  "x == null or x.k == null or x.k.y == 'a'",
+  "x != null and isinstance(x.k, Inner) and x.k.y == 'a'",
+  "x?.k != null and x.k.y == 'a'",
+])("a guard on each prefix lifts each step (%s)", (text) => {
+  const holder = typeFor("Optional(Holder)", NestedTypes);
+  expect(nullableReadErrors(parseCondition(text), typedRoots(holder), NestedTypes)).toEqual([]);
+});
+
+test("a guard on the field alone still leaves the root step flagged", () => {
+  const holder = typeFor("Optional(Holder)", NestedTypes);
+  expect(nullableReadErrors(parseCondition("x.k != null and x.k.y == 'a'"), typedRoots(holder), NestedTypes)[0]).toStartWith(
+    "${x.k} reads field 'k' of x, which may be null",
+  );
+});
+
+test("an untyped field of a typed root narrowed to T needs ?. for a field T doesn't require", () => {
+  const w = typeFor("W", NestedTypes);
+  const errors = (text: string) => nullableReadErrors(parseCondition(text), typedRoots(w), NestedTypes);
+  expect(errors("isinstance(x.payload, T) and x.payload.f == 'a'")[0]).toBe(
+    "${x.payload.f} reads field 'f', which T doesn't require, of x.payload, which is untyped and only narrowed to T; " +
+      "write x.payload?.f, or declare x.payload as T in the type that holds it",
+  );
+  expect(errors("isinstance(x.payload, T) and x.payload?.f == 'a'")).toEqual([]);
+  expect(errors("isinstance(x.payload, T) and x.payload.g == 'a'")).toEqual([]);
+});
+
+/** A flow with `mk` an `Optional(Rec)` producer, `w` a `W` producer and `input.a` an `Optional(Rec)`. */
+const NESTED_FLOW = `id: f
+name: f
+typedefs:
+  Inner: {x: str}
+  Rec: {k: Optional(Inner), m: str}
+  T: {f: Optional(str), g: str}
+  W: {payload: Any}
+input:
+  s: !str
+  a: !Optional(Rec)
+nodes:
+  mk:
+    kind: code
+    input:
+      s: \${input.s}
+    output: Optional(Rec)
+    code: |
+      return None
+  w:
+    kind: code
+    input:
+      s: \${input.s}
+    output: W
+    code: |
+      return {"payload": None}
+NODES
+output: OUTPUT
+`;
+
+/** Return `NESTED_FLOW` with `nodes` appended and `output` as the flow output. */
+const nestedFlow = (nodes: string, output = "${mk.output}") =>
+  NESTED_FLOW.replace("NODES", nodes).replace("OUTPUT", output);
+
+/** A CODE node `id` with the input `v: value` and an optional assert. */
+const codeNode = (id: string, value: string, assert = "") =>
+  `  ${id}:
+    kind: code
+    input:
+      v: ${value}
+    output: Any${assert === "" ? "" : `\n    asserts:\n      - ${assert}`}
+    code: |
+      return 1`;
+
+/** A searched CASE `route` with one `when:` to `go` (reading `read`), else `other`. */
+const caseNodes = (when: string, read: string) =>
+  `  route:
+    kind: case
+    cases:
+      - when: ${when}
+        then: go
+    else: other
+${codeNode("go", read)}
+${codeNode("other", "${input.s}")}`;
+
+test.each([
+  ["binding", nestedFlow(codeNode("use", '${mk.output != null and mk.output.k != null and mk.output.k.x == "a"}'))],
+  ["binding, == null or", nestedFlow(codeNode("use", '${mk.output == null or mk.output.k == null or mk.output.k.x == "a"}'))],
+  ["binding, ?. guard", nestedFlow(codeNode("use", '${mk.output?.k != null and mk.output.k.x == "a"}'))],
+  ["node assert", nestedFlow(codeNode("use", "${mk.output}", '${v != null and v.k != null and v.k.x == "a"}'))],
+  ["flow output", nestedFlow("", '${mk.output != null and mk.output.k != null and mk.output.k.x == "a"}')],
+  [
+    "searched when",
+    nestedFlow(caseNodes('mk.output != null and mk.output.k != null and mk.output.k.x == "a"', "${input.s}"), "${go.output | other.output}"),
+  ],
+  ["input, inline", nestedFlow(codeNode("use", '${input.a?.k != null and input.a.m == "p"}'))],
+  [
+    "input, CASE branch",
+    nestedFlow(caseNodes('input.a?.k != null and input.a.m == "p"', "${input.a.m}"), "${go.output | other.output}"),
+  ],
+])("nested null guards load (%s)", (_label, text) => {
+  load(text);
+});
+
+const PAYLOAD_ERROR =
+  "${w.output.payload.f} reads field 'f', which T doesn't require, of w.output.payload, which is untyped and only " +
+  "narrowed to T; write w.output.payload?.f, or declare w.output.payload as T in the type that holds it";
+
+test.each([
+  ["inline", nestedFlow(codeNode("use", '${isinstance(w.output.payload, T) and w.output.payload.f == "a"}'))],
+  ["CASE branch", nestedFlow(caseNodes("isinstance(w.output.payload, T)", "${w.output.payload.f}"), "${go.output | other.output}")],
+])("an untyped field narrowed to T needs ?. for a field T doesn't require (%s)", (_label, text) => {
+  expect(failure(text)).toContain(PAYLOAD_ERROR);
+  load(text.replace("w.output.payload.f", "w.output.payload?.f"));
+  load(text.replace("w.output.payload.f", "w.output.payload.g"));
+});
+
+test("a case value read's error spells the read as written", () => {
+  const text = `id: f
+name: f
+typedefs:
+  Inner: {x: str}
+  Rec: {opt: Optional(Inner)}
+input:
+  s: !str
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: input.s == "a"
+        then: pro
+    else: con
+  pro:
+    kind: code
+    output: Rec
+    code: |
+      return {"opt": None}
+  con:
+    kind: code
+    output: Rec
+    code: |
+      return {"opt": None}
+  use:
+    kind: code
+    input:
+      v: \${gate.output.opt.x}
+    output: Any
+    code: |
+      return 1
+output: \${use.output}
+`;
+  expect(failure(text)).toContain(
+    "node 'use' input 'v': ${gate.output.opt.x} reads field 'x' of gate.output.opt, which may be null " +
+      "(field 'opt' is Optional); write gate.output.opt?.x, or check gate.output.opt != null first",
+  );
+  expect(failure(text.replace("v: ${gate.output.opt.x}", "v: ${input.s}").replace("${use.output}", "${gate.output.opt.x}"))).toContain(
+    "output: ${gate.output.opt.x} reads field 'x' of gate.output.opt",
+  );
+});
+
+test("a read with an unknown field gets no nullable-read message too", () => {
+  const holder = typeFor("Holder", NestedTypes);
+  const errors = (text: string) =>
+    fieldReadErrors(parseCondition(text), new Map([["v", [new ValueContract(holder)]]]), NestedTypes).map(
+      ({ message }) => message,
+    );
+  expect(errors("v.k.zz == 'a'")).toEqual(["reference ${v.k.zz} reads unknown field 'zz' on record"]);
+  expect(errors("v.k.y.zz == 'a'")).toEqual(["reference ${v.k.y.zz} reads field 'zz' on type str, which has no fields"]);
+  expect(errors("v.k.zz == 'a' and v.k.y == 'b'")).toEqual([
+    "reference ${v.k.zz} reads unknown field 'zz' on record",
+    "${v.k.y} reads field 'y' of v.k, which may be null (field 'k' is Optional); write v.k?.y, or check v.k != null first",
+  ]);
+});
+
+test("an inline body's output error names the node that owns the body", () => {
+  const text = `id: f
+name: f
+typedefs:
+  Inner: {x: str}
+  Rec: {k: Optional(Inner)}
+input:
+  s: !str
+nodes:
+  lp:
+    kind: loop
+    times: 1
+    input:
+      value: 0
+    nodes:
+      mk:
+        kind: code
+        output: Rec
+        code: |
+          return {"k": None}
+    output: \${mk.output.k.x}
+output: \${lp.output}
+`;
+  expect(failure(text)).toContain(
+    "inline body of node 'lp' output: ${mk.output.k.x} reads field 'x' of mk.output.k, which may be null",
+  );
 });

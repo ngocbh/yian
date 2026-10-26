@@ -9,7 +9,7 @@ import { rensInternal } from "../../src/compile/expand.ts";
 import { classifyPath } from "../../src/compile/validation.ts";
 import { refProducer } from "../../src/compose/edges/producers.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { referenceContract } from "../../src/compose/helpers/output_contracts.ts";
+import { referenceContract } from "../../src/compile/output_contracts.ts";
 import { forget } from "../../src/defaults.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { messagesKey } from "../../src/typesys/pool.ts";

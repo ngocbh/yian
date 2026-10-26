@@ -1,5 +1,5 @@
 kind: run
-rules: [run-log]
+rules: [run-log, null-field-read]
 flow: |
   id: mn
   name: mn
@@ -26,7 +26,7 @@ flow: |
   nodes:
     pages:
       kind: loop
-      while: page.next != null
+      while: page?.next != null
       input:
         page: {n: 0}
       call: step

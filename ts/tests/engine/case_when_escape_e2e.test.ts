@@ -43,7 +43,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { type RunResult, runFlow } from "../../src/run.ts";
-import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
+import { assembleText, loadConformanceFlow, loadError, loadErrorAsync } from "../compose/declarations.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-case-when-escape-e2e-"));
@@ -155,4 +155,66 @@ test.each([
     "flow has unresolved references:\n" +
       `  node 'gate2' cases[0].when from: reference ${reference} uses unknown namespace 'nope'`,
   );
+});
+
+// ---------- nullable field reads in a searched when: ----------
+
+/** A flow where `route` may skip `x` (`Rec`), and searched CASE `gate` routes on `when`. */
+const skippableWhen = (when: string) => `id: w
+name: w
+typedefs:
+  Rec: {k: int}
+input:
+  go: !bool
+nodes:
+  route:
+    kind: case
+    cases:
+      - when: \${input.go}
+        then: x
+  x:
+    kind: code
+    output: Rec
+    code: "return {'k': 2}"
+  gate:
+    kind: case
+    cases:
+      - when: "${when}"
+        then: hot
+    else: cold
+  hot:
+    kind: code
+    output: str
+    code: return 'hot'
+  cold:
+    kind: code
+    output: str
+    code: return 'cold'
+output: \${hot.output | cold.output}
+`;
+
+test("a field read inside an escape, of a node that may be skipped, needs ?.", () => {
+  // The root is read only inside the escape, so `gate` runs while `x` is skipped; `:-` doesn't
+  // catch the read of a field of null.
+  const error = loadError(() => assembleText(skippableWhen("(x.output.k :- 0) > 1")));
+  expect(error.diagnostic.code).toBe("expr.nullable_field_read");
+  expect(error.message).toStartWith("node 'gate' cases[0].when: ");
+  expect(error.message).toContain(
+    "${x.output.k} reads field 'k' of x.output, which may be null (node 'x' may be skipped while 'gate' runs); " +
+      "write x.output?.k, or check x.output != null first",
+  );
+  expect(error.message).not.toContain("__r");
+});
+
+test.each(["(x.output?.k :- 0) > 1", "x.output != null and x.output.k > 1", "x.output.k > 1"])(
+  "a searched when: loads: %s",
+  (when) => {
+    assembleText(skippableWhen(when));
+  },
+);
+
+test("an unknown field in a searched when: names the authored read", () => {
+  const message = loadError(() => assembleText(skippableWhen("x.output.nosuch > 1"))).message;
+  expect(message).toContain("reference ${x.output.nosuch} reads unknown field 'nosuch'");
+  expect(message).not.toContain("__r");
 });

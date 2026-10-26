@@ -236,7 +236,20 @@ Changed (TS yian): **`?.`** reads a field that may be missing. `x?.k` is null wh
 or missing, or is a record without `k`, and it is typed `Optional`. It short-circuits the rest of
 the chain, so `a?.b.c` is null when `a` is null. `?.` goes after a reference's root
 (`a.output?.k`, `input.k?.x`); `a?.output` and `input?.k` are load errors. Until #1149 lands, a
-plain `.` still reads null on a null value.
+plain `.` still reads null on a null value at run time.
+
+Changed (TS yian): **a `.` on a value that may be null is a load error** (code
+`expr.nullable_field_read`).
+
+- It covers an `Optional` value, a field that is `Optional` or not required, a node a `case` may
+  skip while the reader runs, and an untyped value narrowed (by `isinstance` or a `case` type
+  branch) to a type that doesn't require the field.
+- The message names the fix: `x?.k`, a null check (`x != null and x.k`, `x == null or x.k`), or
+  for arithmetic `(x?.k :- <default>)` (just `x?.k` when the operand already has a `:-` or `|`
+  default). `:-` doesn't catch the read: write `x?.k :- "none"`.
+- A bare reference, or a coalesce of references, co-skips with its producer, so
+  `${order.output.qty}` loads in a binding or a lone output.
+- At the skip-search bound the check can under-report; the run-time error is the backstop.
 
 ### Arithmetic follows Python
 

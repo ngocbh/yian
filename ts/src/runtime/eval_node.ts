@@ -176,8 +176,8 @@ function observerSink<T>(
 
 /**
  * Wrap the engine's steer inbox opener for one evaluation: once the evaluation ended, opening and
- * each `queued`, `read` or `interruptedBy` throw a `CapabilityFault`; a `CapabilityFault` the engine throws reaches
- * `onFault` before it is rethrown, so a node that catches it can't hide it.
+ * each `queued`, `read` or `interruptedBy` throw a `CapabilityFault`; a `CapabilityFault` the
+ * engine throws reaches `onFault` before it is rethrown, so a node that catches it can't hide it.
  */
 function steerInboxCapability(
   open: (inbox: string) => SteerInbox,
@@ -434,7 +434,8 @@ export interface EvalNodeOptions {
   /**
    * This start's steps from the engine, delivered only to a node declaring `needsSteps` as a
    * `NodeSteps` over the same `starts`, `prior`, `calls` and `maxEventBytes`; a `CapabilityFault`
-   * its `record` throws is a capability fault of this evaluation. The node's `record` closes when the outcome is decided.
+   * its `record` throws is a capability fault of this evaluation. The node's `record` closes when
+   * the outcome is decided.
    */
   steps?: NodeSteps | null;
   /**
@@ -463,13 +464,12 @@ export interface EvalNodeOptions {
  * @param options The capabilities and captures; see `EvalNodeOptions`.
  * @returns The outcome, with captures when asked for.
  * @throws TypeError (as a rejection) for a malformed option.
- * @throws The original error of the first capability fault (a failing stream or event sink,
- *   a repeated memory context open or a failing opener, a
- *   `CapabilityFault` from `steps.record` or the steer inbox), whatever the node then returned or
- *   threw.
+ * @throws The original error of the first capability fault (a failing stream or event sink, a
+ *   repeated memory context open or a failing opener, a `CapabilityFault` from `steps.record` or
+ *   the steer inbox), whatever the node then returned or threw.
  * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
- *   exactly a `MemoryScope`; Error when a
- *   memory context node's scope has memories and no opener was injected.
+ *   exactly a `MemoryScope`; Error when a memory context node's scope has memories and no opener
+ *   was injected.
  * @throws TypeError, RangeError or the hook's own error when capturing bindings and the input
  *   inventory fails; the body hasn't run.
  * @throws The signal's reason when the signal is already aborted, before binding, or when the node
@@ -704,8 +704,8 @@ async function evaluateNode(
   });
 
   // Every node gets its signal and the given scheduler, random draw and run folder; the rest are
-  // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker from inside the
-  // body, and the classification below keeps it.
+  // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker
+  // from inside the body, and the classification below keeps it.
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = { signal };
   if (flow !== null) caps.localTypes = localTypes(flow, node);
   if (scheduler !== null) caps.scheduler = scheduler;
@@ -931,8 +931,8 @@ interface Rebound {
 
 /**
  * Bind `node` from `sources` as the evaluator does, with defaults filled; with a `collector`,
- * collect the route and bound inputs into it too. `reserved`, when given, are the node's reserved values, used in
- * place of its `bindReserved`.
+ * collect the route and bound inputs into it too. `reserved`, when given, are the node's reserved
+ * values, used in place of its `bindReserved`.
  */
 function bindFrom(
   node: Node,

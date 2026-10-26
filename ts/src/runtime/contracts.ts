@@ -265,9 +265,9 @@ export class BackwardCapture {
  * The bound inputs aren't kept: learning rebuilds them by binding the node again from the values
  * its route read (`TraceOccurrence.boundInputs`). Its record holds no interpolation route's text
  * either; the same binding rebuilds it (`TraceOccurrence.capture`). Nor node data: learning
- * rebuilds it from the node (`TraceOccurrence.nodeData`). An unfinished binding keeps
- * its safe partial routes. Item captures retain explicit indices and actual second-template evaluation flags.
- * Outcomes and visible interactions stay on their accepted record. Scope may be absent for
+ * rebuilds it from the node (`TraceOccurrence.nodeData`). An unfinished binding keeps its safe
+ * partial routes. Item captures retain explicit indices and actual second-template evaluation
+ * flags. Outcomes and visible interactions stay on their accepted record. Scope may be absent for
  * synthetic nodes awaiting instantiation.
  */
 export class ForwardCapture {

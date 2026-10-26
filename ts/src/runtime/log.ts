@@ -297,12 +297,11 @@ export class RunStartedRecord {
    *   isn't a plain object, or a part of `flow`, `skills`, `tools`, `yianVersion` or `parent` has
    *   the wrong type.
    * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
-   *   negative, the memory fields
-   *   are only partly recorded, aren't sorted and unique, disagree on their keys or a stack names
-   *   an unknown key, a defaults name is empty, `callTimeLlm` has missing or extra fields, no
-   *   agent, an empty agent path or a non-JSON value, `flow.files` lacks `flow.root` or a file
-   *   its refs name, a name, the flow's root or folder or the version is empty, a tool's
-   *   parameters aren't JSON, or a tool group names a tool `tools` lacks.
+   *   negative, the memory fields are only partly recorded, aren't sorted and unique, disagree on
+   *   their keys or a stack names an unknown key, a defaults name is empty, `callTimeLlm` has
+   *   missing or extra fields, no agent, an empty agent path or a non-JSON value, `flow.files`
+   *   lacks `flow.root` or a file its refs name, a name, the flow's root or folder or the version
+   *   is empty, a tool's parameters aren't JSON, or a tool group names a tool `tools` lacks.
    * @throws TypeCheckError at the bad part's path when the wiring override or the agent
    *   configuration holds NaN or another non-JSON value (see `jsonPart`).
    */
@@ -733,14 +732,8 @@ export class InboxWithdrawnRecord {
    */
   constructor(inbox: string, events: readonly number[]) {
     this.inbox = requireName(inbox, "inbox");
-    if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
-      throw new RangeError("events must be positive integers");
-    }
-    const seqs = [...events] as number[];
+    const seqs = validatedEventSeqs(events, "events");
     if (seqs.length === 0) throw new RangeError("events must be non-empty");
-    if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {
-      throw new RangeError("events must be strictly increasing");
-    }
     this.events = Object.freeze(seqs);
     Object.freeze(this);
   }
@@ -906,7 +899,7 @@ export class PoolCommitRecord {
     this.nodeId = requireName(nodeId, "node_id");
     this.key = requireName(key, "key");
     this.value =
-      value === null ? null : (freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as unknown as TypedWire);
+      value === null ? null : (freezeParsed(canonicalCopy(TypedValue.fromWire(value).toWire())) as TypedWire);
     this.from = validatedFrom(options.from ?? null);
     this.take = options.take == null ? null : validatedTake(options.take);
     this.steps = options.steps == null ? null : validatedSteps(options.steps);
@@ -938,16 +931,26 @@ export interface TakeCommit {
 function validatedTake(take: unknown): TakeCommit {
   if (!isRecord(take)) throw new TypeError("take must be an object");
   const inbox = requireName(take["inbox"], "take inbox");
-  const events = take["events"];
+  const seqs = validatedEventSeqs(take["events"], "take events");
+  if (typeof take["closed"] !== "boolean") throw new TypeError("take closed must be a boolean");
+  return Object.freeze({ inbox, events: Object.freeze(seqs), closed: take["closed"] });
+}
+
+/**
+ * Return a copy of `events` when it is a list of strictly increasing positive safe integers;
+ * `label` names it in errors.
+ *
+ * @throws RangeError otherwise.
+ */
+function validatedEventSeqs(events: unknown, label: string): number[] {
   if (!isList(events) || ![...events].every((seq) => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1)) {
-    throw new RangeError("take events must be positive integers");
+    throw new RangeError(`${label} must be positive integers`);
   }
   const seqs = [...events] as number[];
   if (seqs.some((seq, index) => index > 0 && seqs[index - 1]! >= seq)) {
-    throw new RangeError("take events must be strictly increasing");
+    throw new RangeError(`${label} must be strictly increasing`);
   }
-  if (typeof take["closed"] !== "boolean") throw new TypeError("take closed must be a boolean");
-  return Object.freeze({ inbox, events: Object.freeze(seqs), closed: take["closed"] });
+  return seqs;
 }
 
 /**
@@ -1126,8 +1129,7 @@ function validatedAttemptId(attemptId: unknown): number {
  */
 function validatedAttributedResults(results: unknown): readonly AttributedBackwardResult[] {
   if (!isList(results)) throw new TypeError("attributed_results must be an array");
-  const message = "attributed_results require exact AttributedBackwardResult values";
-  return exactItems(results, AttributedBackwardResult, message);
+  return exactItems(results, AttributedBackwardResult, "attributed_results require exact AttributedBackwardResult values");
 }
 
 /** Start one backward attempt with detached ordinary root feedback. Frozen. */
@@ -1654,9 +1656,8 @@ export class RecordEnvelope {
    * hold.
    *
    * @throws RunLogSchemaError when the schema isn't `SCHEMA_VERSION`.
-   * @throws RangeError when the run id is empty or holds a
-   *   lone surrogate, `seq` isn't a non-negative safe integer, or `at` isn't a UTC time in
-   *   `formatRecordTime`'s form.
+   * @throws RangeError when the run id is empty or holds a lone surrogate, `seq` isn't a
+   *   non-negative safe integer, or `at` isn't a UTC time in `formatRecordTime`'s form.
    * @throws TypeError when `record` isn't exactly one of `RUN_RECORD_TYPES`, or `at` is neither a
    *   string nor `null`.
    */
@@ -3422,7 +3423,7 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
       return new PoolCommitRecord(
         requireName(payload["node_id"], `${label} node_id`),
         requireName(payload["key"], `${label} key`),
-        form === "value" ? ({ kind: payload["kind"], value: payload["value"] } as unknown as TypedWire) : null,
+        form === "value" ? ({ kind: payload["kind"], value: payload["value"] } as TypedWire) : null,
         {
           from: form === "from" ? fromFromPayload(payload["from"], `${label} from`) : null,
           take: form === "take" ? takeFromPayload(payload, label) : null,

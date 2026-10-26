@@ -277,7 +277,7 @@ function schemaOf(
     return [value, null];
   }
   if (!isStandardSchema(value)) throw new TypeError(`${prefix} ${role} must be a Standard Schema v1 validator`);
-  const validator = value as StandardSchemaV1;
+  const validator = value;
   if (given !== undefined) return [given, validator];
   const { vendor, jsonSchema } = validator["~standard"] as { vendor: unknown; jsonSchema?: unknown };
   const input =
@@ -298,7 +298,7 @@ function schemaOf(
 }
 
 /** Return whether `value` is a Standard Schema v1 validator: an object or function with a v1 `~standard`. */
-function isStandardSchema(value: unknown): boolean {
+function isStandardSchema(value: unknown): value is StandardSchemaV1 {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
   const standard: unknown = (value as { "~standard"?: unknown })["~standard"];
   if (typeof standard !== "object" || standard === null) return false;

@@ -404,7 +404,7 @@ function snapshotJson(namespace: string, epoch: number, revision: number, state:
 
 /** Return the stable snapshot-validation failure. */
 function snapshotError(options: { cause?: unknown } = {}): MemoryOperationError {
-  return operationError("open_run", "episodic.invalid_snapshot", "recorded memory snapshot is invalid", options);
+  return operationError("openRun", "episodic.invalid_snapshot", "recorded memory snapshot is invalid", options);
 }
 
 /**
@@ -698,7 +698,7 @@ export class EpisodicMemory implements Memory {
     return this.operation(() => {
       const snapshot = options.snapshot ?? null;
       const parsed = snapshot === null ? null : parseSnapshot(snapshot);
-      if (parsed !== null) resolveLimits(this.requested, parsed[3].limits, "open_run");
+      if (parsed !== null) resolveLimits(this.requested, parsed[3].limits, "openRun");
       // The state is frozen, so a session pins it without Python's defensive copy.
       const [namespace, epoch, revision, state] = parsed ?? [this.namespace, this.epoch, this.revision, this.state];
       let adopt = false;

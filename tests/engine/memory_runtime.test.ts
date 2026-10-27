@@ -194,7 +194,7 @@ class FakeMemory implements Memory {
 
   openRun(options: { snapshot?: JsonObject | null } = {}): FakeSession {
     const snapshot = options.snapshot ?? null;
-    this.events.push(["open_run", this.name, snapshot]);
+    this.events.push(["openRun", this.name, snapshot]);
     if (this.openError !== null) throw this.openError;
     if (snapshot !== null && this.restoreSnapshot) this.session.storedSnapshot = snapshot;
     return this.session;
@@ -306,8 +306,8 @@ test("open uses key order and captures snapshots", async () => {
   );
 
   expect(events).toEqual([
-    ["open_run", "alpha", null],
-    ["open_run", "beta", null],
+    ["openRun", "alpha", null],
+    ["openRun", "beta", null],
     ["snapshot", "alpha"],
     ["snapshot", "beta"],
   ]);
@@ -351,8 +351,8 @@ test("open restores exact recorded snapshot per key", async () => {
   const runtime = await open(pair(events), { snapshots });
 
   expect(events.slice(0, 2)).toEqual([
-    ["open_run", "alpha", { revision: 2n }],
-    ["open_run", "beta", { revision: 3n }],
+    ["openRun", "alpha", { revision: 2n }],
+    ["openRun", "beta", { revision: 3n }],
   ]);
   expect(runtime.snapshots).toEqual(snapshots);
   await runtime.close();
@@ -509,7 +509,7 @@ test("snapshots must be an array of unique envelopes", async () => {
 
 test("later open failure closes prior session and preserves origin", async () => {
   const events: Events = [];
-  const failure = new MemoryOperationError("open_run", "beta.unavailable", "temporarily unavailable", true);
+  const failure = new MemoryOperationError("openRun", "beta.unavailable", "temporarily unavailable", true);
   const authored = origins();
 
   const error = await expectError(
@@ -528,8 +528,8 @@ test("later open failure closes prior session and preserves origin", async () =>
   expect((error as MemorySetupError).origin).toBe(authored.get("beta")!);
   expect((error as Error).cause).toBe(failure);
   expect(events).toEqual([
-    ["open_run", "alpha", null],
-    ["open_run", "beta", null],
+    ["openRun", "alpha", null],
+    ["openRun", "beta", null],
     ["close", "alpha"],
   ]);
 });
@@ -551,7 +551,7 @@ test("frame-era session is closed before setup failure", async () => {
   };
   const frameMemory = {
     openRun(options: { snapshot?: JsonObject | null } = {}) {
-      events.push(["open_run", "alpha-invalid", options.snapshot ?? null]);
+      events.push(["openRun", "alpha-invalid", options.snapshot ?? null]);
       return frameSession;
     },
     reset(): void {},
@@ -569,16 +569,16 @@ test("frame-era session is closed before setup failure", async () => {
 
   expect((error as MemorySetupError).origin).toBe(authored.get("alpha")!);
   expect(events).toEqual([
-    ["open_run", "alpha-invalid", null],
+    ["openRun", "alpha-invalid", null],
     ["close", "alpha-invalid"],
   ]);
 });
 
-/** A memory whose `openRun` logs `open_run` and returns `session`. */
+/** A memory whose `openRun` logs `openRun` and returns `session`. */
 function memoryOf(name: string, events: Events, session: unknown): Memory {
   return {
     openRun() {
-      events.push(["open_run", name, null]);
+      events.push(["openRun", name, null]);
       return session as MemorySession;
     },
     reset() {},
@@ -706,8 +706,8 @@ test("a session lacking close is not closed on a later failure", async () => {
   expect((error as MemorySetupError).cause).toBeUndefined();
   expect(Object.hasOwn(error as object, "notes")).toBe(false);
   expect(events).toEqual([
-    ["open_run", "alpha", null],
-    ["open_run", "beta", null],
+    ["openRun", "alpha", null],
+    ["openRun", "beta", null],
     ["close", "alpha"],
   ]);
 });

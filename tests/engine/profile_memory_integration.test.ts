@@ -538,7 +538,7 @@ test("a host store that dropped the recorded version cannot reopen the run", asy
   );
   const cause = (error as MemorySetupError).cause as MemoryOperationError;
   expect(cause).toBeInstanceOf(MemoryOperationError);
-  expect([cause.stage, cause.code]).toEqual(["open_run", "profile.snapshot_unavailable"]);
+  expect([cause.stage, cause.code]).toEqual(["openRun", "profile.snapshot_unavailable"]);
   expect(cause.cause).toBeInstanceOf(RangeError);
   expect((cause.cause as RangeError).message).toBe("unknown version");
   expect(resumed.backwardOutcome).toBeNull();

@@ -313,14 +313,14 @@ export class ProfileMemory implements Memory {
    *   unknown, or changed. Other store errors pass through unchanged.
    */
   async openRun(options: { snapshot?: JsonObject | null } = {}): Promise<ProfileSession> {
-    this.ensureOpen("open_run");
+    this.ensureOpen("openRun");
     const snapshot = options.snapshot ?? null;
     let document: readonly [string, string];
     if (snapshot === null) {
       try {
         document = await this.store.read(null);
       } catch (cause) {
-        throw readError("open_run", cause);
+        throw readError("openRun", cause);
       }
       return new ProfileSession(this, document[0], document[1]);
     }
@@ -343,7 +343,7 @@ export class ProfileMemory implements Memory {
       }
     } catch (cause) {
       if (!(cause instanceof TypeError || cause instanceof RangeError || isSystemError(cause))) throw cause;
-      throw error("open_run", "profile.snapshot_unavailable", "recorded profile version cannot be restored", {
+      throw error("openRun", "profile.snapshot_unavailable", "recorded profile version cannot be restored", {
         cause,
       });
     }

@@ -319,7 +319,7 @@ function completeLlmConfig(config: Readonly<Record<string, unknown>>): Record<st
 
 /** Return a stable final snapshot-validation failure, with `cause` when given. */
 function snapshotError(message: string, cause?: unknown): MemoryOperationError {
-  return operationError("open_run", "reflective.invalid_snapshot", message, cause === undefined ? {} : { cause });
+  return operationError("openRun", "reflective.invalid_snapshot", message, cause === undefined ? {} : { cause });
 }
 
 /**
@@ -846,7 +846,7 @@ export class ReflectiveMemory implements Memory {
       if (!model.trim()) throw new RangeError("llm_config.model must not be blank");
       return copyObject(complete, "llm_config");
     } catch (error) {
-      throw operationError("open_run", "reflective.config", "reflective model configuration is invalid", {
+      throw operationError("openRun", "reflective.config", "reflective model configuration is invalid", {
         cause: error,
       });
     }
@@ -875,7 +875,7 @@ export class ReflectiveMemory implements Memory {
         this.effectiveLlmConfig(),
       ];
       if (parsed !== null) {
-        resolveLimits(this.requested, state.limits, "open_run");
+        resolveLimits(this.requested, state.limits, "openRun");
         if (namespace !== this.namespace) {
           const pristine =
             !this.everOpened &&

@@ -99,17 +99,17 @@ output:
   (`output: !Order ${x.output}`). A type definition is plain text: a `typedefs:` entry and the
   `output:` of an `agent`, `code` or `tool` node. Mixing them up is a load error.
 - **Every flow input has a tag**, with an optional default: `lookback: !int 30`,
-  `note: !Optional(str)` (omitted is null). A default is a literal, never converted: `!int 30`,
-  not `!int "30"`.
+  `note: !Optional(str)` (omitted is null).
 - **A tag ends at the first space and holds no `,`.** Name a type with several arguments in
   `typedefs:` and tag with the name: `Order: Union(Buy, Sell)`, then `!Order`. One-argument
   types work inline: `!Optional(list(str))`.
 - **Spellings:** parentheses, not brackets (`Optional(str)`, `int(1..12)`); `Any`, not `any`;
   `Union(A, B)`, not `A | B`; `Optional(Order)`, not `Union(Order, None)`.
-- **Union members need a tag field**: the same field as a one-value `Literal` in each member,
-  such as `action: Literal(buy)`. A field only some members have can be read only after
-  narrowing: on a `case` branch over the tag, or after `isinstance(x, Buy)` or
-  `x.action == "buy"`. See [Narrowing](https://yian.readthedocs.io/types/#narrowing).
+- **Union members must differ by a tag field or by shape.** A tag field is the same field as a
+  one-value `Literal` in each member, such as `action: Literal(buy)`; shapes such as `{text: str}`
+  and `{num: int}` can't overlap. A field only some members have can be read only after narrowing:
+  on a `case` branch over the tag, or after `isinstance(x, Buy)` or `x.action == "buy"`. See
+  [Narrowing](https://yian.readthedocs.io/types/#narrowing).
 - **A tag checks; it never converts.** Unquoted YAML follows the core schema: `yes` is text
   (write `true`), `!str 30` fails (quote it: `!str "30"`), `!int "5"` fails.
 - **Tag what can't be inferred**, such as an empty list: `seen: !list(str) []`.
@@ -203,10 +203,11 @@ output:
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
   to every agent with `steer_inbox:`.
-- **`llm_config:` holds `provider`, `model` and, on an agent, `inherit:`.** Request settings go
-  in a block named after the provider, written as that API's request body:
-  `anthropic: {max_tokens: 8000}`, `openai: {reasoning: {effort: high}}`. See
-  [Models and providers](https://yian.readthedocs.io/models/).
+- **`llm_config:` holds `provider`, `model` and, on an agent, `inherit:`.** Set `provider` and
+  `model` together: an agent that sets only `provider:` keeps an outer `model:`, even one for
+  another provider. Request settings go in a block named after the provider, written as that API's
+  request body: `anthropic: {max_tokens: 8000}`, `openai: {reasoning: {effort: high}}`. See [Models
+  and providers](https://yian.readthedocs.io/models/).
 - **No `session` memory.** Carry a conversation as a `loop` field and compact it with a `call`;
   see `templates/chat.yaml`. Long-term memory types are `episodic`, `reflective` and `profile`
   ([Learning](https://yian.readthedocs.io/learning/)).
@@ -226,9 +227,10 @@ See [Inboxes and waiting](https://yian.readthedocs.io/inboxes/).
 
 ### Secrets
 
-Never write a credential in a flow file: the run log records the flow. Pass a secret as an input
-or leave it to the host. `api_key`, `headers`, `organization` and `project` in `llm_config:` are
-load errors, and so is `base_url` outside `provider: azure`.
+Never put a credential in a flow file or an input: the run log records both. Keep it in the
+environment: `yian auth` saves a provider login, an MCP server's config reads `${VAR}`, and a code
+node or host tool reads the variable itself. `api_key`, `headers`, `organization` and `project` in
+`llm_config:` are load errors, and so is `base_url` outside `provider: azure`.
 
 ## Before you hand the flow over
 

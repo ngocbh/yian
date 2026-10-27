@@ -42,7 +42,7 @@ Top-level keys ([Flows and nodes](https://yian.readthedocs.io/flows/#the-file-sh
 | Flow `output:` | Returns |
 |---|---|
 | `${total.output}` | That value |
-| `{total: ${total.output}, note: ${note.output}}` | A record |
+| `{total: "${total.output}", note: "${note.output}"}` | A record (quote each `${...}` in a `{...}`) |
 | `!float ${total.output}` | One value, checked against the type |
 | none | null |
 
@@ -77,7 +77,8 @@ unique `header`, optional `options` and `multi_select`), optional `timeout`; or
 `adaptive_questions: {prompt: ...}` beside `input`. A `questions:` answer is a record keyed by
 `header`. Other inputs reach the host's handler, which must declare them.
 
-**take**: `tool_id: take`, `input: {from: ${input.<inbox>}, take: one | all, timeout: 30m}`.
+**take**: `tool_id: take`, `input` with `from: ${input.<inbox>}`, optional `take:` (`one`, the
+default, or `all`) and optional `timeout:`.
 **sleep**: `tool_id: sleep`, `input` with exactly one of `until:` (a date or datetime, UTC when
 it has no offset) or `for:` (a duration). Its output is null.
 
@@ -185,8 +186,9 @@ inbox. Each turn:
    calls `compact_history.yaml`, which folds older turns into the summary once the history
    passes a budget.
 2. A condition `case` sends a non-empty `events` to `answered`, a `call` of `respond`.
-3. `respond`'s agent reads the history as a list `prompt:`, takes the inbox as `steer_inbox:`,
-   has `output: Optional(str)`, and returns `${[input.said + reply.new_messages]}`.
+3. In `respond`, the agent `reply` reads the history as a list `prompt:`, takes the inbox as
+   `steer_inbox:` and has `output: Optional(str)`; the def's `output:` is
+   `${[input.said + reply.new_messages]}`, this turn as one list.
 4. The turn returns `history: ${compacted.output.history + (answered.output :- [])}` and
    `closed: ${heard.output.closed}`; the loop runs `while: not closed`.
 

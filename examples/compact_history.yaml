@@ -3,7 +3,6 @@
 # counts turns, so a tool call and its result never part. The budget counts the characters of
 # the messages' text parts; the summarizer reads those text parts too (tool calls, their results
 # and reasoning are left out of the summary).
-# Comprehensions, len(), slices and the built-in `Message` are TS-only.
 id: compact_history
 name: compact_history
 description: Keep a chat history's text under a budget by folding older turns into a rolling summary.

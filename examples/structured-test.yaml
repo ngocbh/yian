@@ -1,6 +1,6 @@
 # structured-test — exercise structured AGENT output across shapes on a local Ollama model.
 # Four agents without tools, one per output shape; the flow output bundles all four so a single
-# run shows whether structured generation + the write boundary accept each shape.
+# run shows whether the model's structured output passes yian's type check for each shape.
 #   yian run examples/structured-test.yaml --input text="..."
 
 id: structured-test

@@ -15,9 +15,8 @@
 # reply's `new_messages` (its tool calls and results, the steers it read, and its final reply).
 # Esc in `yian chat` withdraws unread messages, then interrupts.
 # Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are answered.
-# The flow grants no tools; see docs/examples.md to add some. The run log grows linearly (see
-# "Growing a carried value" in docs/syntax.md).
-# TS yian only. Run it with:  yian chat examples/chat.yaml
+# The flow grants no tools, so it runs with no setup. The run log grows linearly with the turns.
+# Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat
 description: A turn-by-turn conversational assistant that folds older turns into a rolling summary.

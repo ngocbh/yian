@@ -34,8 +34,15 @@ Judge each change to the language against these. Breaking one needs a reason in 
 - A flow does exactly what the docs say, or fails with a clear error: nothing silent, nothing
   undefined.
 - Catch errors at load time when you can, and name the location and the fix.
-- Few concepts that compose, working the same in every position. Grow through flows, host tools
-  and imports, not a new keyword per need.
+- Few concepts that compose, working the same in every position. Control flow is a closed set:
+  `case`, `loop`, `map` and `call`. Grow through flows, host tools and imports, not a new keyword
+  per need. When a flow needs more computation, use a `code` node or a tool.
+- Expressions are pure and always end: no side effects, no user-defined functions, no recursion.
+  A host's builtin must be pure and deterministic too.
+- `defs:` entries are subflows you can read in the file, not functions: a def can't call itself,
+  directly or through another.
+- Give every new construct that repeats a bound (`times:`, `max:` or a cap in `src/defaults.ts`).
+  A `while:` or `until:` loop is bounded only when it sets `max:`.
 - A flow is plain YAML. yian adds meaning inside strings (`${...}`, conditions) and through YAML
   tags, never by changing YAML.
 - Once users rely on something, a breaking change comes with an error that says what to change.

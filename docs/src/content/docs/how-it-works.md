@@ -93,7 +93,7 @@ they came from, so the same run always builds the same ids:
 |---|---|
 | `review` | A node you wrote |
 | `fetch/parse` | Node `parse` inside the `call` node `fetch` |
-| `each#2/echo` | Node `echo` for item 2 of the `map` node `each` |
+| `each#2/echo` | Node `echo` for item 2 of the `map` node `each` (items count from 0) |
 | `loop#1/step` | Node `step` in turn 1 of the `loop` node `loop` (turns count from 0) |
 | `loop~2` | The check that decides whether `loop` runs turn 2 |
 
@@ -105,8 +105,8 @@ records it, and a resume checks it.
 The engine drives the run. It repeats one cycle:
 
 1. Pick a node whose inputs are all settled.
-2. Run it. The node gets its inputs and returns one outcome.
-3. Write the outcome to the run log.
+2. Write `node_started`, then run it. The node gets its inputs and returns one outcome.
+3. Write the outcome's records to the run log.
 4. Apply it to the run's state, then tell listeners (events, progress lines).
 
 Writing comes before applying. If the write fails, the step didn't happen: the state doesn't
@@ -116,10 +116,10 @@ Each node returns one of these outcomes:
 
 | Outcome | Records written | What changes |
 |---|---|---|
-| A value | `pool_commit`, then `node_succeeded` | The value is stored under the node's id; nodes that read it can run |
+| A value | `pool_commit` (an agent adds one for its messages), then `node_succeeded` | The value is stored under the node's id; nodes that read it can run |
 | A route (`case`) | `node_routed` | The branches not taken are skipped |
-| An expansion (`call`, `map`, `loop`) | `node_expanded` | The child flow's nodes join the graph |
-| A wait (`take`, `sleep`, `ask`, a host call) | `node_waiting` | The node is set aside until what it waits on arrives |
+| An expansion (`call`, `map`, `loop`) | A `pool_commit` for each child START, then `node_expanded` | The child flow's nodes join the graph |
+| A wait (`take`, `sleep`, `ask`, a host call) | `node_waiting` | The node is set aside until what it waits on arrives. A `take` whose event is already there, or a `sleep` already due, stores its value at once instead |
 | A failure | `node_failed` | The run fails |
 
 The engine never asks what kind a node is. It reacts only to the outcome, so every node kind runs
@@ -140,7 +140,7 @@ arrives. See [Inboxes and waiting](/inboxes/).
 | Ending | When |
 |---|---|
 | Succeeded | END has its value and no node is still running |
-| Failed | A node failed, or a route left END unable to run |
+| Failed | A node failed (`node_failed`), or a route left END unable to run; if nodes still wait then, yian writes `run_failed` |
 | Waiting | Nothing can run and some nodes are waiting; yian writes `run_waiting` |
 | Cancelled | The host cancelled the run; yian writes `run_cancelled` |
 
@@ -204,7 +204,8 @@ The `run_started` record holds everything the run needs to be rebuilt later:
 | Memory snapshots, and the yian version | |
 
 Steps inside a node are records too. An agent writes a `node_step` for each model reply and each
-tool result, as it goes. A retried tool writes one for each failed attempt.
+tool result, as it goes. A tool that retries writes one for each failed attempt and one as the next
+attempt starts.
 [Reference](/reference/) lists every record kind and its fields.
 
 To see where a run stands, give its log to `yian status`:
@@ -239,10 +240,10 @@ and its fingerprint must match.
 ## Crash recovery
 
 If the process dies mid-run, the log still holds every step that finished. The last line may be
-cut off; yian ignores it. Here the run was cut while `shout` was running:
+cut off; yian ignores it. Here another run of `greet.yaml` was cut while `shout` was running:
 
 ```console
-$ yian status ~/.yian/runs/281f84a4cdb54f26a59aaa23c0f1b593/log.jsonl
+$ yian status ~/.yian/runs/9b3e07d2c41a4f8e8d6a5f1c2e7b4a90/log.jsonl
 status: crashed
 in flight: shout
 crashed attempts: shout=1
@@ -251,7 +252,7 @@ crashed attempts: shout=1
 Resume it with `--resume`. yian runs the flow the log recorded, so you don't name the flow file:
 
 ```console
-$ yian run --resume ~/.yian/runs/281f84a4cdb54f26a59aaa23c0f1b593/log.jsonl
+$ yian run --resume ~/.yian/runs/9b3e07d2c41a4f8e8d6a5f1c2e7b4a90/log.jsonl
 HI ADA
 ```
 
@@ -271,7 +272,7 @@ A resume does this:
 | Status | Means | What a resume does |
 |---|---|---|
 | `succeeded`, `failed`, `cancelled` | The run ended | Returns the recorded result and writes nothing |
-| `waiting` | Every unfinished node is waiting | Wakes the nodes whose answer or deadline has arrived; if none has, writes nothing and returns `waiting` |
+| `waiting` | Every unfinished node is waiting | Wakes the nodes whose answer or deadline has arrived; if none has and `--num-workers` is unchanged, writes nothing and returns `waiting` |
 | `stopped` | The host stopped the run (`run_stopped`) | Runs the stopped nodes again |
 | `crashed` | The process ended without a stop | Runs the unfinished nodes again, each counted as a crashed attempt |
 | `running` | Another process holds the lock | Refuses |

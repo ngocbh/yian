@@ -1,11 +1,13 @@
 ---
 title: "Examples"
-description: "Runnable example flows, each with a one-line purpose."
+description: "Complete example flows, each with a one-line purpose."
 ---
 
 This page shows complete example flows, smallest first, each with a one-line purpose. Copy a flow
-into a file with the name shown, set up a model provider ([Get started](/get-started/)), and run it.
-Each flow's header comment shows the command, written for a folder named `examples`.
+into a file with the name shown, set up a model provider ([Get started](/get-started/)), and run it
+with the command in its header comment, written for a folder named `examples`. Two flows have no
+command: `compact_history.yaml` is called by `chat.yaml`, and `approve-plan.yaml` needs a host
+program.
 
 ## hello.yaml
 
@@ -101,14 +103,14 @@ output:
 Four agents, one per output shape (record, int, `Literal`, list), to check that a model returns typed output.
 
 ```yaml title="structured-test.yaml" source=examples/structured-test.yaml
-# structured-test — exercise structured AGENT output across shapes on a local Ollama model.
+# structured-test — exercise structured AGENT output across shapes on your default model.
 # Four agents without tools, one per output shape; the flow output bundles all four so a single
 # run shows whether the model's structured output passes yian's type check for each shape.
 #   yian run examples/structured-test.yaml --input text="..."
 
 id: structured-test
 name: structured_test
-description: Exercise structured AGENT output (record / int / list / enum) on Ollama.
+description: Exercise structured AGENT output (record / int / list / enum).
 
 input:
   text: !str
@@ -316,7 +318,7 @@ Weigh a decision from three angles, route on a typed verdict, and write a tailor
 #   4. finalizes by combining the decision with whichever brief ran (a coalesce join),
 #   5. returns a multi-field object, with a runtime assert on the decision.
 #
-# Exercises: a Literal typedef, an Optional input with a default, fan-out + fan-in, a
+# Exercises: a Literal typedef, an Optional input with a `:-` fallback, fan-out + fan-in, a
 # typed enum output, `case ... on` with `else`, an n-ary `|` coalesce consumed by a
 # downstream node, multi-output, and asserts — all with AGENT nodes, so it runs against
 # any provider and model.
@@ -569,6 +571,8 @@ Ask the lead to approve a plan, and the manager when the lead doesn't answer in 
 
 ```yaml title="approve-plan.yaml" source=examples/approve-plan.yaml
 # approve-plan — ask the lead, then escalate to the manager when the lead doesn't answer.
+# It needs a host program: its asks pass `to:`, which the ask tool of `yian run` doesn't take,
+# so there is no `yian run` command for it.
 #
 # Each `ask` TOOL node asks with a deadline (`timeout:`). The host answers at once, or returns
 # `pending()` and answers later with `complete()`; a call still open at its deadline closes
@@ -715,7 +719,7 @@ A chat assistant on an inbox that steers, can be interrupted, and keeps a rollin
 # reply's `new_messages` (its tool calls and results, the steers it read, and its final reply).
 # Esc in `yian chat` withdraws unread messages, then interrupts.
 # Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are answered.
-# The flow grants no tools, so it runs with no setup. The run log grows linearly with the turns.
+# The flow grants no tools, so it needs no MCP servers.
 # Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat
@@ -743,7 +747,7 @@ defs:
         kind: agent
         input:
           summary: ${input.summary}
-          history: ${input.history}      # a plain reference: one route in a learnable capture
+          history: ${input.history}
           said: ${input.said}
         steer_inbox: ${input.owner_messages}
         output: Optional(str)            # text; null only after an interrupt

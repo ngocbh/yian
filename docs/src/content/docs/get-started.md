@@ -23,7 +23,7 @@ To run flows from the terminal, you need the `yian` command. Pick one way:
 |---|---|---|
 | Install it globally | `npm i -g @ngocbh/yian` | Puts `yian` on your PATH |
 | Run it once with npm | `npx @ngocbh/yian` | Downloads the package if needed |
-| Run it once with Bun | `bunx @ngocbh/yian` | Downloads the package if needed |
+| Run it once with Bun | `bunx --bun @ngocbh/yian` | Without `--bun`, bunx runs it with Node |
 
 ```console
 $ npx @ngocbh/yian --version
@@ -36,7 +36,8 @@ fetches a different, unrelated package called `yian`.
 
 The rest of the docs write the command as `yian`. Run `yian --help` to list the commands.
 
-To use tools from MCP servers, also install the MCP client package:
+To use tools from MCP servers, install the MCP client package where yian is installed: in the
+same project, or globally (`npm i -g`) next to a global yian.
 
 ```console
 $ npm install @modelcontextprotocol/client@2.3.1
@@ -103,7 +104,8 @@ This flow is a single agent step, so it fits in one block:
 
 | Key | Meaning |
 |---|---|
-| `id`, `name` | Name the flow |
+| `id` | Required. The flow's identifier; in this one-step form it also names the step |
+| `name` | Required. A display name |
 | `description` | Says what the flow does (optional) |
 | `input` | The flow's inputs and their types. `name: !str` is a required string |
 | `output` | The type of the result. `str` is free text |
@@ -128,7 +130,7 @@ $ yian run hello.yaml --input name=Ada
 
 - The result goes to stdout, as text for a `str` and as JSON for anything else.
 - Progress for each step, and the path of the run log, go to stderr.
-- On a terminal, `yian run` asks for any required input you didn't pass.
+- On a terminal, `yian run` asks for each input you didn't pass. You can skip optional ones.
 - Each run is logged under `~/.yian/runs/`. `yian status` lists those runs.
 
 Common flags:
@@ -163,12 +165,13 @@ $ yian chat chat.yaml
 | Key | What it does |
 |---|---|
 | Enter | Sends the line |
-| Ctrl-C while a reply runs | Cuts the reply short; the chat waits for your next line |
+| Ctrl-C while a reply runs | Cuts short an agent that reads the inbox as its `steer_inbox`; the chat waits for your next line |
 | Ctrl-C again within 2 seconds, or at the prompt | Cancels the run |
 | Esc | Takes back lines the flow hasn't read yet, then stops the reply |
 | `/exit`, `/quit` or Ctrl-D | Ends the chat once the queued lines are answered |
 
-`yian chat` takes the same `--input`, `--provider`, `--model` and `--log` flags as `yian run`.
+`yian chat` takes `--input`, `--inputs`, `--provider`, `--model` and `--log` like `yian run`. It
+opens no MCP servers and loads no skills.
 Use `--inbox NAME` when the flow has more than one inbox input. Inboxes are covered in
 [Inboxes and waiting](/inboxes/).
 

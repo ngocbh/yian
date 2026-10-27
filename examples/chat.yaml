@@ -15,7 +15,7 @@
 # reply's `new_messages` (its tool calls and results, the steers it read, and its final reply).
 # Esc in `yian chat` withdraws unread messages, then interrupts.
 # Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are answered.
-# The flow grants no tools, so it runs with no setup. The run log grows linearly with the turns.
+# The flow grants no tools, so it needs no MCP servers.
 # Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat
@@ -43,7 +43,7 @@ defs:
         kind: agent
         input:
           summary: ${input.summary}
-          history: ${input.history}      # a plain reference: one route in a learnable capture
+          history: ${input.history}
           said: ${input.said}
         steer_inbox: ${input.owner_messages}
         output: Optional(str)            # text; null only after an interrupt

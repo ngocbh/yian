@@ -7,7 +7,7 @@
 #   4. finalizes by combining the decision with whichever brief ran (a coalesce join),
 #   5. returns a multi-field object, with a runtime assert on the decision.
 #
-# Exercises: a Literal typedef, an Optional input with a default, fan-out + fan-in, a
+# Exercises: a Literal typedef, an Optional input with a `:-` fallback, fan-out + fan-in, a
 # typed enum output, `case ... on` with `else`, an n-ary `|` coalesce consumed by a
 # downstream node, multi-output, and asserts — all with AGENT nodes, so it runs against
 # any provider and model.

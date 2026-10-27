@@ -3,23 +3,22 @@ title: "yian"
 description: "Readable YAML flows of agents, code and tools that people and LLMs write, check and improve."
 ---
 
-yian runs flows: YAML files that wire agents, code and tools into a fixed graph you can read
-before it runs. This page says what yian is for, shows a small flow, and points you to the rest
-of the docs.
+yian runs flows: YAML files that wire agents, code and tools into steps.
 
 ## What yian is
 
 You write the graph in a YAML file, and it doesn't change at run time. LLMs fill in values and
-choose among the tools you grant; they never add, skip or reorder steps.
+choose among the tools you grant. A model's answer can pick among the paths you wrote, but never
+adds a step.
 
-- **A fixed graph you can read before it runs.** Steps are wired together by data references
-  such as `${triage.output}`, so the file shows what runs and what waits for what.
+- **Wiring you can read.** Steps are wired mostly by data references such as
+  `${triage.output}`, so the file shows what runs and what waits for what.
 - **Typed values, checked at load.** Every input and output has a type. A flow whose parts don't
   fit fails before it calls a model.
 - **An append-only run log.** Each step is logged before it's applied, so a run resumes after a
   crash or a wait, and you can read what happened afterwards.
-- **Learning across runs.** Feedback on a run can improve the flow's prompts and memory for the
-  next one.
+- **Learning across runs.** Feedback on a run becomes lessons in the flow's memory, which agents
+  recall into their prompts on later runs.
 
 ## Goals and non-goals
 
@@ -59,9 +58,12 @@ $ yian run triage.yaml --input message="I was charged twice this month."
 {"label":"billing","reply":"Sorry about the double charge; we have refunded it."}
 ```
 
-- `input:` and `output:` give the flow typed boundaries, like a function.
+- `input:` and `output:` give the flow typed boundaries, like a function. Flow inputs take the
+  tag form `!str`, which can carry a default (`!int 3`); outputs take a plain type.
 - Each entry under `nodes:` is a step. `kind: agent` is a step backed by an LLM.
-- `reply` reads `${label.output}`, so it runs after `label`. You don't draw edges by hand.
+- A step's `input:` maps names to values (`${input.message}` is the flow's input); its prompt
+  reads those names (`${message}`).
+- `reply` reads `${label.output}`, so it runs after `label`. You don't draw that edge by hand.
 - `Literal(billing, bug, other)` makes the model answer with exactly one of those labels.
 
 ```mermaid

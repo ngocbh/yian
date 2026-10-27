@@ -1,4 +1,6 @@
 # approve-plan — ask the lead, then escalate to the manager when the lead doesn't answer.
+# It needs a host program: its asks pass `to:`, which the ask tool of `yian run` doesn't take,
+# so there is no `yian run` command for it.
 #
 # Each `ask` TOOL node asks with a deadline (`timeout:`). The host answers at once, or returns
 # `pending()` and answers later with `complete()`; a call still open at its deadline closes

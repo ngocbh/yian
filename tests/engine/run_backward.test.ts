@@ -1,74 +1,7 @@
 /**
- * Explicit public backward attempts over retained forward run authority: a port of
- * `tests/engine/test_run_backward.py`, through `runFlow`, `advance` and `RunResult.backward` in
- * an environment holding only the test's credential store. Memory keys are served by the shared
- * `FakeMemory` (Python's `_Memory`).
- *
- * Ported: `test_backward_without_memory_is_explicit_and_repeatable[memory]`, the backward half of
- * `test_forward_returns_before_any_learning_or_commit`,
- * `test_same_handle_rejects_nested_backward_before_a_second_commit`,
- * `test_same_handle_rejects_concurrent_backward_without_waiting` (2 rows),
- * `test_delayed_backward_anchors_the_log_at_acquisition` (4 rows),
- * `test_acquisition_uses_the_captured_locator_if_opener_changes_cwd` (2 rows),
- * `test_prefix_export_failure_preserves_primary_and_prevents_stale_retry` (6 rows),
- * `test_accepted_append_error_refreshes_the_actual_prefix` (8 rows),
- * `test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots`,
- * `test_terminal_resume_retains_mapping_references_without_opening_them`,
- * `test_cancelled_backward_retains_started_and_releases_resources`,
- * `test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation`,
- * `test_delayed_backward_uses_private_program_and_canonical_values` (2 rows),
- * `test_distinct_durable_handles_keep_file_lock_exclusion`,
- * `test_handle_guard_covers_prefix_export_and_log_cleanup` (2 rows),
- * `test_cleanup_error_preserves_finished_authority_and_releases_guard` (4 rows),
- * `test_invalid_feedback_on_stale_handle_preserves_its_observation` (2 rows),
- * `test_stale_handle_publishes_its_new_accepted_prefix_on_host_failure`,
- * `test_resumed_interrupted_observation_keeps_identity_on_invalid_feedback` (2 rows),
- * `test_nonretained_result_rejects_backward`, `test_terminal_resume_only_reconstructs_backward_outcome`,
- * `test_terminal_resume_inspects_every_unfinished_backward_prefix` (4 rows) and
- * `test_killed_attempt_does_not_block_a_later_attempt` (2 rows).
- *
- * Changed:
- * - `backward` is async and the guard is a flag, so "concurrent" is a second call while the first
- *   awaits its learner, and a nested call rejects (Python: a thread and a lock). Python's
- *   `RuntimeError` is an `Error`, its `ValueError` a `RangeError`, its `MemoryError` and other host
- *   faults an `Error`; the busy file lock is the `Error` naming the locked log (Python:
- *   `BlockingIOError`). Field names are camelCase (`inputFeedback`, `backwardOutcome`).
- * - The export and close faults patch `records()` and `close()` of the log class (Python:
- *   `__iter__` and `close`); the accepted-append fault patches `append`; the session close fault
- *   patches `FakeSession.prototype.close`; each is restored in `finally`. The opener changing the
- *   directory spies on `JsonlRunLog.create`/`resume`. Directory changes use `process.chdir`,
- *   restored after each test.
- * - `test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots`: `FakeSession`'s
- *   snapshot is frozen, so the row doesn't change it after the run (the recorded snapshot is still
- *   what each attempt restores).
- * - `test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation`: the mismatched
- *   restore returns a new session holding another snapshot (Python changes the opened session's).
- * - `test_delayed_backward_uses_private_program_and_canonical_values`: `runId` and `log` are
- *   read-only, so only the mutable values are changed.
- * - `test_cancelled_backward_retains_started_and_releases_resources`: one row, the learner throws an
- *   `AbortError` (JS has one cancellation error; Python's two rows are its two classes).
- * - `test_killed_attempt_does_not_block_a_later_attempt`: the child is this runtime running a
- *   script written to the test's directory, which blocks in a `FakeMemory` learner or a session's
- *   `commit` that writes a marker and never settles.
- *
- * TS-only: a run whose `env` sets a non-default `YIAN_*` value records it, and a later
- * `result.backward` (after `runFlow` or `advance` returned) replays in that `env` and bounds its
- * feedback by that `env`'s nesting limit (51 levels under a limit of 50 is a `TypeCheckError` that
- * appends nothing); a resume in another `env` is refused. `result.backward`'s `onEvent` receives an
- * AGENT backward model call's retry as one `ModelCallRetried` with consumer `backward`. A memory
- * and a durable log stamp a later `result.backward`'s records from the run's clock.
- *
- * Covered by a case: `test_backward_without_memory_is_explicit_and_repeatable[durable]`
- * (`backward/run_backward__backward_without_memory_is_repeatable`, whose runner writes a log),
- * the forward half of `test_forward_returns_before_any_learning_or_commit`
- * (`run-memory/run_backward__forward_never_learns`; its backward half is ported here),
- * `test_invalid_feedback_does_not_change_latest_outcome`
- * (`backward/backward_recovery__invalid_root_feedback_appends_nothing`) and
- * `test_failed_forward_and_successful_backward_have_separate_statuses`
- * (`backward/run_backward__a_failed_forward_and_a_successful_backward`).
- *
- * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
- * `backward.interrupted`.
+ * Explicit backward attempts over a retained forward run, through `runFlow`, `advance` and
+ * `RunResult.backward`, with memory keys served by the shared `FakeMemory`. An unfinished backward
+ * attempt fails `backward.unfinished`.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -216,7 +149,7 @@ test.each(["memory", "durable"])("a %s log stamps backward records from the run'
   expect(new Set(backward)).toEqual(new Set(["2026-10-20T14:00:00.000Z"]));
 });
 
-test("test_backward_without_memory_is_explicit_and_repeatable[memory]", async () => {
+test("backward without memory is explicit and repeatable (memory)", async () => {
   const result = await run(await loadFlow(IDENTITY), { text: "hello" }, { learnable: true });
   expect(result.backwardOutcome).toBeNull();
   expect(result.learning).toBeNull();
@@ -235,7 +168,7 @@ test("test_backward_without_memory_is_explicit_and_repeatable[memory]", async ()
   expect(result.backwardOutcome).toBe(again);
 });
 
-test("test_forward_returns_before_any_learning_or_commit (the backward half)", async () => {
+test("forward returns before any learning or commit (the backward half)", async () => {
   const path = join(dir, "run.jsonl");
   const memory = new FakeMemory();
   const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
@@ -265,7 +198,7 @@ test("test_forward_returns_before_any_learning_or_commit (the backward half)", a
   ]);
 });
 
-test("test_same_handle_rejects_nested_backward_before_a_second_commit", async () => {
+test("same handle rejects nested backward before a second commit", async () => {
   const rejected: unknown[] = [];
   let result: RunResult;
   const backend = new FakeMemory({
@@ -291,7 +224,7 @@ test("test_same_handle_rejects_nested_backward_before_a_second_commit", async ()
 });
 
 for (const durable of [false, true]) {
-  test(`test_same_handle_rejects_concurrent_backward_without_waiting[${durable}]`, async () => {
+  test(`same handle rejects concurrent backward without waiting (${durable})`, async () => {
     let enter!: () => void;
     const entered = new Promise<void>((resolve) => {
       enter = resolve;
@@ -332,7 +265,7 @@ for (const durable of [false, true]) {
 }
 
 for (const acquisition of ["fresh_event", "fresh_after", "resume_event", "resume_after"]) {
-  test(`test_delayed_backward_anchors_the_log_at_acquisition[${acquisition}]`, async () => {
+  test(`delayed backward anchors the log at acquisition (${acquisition})`, async () => {
     const acquired = join(dir, "acquired");
     const elsewhere = join(dir, "elsewhere");
     mkdirSync(acquired);
@@ -373,7 +306,7 @@ for (const acquisition of ["fresh_event", "fresh_after", "resume_event", "resume
 }
 
 for (const opening of ["create", "resume"] as const) {
-  test(`test_acquisition_uses_the_captured_locator_if_opener_changes_cwd[${opening}]`, async () => {
+  test(`acquisition uses the captured locator if opener changes cwd (${opening})`, async () => {
     const acquired = join(dir, "acquired");
     const elsewhere = join(dir, "elsewhere");
     mkdirSync(acquired);
@@ -412,7 +345,7 @@ for (const opening of ["create", "resume"] as const) {
 
 for (const durable of [false, true]) {
   for (const phase of ["learner", "commit", "finished"]) {
-    test(`test_prefix_export_failure_preserves_primary_and_prevents_stale_retry[${durable}-${phase}]`, async () => {
+    test(`prefix export failure preserves primary and prevents stale retry (${durable}-${phase})`, async () => {
       const primary = new Error(phase === "learner" ? "learner failed" : "backend failed");
       const exportError = new Error("prefix export failed");
       const closeError = new Error("log close failed");
@@ -473,7 +406,7 @@ const ACCEPTED_APPENDS = [
 
 for (const durable of [false, true]) {
   for (const [recordType, disposition] of ACCEPTED_APPENDS) {
-    test(`test_accepted_append_error_refreshes_the_actual_prefix[${durable}-${recordType.name}]`, async () => {
+    test(`accepted append error refreshes the actual prefix (${durable}-${recordType.name})`, async () => {
       const backend = new FakeMemory();
       const path = durable ? join(dir, "accepted.jsonl") : null;
       const flow = await loadFlow(WITH_MEMORY);
@@ -515,7 +448,7 @@ for (const durable of [false, true]) {
   }
 }
 
-test("test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots", async () => {
+test("each explicit attempt restores fresh sessions from recorded snapshots", async () => {
   const backend = new FakeMemory({ learnOutcomes: [declined(), []] });
   const replacement = new FakeMemory();
   const mapping = testMemory(backend);
@@ -535,7 +468,7 @@ test("test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots
   expect(replacement.sessions).toEqual([]);
 });
 
-test("test_terminal_resume_retains_mapping_references_without_opening_them", async () => {
+test("terminal resume retains mapping references without opening them", async () => {
   const path = join(dir, "terminal.jsonl");
   const flow = await loadFlow(WITH_MEMORY);
   const original = new FakeMemory();
@@ -564,7 +497,7 @@ test("test_terminal_resume_retains_mapping_references_without_opening_them", asy
   expect(original.learnContexts).toEqual([]);
 });
 
-test("test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation", async () => {
+test("failed snapshot restoration keeps interrupted prefix and observation", async () => {
   const path = join(dir, "restore.jsonl");
   const interrupted = new Error("interrupted learner");
   const backend = new FakeMemory({ learnOutcomes: [interrupted, []] });
@@ -600,7 +533,7 @@ test("test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation"
 });
 
 for (const durable of [false, true]) {
-  test(`test_delayed_backward_uses_private_program_and_canonical_values[${durable}]`, async () => {
+  test(`delayed backward uses private program and canonical values (${durable})`, async () => {
     const flow = await loadFlow(IDENTITY.replace("text: !str", "text: !object"));
     const supplied = { text: { items: [1, 2] } };
     const result = await run(flow, supplied, { learnable: true, log: durable ? join(dir, "private.jsonl") : null });
@@ -620,7 +553,7 @@ for (const durable of [false, true]) {
   });
 }
 
-test("test_distinct_durable_handles_keep_file_lock_exclusion", async () => {
+test("distinct durable handles keep file lock exclusion", async () => {
   const path = join(dir, "locked.jsonl");
   const errors: unknown[] = [];
   let second: RunResult;
@@ -647,7 +580,7 @@ test("test_distinct_durable_handles_keep_file_lock_exclusion", async () => {
 });
 
 for (const phase of ["export", "close"]) {
-  test(`test_handle_guard_covers_prefix_export_and_log_cleanup[${phase}]`, async () => {
+  test(`handle guard covers prefix export and log cleanup (${phase})`, async () => {
     const backend = new FakeMemory();
     const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
       learnable: true,
@@ -678,7 +611,7 @@ for (const phase of ["export", "close"]) {
 
 for (const resource of ["session", "log"]) {
   for (const learnerFails of [false, true]) {
-    test(`test_cleanup_error_preserves_finished_authority_and_releases_guard[${learnerFails}-${resource}]`, async () => {
+    test(`cleanup error preserves finished authority and releases guard (${learnerFails}-${resource})`, async () => {
       const backend = new FakeMemory({ learnOutcomes: learnerFails ? [declined(), []] : [] });
       const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
         learnable: true,
@@ -707,7 +640,7 @@ for (const resource of ["session", "log"]) {
   }
 }
 
-test("test_cancelled_backward_retains_started_and_releases_resources", async () => {
+test("cancelled backward retains started and releases resources", async () => {
   const failure = new DOMException("cancelled", "AbortError");
   const backend = new FakeMemory({ learnOutcomes: [failure, []] });
   const result = await run(await loadFlow(WITH_MEMORY), { text: "hello" }, {
@@ -727,7 +660,7 @@ test("test_cancelled_backward_retains_started_and_releases_resources", async () 
 });
 
 for (const previousFailure of [false, true]) {
-  test(`test_invalid_feedback_on_stale_handle_preserves_its_observation[${previousFailure}]`, async () => {
+  test(`invalid feedback on stale handle preserves its observation (${previousFailure})`, async () => {
     const path = join(dir, "stale.jsonl");
     const flow = await loadFlow(previousFailure ? WITH_MEMORY : IDENTITY);
     const backend = new FakeMemory({ learnOutcomes: [declined(), []] });
@@ -749,7 +682,7 @@ for (const previousFailure of [false, true]) {
   });
 }
 
-test("test_stale_handle_publishes_its_new_accepted_prefix_on_host_failure", async () => {
+test("stale handle publishes its new accepted prefix on host failure", async () => {
   const path = join(dir, "accepted.jsonl");
   const flow = await loadFlow(WITH_MEMORY);
   const failure = new Error("learner allocation failed");
@@ -774,7 +707,7 @@ test("test_stale_handle_publishes_its_new_accepted_prefix_on_host_failure", asyn
 });
 
 for (const otherFinishes of [false, true]) {
-  test(`test_resumed_interrupted_observation_keeps_identity_on_invalid_feedback[${otherFinishes}]`, async () => {
+  test(`resumed interrupted observation keeps identity on invalid feedback (${otherFinishes})`, async () => {
     const path = join(dir, "interrupted.jsonl");
     const flow = await loadFlow(WITH_MEMORY);
     const interrupted = new Error("interrupted learner");
@@ -802,7 +735,7 @@ for (const otherFinishes of [false, true]) {
   });
 }
 
-test("test_nonretained_result_rejects_backward", async () => {
+test("nonretained result rejects backward", async () => {
   const result = await run(await loadFlow(IDENTITY), { text: "hello" });
 
   const error = await rejected(result.backward("Review."));
@@ -813,7 +746,7 @@ test("test_nonretained_result_rejects_backward", async () => {
   expect(result.backwardOutcome).toBeNull();
 });
 
-test("test_terminal_resume_only_reconstructs_backward_outcome", async () => {
+test("terminal resume only reconstructs backward outcome", async () => {
   const path = join(dir, "run.jsonl");
   const flow = await loadFlow(WITH_MEMORY);
   const memory = new FakeMemory();
@@ -838,7 +771,7 @@ test("test_terminal_resume_only_reconstructs_backward_outcome", async () => {
 });
 
 for (const prefix of ["started", "ready", "requested", "confirmed"]) {
-  test(`test_terminal_resume_inspects_every_unfinished_backward_prefix[${prefix}]`, async () => {
+  test(`terminal resume inspects every unfinished backward prefix (${prefix})`, async () => {
     const path = join(dir, "prefix.jsonl");
     const flow = await loadFlow(WITH_MEMORY);
     const memory = new FakeMemory();
@@ -886,7 +819,7 @@ for (const prefix of ["started", "ready", "requested", "confirmed"]) {
 
 for (const phase of ["learn", "commit"]) {
   test(
-    `test_killed_attempt_does_not_block_a_later_attempt[${phase}]`,
+    `killed attempt does not block a later attempt (${phase})`,
     async () => {
       const path = join(dir, "run.jsonl");
       const marker = join(dir, "blocked");

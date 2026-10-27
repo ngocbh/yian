@@ -1,4 +1,4 @@
-// Ported from tests/cli/test_render_diagnostic.py: the format-neutral diagnostic renderer.
+// The format-neutral diagnostic renderer.
 
 import { describe, expect, test } from "bun:test";
 

@@ -1,18 +1,7 @@
 /**
  * How `readTypedefs` walks typedef references and bounds their nesting, and how deep a type
- * may nest once its typedef names are expanded, a port of `tests/engine/test_typedef_nesting.py`.
- * The flow-loading tests (`test_types_at_the_limit_load`, `test_a_flow_with_a_diamond_loads`,
- * `test_a_flow_with_a_long_chain_is_a_located_load_error` and
- * `test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error`) run through `loadFlow`
- * (`loadConformanceFlow`), the CODE node naming the conformance fixture `echo`, with union and
- * Optional field types quoted as Python quotes them; a stack overflow (Python's `RecursionError`)
- * is checked for in the error's causes. TS-only: the at-the-limit and diamond rows also check the
- * levels of the loaded node's output type.
- * Not ported: `test_field_parse_follows_the_int_digit_limit` (D4a: no digit limits);
- * `test_measuring_a_diamond_is_memoized` and the measure half of
- * `test_an_empty_record_and_an_enum_load` call private functions;
- * `test_measured_levels_match_the_resolved_type` checks the measured levels through
- * `readTypedefs` instead.
+ * may nest once its typedef names are expanded. The flow-loading rows run through `loadFlow`;
+ * a stack overflow is checked for in the error's causes.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -80,8 +69,7 @@ function flow(typedefs: Record<string, string>, output: string): string {
 
 /**
  * Render each typedef of `raw` as the flow-style YAML `flow` writes; a record field's `Union` or
- * `Optional` type is single-quoted, as Python's builders quote them (a comma would end a plain
- * flow scalar).
+ * `Optional` type is single-quoted (a comma would end a plain flow scalar).
  */
 function flowLines(raw: Raw): Record<string, string> {
   const quoted = (type: string) => (/^(Union|Optional)\(/.test(type) ? `'${type}'` : type);
@@ -354,7 +342,7 @@ describe("levels and chains", () => {
     expect(overflowed(error)).toBe(false);
   });
 
-  // Each typedef's levels as Python's `_measure_typedef` measures them.
+  // Each typedef's measured levels.
   const MEASURED: Raw = {
     E: {},
     V: "Literal(a, b)",

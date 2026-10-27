@@ -1,12 +1,7 @@
 /**
- * Run ids and the UTC clock seeded into a pool's `system` namespace, a port of
- * `tests/engine/test_seeding.py`.
- *
- * TS-only: the injected-clock rows, which pin the `isoformat()` spelling (the fraction only when
- * non-zero, microseconds from the fraction of a millisecond, a negative epoch, the year bounds
- * and exact arithmetic far from 1970), `todayUtc` of the same instants, one clock reading for
- * both `today` and `now`, seeding from the real clock (kinds only), and the `RangeError` for a
- * clock outside years 1 to 9999.
+ * Run ids and the UTC clock seeded into a pool's `system` namespace: the ISO 8601 spelling of an
+ * injected clock, `todayUtc`, one clock reading for both `today` and `now`, and the `RangeError` for
+ * a clock outside years 1 to 9999.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -19,7 +14,7 @@ import { ValueKind } from "../../src/typesys/values.ts";
 const AFTERNOON = Date.UTC(2026, 9, 18, 14, 30, 5);
 
 describe("the UTC clock", () => {
-  test("nowUtc is an ISO datetime in UTC (test_now_utc_is_iso_datetime)", () => {
+  test("nowUtc is an ISO datetime in UTC", () => {
     const now = nowUtc();
     parseDatetime(now);
     expect(now).toContain("T");
@@ -52,9 +47,9 @@ describe("the UTC clock", () => {
 
 describe("seeding the system namespace", () => {
   test(
-    "seedSystemClock seeds typed today and now (test_seed_system_clock_seeds_typed_today_and_now)",
+    "seedSystemClock seeds typed today and now",
     () => {
-      // An injected clock: Python compares with a second clock read, which races midnight.
+      // An injected clock: a second clock read to compare with could race midnight.
       const pool = new VariablePool();
       seedSystemClock(pool, AFTERNOON);
       expect(pool.system.get("today")!.kind).toBe(ValueKind.DATE);
@@ -81,7 +76,7 @@ describe("seeding the system namespace", () => {
 });
 
 describe("run ids", () => {
-  test("defaultRunId is a fresh hex id (test_default_run_id_is_a_fresh_nonempty_string)", () => {
+  test("defaultRunId is a fresh hex id", () => {
     const [a, b] = [defaultRunId(), defaultRunId()];
     expect(a).toMatch(/^[0-9a-f]{32}$/);
     expect(a).not.toBe(b);

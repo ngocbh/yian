@@ -1,12 +1,7 @@
 /**
- * A port of `tests/engine/test_run_resolved_keys.py`: a key from the environment or a saved login
- * stays out of every record when a provider echoes it.
- *
- * Ported: all 4 tests. The provider calls go through the real `chatModelFromConfig` with a
- * recording `send` (`recording`) that answers OpenAI's masked-key 401 (`keyEcho401`), where Python
- * routes the OpenAI client through `httpx.MockTransport`; the subscription row's model access throws
- * where Python patches `model_from_config`. The secret scan is `expectHidden`. Each row has its own
- * environment (`hostEnv`) and so its own credential store, which logins are saved to.
+ * A key from the environment or a saved login stays out of every record when a provider echoes
+ * it. Provider calls go through the real `chatModelFromConfig` with a recording `send` that answers
+ * OpenAI's masked-key 401 (`keyEcho401`); each row has its own environment and credential store.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";

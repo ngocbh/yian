@@ -1,40 +1,12 @@
 /**
- * Reference-wiring validation over every binding site of a built flow: a port of
- * `tests/engine/test_validate_refs.py`.
+ * Reference-wiring validation over every binding site of a built flow.
  *
  * `validateReferences` runs the reused leaf checker (`classifyPath`) and the shared field-read walk
  * over node input bindings, flow `output:` bindings and (through the desugared CASE wiring) each
  * `case`'s `on:`/`when:` data refs, and throws one `LoadError` carrying every located error. Two
  * loud mechanisms are pinned here: e01 (a dangling flow-output ref, `${scor.output}`) and e03 (a
  * field miss on an anonymous producer record). The rewritten node-local `__rN`/`__on` of a CASE are
- * never classified.
- *
- * Ported: `test_clean_seed01_passes`, `test_clean_case_seed02_passes`,
- * `test_clean_case_on_seed06_passes`, `test_wait_until_rejects_invalid_references_at_load` (4),
- * `test_wait_until_accepts_valid_reference_sources` (4),
- * `test_system_ambient_field_read_is_a_load_error` (3),
- * `test_system_ambient_field_read_in_case_when_is_a_load_error`,
- * `test_e01_dangling_flow_output_is_loud`, `test_dangling_flow_output_uses_supplied_range`,
- * `test_aggregate_location_uses_first_available_range`, `test_e03_unknown_field_on_anon_record_is_loud`,
- * `test_reference_walk_projects_type_without_replacing_contract_origins`,
- * `test_reference_walk_rejects_non_contract_producer_map_values`,
- * `test_prompt_l1_pool_ref_is_loud`, `test_prompt_l1_declared_input_passes`,
- * `test_case_dangling_data_ref_is_loud` and `test_case_node_local_ref_does_not_error`.
- *
- * Changed: the seeds are conformance cases (`load-agent/seed_01_structured_agent`,
- * `load-case/seed_02_case`, `load-case/seed_06_case_on`, `load-core/seed_e01_undeclared_ref`,
- * `load-types/seed_e03_unknown_field`), parsed with `nodesOf` and `fileOf` and built leaves first,
- * then cases, as Python's `_load` does, with an empty registry where Python's `_load` passes the
- * producer map in the `BuildContext` registry slot. The `load_flow` rows assemble with
- * `assembleText`. Python's `tests/engine/_fakes` `stamp_reads`/`derive_wiring` are the local
- * `withReads` and `wiringOf`. TS yian has no `wait`, so the two wait-until rows bind a `sleep`'s
- * `until` input. The inline CODE bodies are JavaScript (`String(inputs["t"])`). The
- * bad-producer row pins the whole `TypeError` message, and the pool-ref prompt row the whole
- * `LoadError` message.
- *
- * TS-only: the conformance cases of this file
- * (`load-core/engine_validate_refs__{system_run_id_field_read,wait_until_accepts_a_node_output,
- * wait_until_reads_an_unknown_flow_input,wait_until_reads_item_outside_a_map}`), each error with `full`.
+ * never classified. The seeds are conformance cases, built leaves first, then cases.
  */
 
 import { afterEach, expect, test } from "bun:test";

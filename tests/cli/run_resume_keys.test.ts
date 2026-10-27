@@ -1,22 +1,6 @@
 /**
- * `yian run --resume` checks the recorded provider keys before it writes: a port of
- * `tests/cli/test_run_resume_keys.py`, every test under its name.
- *
- * Changed:
- * - Python's patched `model_from_config` is a fake `fetch`: a model that answers "written offline"
- *   (a Responses stream for OpenAI, a chat-completions stream otherwise) or one that records the
- *   call and fails, the test then checking no call was made.
- * - Python's environment fixture is the command's env, holding only `HOME`, `YIAN_AUTH_FILE` and
- *   `XDG_CONFIG_HOME` under a temp directory (and the key a row sets); logins are saved through
- *   that env, and the unfinished run starts with the key in its own env.
- * - Python's patched `_prompt_request` is a fake TTY stdin with the keys typed ahead; the prompts
- *   are counted from its raw-mode switches. A typed key reaching the run is checked by the
- *   model call's `Authorization` header (Python reads `os.environ`).
- * - The saved-login row needing no environment key runs with a stdin that isn't a TTY, so a prompt
- *   can't be answered (Python makes the prompt fail).
- * - The host-key message says "a host's" for Python's "a Python host's".
- * - `test_resume_checks_saved_login_of_non_openai_provider` uses `xai`, whose chat-completions
- *   stream the fake speaks, for Python's `anthropic`.
+ * `yian run --resume` checks the recorded provider keys before it writes: environment keys, saved
+ * logins, keys typed at a prompt, and keys only the host can supply. The model is a fake `fetch`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -107,7 +91,7 @@ const CHAT_REPLY =
 /** The `Authorization` header of each model request. */
 let authorizations: (string | null)[];
 
-/** Answer the AGENT locally (Python's `_fake_model`). */
+/** Answer the AGENT locally. */
 async function fakeModel(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   const request = new Request(input as string, init);
   authorizations.push(request.headers.get("authorization"));
@@ -115,7 +99,7 @@ async function fakeModel(input: string | URL | Request, init?: RequestInit): Pro
   return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
 
-/** Each request the failing model got (Python's `_no_model`). */
+/** Each request the failing model got. */
 let reached: string[];
 
 /** Record that the run reached a model, and fail the call. */
@@ -147,8 +131,7 @@ function flowFile(dir = tmp, provider = "openai", text = FLOW): string {
 }
 
 /**
- * Record a run interrupted at `prep`, with `envVar` set to `key` only in its own env (Python's
- * `_unfinished_log`).
+ * Record a run interrupted at `prep`, with `envVar` set to `key` only in its own env.
  */
 async function unfinishedLog(
   flow: string,
@@ -200,7 +183,7 @@ function plain(text: string): string {
   return text.replace(ANSI, "").split(/\s+/).filter(Boolean).join(" ");
 }
 
-/** Assert the log is still recoverable and unlocked (Python's `_resumes_with_the_key`). */
+/** Assert the log is still recoverable and unlocked. */
 async function resumesWithTheKey(flow: string, log: string): Promise<void> {
   vars["OPENAI_API_KEY"] = "sk-fake";
   const result = await withFetch(fakeModel, () => resume(log));
@@ -208,7 +191,7 @@ async function resumesWithTheKey(flow: string, log: string): Promise<void> {
   expect(result.stdout).toContain("written offline");
 }
 
-test("test_resume_without_the_key_exits_before_writing", async () => {
+test("resume without the key exits before writing", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
@@ -224,7 +207,7 @@ test("test_resume_without_the_key_exits_before_writing", async () => {
   await resumesWithTheKey(flow, log);
 });
 
-test("test_resume_with_a_changed_key_exits_before_writing", async () => {
+test("resume with a changed key exits before writing", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
@@ -240,7 +223,7 @@ test("test_resume_with_a_changed_key_exits_before_writing", async () => {
   expect(reached).toEqual([]);
 });
 
-test("test_resume_prompts_for_a_missing_key_on_a_tty", async () => {
+test("resume prompts for a missing key on a tty", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
 
@@ -253,7 +236,7 @@ test("test_resume_prompts_for_a_missing_key_on_a_tty", async () => {
   expect(authorizations).toEqual(["Bearer sk-fake"]);
 });
 
-test("test_resume_rejects_a_typed_key_that_does_not_match", async () => {
+test("resume rejects a typed key that does not match", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
@@ -268,7 +251,7 @@ test("test_resume_rejects_a_typed_key_that_does_not_match", async () => {
   expect(reached).toEqual([]);
 });
 
-test("test_resume_reprompts_on_empty_answers_then_gives_up", async () => {
+test("resume reprompts on empty answers then gives up", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
@@ -281,7 +264,7 @@ test("test_resume_reprompts_on_empty_answers_then_gives_up", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_checks_other_providers_by_env_var", async () => {
+test("resume checks other providers by env var", async () => {
   const flow = flowFile(tmp, "anthropic");
   const log = await unfinishedLog(flow, { envVar: "ANTHROPIC_API_KEY", key: "sk-ant" });
   const before = readFileSync(log);
@@ -295,7 +278,7 @@ test("test_resume_checks_other_providers_by_env_var", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_on_a_saved_api_key_login_needs_no_environment_key", async () => {
+test("resume on a saved api key login needs no environment key", async () => {
   const flow = flowFile();
   await new AuthStore(null, { env }).save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
   const log = await unfinishedLog(flow, { envVar: null });
@@ -307,7 +290,7 @@ test("test_resume_on_a_saved_api_key_login_needs_no_environment_key", async () =
   expect(result.stdout).toContain("written offline");
 });
 
-test("test_agents_sharing_one_connection_get_one_prompt", async () => {
+test("agents sharing one connection get one prompt", async () => {
   const text = FLOW.replace(
     "output: ${write.output}",
     "  again:\n    kind: agent\n    input:\n      text: ${write.output}\n" +
@@ -323,7 +306,7 @@ test("test_agents_sharing_one_connection_get_one_prompt", async () => {
   expect(result.prompts).toBe(1);
 });
 
-test("test_resume_relays_a_reconnected_store_credential", async () => {
+test("resume relays a reconnected store credential", async () => {
   const flow = flowFile();
   const store = new AuthStore(null, { env });
   await store.save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
@@ -340,7 +323,7 @@ test("test_resume_relays_a_reconnected_store_credential", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_key_prompt_eof_leaves_the_log_unchanged", async () => {
+test("resume key prompt eof leaves the log unchanged", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
@@ -353,7 +336,7 @@ test("test_resume_key_prompt_eof_leaves_the_log_unchanged", async () => {
   await resumesWithTheKey(flow, log);
 });
 
-test("test_resume_key_prompt_ctrl_c_leaves_the_log_unchanged", async () => {
+test("resume key prompt ctrl c leaves the log unchanged", async () => {
   const flow = flowFile();
   const log = await unfinishedLog(flow);
   const before = readFileSync(log);
@@ -366,7 +349,7 @@ test("test_resume_key_prompt_ctrl_c_leaves_the_log_unchanged", async () => {
   await resumesWithTheKey(flow, log);
 });
 
-test("test_resume_of_a_host_key_run_points_to_python", async () => {
+test("resume of a host key run says the host must resume it", async () => {
   const flow = flowFile();
   const llmConfig = { provider: "openai", model: "m", api_key: "sk-h" };
   const log = await unfinishedLog(flow, { envVar: null, llmConfig });
@@ -381,7 +364,7 @@ test("test_resume_of_a_host_key_run_points_to_python", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_of_a_host_key_run_with_headers_names_both", async () => {
+test("resume of a host key run with headers names both", async () => {
   const flow = flowFile();
   const llmConfig = { provider: "openai", model: "m", api_key: "sk-h", headers: { "X-Gateway": "gw-6a1f" } };
   const log = await unfinishedLog(flow, { envVar: null, llmConfig });
@@ -395,7 +378,7 @@ test("test_resume_of_a_host_key_run_with_headers_names_both", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_of_a_login_saved_again_with_other_settings_fails", async () => {
+test("resume of a login saved again with other settings fails", async () => {
   const flow = flowFile();
   const store = new AuthStore(null, { env });
   const first = new ApiKeyCredentials("saved-key", { "X-Gateway": "gw-1" });
@@ -413,7 +396,7 @@ test("test_resume_of_a_login_saved_again_with_other_settings_fails", async () =>
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_terminal_resume_of_an_agent_run_skips_the_key_check", async () => {
+test("terminal resume of an agent run skips the key check", async () => {
   const flow = flowFile();
   const loaded = await loadFlow(readFileSync(flow, "utf8"), { searchPaths: [tmp] });
   const log = join(tmp, "finished.jsonl");
@@ -430,7 +413,7 @@ test("test_terminal_resume_of_an_agent_run_skips_the_key_check", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_checks_saved_login_of_non_openai_provider", async () => {
+test("resume checks saved login of non openai provider", async () => {
   const store = new AuthStore(null, { env });
   await store.save("xai", new ApiKeyCredentials("saved-xai"), "m", { makeDefault: false });
   const firstDir = join(tmp, "first");
@@ -471,7 +454,7 @@ test("test_resume_checks_saved_login_of_non_openai_provider", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_of_keyless_vllm_run_needs_no_key", async () => {
+test("resume of keyless vllm run needs no key", async () => {
   const flow = flowFile(tmp, "vllm");
   const log = await unfinishedLog(flow, { envVar: null });
 
@@ -486,7 +469,7 @@ const CALL_TIME_FLOW = FLOW.replace(
   "    prompt: \"Write about ${text}\"\n    llm_config: {model: '${prep.output}'}\n",
 ).replace("llm_config: {provider: PROVIDER, model: offline-model}", "llm_config: {provider: openai}");
 
-test("test_resume_of_a_call_time_host_key_selection_points_to_python", async () => {
+test("resume of a call time host key selection says the host must resume it", async () => {
   const flow = flowFile(tmp, "openai", CALL_TIME_FLOW);
   const llmConfig = { provider: "openai", api_key: "sk-h", headers: { "X-Gateway": "gw-6a1f" } };
   const log = await unfinishedLog(flow, { envVar: null, llmConfig });
@@ -504,7 +487,7 @@ test("test_resume_of_a_call_time_host_key_selection_points_to_python", async () 
   expect(readFileSync(log)).toEqual(before);
 });
 
-test("test_resume_of_a_call_time_selection_without_a_host_key_runs", async () => {
+test("resume of a call time selection without a host key runs", async () => {
   const flow = flowFile(tmp, "openai", CALL_TIME_FLOW);
   const log = await unfinishedLog(flow);
   expect(readFileSync(log, "utf8")).toContain('"call_time_llm"');

@@ -1,54 +1,6 @@
 /**
- * Silent replay of a historical log prefix through the live reducer: a port of
- * `tests/engine/test_run_recovery_prefixes.py`. Python's `ValueError` is a `RangeError` here.
- *
- * Ported, through `run.ts`'s `replayRunLog` (exported `@internal`) and `advance`, with flows
- * loaded from YAML whose CODE references resolve from the conformance fixtures, each pinning its
- * one class and full message: `test_replay_preserves_ordered_unfinished_starts_for_later_resume`,
- * `test_replay_rejects_invalid_prefix_roots` (3 rows),
- * `test_replay_rejects_log_identity_and_length_disagreement` and
- * `test_replay_rejects_records_after_terminal_without_touching_source`.
- *
- * Changed:
- * - `test_replay_requires_pristine_state`: the log is a live run of the fixtures' `flow()`.
- * - `test_historical_cursor_matches_each_envelopes_schema`: the cursor holds live TS log lines,
- *   not Python's recorded schema-9 bytes, since schema 13 is the only TS schema. It also pins the
- *   append past the prefix and the consumed envelopes `records()` and the iterator return.
- * - `test_replay_every_prefix_matches_live_state_and_uses_commit_path`: ESM bindings can't be
- *   patched, so the count of `commit_prepared` calls is not checked; the snapshots, the read-only
- *   source and the unchanged authored flow are.
- * - `test_replay_applies_logged_llm_map_before_rebuilding_growth`: replay takes no environment, so
- *   the "never reads a default" half (Python patches `connection_snapshot`) has nothing to patch.
- * - `test_recorded_public_resume_keeps_completed_code_and_wire[6]`: the prefix is the first 6
- *   lines of a live TS run's log (schema 13 is the only TS schema), and an accepted CODE rerun is
- *   caught by spying on `CodeNode.prototype.forward`; a resume in an environment whose
- *   `YIAN_DEFAULT_PROVIDER` and credential-store reads fail stands for the patched
- *   `connection_snapshot`.
- * - `test_replay_rejects_changed_but_valid_growth_digest`: the growth builder can't be patched, so
- *   the recorded `NodeExpanded` holds another valid digest instead of the builder making another
- *   fragment; the message is checked for "topology digest mismatch", as Python matches it.
- * - `test_fingerprint_mismatch_fails_before_copy_or_llm_apply`: `copyGraph` and
- *   `applyEffectiveLlmMap` can't be patched; the row checks the error and that the flow didn't
- *   change.
- * - `test_run_started_replay_rejects_pool_and_envelope_identity_drift`: records are frozen, so the
- *   drifted `RunStarted` is built anew with the other run id in its pool; the message is checked
- *   for `system.run_id`, as Python matches it.
- *
- * TS-only, the reducer cores of the rows above, through `replayRecords`: every prefix of a live
- * log replays to the live state after it; a replayed RunStarted keeps the recorded defaults and
- * call-time LLM config; an empty prefix, a first record that isn't RunStarted, a first sequence
- * that isn't 0, a sequence gap, a run-id change and a record after the terminal are refused; a
- * route to a handle that matches no edge throws the `RangeError` itself, not the live
- * `NodeDataError`.
- *
- * TS-only, through `runFlow`, `inspectRun` and `advance`: a two-worker run whose log refuses
- * appends after both `NodeStarted` records counts each node once, and its resume publishes a
- * `NodeAttemptResumed` for each, in start order.
- *
- * Not ported: none.
- *
- * Covered by a case: `test_recorded_public_resume_keeps_completed_code_and_wire[5]`
- * (`resume/run_recovery_prefixes__a_settled_node_does_not_run_again`).
+ * Silent replay of a historical log prefix through the live reducer (`replayRunLog`,
+ * `replayRecords`) and resume after it. Each rejected row pins its class and full message.
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -445,7 +397,7 @@ async function agentGrowthHistory(): Promise<{
   return { loaded, live: state, log, effective };
 }
 
-test("test_replay_every_prefix_matches_live_state_and_uses_commit_path", async () => {
+test("replay every prefix matches live state and uses commit path", async () => {
   const { loaded, log, snapshots } = await loadedLinearHistory();
   const envelopes = log.records();
   const originalManifest = flowManifest(loaded.compiled);
@@ -466,7 +418,7 @@ test("test_replay_every_prefix_matches_live_state_and_uses_commit_path", async (
   expect(flowManifest(loaded.compiled)).toEqual(originalManifest);
 });
 
-test("test_replay_preserves_ordered_unfinished_starts_for_later_resume", async () => {
+test("replay preserves ordered unfinished starts for later resume", async () => {
   const loaded = await load(FANOUT);
   const log = new MemoryRunLog(RECOVERY_RUN_ID);
   const state = startedRun(loaded, log, { numWorkers: 4 });
@@ -484,7 +436,7 @@ test("test_replay_preserves_ordered_unfinished_starts_for_later_resume", async (
   expect(recovered.numWorkers).toBe(4);
 });
 
-test("test_replay_applies_logged_llm_map_before_rebuilding_growth", async () => {
+test("replay applies logged llm map before rebuilding growth", async () => {
   const { loaded, live, log, effective } = await agentGrowthHistory();
   const originalManifest = flowManifest(loaded.compiled);
   const source = new ReadOnlyLog(log.records());
@@ -567,7 +519,7 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
   }
 });
 
-test("test_replay_rejects_changed_but_valid_growth_digest", async () => {
+test("replay rejects changed but valid growth digest", async () => {
   const { loaded, log } = await agentGrowthHistory();
   const envelopes = [...log.records()];
   const last = envelopes.pop()!;
@@ -581,7 +533,7 @@ test("test_replay_rejects_changed_but_valid_growth_digest", async () => {
   expect((caught as Error).message).toContain("topology digest mismatch");
 });
 
-test("test_replay_rejects_invalid_prefix_roots", async () => {
+test("replay rejects invalid prefix roots", async () => {
   const loaded = await load(LINEAR);
   const started = new NodeStartedRecord(START_ID);
 
@@ -598,7 +550,7 @@ test("test_replay_rejects_invalid_prefix_roots", async () => {
   );
 });
 
-test("test_replay_rejects_log_identity_and_length_disagreement", async () => {
+test("replay rejects log identity and length disagreement", async () => {
   const { loaded, log } = await loadedLinearHistory();
   const envelopes = log.records();
 
@@ -614,7 +566,7 @@ test("test_replay_rejects_log_identity_and_length_disagreement", async () => {
   );
 });
 
-test("test_fingerprint_mismatch_fails_before_copy_or_llm_apply", async () => {
+test("fingerprint mismatch fails before copy or llm apply", async () => {
   const { log } = await loadedLinearHistory();
   const source = new ReadOnlyLog(log.records());
   const changed = await load(LINEAR);
@@ -628,7 +580,7 @@ test("test_fingerprint_mismatch_fails_before_copy_or_llm_apply", async () => {
   expect(source.appendCalls).toBe(0);
 });
 
-test("test_replay_rejects_records_after_terminal_without_touching_source", async () => {
+test("replay rejects records after terminal without touching source", async () => {
   const { loaded, log } = await loadedLinearHistory();
   const trailing = MemoryRunLog.fromRecords(log.records());
   trailing.append(new NodeStartedRecord(START_ID));
@@ -641,7 +593,7 @@ test("test_replay_rejects_records_after_terminal_without_touching_source", async
   expect(source.nextSequence).toBe(trailing.nextSequence);
 });
 
-test("test_run_started_replay_rejects_pool_and_envelope_identity_drift", async () => {
+test("run started replay rejects pool and envelope identity drift", async () => {
   const { loaded, log } = await loadedLinearHistory();
   const records = log.records();
   // The run start's `system.run_id` commit holds the run id.

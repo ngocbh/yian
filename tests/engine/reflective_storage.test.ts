@@ -1,63 +1,7 @@
 /**
- * Optional reflective persistence preserves lessons and callback ownership: a port of
- * `tests/engine/test_reflective_storage.py`.
- *
- * Ported: `test_learned_lessons_and_limits_survive_reopen`,
- * `test_saved_snapshots_pin_model_but_new_sessions_use_host_config`,
- * `test_pristine_snapshot_adoption_keeps_constructor_model`,
- * `test_first_open_persists_identity_without_resolving_model`, `test_ambient_config_is_current_after_reopen`,
- * `test_none_storage_never_opens_sqlite`, `test_invalid_defaults_do_not_create_storage`,
- * `test_whole_commit_is_validated_before_saving`, `test_idle_handles_do_not_block_close_and_are_invalidated`,
- * `test_nonpristine_flags_survive_reopen`, `test_commit_tombstones_survive_removal_reset_and_stale_replay`,
- * `test_recorded_limits_survive_reopen`, `test_explicit_limits_must_match_stored_limits`,
- * `test_a_fresh_store_pins_its_default_limits`, `test_failed_save_never_publishes_candidate_ram`,
- * `test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary`,
- * `test_invalid_inventory_releases_ownership_without_rewriting`,
- * `test_actual_process_restart_restores_learned_lessons`,
- * `test_active_callback_blocks_close_without_holding_backend_lock`,
- * `test_structured_result_inspection_preserves_error_translation` and
- * `test_first_open_cleanup_preserves_cancellation_and_releases_owner`.
- *
- * TS-only: with `YIAN_TEST_NODE` set to a Node binary, the built backend reopens a store Bun wrote,
- * learns with a scripted model and commits under Node, and Bun reads the result back.
- *
- * Changed:
- * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
- *   variables, and each test starts from the built-in defaults. Python patches the module's
- *   `model_from_config`; here every backend's `createModel` delegates to the test's current
- *   `learner`, which `installModel(replies)` replaces: one `ScriptedModel` per call, answering the
- *   next reply.
- * - Python's `with ReflectiveMemory(...)` is `withMemory`, which opens the storage first (Python's
- *   `__enter__` runs an operation) and closes the backend in `finally`; `_first_open` runs the
- *   private `operation` guard with an empty body.
- * - `test_first_open_persists_identity_without_resolving_model`: an `env` that throws on any read
- *   stands in for forbidding `resolve_model_config`.
- * - `test_none_storage_never_opens_sqlite`: spies on `SQLiteStorage.prototype.load` and `save` that
- *   throw stand in for forbidding `sqlite3.connect`.
- * - `test_idle_handles_do_not_block_close_and_are_invalidated`: there is no `__enter__` row.
- * - `test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary`: the failure is injected by a
- *   spy on the storage's private connection's `exec` for `COMMIT`, where Python subclasses
- *   `sqlite3.Connection`; the cancel rows throw a non-`Error` value (Python's `KeyboardInterrupt`),
- *   and the other rows a SQLite driver-shaped error.
- * - `test_actual_process_restart_restores_learned_lessons`: a child `bun` process writes, where
- *   Python spawns a process; the Node block covers Node.
- * - `test_active_callback_blocks_close_without_holding_backend_lock`: a plain async test, where
- *   Python runs a thread in a spawned process. The phases are `construction` (`createModel`
- *   awaits), `invoke` (the scripted stream awaits) and `query` (`rewriteQuery` awaits); `structured`
- *   has no TS phase, since nothing is bound before the call.
- * - `test_structured_result_inspection_preserves_error_translation`: the model's `stream` getter
- *   throws, or gives no function, where Python's `invoke` property does.
- * - `test_first_open_cleanup_preserves_cancellation_and_releases_owner`: the primary is a thrown
- *   non-`Error` value from a spy on `SQLiteStorage.prototype.load` (the same failure path), where
- *   Python patches the module's `_parse_inventory`.
- * - JSON ints written into inventories and snapshots are `bigint`s; mutable copies are
- *   `structuredClone`s; `recall` and `learn` are async.
- *
- * Not ported: `test_fork_guard_precedes_inherited_backend_lock`,
- * `test_callback_fork_rejects_before_cleanup_acquires_inherited_lock`,
- * `test_callback_fork_cleanup_preserves_primary_exception` and
- * `test_callback_fork_contexts_preserve_primary_exception` (JS can't fork a live process, so there
- * is no fork guard); `test_context_cleanup_preserves_primary_exception` (there is no `with` form).
+ * Reflective memory's optional SQLite storage: lessons, limits and commit tombstones survive a
+ * reopen, failed saves publish nothing, and an active callback blocks close. With `YIAN_TEST_NODE`
+ * set, a store Bun wrote is reopened, learned into and committed under Node.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -109,7 +53,7 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** Python's `conftest.py` environment: an empty private store and an explicit model default. */
+/** The test environment: an empty private store and an explicit model default. */
 function baseEnv(overrides: Record<string, string> = {}): Env {
   const vars = new Map([
     ["YIAN_AUTH_FILE", path.join(dir, "auth.json")],
@@ -128,7 +72,7 @@ function reply(actions: readonly Action[]): Response {
 }
 
 /**
- * Python's `_install_model`: a `createModel` that records each config and returns a new
+ * A `createModel` that records each config and returns a new
  * `ScriptedModel` (named by the config) answering with the next reply of the shared list.
  */
 function installModel(replies: readonly Response[]) {
@@ -149,7 +93,7 @@ function installModel(replies: readonly Response[]) {
   };
 }
 
-/** Python's `_memory`: a backend over `CONFIG`, `baseEnv()` and the current learner. */
+/** A backend over `CONFIG`, `baseEnv()` and the current learner. */
 function newMemory(
   file: string | null = null,
   options: ConstructorParameters<typeof ReflectiveMemory>[0] = {},
@@ -195,13 +139,13 @@ function thrown(fn: () => unknown): unknown {
   throw new Error("expected a throw");
 }
 
-/** Open lazy storage without starting a run (Python's `_first_open`). */
+/** Open lazy storage without starting a run. */
 function firstOpen(memory: ReflectiveMemory): ReflectiveMemory {
   (memory as Mutable).operation(() => {});
   return memory;
 }
 
-/** Open `memory`'s storage, await `fn` with it and close it (Python's `with ReflectiveMemory(...)`). */
+/** Open `memory`'s storage, await `fn` with it and close it. */
 async function withMemory<T>(
   memory: ReflectiveMemory,
   fn: (memory: ReflectiveMemory) => T | Promise<T>,
@@ -214,7 +158,7 @@ async function withMemory<T>(
   }
 }
 
-/** Open a run, await `fn` with it and close it (Python's `with memory.open_run() as session`). */
+/** Open a run, await `fn` with it, and close it. */
 async function withRun<T>(
   memory: ReflectiveMemory,
   fn: (session: ReflectiveSession) => T | Promise<T>,
@@ -295,7 +239,7 @@ function storageOf(memory: ReflectiveMemory): SQLiteStorage {
   return (memory as Mutable).storage;
 }
 
-/** A copy of the publication fields of `memory`, in Python's `_ram_state` order. */
+/** A copy of the publication fields of `memory`, in a fixed order. */
 function ramState(memory: ReflectiveMemory): unknown[] {
   const m = memory as Mutable;
   return structuredClone([

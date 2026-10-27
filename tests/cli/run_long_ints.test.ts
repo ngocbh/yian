@@ -1,7 +1,5 @@
-// Ported from tests/cli/test_run_long_ints.py, the four `yian run` rows, inverted: Python refuses an
-// int past its 4300-digit limit at the inputs, while TS yian's ints are `bigint`s with no digit
-// limit, so a long int from `--input` or `--inputs` runs and prints whole. A lone long int in the
-// `--inputs` file is still not an object. The structured-prompt row comes with the prompts.
+// `yian run` takes a long int from `--input` or `--inputs` and prints it whole, since ints are
+// `bigint`s with no digit limit. A lone long int in the `--inputs` file is still not an object.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -100,7 +98,7 @@ test("inputs file holding a lone long int is not an object", async () => {
   expect(stderr).not.toMatch(/[0-9]{600}/);
 });
 
-test("input flag accepts an int at Python's limit", async () => {
+test("input flag accepts a 4,300-digit int", async () => {
   const flow = write("flow.yaml", INT_FLOW);
   const nines = "9".repeat(4300);
   const { code, stdout } = await runCli([flow, "-q", "-i", `n=${nines}`, "--log", join(tmp, "run.jsonl")]);

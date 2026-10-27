@@ -1,101 +1,13 @@
 /**
- * Value nesting at the binding boundary and in AGENT structured replies, a port of
- * `tests/engine/test_value_nesting_boundaries.py`.
+ * Value nesting at the binding boundary, in AGENT structured replies and tool arguments, in runs,
+ * loads, replay and backward learning.
  *
- * Ported: `test_apply_defaults_rejects_a_default_over_the_limit` and
- * `test_bind_params_rejects_a_filled_default_over_the_limit`.
- *
- * Ported at node level, through `evalNode` (`drive`) with a `ScriptedModel` from `models` where
- * Python runs a loaded flow: the non-session rows of
- * `test_a_structured_agent_over_the_limit_self_corrects_under_retries`,
- * `test_a_deep_native_reply_that_misses_the_schema_retries_on_the_schema_error`,
- * `test_an_exhausted_deep_native_schema_miss_is_located_at_the_field` and
- * `test_a_structured_agent_over_the_limit_without_retries_fails`.
- *
- * Changed: a structured reply still invalid once `retries:` are spent fails with code
- * `agent.output_invalid` (Python: `node.execute`). Both strategies check a reply's nesting before
- * its declared types, where Python's native strategy has the provider validate the schema first:
- * so `test_a_deep_native_reply_that_misses_the_schema_retries_on_the_schema_error` is corrected
- * naming the nesting under `t` (not `n`), and `test_an_exhausted_deep_native_schema_miss_is_located_at_the_field`
- * keeps the node origin (the nesting error has no path into the output). The agent self-correct rows run at levels
- * 101 and 1500 on both strategies, so they also stand for
- * `test_a_fallback_structured_value_over_the_limit_self_corrects` and
- * `test_a_native_structured_value_over_the_limit_self_corrects` (Python calls
- * `generate_structured` directly). `test_an_exhausted_fallback_structured_value_over_the_limit_is_located`:
- * TS's nesting error has no path into the output (see `structured_retry.test.ts`), so the exhausted
- * failure keeps the node origin, as the without-retries rows check.
- *
- * Ported the same way, the AGENT tool loop's argument checks: the `session=False` rows of
- * `test_tool_arguments_over_the_limit_fail_the_agent_before_any_call` and
- * `test_tool_arguments_over_the_limit_in_a_later_call_stop_every_call`, and the run half of
- * `test_tool_arguments_at_the_limit_run_and_are_learned_from`. A parsed `ToolCallPart` refuses
- * arguments past the limit, so an over-deep call is unparsed (`arguments: null` with its
- * `rawArguments`, or `ToolCallDelta`s the assembler leaves unparsed), as a provider's reply gives
- * it; the loop parses and checks it the same way. From `test_agent_nonfinite_replies.py`, their
- * depth analogs: `test_a_nonfinite_argument_in_a_later_call_stops_every_call_of_the_reply` (a
- * too-deep later call, streamed: no tool runs) and `test_live_events_show_the_model_call_but_no_tool_call`
- * (model brackets, no tool brackets). The non-finite rows of `test_agent_nonfinite_replies.py`
- * are Not ported: plain JSON replies and arguments can't hold `NaN` or `Infinity`.
- *
- * TS-only: an over-deep call on a final reply (text and no parsed call) fails it too.
- *
- * Not ported: the session rows of the agent tests above,
- * `test_a_native_session_value_at_the_limit_is_stored` and
- * `test_a_native_session_value_over_the_limit_is_not_stored_and_self_corrects` (TS yian has no
- * session memory).
- *
- * Ported through `runFlow` and `RunResult.backward`, with episodic memory from `buildMemories`:
- * the learning half of `test_tool_arguments_at_the_limit_run_and_are_learned_from`,
- * `test_a_model_value_at_the_limit_is_learned_from`,
- * `test_a_model_value_over_the_limit_self_corrects_and_backward_learns`,
- * `test_a_model_value_over_the_limit_fails_the_agent_and_backward_still_learns` (2 rows),
- * `test_tool_arguments_over_the_limit_fail_the_agent_and_backward_still_learns` (2 rows) and
- * `test_value_at_the_limit_learns_from_{an_output,an_input,a_record_output}`; without memory:
- * `test_backward_rejects_feedback_over_the_limit_and_stays_usable`. Changed: the backward runs at
- * the test's own stack depth (Python lowers the recursion limit by 300 frames; JS has no such
- * knob). The model is a native `ScriptedModel` from `models`, answering the structured value as
- * text (Python patches a structured-output fake). The exhausted structured value fails
- * `agent.output_invalid` (Python: `node.execute`), as above. CODE bodies are TypeScript; the
- * feedback over the limit is a `TypeCheckError` (Python's `ValueError`).
- *
- * Ported through `loadFlow`: `test_an_agent_variable_default_over_the_limit_fails_at_load` and
- * `test_a_start_default_over_the_limit_fails_at_load`, pinning the whole message where Python
- * matches fragments.
- *
- * Ported through `runFlow` (inline CODE bodies JavaScript; `deep_tree` the TS fixture
- * `./fixtures/compose_codefns.ts:deep_tree`), each run in `hostEnv`:
- * `test_a_record_output_at_the_limit_succeeds`, `test_a_record_output_over_the_limit_fails_at_the_field`,
- * `test_a_far_too_deep_inline_output_fails_without_raising`,
- * `test_a_far_too_deep_reference_output_fails_on_depth`, `test_an_untyped_output_over_the_limit_fails`,
- * `test_a_map_result_list_at_the_limit_succeeds`, `test_a_run_input_record_may_carry_a_value_at_the_limit`,
- * `test_a_run_input_over_the_limit_is_rejected_before_the_run_starts`,
- * `test_a_binding_around_a_value_at_the_limit_fails_its_node`,
- * `test_a_value_template_around_a_value_at_the_limit_fails_its_node`,
- * `test_a_call_bound_to_a_value_at_the_limit_succeeds`,
- * `test_a_call_bound_over_the_limit_fails_the_call_not_its_start`,
- * `test_a_map_over_list_around_a_value_at_the_limit_fails_the_map` and
- * `test_replay_accepts_a_value_recorded_before_the_limit`. Changed: the run-input error is a
- * `TypeCheckError` (Python's subclass `ValueError` too). The replay row's recording run reads the
- * process's installed values, which take `MAX_VALUE_NESTING` 150 unchecked as Python's
- * `set_defaults.unchecked` does (a `YIAN_*` value in a run's `env` is range-checked, and 100 is
- * the maximum); its resume runs in `hostEnv`; the old log's `defaults` is `{}`, since TS's
- * `run_started` requires the field (Python drops it).
- *
- * TS-only, next to the CALL row and pinned to Python's results for the same flows: a MAP whose
- * input binds a value at the limit succeeds, and a LOOP carrying one fails `contract.output` at its
- * body's end (the body's output record adds a level), not `contract.growth`. They check that a
- * growth seed's two containers don't count toward the value's nesting (MAP: list, then record;
- * LOOP: pair, then record). Also pinned to Python's result: a CODE result over the limit meets the
- * node's post-asserts before the commit refuses it (the worker copies it back first). Changed: a
- * result too deep to copy back from the worker (over 1,000 levels) fails `contract.output` there,
- * with the commit's message and trace, before its post-asserts (Python checks them first).
- *
- * Covered by the harvested run cases (the same flows and results):
- * `run-core/engine_value_nesting_boundaries__an_untyped_output_at_the_limit_flows_out_whole`,
- * `run-core/engine_value_nesting_boundaries__a_map_result_list_over_the_limit_fails`
- * (`test_a_map_result_list_over_the_limit_fails_at_the_map_end`) and
- * `run-core/engine_value_nesting_boundaries__a_record_flow_output_past_the_limit_fails`
- * (`test_a_record_flow_output_around_a_value_at_the_limit_fails_at_end`).
+ * Both structured strategies check a reply's nesting before its declared types, and a nesting error
+ * has no path into the output, so an exhausted failure keeps the node origin. A growth seed's two
+ * containers don't count toward the value's nesting (MAP: list, then record; LOOP: pair, then
+ * record). A CODE result over the limit meets the node's post-asserts before the commit refuses it;
+ * one too deep to copy back from the worker (over 1,000 levels) fails `contract.output` there,
+ * before its post-asserts.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -185,12 +97,12 @@ output: \${deep.output}
 `;
 }
 
-/** Python's `_memory_flow`: `text` loaded with episodic long-term memory declared on the flow. */
+/** `text` loaded with episodic long-term memory declared on the flow. */
 function memoryFlow(text: string) {
   return loadFlow(text.replace("name: nesting\n", "name: nesting\nlong_term_memory: episodic\n"));
 }
 
-/** Python's `_assert_learns`: a memory run of `flow` on `inputs` succeeds and learns from `feedback`. */
+/** A memory run of `flow` on `inputs` succeeds and learns from `feedback`. */
 async function expectLearns(
   flow: Awaited<ReturnType<typeof loadFlow>>,
   inputs: Record<string, unknown>,
@@ -658,7 +570,7 @@ output: \${c.output}
 const dir = mkdtempSync(join(tmpdir(), "yian-value-nesting-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/** Return a flow whose `deep` CODE node runs the inline `body` (Python's `_code_flow`). */
+/** Return a flow whose `deep` CODE node runs the inline `body`. */
 function codeFlow(body: string, options: { outputLine?: string; flowOutput?: string } = {}): string {
   const { outputLine = "", flowOutput = "${deep.output}" } = options;
   const indented = body
@@ -875,7 +787,7 @@ test("a value template around a value at the limit fails its node", async () => 
   expectBindingTooDeep(await run(text, { x: nestRecord(100) }), "c", "input 'y' at w.a");
 });
 
-/** A flow whose `k` CALL binds the def input `y: declared` to `binding` (Python's `_call_flow`). */
+/** A flow whose `k` CALL binds the def input `y: declared` to `binding`. */
 const callFlow = (binding: string, declared: string) => `
 id: nesting
 name: nesting

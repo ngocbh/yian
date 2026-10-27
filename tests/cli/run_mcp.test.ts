@@ -1,32 +1,7 @@
 /**
- * `yian run` starts the MCP servers a flow needs from `~/.yian/mcp.json` and `--mcp-config`: a port
- * of `tests/cli/test_run_mcp.py`, over the fake server in `tests/fixtures/mcp/`.
- *
- * Ported under their names: every row.
- *
- * Changed:
- * - Python's `isolated_cli_home` fixture is `HOME` in the command's env; each run gets a fresh
- *   `--log` in the temp dir.
- * - Python's `_assert_no_children` checks no MCP thread runs; TS has none, so it waits for each
- *   recorded pid to exit, and `afterAll` checks no fake server is left.
- * - Python's patched `model_from_config` is a fake `fetch` answering as an OpenAI-compatible chat
- *   endpoint (xAI's route, its key and the default provider and model in the command's env); the
- *   bound tools are the first request's `tools`.
- * - `_open_mcp_servers` is `openMcpServers`, which runs a body with the selected servers (Python:
- *   a context manager); its stop is an `AbortSignal` (Python: a `threading.Event`).
- * - The registered tool the server shadows is one this test registers (Python: `read_flow`).
- * - The missing SDK is a patched `McpServer.prototype.open` throwing the SDK's error (Python: a
- *   patched `_run_flow_controlled` raising `ImportError`); for another error `main` prints its
- *   stack (Python: the `ImportError` escapes the runner).
- * - Config warnings have no `UserWarning` to leak; that row checks only the `warning:` line.
- * - The missing ids print in the text form (`["echo"]`, decision 43), not Python's list repr; a
- *   TS-only row checks the `--json` document's `run.setup` error keeps the notes.
- * - The crash before a resume is a frozen log: the local `whoami` tool freezes every durable log,
- *   whose next append throws, and the run rejects with it (Python: the tool raises
- *   `_SimulatedCrash`). A resume names no flow file: it runs the flow the log recorded.
- *
- * TS-only: a resume opens the server and reads the skill of the flow the log recorded, not of the
- * flow file edited since, and `yian run <flow> --resume <log>` is a usage error.
+ * `yian run` starts the MCP servers a flow needs from `~/.yian/mcp.json` and `--mcp-config`, over
+ * the fake server in `tests/fixtures/mcp/`, and a resume opens the servers of the flow the log
+ * recorded. Each run waits for every recorded server pid to exit.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -174,7 +149,7 @@ function flat(text: string): string {
 }
 
 test(
-  "test_a_tool_node_calls_a_server_from_mcp_config",
+  "a tool node calls a server from mcp config",
   async () => {
     const pid = marker();
     const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
@@ -190,7 +165,7 @@ test(
 );
 
 test(
-  "test_a_tool_node_calls_an_http_server",
+  "a tool node calls an http server",
   async () => {
     const http = await startHttpServer();
     let result;
@@ -208,7 +183,7 @@ test(
 );
 
 test(
-  "test_the_user_config_is_read_and_a_flag_file_replaces_its_server",
+  "the user config is read and a flag file replaces its server",
   async () => {
     const flow = toolFlow();
     const pid = marker();
@@ -234,7 +209,7 @@ test(
 );
 
 test(
-  "test_a_flow_without_tools_starts_no_server",
+  "a flow without tools starts no server",
   async () => {
     const pid = marker();
     const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
@@ -249,7 +224,7 @@ test(
 );
 
 test(
-  "test_unused_servers_with_colliding_tools_dont_fail_the_run",
+  "unused servers with colliding tools dont fail the run",
   async () => {
     const files = { a: marker("a.pid"), b: marker("b.pid"), c: marker("c.pid") };
     const cfg = config(join(tmp, "cfg.json"), {
@@ -270,7 +245,7 @@ test(
 );
 
 test(
-  "test_a_tool_id_named_like_a_server_still_probes_for_the_tool",
+  "a tool id named like a server still probes for the tool",
   async () => {
     const files = { echo: marker("echo.pid"), fake: marker("fake.pid") };
     const cfg = config(join(tmp, "cfg.json"), {
@@ -290,7 +265,7 @@ test(
 );
 
 test(
-  "test_a_granted_server_that_supplies_the_missing_tool_skips_probing",
+  "a granted server that supplies the missing tool skips probing",
   async () => {
     const fakePid = marker("fake.pid");
     const otherPid = marker("other.pid");
@@ -333,7 +308,7 @@ const DONE =
     .join("") + "data: [DONE]\n\n";
 
 test(
-  "test_an_agent_grant_starts_only_the_granted_server",
+  "an agent grant starts only the granted server",
   async () => {
     const bound: string[][] = [];
     const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
@@ -377,7 +352,7 @@ output: \${call.output}
 `;
 
 test(
-  "test_resume_re_supplies_the_servers",
+  "resume re supplies the servers",
   async () => {
     const flow = flowFile(WHOAMI_FLOW);
     const log = join(tmp, "run.jsonl");
@@ -418,7 +393,7 @@ test(
 );
 
 test(
-  "test_resuming_a_finished_run_starts_no_granted_server",
+  "resuming a finished run starts no granted server",
   async () => {
     const flow = flowFile(AGENT_FLOW);
     const log = join(tmp, "run.jsonl");
@@ -506,7 +481,7 @@ test(
   SLOW,
 );
 
-test("test_a_bad_config_exits_with_its_message", async () => {
+test("a bad config exits with its message", async () => {
   const cfg = join(tmp, "cfg.json");
   writeFileSync(cfg, "{not json");
 
@@ -517,7 +492,7 @@ test("test_a_bad_config_exits_with_its_message", async () => {
 });
 
 test(
-  "test_a_needed_server_that_fails_to_open_exits_naming_it",
+  "a needed server that fails to open exits naming it",
   async () => {
     const cfg = config(join(tmp, "cfg.json"), { broken: { command: join(tmp, "missing") } });
 
@@ -573,7 +548,7 @@ test(
 );
 
 test(
-  "test_a_broken_server_the_flow_doesnt_need_is_a_warning",
+  "a broken server the flow doesnt need is a warning",
   async () => {
     const pid = marker();
     const cfg = config(join(tmp, "cfg.json"), {
@@ -594,7 +569,7 @@ test(
   SLOW,
 );
 
-test("test_a_flow_that_needs_no_mcp_tool_reads_no_config", async () => {
+test("a flow that needs no mcp tool reads no config", async () => {
   const flow = flowFile(PLAIN_FLOW);
   mkdirSync(join(home, ".yian"));
   writeFileSync(join(home, ".yian", "mcp.json"), "{not json");
@@ -610,7 +585,7 @@ test("test_a_flow_that_needs_no_mcp_tool_reads_no_config", async () => {
 });
 
 test(
-  "test_config_warnings_print_as_warning_lines",
+  "config warnings print as warning lines",
   async () => {
     const cfg = config(join(tmp, "cfg.json"), { fake: { ...stdio(), timeout: 5 } });
 
@@ -624,7 +599,7 @@ test(
   SLOW,
 );
 
-test("test_a_stop_while_servers_start_opens_no_more", async () => {
+test("a stop while servers start opens no more", async () => {
   const files = { a: marker("a.pid"), b: marker("b.pid") };
   const cfg = config(join(tmp, "cfg.json"), { a: stdio("--marker", files.a), b: stdio("--marker", files.b) });
   const servers = loadMcpConfig([cfg], () => undefined);
@@ -647,7 +622,7 @@ test("test_a_stop_while_servers_start_opens_no_more", async () => {
   expect(warned).toEqual([]);
 });
 
-test("test_a_server_named_like_a_registered_tool_exits", async () => {
+test("a server named like a registered tool exits", async () => {
   const shadowed = new FunctionTool({
     name: "shadowed",
     description: "A registered tool a server may not shadow.",
@@ -672,7 +647,7 @@ test("test_a_server_named_like_a_registered_tool_exits", async () => {
   expect(existsSync(pid)).toBe(false);
 });
 
-test("test_a_server_named_ask_user_exits", async () => {
+test("a server named ask user exits", async () => {
   const cfg = config(join(tmp, "cfg.json"), { ask_user: stdio() });
 
   const result = await run([toolFlow(), "--mcp-config", cfg]);
@@ -690,7 +665,7 @@ test("a server named after a built-in exits", async () => {
   expect(result.output).toContain(`${cfg}: server 'take': the name is reserved`);
 });
 
-test("test_a_later_file_disables_a_user_server", async () => {
+test("a later file disables a user server", async () => {
   const pid = marker();
   config(join(home, ".yian", "mcp.json"), { fake: stdio("--marker", pid) });
   const cfg = config(join(tmp, "cfg.json"), { fake: { disabled: true } });
@@ -702,7 +677,7 @@ test("test_a_later_file_disables_a_user_server", async () => {
   expect(existsSync(pid)).toBe(false);
 });
 
-test("test_only_the_missing_mcp_sdk_import_error_is_a_host_error", async () => {
+test("only the missing mcp sdk import error is a host error", async () => {
   const cfg = config(join(tmp, "cfg.json"), { fake: stdio() });
   const flow = toolFlow();
   const open = McpServer.prototype.open;

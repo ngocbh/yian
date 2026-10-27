@@ -1,80 +1,7 @@
 /**
  * A flow output that reads a node CASE routing may skip gets the explicit null default, so it
- * returns null when that node is skipped, and arithmetic on such a value is a load error: a port
- * of `tests/engine/test_skipped_flow_outputs.py`, assembling each load-only flow with
- * `assembleText` where Python calls `load_flow`, and loading each run with `loadFlow`.
- *
- * Ported, the compiled output sources (Python's `_sources`) and the runs (`_run`):
- * `test_record_output_of_a_skipped_branch_is_null`,
- * `test_coalesce_over_a_routing_only_case_is_null`, `test_value_mode_output_is_null`,
- * `test_dotted_output_is_null`, `test_ref_default_group_over_a_routing_only_case_is_null`,
- * `test_depends_on_a_case_runs_on_every_branch`, `test_coalesce_over_an_exhaustive_case_is_unchanged`,
- * `test_case_output_of_an_exhaustive_case_is_unchanged`,
- * `test_case_output_over_a_value_entry_branch_is_unchanged`,
- * `test_case_output_over_an_inner_case_is_unchanged`,
- * `test_case_output_over_an_inner_case_and_a_value_entry_is_unchanged`,
- * `test_root_node_output_is_unchanged`, `test_reader_of_an_exhaustive_join_is_unchanged`,
- * `test_literal_output_is_unchanged`, `test_embedded_template_is_unchanged`,
- * `test_comparison_is_unchanged`, `test_on_over_a_nullable_literal_may_match_nothing` (2),
- * `test_on_over_a_literal_input` (3), `test_defs_child_returns_null_to_its_caller` and
- * `test_map_body_routing_on_a_literal_item_is_not_rewritten` (the inline MAP body's outputs).
- * Also `test_rewritten_output_fingerprints_as_the_explicit_null_default` (`flowFingerprint`).
- *
- * Ported, the run-only rows: `test_nested_case_target_is_null_when_either_case_skips_it`,
- * `test_depends_on_a_skipped_target_is_null`, `test_then_call_target_is_null`,
- * `test_call_node_target_is_null`, `test_loop_node_target_is_null`, `test_map_node_target_is_null`,
- * `test_typed_output_over_a_skipped_branch_fails_at_runtime`,
- * `test_optional_typed_output_over_a_skipped_branch_is_null`,
- * `test_typed_argument_narrows_a_skipped_child_output_at_runtime`,
- * `test_inline_loop_sets_a_skipped_field_to_null`,
- * `test_inline_loop_over_a_typed_str_seed_rejects_the_null_next_iteration`,
- * `test_inline_loop_over_an_optional_seed_carries_the_null` (2),
- * `test_named_loop_body_sets_a_skipped_field_to_null`,
- * `test_map_inline_body_returns_null_per_skipped_element`, `test_replay_returns_the_same_null`
- * (with `advance`) and `test_child_routing_on_a_literal_input_passes_to_a_str_input`.
- *
- * Ported, the load-time rows (all errors but the comparison, which loads):
- * `test_inline_loop_over_an_untyped_seed_asks_for_its_type` (the loop
- * type contract raises it, since the skip makes the body field `Optional(str)`),
- * `test_arithmetic_on_a_skipped_output_is_a_load_error`,
- * `test_arithmetic_in_a_node_input_that_still_runs_is_a_load_error`,
- * `test_arithmetic_in_an_embedded_template_is_a_load_error`,
- * `test_arithmetic_in_a_case_on_is_a_load_error`,
- * `test_unary_minus_and_power_on_a_skipped_output_are_load_errors` (2),
- * `test_arithmetic_on_a_coalesce_of_routing_only_targets_is_a_load_error`,
- * `test_comparison_on_a_skipped_output_loads`, `test_hint_names_a_placeholder_default`,
- * `test_hint_replaces_a_null_default`, `test_arithmetic_in_a_searched_when_under_a_default_is_a_load_error`,
- * `test_arithmetic_on_a_null_default_in_a_searched_when_is_a_load_error`,
- * `test_arithmetic_in_a_map_over_names_map_over`, `test_arithmetic_in_a_wait_until_names_wait_until`
- * and `test_arithmetic_in_a_default_is_checked_as_if_it_always_runs`. Ported, loaded and run:
- * `test_arithmetic_in_a_node_that_co_skips_loads`,
- * `test_arithmetic_in_a_node_routed_by_a_case_on_the_value_loads`,
- * `test_arithmetic_on_a_node_that_depends_on_a_case_loads`, `test_arithmetic_on_a_defaulted_value_loads`,
- * `test_arithmetic_on_an_exhaustive_join_loads`, `test_arithmetic_on_an_input_loads`,
- * `test_arithmetic_on_a_node_that_cannot_be_skipped_runs`,
- * `test_arithmetic_on_a_defaulted_value_in_a_searched_when_loads`,
- * `test_plain_arithmetic_in_a_searched_when_loads`,
- * `test_isinstance_guard_in_a_searched_when_over_a_skippable_union_routes` and
- * `test_arithmetic_on_a_join_over_a_literal_input_loads`.
- *
- * The harvested `load-case/engine_skipped_flow_outputs__*` cases are pinned at the end.
- *
- * Changed: CODE bodies are TS, and ints reach them as numbers; a flow's int output is a `bigint`,
- * so the literal output `5` reads as `5n`. In `test_replay_returns_the_same_null` each CODE body
- * appends its node id to a file, where Python patches the code functions its references name to
- * record it. The fingerprint row's second half stubs `null_skipped_outputs` in Python's pipeline
- * module to fingerprint the flow without the rewrite; a test can't stub a function another ES
- * module imports, so it puts the authored output source back on a fresh assembly by hand (END's
- * edge keeps the optional stance the rewrite gave it, so only the output source differs). The
- * error rows pin the whole message where Python checks fragments. TS yian has no `wait`, so
- * `test_arithmetic_in_a_wait_until_names_wait_until` uses a `sleep`, whose message names its
- * `until` input.
- *
- * Ported, reading a `defs:` child's own output contract (through `assembleText`, whose callable
- * scope builds the def): `test_call_output_of_a_skipped_branch_is_optional`,
- * `test_call_output_of_a_coalesce_over_a_routing_only_case_is_optional`,
- * `test_call_output_of_a_dotted_skipped_read_is_optional` and
- * `test_passing_a_skipped_child_output_to_a_str_input_is_a_load_error`.
+ * returns null when that node is skipped, and arithmetic on such a value is a load error. CODE
+ * bodies are TS, and ints reach them as numbers; a flow's int output is a `bigint`.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -595,7 +522,7 @@ test("a map inline body returns null per skipped element", async () => {
 
 test("a replay returns the same null", async () => {
   // Resuming a finished run that returned a skipped null replays it without running code. Each
-  // CODE body appends its node id to `seen`, as Python's patched code functions record it.
+  // CODE body appends its node id to `seen`.
   const dir = mkdtempSync(join(tmpdir(), "yian-skipped-replay-"));
   try {
     const seen = join(dir, "seen.txt");
@@ -785,7 +712,7 @@ test("the rewritten output fingerprints as the explicit null default", () => {
   const rewritten = flowFingerprint(assembleText(flow(R1, "\n  order: ${order.output}")).flow.compiled);
   const explicit = assembleText(flow(R1, "\n  order: ${order.output:-null}")).flow.compiled;
   expect(rewritten).toBe(flowFingerprint(explicit));
-  // Python reloads with the rewrite switched off; an ES module import can't be swapped, so a fresh
+  // An ES module import can't be swapped to switch the rewrite off, so a fresh
   // assembly gets its authored output source back by hand.
   const plain = assembleText(flow(R1, "\n  order: ${order.output}")).flow.compiled;
   plain.outputs = plain.outputs.map((output) => new FlowOutput(output.name, "${order.output}"));

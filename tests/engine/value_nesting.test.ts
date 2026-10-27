@@ -1,18 +1,7 @@
 /**
  * How deep a value may nest and which entry of a value refers back to a container enclosing
- * it, a port of `tests/engine/test_value_nesting.py` (`rejectDeepNesting`,
- * `recursiveEntryPath`). The levels are arrays, records and `FileRef`s; a `TypedValue` is
- * unwrapped.
- *
- * TS-only: `rejectLoneSurrogates`, which refuses text or a record key holding a lone
- * surrogate on the same walk.
- *
- * Also here: `test_limit_overrides.py::test_value_nesting_follows_the_variable`.
- *
- * Not ported: `test_tuple_dataclass_and_model_each_count_as_a_level` and
- * `test_model_extras_are_direct_children` (no tuples, dataclasses or pydantic models in TS),
- * and the `reject_non_text_keys` tests (a record key is always a string, so it has no TS
- * counterpart).
+ * it (`rejectDeepNesting`, `recursiveEntryPath`), and `rejectLoneSurrogates` on the same walk.
+ * The levels are arrays, records and `FileRef`s; a `TypedValue` is unwrapped.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -161,7 +150,6 @@ describe("rejectDeepNesting", () => {
     expect(error.message).toBe(message("a.a.a", 3));
   });
 
-  // From test_limit_overrides.py::test_value_nesting_follows_the_variable.
   test("value nesting follows the variable", () => {
     reload((name) => (name === "YIAN_MAX_VALUE_NESTING" ? "3" : undefined));
     rejectDeepNesting(nest(3), "output");
@@ -187,7 +175,6 @@ describe("recursiveEntryPath", () => {
     const inner: { [key: string]: Value } = {};
     const record = { a: inner };
     inner["b"] = record;
-    // Python's pair holds a tuple; a list here (no tuples in TS).
     const pair: Value[] = [];
     pair.push(["x", pair]);
 

@@ -1,23 +1,7 @@
 /**
- * `runFlow`/`advance` `skills`: early checks and durable resume with on-demand skills; a port
- * of `tests/engine/test_run_skills.py`.
- *
- * Ported: every test, through `loadFlow`, `runFlow` and `advance` (`runWith`, `resumeWith`),
- * with a `ScriptedModel` serving every AGENT and the skills read by `loadSkills` from a temp root.
- *
- * Changed:
- * - `FLOW` has `llm_config: {provider: openai, model: test-model}`, since a run refuses an AGENT
- *   without a provider at start (Python patches the model builder instead).
- * - The early checks throw a `RangeError` where Python raises `ValueError`; a skills mapping is a
- *   `Map`, a hand-made skill a `new Skill({...})`; a list of names in a message is written in the
- *   text form (`["release-notes"]`, Python `['release-notes']`).
- * - `test_load_skill_runs_through_a_session_conversation` runs without the session memory TS yian
- *   doesn't have, so it checks the result the next request reads, not the stored effects.
- * - A crash is a frozen log: `CrashAt` marks request N, and from then on every durable log's
- *   append throws a `Crash` the run rejects with (Python: the model raises `_SimulatedCrash` for
- *   request N). Either way no record of request N's outcome reaches the log.
- *
- * `run.test.ts`'s TS-only skill rows stay: they pin the full messages of the same checks.
+ * `runFlow`/`advance` `skills`: early checks and durable resume with on-demand skills. A crash is
+ * a frozen log: `CrashAt` marks request N, and from then on every durable log's append throws a
+ * `Crash` the run rejects with, so no record of request N's outcome reaches the log.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

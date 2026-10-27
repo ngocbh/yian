@@ -1,18 +1,6 @@
 /**
- * `runFlow`'s `numWorkers` sets the engine's drive mode: a port of
- * `tests/engine/test_run_flow_workers.py`. A fan-out/fan-in CODE flow runs serial (`0`) and pooled
- * (`>= 1`) to the same output, since workers only execute nodes.
- *
- * Ported: `test_run_flow_serial_and_pooled_same_output`; of
- * `test_pooled_dispatcher_drops_read_results`, its run (two workers, a 12-turn LOOP) and its status
- * and output, `12n` (ints are bigints, decision 4a).
- *
- * Changed: `test_run_flow_defaults_to_eight_workers` runs `runFlow` without and with a `signal`,
- * where Python runs `run_flow` and `_run_flow_controlled` (its host stop event); the merge node is
- * an inline body, as the fixtures have no `join_two`.
- *
- * Not ported: `test_pooled_dispatcher_drops_read_results`'s peak count of finished `Future`s held
- * in memory (Python's `concurrent.futures` and `gc`); TS keeps no retained-future set to inspect.
+ * `runFlow`'s `numWorkers` sets the engine's drive mode: a fan-out/fan-in CODE flow runs serial
+ * (`0`) and pooled (`>= 1`) to the same output, since workers only execute nodes.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

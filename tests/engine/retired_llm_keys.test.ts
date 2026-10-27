@@ -1,16 +1,6 @@
 /**
- * Mirrors `tests/engine/test_retired_llm_keys.py`: the first three tests, the node site of
- * `test_a_retired_key_in_yaml_is_a_load_error` (the root flow assembled as the loader assembles
- * it), `test_a_retired_key_in_a_host_layer_fails_the_cascade` (over `resolveLlmCascade`), and the
- * harvested case `engine_retired_llm_keys__temperature_on_a_node` (assembled likewise); the flow
- * and def sites of the load-error test through `loadFlow`.
- *
- * Ported through `runFlow` and `advance`, in `hostEnv` (with `VLLM_API_KEY` where Python sets
- * it), an AGENT's model a `ScriptedModel` given as `models`: `test_a_retired_key_in_the_run_layer_fails_before_the_log`,
- * `test_resuming_a_record_with_a_set_retired_key_fails_before_appending` and
- * `test_a_finished_record_with_a_set_retired_key_still_replays` (Python serves its reply through
- * an OpenAI client over a mock transport). Changed: the refusals are `RangeError`s (Python's
- * `ValueError`).
+ * Retired LLM config keys: refused at load in a flow, a def or a node, in a host layer of the
+ * cascade, and in the run layer before the log; a finished record holding one still replays.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

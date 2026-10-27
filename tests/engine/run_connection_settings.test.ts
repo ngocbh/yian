@@ -1,25 +1,7 @@
 /**
- * A port of `tests/engine/test_run_connection_settings.py`: the connection settings
- * (`organization`, `project`, `headers`) come only from the host layer and travel with the host key.
- *
- * Ported: every test but the one already ported below, the parametrized ones whole. Python's
- * `_fake_models` and `_recording_models` read the configs `serving` receives; the backward rows go
- * through the real `chatModelFromConfig` with a recording `send` (`recording`), where Python routes
- * the OpenAI client through `httpx.MockTransport`. The secret scan is `expectHidden`. Each run's
- * environment is the file's (`hostEnv`) plus the variables a row sets.
- *
- * Changed: refused configs and settings are `RangeError`s (`ValidationError` is one) and refused
- * flow files `LoadError`s (Python's `ValueError`s). TS has no `SecretStr`: header values reach the
- * model config and `popHostCredentials`' result as plain text, the result keeping them in private
- * fields that neither `inspect` nor JSON shows, so the `SecretStr` instance checks become those
- * scans, and a frozen `HostConnection` refuses an assignment with a `TypeError` (Python's
- * `FrozenInstanceError`). The backward rows' `repr` checks of Python's `_backward_handle` have no
- * counterpart: the TS handle is a module-private entry no value exposes; the results holding it
- * are scanned instead. `test_a_python_built_flow_layer_cannot_set_a_connection_setting` sets the
- * layer on the loaded flow's `AgentNode` (Python's `own_llm_config`).
- *
- * Already ported: `test_reflective_memory_refuses_connection_settings`, in the constructor test of
- * `reflective_memory.test.ts`.
+ * The connection settings (`organization`, `project`, `headers`) come only from the host layer and
+ * travel with the host key; header values stay in private fields that neither `inspect` nor JSON
+ * shows.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -161,7 +143,7 @@ describe("a flow file cannot set a connection setting", () => {
   }
 });
 
-describe("a python built flow layer cannot set a connection setting", () => {
+describe("a flow layer set in code cannot set a connection setting", () => {
   for (const field of ["organization", "project", "headers"]) {
     test(field, async () => {
       // A flow built in code skips the loader; the cascade still refuses the setting.

@@ -1,12 +1,7 @@
 /**
- * A tool's JSON Schema translates into a yian `Type` that is never narrower than it, a port of
- * the JSON Schema parts of `tests/engine/test_tool_types.py`.
- *
- * The cases are raw JSON Schema objects, so the same rules cover function tools and MCP tools
- * that only publish a schema. Python ints beyond 2^53 are `bigint`s here.
- *
- * It also ports `test_translation_never_reports_an_accepted_value_as_disjoint` (with
- * `typeRelation`).
+ * A tool's JSON Schema translates into a yian `Type` that is never narrower than it. The cases are
+ * raw JSON Schema objects, so the same rules cover function tools and MCP tools that only publish
+ * a schema. Ints beyond 2^53 are `bigint`s.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -378,7 +373,8 @@ describe("translation never reports an accepted value as disjoint", () => {
   });
 });
 
-// The schema pydantic generates for a field `v: Union[_Inner, str]`, `_Inner` holding `x: int`.
+// A field `v` that is either an `_Inner` object (holding `x: int`) or a string, as a generated
+// schema spells it.
 const UNION_OF_A_MODEL_AND_A_SCALAR: Schema = {
   $defs: {
     _Inner: {
@@ -392,7 +388,7 @@ const UNION_OF_A_MODEL_AND_A_SCALAR: Schema = {
   title: "V",
 };
 
-describe("pydantic union of a model and a scalar has no type", () => {
+describe("an anyOf of an object ref and a scalar has no type", () => {
   test.each([false, true])("closed=%p", (closed) => {
     expect(typeFromJsonSchema(UNION_OF_A_MODEL_AND_A_SCALAR, { closed })).toBeNull();
   });

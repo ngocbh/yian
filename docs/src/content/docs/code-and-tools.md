@@ -84,7 +84,7 @@ A `module:function` value with no `./`, such as `text:countWords`, fails at load
 | yian type | Your code sees | What you return |
 |---|---|---|
 | `int` | `number`, or `bigint` past 2^53 | a safe-integer `number`, or a `bigint` |
-| `float` | `number` | a `number` |
+| `float` | `number`, or `bigint` for an int past 2^53 | a `number` |
 | `str`, `bool` | `string`, `boolean` | the same |
 | `date`, `datetime` | an ISO `string` | an ISO `string` |
 | `None` | `null` | `null` |

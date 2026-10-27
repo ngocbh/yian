@@ -1,15 +1,7 @@
 /**
- * The kind dispatch tables `KINDS` and `BINDING_FIELDS`, and `REMOVED_KINDS`: a port of
- * `tests/compose/test_kinds_table.py`.
- *
- * Ported: `test_kinds_tables_present`, `test_kinds_maps_string_to_descriptor_class`,
- * `test_all_authored_kinds_registered`, `test_removed_kinds_are_not_registered`,
- * `test_kinds_and_binding_fields_agree`.
- *
- * TS-only: every kind's class in `KINDS`; the `case`, `call`, `map` and `loop` binding fields;
- * `withKinds` restores the tables after its function returns or throws.
- *
- * Dropped: `test_retired_kindspec_is_not_public` (a Python import).
+ * The kind dispatch tables: `KINDS` maps each authored kind to its descriptor class,
+ * `BINDING_FIELDS` names each kind's binding fields, and `REMOVED_KINDS` names what to write
+ * instead of a retired kind. `withKinds` restores the tables after its function returns or throws.
  */
 
 import { expect, test } from "bun:test";
@@ -24,7 +16,7 @@ import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { StandInCode, standIn, withKinds } from "./stand_ins.ts";
 
-// The author-written kinds (as `docs/syntax.md` lists them; the loader makes `start` and `end`).
+// The author-written kinds, as the Flows and nodes page lists them; the loader makes `start` and `end`.
 const AUTHORED_KINDS: readonly string[] = [
   "agent",
   "call",

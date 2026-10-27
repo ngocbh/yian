@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e37-synth-node-inherits-host-ranges.yaml.
 # A dangling reference in an inline `call(...)` argument is named by the directive and located
 # at the binding it is written in.
 kind: load

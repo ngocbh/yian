@@ -1,19 +1,10 @@
 /**
- * One-pass, privately retained YAML source documents: a port of
- * `tests/compose/test_source_document.py`.
+ * One-pass, privately retained YAML source documents.
  *
- * `test_document_uses_one_loader_instance` and the SafeLoader comparisons have no
- * counterpart: there is one compose pass and no SafeLoader to compare with. Python's three
- * `!!value` tests become refusal tests in TS, since YAML 1.2 has no `!!value`; `!!binary`,
- * `!!set`, `!!omap` and `!!pairs` are refused too; the merge texts compare with hand-written
- * values. The cursor-based checks come with the cursor. The tag rows that read the document
- * (merge-source tags included) and the merge-rope size and literal-line rows of
- * `test_source_cursor.py` read definitions here; `test_source_tags.py` itself is ported in
- * `source_tags.test.ts`, with the cursor. TS-era rows: a mapping key YAML reads as
- * non-text is kept in the value as written, lone CRs are line breaks while NEL, U+2028 and
- * U+2029 are not, an undefined alias follows YAML 1.2, a local tag never changes how its
- * scalar reads, and the tag hint names a tag glued to `,`, `[`, `]`, `{` or `}`. The harvested
- * `yaml/compose_source_document__*` cases are pinned at the end through `parseSourceDocument`.
+ * `!!binary`, `!!set`, `!!omap` and `!!pairs` are refused. A mapping key YAML reads as non-text is
+ * kept in the value as written; lone CRs are line breaks while NEL, U+2028 and U+2029 are not; an
+ * undefined alias follows YAML 1.2; a local tag never changes how its scalar reads; and the tag hint
+ * names a tag glued to `,`, `[`, `]`, `{` or `}`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -123,8 +114,7 @@ describe("a character the reader refuses", () => {
     const error = refusal(`first: ok${lineBreak}bad:\x00 value\n`);
 
     expect(error.message).toBe(MESSAGE);
-    // Python gives (2, 5, 2, 6): PyYAML also breaks lines at NEL, U+2028 and U+2029
-    // (`rule: columns`).
+    // NEL, U+2028 and U+2029 are not line breaks.
     expect(error.range).toEqual(new SourceRange(1, 15, 1, 16));
   });
 
@@ -237,8 +227,7 @@ describe("nonTextKey", () => {
     expect(found?.range).toEqual(range);
   });
 
-  // Python gives one column earlier: eemeli puts an empty node after the space, PyYAML
-  // before it (`rule: yaml`).
+  // The empty node comes after the space.
   test.each([
     ["explicit", "? \n: x\n", new SourceRange(1, 3, 1, 3)],
     ["flow", "{? : x}\n", new SourceRange(1, 4, 1, 4)],
@@ -410,7 +399,7 @@ describe("property ranges", () => {
 });
 
 describe("range ends", () => {
-  // PyYAML's ends: a block collection ends at the next token past blank lines and comments,
+  // A block collection ends at the next token past blank lines and comments,
   // a block scalar after the blank lines that follow it.
   test.each<[string, (string | number)[], SourceRange]>([
     ["- &n0\n  <<: *n0\n  c: ''\n- on", [], new SourceRange(1, 1, 4, 5)],
@@ -424,7 +413,7 @@ describe("range ends", () => {
     ["a:\r\n  b: 1\r\n  # x\r\n\r\nc: 2\r\n", ["a"], new SourceRange(2, 3, 5, 1)],
     ["a: [1,\n  2]\n\nb: 1", ["a"], new SourceRange(1, 4, 2, 5)],
     ["a: 'q'  # c\n\nb: 1", ["a"], new SourceRange(1, 4, 1, 7)],
-  ])("are PyYAML's: %p at %p", (text, path, range) => {
+  ])("of %p at %p", (text, path, range) => {
     expect(definitionAt(text, ...path).range).toEqual(range);
   });
 
@@ -443,8 +432,7 @@ describe("range ends", () => {
 });
 
 describe("core tags", () => {
-  // Python's three `!!value` texts respell the alias `*equals :` in a flow mapping, where
-  // `*equals:` is the alias `equals:` in YAML 1.2.
+  // In a flow mapping `*equals:` is the alias `equals:` (YAML 1.2), so the texts write `*equals :`.
   test.each([
     ["a: !!binary YQ==\n", "binary"],
     ["a: !!set {x: null}\n", "set"],
@@ -753,7 +741,6 @@ describe("merges", () => {
   });
 
   test("merged keys keep their text and an own key wins", () => {
-    // Python's `!!binary` and `!!value` lines are refused in TS.
     const text =
       "base: &base\n" +
       "  true: boolean\n" +
@@ -931,7 +918,7 @@ describe("merges", () => {
     expect(document.repeatedKey).toBeNull();
   });
 
-  /** Return a short document with exponentially many merged pairs (Python's builder). */
+  /** Return a short document with exponentially many merged pairs. */
   function binaryMergeDocument(levels: number): SourceDocument {
     const lines = ["level_0: &level_0", "  value: leaf"];
     for (let level = 1; level <= levels; level++) {

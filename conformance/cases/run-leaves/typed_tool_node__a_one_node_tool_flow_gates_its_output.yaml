@@ -1,4 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_a_one_node_tool_flow_gates_its_output.
 # A compact one-node TOOL flow checks its `output: int`; the failure names the flow's node (`count`)
 # at that line.
 kind: run

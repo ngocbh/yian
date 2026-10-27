@@ -1,4 +1,3 @@
-# From tests/seeds/00-hello-agent.yaml.
 # One AGENT with a scalar input and output, the graph inferred from bindings, loads.
 kind: load
 flow: |

@@ -1,7 +1,7 @@
-# From tests/seeds/errors/e32-malformed-code-ref.yaml.
 # A `code:` value that is neither a reference nor inline source fails at load, at the value.
-# The header (a dotted token, `module:function`) describes the Python form; TS uses a path with
-# no `:fn` part, which isn't a reference, so it is read as an inline body that doesn't parse.
+# The flow's header comment (a dotted token, `module:function`) describes an older CODE form; the
+# value is a path with no `:fn` part, which isn't a reference, so it is read as an inline body that
+# doesn't parse.
 kind: load
 flow: |
   # e32 — a `code:` value that is neither a valid `module:function` reference nor inline

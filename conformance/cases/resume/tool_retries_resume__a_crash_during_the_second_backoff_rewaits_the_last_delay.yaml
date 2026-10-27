@@ -1,8 +1,7 @@
-# From tests/engine/test_tool_retries_resume.py::test_a_crash_during_the_second_backoff_rewaits_the_last_recorded_delay.
 # A crash during the second backoff wait resumes at attempt 3 with the same call id, keeping the recorded steps;
 # the restart re-waits the last recorded delay (a retry_after: no draw).
 # Record 11 is the second `failed` step: the wait runs, then the `started` step of attempt 3 is refused.
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# Events left out: a resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |

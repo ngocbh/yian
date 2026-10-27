@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e25-external-raise.yaml.
 # A CODE throw inside a `uses:` child fails `go/kaboom`: frames the CALL, then the child's `code:`.
 kind: run
 flow: |

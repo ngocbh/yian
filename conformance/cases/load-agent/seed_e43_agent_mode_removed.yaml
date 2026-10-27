@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e43-agent-mode-removed.yaml.
 # The removed AGENT `mode:` fails at its key, saying to delete the line.
 kind: load
 flow: |

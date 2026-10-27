@@ -1,4 +1,3 @@
-# From tests/engine/test_reported_tool_error.py::test_an_empty_reported_error_reads_as_its_type_name.
 # A ReportedToolError with no message reads as its type name: the model gets a tool_result whose
 # content is "ReportedToolError" (the test's subclass NotFound reads "NotFound"; a stub raises
 # the class itself), with is_error true, and the run succeeds.

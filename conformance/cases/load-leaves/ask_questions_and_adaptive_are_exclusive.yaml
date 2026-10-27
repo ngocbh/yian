@@ -1,4 +1,4 @@
-# TS-only: an ask's questions and adaptive_questions are exclusive.
+# An ask's questions and adaptive_questions are exclusive.
 kind: load
 flow: |
   id: f

@@ -1,4 +1,4 @@
-# TS-only: an inbox input takes no default.
+# An inbox input takes no default.
 kind: load
 flow: |
   id: f

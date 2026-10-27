@@ -1,9 +1,4 @@
-/**
- * Authored Compose flow-output origins: a port of `tests/compose/test_flow_output_origins.py`.
- *
- * Ported: every row. Changed: the source-free rows build `CallableScope` over an empty typedef
- * `Map` where Python passes `{}`.
- */
+/** Authored Compose flow-output origins. */
 
 import { expect, test } from "bun:test";
 

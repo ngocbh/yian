@@ -1,4 +1,3 @@
-# From tests/seeds/06-case-on.yaml.
 # A `case ... on` (value matching, an `else:`, a 3-way coalesce) loads.
 kind: load
 flow: |

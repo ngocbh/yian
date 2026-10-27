@@ -1,4 +1,3 @@
-# From tests/seeds/01-structured-agent.yaml.
 # An AGENT with a record output, read by dotted access into a CODE node, loads.
 kind: load
 flow: |

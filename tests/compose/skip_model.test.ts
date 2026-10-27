@@ -1,9 +1,4 @@
-/**
- * The skip model: which nodes of a flow level CASE routing may skip, and together. A port of
- * `tests/compose/test_skip_model.py`; every row is ported.
- *
- * Changed: node and CASE id sets are `Set`s, producer and input tables `Map`s.
- */
+/** The skip model: which nodes of a flow level CASE routing may skip, and together. */
 
 import { expect, test } from "bun:test";
 

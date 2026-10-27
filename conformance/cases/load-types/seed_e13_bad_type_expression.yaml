@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e13-bad-type-expression.yaml.
 # A node `output:` type that doesn't parse fails at its value.
 kind: load
 flow: |

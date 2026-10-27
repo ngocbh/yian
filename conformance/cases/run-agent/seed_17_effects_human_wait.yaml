@@ -1,9 +1,8 @@
-# From tests/seeds/17-effects-human-wait.yaml.
 # The human approves, the `case ... on` the answer takes `settle`, the sleep's past deadline returns
 # at once with no value, and `confirm` runs after it; `abort` is skipped.
 # `confirm_action` reads `answer`, which `confirm` doesn't bind (it binds `action`), so it returns
 # its default, `cancel`.
-# No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
+# No `tool_calls`: the form of the `ask_user` tool's `answer_schema` isn't documented, so it isn't pinned.
 kind: run
 flow: |
   # 17 — Effects: ask + sleep.

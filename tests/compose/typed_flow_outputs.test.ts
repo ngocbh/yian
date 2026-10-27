@@ -1,16 +1,4 @@
-/**
- * Loading typed flow outputs, `output: !Type value` and typed record fields: a port of
- * `tests/compose/test_typed_flow_outputs.py`.
- *
- * Ported: every row but the one below. Types compare with `typeEquals`, as Python's `==` compares
- * them. The CODE bodies are Python's, which read the same in JS (decision 11).
- * `test_typed_output_changes_the_flow_fingerprint` is ported too: the case
- * `fingerprint/compose_typed_flow_outputs__typed_output` harvested from it fingerprints a TOOL
- * producer, not this flow's CODE node.
- *
- * Covered by `run-core/compose_typed_flow_outputs__plain_output_whose_left_side_is_not_a_type`:
- * `test_plain_output_whose_left_side_is_not_a_type_is_text`.
- */
+/** Loading typed flow outputs, `output: !Type value` and typed record fields. */
 
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -327,7 +315,7 @@ test("inline loop body output field types the carried record", async () => {
 
   const contract = contractOf(typed.compiled, "loop");
   expectRecordFields(contract, { rounds: INT });
-  // Python compares the contracts by value: the untyped body's is not that exact record.
+  // Compared by value, the untyped body's contract is not that exact record.
   const other = contractOf(plain.compiled, "loop");
   expect(
     other instanceof ValueContract && typeEquals(other.type, (contract as ValueContract).type),

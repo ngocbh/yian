@@ -1,9 +1,9 @@
-/** CODE-node functions the seed cases reference: a TypeScript port of yian's `tests/seeds/fns.py`. */
+/** CODE-node functions the seed cases reference by `./fixtures/seeds.ts:<name>`. */
 
-// Python's `rec.get(k, d)` is ported as `k in inputs ? inputs[k] : d`: a CODE node's `inputs`
-// object throws on an undeclared name (so `inputs[k] ?? d` would throw), while `in` doesn't.
+// An optional input is read as `k in inputs ? inputs[k] : d`: a CODE node's `inputs` object
+// throws on an undeclared name (so `inputs[k] ?? d` would throw), while `in` doesn't.
 
-/** Format `x` with a sign and two decimals (Python's `f"{x:+.2f}"`). */
+/** Format `x` with a sign and two decimals. */
 function signed(x: number): string {
   return (x >= 0 ? "+" : "") + x.toFixed(2);
 }
@@ -37,7 +37,7 @@ export function build_outline(inputs: Record<string, any>): Record<string, unkno
     items,
     summary: {
       count: items.length,
-      total: quantity, // JS has one number type (Python's `float(quantity)`)
+      total: quantity,
       meta: {
         as_of: "as_of" in inputs ? inputs.as_of : null,
         dry_run: Boolean("dry_run" in inputs ? inputs.dry_run : false),

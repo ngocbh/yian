@@ -1,4 +1,3 @@
-# From tests/seeds/12-depends-on.yaml.
 # A `depends_on:` ordering edge to a CODE node whose output nobody binds loads.
 kind: load
 flow: |
@@ -11,7 +10,7 @@ flow: |
   #   - `runs_after:  [X]` — run after X but still run if X is skipped (pure order).
   # Both gate on X settling. This seed uses `depends_on` (the source `warm_cache` is
   # unconditional, so it always runs); the co-skip vs survive distinction only shows
-  # when the source sits behind a `case` (see tests/engine/test_depends_on_e2e.py).
+  # when the source sits behind a `case`.
   # Shows: depends_on, a bool output nobody binds, and a CODE side-effect node.
 
   id: depends-on

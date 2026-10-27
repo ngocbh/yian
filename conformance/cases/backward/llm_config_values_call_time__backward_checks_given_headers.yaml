@@ -1,7 +1,6 @@
-# hand TS expect: the TS body throws `new RangeError(...)` with Python's text (a computed `1 / 0` is `Infinity`, not an
-# error), so the failure message is "RangeError: integer division or modulo by zero" (a thrown error's text, as in
-# run-map-call/seed_e24_nested_code_raise), and the TS `code:` scalar spans columns 11-73; Python's message and
-# columns 11-31 are in python_expect.
+# The CODE body throws `new RangeError(...)` (a computed `1 / 0` is `Infinity`, not an error), so the failure
+# message is "RangeError: integer division or modulo by zero" (a thrown error's text, as in
+# run-map-call/seed_e24_nested_code_raise), and the `code:` scalar spans columns 11-73.
 kind: backward
 flow: |
   id: f

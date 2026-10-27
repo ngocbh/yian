@@ -1,11 +1,8 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupted_agent_in_a_loop_lets_the_loop_continue
-# (tests/engine/test_agent_in_loop.py's FLOW, with the fold CODE replaced by the body's output
-# template). Both LOOP occurrences read inbox `notes`; an interrupt delivered once
-# `loop#0/reply`'s model call finishes names only that running occurrence: it skips its ping call
-# and ends null (folded as "-"). The Stop is remembered: no take or wait comes between the
-# occurrences, so `loop#1/reply` opens while it stands, gets its own `interrupted` record and
-# ends null before its model call: "s|-|-".
+# The body's output template folds each LOOP iteration. Both LOOP occurrences read inbox `notes`;
+# an interrupt delivered once `loop#0/reply`'s model call finishes names only that running
+# occurrence: it skips its ping call and ends null (folded as "-"). The Stop is remembered: no
+# take or wait comes between the occurrences, so `loop#1/reply` opens while it stands, gets its
+# own `interrupted` record and ends null before its model call: "s|-|-".
 kind: run
 flow: |
   id: t

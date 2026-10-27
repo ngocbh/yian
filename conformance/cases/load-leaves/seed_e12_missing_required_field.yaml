@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e12-missing-required-field.yaml.
 # A CODE node with no `code:` fails at the node body.
 kind: load
 flow: |

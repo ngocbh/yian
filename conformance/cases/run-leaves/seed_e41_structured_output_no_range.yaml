@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e41-structured-output-no-range.yaml.
 # A record output's one wrong field fails `contract.output` at that field's declared type.
 kind: run
 flow: |

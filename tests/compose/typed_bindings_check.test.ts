@@ -1,63 +1,10 @@
 /**
- * Checking typed bindings at load: literals exactly, references by inferred type; a port of
- * `tests/compose/test_typed_bindings_check.py`, loading each flow with `assembleText` (`assemble`
- * as the loader calls it) where Python calls `load_flow`.
+ * Checking typed bindings at load: literals exactly, references by inferred type.
  *
  * A typed binding whose value can never fit its declared type is a load error located at the
  * binding. A literal value is fully known, so it is checked exactly; a reference or expression is
  * rejected only when its inferred type is disjoint from the declared one, while a narrower inferred
  * type loads and is checked at runtime.
- *
- * Ported: `test_disjoint_node_input_fails_at_its_line`,
- * `test_disjoint_flow_output_field_fails_at_its_line`, `test_disjoint_single_flow_output_fails`,
- * `test_record_flow_output_field_named_result_keeps_its_name`,
- * `test_embedded_template_is_text_and_disjoint_from_int`,
- * `test_record_with_an_extra_required_field_is_disjoint_from_a_smaller_record`,
- * `test_record_missing_a_required_field_names_the_field`,
- * `test_missing_field_is_not_named_when_another_field_mismatches`, `test_fitting_literals_load`
- * (6), the load half of `test_optional_into_non_optional_loads_and_fails_at_runtime`,
- * `test_str_into_literal_loads`, `test_int_into_float_loads`, `test_unproven_sources_load` (3),
- * `test_inline_call_source_that_returns_str_is_disjoint_from_int`,
- * `test_disjoint_binding_into_an_inline_body_fails`, `test_disjoint_loop_seed_fails`,
- * `test_disjoint_reference_into_a_call_reports_the_binding_not_the_child`,
- * `test_disjoint_item_binding_on_a_named_map_fails_at_its_line`,
- * `test_disjoint_item_binding_on_an_inline_map_fails`, `test_fitting_item_binding_loads`,
- * `test_disjoint_item_field_binding_fails`, `test_item_binding_over_an_untyped_list_loads` and
- * `test_disjoint_binding_inside_a_defs_body_names_the_body` (the `defs entry` prefix comes from the
- * scope's def loading).
- *
- * Changed: the error rows pin the whole message where Python matches its start, and the last frame's label and range where Python
- * checks the first frame's line. CODE bodies are written in TS and code refs name
- * `./fixtures/compose_codefns.ts`, as the harvested cases write them; load doesn't run them.
- *
- * Not ported here: the literal rows the tags reader (`readTaggedValue`, tested in `tags.test.ts`)
- * decides while the binding is split, before this check runs. Pinned in `tags.test.ts` through
- * their cases: `test_text_literal_for_int_fails_at_its_line`,
- * `test_number_literal_for_str_suggests_quoting`, `test_true_literal_for_str_explains_yaml_booleans`
- * and `test_null_literal_for_a_record_output_field_fails_at_its_line`. Decided there with no case:
- * `test_former_boolean_word_for_bool_names_the_boolean_to_write`,
- * `test_former_boolean_word_for_a_bool_output_names_the_boolean_to_write`,
- * `test_former_boolean_word_in_a_list_literal_gets_no_fix`,
- * `test_escaped_template_is_text_and_does_not_fit_int`,
- * `test_bad_literal_into_a_call_reports_the_binding_not_the_child` and
- * `test_bad_literal_loop_seed_reports_the_binding_not_the_carried_type`.
- *
- * TS-only: a flow-style variant of `test_nested_template_types.py`'s
- * `test_nested_typed_binding_is_checked_at_its_own_line` (ported in `nested_template_types.test.ts`)
- * that pins the nested binding's whole frame; `shownLiteral` rows (compact JSON, ints as digits);
- * `localInputContracts` rows over hand-built maps (Python has no direct test; the reference and
- * assert checks read it); and the harvested cases these checks decide (`runCase`, `assembled`),
- * in the "Pinned harvested cases" block, then those from `test_open_range_flows.py`,
- * `test_nested_template_types.py` and `test_tagged_bindings.py`, which these checks decide, in the
- * "Pinned harvested cases (TS-only placement)" block.
- *
- * Ported through `loadConformanceFlow` and `runFlow`: `test_unquoted_yes_or_no_literal_for_str_is_text`
- * (2).
- *
- * Covered by `run-core/compose_typed_bindings_check__escaped_template_binds_its_text`:
- * `test_escaped_template_binds_its_text`; by
- * `run-core/compose_typed_bindings_check__optional_into_non_optional_fails_at_runtime`:
- * `test_optional_into_non_optional_loads_and_fails_at_runtime` (its load half is ported too).
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
@@ -249,7 +196,6 @@ test("a missing field is not named when another field mismatches", () => {
   expect(error.message).toBe("node 'use' input 'x': declared Buy, but the value is {\"conviction\":str}");
 });
 
-// A flow-style variant of `test_nested_template_types.py::test_nested_typed_binding_is_checked_at_its_own_line`.
 test("a disjoint binding nested in a value template names its path", () => {
   const text = flow("{a: !int '${note.output}'}", { producers: producer("note", '"hi"', "str") });
 
@@ -550,7 +496,7 @@ test("an item binding over an untyped list loads", () => {
   load(namedMapFlow("!str ${item}", { over: "${opaque.output}", paramType: "!str" }));
 });
 
-// ---------- shownLiteral (TS-only) ----------
+// ---------- shownLiteral ----------
 
 describe("shownLiteral writes a literal as compact JSON", () => {
   test.each<{ value: unknown; shown: string }>([
@@ -565,7 +511,7 @@ describe("shownLiteral writes a literal as compact JSON", () => {
   });
 });
 
-// ---------- localInputContracts (TS-only) ----------
+// ---------- localInputContracts ----------
 
 describe("localInputContracts", () => {
   const OPTIONAL_INT = new ValueContract(Type.scalar(ValueKind.INTEGER).replace({ nullable: true }));
@@ -664,10 +610,9 @@ test.each<CaseRow>([
   ].map((name) => ({ id: `load-types/compose_typed_bindings_check__${name}`, call: assembled })),
 ])("assemble: $id", runCase);
 
-// ---------- Pinned harvested cases (TS-only placement) ----------
+// ---------- Pinned conformance cases ----------
 
-// From `test_open_range_flows.py`, `test_nested_template_types.py` and `test_tagged_bindings.py`;
-// the range, record and template messages decide them.
+// The range, record and template messages decide these cases.
 
 test.each<CaseRow>([
   { id: "types/compose_open_range_flows__tagged_binding_disjoint_from_an_open_range", call: assembled },

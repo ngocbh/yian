@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_wiring_types_asserts_and_env.
 # The order of a node's asserts is identity.
 kind: fingerprint
 flow: |

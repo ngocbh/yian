@@ -1,31 +1,4 @@
-/**
- * The `call` kind's parse: a port of `tests/compose/test_kind_call_parse.py`.
- *
- * Ported: `test_call_parse_matches_descriptor_and_records_ranges`,
- * `test_call_parse_requires_call`, `test_call_parse_rejects_non_string_asserts`.
- *
- * Changed: Python compares the descriptor to a `CallDescriptor` with the parse metadata and the
- * compiler-owned `child_label` and `call_site` excluded; TS compares its class and fields. The
- * requires-call and asserts rows pin the whole message and its range (the node body; the
- * `asserts:` value), where Python matches a fragment.
- *
- * The harvested cases whose error the CALL parse raises are pinned in the TS mirrors of the Python
- * files they come from: `non_text_fields.test.ts` (`call:`), `node_input_shape.test.ts`
- * (`input:`), `node_when_hint.test.ts` (`when:`) and `engine/inline_composite_bodies.test.ts`
- * (the key check).
- *
- * Pinned at the end (`assembledWith`, each def built by hand with `handChild`), the CALL build's
- * cases from files with no TS mirror yet:
- * `load-map-call/compose_call_argument_labels__an_authored_call_node_keeps_its_binding_wording`
- * (`tests/compose/test_call_argument_labels.py`) and
- * `load-core/engine_limit_overrides__call_nesting_follows_the_variable`
- * (`tests/engine/test_limit_overrides.py`), whose `c0` calls `c1`, which calls `c2`; and the
- * CALL builds of an inline `call(...)`'s synth node,
- * `load-map-call/compose_call_argument_labels__a_missing_argument_names_the_call`,
- * `load-map-call/compose_call_argument_labels__an_undeclared_argument_in_a_value_entry_call` and
- * `load-map-call/compose_call_argument_labels__an_undeclared_argument_names_the_argument`
- * (`tests/compose/test_call_argument_labels.py`), whose messages name the authored binding.
- */
+/** The `call` kind's parse. */
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -55,7 +28,7 @@ function readerFor(text: string, nodeId: string): SourceCursor {
   return SourceDocument.parse(text).root.child("nodes").child(nodeId);
 }
 
-/** Return a descriptor's fields, leaving out what Python's `compare=False` leaves out. */
+/** Return a descriptor's fields, leaving out the parse metadata. */
 function fieldsOf(desc: CallDescriptor): Record<string, unknown> {
   const {
     range: _range,

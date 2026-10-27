@@ -1,15 +1,4 @@
-/**
- * The base descriptor contract shared by every node kind: a port of
- * `tests/compose/test_descriptor_base.py`, with a test-local `D` as Python's.
- *
- * TS-only: `replace` keeps the class and re-runs the origin check (Python's
- * `dataclasses.replace`), takes a kind's own field from the kind's method and returns the
- * kind's type; a kind's `parse` override typechecks; the instance `kind`; and a subclass's
- * `allow` unioning its parent's set. And the `message builders` rows, which Python tests
- * through `load_flow` or its docstrings: `valueTypeError` (its docstring examples),
- * `rejectNonText`, `rejectContainerSpans`, `inputShapeProblem`'s binding noun per kind (the
- * shapes run through `parse` in `node_input_shape.test.ts`), `rejectInfinityName` and `siteKey`.
- */
+/** The base descriptor contract shared by every node kind. */
 
 import { describe, expect, test } from "bun:test";
 

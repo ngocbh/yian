@@ -1,4 +1,3 @@
-# TS-only (D29): Python runs a reply's tool calls one at a time.
 # Two calls of a tool marked concurrency_safe form one group: both start before either finishes.
 # The stub tools return at once, so they finish in call order (call a, then b), and the next
 # request holds their two tool messages in call order.

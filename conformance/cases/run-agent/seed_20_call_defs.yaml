@@ -1,4 +1,3 @@
-# From tests/seeds/20-call-defs.yaml.
 # A `call` to an in-file `defs:` callable grows its CODE and AGENT nodes under `brief/`; the
 # child's AGENT reply is the flow's output.
 kind: run

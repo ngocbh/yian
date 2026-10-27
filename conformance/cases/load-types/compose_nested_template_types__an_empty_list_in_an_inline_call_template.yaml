@@ -1,4 +1,4 @@
-# TS writes the quoted key in the path in the text form (rules: messages); Python's wording in python_expect.
+# The message writes the quoted key in the path in the text form.
 kind: load
 flow: |
   id: inline_call

@@ -1,4 +1,3 @@
-# From tests/engine/test_tagged_bindings_run.py::test_tagged_tool_input_fails_before_the_tool_runs.
 # A tagged TOOL input (`!int`) over an untyped value "5" fails binding.type before the tool runs;
 # an `!Any` flow input stands in for the test's untyped CODE source.
 kind: run

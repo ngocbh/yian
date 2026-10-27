@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_loaded_zero_and_one_field_records_differ_from_their_value_forms.
 # `output: {}` fingerprints differently from no output.
 kind: fingerprint
 flow: |

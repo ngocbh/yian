@@ -1,6 +1,5 @@
-# From tests/engine/test_human_input_questions_models.py::test_parse_questions_rejects_empty_too_many_dups_badtype
-# and docs/syntax.md ("headers unique").
-# Upstream questions with a repeated header fail the ask before it asks.
+# Question headers must be unique: upstream questions with a repeated header fail the ask before it
+# asks.
 kind: run
 flow: |
   id: manual_ref

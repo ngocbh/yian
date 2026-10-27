@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_node_input_literals_are_identity.
 # A node input literal is identity, even a URL query value.
 kind: fingerprint
 flow: |

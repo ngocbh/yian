@@ -1,9 +1,6 @@
 /**
  * `steer_inbox:` on AGENT: the agent reads steers from a declared top-level inbox, named by a lone
  * `${input.<name>}`. The retired `steerable:` is a load error with a hint.
- *
- * TS-only: Python yian has no inboxes. Python's `tests/compose/test_agent_steerable_yaml.py` keeps
- * the old `steerable:` rows.
  */
 
 import { afterEach, expect, test } from "bun:test";

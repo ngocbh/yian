@@ -1,12 +1,6 @@
 /**
- * YAML 1.1 boolean spellings, which YAML 1.2 core rules read as text, and their fix; and what
- * YAML read a value as, a port of `tests/compose/test_yaml_words.py`.
- *
- * Not ported: the date, datetime and binary `yamlReadAs` rows; the loader keeps dates as text
- * and builds no bytes.
- *
- * Changed: no search inside a list or record; only a bare word gets the fix (Python makes the
- * same change).
+ * YAML 1.1 boolean spellings, which YAML 1.2 core rules read as text, and their fix; and what YAML
+ * read a value as.
  */
 
 import { describe, expect, test } from "bun:test";

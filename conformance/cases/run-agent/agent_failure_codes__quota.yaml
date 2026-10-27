@@ -1,5 +1,5 @@
 # The AGENT's model call fails with a 429 reply naming insufficient_quota.
-# No retry (YIAN_MODEL_RETRIES=0); TS fails provider.quota and Python node.execute.
+# No retry (YIAN_MODEL_RETRIES=0); the node fails provider.quota.
 kind: run
 flow: |
   id: agent-failure-quota

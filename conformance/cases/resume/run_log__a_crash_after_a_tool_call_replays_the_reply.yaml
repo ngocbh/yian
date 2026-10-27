@@ -1,4 +1,3 @@
-# TS-only: Python reruns an AGENT from its start on resume.
 # The agent's first reply calls lookup, whose result is written (record 10); its second call is
 # made and lost when the crash refuses its model_call. The resumed agent replays the first reply
 # and lookup's recorded result without calling the model or the tool, then makes the second call

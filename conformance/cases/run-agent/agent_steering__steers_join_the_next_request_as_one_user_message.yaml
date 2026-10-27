@@ -1,4 +1,3 @@
-# From tests/engine/test_agent_steering.py::test_steers_are_sent_as_user_messages_at_the_top_of_each_iteration.
 # Changed (yian #1025): a steer is a send to the agent's `steer_inbox`. The two sent while tool
 # call 1 runs are read together before the next model call, as one `steer` step: they join that
 # request after the tool result as one user message with a text part each, in send order.

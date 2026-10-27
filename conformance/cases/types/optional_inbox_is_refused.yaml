@@ -1,4 +1,4 @@
-# TS-only: an inbox is never optional.
+# An inbox is never optional.
 kind: value
 type: Optional(Inbox(str))
 value:

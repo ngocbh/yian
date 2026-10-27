@@ -1,4 +1,3 @@
-# From tests/engine/test_loop_run.py::test_loop_budget_exceeded_in_step_fails_run.
 # The test's budget of 6 now trips the first growth (at `loop`); 7 lets iteration 0 grow and trips the next
 # driver's growth (at `loop~1`), the later-iteration failure the test describes.
 kind: run

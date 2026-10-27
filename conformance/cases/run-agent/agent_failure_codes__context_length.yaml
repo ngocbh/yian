@@ -1,5 +1,5 @@
 # The AGENT's model call fails with a 400 reply naming context_length_exceeded.
-# No retry (YIAN_MODEL_RETRIES=0); TS fails provider.context_length and Python node.execute.
+# No retry (YIAN_MODEL_RETRIES=0); the node fails provider.context_length.
 kind: run
 flow: |
   id: agent-failure-context-length

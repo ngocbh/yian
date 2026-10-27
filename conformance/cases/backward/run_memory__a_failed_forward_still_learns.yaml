@@ -1,11 +1,8 @@
-# From tests/engine/test_run_memory.py::test_primary_failure_still_learns_without_changing_its_failure
-# (a reflective memory in place of the fake; never episodic, whose episode would hold the Python
-# traceback of the failed node).
 # Pins: backward on a failed run still learns and commits, and the run's failure is unchanged.
 # YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
-# hand TS expect: the TS body throws `new Error('forward failed')`, whose failure message is "Error: forward failed"
+# The body throws `new Error('forward failed')`, whose failure message is "Error: forward failed"
 # (as in run-map-call/seed_e24_nested_code_raise), and its throwing line `  throw new Error('forward failed')` ends at
-# column 42; Python's "forward failed" and column 47 are in python_expect.
+# column 42.
 kind: backward
 flow: |
   id: failure

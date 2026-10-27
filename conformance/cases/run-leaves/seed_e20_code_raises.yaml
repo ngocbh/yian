@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e20-code-raises.yaml.
 # A reference CODE function that throws fails its node, at the `code:` value, and the run.
 kind: run
 flow: |

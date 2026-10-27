@@ -1,4 +1,3 @@
-# From tests/seeds/22-case-value.yaml.
 # A score of 0.6 takes the `positive` branch; `${gate.output}` returns its reply, and `cautious`
 # is skipped.
 kind: run

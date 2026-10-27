@@ -1,8 +1,8 @@
-# `return (` is a syntax error in Python and TS, so this CODE case is shared and carries no rule;
-# a non-literal `code:` scalar puts the frame on the whole scalar (seed_e30 frames a block line).
+# `return (` is a syntax error; a non-literal `code:` scalar puts the frame on the whole scalar
+# (seed_e30 frames a block line).
 kind: load
-# `output: str`, not Python's invalid `string`: TS checks CODE after assembly, so an invalid output
-# type would be reported first (Python reports the syntax error first).
+# `output: str`, a valid type: CODE is checked after assembly, so an invalid output type would be
+# reported before the syntax error.
 flow: |
   id: syntax-fallback
   name: syntax-fallback

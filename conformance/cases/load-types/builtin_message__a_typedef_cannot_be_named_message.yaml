@@ -1,4 +1,4 @@
-# TS-only: `Message` is a built-in type, so a typedef can't take its name; the error is at the
+# `Message` is a built-in type, so a typedef can't take its name; the error is at the
 # typedef's key.
 kind: load
 flow: |

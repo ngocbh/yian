@@ -1,4 +1,3 @@
-# From tests/seeds/19-binding-stances.yaml.
 # A score of 0.6 takes the `pro` branch: `con` is skipped, `pro_detail` runs with `pro`, and
 # `assemble` binds every stance (plain, join, `:-`, a bare-ref default, `:?`).
 # On `con`, `detail` is null, and a null span fails `assemble`'s strict prompt, so this takes `pro`.

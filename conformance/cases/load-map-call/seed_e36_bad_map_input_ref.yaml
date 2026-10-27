@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e36-bad-map-input-ref.yaml.
 # A dangling reference in one of a MAP's per-element inputs is named `map input 'extra'`
 # and located at that entry's value.
 kind: load

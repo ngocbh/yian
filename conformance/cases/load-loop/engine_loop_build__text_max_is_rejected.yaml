@@ -1,4 +1,4 @@
-# TS spells the text value as JSON text, "5" (rules: messages); Python's repr in python_expect.
+# The message spells the text value as JSON text, "5".
 kind: load
 flow: |2
 

@@ -1,4 +1,4 @@
-# TS writes the missing-field list in the text form (rules: messages); Python's wording in python_expect.
+# The message writes the missing-field list in the text form.
 kind: load
 flow: |
   id: f

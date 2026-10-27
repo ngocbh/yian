@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e14-unknown-system-ambient.yaml.
 # An unknown `system.X` ambient fails at that one input value, not the whole `input:` block.
 kind: load
 flow: |

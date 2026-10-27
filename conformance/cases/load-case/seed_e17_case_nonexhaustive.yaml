@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e17-case-nonexhaustive.yaml.
 # A routing `case ... on` a Literal output, with a tag uncovered and no `else:`, fails at the node.
 kind: load
 flow: |

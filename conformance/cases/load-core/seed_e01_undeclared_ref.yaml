@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e01-undeclared-ref.yaml.
 # A flow output that reads an undeclared node fails at the `output:` value.
 kind: load
 flow: |

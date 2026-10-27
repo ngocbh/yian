@@ -1,4 +1,3 @@
-# From tests/seeds/05-call-map.yaml.
 # A `map` of a `uses:` alias over a defaulted list, with a top-level assert, loads.
 kind: load
 flow: |

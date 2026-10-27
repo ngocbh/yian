@@ -1,5 +1,3 @@
-# From tests/engine/test_run_memory.py::test_unfinished_primary_resume_uses_static_layout_after_map_growth
-# (serial here, and a built-in episodic memory for the test's fake one).
 # Pins: a run with a flow-level memory cut after a MAP's expansion (record 12) resumes to the same
 # output: the memory layout the resume checks is the flow's static one, not the grown nodes.
 kind: resume

@@ -1,4 +1,3 @@
-# TS-only: steer_inbox reads an Inbox, which Python yian doesn't have (#1025).
 # A tool-free AGENT with a structured output makes one structured call; the steers queued before
 # it join that request, after the prompt, as a recorded `steer` step. Here `draft` answers first,
 # and the steer sent once its call has finished is queued when `score` starts.

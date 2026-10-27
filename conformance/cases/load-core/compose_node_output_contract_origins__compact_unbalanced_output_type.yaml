@@ -1,4 +1,4 @@
-# `'list('` is yian's quote of the type text, shared by both languages.
+# `'list('` is yian's quote of the type text.
 kind: load
 flow: |
   id: invalid_compact_output

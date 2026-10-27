@@ -1,11 +1,7 @@
 /**
  * The conformance runner's own unit tests: reading a case file, the format check, case values,
- * comparison, the case directory, selection and the report. Not a port of
- * `tests/test_conformance.py`, which `conformance.ts` is, except for
- * `test_steering_unreached_action_fails` (on an interrupt item), which no case can cover (a
- * passing case reaches every point). Not ported: `test_memory_expect_refuses_a_session_key` (TS yian has no session memory).
- * TS-only: an undeclared `expect.memory` key fails the case, a `host.memory.before` entry whose
- * backward call raises fails it, and the inbox and wait records' trace rows and masked deadlines.
+ * comparison, the case directory, selection and the report, plus an unreached interrupt item,
+ * which no case can cover (a passing case reaches every point).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -2045,7 +2041,7 @@ describe("runCli", () => {
         'const token = await fetch("https://auth.example/token", {method: "POST", ' +
         'body: new URLSearchParams({empty: "", code: "c"})});\n' +
         "console.log(token.status, JSON.stringify(await token.text()));\n";
-      // Written as Python's `json.dumps` writes it: a float keeps its fraction.
+      // JSON with `, ` and `: ` separators; a float keeps its fraction.
       const stdout = '200 {"user_code": "A"}\n201 application/json {"data": [1, 2.0]}\n400 ""\n';
       await cli(
         `kind: cli\nhttp: [{request: {method: POST, url: ${q(USERCODE)}, json: {client_id: x}}, ` +

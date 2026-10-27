@@ -1,6 +1,5 @@
-# From tests/seeds/errors/e27-inline-code-raises.yaml.
 # An inline CODE body that throws fails its node at the throwing line, and the run.
-# The header (the has-`return` load gate, the traceback) describes the Python form.
+# The flow's header comment (the has-`return` load gate, the traceback) describes an older CODE form.
 kind: run
 flow: |
   # e27 — an inline CODE body that raises. RUNTIME: the node fails -> the run fails,

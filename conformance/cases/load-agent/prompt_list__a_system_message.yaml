@@ -1,4 +1,4 @@
-# TS-only: a prompt list item can't be `system:`; the system message is `system_prompt:`.
+# A prompt list item can't be `system:`; the system message is `system_prompt:`.
 kind: load
 flow: |
   id: chat

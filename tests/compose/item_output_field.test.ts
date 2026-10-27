@@ -1,14 +1,4 @@
-/**
- * A MAP item field named `output` reads like any other field (`${item.output}`): a port of
- * `tests/compose/test_item_output_field.py`.
- *
- * Ported: `test_map_reads_an_item_field_named_output` (both rows) and
- * `test_map_inside_a_called_def_reads_an_item_field_named_output`. The CODE body is JS
- * (`toUpperCase()`, decision 11).
- *
- * Covered by `run-map-call/compose_item_output_field__inline_map_body_reads_an_item_field_named_output`:
- * `test_inline_map_body_reads_an_item_field_named_output`.
- */
+/** A MAP item field named `output` reads like any other field (`${item.output}`). */
 
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

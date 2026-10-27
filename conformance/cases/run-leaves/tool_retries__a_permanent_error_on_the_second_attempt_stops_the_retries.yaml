@@ -1,4 +1,3 @@
-# From tests/engine/test_tool_retries.py::test_permanent_error_on_the_second_attempt_stops_the_retries.
 # A PermanentToolError after a retry stops the retries; the failure lists both attempts.
 kind: run
 flow: |

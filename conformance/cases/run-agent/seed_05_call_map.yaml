@@ -1,4 +1,3 @@
-# From tests/seeds/05-call-map.yaml.
 # A MAP of a `uses:` alias grows one child per topic under `research_each#<i>/`, each AGENT
 # keyed by its expanded id; the list of child records fans in to one AGENT.
 kind: run

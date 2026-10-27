@@ -1,5 +1,5 @@
 kind: value
-# Hand-written from tests/engine/test_types.py::test_numeric_bounds_reject_nonliteral_or_malformed_endpoints: bad type text raises when the type is built.
+# Bad type text raises when the type is built.
 type: int(lo..hi)
 value: 1
 expect:

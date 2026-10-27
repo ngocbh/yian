@@ -1,41 +1,9 @@
 /**
- * One-sided numeric ranges in whole flows, load-time checks and runtime checks: a port of
- * `tests/compose/test_open_range_flows.py`.
+ * One-sided numeric ranges in whole flows, load-time checks and runtime checks.
  *
  * `int(0..)` means 0 or more and `int(..100)` at most 100. Flow inputs, node input tags, bindings,
  * typedefs, cross-flow calls, case `when:` values, and AGENT outputs treat an open end as unbounded
  * on that side, with the same rules as two-sided ranges.
- *
- * Ported: every row but those below; the CODE bodies are Python's, which read the same in JS
- * (decision 11), but for the typedef flow's sum, which is the harvested case's JS body. The AGENT
- * model is a `ScriptedModel` replying the record as text, where Python stubs the model's
- * structured output.
- *
- * Changed: `test_flow_input_inside_an_open_range_runs` gives `[3n, 50n, 0n]`: the ints stay ints in
- * the `list(float)` output (decision 38), and `0.0` reaches the CODE body as the `number` 0, which
- * reads back as the int 0 (decisions 45, 9A). For the same reason the typedef flow's `price` reads
- * back as an int when it is whole. `test_agent_reply_below_an_open_range_fails_structured_output`
- * fails `agent.output_invalid` (decision 36), where Python fails `node.execute` with a pydantic
- * `ValidationError`, and its message is yian's own range message naming `qty`, where Python's is
- * pydantic's ("greater than or equal to 1").
- *
- * Covered by `run-core/compose_open_range_flows__flow_input_below_an_open_range_fails`:
- * `test_flow_input_below_an_open_range_fails_the_input_contract`; by
- * `types/compose_open_range_flows__tagged_literal_outside_an_open_range`:
- * `test_tagged_literal_outside_an_open_range_is_a_load_error`; by
- * `run-core/compose_open_range_flows__tagged_binding_below_an_open_range_fails`:
- * `test_tagged_binding_checks_an_open_range_at_runtime`; by
- * `types/compose_open_range_flows__tagged_binding_disjoint_from_an_open_range` (pinned in
- * `typed_bindings_check.test.ts`): `test_tagged_binding_disjoint_from_an_open_range_is_a_load_error`;
- * by `run-core/compose_open_range_flows__record_field_below_an_open_range_fails` (the sum in JS):
- * `test_record_field_below_an_open_range_fails_the_output_contract`; by
- * `types/compose_open_range_flows__call_with_a_wider_open_range_source` (pinned in
- * `call_binding_types.test.ts`): `test_call_with_a_wider_open_range_source_is_a_load_error`; by
- * `types/compose_open_range_flows__case_when_outside_an_open_range`:
- * `test_case_when_outside_an_open_range_is_a_load_error`; by
- * `types/compose_open_range_flows__no_ends_in_a_tag`: `test_no_ends_in_a_tag_is_a_load_error`; by
- * `run-agent/compose_open_range_flows__an_agent_reply_inside_open_ranges_runs`:
- * `test_agent_reply_inside_open_ranges_runs`.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,5 +1,5 @@
 kind: load
-# The assert text is quoted as written, the Python-repr way (TS reprText): shared.
+# The assert text is quoted as written, by reprText.
 flow: |2
 
   id: f

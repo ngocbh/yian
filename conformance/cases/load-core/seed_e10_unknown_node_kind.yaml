@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e10-unknown-node-kind.yaml.
 # An unknown node kind fails at the `kind:` value, listing the kinds.
 kind: load
 flow: |

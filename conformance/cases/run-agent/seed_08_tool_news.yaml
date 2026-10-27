@@ -1,4 +1,3 @@
-# From tests/seeds/08-tool-news.yaml.
 # A TOOL node calls a stub `get_facts` with a reference and a literal argument; an AGENT reads
 # the tool's whole list value.
 # The header's TOOL_REGISTRY key is the case's stub tool here.

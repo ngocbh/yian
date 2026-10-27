@@ -1,37 +1,6 @@
 /**
- * A text or expression field YAML reads as non-text is a load error at that value: a port of
- * `tests/compose/test_non_text_fields.py`. Values are as TS YAML gives them: ints are `bigint`.
- * The flow rows read through `parseFile`, the node rows through `parseFile`, `flowNodesCursor`
- * and `parseNodes` with the registered kinds.
- *
- * Changed: a flow with no `nodes:` says "missing required top-level key 'nodes'", where Python's
- * text is pydantic's. The null and text `node_name:` rows, the null optional flow field rows and
- * the null and text `on:` rows check the parsed value, where Python loads the flow; the `on:` rows
- * also assemble it (`assembleText`), the null one failing on its unresolved `when: x`.
- * `test_text_code_and_tool_id_still_load` assembles the root flow with `assembleText`, where
- * Python loads it. `test_non_text_call_is_a_load_error` and `test_null_call_is_empty` parse the
- * flow's nodes, where Python loads it; `test_text_call_still_loads` checks the parsed `call:`, then
- * loads the flow with `loadFlow`. The while and until rows of
- * `test_already_located_fields_are_unchanged` parse the flow's nodes too, since the LOOP parse
- * raises their error. The searched-when and on-when rows of that test, whose errors the CASE build
- * raises, and its then and else rows, whose errors the case-branch check raises, load with
- * `assembleText`, as the loader assembles the root flow.
- *
- * The `llm_config` rows (`test_non_text_llm_config_field_is_a_load_error`,
- * `test_nested_llm_config_text_field`, `test_other_llm_config_errors_are_unchanged`) load each of
- * the node, flow, def and `adaptive_questions.llm_config` sites with `loadFlow`, as do the def
- * `asserts:` rows (`test_non_text_def_assert_is_a_load_error`,
- * `test_non_list_def_asserts_is_a_load_error`, `test_null_def_asserts_loads`).
- *
- * The harvested `load-core/compose_non_text_fields__*` cases are pinned at the end of each block,
- * by the call that raises their error. The inline-body rows of
- * `test_code_in_def_compact_merge_and_inline_body` and
- * `test_non_text_kind_in_a_def_and_inline_body` load with `assembleText` (the error comes from the
- * child's assembly) and pin the whole message; their def, compact and merge rows load with
- * `loadFlow`.
- *
- * Dropped: the date rows (TS reads an unquoted date as text) and
- * `test_not_text_detail_reads_the_first_string_error` (`not_text_detail` reads a pydantic error).
+ * A text or expression field YAML reads as non-text is a load error at that value. Ints are
+ * `bigint`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -361,7 +330,6 @@ describe("parseFile", () => {
   });
 
   test("a missing nodes section names it", () => {
-    // Changed: Python's text is pydantic's "validation error for ComposeFile".
     expect(fileError("id: f\nname: f\noutput: x\n").message).toBe(
       "missing required top-level key 'nodes'",
     );

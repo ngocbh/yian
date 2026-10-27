@@ -1,4 +1,4 @@
-# TS-only: a flow output can't read an inbox.
+# A flow output can't read an inbox.
 kind: load
 flow: |
   id: f

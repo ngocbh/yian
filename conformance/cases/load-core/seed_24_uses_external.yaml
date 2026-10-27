@@ -1,8 +1,7 @@
-# From tests/seeds/24-uses-external.yaml.
 # A `uses:` alias with a `@v1` version guard names a sibling flow file, and a CALL of it loads.
 kind: load
 flow: |
-  # 24 — USES: call an EXTERNAL flow (Python-import style).
+  # 24 — USES: call an EXTERNAL flow.
   #
   # `uses:` declares an external callable bound to a local alias; a node then `call:`s the
   # alias like any in-file callable. The alias's ref (`lib_verdict`) is resolved on the

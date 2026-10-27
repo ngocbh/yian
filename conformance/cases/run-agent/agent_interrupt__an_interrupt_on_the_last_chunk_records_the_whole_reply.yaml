@@ -1,9 +1,7 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupt_on_the_last_chunk_keeps_the_complete_reply
-# (Python keeps the text as the output; TS yian's output is null). The tool-call and usage chunks
-# come first, then the text; an interrupt delivered once the last chunk is read leaves nothing to
-# cut: the model_call holds the whole "ok go" and usage 500/20/520, and the reply's tool call is
-# skipped, so lookup never runs.
+# The tool-call and usage chunks come first, then the text; an interrupt delivered once the last
+# chunk is read leaves nothing to cut: the model_call holds the whole "ok go" and usage
+# 500/20/520, the reply's tool call is skipped, so lookup never runs, and the agent's output is
+# null.
 kind: run
 flow: |
   id: steer

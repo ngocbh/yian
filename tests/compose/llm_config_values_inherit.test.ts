@@ -1,10 +1,4 @@
-/**
- * A child flow's agents may not inherit an `llm_config` value read only when a flow runs: a port
- * of `tests/compose/test_llm_config_values_inherit.py`.
- *
- * Ported: every row. Changed: the cascade checks throw a `RangeError` where Python raises
- * `ValueError`.
- */
+/** A child flow's agents may not inherit an `llm_config` value read only when a flow runs. */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

@@ -1,7 +1,5 @@
-# From tests/engine/test_answer_schema.py::test_literal_enum_carries_values (the gate's enum) and
-# docs/syntax.md, `human_input`: "The answer is validated against the declared `output:` before the
-# flow continues." (no Python test runs it).
-# An answer outside the ask's Literal fails the ask with contract.output.
+# An answer is checked against the ask's declared `output:` before the flow continues: an answer
+# outside the ask's Literal fails the ask with contract.output.
 kind: run
 flow: |
   id: approval

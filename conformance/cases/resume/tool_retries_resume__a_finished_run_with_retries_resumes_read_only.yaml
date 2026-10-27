@@ -1,5 +1,3 @@
-# From tests/engine/test_tool_retries_resume.py::test_a_finished_log_with_retries_replays_to_the_live_steps.
-# Also tests/engine/test_run_lifecycle.py::test_terminal_resume_is_read_only_silent_and_unlocks[succeeded].
 # Resuming a finished run returns its result read-only: nothing is appended (the retried TOOL's steps stay as
 # recorded), no event fires, and the tool is not called again.
 # env: YIAN_TOOL_RETRY_DELAY_SECONDS=0 makes the backoffs zero waits (each still takes a draw).

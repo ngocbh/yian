@@ -1,6 +1,5 @@
-# From tests/seeds/29-inline-code.yaml.
 # A CODE node with an inline body that reads `inputs` and returns a value loads.
-# The header (`def main(inputs)`, `module:function`) describes the Python form.
+# The flow's header comment (`def main(inputs)`, `module:function`) describes an older CODE form.
 # String concatenation, not a template literal: `${...}` in flow text reads as a yian reference.
 kind: load
 flow: |

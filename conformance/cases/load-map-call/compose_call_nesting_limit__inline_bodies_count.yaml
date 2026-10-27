@@ -1,4 +1,3 @@
-# The frame sits on def/inline-body structure, not CODE text: shared.
 kind: load
 flow: |
   id: inline3

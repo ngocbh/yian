@@ -1,25 +1,6 @@
 /**
  * A node's `input:` must be a mapping; any other value is a located load error naming the kind's
- * binding noun and showing a fix: the parse half of `tests/compose/test_node_input_shape.py`
- * (rows 1-4 and 6), through each kind's `parse` on the node's cursor with `input:` renamed to
- * `inputs` as the parse phase does: the registered `LoopDescriptor`, `CallDescriptor`,
- * `MapDescriptor`, `CodeDescriptor`, `ToolDescriptor` (which an `ask` is) and `AgentDescriptor`. The
- * harvested `whole_reference_input_{agent,call,code}` and
- * `{empty_list,expression,number,whole_record}_loop_seed` cases are pinned at the end. A text
- * value is spelled by `valueRepr` (`"abc"` and `true` where Python shows `'abc'` and `True`).
- *
- * Dropped: the date row of `test_non_mapping_input_is_a_load_error` (TS reads an unquoted date
- * as text), and the human_input row of `test_whole_reference_input_is_a_load_error_for_every_kind`
- * (an `ask` is a TOOL node, which the tool row covers).
- *
- * Ported through `assembleText`: `test_inline_loop_whole_reference_keeps_its_message` (inline
- * body extraction refuses the `input:` before any node parses), with its harvested case
- * `inline_loop_whole_reference_keeps_its_message` (`assembled`). Its flow drops Python's unused
- * `defs:` entry.
- *
- * Ported through `loadFlow`: `test_non_mapping_input_in_a_defs_body_is_located` and the load half
- * of `test_null_or_empty_mapping_input_still_loads`; and, run with `runFlow`,
- * `test_listed_carried_fields_load_and_run`.
+ * binding noun and showing a fix. A text value is spelled by `valueRepr` (`"abc"`, `true`).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -155,7 +136,7 @@ test.each([
   expect(parseNode(text, "c").inputs).toEqual({});
 });
 
-/** Python's shared flow: a `defs:` entry `step`, a CODE node `seed`, then `node` (YAML lines). */
+/** The shared flow: a `defs:` entry `step`, a CODE node `seed`, then `node` (YAML lines). */
 const sharedFlow = (node: string) => `id: input-shape
 name: input_shape
 input:

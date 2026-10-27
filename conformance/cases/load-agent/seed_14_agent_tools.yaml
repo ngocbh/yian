@@ -1,4 +1,3 @@
-# From tests/seeds/14-agent-tools.yaml.
 # An AGENT with a record output, a `tools:` grant (`ask_user` among them) and an `llm_config:`
 # with a provider block loads.
 kind: load

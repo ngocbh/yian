@@ -1,4 +1,3 @@
-# From tests/seeds/08-tool-news.yaml.
 # A TOOL node with a flat `tool_id:` and literal and reference arguments loads.
 kind: load
 flow: |

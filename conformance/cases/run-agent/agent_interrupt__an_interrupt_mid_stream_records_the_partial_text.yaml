@@ -1,8 +1,6 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream
-# (Python's node keeps the text as its output; TS yian's output is null and the cut text stays in
-# the model_call step). An interrupt delivered once chunk 2 of the streamed reply is read cuts the
-# stream there (finish `interrupted`, "hello big"); the reply's tool call never runs.
+# An interrupt delivered once chunk 2 of the streamed reply is read cuts the stream there (finish
+# `interrupted`, "hello big"); the cut text stays in the model_call step, the agent's output is
+# null, and the reply's tool call never runs.
 kind: run
 flow: |
   id: steer

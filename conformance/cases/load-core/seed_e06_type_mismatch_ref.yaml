@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e06-type-mismatch-ref.yaml.
 # A float output bound to a `uses:` child's str input fails at the CALL node's `input:` block.
 kind: load
 flow: |
@@ -38,8 +37,7 @@ flow: |
         topic: ${score.output}      # ERROR: float bound to a str-typed callee input
 
   output: ${call.output}
-# `files` stores seed 03 as `research-one.yaml`, the name the flow's `uses:` gives; it stands in
-# for the child resolver Python's test uses.
+# `files` stores seed 03 as `research-one.yaml`, the name the flow's `uses:` gives.
 files:
   research-one.yaml: |
     # 03 — Single-topic research (a reusable child flow).

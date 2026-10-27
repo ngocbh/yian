@@ -1,4 +1,4 @@
-# TS-only: a spliced `${name}` must name an input or variable of the node.
+# A spliced `${name}` must name an input or variable of the node.
 kind: load
 flow: |
   id: chat

@@ -1,5 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_a_value_that_does_not_fit_fails_at_the_output_declaration,
-# with `retries: 3` from tests/engine/test_tool_retries.py::test_an_output_contract_failure_is_not_retried.
 # A return that doesn't fit the TOOL node's `output: int` fails contract.output at that line, and is
 # not retried.
 kind: run

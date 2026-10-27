@@ -1,8 +1,6 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupted_stream_reports_the_usage_received_so_far
-# (Python keeps the text as the output; TS yian's output is null). A text-free first chunk carries
-# the input usage; an interrupt delivered once chunk 3 (" big") is read cuts the stream, and the
-# one ModelCallFinished reports the usage received so far (1000/1/1001) with no error.
+# A text-free first chunk carries the input usage; an interrupt delivered once chunk 3 (" big") is
+# read cuts the stream, and the one ModelCallFinished reports the usage received so far
+# (1000/1/1001) with no error. The agent's output is null.
 kind: run
 flow: |
   id: steer

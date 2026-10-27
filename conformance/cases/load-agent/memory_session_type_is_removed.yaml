@@ -1,4 +1,4 @@
-# TS yian has no session memory: a `session` memory, on an AGENT or a flow, is a load error that
+# yian has no session memory: a `session` memory, on an AGENT or a flow, is a load error that
 # says to carry the history as a LOOP field.
 kind: load
 flow: |

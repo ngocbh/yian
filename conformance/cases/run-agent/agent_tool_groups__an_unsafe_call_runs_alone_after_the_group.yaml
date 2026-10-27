@@ -1,4 +1,3 @@
-# TS-only (D29): Python runs a reply's tool calls one at a time.
 # The reply calls [safe, safe, unsafe]: the two calls of the tool marked concurrency_safe start
 # together; `save`, which isn't marked, waits for both to finish and runs alone. The next request
 # holds the three tool messages in call order.

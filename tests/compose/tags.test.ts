@@ -1,29 +1,6 @@
 /**
- * Reading a slot's type and value through its YAML tags, spelling tags for messages, and
- * rejecting tags outside a slot: a port of `tests/compose/test_tags.py` (the `read_tag_type`,
- * `suggest_tag` and `read_tagged_value` tests). The `read_tagged_value` tests read with a `read`
- * helper as Python's; ints are `bigint`, an unquoted date is text (rule `dates`), so
- * `x: [!str 2026-01-01]` loads where Python asks for quotes, and a missing-field list is written
- * in the text form (`["action"]`).
- *
- * TS-only: direct rows for `splitTypedText`, `oldTypedText`, `spellTypeText`, `closeTypeName`,
- * `suggestedLiteral` (a literal that doesn't parse is kept as written, where Python reads an
- * unbound name), `yamlQuoted`, `pathLabel`, `hasSpan`, `namedTypeLabel`, `rejectTaggedOutput`
- * and `rejectUnreadTags`, which Python tests only through `load_flow`; the fragments of
- * conformance messages these helpers produce, each the exact text in its case; `suggestTag`
- * with neither a type nor its text, which throws `TypeError` where Python asserts; a verbatim
- * tag carrying `[`, `]` or `,`, a flow-style tag cut at its `,`, a `%XX` escape kept raw in a
- * tag, and `!Any` on a date and on a null; and the harvested-case tables, which make the
- * loader's calls on the slots of the conformance cases these functions decide, comparing the
- * message and the last frame (and, through `assembled`,
- * `load-types/compose_tag_positions__tags_in_an_inline_body_slot_load`, whose inline body's slots
- * only the child's assembly reads).
- *
- * Not ported: `read_tag_type`'s long-int message (`the tag` in place of a tag that repeats every
- * digit); ints are unbounded in TS, so the message always shows the tag. And
- * `test_any_other_value_error_from_the_check_is_a_located_load_error`: TS has no value models,
- * so the check throws only `TypeCheckError` for an author's value; anything else is a bug and
- * propagates.
+ * Reading a slot's type and value through its YAML tags, spelling tags for messages, and rejecting
+ * tags outside a slot.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

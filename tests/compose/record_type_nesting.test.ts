@@ -1,33 +1,11 @@
 /**
- * A record type in `output:` counts its levels against the type nesting limit at load: a port of
- * `tests/compose/test_record_type_nesting.py`.
+ * A record type in `output:` counts its levels against the type nesting limit at load.
  *
  * A record written as a mapping, or as a list of single-key maps, in a node's `output:` is one
  * level, and so is every record inside it. A field's type text adds the levels of its resolved
  * type; the total must stay within `MAX_TYPE_NESTING` (100 by default), however YAML text or
  * aliases built the record, so a 1000-link alias chain is a located load error (under a raised
  * `YIAN_MAX_YAML_NODES`: at the default, the chain's anchors exceed the node limit first).
- *
- * Ported: `test_a_record_output_over_a_1000_link_alias_chain_is_a_located_load_error` (all seven
- * sites), `test_a_list_of_fields_output_over_a_1000_link_alias_chain_is_a_located_load_error`,
- * `test_one_record_past_the_limit_is_a_load_error`, `test_a_field_type_counts_its_lists`,
- * `test_records_and_a_deep_list_field_are_counted_together`,
- * `test_a_record_at_the_limit_loads_and_runs`, `test_types_at_the_limit_load`,
- * `test_a_record_at_the_highest_configurable_limit_loads_and_runs` (125, the TS maximum) and
- * `test_a_recursive_record_alias_keeps_its_error` (both rows).
- *
- * Changed: Python also asserts no `RecursionError` in the error's chain; here a stack overflow
- * would be a `RangeError`, not the `LoadError` the rows expect, so `loadErrorAsync` fails on it.
- * The CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
- *
- * Covered by `types/compose_record_type_nesting__a_typedef_name_counts_as_deep_as_its_definition`:
- * `test_a_typedef_name_counts_as_deep_as_its_definition`; by
- * `types/compose_record_type_nesting__record_at_a_configured_limit_loads` and
- * `types/compose_record_type_nesting__record_past_a_configured_limit`:
- * `test_record_nesting_follows_the_configured_limit`.
- *
- * Already ported: `test_a_case_output_over_a_1000_link_alias_chain_is_rejected_as_a_case_output`
- * in `validate.test.ts`.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";

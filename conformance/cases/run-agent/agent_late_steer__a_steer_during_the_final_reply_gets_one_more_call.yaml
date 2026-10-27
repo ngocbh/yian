@@ -1,4 +1,4 @@
-# TS-only (yian #1025): a steer sent while the model gives its final answer gets one more model
+# A steer sent while the model gives its final answer gets one more model
 # call. The agent reads it as a `steer` step after the final reply, and the second request ends
 # with the first reply and the steer.
 kind: run

@@ -1,9 +1,7 @@
-# From tests/engine/test_run_lifecycle.py::test_nonterminal_resume_commits_exact_retries_and_selected_workers[recorded].
-# Also tests/engine/test_run_recovery_matrix.py::test_resume_prepends_ordered_effect_retries_before_existing_ready_work.
 # The node in flight at the crash is retried ahead of the siblings that were already ready, and an absent
 # resume.num_workers keeps the recorded one. Record 8 is a's node_started (b and c ready): a runs, its result is
 # refused.
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# Events left out: a resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |

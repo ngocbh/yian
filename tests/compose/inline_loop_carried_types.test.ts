@@ -1,35 +1,9 @@
 /**
- * An inline LOOP body's returned fields must fit the parameters generated from its seeds: a port
- * of `tests/compose/test_inline_loop_carried_types.py`, loading each flow with `assembleText`
- * (`assemble` as the loader calls it) where Python calls `load_flow`.
+ * An inline LOOP body's returned fields must fit the parameters generated from its seeds.
  *
  * An inline body becomes a child flow whose parameters are typed from the seeds, and each returned
  * field is bound to its parameter again on the next iteration. A returned field that can never fit
  * that parameter is a load error, so loading accepts only flows that can run.
- *
- * Ported: `test_untyped_null_seed_with_a_nullable_list_body_is_rejected_with_a_hint`,
- * `test_untyped_null_seed_error_points_at_the_seed`, `test_int_seed_with_a_float_body_field_is_rejected`,
- * `test_a_typed_seed_names_its_declared_type`,
- * `test_untyped_seed_with_an_optional_body_field_is_rejected_with_a_hint`,
- * `test_typed_str_seed_with_an_int_body_field_is_rejected`,
- * `test_literal_seed_with_a_str_body_field_is_rejected`; the load halves of
- * `test_typed_null_seed_with_a_nullable_list_body_runs`,
- * `test_int_seed_with_an_int_body_field_loads_and_runs`, `test_a_field_the_body_omits_is_not_checked`,
- * `test_typed_seed_with_an_optional_body_field_loads` and
- * `test_typed_seed_with_a_returned_null_fails_the_next_iteration`, and their run halves, through
- * `runFlow` on the same flow text.
- *
- * Changed: the inline CODE bodies are TS, as the harvested cases write them, ints arriving as
- * `number` (decision 45); the runs' ints are bigints (decision 4a). The error rows pin the whole
- * message where Python matches fragments.
- *
- * Pinned at the end (`assembled`, the body inline):
- * `load-loop/compose_inline_loop_carried_types__{literal_seed_with_a_str_body_field_is_rejected,
- * typed_str_seed_rejects_an_int_body_field}`.
- *
- * Pinned in skipped_flow_outputs.test.ts, its file's mirror:
- * `load-case/engine_skipped_flow_outputs__inline_loop_over_an_untyped_seed_asks_for_its_type` (its
- * `Optional(str)` comes from skipping the CASE-gated body node).
  */
 
 import { expect, test } from "bun:test";
@@ -153,7 +127,6 @@ test("an untyped null seed error points at the seed", () => {
 });
 
 test("a typed null seed with a nullable list body loads", () => {
-  // The load half of Python's test_typed_null_seed_with_a_nullable_list_body_runs.
   assembleText(seenLoop("!Optional(list(str)) ${null}"));
 });
 
@@ -172,7 +145,6 @@ test("an int seed with a float body field is rejected", () => {
 });
 
 test("an int seed with an int body field loads", () => {
-  // The load half of Python's test_int_seed_with_an_int_body_field_loads_and_runs.
   assembleText(numberLoop("int", 'inputs["n"] + 1'));
 });
 
@@ -233,7 +205,6 @@ test("a typed seed with an optional body field loads", () => {
 });
 
 test("typed seed with an optional body field runs", async () => {
-  // Python's test_typed_seed_with_an_optional_body_field_loads also runs the flow.
   const result = await run(noteLoop('!str "start"', "Optional(str)", 'inputs["note"] + "!"'));
 
   expect(result.status, result.failure?.message).toBe("succeeded");
@@ -241,7 +212,6 @@ test("typed seed with an optional body field runs", async () => {
 });
 
 test("a typed seed with a returned null loads", () => {
-  // The load half of Python's test_typed_seed_with_a_returned_null_fails_the_next_iteration.
   assembleText(noteLoop('!str "start"', "Optional(str)", "null"));
 });
 

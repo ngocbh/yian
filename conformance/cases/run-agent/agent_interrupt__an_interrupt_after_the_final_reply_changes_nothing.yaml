@@ -1,5 +1,3 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupt_for_a_finished_node_is_ignored.
 # An interrupt delivered once `chat`'s final reply (no tool calls) has been taken is recorded
 # (`interrupted {inbox, nodes: [chat]}`) but cuts nothing: the answer is whole, so `chat`
 # succeeds with "chat done" and writes no honor step; the next AGENT renders it.

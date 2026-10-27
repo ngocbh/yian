@@ -1,6 +1,5 @@
-# From tests/seeds/errors/e31-inline-no-return.yaml.
-# An inline CODE body with no `return` fails at load in Python and loads in TS.
-# The header (the has-`return` load gate) describes the Python form.
+# An inline CODE body with no `return` loads.
+# The flow's header comment (the has-`return` load gate) describes an older CODE form.
 kind: load
 flow: |
   # e31 — an inline CODE body with no `return`. COMPILE: the has-`return` load gate rejects

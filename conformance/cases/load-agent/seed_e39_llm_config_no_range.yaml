@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e39-llm-config-no-range.yaml.
 # An unknown `llm_config:` provider fails at the whole `llm_config:` value, not the node header.
 kind: load
 flow: |
@@ -39,7 +38,7 @@ flow: |
 expect:
   load:
     diagnostics:
-      # No `message`: it is pydantic's text (with a versioned URL), which yian doesn't write.
+      # No `message`: the case pins the code and the frame, not the schema error's text.
       - code: compose.load
         # The `llm_config:` mapping, from `provider:` on line 27 to the `input:` key that ends it.
         frames: [{label: flow.yaml, range: [27, 7, 30, 5]}]

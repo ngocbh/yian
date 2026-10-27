@@ -1,5 +1,3 @@
-# From tests/engine/test_reflective_memory.py::test_commit_is_atomic_idempotent_and_empty_batches_advance_revision
-# and ::test_learn_uses_pinned_config_and_returns_deterministic_proposals (a lone noop action).
 # Pins: a reflective learner that answers noop proposes nothing; the empty batch still commits.
 # YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
 kind: backward

@@ -1,4 +1,3 @@
-# From tests/compose/test_tool_retries_load.py::test_omitted_retries_uses_the_default.
 # A TOOL node without `retries:` takes YIAN_TOOL_RETRIES (1 here): one failure, then a second
 # attempt that succeeds.
 kind: run

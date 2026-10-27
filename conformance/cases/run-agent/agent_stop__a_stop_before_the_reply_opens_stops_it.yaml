@@ -1,4 +1,3 @@
-# TS-only: withdraw and the remembered Stop (#1106).
 # A message is sent to the waiting take, then the host interrupts before the take wakes: no agent
 # reads the inbox yet, so the interrupt records `interrupted {notes, []}`, remembering the Stop.
 # The take wakes and takes the message (a waited take's commit doesn't end the Stop); `reply`

@@ -1,4 +1,3 @@
-# From tests/engine/test_tool_retries.py::test_ten_attempts_are_all_listed.
 # Ten failed attempts are all listed in the failure, none elided.
 kind: run
 flow: |

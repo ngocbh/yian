@@ -1,4 +1,4 @@
-# TS-only: an inbox is never read inside text.
+# An inbox is never read inside text.
 kind: load
 flow: |
   id: f

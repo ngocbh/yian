@@ -1,38 +1,4 @@
-/**
- * Load-time checks for reading a field a value's known type can't have: a port of
- * `tests/compose/test_field_reads.py`, loading each flow with `assembleText` (`assemble` as the
- * loader calls it) where Python calls `load_flow`.
- *
- * Ported: `test_field_on_a_fieldless_output_in_a_flow_output_is_a_load_error`,
- * `test_field_on_str_in_a_node_binding_is_a_load_error`,
- * `test_field_on_str_in_a_case_when_is_a_load_error`,
- * `test_field_on_str_in_a_case_on_is_a_load_error`,
- * `test_field_on_str_in_any_reference_form_is_a_load_error`,
- * `test_nested_field_on_a_record_field_of_type_str_is_a_load_error`,
- * `test_undeclared_record_field_keeps_its_message`, `test_field_on_str_in_map_over_is_a_load_error`,
- * `test_field_on_str_in_wait_until_is_a_load_error` (on a sleep's `until` input),
- * `test_field_on_a_bare_call_output_is_a_load_error`,
- * `test_field_on_a_map_output_is_a_load_error`, `test_field_on_str_in_a_flow_assert_is_a_load_error`,
- * `test_partial_record_output_checks_names_and_typed_fields`,
- * `test_node_assert_on_a_partial_record_output_checks_typed_fields`,
- * `test_node_assert_on_an_exact_record_output_checks_typed_fields`, `test_reads_the_type_allows_still_load`,
- * `test_untyped_output_reads_still_load`, `test_flow_input_field_reads_are_checked`,
- * `test_valid_flow_input_reads_still_load`, `test_inline_body_input_field_reads_are_checked`,
- * `test_map_item_field_reads_are_checked`, `test_map_item_reads_the_type_allows_still_load` and
- * `test_defs_body_input_field_reads_are_checked`. The assert rows pin the whole message where
- * Python matches a fragment.
- *
- * Pinned at the end, the harvested `load-core/compose_field_reads__*` cases the reference validator
- * decides, and the assert checks' `load-core/compose_field_reads__field_on_str_in_a_flow_assert` and
- * `load-core/compose_field_reads__node_assert_reads_a_field_of_a_str_field`.
- *
- * Ported, as a flow run (first, as in Python): `test_case_when_on_a_missing_optional_record_input_is_falsy`,
- * both runs (its case `run-core/compose_field_reads__case_when_on_a_missing_optional_record_is_falsy`
- * holds only the first).
- *
- * Covered by `run-core/compose_field_reads__optional_record_field_reads_null`:
- * `test_optional_record_field_reads_null_when_the_whole_value_is_null`.
- */
+/** Load-time checks for reading a field a value's known type can't have. */
 
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

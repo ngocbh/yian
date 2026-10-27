@@ -1,7 +1,4 @@
-/**
- * CODE-node functions harvested cases reference: a TypeScript port of yian's
- * `tests/engine/_compose_codefns.py`. Functions are ported as harvested cases reference them.
- */
+/** CODE-node functions the conformance cases reference by `./fixtures/compose_codefns.ts:<name>`. */
 
 /** Return a multi-field object matching a declared `{rating, score}` record. */
 export function make_plan(inputs: Record<string, any>): Record<string, unknown> {
@@ -27,7 +24,7 @@ export function cautious(inputs: Record<string, any>): string {
 /** A `{report, n}` child codomain (CALL re-exports it; MAP collects a list of it). */
 export function make_report(inputs: Record<string, any>): Record<string, unknown> {
   const t = inputs.topic;
-  // Python's len() counts code points, not UTF-16 units.
+  // `n` counts code points, not UTF-16 units.
   return { report: `report for ${t}`, n: BigInt([...t].length) };
 }
 

@@ -1,8 +1,7 @@
-# From tests/engine/test_run_connection_settings.py::test_resume_sends_the_given_headers_to_the_key_agents.
 # Header names compare without case, as in HTTP: the recorded names given in other cases resume the run, and
 # no header value is recorded.
 # Record 8 is agent's node_started: its first model call runs, its result is refused.
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# Events left out: a resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |

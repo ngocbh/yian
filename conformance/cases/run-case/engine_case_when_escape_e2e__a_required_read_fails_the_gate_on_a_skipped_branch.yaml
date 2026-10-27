@@ -1,6 +1,5 @@
-# From tests/engine/test_case_when_escape_e2e.py::test_a_required_read_fails_the_gate_on_a_skipped_branch.
 # A CASE `when:` with a required read (`:?`) of a skipped branch fails the gate with the read's
-# message. TS fails condition.evaluate and Python node.execute.
+# message. It fails condition.evaluate.
 kind: run
 flow: |2
 

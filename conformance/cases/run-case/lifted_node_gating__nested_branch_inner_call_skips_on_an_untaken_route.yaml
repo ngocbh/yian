@@ -1,4 +1,3 @@
-# From tests/engine/test_lifted_node_gating.py::test_nested_branch_call_does_not_run_its_inner_call_on_an_untaken_route.
 # Pins: the inner call of a nested `then: call(wrap, x=call(side, ...))` never starts when `else:` is taken.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run

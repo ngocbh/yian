@@ -1,30 +1,4 @@
-/**
- * Agent-local variable declarations and the AGENT build that reads them: a port of
- * `tests/compose/test_agent_variables.py`, reading declarations with `parametersFromYaml`
- * (`readSourceParameters`) and loading flows with `assembleText` where Python calls `load_flow`.
- * Ints are `bigint`.
- *
- * Ported: `test_agent_variables_reject_missing_empty_or_invalid_defaults`,
- * `test_agent_build_resolves_typed_variables_without_input_bindings` (the defaults read, then
- * built; a float slot keeps `compatible`'s int `4n`), `test_agent_variables_reject_malformed_mappings_and_names`,
- * `test_variable_reader_can_decline_a_source_free_declaration`,
- * `test_variable_reader_rejects_a_noncanonical_return_value`,
- * `test_variable_input_collision_selects_the_variable_declaration_key`,
- * `test_invalid_variable_default_selects_the_declaration_value`,
- * `test_invalid_variable_name_selects_its_declaration_key`, and
- * `test_loaded_agent_prompt_can_name_inputs_and_variables_without_default_data_edges`.
- *
- * Changed: the malformed mappings drop Python's `{1: "int"}` row: a record's keys are always
- * text, so it has no TS counterpart (`{"1": "int"}` would fail for its missing default instead),
- * and `test_invalid_variable_name_selects_its_declaration_key` covers a non-text YAML key; the
- * noncanonical returns are a record, text, a set, and lists holding a record
- * or a `Parameter` subclass, where Python's are a tuple, a dict and a list holding an `object()`.
- *
- * TS-only: `readVariables` on its own, which `AgentDescriptor` calls for a node with no
- * authored source; and the harvested-case table, which makes the loader's call on the
- * conformance cases of these declarations, comparing the message and the last frame, or
- * checking that the flow loads.
- */
+/** Agent-local variable declarations and the AGENT build that reads them. Ints are `bigint`. */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 

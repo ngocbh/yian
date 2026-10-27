@@ -1,13 +1,4 @@
-/**
- * The `when:` hint on a node body's unknown-key error: a port of
- * `tests/compose/test_node_when_hint.py`, through `parseFile`, `flowNodesCursor` and `parseNodes`
- * with the registered kinds.
- *
- * Changed: `test_when_on_non_case_node_suggests_a_case_node` sweeps the registered kinds but
- * `case`, through `parseNodes` where Python loads the flow;
- * `test_when_on_case_node_points_at_cases_entries` runs on the real `case` kind. The harvested
- * `compose_node_when_hint__when_on_*` cases are pinned.
- */
+/** The `when:` hint on a node body's unknown-key error. */
 
 import { afterEach, expect, test } from "bun:test";
 

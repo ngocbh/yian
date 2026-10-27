@@ -1,4 +1,3 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
 # An interrupt delivered once model call 1 has finished (record 9) skips both of the reply's tool
 # calls (records 11 and 12); the agent then writes `interrupted {by: 9}` (record 13).
 # A crash after the skipped results (record 12), before the agent's `interrupted {by}` step,

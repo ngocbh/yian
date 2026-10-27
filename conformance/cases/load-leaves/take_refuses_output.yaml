@@ -1,4 +1,4 @@
-# TS-only: a take's output is inferred, so `output:` is refused.
+# A take's output is inferred, so `output:` is refused.
 kind: load
 flow: |
   id: f

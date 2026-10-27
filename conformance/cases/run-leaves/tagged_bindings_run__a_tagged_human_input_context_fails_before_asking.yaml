@@ -1,4 +1,3 @@
-# From tests/engine/test_tagged_bindings_run.py::test_tagged_human_input_context_fails_before_asking.
 # A tagged ask input (`!int`, a context input the host declares) over an untyped value "three"
 # fails binding.type before the ask asks; an `!Any` flow input stands in for the test's untyped
 # CODE source.

@@ -1,4 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_a_wider_return_type_runs_and_the_gate_still_checks_each_value.
 # A TOOL node's record `output:` checks each field of the return: a text `qty` fails contract.output.
 kind: run
 flow: |

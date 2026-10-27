@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e24-nested-code-raise.yaml.
 # A CODE throw inside a called `defs:` child fails `run/boom`: frames the CALL, then the `code:`.
 # The header's `--engine-trace` is a `yian run` flag; this run case doesn't use it.
 kind: run

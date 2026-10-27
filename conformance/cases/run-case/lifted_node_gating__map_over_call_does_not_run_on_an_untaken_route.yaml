@@ -1,4 +1,3 @@
-# From tests/engine/test_lifted_node_gating.py::test_map_over_call_does_not_run_on_an_untaken_route.
 # Pins: a MAP's `over: call(...)` never starts on the untaken route.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run

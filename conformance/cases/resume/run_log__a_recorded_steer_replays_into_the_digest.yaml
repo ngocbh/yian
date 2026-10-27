@@ -1,4 +1,3 @@
-# TS-only: Python reruns an AGENT from its start on resume, and has no inboxes.
 # A steer sent while lookup runs is read before the next model call as a `steer` step; the crash
 # comes right after that step. The resumed agent replays the reply and lookup's result, feeds the
 # recorded steer back, and makes the live call with it in the request (its `request` below), so

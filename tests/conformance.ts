@@ -258,16 +258,16 @@ function get(mapping: Case, key: string, fallback?: Value): Value | undefined {
   return Object.hasOwn(mapping, key) ? mapping[key] : fallback;
 }
 
-/** Return whether `value` is true in Python's sense: not null, false, zero or empty. */
+/** Return whether `value` counts as true: not null, false, zero, empty text, or an empty list or mapping. */
 function truthy(value: Value | undefined): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (isMapping(value)) return Object.keys(value).length > 0;
-  // NaN is true to Python.
+  // NaN counts as true.
   if (typeof value === "number") return value !== 0;
   return Boolean(value);
 }
 
-/** Return whether `value` is 0 in Python's `== 0` sense, under which 0.0 and false equal 0 too. */
+/** Return whether `value` is zero: 0, 0.0 and false all count. */
 function isZero(value: Value | undefined): boolean {
   return value === 0n || value === 0 || value === false;
 }
@@ -283,7 +283,7 @@ export function readCase(text: string): Case {
   const error = doc.errors[0];
   if (error !== undefined) throw new Error(error.message);
   // YAML readers disagree on tags (`! 12` is text to some, `!!timestamp` a date), so a case
-  // file has none. They are refused before any key, as Python's composer does.
+  // file has none. They are refused before any key is checked.
   visit(doc, {
     Node(_, node) {
       if (node.tag !== undefined) {
@@ -291,13 +291,13 @@ export function readCase(text: string): Case {
       }
     },
   });
-  // Keys are checked level by level, mappings in document order, as Python's constructor does.
+  // Keys are checked level by level, mappings in document order.
   const nodes: unknown[] = [doc.contents];
   for (const node of nodes) {
     if (isSeq(node)) nodes.push(...node.items);
     else if (isMap(node)) checkKeys(doc, node, (value) => nodes.push(value));
   }
-  // Case files are trusted, and Python has no alias limit.
+  // Case files are trusted, so aliases have no limit.
   const value = doc.toJS({ maxAliasCount: -1 }) as Value;
   if (!isMapping(value)) throw new Error("a case file holds one mapping");
   return value;
@@ -307,7 +307,7 @@ export function readCase(text: string): Case {
 function checkKeys(doc: Document, map: YAMLMap, next: (value: unknown) => void): void {
   const seen = new Set<string>();
   for (const pair of map.items) {
-    // Python builds a collection key in full first, so a bad key inside it is reported first.
+    // A collection key is checked in full first, so a bad key inside it is reported first.
     if (isCollection(pair.key)) checkDeep(doc, pair.key);
     const key = (isNode(pair.key) ? pair.key.toJS(doc, { maxAliasCount: -1 }) : pair.key) as Value;
     if (typeof key !== "string") throw new Error(`mapping key ${spell(key)} is not text`);
@@ -588,7 +588,7 @@ function checkStop(stop: Value | undefined): void {
  * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` items, optionally with
  * `after: {node, <point>}` (sent live when the run reaches the point) or, in a `resume` case,
  * `down: true` (sent after the crash, before the resume), `{close}` items, `{interrupt}` items
- * (TS-only: `interrupt(run, inbox)`), optionally with `after`, and `{complete, output}` or
+ * (`interrupt(run, inbox)`), optionally with `after`, and `{complete, output}` or
  * `{complete, error}` items.
  */
 function checkSends(value: Value | undefined, kind: Kind): void {
@@ -914,7 +914,7 @@ export function checkCase(case_: Case): Case {
 /** Return a case value read from yian's JSON codec form; a bare non-finite float is an error. */
 export function decode(value: Value): Value {
   if (typeof value === "number" && !Number.isFinite(value)) {
-    // Spelled as Python spells the float.
+    // The message names the float nan, inf or -inf.
     const bare = Number.isNaN(value) ? "nan" : value > 0 ? "inf" : "-inf";
     throw new Error(`a bare ${bare} is not a case value; write {$float: inf} or {$float: -inf}`);
   }
@@ -973,7 +973,7 @@ export class CaseFailure extends Error {
   override name = "CaseFailure";
 }
 
-/** Return `value` as Python's `str()` writes it into a message: text as is, else spelled. */
+/** Return `value` as a message shows it: text as is, else spelled. */
 function str(value: Value | undefined): string {
   return typeof value === "string" ? value : spell(value);
 }
@@ -2072,9 +2072,8 @@ function llm(config: Case): Case {
   return kept;
 }
 
-/** Return whether a route field holds its empty value, as Python's `in (None, [], 0, "")` reads. */
+/** Return whether a route field holds its empty value: null, "", an empty list, or 0, 0.0 or false. */
 function emptyRouteValue(value: Value): boolean {
-  // Python's `0` also equals `0.0` and `False`.
   return (
     value === null || value === "" || value === 0 || value === 0n || value === false ||
     (Array.isArray(value) && value.length === 0)
@@ -2523,7 +2522,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const resume = get(case_, "resume", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
-  // The learners' events (TS-only, from `buildMemories`' `onEvent`) are never read: collected here
+  // The learners' events (from `buildMemories`' `onEvent`) are never read: collected here
   // so they stay out of the run's `events`, which `expect.events` compares.
   const apart: unknown[] = [];
   // A run without `host.memory` gets none, leaving the flow's declarations dormant.
@@ -2564,7 +2563,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       caught = { raises: raised(error), error };
     }
     if (!Object.hasOwn(caught, "raises")) {
-      // A close error escapes as the case's own error, as Python's `with` lets it.
+      // A close error escapes as the case's own error.
       try {
         await cutFirstRun(spec, () => start(cutMemory), stop);
       } finally {
@@ -3399,7 +3398,7 @@ const CLI_SCHEMA = JSON.parse(
 const FILLED = /sk-conformance-[0-9]+/g;
 
 /**
- * Return `value`, a case's plain JSON, as JSON text with Python's spacing, floats with a
+ * Return `value`, a case's plain JSON, as JSON text with `, ` and `: ` separators, floats with a
  * fraction.
  */
 function jsonText(value: Value): string {
@@ -3671,8 +3670,8 @@ async function runCommand(
     }
     return ran;
   } finally {
-    // Ends a command the case gave up on, and waits for it, as Python's `process.wait()`, so the
-    // stub and the hook outlive it.
+    // Ends a command the case gave up on, and waits for it to exit, so the stub and the hook
+    // outlive it.
     if (!finished) {
       child.kill("SIGKILL");
       await exited;
@@ -3720,8 +3719,7 @@ function cliDocument(text: string, stdout: string): Value {
 }
 
 /**
- * Whether `path` exists, a dangling symlink included; false on any system error, as Python's
- * `os.path.lexists`.
+ * Whether `path` exists, a dangling symlink included; false on any system error.
  */
 function lexists(path: string): boolean {
   try {

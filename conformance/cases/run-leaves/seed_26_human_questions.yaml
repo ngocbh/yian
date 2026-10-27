@@ -1,6 +1,6 @@
-# From tests/seeds/26-human-questions.yaml.
 # An ask's static questions get an answer record keyed by header; CODE reads its label.
-# No `tool_calls`: docs/api.md's `ask_user` doesn't define `question` for a questions-only gate.
+# No `tool_calls`: the `ask_user` tool's `question` for a questions-only gate isn't documented, so it
+# isn't pinned.
 kind: run
 flow: |
   # 26 — ask questions: the three question surfaces.

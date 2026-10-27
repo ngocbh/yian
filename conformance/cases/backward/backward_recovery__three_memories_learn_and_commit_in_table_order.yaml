@@ -1,5 +1,3 @@
-# From tests/engine/test_backward_recovery.py::test_three_memory_failure_preserves_ordered_dispositions_and_admits_a_public_retry
-# (its success path: built-in memories can't fail a commit on cue).
 # Pins: three memories (episodic A on the flow, reflective B on one AGENT, profile C on the other)
 # learn and commit in key order, each with its own disposition in the outcome.
 # YIAN_DEFAULT_PROVIDER/MODEL: reflective and profile learners' model config comes from the defaults.

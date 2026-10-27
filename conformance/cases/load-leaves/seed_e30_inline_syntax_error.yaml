@@ -1,7 +1,4 @@
-# From tests/seeds/errors/e30-inline-syntax-error.yaml.
 # An inline CODE body that doesn't parse fails at load, at the body line.
-# `return (` is the same text and the same syntax error in Python and TS, so this CODE case is
-# shared and carries no `code` rule.
 kind: load
 flow: |
   # e30 — a malformed inline CODE body. COMPILE: the load-time compile() syntax gate raises

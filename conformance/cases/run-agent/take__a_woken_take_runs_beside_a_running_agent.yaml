@@ -1,4 +1,4 @@
-# TS-only: a woken TOOL node takes no worker. With one worker, `heard`'s take waits on the inbox
+# A woken TOOL node takes no worker. With one worker, `heard`'s take waits on the inbox
 # and `chat` takes the worker; a send during chat's model call wakes `heard`, which decides its
 # take beside the running AGENT. The in-flight invariant counts the woken take as holding no
 # worker (a woken AGENT would hold one).

@@ -1,4 +1,4 @@
-# TS-only: an inbox handle's mapping holds exactly the key inbox.
+# An inbox handle's mapping holds exactly the key inbox.
 kind: value
 type: Inbox(str)
 value:

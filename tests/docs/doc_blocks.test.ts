@@ -100,7 +100,7 @@ test("the CLI table refuses unknown commands and options", () => {
 
 test("npx and bunx running the package are yian lines", () => {
   expect(asYian(shellWords("npx @ngocbh/yian run a.yaml"))).toEqual(["yian", "run", "a.yaml"]);
-  expect(asYian(shellWords("bunx @ngocbh/yian@0.1.0 --version"))).toEqual(["yian", "--version"]);
+  expect(asYian(shellWords("bunx @ngocbh/yian@0.0.4 --version"))).toEqual(["yian", "--version"]);
   expect(asYian(shellWords("npx -y @ngocbh/yian check a.yaml"))).toEqual(["yian", "check", "a.yaml"]);
   expect(asYian(shellWords("npx other run"))).toBeNull();
   expect(asYian(shellWords("npm install @ngocbh/yian"))).toBeNull();

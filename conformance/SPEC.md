@@ -37,8 +37,8 @@ additions to this file.
 
 ```yaml
 kind: run                  # load | run | resume | backward | expr | value | defaults | fingerprint | cli | json
-pending: "#391"            # the runner expects this case to fail until that issue lands
-flow: |                    # the flow (TS CODE bodies)
+pending: "<reason>"        # the runner expects this case to fail until the reason is fixed
+flow: |                    # the flow
   id: greet
   ...
 files: {}                  # more files in the case directory: relative path -> text
@@ -63,7 +63,8 @@ Every case runs in a new temporary directory, the *case directory*:
 - `flow` is written to `flow.yaml`, and each `files` entry to
   its relative path with mode 0600; `fixtures/` is a copy of `conformance/fixtures/`. The case
   directory, and every directory the runner makes for `files`, is 0700 (yian's auth store refuses
-  anything others can read; its own checks are pinned by unit tests, not by cases). A TS CODE reference resolves relative to the file that holds it, so `flow.yaml`, or a
+  anything others can read; its own checks are pinned by unit tests, not by cases). A CODE
+  reference resolves relative to the file that holds it, so `flow.yaml`, or a
   `files` entry at the top of the case directory, names a shared helper `./fixtures/<file>.ts:<fn>`.
 - The flow is loaded from the text of `flow.yaml` with the source label `flow.yaml`, resolving
   `uses:` and `call:` paths in the case directory. Frame labels are what the loader gives:
@@ -73,11 +74,11 @@ Every case runs in a new temporary directory, the *case directory*:
   variable and every variable whose name ends in `_API_KEY`, `_BASE_URL`, `_ENDPOINT` or
   `_API_VERSION` is unset first, and `YIAN_AUTH_FILE` names a file in the case directory that
   doesn't exist, unless `env` sets them. Values in `env` are text.
-- **Values keep their kinds.** A runner hands case values to the implementation as yian values
+- **Values keep their kinds.** A runner hands case values to yian as yian values
   with the kinds the case file gives them: `inputs`, stub tool results, human answers,
-  `value`, `values` and `item`. A TS run still takes `inputs`, a tool result and an answer
-  through host intake (design 3.2.1), as it takes any host's, so a whole float reaches it as an
-  int: `2.0` is the int `2` (`2.5` stays a float).
+  `value`, `values` and `item`. yian takes `inputs`, a tool result and an answer through host
+  intake, as it takes any host's, so a whole float reaches it as an int: `2.0` is the int `2`
+  (`2.5` stays a float).
 - **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `backward`, `env`, `host`,
   `stdin` and `http`. The runner replaces each with the text `sk-conformance-N` and fails the case
   if one appears in the trace, events, stream, tool calls, output, the raised error's message,
@@ -116,8 +117,8 @@ runner always gives the run a log file in the case directory, and projects it to
 
 | `run` key | Meaning | Absent |
 |---|---|---|
-| `run_id` | the run id | the implementation makes one (a placeholder in expectations) |
-| `num_workers` | the worker bound; `0` is serial | the implementation's default, 8 |
+| `run_id` | the run id | yian makes one (a placeholder in expectations) |
+| `num_workers` | the worker bound; `0` is serial | yian's default, 8 |
 | `learnable` | keep learning evidence | `false` |
 | `llm_config` | the run's `llm_config` layer (its `headers` included) | none |
 | `context` | `present`: tools get a host context object | none |
@@ -135,9 +136,8 @@ every other result is the main run's.
 For serial runs (`num_workers: 0`). A `resume` case gives one of `host.crash_after_record`, a
 record number or `end`, and `host.stop` (below). A number `k` cuts the first run after record `k`
 (0-based, so records `0`..`k` are kept): every later append is refused without writing, the run
-is abandoned, and the runner checks that the cut happened. Each runner's cut still runs the run's
-own cleanup (closing the log, and memory and MCP close calls; in TS, `runFlow`'s), which a real
-crash would not. `end` lets the first run run to its end (a first run that raises fails the case),
+is abandoned, and the runner checks that the cut happened. The cut still runs the run's own
+cleanup (closing the log, and memory and MCP close calls), which a real crash would not. `end` lets the first run run to its end (a first run that raises fails the case),
 so the resume is a finished run's, read-only. With `host.stop`, the first run must reject with the
 stop, and the resume continues the stopped run. Then the flow is
 resumed from the log with the `resume` arguments `num_workers` (absent: the recorded value),
@@ -181,9 +181,9 @@ stored value and `expect.kind` its storage kind (`int`, `list[str]`, `object`, .
 
 ### `defaults`
 
-Reads yian's defaults from `env`. `expect.defaults` maps entry names (as in `docs/defaults.md`,
-`MAX_TOTAL_NODES`) to their values; entries not listed aren't compared, and an entry the
-implementation doesn't define fails the case. `expect.raises` is the error for a bad variable.
+Reads yian's defaults from `env`. `expect.defaults` maps entry names (as in `src/defaults.ts`,
+`MAX_TOTAL_NODES`) to their values; entries not listed aren't compared, and an entry
+yian doesn't define fails the case. `expect.raises` is the error for a bad variable.
 
 ### `fingerprint`
 
@@ -207,9 +207,8 @@ given the path (`--log`).
 
 A `json` document, and each `json_lines` line, is checked as parsed (before the codec decoding)
 against `conformance/schema/cli.schema.json` before it is compared; a document that doesn't
-match fails the case. Runners validate with JSON Schema 2020-12; the TS runner uses
-`tests/schema.ts`, the small validator the event and message schema tests share, which
-implements the keywords these schemas use.
+match fails the case. The runner validates with `tests/schema.ts`, a small JSON Schema 2020-12
+validator that implements the keywords these schemas use.
 
 `expect.exists` maps relative paths under the case directory (not absolute, no `..` part) to
 `true` or `false`: whether each exists after the command (a dangling symlink exists).
@@ -261,7 +260,7 @@ http:
 ### `json`
 
 Reads JSON text with yian's lossless reader, or writes a value with one of yian's canonical
-encoders (design #736, sections 3.2.1, 3.2.5, 3.2.12). `read` is the JSON text and `mode` is
+encoders. `read` is the JSON text and `mode` is
 `codec` (yian's codec form is decoded: data yian wrote) or `plain` (nothing is decoded: model
 replies, tool arguments, `--inputs`); `expect.value` is the value read. `write` is a value
 (in codec form, like every case value) and `form` is `canonical` (RFC 8785, for
@@ -278,8 +277,7 @@ A case can't hold code, so its host is declared under `host`.
 - **`tools`**: stub tools by name, each `{parameters: <JSON Schema>, description: <text>,
   concurrency_safe: <bool>, results: <script>}` (`description` and `concurrency_safe`
   optional). With `concurrency_safe: true`, the tool's `isConcurrencySafe` returns true for every
-  call, so an AGENT may run its calls together (see
-  [`docs/api.md`](../docs/api.md#tool-context)). A script is a list of entries, taken one per call
+  call, so an AGENT may run its calls together. A script is a list of entries, taken one per call
   in order, or a mapping from node id to such a list, taken by the calling node (for tools that
   several nodes call at once). An entry is `{return: <value>}` or `{raise: {class: <name>,
   message: <text>, retry_after: <seconds>}}` (`retry_after`, a finite non-negative number of
@@ -293,7 +291,7 @@ A case can't hold code, so its host is declared under `host`.
   takes `results` or `pending: true`, not both.
 - **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's ask handler gives to the
   calling node, in order; the same rules when they run out or are left over. The one handler
-  answers a TOOL `ask` (TS) and an agent's `ask_user` tool. In TS it declares, as extra inputs,
+  answers a TOOL `ask` and an agent's `ask_user` tool. It declares, as extra inputs,
   every input the flow's TOOL `ask` nodes pass beyond `prompt`, `questions` and `timeout` (such
   as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
   `ask` or `ask_user`.
@@ -314,7 +312,7 @@ A case can't hold code, so its host is declared under `host`.
   - `{interrupt, after: {node: <node id>, <point>}}` calls `interrupt(log, inbox)` while the run
     is live, when it reaches the point; the delivery lands in the same tick, through the run's
     engine. It interrupts every AGENT reading that inbox as its `steer_inbox:`, running or
-    waiting (see [Interrupting an agent](../docs/api.md#interrupting-an-agent-ts-yian)).
+    waiting.
   - `{withdraw, after: {node: <node id>, <point>}}` calls `withdraw(log, inbox)` while the run is
     live, when it reaches the point, through the run's engine.
   - `{inbox, event, down: true}`, `resume` cases only, is sent after the cut and before the
@@ -323,7 +321,7 @@ A case can't hold code, so its host is declared under `host`.
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
   and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules
   apply.
-  Without `jitter`, draws are the implementation's own, and the case doesn't depend on them.
+  Without `jitter`, draws are yian's own, and the case doesn't depend on them.
 - **`models`**: scripted model calls, `{<node id>: {<consumer>: [<entry>, ...]}}`; each call
   takes the next entry of its node and consumer. The consumers are `agent` (an AGENT's calls),
   `structured_retry` (a structured call's attempts after its first, which keeps the outer
@@ -338,18 +336,18 @@ A case can't hold code, so its host is declared under `host`.
   fails with an error of class `class` and message `message`: as for a stub tool, `TimeoutError`
   and `ConnectionError` are those classes, and any other name is a plain error with that class
   name.
-  In TS, a `raise` with `status` is the provider error an HTTP reply with that status and body
+  A `raise` with `status` is the provider error an HTTP reply with that status and body
   would give (its kind read from the status and the message, as `kindForStatus` reads a body);
-  its class name is TS's own, so a case with such a raise doesn't pin `ModelCallFinished.error`.
+  its class name is yian's own, so a case with such a raise doesn't pin `ModelCallFinished.error`.
   Without `status`, it is a plain error named `class`, never retried.
-  TS seats a call from the call itself, since its model is built per node: the node id is the
+  The runner seats a call from the call itself, since its model is built per node: the node id is the
   one the model was built for, and the consumer is the one it was built for when it has one
   (`ModelAccess.createModel`'s `consumer`: `backward`, or `memory:<key>` under `__memory__`),
   else `summary` when the request's first message is a system message starting `Summarize the
   historical conversation` (the AGENT's summary prompt), else `structured_retry` when the
   request's last message is a user message starting `Your previous output was invalid:` (the
   correction a structured call adds after an invalid reply), else `compose` for a node id ending
-  in `__compose` and `agent` for any other. Every TS model call streams, so no `chunks` entry is
+  in `__compose` and `agent` for any other. Every model call streams, so no `chunks` entry is
   summed; the text chunks of an entry build one text part, ahead of its tool calls.
   Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
   <JSON Schema>}`, which the runner compares exactly with the call's, failing the case when they
@@ -412,11 +410,6 @@ uses it:
 
 - **`skills`**: skill directories, given as `files`.
 
-Not in the format yet (each comes as an addition when a case needs it): file values in
-`values`/`item`, output schemas for stub tools, `files` for the `other` flow of a fingerprint
-case, a clock for `system.now`, and the content of a file after a `cli` command (such as
-which logins an auth file holds), so no case pins a removal or the token a refresh saves.
-
 ### Points
 
 A `sends` item's or a `stop`'s `after: {node: <node id>, <point>}` names a point in an AGENT's
@@ -433,7 +426,7 @@ or MAP). The points:
 
 Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
 scripts do. Points count in the main run (and its resume), never in a `host.memory` `before`
-run, whose calls aren't counted. A resumed TS AGENT replays its recorded calls, steers and
+run, whose calls aren't counted. A resumed AGENT replays its recorded calls, steers and
 `interrupted` step (`resume/run_log__*`); an interrupt recorded before the cut and not yet
 honored is honored on the resume.
 
@@ -449,7 +442,7 @@ tool call. A host can't act "before" a point, so:
   already started when an earlier one returns, and they finish;
 - an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.
 
-TS checks for an interrupt before each later **text** chunk, before each tool call's check,
+yian checks for an interrupt before each later **text** chunk, before each tool call's check,
 before each group, and before failing at a call whose check failed. So a case that cuts
 mid-stream needs a text chunk after its point (an interrupt before a `tool_call`, `usage` or
 `finish` chunk keeps the reply whole, and its calls are skipped with brackets).
@@ -465,7 +458,7 @@ output fails `agent.interrupted`.
 **Comparison** is exact and kind-strict: `true`, `1`, `1.0` and `"1"` all differ; mappings are
 compared by keys and values, ignoring key order; lists in order. One exception: in values a host
 receives (`expect.output`'s `output`, event data, stream chunks and `tool_calls`), an int and a
-float compare by value (`2` equals `2.0`), because a TS host receives both as a JS `number`. The
+float compare by value (`2` equals `2.0`), because a host receives both as a JS `number`. The
 trace keeps the kinds. Kinds are about yian values: the format's own numbers (ranges, paths,
 attempts, sequence numbers, `defaults` values, `exit`) are ints, and `retry_in` is a float.
 
@@ -488,7 +481,7 @@ failure.
 **Raises**: `{class, message}`, plus `path` for a `TypeCheckError` (a list of field names and
 list indexes, `[]` at the root). `class` is the error's class name.
 
-**Error classes.** A case names an error by its TS class as thrown (`error.name`), in `raises`
+**Error classes.** A case names an error by its class as thrown (`error.name`), in `raises`
 and in the error type of TOOL steps: `RangeError`, `TypeError`, `RunLogSchemaError` and the
 like, a stub's declared class included. There is no mapping table.
 
@@ -521,8 +514,8 @@ they are, except as the rules below say), and an empty payload is left out.
 | `node_woken` | `node_id` | `timed_out` |
 | `run_waiting` | null | `node_ids` |
 | `inbox_closed` | null | `inbox` |
-| `inbox_withdrawn` (schema 23) | null | `inbox`, `events` |
-| `interrupted` (`nodes` may be empty from schema 23) | null | `inbox`, `nodes` |
+| `inbox_withdrawn` | null | `inbox`, `events` |
+| `interrupted` | null | `inbox`, `nodes` (may be empty) |
 | `run_cancelled` | null | none |
 | `run_failed` | null | `failure` |
 | `node_started` | `node_id` | none |
@@ -552,13 +545,13 @@ For example:
 - [node_failed, place, {failure: {code: node.execute, message: rejected, node: place, frames: [{label: flow.yaml, range: [12, 3, 12, 8]}]}}]
 ```
 
-- Every write to the variable pool is a `pool_commit` (TS schema 13): the run start writes the
+- Every write to the variable pool is a `pool_commit`: the run start writes the
   system values (keys `system.now`, `system.run_id`, `system.today`, in key order) and then the
   START inputs right after `run_started`, and a node's output is a `pool_commit` before the
   `node_succeeded` that names its seq. A commit no success names (a crash between the two) stays
   in the log and its node reran. The run start's times (`system.now`, `system.today`) leave out
   their `value`.
-- A derived commit (TS schema 16) holds no `value` but `from`: each pool name its binding read,
+- A derived commit holds no `value` but `from`: each pool name its binding read,
   to the seq of the `pool_commit` that wrote it; replay rebuilds the value. Derived commits are a non-top `__end__`'s, the stopping LOOP
   driver's, and the expansion's: before `node_expanded`, the spawner writes one per START of the
   fragment (its own, then each child flow's), keyed by the child START, with the spawner's
@@ -566,11 +559,11 @@ For example:
 - Values are plain values: a `pool_commit`'s `value` is recorded typed (`kind` and `value`), and
   is written without the kind tag (a file as `{uri, mime, name}`); every other value
   (captures, feedback) is recorded plain already.
-- A messages commit (TS schema 22) holds no `value` but `steps`: the seqs of the AGENT's steps
+- A messages commit holds no `value` but `steps`: the seqs of the AGENT's steps
   its success rebuilds `<node>.new_messages` from (each chat reply that arrived, every tool
   result, and a structured agent's accepted call). An AGENT writes it right after its output
   commit, and `node_succeeded.messages` names it.
-- A take commit (TS schema 18) holds no `value` but `inbox`, `events` (the seqs of the send
+- A take commit holds no `value` but `inbox`, `events` (the seqs of the send
   commits it consumed, in order) and `closed` (whether it saw the inbox closed); its node's
   success rebuilds the value from those sends.
 - `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent`, `waits`, `timed_out` and
@@ -580,9 +573,7 @@ For example:
 - Dropped: the envelope (`schema`, `run_id`, `seq`); a `pool_commit`'s `kind`; from
   `run_started`, `flow_fingerprint`, `start_wiring_override`, `memory_snapshots`, `memories`,
   `memory_stacks`, and the bulky `flow` (the flow files), `skills`, `tools` and `yian_version`;
-  `topology_digest`; and every `evidence` field (the model and tool evaluation
-  evidence, whose shape is implementation-specific; TS schema 17 writes none, since learning
-  reads the steps).
+  and `node_expanded`'s `topology_digest`.
 - Failures: `node_failed.failure`, `node_routed.terminal_failure`, `run_failed.failure` and a
   backward failure's `cause` (when it is a node failure, with `trace`) are in failure form. A backward failure
   (`backward_finished.outcome.failure`) leaves out `cause_type` and `traceback`. Nothing else
@@ -590,8 +581,8 @@ For example:
   placeholders. A memory record's `failure` is a memory operation failure, `{stage, code,
   message, retryable}`, kept as recorded.
 - In `forward_capture`, a route (and each route nested in its `children` and `snapshot`)
-  leaves out `expression` and `result_type`, because they are text each implementation spells
-  its own way (a literal's JSON text, markers for values JSON can't hold); its structure stays.
+  leaves out `expression` and `result_type`, because their spelling isn't part of the
+  contract (a literal's JSON text, markers for values JSON can't hold); its structure stays.
   It also leaves out every other field equal to its empty value (null, `[]`, `0`, `""`), except
   `kind`, which always stays, and its `value_json` text is read as JSON (codec form). The
   capture leaves out `evaluated_keys`, `items`, `input_names` and `variable_names` when they
@@ -613,18 +604,17 @@ For example:
   internal and its effect is recorded in each call-time agent's `effective_llm_config` step.
 - The backward records' nested structures are kept as recorded, except the backward failure
   above.
-- A step (TS schema 14) shows its `n` and every field as written, its `kind` included: a TOOL's
+- A step shows its `n` and every field as written, its `kind` included: a TOOL's
   `tool_attempt`, a call-time agent's `llm_config`, an AGENT's `model_call` and `tool_result`
   (`closed: skipped` for a call a host interrupt skipped, `closed: crashed` for one a resume
   closed because its run was cut off before its result). Its times (`started_at`,
   `first_token_at`) are left out.
-- In TOOL steps, `retry_in` is a float, and a `failed` step's error type goes through the
-  error-class table; so does a failed `model_call`'s error `kind` (a provider error's kind, such
-  as `rate_limit`, is no class and stays).
+- In TOOL steps, `retry_in` is a float. A `failed` step's error type and a failed `model_call`'s
+  error `kind` stay as recorded: a class name (as under Error classes), or a provider error's
+  kind such as `rate_limit`.
 
-**Placeholders.** Ids an implementation makes up are replaced by `<id:1>`, `<id:2>`, ...: a run id
-the case didn't give, and the values of `commit_id`, `mutation_id` and `note_id` fields. (This
-list grows only by fields no committed case holds yet.) The generated run id is the
+**Placeholders.** Ids yian makes up are replaced by `<id:1>`, `<id:2>`, ...: a run id
+the case didn't give, and the values of `commit_id`, `mutation_id` and `note_id` fields. The generated run id is the
 run's own id. Every occurrence inside a text value is replaced, so a call id `<run id>/fetch`
 becomes `<id:1>/fetch`; mapping keys are left alone. The ids are collected from every
 projection, expected or not, and numbered in order of first appearance (by position, within one
@@ -633,7 +623,7 @@ but their entries are never compared), then the trace, events, stream, tool call
 sorted order), output, backward outcomes and `expect.memory` texts, with lists in order and
 mapping keys in sorted order; projections added later are walked after `expect.memory`. An
 episode's `entry_id` equals a `mutation_id`, so recall text gets the same placeholder. Since
-replacement is textual, the TS runner's id source makes ids that can't occur in other text
+replacement is textual, the runner's id source makes ids that can't occur in other text
 (UUIDs, for example). A `raises` expectation is compared as is; a case whose error names the
 run id gives `run_id`.
 
@@ -699,7 +689,7 @@ the run's `context`, `llm_config.api_key` and `llm_config.headers` again), and c
 invariants, plus the output and node outcomes when the case has no `host.human` or `host.jitter`
 and its tool scripts only return. What a run took from the host scripts after the cut (tool
 results, model replies, backoff draws) goes back; what it took before stays taken, since the
-resume replays the steps that hold it (in TS an AGENT replays its recorded model calls and tool
+resume replays the steps that hold it (an AGENT replays its recorded model calls and tool
 results rather than making them again). A resume adds records, so in those outcomes a
 capture source's `execution_seq` is compared by the kind and node of the record it names, and a
 success's `commit` by the trace fields of the `pool_commit` it names (a `from` seq by the kind and
@@ -709,7 +699,7 @@ back from its last record before the commit (its steps replay). A cut inside the
 (`run log <path> ends inside its run start; start the run again`) and leave the log as it is.
 
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
-TS run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
+run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
 case, with its backward records), pinned byte for byte. Before
 the comparison, every `traceback` value, each record's time (`at`), the seeded clock values
 (the `value` of the `system.now` and `system.today` commits), a step's times (`started_at` and
@@ -718,7 +708,7 @@ the recorded flow's folder (`run_started`'s
 `flow.dir`) and the yian version (`yian_version`) are replaced by `"<masked>"`, since the times
 come from the virtual clock, which starts at the real time, the folder is the case's temporary one,
 and the version changes with each release; each line is then written again with the log's own
-encoder, which gives back the line as written. When the TS log format changes, regenerate the
+encoder, which gives back the line as written. When the log format changes, regenerate the
 golden logs with `--write-logs`, naming each case that has one, and check the diff holds only the
 change. Bun and Node write the same bytes. A golden log goes
 with a serial case that sets `run.run_id`, makes no random ids (no memory; an AGENT case only when

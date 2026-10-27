@@ -73,7 +73,8 @@
  *   subclass) is a `TypeError`.
  * - `test_retired_schema_record_is_rejected_by_name` and `test_retired_schema_log_is_rejected_on_resume`:
  *   every schema below 10 is Python's, so 7, 8 and 9 read `unsupported run-record schema: N`;
- *   TS's own schemas 10 and 11 are retired as Python names its retired schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
+ *   TS's own schemas 10 and 11 are retired as Python names its retired schemas. Every schema
+ *   rejection is a `RunLogSchemaError` (Python's `ValueError`).
  * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 13 and the float
  *   token `23.0` (the current schema written as a float); the float row is wire-only, since a JS
  *   `23.0` is the number 23.

@@ -6,6 +6,8 @@
  * and a `load` that imports the handler's module on demand, so `yian --help` or a usage error loads
  * no command module. A two-word key (`skills check`) is a command in a group (`skills`).
  *
+ * `COMMANDS` and `GROUPS` are exported for the docs test, which checks command lines against them.
+ *
  * Before a command parses its arguments, `main` checks the `YIAN_<NAME>` defaults in the command's
  * environment, as Python's root callback does.
  *
@@ -51,7 +53,7 @@ const JSON_HELP = "Print one yian.cli.v1 JSON document on stdout.";
 const JSON_OPTION: OptionSpec = { name: "json", type: "boolean", help: JSON_HELP };
 
 /** The commands by name, in the order the root help lists them. */
-const COMMANDS: Readonly<Record<string, Command>> = {
+export const COMMANDS: Readonly<Record<string, Command>> = {
   run: {
     spec: {
       name: "run",
@@ -400,7 +402,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
 };
 
 /** The groups by name, each with its one-line summary. */
-const GROUPS: Readonly<Record<string, string>> = {
+export const GROUPS: Readonly<Record<string, string>> = {
   config: "Check an llm_config layer.",
   skills: "Check skill directories.",
 };

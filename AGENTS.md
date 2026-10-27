@@ -15,21 +15,17 @@ Read before you change code:
 
 ## Rules
 
-- Start from a GitHub issue. Check its claims against the current code and cite `file:line`.
-  Post a short plan on the issue before you write code.
+- Follow the pull-request steps and code style in `CONTRIBUTING.md`. Check the issue's claims
+  against the current code and cite `file:line`.
 - Stay inside the issue's scope: no unrelated features, abstractions, error handling or
   refactors. Ask when an API, schema, name or behavior is unclear.
-- Work test-first in small commits. Don't say a check passed unless you ran it, and list the
-  exact commands in the pull request.
+- Work test-first. Don't say a check passed unless you ran it.
 - Keep the rules in `ARCHITECTURE.md`: append before apply, deterministic replay, a fixed graph,
   pure nodes, a kind-blind engine, one-way imports, a closed list of failure codes.
 - Put a new external dependency behind a small injected function. Runtime-specific APIs go in
   `src/platform.ts`, and environment reads in `src/defaults.ts`.
-- A change to what users see (flow syntax, a node kind, the CLI, the host API, a failure code)
-  updates its page in `docs/src/content/docs/` and, for flow syntax, the `composing-agents`
-  skill in `.claude/skills/`, in the same pull request.
-- Keep code direct. Docstrings say what a symbol does, comments say why. No issue numbers, plan
-  labels or AI-attribution footers in source.
+- A change to flow syntax also updates the `composing-agents` skill in `.claude/skills/`, in the
+  same pull request as its docs page.
 
 ## The flow language
 

@@ -3,7 +3,6 @@
 # and the variables with their domains, and the learner is the model `pick` chose when the agent
 # ran. The record leaves them out; learning renders the occurrence again with the node that ran.
 kind: backward
-rules: [run-log]
 flow: |
   id: picks
   name: picks

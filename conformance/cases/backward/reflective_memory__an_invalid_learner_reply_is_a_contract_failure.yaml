@@ -3,7 +3,6 @@
 # at the learn stage as a final contract error, without the reply's text, and commits nothing.
 # YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
 kind: backward
-rules: [run-log]
 flow: |
   id: memory-run
   name: memory_run

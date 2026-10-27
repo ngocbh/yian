@@ -1,6 +1,5 @@
 # TS-only: an agent with a steer inbox and no tools loads (yian #1025 replaced `steerable:`).
 kind: load
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: removed
   name: removed

@@ -23,29 +23,6 @@ flow: |2
       kind: call
       call: child
   output: ${run.output}
-python_flow: |2
-
-  id: checked
-  name: checked
-  defs:
-    child:
-      nodes:
-        note:
-          kind: code
-          output: str
-          code: |
-            return "hi"
-        use:
-          kind: code
-          code: tests.engine._compose_codefns:echo_x
-          input:
-            x: !int ${note.output}
-      output: ${use.output}
-  nodes:
-    run:
-      kind: call
-      call: child
-  output: ${run.output}
 expect:
   load:
     diagnostics:

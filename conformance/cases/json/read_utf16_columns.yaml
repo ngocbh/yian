@@ -1,6 +1,5 @@
 kind: json
 # Positions count UTF-16 code units: the emoji is two.
-rules: [numbers, columns]
 read: "\"\U0001F600\" x"
 mode: plain
 expect:

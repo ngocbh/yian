@@ -1,28 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: loop-nested
-  name: loop_nested
-  nodes:
-    repeat:
-      kind: loop
-      while: state.count < 3
-      input:
-        state: {count: 0}
-      nodes:
-        bump:
-          kind: code
-          input:
-            s: ${input.state}
-          output:
-            state:
-              count: int
-          code: |
-            return {"state": {"count": inputs["s"]["count"] + 1}}
-      output: ${bump.output}
-  output: ${repeat.output}
-python_flow: |2
 
   id: loop-nested
   name: loop_nested

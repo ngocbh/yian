@@ -1,5 +1,4 @@
 kind: load
-rules: [infinity]
 flow: |
   id: p
   name: p
@@ -17,11 +16,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [8, 6, 8, 7]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''g'': numbers must be finite (got 1e400, which YAML reads as .inf)'
-      frames:
-      - label: flow.yaml
-        range: [8, 6, 8, 11]

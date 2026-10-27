@@ -1,6 +1,5 @@
 # TS spells the name list as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |2
 
   id: dep-cycle
@@ -23,44 +22,11 @@ flow: |2
         topic: ${input.topic}
       output: str
   output: ${a.output}
-python_flow: |2
-
-  id: dep-cycle
-  name: dep_cycle
-  input:
-    topic: !str
-  nodes:
-    a:
-      kind: code
-      depends_on: [b]
-      code: tests.engine._compose_codefns:pick_pro
-      input:
-        topic: ${input.topic}
-      output: str
-    b:
-      kind: code
-      runs_after: [a]
-      code: tests.engine._compose_codefns:pick_con
-      input:
-        topic: ${input.topic}
-      output: str
-  output: ${a.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
       message: 'flow has a cycle involving ["a","b"]; flows must be acyclic'
-      frames:
-      - label: flow.yaml
-        range: [7, 3, 7, 4]
-      - label: flow.yaml
-        range: [14, 3, 14, 4]
-      notes: [a depends on b (ordering), b depends on a (ordering)]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: flow has a cycle involving ['a', 'b']; flows must be acyclic
       frames:
       - label: flow.yaml
         range: [7, 3, 7, 4]

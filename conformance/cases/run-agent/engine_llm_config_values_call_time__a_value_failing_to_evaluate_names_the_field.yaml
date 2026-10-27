@@ -1,20 +1,9 @@
 kind: run
-rules: [run-log]
 flow: |
   id: f
   name: f
   nodes:
     pick: {kind: code, output: Optional(str), code: "return null"}
-    chat:
-      kind: agent
-      prompt: Go.
-      llm_config: {provider: openai, model: !str '${pick.output :? "no model"}'}
-  output: ${chat.output}
-python_flow: |
-  id: f
-  name: f
-  nodes:
-    pick: {kind: code, output: Optional(str), code: "return None"}
     chat:
       kind: agent
       prompt: Go.

@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: list comprehensions (#1086)"
 # The first iterable reads the carried field ns; inside, the variable ns shadows it.
 flow: |
   id: p

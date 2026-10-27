@@ -2,7 +2,6 @@
 # The model calls `ask_user` once, the human's answer returns as the tool result, and the model's
 # next reply ends the loop; the flow returns that text.
 kind: run
-rules: [run-log]
 flow: |
   # ask-user — a model-chosen clarifying question via the blocking ask_user tool.
   #

@@ -4,7 +4,6 @@
 # and lookup's recorded result without calling the model or the tool, then makes the second call
 # again under the same step number (3).
 kind: resume
-rules: [run-log]
 flow: |
   id: replay-after-tool
   name: replay_after_tool

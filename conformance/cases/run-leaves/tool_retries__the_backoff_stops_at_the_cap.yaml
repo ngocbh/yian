@@ -2,7 +2,6 @@
 # The cap stops the doubling: with base 1 s and cap 1 s the second delay stays 1 s (0.5 s waits
 # at draw 0.0) instead of doubling to 2 s.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

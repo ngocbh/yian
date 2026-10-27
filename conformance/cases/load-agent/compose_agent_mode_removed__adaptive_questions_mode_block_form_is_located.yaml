@@ -1,5 +1,4 @@
 kind: load
-python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: gate
   name: gate

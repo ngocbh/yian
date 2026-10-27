@@ -1,6 +1,4 @@
 kind: run
-rules: [run-log]
-python_skip: "TS-only: list comprehensions (#1086)"
 # A documented limit: iterating a node a CASE may skip loads, and fails at run time with the
 # null-iterable error, which names the fix.
 flow: |

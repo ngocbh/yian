@@ -2,7 +2,6 @@
 # Also ::test_terminal_resume_is_read_only_silent_and_unlocks[failed]. Resuming a failed run returns its failure,
 # located as before, read-only: nothing is appended and no event fires.
 kind: resume
-rules: [messages, run-log]
 flow: |
   id: lifecycle-located-failure
   name: lifecycle_located_failure
@@ -12,19 +11,6 @@ flow: |
     echo:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x
-      input:
-        x: ${input.window}
-      output: int
-  output: ${echo.output}
-python_flow: |
-  id: lifecycle-located-failure
-  name: lifecycle_located_failure
-  input:
-    window: !int
-  nodes:
-    echo:
-      kind: code
-      code: tests.engine._compose_codefns:echo_x
       input:
         x: ${input.window}
       output: int
@@ -69,34 +55,6 @@ expect:
     - failure:
         code: contract.input
         message: 'input ''window'': "soon" does not match declared type int'
-        frames:
-        - label: flow.yaml
-          range: [4, 11, 4, 15]
-        node: __start__
-  events: []
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.input
-      message: 'input ''window'': ''soon'' does not match declared type int'
-      frames:
-      - label: flow.yaml
-        range: [4, 11, 4, 15]
-      node: __start__
-  trace:
-  - - run_started
-    - null
-    - learnable: false
-      num_workers: 0
-      inputs:
-        window: soon
-  - [node_started, __start__]
-  - - node_failed
-    - __start__
-    - failure:
-        code: contract.input
-        message: 'input ''window'': ''soon'' does not match declared type int'
         frames:
         - label: flow.yaml
           range: [4, 11, 4, 15]

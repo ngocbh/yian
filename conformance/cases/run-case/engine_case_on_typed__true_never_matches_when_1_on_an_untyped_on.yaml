@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: f
   name: f
@@ -12,43 +11,6 @@ flow: |
         p: ${input.pick}
       code: |
         return inputs["p"] == "t" ? true : 1
-    route:
-      kind: case
-      on: ${src.output}
-      cases:
-        - when: 1
-          then: one
-        - when: true
-          then: two
-      else: other
-    one:
-      kind: code
-      code: |
-        return "one"
-      output: str
-    two:
-      kind: code
-      code: |
-        return "two"
-      output: str
-    other:
-      kind: code
-      code: |
-        return "other"
-      output: str
-  output: ${one.output | two.output | other.output}
-python_flow: |
-  id: f
-  name: f
-  input:
-    pick: !str
-  nodes:
-    src:
-      kind: code
-      input:
-        p: ${input.pick}
-      code: |
-        return True if inputs["p"] == "t" else 1
     route:
       kind: case
       on: ${src.output}

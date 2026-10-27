@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: len() and list slicing (#1086)"
 expr: "[xs[1:-1], xs[a:-b], xs[a: -b], xs[a :- b], xs[m - 1:-1], xs[a * 2:-b]]"
 values: {xs: [1, 2, 3, 4], ys: [5], a: 1, b: 1, m: 2, n: null, s: abc}
 expect:

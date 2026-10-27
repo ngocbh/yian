@@ -4,7 +4,6 @@
 # Pins: feedback naming a field the output doesn't have raises before any record is appended, so
 # the corrected call that follows is attempt 1.
 kind: backward
-rules: [run-log]
 flow: |
   id: invalid-root-feedback
   name: invalid_root_feedback

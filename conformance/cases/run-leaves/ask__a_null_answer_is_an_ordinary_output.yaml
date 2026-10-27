@@ -1,7 +1,6 @@
 # From tests/engine/test_blocking_human_input.py::test_none_answer_is_an_ordinary_output.
 # A null answer is the ask's output, not a cancellation.
 kind: run
-rules: [run-log]
 flow: |
   id: optional
   name: optional

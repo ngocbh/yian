@@ -1,6 +1,5 @@
 # TS-only: an Optional(str) output is text, so an agent with a steer inbox may declare it (yian #1025).
 kind: load
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer

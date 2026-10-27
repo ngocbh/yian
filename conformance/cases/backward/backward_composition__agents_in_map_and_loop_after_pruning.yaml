@@ -4,7 +4,6 @@
 # Pins: backward calls every AGENT occurrence once, the LOOP's earlier (pruned) iterations too, and
 # returns the first iterations' input feedback to each MAP item's position.
 kind: backward
-rules: [run-log]
 flow: |
   id: nested-agent-history
   name: nested_agent_history

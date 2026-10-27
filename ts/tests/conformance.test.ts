@@ -196,20 +196,13 @@ describe("checkCase", () => {
     ],
     ["kind: run\nflow: x\nexpect: {output: 1, x: 1}", "unknown key `expect.x`"],
     ["kind: run\nflow: x\nexpect: {load: ok}", "`expect.load` is not a key of a `run` case"],
-    [`${LOAD}python_expect: {load: ok}`, "`python_expect` needs `rules`"],
-    [`${LOAD}rules: []\npython_expect: {load: ok}`, "`python_expect` needs `rules`"],
-    [`${LOAD}rules: [text]\npython_expect: {}`, "`python_expect` needs `load`"],
-    [`${LOAD}rules: text`, "`rules` must be a list of rule ids"],
-    [`${LOAD}rules: [1]`, "`rules` must be a list of rule ids"],
-    [`${LOAD}rules: .nan\npython_expect: {load: ok}`, "`rules` must be a list of rule ids"],
+    [`${LOAD}rules: [text]`, "unknown key `rules`"],
+    [`${LOAD}python_expect: {load: ok}`, "unknown key `python_expect`"],
     [`${CLI}args: [1]`, "`args` must be a list of text"],
-    [`${LOAD}rules: [nope, text, bad]`, "unknown rule ids: nope, bad"],
     [`${LOAD}env: 1`, "`env` must be a mapping"],
     [`${LOAD}env: {A: 1}`, "`env` values must be text"],
     [`${LOAD}files: {a: 1}`, "`files` values must be text"],
-    [`${LOAD}python_files: {a: 1}`, "`python_files` values must be text"],
     ["kind: load\nflow: 1\nexpect: {load: ok}", "`flow` must be text"],
-    [`${LOAD}python_flow: [a]`, "`python_flow` must be text"],
     ["kind: fingerprint\nflow: x\nother: 1\nexpect: {fingerprint: same}", "`other` must be text"],
     [`${CLI}stdin: 1`, "`stdin` must be text"],
     [`${CLI}signal: {name: SIGHUP, after: x}`, "`signal.name` must be SIGINT or SIGTERM"],
@@ -238,14 +231,6 @@ describe("checkCase", () => {
     ],
     ["kind: cli\nexpect: {exit: 0, exists: {a/../b: true}}", EXISTS("a/../b")],
     ["kind: cli\nexpect: {exit: 0, exists: {/a: true}}", EXISTS("/a")],
-    [
-      "kind: fingerprint\nflow: x\nother: y\npython_flow: z\nexpect: {fingerprint: same}",
-      "`python_flow` is not a key of a `fingerprint` case",
-    ],
-    [
-      "kind: fingerprint\nflow: x\nother: y\npython_files: {}\nexpect: {fingerprint: same}",
-      "`python_files` is not a key of a `fingerprint` case",
-    ],
     [`${RUN}run: 1`, "`run` must be a mapping"],
     [`${RUN}run: {x: 1}`, "unknown key `run.x`"],
     [`${RUN}run: {context: yes}`, "`run.context` must be `present`"],
@@ -573,7 +558,6 @@ describe("checkCase", () => {
 
   test.each([
     LOAD,
-    `${LOAD}rules: [text]\npython_expect: {load: ok}`,
     `${RUN}host: {jitter: [0, 0.5], human: {n: [a]}}`,
     MODEL(`{reply: ${TEXT_REPLY}, usage: {input_tokens: 1, output_tokens: 2, total_tokens: 3, ` +
       "reasoning_tokens: 0}}"),
@@ -677,21 +661,18 @@ describe("prepare", () => {
     const inf = "{$float: inf}";
     const prepared = prepare(
       readCase(
-        `flow: "${inf}"\npython_flow: x\nother: y\nfiles: {a: b}\npython_files: {a: "${inf}"}\n` +
+        `flow: "${inf}"\nother: y\nfiles: {a: b}\n` +
           `stdin: z\n` +
-          `inputs: {a: ${inf}}\nexpect: {output: ${inf}}\npython_expect: {output: ${inf}}`,
+          `inputs: {a: ${inf}}\nexpect: {output: ${inf}}`,
       ),
     );
     expect(prepared).toEqual({
       flow: inf,
-      python_flow: "x",
       other: "y",
       files: { a: "b" },
-      python_files: { a: inf },
       stdin: "z",
       inputs: { a: Infinity },
       expect: { output: Infinity },
-      python_expect: { output: Infinity },
     });
   });
 
@@ -1166,7 +1147,6 @@ describe("main", () => {
     "a/ok.yaml": "kind: expr\nexpr: pass\nexpect: {value: 1}\n",
     "a/x.yaml": "kind: expr\nexpr: differ\nexpect: {value: 1}\n",
     "a/boom.yaml": "kind: expr\nexpr: throw\nexpect: {value: 1}\n",
-    "a/rules.yaml": "kind: expr\nexpr: pass\nrules: [text]\nexpect: {value: 1}\n",
     "a/run.log.jsonl": "{}\n",
     "b/y.yaml": "kind: load\nflow: x\nexpect: {load: ok}\n",
     "b/diag.yaml": "kind: load\nflow: x\nexpect: {load: {diagnostics: [{code: compose.load}]}}\n",
@@ -1248,7 +1228,7 @@ describe("main", () => {
       `FAIL b/diag: ${NO_LOAD}`,
       PASSES,
       `FAIL b/y: ${NO_LOAD}`,
-      "9 cases: 2 passed, 6 failed, 1 pending",
+      "8 cases: 1 passed, 6 failed, 1 pending",
     ]);
   });
 
@@ -1309,21 +1289,19 @@ describe("main", () => {
   });
 
   const ALL = [
-    "a/boom", "a/ok", "a/rules", "a/x",
+    "a/boom", "a/ok", "a/x",
     "b/bad", "b/diag", "b/pending_fails", "b/pending_passes", "b/y",
   ];
   const FAILING = new Set(["a/boom", "a/x", "b/bad", "b/diag", "b/pending_passes", "b/y"]);
 
   test.each([
-    [["--group", "a"], ["a/boom", "a/ok", "a/rules", "a/x"]],
+    [["--group", "a"], ["a/boom", "a/ok", "a/x"]],
     [["--group", "a", "--group", "b"], ALL],
     [["--case", "a/ok", "--case", "b/y"], ["a/ok", "b/y"]],
     [["--kind", "load"], ["b/bad", "b/diag", "b/y"]],
-    [["--rules", "text"], ["a/rules", "b/bad"]],
     [["--diagnostic-code", "compose.load"], ["b/bad", "b/diag"]],
     [["--diagnostic-code", "other"], ["b/bad"]],
     [["--group", "b", "--kind", "expr"], ["b/bad", "b/pending_fails", "b/pending_passes"]],
-    [["--group", "b", "--rules", "text"], ["b/bad"]],
     [["--kind", "nope"], ["b/bad"]],
   ])("selects with %p", async (argv, ids) => {
     const { out } = await run(argv);
@@ -1523,7 +1501,7 @@ describe("main", () => {
     expect(code).toBe(2);
     expect(out).toEqual([]);
     expect(err).toEqual([
-      "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
+      "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] " +
         "[--diagnostic-code CODE] [--crash-sweep] [--write-logs] [--write-expect]",
     ]);
   });
@@ -1598,8 +1576,8 @@ describe("main", () => {
     });
     const path = join(roots.at(-1)!, "cases", "a", "forms.yaml");
     const text = readFileSync(path, "utf8");
-    // Comments, styles and key order stay; `run-log` goes right after `kind`.
-    expect(text).toBe(FORMS.replace("kind: run\n", "kind: run\nrules: [run-log]\n"));
+    // Comments, styles and key order stay.
+    expect(text).toBe(FORMS);
     // The float stays a float, the int past 2^53 exact, and the placeholder a placeholder.
     const trace = (readCase(text)["expect"] as Case)["trace"] as unknown[][];
     expect(trace[9]).toEqual([
@@ -1649,7 +1627,7 @@ describe("main", () => {
     const written = await run(["--write-expect"], { "a/forms.yaml": edited }, {}, kinds);
     expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
     const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
-    expect(text).toBe(block.replace("kind: run\n", "kind: run\nrules: [run-log]\n"));
+    expect(text).toBe(block);
   });
 
   test("--write-expect fails a case whose expect it can't write back in its own text", async () => {

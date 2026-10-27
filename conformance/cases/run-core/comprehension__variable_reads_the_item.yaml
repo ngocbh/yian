@@ -1,6 +1,4 @@
 kind: run
-rules: [run-log]
-python_skip: "TS-only: list comprehensions (#1086)"
 # Inside the comprehension, step, xs, Msg and len read the items, not the node, the input, the
 # typedef or the builtin; the call len(...) still calls the builtin.
 flow: |

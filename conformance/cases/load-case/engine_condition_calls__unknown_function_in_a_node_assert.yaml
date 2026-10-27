@@ -15,22 +15,6 @@ flow: |2
       asserts:
         - "nosuchfn(n) > 0"
   output: ${x.output}
-python_flow: |2
-
-  id: f
-  name: f
-  input:
-    v: !int
-  nodes:
-    x:
-      kind: code
-      code: tests.engine._compose_codefns:double
-      input:
-        n: ${input.v}
-      output: int
-      asserts:
-        - "nosuchfn(n) > 0"
-  output: ${x.output}
 expect:
   load:
     diagnostics:

@@ -1,5 +1,4 @@
 kind: value
-rules: [messages]
 typedefs:
   Buy:
     action: Literal(buy)
@@ -16,9 +15,4 @@ expect:
   raises:
     class: TypeCheckError
     message: 'record has unknown fields: ["qty"]'
-    path: [qty]
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: 'record has unknown fields: [''qty'']'
     path: [qty]

@@ -4,7 +4,6 @@
 # request has no memory block. The main run's request (the episode recalled in the memory block)
 # is pinned by episodic_memory_integration__a_recalled_episode_reaches_the_request.
 kind: run
-rules: [run-log]
 flow: |
   id: episodic-history
   name: episodic_history

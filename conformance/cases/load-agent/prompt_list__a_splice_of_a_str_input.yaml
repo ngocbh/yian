@@ -1,6 +1,5 @@
 # TS-only: a spliced input whose type can't hold messages is refused, naming the type.
 kind: load
-python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
   id: chat
   name: chat

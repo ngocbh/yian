@@ -1,7 +1,6 @@
 # An untyped producer narrowed by a CASE type branch is still untyped at run time, so a field its
 # type doesn't require is read through ?. in the routed node.
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -44,5 +43,3 @@ expect:
         frames:
           - label: flow.yaml
             range: [24, 10, 24, 24]
-python_expect:
-  load: ok

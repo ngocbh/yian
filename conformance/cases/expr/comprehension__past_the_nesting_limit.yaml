@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
 # A comprehension is one level, like a list; its clauses add none.
 expr: "[[[x]] for x in xs]"
 values: {xs: [1, 2]}

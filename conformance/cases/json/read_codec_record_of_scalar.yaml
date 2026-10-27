@@ -1,7 +1,6 @@
 kind: json
 # The first is yian's escape of the record {$record: 5}; the second, the bare form, reads as
 # the same record.
-rules: [numbers, infinity]
 read: '[{"$record": {"$record": 5}}, {"$record": 5}]'
 mode: codec
 expect:

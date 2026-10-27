@@ -1,6 +1,5 @@
 # A learnable MAP over three items. The golden log pins each item's seed and capture.
 kind: run
-rules: [run-log]
 flow: |
   id: doubles
   name: doubles

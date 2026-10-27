@@ -1,5 +1,4 @@
 kind: load
-rules: [messages]
 flow: |
   id: p
   name: p
@@ -15,14 +14,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: '''ok'': the value is not a valid list(bool): "no" does not match declared type bool (at `ok[1]`)'
-      frames:
-      - label: flow.yaml
-        range: [8, 7, 8, 29]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''ok'': the value is not a valid list(bool): ''no'' does not match declared type bool (at `ok[1]`)'
       frames:
       - label: flow.yaml
         range: [8, 7, 8, 29]

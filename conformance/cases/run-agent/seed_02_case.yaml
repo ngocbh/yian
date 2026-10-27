@@ -2,7 +2,6 @@
 # A float AGENT output routes a searched `case` to `positive`; `cautious` is skipped and gets no
 # model call, and the coalesce join returns `positive`'s text.
 kind: run
-rules: [run-log]
 flow: |
   # 02 — Branching with a `case` node (searched form) + a coalesce join.
   #

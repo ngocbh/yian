@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: a TOOL node allows adaptive_questions, for ask (#1025)"
 flow: |
   id: f
   name: f

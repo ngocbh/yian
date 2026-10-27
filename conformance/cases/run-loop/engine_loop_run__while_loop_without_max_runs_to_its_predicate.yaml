@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: counter
@@ -13,35 +12,6 @@ flow: |2
         step:
           kind: code
           code: ./fixtures/compose_codefns.ts:loop_bump
-          input:
-            n: ${input.n}
-            exited: ${input.exited}
-          output:
-            n: int
-            exited: bool
-      output: ${step.output}
-  nodes:
-    loop:
-      kind: loop
-      call: bump
-      input:
-        n: 0
-        exited: false
-      while: not exited
-  output: ${loop.output}
-python_flow: |2
-
-  id: counter
-  name: counter
-  defs:
-    bump:
-      input:
-        n: !int
-        exited: !bool
-      nodes:
-        step:
-          kind: code
-          code: tests.engine._compose_codefns:loop_bump
           input:
             n: ${input.n}
             exited: ${input.exited}

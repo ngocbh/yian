@@ -1,51 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: partial-in-call
-  name: partial_in_call
-  defs:
-    bump:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          code: |
-            return {"n": inputs["n"] + 1}
-          input:
-            n: ${input.n}
-          output:
-            n: int
-      output: ${step.output}
-    counter:
-      input:
-        tag: !str
-      nodes:
-        loop:
-          kind: loop
-          call: bump
-          input:
-            n: 0
-            tag: ${input.tag}
-          times: 2
-      output: ${loop.output}
-  nodes:
-    outer:
-      kind: call
-      call: counter
-      input:
-        tag: kept
-    mapped:
-      kind: map
-      call: counter
-      over: ${["a", "b"]}
-      input:
-        tag: ${item}
-  output:
-    outer: ${outer.output}
-    mapped: ${mapped.output}
-python_flow: |2
 
   id: partial-in-call
   name: partial_in_call

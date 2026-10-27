@@ -1,5 +1,4 @@
 kind: run
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -19,11 +18,5 @@ expect:
   raises:
     class: ValueError
     message: 'node ''chat'' llm_config.openai.temperature: input ''t'': "warm" does not match declared type float'
-  trace: []
-  events: []
-python_expect:
-  raises:
-    class: ValueError
-    message: 'node ''chat'' llm_config.openai.temperature: input ''t'': ''warm'' does not match declared type float'
   trace: []
   events: []

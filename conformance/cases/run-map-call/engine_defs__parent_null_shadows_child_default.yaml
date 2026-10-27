@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: shadow
@@ -10,26 +9,6 @@ flow: |2
     child:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
-      input:
-        topic: !Optional(str) "fallback"
-      output: Optional(str)
-  nodes:
-    go:
-      kind: call
-      call: child
-      input:
-        topic: ${input.x}
-  output: ${go.output}
-python_flow: |2
-
-  id: shadow
-  name: shadow
-  input:
-    x: !Optional(str)
-  defs:
-    child:
-      kind: code
-      code: tests.engine._compose_codefns:echo
       input:
         topic: !Optional(str) "fallback"
       output: Optional(str)

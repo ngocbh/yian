@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: list comprehensions (#1086)"
 # Variables named like a node (step), an input (xs), a typedef (Msg) and a builtin (len) load;
 # a call len(...) is never a variable read.
 flow: |

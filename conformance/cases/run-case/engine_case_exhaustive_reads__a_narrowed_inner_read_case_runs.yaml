@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: f
   name: f
@@ -21,44 +20,6 @@ flow: |
         if (inputs["kind"] === "buy")
           return {action: "buy", qty: 3}
         return {action: "sell", price: 1.5}
-      output: Union(Buy, Sell)
-    route:
-      kind: case
-      on: ${d.output.action}
-      cases:
-        - when: buy
-          then: inner
-      else: sold
-    inner:
-      kind: case
-      on: ${d.output.action}
-      cases:
-        - when: buy
-          then: bought
-    bought: !str "bought ${d.output.qty}"
-    sold: !str sold
-  output: ${route.output}
-python_flow: |
-  id: f
-  name: f
-  typedefs:
-    Buy:
-      action: Literal(buy)
-      qty: int
-    Sell:
-      action: Literal(sell)
-      price: float
-  input:
-    kind: !str
-  nodes:
-    d:
-      kind: code
-      input:
-        kind: ${input.kind}
-      code: |
-        if inputs["kind"] == "buy":
-            return {"action": "buy", "qty": 3}
-        return {"action": "sell", "price": 1.5}
       output: Union(Buy, Sell)
     route:
       kind: case

@@ -1,6 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
-rules: [null-field-read]
 # A `.` read of a key an untyped item lacks raises in a prompt too.
 template: "${[x.k for x in ms if x.flag]}"
 mode: strict

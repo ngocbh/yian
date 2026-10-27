@@ -1,6 +1,5 @@
 # TS-only: tool_id: ask_user is the ask built-in under its old name, so it takes ask's inputs.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: uc
@@ -12,32 +11,6 @@ flow: |2
         step:
           kind: code
           code: ./fixtures/compose_codefns.ts:loop_countdown
-          input:
-            n: ${input.n}
-          output:
-            n: int
-      output: ${step.output}
-  nodes:
-    loop:
-      kind: loop
-      call: countdown
-      input:
-        n: 3
-      until: n <= 0
-      max: 10
-  output: ${loop.output}
-python_flow: |2
-
-  id: uc
-  name: uc
-  defs:
-    countdown:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          code: tests.engine._compose_codefns:loop_countdown
           input:
             n: ${input.n}
           output:

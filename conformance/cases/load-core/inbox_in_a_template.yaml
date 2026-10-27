@@ -1,6 +1,5 @@
 # TS-only: an inbox is never read inside text.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

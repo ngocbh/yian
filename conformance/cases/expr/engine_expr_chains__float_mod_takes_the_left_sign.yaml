@@ -1,6 +1,4 @@
 kind: expr
 # Float `%` takes the left operand's sign too.
 expr: "5.5 % -2"
-rules: [arithmetic]
 expect: {value: 1.5}
-python_expect: {value: -0.5}

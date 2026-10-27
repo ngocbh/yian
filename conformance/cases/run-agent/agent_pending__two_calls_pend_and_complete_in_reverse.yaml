@@ -2,8 +2,6 @@
 # second first: the agent still waits on the first, and the run waits again. Once both are
 # answered the woken agent's next request reads the results in call order, not answer order.
 kind: run
-rules: [run-log]
-python_skip: an agent's pending host call is TS-only (#1025)
 flow: |
   id: pending
   name: pending

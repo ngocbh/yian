@@ -1,7 +1,6 @@
 # From tests/engine/test_tool_retries.py::test_jitter_draws_from_half_to_the_full_delay.
 # The backoff draw spreads the delay over its upper half: draw 0.5 on a 1 s delay waits 0.75 s.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

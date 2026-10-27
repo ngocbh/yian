@@ -4,8 +4,6 @@
 # reads that the call's outcome is unknown) and the next model call goes on; the handler isn't
 # called again.
 kind: resume
-rules: [run-log]
-python_skip: an agent's pending host call is TS-only (#1025)
 flow: |
   id: pending
   name: pending

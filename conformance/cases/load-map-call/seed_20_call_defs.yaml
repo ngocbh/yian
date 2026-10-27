@@ -49,54 +49,5 @@ flow: |
         topic: ${input.topic}
 
   output: ${brief.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # 20 — CALL + defs: an in-file callable (a multi-node sub-flow).
-  #
-  # `defs:` holds in-file callables — a `call:` resolves DEFS-FIRST, else an external flow.
-  # Here `enrich` is a 2-node sub-flow (CODE fetch -> AGENT summarize) that lives in THIS
-  # file; the top-level flow calls it. A multi-node def lets a self-contained branch live
-  # inline instead of as a separate flow file (and the flow loads resolver-free — the
-  # callable is in-file). Shows: a `defs:` section, a multi-node callable (`input:`
-  # signature + `nodes:` body + `output:` codomain), and a `call:` resolving to it.
-
-  id: call-defs
-  name: call_defs
-  description: Call an in-file multi-node `defs:` callable to enrich one topic.
-
-  input:
-    topic: !str
-
-  defs:
-    enrich:                      # an in-file callable — a 2-node sub-flow
-      input:
-        topic: !str
-      nodes:
-        fetch:
-          kind: code
-          code: tests.seeds.fns:fetch_facts
-          input:
-            topic: ${input.topic}
-          output:               # the callee's intermediate record
-            values: list(float)
-            news: list(str)
-        summarize:
-          kind: agent
-          input:
-            news: ${fetch.output.news}    # dot into the fetch record
-          output: str
-          prompt: |-
-            Summarize these headlines in one neutral sentence (no recommendations):
-            ${news}
-      output: ${summarize.output}        # the callee's codomain (its single value)
-
-  nodes:
-    brief:
-      kind: call
-      call: enrich               # resolves to the in-file def above (defs-first)
-      input:
-        topic: ${input.topic}
-
-  output: ${brief.output}
 expect:
   load: ok

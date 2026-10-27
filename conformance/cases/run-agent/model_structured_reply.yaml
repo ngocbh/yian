@@ -1,6 +1,4 @@
 kind: run
-# The `request` and the `structured_native` purpose are Python's lowering of the call.
-rules: [llm, run-log]
 flow: |
   id: model-structured-reply
   name: model_structured_reply
@@ -77,38 +75,6 @@ expect:
           cache_creation_tokens: null
           reasoning_tokens: null
         n: 1
-    - [NodeSucceeded, {node_id: score, output: {name: Ada, score: 3}}]
-    - [NodeStarted, {node_id: __end__}]
-    - [NodeSucceeded, {node_id: __end__, output: {name: Ada, score: 3}}]
-    - [RunSucceeded, {output: {name: Ada, score: 3}}]
-  stream: []
-python_expect:
-  output: {status: succeeded, output: {name: Ada, score: 3}}
-  # A structured call isn't streamed; its usage is reported all the same.
-  events:
-    - [RunStarted]
-    - [NodeStarted, {node_id: __start__}]
-    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}}]
-    - [NodeStarted, {node_id: score}]
-    - - ModelCallStarted
-      - node_id: score
-        exchange_id: "<id:1>"
-        purpose: structured_native
-        provider: openai
-        model: gpt-5.5
-    - - ModelCallFinished
-      - node_id: score
-        exchange_id: "<id:1>"
-        purpose: structured_native
-        provider: openai
-        model: gpt-5.5
-        usage:
-          input_tokens: 20
-          output_tokens: 8
-          total_tokens: 28
-          cache_read_tokens: null
-          cache_creation_tokens: null
-          reasoning_tokens: null
     - [NodeSucceeded, {node_id: score, output: {name: Ada, score: 3}}]
     - [NodeStarted, {node_id: __end__}]
     - [NodeSucceeded, {node_id: __end__, output: {name: Ada, score: 3}}]

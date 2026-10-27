@@ -26,33 +26,6 @@ flow: |2
       while: "upper(exited, 1) == 'A'"
       max: 5
   output: ${repeat.output}
-python_flow: |2
-
-  id: f
-  name: f
-  defs:
-    step:
-      input: {n: !int , exited: !bool }
-      nodes:
-        s:
-          kind: code
-          code: "return {'n': inputs['n'] + 1, 'exited': inputs['n'] >= 2}"
-          input:
-            n: ${input.n}
-          output:
-            n: int
-            exited: bool
-      output: ${s.output}
-  nodes:
-    repeat:
-      kind: loop
-      call: step
-      input:
-        n: 0
-        exited: false
-      while: "upper(exited, 1) == 'A'"
-      max: 5
-  output: ${repeat.output}
 expect:
   load:
     diagnostics:

@@ -4,8 +4,6 @@
 # model call 1 has finished skips both of the reply's tool calls (ToolCallFinished error
 # `interrupted`), then the agent writes `interrupted {by}`; the Optional(str) agent succeeds null.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

@@ -4,7 +4,6 @@
 # the float input `weight` written `1.0`. The entry_id is a literal hash, not a placeholder,
 # because a model request is compared exactly, without placeholders.
 kind: run
-rules: [run-log]
 flow: |
   id: episodic-history
   name: episodic_history

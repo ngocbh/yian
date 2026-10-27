@@ -2,7 +2,6 @@
 # Pins: the inner call of `call(pair, x=call(side, ...), y=${maybe.output})` is skipped with the outer call's skipped argument.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -29,54 +28,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-  nodes:
-    pick:
-      kind: case
-      cases:
-        - when: ${input.other}
-          then: maybe
-    maybe:
-      kind: code
-      output: str
-      code: return "m"
-    publish:
-      kind: code
-      input:
-        draft: call(pair, x=call(side, tag="inner"), y=${maybe.output})
-      output: str
-      code: return inputs["draft"]
-  output:
-    r: ${publish.output}
-python_flow: |
-  id: t
-  name: t
-  input:
-    other: !bool
-  defs:
-    pair:
-      input:
-        x: !str
-        y: !str
-      nodes:
-        j:
-          kind: code
-          input:
-            x: ${input.x}
-            y: ${input.y}
-          output: str
-          code: return inputs["x"] + inputs["y"]
-      output: ${j.output}
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

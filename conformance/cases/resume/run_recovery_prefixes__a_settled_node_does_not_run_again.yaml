@@ -3,7 +3,6 @@
 # A TOOL stands for the test's CODE node so the single call shows the node didn't rerun.
 # Record 10 is n's node_succeeded: __end__'s node_started is refused.
 kind: resume
-rules: [run-log]
 flow: |
   id: one-tool
   name: one_tool

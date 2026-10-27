@@ -1,6 +1,5 @@
 # TS-only: an inbox handle's mapping holds exactly the key inbox.
 kind: value
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 type: Inbox(str)
 value:
   inbox: owner_messages

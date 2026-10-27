@@ -1,5 +1,4 @@
 kind: load
-rules: [infinity]
 flow: |
   id: p
   name: p
@@ -12,11 +11,3 @@ flow: |
     h: ${b.output}
 expect:
   load: ok
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''g'': numbers must be finite (got .inf)'
-      frames:
-      - label: flow.yaml
-        range: [8, 6, 8, 10]

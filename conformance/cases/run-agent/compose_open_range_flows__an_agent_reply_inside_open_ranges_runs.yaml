@@ -1,5 +1,4 @@
 kind: run
-rules: [llm, run-log]
 flow: |2
 
   id: open_agent
@@ -148,79 +147,6 @@ expect:
       provider: openai
       purpose: structured_native
       n: 1
-  - - NodeSucceeded
-    - node_id: writer
-      output:
-        price: 9.5
-        qty: 3
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output:
-        price: 9.5
-        qty: 3
-  - - RunSucceeded
-    - output:
-        price: 9.5
-        qty: 3
-python_expect:
-  output:
-    status: succeeded
-    output:
-      price: 9.5
-      qty: 3
-  trace:
-  - - run_started
-    - null
-    - effective_llm_by_static_path:
-        writer:
-          _connection:
-            endpoint: https://api.openai.com/v1
-            method: api_key
-            source: missing
-          model: gpt-4o
-          provider: openai
-      inputs: {}
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value: {}
-  - [node_started, writer]
-  - - node_succeeded
-    - writer
-    - value:
-        price: 9.5
-        qty: 3
-  - [node_started, __end__]
-  - - node_succeeded
-    - __end__
-    - value:
-        price: 9.5
-        qty: 3
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output: {}
-  - - NodeStarted
-    - node_id: writer
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-4o
-      node_id: writer
-      provider: openai
-      purpose: structured_native
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-4o
-      node_id: writer
-      provider: openai
-      purpose: structured_native
   - - NodeSucceeded
     - node_id: writer
       output:

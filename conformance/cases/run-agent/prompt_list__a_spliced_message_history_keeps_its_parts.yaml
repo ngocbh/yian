@@ -1,7 +1,6 @@
 # TS-only: a spliced `!list(Message)` history reaches the request with every part and role: the
 # assistant's tool call, the tool message's result, then the user message.
 kind: run
-python_skip: "the built-in Message type is TS-only (#1042)"
 flow: |
   id: chat
   name: chat

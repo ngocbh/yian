@@ -1,6 +1,4 @@
 kind: load
-# TS spells the uncovered tags as JSON text (rules: messages); Python's repr in python_expect.
-rules: [messages]
 flow: |2
 
   id: f
@@ -35,14 +33,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'case node ''route'' on ${cls.output :- null}: non-exhaustive — enum tag(s) ["c"] not covered by a case `when:` or an `else:`'
-      frames:
-      - label: flow.yaml
-        range: [10, 3, 10, 8]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'case node ''route'' on ${cls.output :- null}: non-exhaustive — enum tag(s) [''c''] not covered by a case `when:` or an `else:`'
       frames:
       - label: flow.yaml
         range: [10, 3, 10, 8]

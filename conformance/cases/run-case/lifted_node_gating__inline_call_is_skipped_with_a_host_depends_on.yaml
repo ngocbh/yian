@@ -2,7 +2,6 @@
 # Pins: the lifted call co-skips with its host's `depends_on:` target.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -17,53 +16,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: ${input.go}
-          then: publish
-      else: skip_it
-    pick:
-      kind: case
-      cases:
-        - when: ${input.other}
-          then: maybe
-    maybe:
-      kind: code
-      output: str
-      code: return "m"
-    publish:
-      kind: code
-      depends_on: [maybe]
-      input:
-        draft: call(side, tag="publish")
-      output: str
-      code: return "published " + inputs["draft"]
-    skip_it:
-      kind: code
-      output: str
-      code: return "skipped"
-  output:
-    r: ${gate.output}
-python_flow: |
-  id: t
-  name: t
-  input:
-    go: !bool
-    other: !bool
-  defs:
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

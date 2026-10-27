@@ -18,25 +18,6 @@ flow: |
       kind: call
       call: d
   output: ${use.output}
-python_flow: |
-  id: f
-  name: f
-  defs:
-    d:
-      env:
-        K: &a [*a]
-      nodes:
-        keep:
-          kind: code
-          code: tests.engine._compose_codefns:echo
-          input:
-            topic: x
-      output: ${keep.output}
-  nodes:
-    use:
-      kind: call
-      call: d
-  output: ${use.output}
 expect:
   load:
     diagnostics:

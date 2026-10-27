@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
 expr: "[len(len) for len in [\"ab\"]]"
 expect:
   value: [2]

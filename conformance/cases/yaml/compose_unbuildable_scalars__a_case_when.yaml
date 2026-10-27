@@ -1,5 +1,4 @@
 kind: load
-rules: [yaml]
 flow: |
   id: f
   name: f
@@ -23,18 +22,6 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      frames:
-      - label: flow.yaml
-        range: [10, 15, 10, 16]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        invalid YAML: not a valid date: month must be in 1..12; quote it to keep it as text
-          in "<unicode string>", line 10, column 15:
-                  - when: 2026-13-45
-                          ^
       frames:
       - label: flow.yaml
         range: [10, 15, 10, 16]

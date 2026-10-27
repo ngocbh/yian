@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: nested
@@ -14,43 +13,6 @@ flow: |2
         x:
           kind: code
           code: ./fixtures/compose_codefns.ts:make_report
-          input:
-            topic: ${input.topic}
-          output:
-            report: str
-            n: int
-      output: ${x.output.report}
-    outer:
-      input:
-        topic: !str
-      nodes:
-        inner_call:
-          kind: call
-          call: inner
-          input:
-            topic: ${input.topic}
-      output: ${inner_call.output}
-  nodes:
-    go:
-      kind: call
-      call: outer
-      input:
-        topic: ${input.topic}
-  output: ${go.output}
-python_flow: |2
-
-  id: nested
-  name: nested
-  input:
-    topic: !str
-  defs:
-    inner:
-      input:
-        topic: !str
-      nodes:
-        x:
-          kind: code
-          code: tests.engine._compose_codefns:make_report
           input:
             topic: ${input.topic}
           output:

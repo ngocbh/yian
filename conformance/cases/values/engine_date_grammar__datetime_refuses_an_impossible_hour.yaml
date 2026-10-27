@@ -1,14 +1,8 @@
 kind: value
-rules: [messages]
 type: datetime
 value: 2026-01-01T25:00:00
 expect:
   raises:
     class: TypeCheckError
     message: '"2026-01-01T25:00:00" does not match declared type datetime: not a valid datetime: hour must be in 0..23'
-    path: []
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: '''2026-01-01T25:00:00'' does not match declared type datetime: not a valid datetime: hour must be in 0..23'
     path: []

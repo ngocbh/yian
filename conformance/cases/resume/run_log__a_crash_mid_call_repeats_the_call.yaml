@@ -4,7 +4,6 @@
 # resumed agent makes the call again as step 1; lookup runs only in the resumed run, under the
 # idempotency key the lost call would have given it (r1/research/1/0).
 kind: resume
-rules: [run-log]
 flow: |
   id: replay-mid-call
   name: replay_mid_call

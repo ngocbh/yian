@@ -4,7 +4,6 @@
 # recorded), no event fires, and the tool is not called again.
 # env: YIAN_TOOL_RETRY_DELAY_SECONDS=0 makes the backoffs zero waits (each still takes a draw).
 kind: resume
-rules: [run-log]
 flow: |
   id: t
   name: t

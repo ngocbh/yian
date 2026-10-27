@@ -2,7 +2,6 @@
 # A sleep `until` that resolves to a non-text value fails contract.input at the node. The input is
 # `!Any`: an int-typed reference is refused at load.
 kind: run
-rules: [run-log]
 flow: |
   id: wait_int
   name: wait_int

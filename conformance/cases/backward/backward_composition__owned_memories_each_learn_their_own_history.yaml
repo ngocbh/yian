@@ -4,7 +4,6 @@
 # each learn the episodes of their own scope: local only the AGENT's, inner the child's nodes,
 # outer everything; one AGENT backward call serves all three.
 kind: backward
-rules: [run-log]
 flow: |
   id: owned-composition
   name: owned_composition

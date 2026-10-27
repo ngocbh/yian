@@ -1,5 +1,4 @@
 kind: expr
-rules: [null-field-read]
 # TS yian (#1149): `:-` sees only null and missing roots, never the error from `.nope`.
 template: v=${sig.nope :- 0}
 values:
@@ -10,5 +9,3 @@ expect:
   raises:
     class: ExpressionError
     message: "cannot read ${sig.nope}: sig has no field 'nope'"
-python_expect:
-  value: v=0

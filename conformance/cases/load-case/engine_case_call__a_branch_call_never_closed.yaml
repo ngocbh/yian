@@ -33,40 +33,6 @@ flow: |2
         stance: x
       output: str
   output: ${gate.output}
-python_flow: |2
-
-  id: bad
-  name: bad
-  input:
-    score: !float
-
-  defs:
-    take:
-      input:
-        stance: !str
-      nodes:
-        x:
-          kind: code
-          code: tests.engine._compose_codefns:took
-          input:
-            stance: ${input.stance}
-          output: str
-      output: ${x.output}
-
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: "input.score >= 0.5"
-          then: call(take
-      else: nope
-    nope:
-      kind: code
-      code: tests.engine._compose_codefns:took
-      input:
-        stance: x
-      output: str
-  output: ${gate.output}
 expect:
   load:
     diagnostics:

@@ -2,7 +2,6 @@
 # A `case ... on` matches the classifier's text `con` and runs `con_note`; the other notes are
 # skipped and get no model call, and the 3-way coalesce returns `con_note`'s text.
 kind: run
-rules: [run-log]
 flow: |
   # 06 — `case ... on`: match a node's value against alternatives.
   #

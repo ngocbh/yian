@@ -4,7 +4,6 @@
 # returns the answer record; a flow input stands in for the test's CODE source. The ask has a
 # `prompt` because a questions-only ask's `question` is undocumented (seed_26 leaves it out).
 kind: run
-rules: [run-log]
 flow: |
   id: manual_ref
   name: manual_ref

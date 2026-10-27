@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: list comprehensions (#1086)"
 # p.text on Message parts (a union, not every member has text) loads after a tag check.
 flow: |
   id: p

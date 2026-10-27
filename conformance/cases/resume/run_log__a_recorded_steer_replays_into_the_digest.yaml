@@ -5,8 +5,6 @@
 # the digest covers it; no second `steer` step is written. The cut run made that call too, before
 # the crash refused its record, so the script holds its reply twice.
 kind: resume
-rules: [run-log]
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: recorded-steer
   name: recorded_steer

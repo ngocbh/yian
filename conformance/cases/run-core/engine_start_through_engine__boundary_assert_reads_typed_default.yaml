@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: da
@@ -13,22 +12,6 @@ flow: |2
         x: ${input.n}
       output: int
       code: ./fixtures/compose_codefns.ts:echo_x
-  output: ${echo.output}
-  asserts:
-    - "input.n >= 5"
-python_flow: |2
-
-  id: da
-  name: da
-  input:
-    n: !int 5
-  nodes:
-    echo:
-      kind: code
-      input:
-        x: ${input.n}
-      output: int
-      code: tests.engine._compose_codefns:echo_x
   output: ${echo.output}
   asserts:
     - "input.n >= 5"

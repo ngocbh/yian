@@ -1,5 +1,4 @@
 kind: value
-rules: [messages]
 typedefs:
   Rating:
     value: float
@@ -10,9 +9,4 @@ expect:
   raises:
     class: TypeCheckError
     message: 'record missing required fields: ["confidence","value"]'
-    path: [confidence]
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: 'record missing required fields: [''confidence'', ''value'']'
     path: [confidence]

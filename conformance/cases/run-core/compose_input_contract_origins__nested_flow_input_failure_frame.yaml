@@ -1,5 +1,4 @@
 kind: run
-rules: [messages, run-log]
 flow: |
   id: input-contract-origins
   name: input-contract-origins
@@ -23,33 +22,6 @@ flow: |
     echo:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x
-      input:
-        x: ${input.topic}
-      output: str
-  output: ${echo.output}
-python_flow: |
-  id: input-contract-origins
-  name: input-contract-origins
-  typedefs:
-    Profile:
-      age: int
-      nickname: Optional(str)
-    Payload:
-      profile: Profile
-    Limits:
-      count: int
-    Flags:
-      enabled: bool
-      limits: Limits
-  input:
-    topic: !str
-    window: !int 30
-    payload: !Payload
-    flags: !Flags
-  nodes:
-    echo:
-      kind: code
-      code: tests.engine._compose_codefns:echo_x
       input:
         x: ${input.topic}
       output: str
@@ -127,58 +99,4 @@ expect:
         - label: flow.yaml
           range: [17, 12, 17, 20]
         message: 'input ''payload'': "not-an-int" does not match declared type int'
-        node: __start__
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.input
-      frames:
-      - label: flow.yaml
-        range: [17, 12, 17, 20]
-      message: 'input ''payload'': ''not-an-int'' does not match declared type int'
-      node: __start__
-  trace:
-  - - run_started
-    - null
-    - inputs:
-        flags:
-          enabled: true
-          limits:
-            count: 1
-        payload:
-          profile:
-            age: not-an-int
-        topic: hello
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_failed
-    - __start__
-    - failure:
-        code: contract.input
-        frames:
-        - label: flow.yaml
-          range: [17, 12, 17, 20]
-        message: 'input ''payload'': ''not-an-int'' does not match declared type int'
-        node: __start__
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeFailed
-    - failure:
-        code: contract.input
-        frames:
-        - label: flow.yaml
-          range: [17, 12, 17, 20]
-        message: 'input ''payload'': ''not-an-int'' does not match declared type int'
-        node: __start__
-  - - RunFailed
-    - failure:
-        code: contract.input
-        frames:
-        - label: flow.yaml
-          range: [17, 12, 17, 20]
-        message: 'input ''payload'': ''not-an-int'' does not match declared type int'
         node: __start__

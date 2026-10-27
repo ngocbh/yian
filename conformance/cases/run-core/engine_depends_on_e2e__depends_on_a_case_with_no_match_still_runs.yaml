@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: case-source
@@ -29,41 +28,6 @@ flow: |2
       kind: code
       depends_on: [gate]
       code: ./fixtures/compose_codefns.ts:cautious
-      input:
-        topic: ${input.topic}
-      output: str
-  output:
-    pick: "${pro.output}"
-    note: ${note.output}
-python_flow: |2
-
-  id: case-source
-  name: case_source
-  input:
-    score: !float
-    topic: !str
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: "input.score >= 0.5"
-          then: pro
-    pro:
-      kind: code
-      code: tests.engine._compose_codefns:pick_pro
-      input:
-        topic: ${input.topic}
-      output: str
-    con:
-      kind: code
-      code: tests.engine._compose_codefns:pick_con
-      input:
-        topic: ${input.topic}
-      output: str
-    note:
-      kind: code
-      depends_on: [gate]
-      code: tests.engine._compose_codefns:cautious
       input:
         topic: ${input.topic}
       output: str

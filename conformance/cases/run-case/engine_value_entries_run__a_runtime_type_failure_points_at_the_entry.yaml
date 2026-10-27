@@ -1,5 +1,4 @@
 kind: run
-rules: [messages, run-log]
 flow: |
   id: f
   name: f
@@ -92,68 +91,4 @@ expect:
         - label: flow.yaml
           range: [8, 6, 8, 22]
         message: 'value entry ''x'': "five" does not match declared type int'
-        node: x
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.type
-      frames:
-      - label: flow.yaml
-        range: [8, 6, 8, 22]
-      message: 'value entry ''x'': ''five'' does not match declared type int'
-      node: x
-  trace:
-  - - run_started
-    - null
-    - inputs: {}
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value: {}
-  - [node_started, p]
-  - - node_succeeded
-    - p
-    - value: five
-  - [node_started, x]
-  - - node_failed
-    - x
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [8, 6, 8, 22]
-        message: 'value entry ''x'': ''five'' does not match declared type int'
-        node: x
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output: {}
-  - - NodeStarted
-    - node_id: p
-  - - NodeSucceeded
-    - node_id: p
-      output: five
-  - - NodeStarted
-    - node_id: x
-  - - NodeFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [8, 6, 8, 22]
-        message: 'value entry ''x'': ''five'' does not match declared type int'
-        node: x
-  - - RunFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [8, 6, 8, 22]
-        message: 'value entry ''x'': ''five'' does not match declared type int'
         node: x

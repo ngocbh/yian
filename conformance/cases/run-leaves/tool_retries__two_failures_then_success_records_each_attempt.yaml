@@ -3,7 +3,6 @@
 # step (doubling delay) and a started step.
 # Retries wait delay/2 + draw * delay/2 with delays 1 s and 2 s: 0.5 s, then 1.0 s.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

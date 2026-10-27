@@ -1,6 +1,5 @@
 kind: cli
 # A resume names no flow file: it runs the flow the log recorded.
-rules: [run-log]
 flow: |
   id: echo
   name: echo

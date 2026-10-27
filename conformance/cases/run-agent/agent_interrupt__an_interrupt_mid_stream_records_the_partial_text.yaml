@@ -4,8 +4,6 @@
 # the model_call step). An interrupt delivered once chunk 2 of the streamed reply is read cuts the
 # stream there (finish `interrupted`, "hello big"); the reply's tool call never runs.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

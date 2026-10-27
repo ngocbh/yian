@@ -1,27 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: typed-counter
-  name: typed_counter
-  nodes:
-    loop:
-      kind: loop
-      times: 3
-      input:
-        rounds: !int 0
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.rounds}
-          output: int
-          code: |
-            return inputs["n"] + 1
-      output:
-        rounds: ${bump.output}
-  output: ${loop.output}
-python_flow: |2
 
   id: typed-counter
   name: typed_counter

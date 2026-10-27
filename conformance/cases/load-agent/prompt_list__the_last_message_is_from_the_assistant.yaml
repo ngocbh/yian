@@ -1,6 +1,5 @@
 # TS-only: a list `prompt:` whose last item is an `assistant:` message is refused at it.
 kind: load
-python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
   id: chat
   name: chat

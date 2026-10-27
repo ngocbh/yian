@@ -4,8 +4,6 @@
 # the input usage; an interrupt delivered once chunk 3 (" big") is read cuts the stream, and the
 # one ModelCallFinished reports the usage received so far (1000/1/1001) with no error.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

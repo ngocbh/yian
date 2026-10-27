@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   defs:
     f:
@@ -13,40 +12,6 @@ flow: |
           output: str
           code: |
             return inputs['x'].toUpperCase()
-      output: ${up.output}
-
-  id: f
-  name: f
-  input:
-    cmd: !str
-    t: !str
-  nodes:
-    route:
-      kind: case
-      on: ${input.cmd}
-      cases:
-        - when: go
-          then: e
-      else: other
-    other:
-      kind: code
-      code: |
-        return 'other'
-    e: !str call(f, x=${input.t})
-  output: ${route.output}
-python_flow: |
-  defs:
-    f:
-      input:
-        x: !str
-      nodes:
-        up:
-          kind: code
-          input:
-            x: ${input.x}
-          output: str
-          code: |
-            return inputs['x'].upper()
       output: ${up.output}
 
   id: f

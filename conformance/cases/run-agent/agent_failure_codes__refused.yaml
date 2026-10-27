@@ -1,7 +1,6 @@
 # The AGENT's model call fails with a 400 reply whose body names content_filter.
 # No retry (YIAN_MODEL_RETRIES=0); TS fails provider.refused and Python node.execute.
 kind: run
-rules: [failure-codes]
 flow: |
   id: agent-failure-refused
   name: agent_failure_refused
@@ -25,14 +24,6 @@ expect:
     status: failed
     failure:
       code: provider.refused
-      message: '{"error": {"code": "content_filter", "message": "The response was filtered"}}'
-      node: write
-      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
       message: '{"error": {"code": "content_filter", "message": "The response was filtered"}}'
       node: write
       frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]

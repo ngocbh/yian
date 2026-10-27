@@ -1,28 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: one-field-body
-  name: one_field_body
-  nodes:
-    loop:
-      kind: loop
-      times: 3
-      input:
-        count: 0
-        label: x
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.count}
-          output: int
-          code: |
-            return inputs["n"] + 1
-      output:
-        count: ${bump.output}
-  output: ${loop.output}
-python_flow: |2
 
   id: one-field-body
   name: one_field_body

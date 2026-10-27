@@ -1,7 +1,6 @@
 # TS-only: an agent with a steer inbox may declare any output; at an interrupt the output contract
 # decides (Optional(...) takes null, anything else fails agent.interrupted) (yian #1025).
 kind: load
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer

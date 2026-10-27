@@ -1,6 +1,5 @@
 # TS reads `${inf}` as infinity, so an AGENT variable named `inf` is refused (rules: infinity); Python loads it.
 kind: load
-rules: [infinity]
 flow: |
   id: f
   name: f
@@ -19,5 +18,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [8, 7, 8, 10]
-python_expect:
-  load: ok

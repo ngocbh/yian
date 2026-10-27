@@ -1,6 +1,5 @@
 # TS reads a `!!timestamp` scalar as its text (rules: dates); Python's error in python_expect.
 kind: load
-rules: [dates]
 flow: |
   id: p
   name: p
@@ -13,11 +12,3 @@ flow: |
     h: ${b.output}
 expect:
   load: ok
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''as_of'': `2026-01-01` is not a JSON value (YAML reads it as a date); quote it to keep it as text: `as_of: "2026-01-01"`'
-      frames:
-      - label: flow.yaml
-        range: [8, 10, 8, 34]

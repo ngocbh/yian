@@ -3,7 +3,6 @@
 # input. Each AGENT's backward request shows the downstream context with the template's text
 # (`result`), which the record leaves out and learning rebuilds by binding the node again.
 kind: backward
-rules: [run-log]
 flow: |
   id: polish
   name: polish

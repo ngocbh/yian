@@ -3,7 +3,6 @@
 # content is "ReportedToolError" (the test's subclass NotFound reads "NotFound"; a stub raises
 # the class itself), with is_error true, and the run succeeds.
 kind: run
-rules: [run-log]
 flow: |
   id: reported
   name: reported

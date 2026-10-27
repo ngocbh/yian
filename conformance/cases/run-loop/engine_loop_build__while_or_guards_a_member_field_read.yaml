@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: loop-union
@@ -26,34 +25,6 @@ flow: |2
           code: |
             const n = inputs["n"] + 1
             return {"n": n, "r": n >= 3 ? {"answer": "ok"} : {"hint": "again"}}
-      output: ${step.output}
-  output: ${ask.output}
-python_flow: |2
-
-  id: loop-union
-  name: loop_union
-  typedefs:
-    Done: {answer: str}
-    More: {hint: str}
-    Step: Union(Done, More)
-  nodes:
-    ask:
-      kind: loop
-      while: isinstance(r, More) or r.answer != 'ok'
-      input:
-        n: 0
-        r: !Step {"hint":"start"}
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: int
-            r: Step
-          code: |
-            n = inputs["n"] + 1
-            return {"n": n, "r": {"answer": "ok"} if n >= 3 else {"hint": "again"}}
       output: ${step.output}
   output: ${ask.output}
 run:

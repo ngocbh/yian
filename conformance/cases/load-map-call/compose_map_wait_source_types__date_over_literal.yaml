@@ -1,6 +1,5 @@
 # TS reads the unquoted date as text (rules: dates); Python's "read it as a date" in python_expect.
 kind: load
-rules: [dates]
 flow: |
   id: f
   name: f
@@ -37,14 +36,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'node ''m'' (kind=map): `over:` must be a list, but YAML read it as text; write a list, or a reference such as `over: ${input.items}`'
-      frames:
-      - label: flow.yaml
-        range: [26, 11, 26, 21]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'node ''m'' (kind=map): `over:` must be a list, but YAML read it as a date; write a list, or a reference such as `over: ${input.items}`'
       frames:
       - label: flow.yaml
         range: [26, 11, 26, 21]

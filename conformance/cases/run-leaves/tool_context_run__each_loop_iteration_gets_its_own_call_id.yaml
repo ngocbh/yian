@@ -1,7 +1,6 @@
 # From tests/engine/test_tool_context_run.py::test_each_loop_iteration_gets_its_own_call_id.
 # A TOOL node in a LOOP body gets one call id per iteration: <run id>/loop#<i>/place.
 kind: run
-rules: [run-log]
 flow: |
   id: loop_ctx
   name: loop_ctx

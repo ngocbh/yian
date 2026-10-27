@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: inline-map-typed-records
   name: inline_map_typed_records

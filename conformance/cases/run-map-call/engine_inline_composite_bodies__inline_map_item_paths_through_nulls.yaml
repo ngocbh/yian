@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log, null-field-read]
 flow: |
   id: inline-map-nullable-items
   name: inline_map_nullable_items

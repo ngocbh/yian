@@ -1,6 +1,5 @@
 # TS-only: a take's output is inferred, so `output:` is refused.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

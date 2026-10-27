@@ -1,10 +1,6 @@
 kind: value
-rules: [int-in-float]
 type: float(-0.5..1.0)
 value: 0
 expect:
   value: 0
   kind: int
-python_expect:
-  value: 0.0
-  kind: float

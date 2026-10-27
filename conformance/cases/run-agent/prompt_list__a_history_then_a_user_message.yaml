@@ -2,7 +2,6 @@
 # with their roles, then the user message, as separate messages.
 # The flow returns the history with the new turn appended.
 kind: run
-python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
   id: chat
   name: chat

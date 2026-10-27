@@ -3,8 +3,6 @@
 # call 1 runs are read together before the next model call, as one `steer` step: they join that
 # request after the tool result as one user message with a text part each, in send order.
 kind: run
-rules: [run-log]
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer

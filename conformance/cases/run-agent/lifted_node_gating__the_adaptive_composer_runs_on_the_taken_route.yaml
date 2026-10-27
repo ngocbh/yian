@@ -4,7 +4,6 @@
 # ask from node `ask` (its question is the ask's prompt), and the answer is the ask's
 # output: {r: {DB: Postgres}}.
 kind: run
-rules: [llm, run-log]
 flow: |
   id: t
   name: t
@@ -23,33 +22,6 @@ flow: |
       tool_id: ask
       input:
         prompt: "Pick one"
-        ctx: ${input.go}
-      adaptive_questions:
-        prompt: "Design one question for: ${ctx}"
-    done:
-      kind: code
-      output: str
-      code: return "done"
-  output:
-    r: ${router.output}
-# Python yian has no ask built-in: it runs the human_input gate.
-python_flow: |
-  id: t
-  name: t
-  llm_config: {provider: openai, model: gpt-5.5}
-  input:
-    go: !bool
-  nodes:
-    router:
-      kind: case
-      cases:
-        - when: ${input.go}
-          then: ask
-      else: done
-    ask:
-      kind: human_input
-      prompt: "Pick one"
-      input:
         ctx: ${input.go}
       adaptive_questions:
         prompt: "Design one question for: ${ctx}"
@@ -240,129 +212,4 @@ expect:
         ctx: true
       call_id: r1/ask
       attempt: 1
-      node: ask
-python_expect:
-  output:
-    status: succeeded
-    output:
-      r:
-        DB: Postgres
-  trace:
-  - - run_started
-    - null
-    - effective_llm_by_static_path:
-        ask__compose:
-          _connection:
-            endpoint: https://api.openai.com/v1
-            method: api_key
-            source: missing
-          model: gpt-5.5
-          provider: openai
-      inputs:
-        go: true
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        go: true
-  - [node_started, router]
-  - - node_routed
-    - router
-    - handle: ask
-  - [node_started, ask__compose]
-  - - node_succeeded
-    - ask__compose
-    - value:
-      - header: DB
-        multi_select: false
-        options:
-        - description: Relational.
-          label: Postgres
-        question: Which database?
-  - [node_started, ask]
-  - - node_succeeded
-    - ask
-    - value:
-        DB: Postgres
-  - [node_started, __end__]
-  - - node_succeeded
-    - __end__
-    - value:
-        r:
-          DB: Postgres
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        go: true
-  - - NodeStarted
-    - node_id: router
-  - - NodeRouted
-    - handle: ask
-      node_id: router
-  - - NodeSkipped
-    - node_id: done
-  - - NodeStarted
-    - node_id: ask__compose
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
-      node_id: ask__compose
-      provider: openai
-      purpose: structured_native
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
-      node_id: ask__compose
-      provider: openai
-      purpose: structured_native
-  - - NodeSucceeded
-    - node_id: ask__compose
-      output:
-      - header: DB
-        multi_select: false
-        options:
-        - description: Relational.
-          label: Postgres
-        question: Which database?
-  - - NodeStarted
-    - node_id: ask
-  - - NodeSucceeded
-    - node_id: ask
-      output:
-        DB: Postgres
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output:
-        r:
-          DB: Postgres
-  - - RunSucceeded
-    - output:
-        r:
-          DB: Postgres
-  tool_calls:
-    ask_user:
-    - args:
-        answer_schema:
-        - name: answer
-          required: true
-          type: object
-        node_id: ask
-        question: Pick one
-        questions:
-        - header: DB
-          multi_select: false
-          options:
-          - description: Relational.
-            label: Postgres
-          question: Which database?
-      attempt: 1
-      call_id: r1/ask
       node: ask

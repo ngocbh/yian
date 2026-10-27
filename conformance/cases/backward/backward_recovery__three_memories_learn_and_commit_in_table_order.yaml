@@ -4,7 +4,6 @@
 # learn and commit in key order, each with its own disposition in the outcome.
 # YIAN_DEFAULT_PROVIDER/MODEL: reflective and profile learners' model config comes from the defaults.
 kind: backward
-rules: [run-log]
 flow: |
   id: backward-recovery
   name: backward_recovery

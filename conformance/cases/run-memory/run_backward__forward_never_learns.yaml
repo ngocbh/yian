@@ -2,7 +2,6 @@
 # Pins: a learnable run with memory and no backward learns nothing: no backward or memory commit
 # record, and the memory's whole recall is empty.
 kind: run
-rules: [run-log]
 flow: |
   id: identity
   name: identity

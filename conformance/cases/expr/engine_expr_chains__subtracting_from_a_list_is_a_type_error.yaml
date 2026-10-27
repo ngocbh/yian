@@ -1,5 +1,4 @@
 kind: expr
-rules: [arithmetic, messages]
 expr: xs - 1.5
 values:
   xs: [1, 2]
@@ -7,7 +6,3 @@ expect:
   raises:
     class: ExpressionError
     message: 'type error evaluating [1,2] - 1.5: unsupported operand kinds for `-`: `list` and `float`'
-python_expect:
-  raises:
-    class: ExpressionError
-    message: 'type error evaluating [1, 2] - 1.5: unsupported operand type(s) for -: ''list'' and ''float'''

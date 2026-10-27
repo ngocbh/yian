@@ -1,6 +1,5 @@
 kind: value
 # Infinity is above every finite upper end, so a range closed on both sides refuses it.
-rules: [infinity, messages]
 type: float(0.0..10.0)
 value: {$float: inf}
 expect:

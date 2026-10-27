@@ -16,23 +16,6 @@ flow: |2
         - "nope > 0"
         - "input.v > 0"
   output: ${x.output}
-python_flow: |2
-
-  id: na
-  name: na
-  input:
-    v: !int
-  nodes:
-    x:
-      kind: code
-      code: tests.engine._compose_codefns:double
-      input:
-        n: ${input.v}
-      output: int
-      asserts:
-        - "nope > 0"
-        - "input.v > 0"
-  output: ${x.output}
 expect:
   load:
     diagnostics:

@@ -1,7 +1,6 @@
 # TS-only: `Message` is a built-in type every flow can name, with no typedef: a spliced
 # `!list(Message)` history, and a typedef field holding a `Message`.
 kind: load
-python_skip: "the built-in Message type is TS-only (#1042)"
 flow: |
   id: chat
   name: chat

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: partial-chat
@@ -23,51 +22,6 @@ flow: |2
             if (inputs["person"]["name"] !== "Ada") throw new Error("assert")
             if (inputs["talking_to"] !== "Bob") throw new Error("assert")
             const n = inputs["n"] + 1
-            return {"n": n, "done": n >= 3}
-          input:
-            person: ${input.person}
-            talking_to: ${input.talking_to}
-            n: ${input.n}
-          output:
-            n: int
-            done: bool
-      output: ${step.output}
-  nodes:
-    loop:
-      kind: loop
-      call: turn
-      input:
-        person: ${input.person}
-        talking_to: ${input.talking_to}
-        n: 0
-        done: false
-      while: not done
-      asserts:
-        - "output.person.name == 'Bob'"
-  output: ${loop.output}
-python_flow: |2
-
-  id: partial-chat
-  name: partial_chat
-  typedefs:
-    Person:
-      name: str
-  input:
-    person: !Person
-    talking_to: !str
-  defs:
-    turn:
-      input:
-        person: !Person
-        talking_to: !str
-        n: !int
-      nodes:
-        step:
-          kind: code
-          code: |
-            assert inputs["person"]["name"] == "Ada"
-            assert inputs["talking_to"] == "Bob"
-            n = inputs["n"] + 1
             return {"n": n, "done": n >= 3}
           input:
             person: ${input.person}

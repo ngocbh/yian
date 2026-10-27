@@ -1,6 +1,5 @@
 # TS spells the lists as JSON text (rules: messages); Python's reprs in python_expect.
 kind: load
-rules: [messages]
 flow: |2
 
   id: loop-never-ends
@@ -27,14 +26,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'loop node ''wait'': `until:` references unknown name(s) ["nope"] — the predicate reads the carried record ["attempts","done"]'
-      frames:
-      - label: flow.yaml
-        range: [13, 3, 13, 7]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'loop node ''wait'': `until:` references unknown name(s) [''nope''] — the predicate reads the carried record [''attempts'', ''done'']'
       frames:
       - label: flow.yaml
         range: [13, 3, 13, 7]

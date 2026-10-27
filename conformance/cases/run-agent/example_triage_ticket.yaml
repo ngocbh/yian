@@ -2,7 +2,6 @@
 # A record AGENT output with Literal fields, three of them read field by field by a second AGENT;
 # the flow returns the record and the reply.
 kind: run
-rules: [run-log]
 flow: |
   # triage-ticket — turn a raw support message into a structured record, then draft a reply.
   #

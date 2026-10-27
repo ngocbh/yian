@@ -3,7 +3,6 @@
 # Pins: a profile key declared at the flow and again on each of two sibling AGENTs is one document,
 # shown once in each AGENT's system prompt; the document is seeded as a file at its storage path.
 kind: run
-rules: [run-log]
 flow: |
   id: siblings
   name: siblings

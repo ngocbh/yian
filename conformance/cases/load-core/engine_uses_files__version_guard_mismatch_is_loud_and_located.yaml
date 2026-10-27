@@ -1,6 +1,5 @@
 # TS spells the versions as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: p
   name: p
@@ -21,30 +20,11 @@ files:
     nodes:
       a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
     output: {y: "${a.output}"}
-python_files:
-  child.yaml: |
-    id: child
-    name: child
-    version: "v2"
-    input:
-      x: !str
-    nodes:
-      a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
-    output: {y: "${a.output}"}
 expect:
   load:
     diagnostics:
     - code: compose.load
       message: 'uses: ref pinned child@v1 but the resolved file declares version: "v2" (file-per-version: name a file that declares "v1")'
-      frames:
-      - label: flow.yaml
-        range: [9, 7, 9, 15]
-        note: uses alias 'ch'
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'uses: ref pinned child@v1 but the resolved file declares version: ''v2'' (file-per-version: name a file that declares ''v1'')'
       frames:
       - label: flow.yaml
         range: [9, 7, 9, 15]

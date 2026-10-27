@@ -1,5 +1,4 @@
 kind: value
-rules: [messages]
 typedefs:
   Buy:
     action: Literal(buy)
@@ -14,9 +13,4 @@ expect:
   raises:
     class: TypeCheckError
     message: missing tag field 'action' (expected one of ["buy","sell"])
-    path: [action]
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: missing tag field 'action' (expected one of ['buy', 'sell'])
     path: [action]

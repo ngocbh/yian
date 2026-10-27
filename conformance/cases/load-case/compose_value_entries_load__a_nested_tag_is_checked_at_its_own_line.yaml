@@ -1,6 +1,4 @@
 kind: load
-# TS spells the text value JSON-quoted (rules: messages); Python's repr in python_expect.
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -24,14 +22,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: '''x.d'': the value is not a valid Buy: "x" does not match declared type float (at `x.d.conviction`)'
-      frames:
-      - label: flow.yaml
-        range: [16, 8, 16, 41]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''x.d'': the value is not a valid Buy: ''x'' does not match declared type float (at `x.d.conviction`)'
       frames:
       - label: flow.yaml
         range: [16, 8, 16, 41]

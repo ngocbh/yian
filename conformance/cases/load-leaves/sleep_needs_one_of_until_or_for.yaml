@@ -1,6 +1,5 @@
 # TS-only: a sleep takes exactly one of until: and for:.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

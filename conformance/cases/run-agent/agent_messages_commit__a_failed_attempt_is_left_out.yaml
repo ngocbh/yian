@@ -1,8 +1,6 @@
 # TS-only: the agent's first model call fails with a 503 and is retried (YIAN_MODEL_RETRIES=1);
 # the failed attempt is a step, but the messages commit names only the reply that arrived.
 kind: run
-rules: [run-log]
-python_skip: "the messages commit is TS-only (#1081)"
 flow: |
   id: retried
   name: retried

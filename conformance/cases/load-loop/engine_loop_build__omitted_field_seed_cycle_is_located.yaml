@@ -36,43 +36,6 @@ flow: |2
         keep: ${first.output.keep}
       times: 1
   output: ${second.output}
-python_flow: |2
-
-  id: loop-seed-cycle
-  name: loop_seed_cycle
-  defs:
-    bump:
-      input:
-        n: !int
-        exited: !bool
-      nodes:
-        step:
-          kind: code
-          code: tests.engine._compose_codefns:loop_bump
-          input:
-            n: ${input.n}
-            exited: ${input.exited}
-          output:
-            n: int
-      output: ${step.output}
-  nodes:
-    first:
-      kind: loop
-      call: bump
-      input:
-        n: 0
-        exited: false
-        keep: ${second.output.keep}
-      times: 1
-    second:
-      kind: loop
-      call: bump
-      input:
-        n: 0
-        exited: false
-        keep: ${first.output.keep}
-      times: 1
-  output: ${second.output}
 expect:
   load:
     diagnostics:

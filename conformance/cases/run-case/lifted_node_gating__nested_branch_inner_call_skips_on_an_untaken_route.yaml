@@ -2,7 +2,6 @@
 # Pins: the inner call of a nested `then: call(wrap, x=call(side, ...))` never starts when `else:` is taken.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -16,47 +15,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-    wrap:
-      input:
-        x: !str
-      nodes:
-        w:
-          kind: code
-          input:
-            x: ${input.x}
-          output: str
-          code: return "wrapped " + inputs["x"]
-      output: ${w.output}
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: ${input.go}
-          then: call(wrap, x=call(side, tag="inner"))
-      else: b
-    b:
-      kind: code
-      output: str
-      code: return "B"
-  output:
-    r: ${gate.output}
-python_flow: |
-  id: t
-  name: t
-  input:
-    go: !bool
-  defs:
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

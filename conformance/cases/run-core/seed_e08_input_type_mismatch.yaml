@@ -2,8 +2,6 @@
 # A run input that doesn't fit its declared type fails START, at the input's type.
 # The header's `build_segment_with_type` names a Python function.
 kind: run
-# The message quotes the input's value: JSON text in TS, a repr in Python.
-rules: [messages, run-log]
 flow: |
   # e08 — Flow input fails type enforcement at the boundary.
   # EXPECT: RUNTIME RunFailed at the input boundary — `window` is declared `int`, but the
@@ -79,32 +77,5 @@ expect:
       - failure:
           code: contract.input
           message: "input 'window': \"soon\" does not match declared type int"
-          node: __start__
-          frames: [{label: flow.yaml, range: [20, 11, 20, 15]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.input
-      message: "input 'window': 'soon' does not match declared type int"
-      node: __start__
-      frames: [{label: flow.yaml, range: [20, 11, 20, 15]}]
-  trace:
-    - - run_started
-      - null
-      - inputs: {topic: X, window: soon}
-        learnable: false
-        num_workers: 0
-        effective_llm_by_static_path:
-          note:
-            provider: openai
-            model: gpt-5.5
-            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
-    - [node_started, __start__]
-    - - node_failed
-      - __start__
-      - failure:
-          code: contract.input
-          message: "input 'window': 'soon' does not match declared type int"
           node: __start__
           frames: [{label: flow.yaml, range: [20, 11, 20, 15]}]

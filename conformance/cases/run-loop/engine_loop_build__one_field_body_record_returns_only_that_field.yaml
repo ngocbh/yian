@@ -1,34 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: loop-single-output-record
-  name: loop_single_output_record
-  defs:
-    bump:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: int
-          code: |
-            return {"n": inputs["n"] + 100}
-      output:
-        state: ${step.output}
-  nodes:
-    chat_loop:
-      kind: loop
-      call: bump
-      input:
-        n: 0
-        state: init
-      times: 2
-  output: ${chat_loop.output}
-python_flow: |2
 
   id: loop-single-output-record
   name: loop_single_output_record

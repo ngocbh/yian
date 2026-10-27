@@ -4,8 +4,6 @@
 # delivered once `chat`'s reply arrives skips its tool call and ends it null; the flow goes on: the
 # next AGENT renders the draft's default ("summarize: (interrupted)") and its reply is the output.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

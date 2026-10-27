@@ -1,6 +1,4 @@
 kind: load
-# TS spells the text value JSON-quoted (rules: messages); Python's repr in python_expect.
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -20,14 +18,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'case node ''gate'': `cases[0]` must be a {when:, then:} mapping (got "done")'
-      frames:
-      - label: flow.yaml
-        range: [8, 13, 8, 17]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'case node ''gate'': `cases[0]` must be a {when:, then:} mapping (got ''done'')'
       frames:
       - label: flow.yaml
         range: [8, 13, 8, 17]

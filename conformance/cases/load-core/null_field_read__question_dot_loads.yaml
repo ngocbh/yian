@@ -1,6 +1,5 @@
 # The same read through ?. loads.
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f

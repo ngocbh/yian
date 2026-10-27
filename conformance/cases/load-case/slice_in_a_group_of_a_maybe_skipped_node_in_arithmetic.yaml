@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: len() and list slicing (#1086)"
 flow: |
   id: f
   name: f

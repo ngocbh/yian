@@ -1,5 +1,4 @@
 kind: expr
-rules: [arithmetic]
 expr: (1.5 % x * 1 % [1] / 1.5) % 2.0
 values:
   x: 3
@@ -7,7 +6,3 @@ expect:
   raises:
     class: ExpressionError
     message: 'type error evaluating 1.5 % [1]: unsupported operand kinds for `%`: `float` and `list`'
-python_expect:
-  raises:
-    class: ExpressionError
-    message: 'type error evaluating 1.5 % [1]: unsupported operand type(s) for %: ''float'' and ''list'''

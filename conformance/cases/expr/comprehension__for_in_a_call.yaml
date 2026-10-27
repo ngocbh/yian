@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
 expr: "f(x for x in xs)"
 expect:
   raises:

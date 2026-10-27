@@ -1,5 +1,4 @@
 kind: json
-rules: [canonical]
 write: [56, {d: true, "10": null, "1": []}]
 form: canonical
 expect:

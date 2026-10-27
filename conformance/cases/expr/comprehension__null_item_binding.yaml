@@ -1,6 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
-rules: [null-field-read]
 # An item is returned as is, as in Python; `.k` on a null item raises (#1149), `?.k` reads null.
 expr: "[[x for x in [null, 1]], [x for x in [null, 1] if x], [x.k for x in [null]]]"
 expect:

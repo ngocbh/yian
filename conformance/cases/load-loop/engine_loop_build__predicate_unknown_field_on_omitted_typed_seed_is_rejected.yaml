@@ -25,32 +25,6 @@ flow: |2
       output:
         n: ${inc.output}
   output: ${repeat.output}
-python_flow: |2
-
-  id: loop-omitted
-  name: loop_omitted
-  typedefs:
-    Cfg: {limit: int}
-  input:
-    cfg: !Cfg
-  nodes:
-    repeat:
-      kind: loop
-      while: n < cfg.limt
-      input:
-        n: 0
-        cfg: ${input.cfg}
-      nodes:
-        inc:
-          kind: code
-          input:
-            n: ${input.n}
-          output: int
-          code: |
-            return inputs["n"] + 1
-      output:
-        n: ${inc.output}
-  output: ${repeat.output}
 expect:
   load:
     diagnostics:

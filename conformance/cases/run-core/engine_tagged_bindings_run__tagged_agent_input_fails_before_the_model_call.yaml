@@ -1,6 +1,5 @@
 # env keeps the model defaults: the run resolves the AGENT's provider and model before the node binds its inputs.
 kind: run
-rules: [messages, run-log]
 flow: |2
 
   id: tagged_agent
@@ -110,76 +109,4 @@ expect:
         - label: flow.yaml
           range: [12, 14, 12, 32]
         message: 'binding ''count'': "three" does not match declared type int'
-        node: ask
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.type
-      frames:
-      - label: flow.yaml
-        range: [12, 14, 12, 32]
-      message: 'binding ''count'': ''three'' does not match declared type int'
-      node: ask
-  trace:
-  - - run_started
-    - null
-    - effective_llm_by_static_path:
-        ask:
-          _connection:
-            endpoint: https://api.openai.com/v1
-            method: api_key
-            source: missing
-          model: gpt-5.5
-          provider: openai
-      inputs: {}
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value: {}
-  - [node_started, src]
-  - - node_succeeded
-    - src
-    - value: three
-  - [node_started, ask]
-  - - node_failed
-    - ask
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [12, 14, 12, 32]
-        message: 'binding ''count'': ''three'' does not match declared type int'
-        node: ask
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output: {}
-  - - NodeStarted
-    - node_id: src
-  - - NodeSucceeded
-    - node_id: src
-      output: three
-  - - NodeStarted
-    - node_id: ask
-  - - NodeFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [12, 14, 12, 32]
-        message: 'binding ''count'': ''three'' does not match declared type int'
-        node: ask
-  - - RunFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [12, 14, 12, 32]
-        message: 'binding ''count'': ''three'' does not match declared type int'
         node: ask

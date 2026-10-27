@@ -1,5 +1,4 @@
 kind: json
-rules: [numbers]
 read: '{"a": }'
 mode: plain
 expect:

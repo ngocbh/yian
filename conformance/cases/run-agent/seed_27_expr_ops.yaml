@@ -2,7 +2,6 @@
 # Every input given, the expression forms bind, the flow asserts pass and the AGENT's reply is the
 # output. Its prompt isn't pinned: it shows `sizable`, an `and` result.
 kind: run
-rules: [run-log]
 flow: |
   # 27 — Every new ${...} expression form, in one flow.
   #

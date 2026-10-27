@@ -1,6 +1,5 @@
 # TS-only: an ask's literal questions are checked at load.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

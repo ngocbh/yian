@@ -1,6 +1,5 @@
 # TS-only: a text item that isn't a lone `${name}` isn't a splice; it is refused at the item, with a fix.
 kind: load
-python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
   id: chat
   name: chat

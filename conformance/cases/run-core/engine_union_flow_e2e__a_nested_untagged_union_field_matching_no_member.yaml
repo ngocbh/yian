@@ -1,6 +1,5 @@
 # hand TS expect (rules curated by hand): `code` is left out of rules; the frame and message are about flow structure, not the CODE body.
 kind: run
-rules: [messages, run-log]
 flow: |2
 
   id: nested
@@ -122,80 +121,4 @@ expect:
         - label: flow.yaml
           range: [22, 14, 22, 24]
         message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
-        node: d
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.output
-      frames:
-      - label: flow.yaml
-        range: [22, 14, 22, 24]
-      message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: [''num'']; {"text":str}: record missing required fields: [''text'']'
-      node: d
-  trace:
-  - - run_started
-    - null
-    - inputs:
-        value:
-          decision:
-            action: buy
-            qty: 3
-          notes:
-          - text: a
-          - zz: 1
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        value:
-          decision:
-            action: buy
-            qty: 3
-          notes:
-          - text: a
-          - zz: 1
-  - [node_started, d]
-  - - node_failed
-    - d
-    - failure:
-        code: contract.output
-        frames:
-        - label: flow.yaml
-          range: [22, 14, 22, 24]
-        message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: [''num'']; {"text":str}: record missing required fields: [''text'']'
-        node: d
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        value:
-          decision:
-            action: buy
-            qty: 3
-          notes:
-          - text: a
-          - zz: 1
-  - - NodeStarted
-    - node_id: d
-  - - NodeFailed
-    - failure:
-        code: contract.output
-        frames:
-        - label: flow.yaml
-          range: [22, 14, 22, 24]
-        message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: [''num'']; {"text":str}: record missing required fields: [''text'']'
-        node: d
-  - - RunFailed
-    - failure:
-        code: contract.output
-        frames:
-        - label: flow.yaml
-          range: [22, 14, 22, 24]
-        message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: [''num'']; {"text":str}: record missing required fields: [''text'']'
         node: d

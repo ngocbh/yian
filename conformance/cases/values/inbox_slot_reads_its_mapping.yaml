@@ -1,7 +1,6 @@
 # TS-only: an Inbox(T) slot reads an inbox handle's mapping {inbox} as a handle, written back as
 # that mapping.
 kind: value
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 type: Inbox(str)
 value:
   inbox: owner_messages

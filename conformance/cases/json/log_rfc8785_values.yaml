@@ -1,6 +1,5 @@
 kind: json
 # RFC 8785's `values` vector: every float in its output has `.` or `e`, so the log form is JCS.
-rules: [canonical, numbers]
 write:
   numbers: [333333333.33333329, 1.0e+30, 4.50, 2.0e-3, 1.0e-27]
   string: "€$\x0f\nA'B\"\\\\\"/"

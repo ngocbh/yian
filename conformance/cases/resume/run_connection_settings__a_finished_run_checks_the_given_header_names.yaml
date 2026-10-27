@@ -1,7 +1,6 @@
 # From tests/engine/test_run_connection_settings.py::test_a_finished_run_checks_the_given_header_names.
 # A finished run's resume still checks the given header names against the recorded ones (and appends nothing).
 kind: resume
-rules: [run-log]
 flow: |
   id: keyed
   name: keyed

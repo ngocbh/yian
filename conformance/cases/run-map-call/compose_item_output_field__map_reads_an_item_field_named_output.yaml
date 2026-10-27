@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: p
   name: p
@@ -18,33 +17,6 @@ flow: |
             x: ${input.x}
           output: str
           code: "return inputs['x'].toUpperCase()"
-      output: ${up.output}
-  nodes:
-    m:
-      kind: map
-      over: ${input.rows}
-      call: leaf
-      input:
-        x: ${item.output}
-  output: ${m.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Row: {output: str}
-  input:
-    rows: !list(Row)
-  defs:
-    leaf:
-      input:
-        x: !str
-      nodes:
-        up:
-          kind: code
-          input:
-            x: ${input.x}
-          output: str
-          code: return inputs['x'].upper()
       output: ${up.output}
   nodes:
     m:

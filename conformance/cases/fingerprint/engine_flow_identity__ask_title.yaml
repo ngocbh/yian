@@ -1,7 +1,6 @@
 # From tests/engine/test_flow_identity.py::test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel.
 # An ask's title (`node_name:`) is identity.
 kind: fingerprint
-python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: human
   name: human

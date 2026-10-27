@@ -1,7 +1,6 @@
 # TS stops earlier, at the line break before the double-quoted scalar's unindented continuation line (rules: yaml);
 # its line 3 still counts the two lone CRs before it. Python's error in python_expect.
 kind: load
-rules: [yaml]
 flow: "id: x\rname: x\rdescription: \"a\rb\"\rnodes: [\r"
 expect:
   load:
@@ -10,11 +9,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [3, 16, 3, 17]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: "invalid YAML: while parsing a flow node\nexpected the node content, but found '<stream end>'\n  in \"<unicode string>\", line 6, column 1:\n    \n    ^"
-      frames:
-      - label: flow.yaml
-        range: [6, 1, 6, 2]

@@ -1,5 +1,4 @@
 kind: run
-rules: [messages, run-log]
 flow: |2
 
   id: str-to-literal
@@ -97,62 +96,4 @@ expect:
         - label: flow.yaml
           range: [21, 13, 21, 29]
         message: 'binding ''mode'': "c" is not a member of variant ["a","b"]'
-        node: go
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.type
-      frames:
-      - label: flow.yaml
-        range: [21, 13, 21, 29]
-      message: 'binding ''mode'': ''c'' is not a member of variant [''a'', ''b'']'
-      node: go
-  trace:
-  - - run_started
-    - null
-    - inputs:
-        s: c
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        s: c
-  - [node_started, go]
-  - - node_failed
-    - go
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [21, 13, 21, 29]
-        message: 'binding ''mode'': ''c'' is not a member of variant [''a'', ''b'']'
-        node: go
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        s: c
-  - - NodeStarted
-    - node_id: go
-  - - NodeFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [21, 13, 21, 29]
-        message: 'binding ''mode'': ''c'' is not a member of variant [''a'', ''b'']'
-        node: go
-  - - RunFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [21, 13, 21, 29]
-        message: 'binding ''mode'': ''c'' is not a member of variant [''a'', ''b'']'
         node: go

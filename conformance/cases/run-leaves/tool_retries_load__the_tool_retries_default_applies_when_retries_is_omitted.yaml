@@ -2,7 +2,6 @@
 # A TOOL node without `retries:` takes YIAN_TOOL_RETRIES (1 here): one failure, then a second
 # attempt that succeeds.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: tool-failure-before-agent
   name: tool_failure_before_agent

@@ -1,6 +1,5 @@
 kind: value
 # Text holding a lone surrogate is not a yian value: it has no UTF-8 form.
-rules: [numbers]
 type: str
 value: "\ud800"
 expect:

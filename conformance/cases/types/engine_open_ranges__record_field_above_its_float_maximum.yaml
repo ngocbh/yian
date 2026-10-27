@@ -1,5 +1,4 @@
 kind: value
-rules: [messages]
 typedefs:
   Order:
     qty: int(1..)
@@ -12,9 +11,4 @@ expect:
   raises:
     class: TypeCheckError
     message: 100.5 is above the inclusive float maximum 100
-    path: [price]
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: 100.5 is above the inclusive float maximum 100.0
     path: [price]

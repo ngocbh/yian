@@ -1,6 +1,4 @@
 kind: load
-rules: [null-field-read]
-python_skip: "TS-only: list comprehensions (#1086)"
 # Reads through a variable are checked at load: m.txt on a Msg is a load error.
 flow: |
   id: p

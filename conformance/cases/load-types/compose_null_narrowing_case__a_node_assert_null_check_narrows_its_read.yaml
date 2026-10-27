@@ -17,24 +17,6 @@ flow: |
       asserts:
         - "output != null and output.nosuch > 0"
   output: ${x.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Item:
-      qty: int
-  input:
-    s: !Optional(str)
-  nodes:
-    x:
-      kind: code
-      code: tests.engine._compose_codefns:echo
-      input:
-        topic: ${input.s}
-      output: Optional(Item)
-      asserts:
-        - "output != null and output.nosuch > 0"
-  output: ${x.output}
 expect:
   load:
     diagnostics:

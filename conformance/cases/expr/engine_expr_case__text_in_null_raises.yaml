@@ -1,5 +1,4 @@
 kind: expr
-rules: [compare]
 expr: '''x'' in opts'
 values:
   opts: null
@@ -8,7 +7,3 @@ expect:
   raises:
     class: ExpressionError
     message: 'type error evaluating "x" in null: unsupported operand kinds for `in`: `str` and `null`'
-python_expect:
-  raises:
-    class: ExpressionError
-    message: '`in` rhs is not iterable: argument of type ''NoneType'' is not iterable'

@@ -1,7 +1,6 @@
 # An agent behind a CASE may be skipped; a reader that must still run gives its new_messages a
 # default, as for `.output`.
 kind: load
-python_skip: "new_messages is TS-only (#1081)"
 flow: |
   id: f
   name: f

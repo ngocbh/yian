@@ -1,5 +1,4 @@
 kind: load
-rules: [messages]
 flow: |
   id: w
   name: w
@@ -12,16 +11,6 @@ flow: |
       input:
         until: ${isinstance(input.when, date)}
   output: ${w.output}
-python_flow: |
-  id: w
-  name: w
-  input:
-    when: !date
-  nodes:
-    w:
-      kind: wait
-      until: ${isinstance(input.when, date)}
-  output: ${w.output}
 expect:
   load:
     diagnostics:
@@ -30,11 +19,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [10, 14, 10, 45]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'node ''w'': isinstance is not supported in a wait node''s until:'
-      frames:
-      - label: flow.yaml
-        range: [8, 12, 8, 43]

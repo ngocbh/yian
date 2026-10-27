@@ -29,35 +29,5 @@ flow: |2
         n: ${input.z}
         m: 0
   output: ${repeat.output}
-python_flow: |2
-
-  id: extra
-  name: extra
-  input:
-    z: !int
-  defs:
-    step:
-      input:
-        n: !int
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: int
-            m: int
-          code: |
-            return {"n": inputs["n"] + 1, "m": 0}
-      output: ${bump.output}
-  nodes:
-    repeat:
-      kind: loop
-      times: 2
-      call: step
-      input:
-        n: ${input.z}
-        m: 0
-  output: ${repeat.output}
 expect:
   load: ok

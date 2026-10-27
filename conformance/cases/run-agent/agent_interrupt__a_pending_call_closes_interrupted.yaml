@@ -5,8 +5,6 @@
 # result and `interrupted {by}`, and the Optional(str) agent succeeds null without a second model
 # call.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

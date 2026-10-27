@@ -6,7 +6,6 @@
 # hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
-rules: [run-log]
 flow: |
   id: lifecycle-parallel
   name: lifecycle_parallel
@@ -28,34 +27,6 @@ flow: |
     c:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo_x
-      input:
-        x: ${input.n}
-      output: int
-  output:
-    a: ${a.output}
-    b: ${b.output}
-    c: ${c.output}
-python_flow: |
-  id: lifecycle-parallel
-  name: lifecycle_parallel
-  input:
-    n: !int
-  nodes:
-    a:
-      kind: code
-      code: tests.engine._compose_codefns:echo_x
-      input:
-        x: ${input.n}
-      output: int
-    b:
-      kind: code
-      code: tests.engine._compose_codefns:echo_x
-      input:
-        x: ${input.n}
-      output: int
-    c:
-      kind: code
-      code: tests.engine._compose_codefns:echo_x
       input:
         x: ${input.n}
       output: int

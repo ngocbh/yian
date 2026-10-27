@@ -46,51 +46,6 @@ flow: |
       code: ./fixtures/seeds.ts:const_one
       output: int
   output: ${positive.output}
-# The CODE references differ by language: `flow` names the TS functions, these the Python ones.
-python_flow: |
-  # e38 — a dangling `${...}` inside a `case` node's `when:` locates at the offending `when:` line,
-  # not the node header. COMPILE: "unresolved references". Fails at load; no inputs needed.
-  # Predicate-owned provenance keeps synthesized inputs tied to the authored condition.
-  #
-  # `compose/nodes/case.py` hoists each distinct `${...}` in a `when:` into a synthetic CaseNode input
-  # `__rN`, rewriting the condition to a bare local such as `${__r1}`.
-  # Predicate-owned provenance maps that synthetic input back to `cases[N].when`.
-  # The diagnostic therefore names the authored condition rather than the synthetic local.
-  #
-  # Each `cases[N].when` range is captured positionally during parsing.
-  # The built node retains that semantic origin for its synthesized predicate parameter.
-  # Reference validation selects L36 and the author-facing `cases[1].when` label.
-  # The recorded range and diagnostic label remain aligned.
-  #
-  # A CASE node has no `input:` field, so its predicate-specific origin is authoritative.
-  # The per-`__rN` site resolves before any generic node-level fallback.
-  # Other authored inputs, such as e14's `rid:`, retain their own direct names.
-  #
-  # The failure is `node 'gate' cases[1].when`.
-  # The expected caret is L36, the offending `when:` line.
-  # The synthetic name `__r1` must not leak into the author-facing message.
-  #
-  # Run: `yian run tests/seeds/errors/e38-case-when-ref-locates-node-header.yaml`.
-  id: err-case-when-ref-header
-  name: err_case_when_ref_header
-  nodes:
-    score:
-      kind: code
-      code: tests.seeds.fns:const_one
-      output: int
-    gate:                                    # L31 — the node header (not the caret site)
-      kind: case
-      cases:                                 # L33 — the `cases:` block
-        - when: "score.output >= 0.5"        # L34 — valid
-          then: positive
-        - when: "nope.output >= 0.9"         # L36 — THE ERROR (no node `nope`)
-          then: positive
-      else: positive
-    positive:
-      kind: code
-      code: tests.seeds.fns:const_one
-      output: int
-  output: ${positive.output}
 expect:
   load:
     diagnostics:

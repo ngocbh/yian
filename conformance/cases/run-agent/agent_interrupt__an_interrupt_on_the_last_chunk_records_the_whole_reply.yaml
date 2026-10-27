@@ -5,8 +5,6 @@
 # cut: the model_call holds the whole "ok go" and usage 500/20/520, and the reply's tool call is
 # skipped, so lookup never runs.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

@@ -2,8 +2,6 @@
 # reply is the output, with no structured call: the models list has two entries, and a third
 # request would fail the case. Neither request asks for a schema.
 kind: run
-rules: [run-log]
-python_skip: "TS-only (yian #1025): Optional(str) output cases follow the inbox model"
 flow: |
   id: optional-text
   name: optional_text

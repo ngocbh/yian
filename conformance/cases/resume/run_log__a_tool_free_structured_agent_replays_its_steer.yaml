@@ -4,8 +4,6 @@
 # request, as the first start would have (its first call's reply, taken before the cut, is
 # lost with the crash; the second script entry answers the resumed call).
 kind: resume
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

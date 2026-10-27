@@ -1,5 +1,4 @@
 kind: load
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -15,19 +14,6 @@ flow: |
               - label: L
                 description: D
   output: ${ask.output}
-python_flow: |
-  id: f
-  name: f
-  nodes:
-    ask:
-      kind: human_input
-      questions:
-        - question: 5
-          header: H
-          options:
-            - label: L
-              description: D
-  output: ${ask.output}
 expect:
   load:
     diagnostics:
@@ -36,11 +22,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [9, 9, 14, 1]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'node ''ask'' (kind=human_input): `questions[0].question:` must be text, but YAML read it as an integer; put it in quotes'
-      frames:
-      - label: flow.yaml
-        range: [7, 19, 7, 20]

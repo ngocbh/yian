@@ -1,6 +1,5 @@
 # TS-only: a prompt list item can't be `system:`; the system message is `system_prompt:`.
 kind: load
-python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
   id: chat
   name: chat

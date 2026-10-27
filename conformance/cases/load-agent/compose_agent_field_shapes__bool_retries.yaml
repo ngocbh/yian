@@ -1,6 +1,5 @@
 # TS spells the rejected value in the text form (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: shapes
   name: shapes
@@ -15,14 +14,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'node ''a'' (kind=agent): `retries:` must be a non-negative integer, got true'
-      frames:
-      - label: flow.yaml
-        range: [7, 14, 7, 18]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'node ''a'' (kind=agent): `retries:` must be a non-negative integer, got True'
       frames:
       - label: flow.yaml
         range: [7, 14, 7, 18]

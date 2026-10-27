@@ -2,7 +2,6 @@
 # A resume header value is checked (a line break is refused) and the message doesn't show it.
 # Record 8 is agent's node_started: its first model call runs, its result is refused.
 kind: resume
-rules: [run-log]
 flow: |
   id: keyed
   name: keyed

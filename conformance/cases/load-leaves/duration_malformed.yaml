@@ -1,6 +1,5 @@
 # TS-only: a duration is a positive integer and a unit.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

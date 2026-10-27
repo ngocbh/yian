@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: open_typedefs
@@ -21,29 +20,6 @@ flow: |2
       code: |
         const extra = inputs["counts"].reduce((a, b) => a + b, 0) + (inputs["maybe"] ?? 0)
         return {"qty": 0, "price": 1.0 + Number(extra)}
-      output: Order
-  output: ${order.output}
-python_flow: |2
-
-  id: open_typedefs
-  name: open_typedefs
-  typedefs:
-    Count: int(0..)
-    Order:
-      qty: int(1..)
-      price: float(..100.0)
-  input:
-    counts: !list(Count) []
-    maybe: !Optional(Count) null
-  nodes:
-    order:
-      kind: code
-      input:
-        counts: ${input.counts}
-        maybe: ${input.maybe}
-      code: |
-        extra = sum(inputs["counts"]) + (inputs["maybe"] or 0)
-        return {"qty": 0, "price": 1.0 + extra}
       output: Order
   output: ${order.output}
 run:

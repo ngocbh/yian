@@ -1,5 +1,4 @@
 kind: run
-rules: [messages, run-log]
 flow: |
   id: f
   name: f
@@ -109,73 +108,4 @@ expect:
         - label: flow.yaml
           range: [23, 10, 23, 30]
         message: 'flow output ''order'': null does not match declared type str'
-        node: __end__
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.type
-      frames:
-      - label: flow.yaml
-        range: [23, 10, 23, 30]
-      message: 'flow output ''order'': None does not match declared type str'
-      node: __end__
-  trace:
-  - - run_started
-    - null
-    - inputs:
-        approve: false
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        approve: false
-  - [node_started, gate]
-  - - node_routed
-    - gate
-    - handle: '#else'
-  - [node_started, __end__]
-  - - node_failed
-    - __end__
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [23, 10, 23, 30]
-        message: 'flow output ''order'': None does not match declared type str'
-        node: __end__
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        approve: false
-  - - NodeStarted
-    - node_id: gate
-  - - NodeRouted
-    - handle: '#else'
-      node_id: gate
-  - - NodeSkipped
-    - node_id: order
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [23, 10, 23, 30]
-        message: 'flow output ''order'': None does not match declared type str'
-        node: __end__
-  - - RunFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [23, 10, 23, 30]
-        message: 'flow output ''order'': None does not match declared type str'
         node: __end__

@@ -1,5 +1,4 @@
 kind: value
-rules: [messages]
 type: list(file)
 value:
 - uri: f
@@ -12,9 +11,4 @@ expect:
   raises:
     class: TypeCheckError
     message: '{"uri":1,"mime":null,"name":null} does not match declared type file'
-    path: [1]
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: '{''uri'': 1, ''mime'': None, ''name'': None} does not match declared type file'
     path: [1]

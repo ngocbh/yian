@@ -1,11 +1,6 @@
 kind: expr
-rules: [arithmetic, messages]
 expr: (1.5 / 'a' * (3 * [] % x % 0.5))
 expect:
   raises:
     class: ExpressionError
     message: 'type error evaluating 1.5 / "a": unsupported operand kinds for `/`: `float` and `str`'
-python_expect:
-  raises:
-    class: ExpressionError
-    message: 'type error evaluating 1.5 / ''a'': unsupported operand type(s) for /: ''float'' and ''str'''

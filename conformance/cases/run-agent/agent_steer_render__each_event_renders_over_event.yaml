@@ -3,8 +3,6 @@
 # never evaluated: its `${secret}` reaches the model as written. Both sends land during the first
 # reply, so they join as a late steer.
 kind: run
-rules: [run-log]
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: late
   name: late

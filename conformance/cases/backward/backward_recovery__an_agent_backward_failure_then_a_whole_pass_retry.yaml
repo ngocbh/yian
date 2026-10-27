@@ -3,7 +3,6 @@
 # (backward.result, at that AGENT), discarding the partial results; the next call is a whole new
 # pass that calls every AGENT again, with the next attempt id.
 kind: backward
-rules: [run-log]
 flow: |
   id: backward-recovery
   name: backward_recovery

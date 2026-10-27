@@ -1,14 +1,8 @@
 kind: value
-rules: [messages]
 type: float
 value: '0'
 expect:
   raises:
     class: TypeCheckError
     message: '"0" does not match declared type float'
-    path: []
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: '''0'' does not match declared type float'
     path: []

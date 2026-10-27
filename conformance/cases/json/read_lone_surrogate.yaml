@@ -1,5 +1,4 @@
 kind: json
-rules: [numbers]
 read: '["\ud800"]'
 mode: plain
 expect:

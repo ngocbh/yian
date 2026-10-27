@@ -17,21 +17,6 @@ flow: |
         await new Promise((resolve) => setTimeout(resolve, 30_000));
         return null;
   output: ${first.output}
-python_flow: |
-  id: pause
-  name: pause
-  nodes:
-    first:
-      kind: code
-      output: str
-      code: |
-        print("ready", flush=True)
-        return "x"
-    settle:
-      kind: wait
-      until: "2999-01-01"
-      depends_on: [first]
-  output: ${first.output}
 args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
 signal: {name: SIGINT, after: ready}
 expect:

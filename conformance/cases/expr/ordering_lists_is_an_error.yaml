@@ -1,9 +1,7 @@
 kind: expr
 # Ordering takes only numbers and text.
 expr: "[1] < [2]"
-rules: [compare]
 expect:
   raises:
     class: ExpressionError
     message: "type error evaluating [1] < [2]: unsupported operand kinds for `<`: `list` and `list`"
-python_expect: {value: true}

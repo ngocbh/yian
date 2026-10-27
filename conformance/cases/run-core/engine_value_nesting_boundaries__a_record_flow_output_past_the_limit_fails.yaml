@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: nesting
@@ -11,21 +10,6 @@ flow: |2
       code: |
         let v = "leaf"
         for (let i = 0; i < 100; i++)
-            v = [v]
-        return v
-  output:
-    t: ${deep.output}
-python_flow: |2
-
-  id: nesting
-  name: nesting
-  nodes:
-    deep:
-      kind: code
-
-      code: |
-        v = "leaf"
-        for _ in range(100):
             v = [v]
         return v
   output:

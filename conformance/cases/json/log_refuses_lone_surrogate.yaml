@@ -1,5 +1,4 @@
 kind: json
-rules: [canonical]
 write: "\ud800"
 form: log
 expect:

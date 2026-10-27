@@ -2,8 +2,6 @@
 # flight; the resume retries fetch, and its NodeAttemptResumed counts no crashed attempt, since the stop covers
 # that start.
 kind: resume
-rules: [run-log]
-python_skip: TS-only (decision 20)
 flow: |
   id: fetch-once
   name: fetch_once

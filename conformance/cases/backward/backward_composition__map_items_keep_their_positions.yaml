@@ -5,7 +5,6 @@
 # each item's AGENT and returns one positional message per item; positional feedback [null, ""]
 # calls only item 1 ("" is effective feedback).
 kind: backward
-rules: [run-log]
 flow: |
   id: ordered-map-feedback
   name: ordered_map_feedback

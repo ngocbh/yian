@@ -2,7 +2,6 @@
 # An ask's literal questions render `${...}` in the question, and in each option's label and
 # description; the request carries the validated list.
 kind: run
-rules: [run-log]
 flow: |
   id: choose
   name: choose

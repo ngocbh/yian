@@ -1,6 +1,5 @@
 # TS-only: a flow output can't read an inbox.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: f
@@ -21,28 +20,6 @@ flow: |2
         text: ${input.cmd}
       code: |
         return {'exited': false, 'reply': inputs['text']}
-  output: ${route.output}
-python_flow: |2
-
-  id: f
-  name: f
-  input:
-    cmd: !str
-  nodes:
-    route:
-      kind: case
-      on: ${input.cmd}
-      cases:
-        - when: /exit
-          then: exit_result
-      else: reply
-    exit_result: !object {exited: true, reply: ""}
-    reply:
-      kind: code
-      input:
-        text: ${input.cmd}
-      code: |
-        return {'exited': False, 'reply': inputs['text']}
   output: ${route.output}
 inputs:
   cmd: /exit

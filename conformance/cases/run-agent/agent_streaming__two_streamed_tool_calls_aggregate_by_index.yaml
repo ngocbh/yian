@@ -5,7 +5,6 @@
 # ToolCallStarted/Finished pair under the reply's step. The tool-only reply streams only its
 # final "" chunk; the second reply streams "both", " fine", then its final chunk.
 kind: run
-rules: [run-log]
 flow: |
   id: stream
   name: stream

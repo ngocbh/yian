@@ -2,7 +2,6 @@
 # A TOOL node without `retries:` calls once; the tool's error fails the node unchanged, with no
 # step recorded and no backoff draw.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

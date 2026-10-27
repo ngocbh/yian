@@ -3,7 +3,6 @@
 # Pins: a reflective learner that answers noop proposes nothing; the empty batch still commits.
 # YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
 kind: backward
-rules: [run-log]
 flow: |
   id: memory-run
   name: memory_run

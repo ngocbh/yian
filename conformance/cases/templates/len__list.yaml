@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: len() and list slicing (#1086)"
 expr: len(xs)
 values:
   xs: [1, 2]

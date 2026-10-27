@@ -3,7 +3,6 @@
 # backoff, even a zero one").
 # A zero base delay still takes one draw per retry; the wait is 0.0 s.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

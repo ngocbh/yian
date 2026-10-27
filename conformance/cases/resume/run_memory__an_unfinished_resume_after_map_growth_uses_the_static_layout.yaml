@@ -3,7 +3,6 @@
 # Pins: a run with a flow-level memory cut after a MAP's expansion (record 12) resumes to the same
 # output: the memory layout the resume checks is the flow's static one, not the grown nodes.
 kind: resume
-rules: [run-log]
 flow: |
   id: memory-map
   name: memory_map

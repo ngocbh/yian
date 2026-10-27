@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: nested-map-binding
   name: nested_map_binding
@@ -15,30 +14,6 @@ flow: |
             bad: ${input.maybe:?"missing mapped value"}
           output: str
           code: ./fixtures/compose_codefns.ts:echo
-      output: ${leaf.output}
-  nodes:
-    invoke:
-      kind: map
-      call: inner
-      over: ${[1]}
-      input:
-        maybe: null
-  output: ${invoke.output}
-python_flow: |
-  id: nested-map-binding
-  name: nested_map_binding
-  defs:
-    inner:
-      input:
-        maybe: !Optional(str)
-      nodes:
-        leaf:
-          kind: code
-          input:
-            okay: literal
-            bad: ${input.maybe:?"missing mapped value"}
-          output: str
-          code: tests.engine._compose_codefns:echo
       output: ${leaf.output}
   nodes:
     invoke:

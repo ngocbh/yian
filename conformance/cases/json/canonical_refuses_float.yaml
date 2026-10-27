@@ -1,5 +1,4 @@
 kind: json
-rules: [canonical]
 write: [1.5]
 form: canonical
 expect:

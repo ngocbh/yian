@@ -11,17 +11,5 @@ flow: |
         qty: *d
       output: int
   output: ${n.output}
-python_flow: |
-  id: f
-  name: f
-  x-defaults: &d !int 1
-  nodes:
-    n:
-      kind: code
-      code: tests.engine._compose_codefns:echo
-      input:
-        qty: *d
-      output: int
-  output: ${n.output}
 expect:
   load: ok

@@ -16,23 +16,6 @@ flow: |
       kind: code
       code: "function run() { return 1 }"
   output: ${b.output}
-python_flow: |
-  id: f
-  name: f
-  nodes:
-    route:
-      kind: case
-      when: ${a.output}
-      cases:
-        - when: ${a.output}
-          then: b
-    a:
-      kind: code
-      code: "def run(): return True"
-    b:
-      kind: code
-      code: "def run(): return 1"
-  output: ${b.output}
 expect:
   load:
     diagnostics:

@@ -3,7 +3,6 @@
 # The golden log pins the agent's recorded evidence: its interactions in that order and its
 # rendered prompt. Every tool call id is scripted, so the log holds no made-up id.
 kind: run
-rules: [run-log]
 flow: |
   id: groups
   name: groups

@@ -1,6 +1,5 @@
 # TS-only: an inbox is never optional.
 kind: value
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 type: Optional(Inbox(str))
 value:
   inbox: owner_messages

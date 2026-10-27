@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: tool-retry-then-human
   name: tool_retry_then_human

@@ -23,28 +23,6 @@ flow: |
       input:
         proj: ${input.proj}
   output: ${sub.output}
-# Python yian has no ask built-in: it runs the human_input gate.
-python_flow: |
-  id: p
-  name: p
-  input: {proj: !str }
-  defs:
-    child:
-      input: {proj: !str }
-      nodes:
-        ask:
-          kind: human_input
-          input: {proj: '${input.proj}'}
-          adaptive_questions:
-            prompt: "Q ${proj}"
-            llm_config: {provider: azure, model: d}
-      output: ${ask.output}
-  nodes:
-    sub:
-      kind: call
-      call: child
-      input: {proj: '${input.proj}'}
-  output: ${sub.output}
 inputs:
   proj: x
 run:

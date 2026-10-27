@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: ordering-e2e
@@ -30,40 +29,6 @@ flow: |2
       kind: code
       runs_after: [warm]
       code: ./fixtures/compose_codefns.ts:cautious
-      input:
-        topic: ${input.topic}
-      output: str
-  output: ${dep_fetch.output | after_fetch.output}
-python_flow: |2
-
-  id: ordering-e2e
-  name: ordering_e2e
-  input:
-    score: !float
-    topic: !str
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: "input.score >= 0.5"
-          then: warm
-    warm:
-      kind: code
-      code: tests.engine._compose_codefns:pick_pro
-      input:
-        topic: ${input.topic}
-      output: str
-    dep_fetch:
-      kind: code
-      depends_on: [warm]
-      code: tests.engine._compose_codefns:positive
-      input:
-        topic: ${input.topic}
-      output: str
-    after_fetch:
-      kind: code
-      runs_after: [warm]
-      code: tests.engine._compose_codefns:cautious
       input:
         topic: ${input.topic}
       output: str

@@ -3,7 +3,6 @@
 # the tool's whole list value.
 # The header's TOOL_REGISTRY key is the case's stub tool here.
 kind: run
-rules: [run-log]
 flow: |
   # 08 — TOOL: a direct, deterministic tool invocation.
   #

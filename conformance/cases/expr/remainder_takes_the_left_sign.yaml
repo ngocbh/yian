@@ -1,6 +1,4 @@
 kind: expr
 # `%` takes the left operand's sign, as JavaScript's does; Python's takes the right's.
 expr: "-7 % 2"
-rules: [arithmetic]
 expect: {value: -1}
-python_expect: {value: 1}

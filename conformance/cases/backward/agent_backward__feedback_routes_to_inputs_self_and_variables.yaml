@@ -2,7 +2,6 @@
 # Pins: one AGENT backward call whose reply gives input, self and variable feedback: the AGENT's
 # result keeps all three, and only the input feedback reaches the flow input (positionally, per tag).
 kind: backward
-rules: [run-log]
 flow: |
   id: writer-flow
   name: writer_flow

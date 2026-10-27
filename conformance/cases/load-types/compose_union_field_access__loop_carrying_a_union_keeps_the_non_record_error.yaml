@@ -1,6 +1,5 @@
 # TS spells the carried field list as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: p
   name: p
@@ -34,14 +33,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'loop node ''drive'': body inline body of node ''drive'' must return a record with at least one carried field (a subset of the carried record ["action"]); write `output: {field: ...}` or a whole reference to a node with a record output'
-      frames:
-      - label: flow.yaml
-        range: [14, 3, 14, 8]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'loop node ''drive'': body inline body of node ''drive'' must return a record with at least one carried field (a subset of the carried record [''action'']); write `output: {field: ...}` or a whole reference to a node with a record output'
       frames:
       - label: flow.yaml
         range: [14, 3, 14, 8]

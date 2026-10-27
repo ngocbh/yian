@@ -1,8 +1,6 @@
 # From tests/seeds/errors/e28-inline-wrong-type.yaml.
 # An inline CODE body's text return into an `int` output fails `contract.output`.
 kind: run
-# The message quotes the returned text as a value: JSON text in TS, a repr in Python.
-rules: [messages, run-log]
 flow: |
   # e28 — an inline CODE body returns the wrong type for its declared `output:`. RUNTIME:
   # the engine's typed write boundary rejects it — the SAME path that rejects a wrong-typed
@@ -46,25 +44,5 @@ expect:
       - failure:
           code: contract.output
           message: '"not-an-int" does not match declared type int'
-          node: calc
-          frames: [{label: flow.yaml, range: [13, 13, 13, 16]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.output
-      message: "'not-an-int' does not match declared type int"
-      node: calc
-      frames: [{label: flow.yaml, range: [13, 13, 13, 16]}]
-  trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
-    - [node_started, calc]
-    - - node_failed
-      - calc
-      - failure:
-          code: contract.output
-          message: "'not-an-int' does not match declared type int"
           node: calc
           frames: [{label: flow.yaml, range: [13, 13, 13, 16]}]

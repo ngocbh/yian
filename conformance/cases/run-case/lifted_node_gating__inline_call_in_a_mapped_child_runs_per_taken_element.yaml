@@ -2,7 +2,6 @@
 # Pins: in a MAP over a child flow, the child's lifted call runs only for the element on its route.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -17,54 +16,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-    child:
-      input:
-        go: !bool
-      nodes:
-        gate:
-          kind: case
-          cases:
-            - when: ${input.go}
-              then: publish
-          else: skip_it
-        publish:
-          kind: code
-          input:
-            draft: call(side, tag="child")
-          output: str
-          code: return inputs["draft"]
-        skip_it:
-          kind: code
-          output: str
-          code: return "skipped"
-      output: ${gate.output}
-  nodes:
-    m:
-      kind: map
-      call: child
-      over: ${[input.go, input.other]}
-      input:
-        go: ${item}
-  output:
-    r: ${m.output}
-python_flow: |
-  id: t
-  name: t
-  input:
-    go: !bool
-    other: !bool
-  defs:
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

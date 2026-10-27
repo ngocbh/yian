@@ -1,6 +1,5 @@
 # TS spells the field lists as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: inline-loop-bad-contract
   name: inline_loop_bad_contract
@@ -28,14 +27,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'loop node ''repeat'': body output field(s) ["value"] are not carried record fields ["n"] (a body returns a subset of the carried record)'
-      frames:
-      - label: flow.yaml
-        range: [6, 3, 6, 9]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'loop node ''repeat'': body output field(s) [''value''] are not carried record fields [''n''] (a body returns a subset of the carried record)'
       frames:
       - label: flow.yaml
         range: [6, 3, 6, 9]

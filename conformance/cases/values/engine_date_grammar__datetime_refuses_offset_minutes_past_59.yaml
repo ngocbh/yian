@@ -1,14 +1,8 @@
 kind: value
-rules: [messages]
 type: datetime
 value: 2026-01-01T10:00:00+05:99
 expect:
   raises:
     class: TypeCheckError
     message: '"2026-01-01T10:00:00+05:99" does not match declared type datetime: not a valid datetime: UTC offset minutes must be under 60'
-    path: []
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: '''2026-01-01T10:00:00+05:99'' does not match declared type datetime: not a valid datetime: UTC offset minutes must be under 60'
     path: []

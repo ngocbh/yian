@@ -1,11 +1,6 @@
 kind: value
-# TS stores -0 in a float slot as 0; Python yian keeps -0.0.
-rules: [numbers]
 type: float
 value: -0.0
 expect:
   value: 0.0
-  kind: float
-python_expect:
-  value: -0.0
   kind: float

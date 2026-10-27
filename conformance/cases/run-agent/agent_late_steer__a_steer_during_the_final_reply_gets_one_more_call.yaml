@@ -2,8 +2,6 @@
 # call. The agent reads it as a `steer` step after the final reply, and the second request ends
 # with the first reply and the steer.
 kind: run
-rules: [run-log]
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: late
   name: late

@@ -4,8 +4,6 @@
 # (`interrupted {inbox, nodes: [chat]}`) but cuts nothing: the answer is whole, so `chat`
 # succeeds with "chat done" and writes no honor step; the next AGENT renders it.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

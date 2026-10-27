@@ -1,6 +1,5 @@
 # TS-only: a steer inbox is identity through its wiring (yian #1025).
 kind: fingerprint
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer

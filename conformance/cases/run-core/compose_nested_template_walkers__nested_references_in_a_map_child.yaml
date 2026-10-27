@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: nested_map
@@ -14,37 +13,6 @@ flow: |2
           input:
             v: ${input.v}
           code: "return inputs[\"v\"] * 10"
-        w:
-          kind: code
-          input:
-            x:
-              v: ${input.v}
-              e: ['${e.output}']
-              note: v=${input.v}
-          code: return inputs["x"]
-      output: ${w.output}
-  nodes:
-    m:
-      kind: map
-      call: wrap
-      over: [1, 2]
-      input:
-        v: ${item}
-  output: ${m.output}
-python_flow: |2
-
-  id: nested_map
-  name: nested_map
-  defs:
-    wrap:
-      input:
-        v: !int
-      nodes:
-        e:
-          kind: code
-          input:
-            v: ${input.v}
-          code: return inputs["v"] * 10
         w:
           kind: code
           input:

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: p
   name: p
@@ -32,55 +31,6 @@ flow: |
       output: Decision
       code: |
         if (inputs['s'] === 'buy')
-            return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}
-        return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}
-    route:
-      kind: case
-      cases:
-        - when: "d.output.action == 'buy' and d.output.limit > 5"
-          then: t
-      else: e
-    t:
-      kind: code
-      output: str
-      code: return 'branch'
-    e:
-      kind: code
-      output: str
-      code: return 'else'
-  output: ${route.output}
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Limit: {type: 'Literal(limit)', price: float}
-    Market: {type: 'Literal(market)'}
-    Leg: Union(Limit, Market)
-    Buy: {action: 'Literal(buy)', qty: int, limit: float, leg: Leg}
-    Hold: {action: 'Literal(hold)', note: str}
-    Sell: {action: 'Literal(sell)', qty: int, price: float, note: str}
-    Decision: Union(Buy, Hold, Sell)
-    HoldOrSell: Union(Hold, Sell)
-    Wrap: {decision: Decision}
-    BuyOrSell: Union(Buy, Sell)
-    Text: {text: str}
-    Num: {num: int}
-    Reply: Union(Text, Num)
-    Mode: Literal(a, b)
-    Cancel: {action: 'Literal(cancel)', reason: str}
-    Rest: Union(Hold, Sell, Cancel)
-    Narrow: {action: 'Literal(buy)', qty: int, limit: float, leg: Limit}
-    SellOrNarrow: Union(Sell, Narrow)
-  input:
-    s: !str
-  nodes:
-    d:
-      kind: code
-      input:
-        s: ${input.s}
-      output: Decision
-      code: |
-        if inputs['s'] == 'buy':
             return {'action': 'buy', 'qty': 1, 'limit': 6.0, 'leg': {'type': 'market'}}
         return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}
     route:

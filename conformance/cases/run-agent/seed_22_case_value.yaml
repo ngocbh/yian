@@ -2,7 +2,6 @@
 # A score of 0.6 takes the `positive` branch; `${gate.output}` returns its reply, and `cautious`
 # is skipped.
 kind: run
-rules: [run-log]
 flow: |
   # 22 — A `case` as a VALUE: ${<case>.output} = the taken branch's value.
   #

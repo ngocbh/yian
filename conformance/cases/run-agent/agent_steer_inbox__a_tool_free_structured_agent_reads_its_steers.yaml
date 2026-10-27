@@ -3,8 +3,6 @@
 # it join that request, after the prompt, as a recorded `steer` step. Here `draft` answers first,
 # and the steer sent once its call has finished is queued when `score` starts.
 kind: run
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

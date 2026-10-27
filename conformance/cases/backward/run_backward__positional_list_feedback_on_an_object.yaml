@@ -1,5 +1,4 @@
 kind: backward
-rules: [run-log]
 flow: |
   id: identity
   name: identity

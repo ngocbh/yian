@@ -5,8 +5,6 @@
 # interrupt wins before the steer inbox is read, so there is no second model call and the steer
 # stays unread.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

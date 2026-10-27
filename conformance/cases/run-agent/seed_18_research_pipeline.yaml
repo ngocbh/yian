@@ -2,7 +2,6 @@
 # Three reviewers fan in to a typed View; the `case ... on` its stance takes `pro_note`, the other
 # notes are skipped, and the join and the flow assert pass.
 kind: run
-rules: [run-log]
 flow: |
   # 18 — A realistic end-to-end research → decision → note pipeline.
   #

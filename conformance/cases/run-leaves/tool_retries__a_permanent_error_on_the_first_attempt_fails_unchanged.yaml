@@ -1,7 +1,6 @@
 # From tests/engine/test_tool_retries.py::test_permanent_error_on_the_first_attempt_fails_unchanged.
 # A PermanentToolError is never retried: one call, and its message fails the node unchanged.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: list comprehensions (#1086)"
 # No node is named x: a comprehension variable is no reference, so it mints no edge.
 flow: |
   id: p

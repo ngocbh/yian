@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: model-stream-cut
   name: model_stream_cut

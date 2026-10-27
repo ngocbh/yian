@@ -1,5 +1,4 @@
 kind: json
-rules: [numbers, infinity]
 read: '-Infinity'
 mode: codec
 expect:

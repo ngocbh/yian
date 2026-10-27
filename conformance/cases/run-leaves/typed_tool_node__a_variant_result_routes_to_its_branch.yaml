@@ -2,7 +2,6 @@
 # A TOOL return checked against a declared union routes a CASE on its tag; the test's CODE branches
 # are value entries here.
 kind: run
-rules: [run-log]
 flow: |
   id: orders
   name: orders

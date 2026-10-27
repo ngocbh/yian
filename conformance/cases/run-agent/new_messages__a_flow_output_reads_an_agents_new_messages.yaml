@@ -3,8 +3,6 @@
 # resumes with an unknown-outcome result, so a crash sweep can't expect one history; the tool
 # turn is covered in ts/tests/engine/agent_new_messages.test.ts.
 kind: run
-rules: [run-log]
-python_skip: "new_messages is TS-only (#1081)"
 flow: |
   id: messages
   name: messages

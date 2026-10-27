@@ -27,33 +27,5 @@ flow: |
         n: !int ${seed.output}
       call: bump
   output: ${loop.output}
-python_flow: |
-  id: p
-  name: p
-  defs:
-    bump:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-          output: int
-          code: return inputs["n"] + 1
-      output:
-        n: ${step.output}
-  nodes:
-    seed:
-      kind: code
-      output: Any
-      code: return 1
-    loop:
-      kind: loop
-      times: 2
-      input:
-        n: !int ${seed.output}
-      call: bump
-  output: ${loop.output}
 expect:
   load: ok

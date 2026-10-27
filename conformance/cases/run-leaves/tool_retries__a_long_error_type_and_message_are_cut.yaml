@@ -3,7 +3,6 @@
 # A failed step's error type and message are each cut to the cap less one character plus "…".
 # YIAN_MAX_SHOWN_VALUE_CHARS is 8 so the case stays short (the tests use the 200 default).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

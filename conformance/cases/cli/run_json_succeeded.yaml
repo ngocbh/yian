@@ -1,6 +1,4 @@
 kind: cli
-# --input x=2 into a float input gives the int 2 in TS yian; Python yian reads it as 2.0.
-rules: [int-in-float]
 flow: |
   id: echo
   name: echo
@@ -21,9 +19,3 @@ expect:
     format: yian.cli.v1
     status: succeeded
     output: {greeting: Ada, n: 2, x: 2}
-python_expect:
-  exit: 0
-  json:
-    format: yian.cli.v1
-    status: succeeded
-    output: {greeting: Ada, n: 2, x: 2.0}

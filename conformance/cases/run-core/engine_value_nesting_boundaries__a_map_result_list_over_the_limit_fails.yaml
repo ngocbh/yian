@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: nesting
@@ -18,28 +17,6 @@ flow: |2
           code: |
             let v = inputs["y"]
             for (let i = 0; i < 100; i++)
-                v = [v]
-            return v
-      output: ${work.output}
-  output: ${m.output}
-python_flow: |2
-
-  id: nesting
-  name: nesting
-  nodes:
-    m:
-      kind: map
-      over: "${[1, 2]}"
-      input:
-        y: !int ${item}
-      nodes:
-        work:
-          kind: code
-          input:
-            y: ${input.y}
-          code: |
-            v = inputs["y"]
-            for _ in range(100):
                 v = [v]
             return v
       output: ${work.output}

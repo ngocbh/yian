@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: recf
@@ -10,24 +9,6 @@ flow: |2
     x:
       kind: code
       code: ./fixtures/compose_codefns.ts:make_report
-      input:
-        topic: ${input.topic}
-      output:
-        report: str
-        n: int
-      asserts:
-        - "output.n >= 0"
-  output: ${x.output}
-python_flow: |2
-
-  id: recf
-  name: recf
-  input:
-    topic: !str
-  nodes:
-    x:
-      kind: code
-      code: tests.engine._compose_codefns:make_report
       input:
         topic: ${input.topic}
       output:

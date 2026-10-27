@@ -2,8 +2,6 @@
 # An inline CODE body that throws fails its node at the throwing line, and the run.
 # The header (the has-`return` load gate, the traceback) describes the Python form.
 kind: run
-# A thrown error's text and the throwing line's length differ by language.
-rules: [code, run-log]
 flow: |
   # e27 — an inline CODE body that raises. RUNTIME: the node fails -> the run fails,
   # carrying an exact literal-line semantic origin plus the debugging traceback. The inline
@@ -22,27 +20,6 @@ flow: |
       code: |
         if (inputs.topic)
             throw new Error("intentional inline failure")
-        return "ok"
-  output: ${boom.output}
-# The CODE body differs by language: `flow` holds the TS body, this the Python one.
-python_flow: |
-  # e27 — an inline CODE body that raises. RUNTIME: the node fails -> the run fails,
-  # carrying an exact literal-line semantic origin plus the debugging traceback. The inline
-  # analogue of e20 (the reference-mode raiser). The body has a (reachable) return so it
-  # passes the has-`return` load gate, then raises at runtime.
-  id: err-inline-raises
-  name: err_inline_raises
-  input:
-    topic: !str
-  nodes:
-    boom:
-      kind: code
-      input:
-        topic: ${input.topic}
-      output: str
-      code: |
-        if inputs["topic"]:
-            raise RuntimeError("intentional inline failure")
         return "ok"
   output: ${boom.output}
 inputs: {topic: X}
@@ -73,23 +50,3 @@ expect:
           message: "Error: intentional inline failure"
           node: boom
           frames: [{label: flow.yaml, range: [17, 7, 17, 56]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      message: "intentional inline failure"
-      node: boom
-      frames: [{label: flow.yaml, range: [17, 7, 17, 59]}]
-  trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
-    - [node_started, boom]
-    - - node_failed
-      - boom
-      - failure:
-          code: node.execute
-          message: "intentional inline failure"
-          node: boom
-          frames: [{label: flow.yaml, range: [17, 7, 17, 59]}]

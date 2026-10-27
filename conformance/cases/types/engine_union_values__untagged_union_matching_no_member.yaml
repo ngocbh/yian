@@ -1,7 +1,6 @@
 # From tests/engine/test_union_values.py::test_untagged_union_matching_no_member.
 # TS writes the missing-field list in the text form (rules: messages); Python's wording in python_expect.
 kind: value
-rules: [messages]
 typedefs:
   Text:
     text: str
@@ -15,9 +14,4 @@ expect:
   raises:
     class: TypeCheckError
     message: 'value matches no member of Union({"input":object,"name":str},{"text":str}): {"input":object,"name":str}: record missing required fields: ["input","name"]; {"text":str}: 3 does not match declared type str'
-    path: []
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: 'value matches no member of Union({"input":object,"name":str},{"text":str}): {"input":object,"name":str}: record missing required fields: [''input'', ''name'']; {"text":str}: 3 does not match declared type str'
     path: []

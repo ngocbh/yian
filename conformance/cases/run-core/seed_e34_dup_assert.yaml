@@ -1,7 +1,6 @@
 # From tests/seeds/errors/e34-dup-assert.yaml.
 # Of two identical false node asserts, the failure is at the first one.
 kind: run
-rules: [run-log]
 flow: |
   # e34 — two IDENTICAL post-asserts on one node. RUNTIME: `output < 0` is false
   # (output is 1), so both fail; the caret must point at the FIRST occurrence (located BY POSITION),
@@ -13,22 +12,6 @@ flow: |
       kind: code
       output: int
       code: ./fixtures/seeds.ts:const_one
-      asserts:
-        - output < 0
-        - output < 0
-  output: ${compute.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # e34 — two IDENTICAL post-asserts on one node. RUNTIME: `output < 0` is false
-  # (output is 1), so both fail; the caret must point at the FIRST occurrence (located BY POSITION),
-  # never collapse to the second occurrence. Run with no inputs.
-  id: err-dup-assert
-  name: err_dup_assert
-  nodes:
-    compute:
-      kind: code
-      output: int
-      code: tests.seeds.fns:const_one
       asserts:
         - output < 0
         - output < 0

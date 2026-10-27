@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: list comprehensions (#1086)"
 # The when's reads and guards stay in lockstep: the iterable is renamed, the variable isn't.
 flow: |
   id: p

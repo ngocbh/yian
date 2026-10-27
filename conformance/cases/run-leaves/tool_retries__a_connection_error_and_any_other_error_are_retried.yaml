@@ -3,7 +3,6 @@
 # PermanentToolError and ToolCheckError is retried.
 # A ConnectionError and an error of any other class are retried; each failed step names the class.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

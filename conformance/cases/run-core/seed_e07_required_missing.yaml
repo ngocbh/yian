@@ -1,7 +1,6 @@
 # From tests/seeds/errors/e07-required-missing.yaml.
 # A `:?` binding on an omitted Optional input fails its AGENT node before any model call.
 kind: run
-rules: [run-log]
 flow: |
   # e07 — Required-at-use-site (`:?`) missing at runtime.
   # EXPECT: RUNTIME RunFailed (not a compile error) — `as_of` is an Optional param, omitted

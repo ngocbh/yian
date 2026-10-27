@@ -2,7 +2,6 @@
 # A structured AGENT with tools runs its tool loop (a text reply, no tool call), then the
 # structured call; the flow's own `llm_config:` (anthropic, with a provider block) is recorded.
 kind: run
-rules: [run-log]
 flow: |
   # 14 — AGENT knobs: tools, llm_config.
   #

@@ -2,7 +2,6 @@
 # The retired AGENT `controls:` field fails at its value, listing the allowed fields as authored
 # (`input`, `output`).
 kind: load
-python_skip: "TS-only (#1025): the allowed list has steer_inbox, which Python yian doesn't have"
 flow: |
   # e40 — the retired AGENT `controls:` field is rejected at its source range.
   # PARSE: the agent descriptor rejects the field. Fails at load; no inputs needed.

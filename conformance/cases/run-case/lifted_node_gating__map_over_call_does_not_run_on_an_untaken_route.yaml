@@ -2,7 +2,6 @@
 # Pins: a MAP's `over: call(...)` never starts on the untaken route.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -16,59 +15,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-        ls:
-          kind: code
-          input:
-            t: ${fx.output}
-          output: list(str)
-          code: return [inputs["t"]]
-      output: ${ls.output}
-    echo:
-      input:
-        item: !str
-      nodes:
-        e:
-          kind: code
-          input:
-            v: ${input.item}
-          output: str
-          code: return inputs["v"]
-      output: ${e.output}
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: ${input.go}
-          then: m
-      else: skip_it
-    m:
-      kind: map
-      call: echo
-      over: call(items, tag="items")
-      input:
-        item: ${item}
-    skip_it:
-      kind: code
-      output: str
-      code: return "skipped"
-  output:
-    r: ${gate.output}
-python_flow: |
-  id: t
-  name: t
-  input:
-    go: !bool
-  defs:
-    items:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

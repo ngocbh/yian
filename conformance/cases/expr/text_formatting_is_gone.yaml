@@ -1,9 +1,7 @@
 kind: expr
 # `%` with text on the left no longer formats.
 expr: '"%s" % 1'
-rules: [arithmetic]
 expect:
   raises:
     class: ExpressionError
     message: "text formatting with `%` was removed; use a template"
-python_expect: {value: "1"}

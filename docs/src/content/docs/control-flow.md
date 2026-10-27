@@ -59,10 +59,7 @@ page the on-call
 | `on:` holds a reference | `on: ${input.n}`; `on: input.n` is a load error |
 | A `when:` is a value of the `on:` type | `when: 1` on an `int`, `when: "1"` on a `str` |
 | Ints and floats compare as numbers | `when: 2` matches `2.0` |
-| A bool never equals a number | `when: true` doesn't match `1` |
-| A `when:` the `on:` type can't hold is a load error, even with `else:` | `when: nogo` when `on:` is `Literal(go, no_go)` |
-| Two equal `when:`s are a load error | `when: 1` and `when: 1.0` |
-| `yes`, `no`, `on` and `off` are text | write `true` or `false` for a bool |
+| A `when:` the `on:` type can't hold is a load error, even with `else:` | `when: true` on an `int`; `when: nogo` on `Literal(go, no_go)` |
 
 ### Test conditions
 
@@ -113,8 +110,8 @@ whichever branch is taken.
 of it. Use it as a whole binding or inside text. It can't appear inside an expression, a `:-`
 default, a `when:` or `on:`, or an assert.
 
-Tag it where you read it to give it one type, as in `output: !Turn ${route.output}`. When the
-branches give different types, `!Any ${route.output}` takes whichever ran.
+The branches may give different types. To check the result as one type, tag the read:
+`output: !Turn ${route.output}`.
 
 A `case` whose result is read must be exhaustive: some branch must always run. That means it has
 an `else:`, or its `on:` is a `Literal` with every tag listed, or a `bool` with `when: true` and
@@ -175,8 +172,7 @@ output:
 
 Elsewhere, read a field of a node that may be skipped through `?.` and give it a default:
 `${(order.output?.qty :- 0) + 1}`. A plain field read or arithmetic there is a load error that
-shows this fix. A coalesce over the branches of an exhaustive `case`, such as
-`${bullish.output | cautious.output}`, is never null.
+shows this fix.
 
 ### Narrow a union
 
@@ -196,8 +192,7 @@ route:
 ```
 
 A condition narrows its branch too: `when: isinstance(decide.output, Buy)` or
-`when: lookup.output != null`. The narrowing reaches the branch target and the nodes that read
-it.
+`when: lookup.output != null`.
 
 ## Reuse a flow with `defs` and `call`
 
@@ -285,8 +280,8 @@ brief:
 - The call runs only when the node it is written in can run: on that node's `case` branches,
   after its `runs_after:` nodes, and once its other inputs are ready.
 - A quoted value is text, never a call: `note: "call(f)"` is the text `call(f)`.
-- A flow call inside `${...}`, or in the middle of other text, is a load error. Give it its own
-  node and read that node's output.
+- A flow call inside `${...}` is a load error, and in the middle of other text `call(...)` is
+  plain text. Give the call its own node and read that node's output.
 
 ## Repeat with `loop`
 
@@ -349,10 +344,8 @@ A `while:` null check guards the body. Under `while: cursor != null`, a seed or 
 typed `Optional(str)` fits a body input typed `str`, since the body never runs with a null
 `cursor`. `until:` and `times:` guard nothing.
 
-A loop keeps only about one run of its body in the live graph, so it may run any number of times.
-The run log keeps every run (see [How yian works](/how-it-works/)). A body node whose result the
-body's `output:` doesn't read, such as one that saves a file, may still be running when the next
-run starts; the run waits for it before it ends.
+A loop may run any number of times. The run log keeps every run (see
+[How yian works](/how-it-works/)).
 
 A body may wait for a message, a time or a person; see [Inboxes and waiting](/inboxes/).
 
@@ -389,7 +382,6 @@ loud:
 
 ## Nesting limit
 
-Each `call`, `map` or `loop` body is one level, whether inline, a `defs:` entry, a `call(...)`, or
-an imported flow. Bodies nest at most 50 levels, and a chain of `uses:` imports at most 50 files.
-`YIAN_MAX_CALL_NESTING` can lower the limit (see [Reference](/reference/)). A deeper chain fails
-to load; flatten it.
+Each `call`, `map` or `loop` body is one level, however it is written. Bodies nest at most 50
+levels; `YIAN_MAX_CALL_NESTING` can lower the limit (see [Reference](/reference/)). A deeper
+flow fails to load.

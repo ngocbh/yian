@@ -59,8 +59,11 @@ output: ${answer.output}
 - Config values are integers of at least 1. `episodic` and `reflective` keys may be `null`, which
   keeps the stored value or the default. `YIAN_EPISODIC_*`, `YIAN_REFLECTIVE_*` and
   `YIAN_PROFILE_*` set the defaults (see [Reference](/reference/)).
-- `storage`, `store` and `path` are refused as config keys, and so is `api_key` anywhere: where a
-  memory lives belongs to whoever runs the flow (see [Storage](#storage)).
+- A built-in type refuses config keys it doesn't list. `storage`, `store` and `path` are refused
+  for every type, and so are credential keys such as `api_key`, in any case and at any depth:
+  where a memory lives belongs to whoever runs the flow (see [Storage](#storage)).
+- `config`, `name` and `type` can't be memory names, and two names that differ only in case are a
+  load error.
 - Any other type name is a custom type, which a host program builds (see
   [Embedding yian](/embedding/)).
 - `long_term_memory: null` is the same as leaving it out; `{}` is a load error. A `session` type is
@@ -84,7 +87,7 @@ and `loop`, then its own. A key that appears twice is recalled once, at its oute
 | Type | What an agent sees |
 |---|---|
 | `episodic` | Up to `recall_limit` past records, the ones most like this call first |
-| `reflective` | Up to `recall_limit` lessons |
+| `reflective` | Up to `recall_limit` lessons, the ones sharing the most words with this call first |
 | `profile` | The whole document |
 
 A run pins each memory as it was when the run started, so recall stays the same while another
@@ -113,7 +116,7 @@ Feedback addresses the run's output:
 | Text | The whole output |
 | A record, such as `{summary: "Too long."}` | Only the fields it names |
 | A list as long as the recorded list, such as `[null, "Off topic."]` | Each item by position; `null` skips one |
-| `null`, or nothing | No feedback; memories still learn from the run itself |
+| `null`, or nothing | No feedback; `episodic` and `reflective` still learn from the run itself |
 
 Records and lists nest to match the output. A field the output doesn't have, or a list of the
 wrong length, is refused before anything happens. A failed run takes only text or `null`.
@@ -124,12 +127,11 @@ The backward pass walks back along the data that made the output, not the order 
 
 - It follows the branch each `case` took, and reaches each `map` item and each `loop` run on its
   own.
-- It passes through flow and child-flow boundaries, and through expressions that keep track of
-  their parts: field reads, records, lists and concatenation. A function call in an expression
-  stops it.
+- It passes through flow and child-flow boundaries, and through expressions to each of their
+  parts: field reads, records, lists, operators and text around `${...}`. A function call in an
+  expression stops it.
 - An agent that receives feedback makes one model call, with no tools, to turn it into feedback
-  for its own inputs and for itself. Nothing runs forward again: no prompt is rebuilt by hand, no
-  tool is called.
+  for its own inputs and for itself. Nothing runs forward again, and no tool is called.
 - Code and tool nodes stop it.
 
 Then every memory gets exactly one chance to learn, in key order, even with no feedback. It sees
@@ -141,27 +143,31 @@ each run of the nodes under it, with the feedback that reached them.
 | `reflective` | One model call proposes lessons to add, revise or remove |
 | `profile` | One model call rewrites the document from the feedback; no feedback changes nothing |
 
+The `reflective` and `profile` learners use the default model (see [Models](/models/)), not a
+model set in the flow.
+
 ### Compute, then commit
 
 One backward attempt has two phases:
 
 1. Compute all the feedback and every memory's proposed changes. If anything fails here, no
    memory changes.
-2. Save each memory's changes, in key order. Each save stands on its own: a later failure doesn't
-   undo an earlier save.
+2. Save each memory's changes, in key order. The first failed save ends the attempt; earlier saves
+   stay, and later memories are left unrequested.
 
-`outcome.learning.policies` lists each memory with its result:
+`outcome.learning.policies` lists each memory with its result (`outcome.learning` is `null` when
+no memory takes part):
 
 | Status | Meaning |
 |---|---|
 | `succeeded` | Its changes were saved |
 | `failed` | Saving failed; the failure says why and whether a retry may help |
 | `unknown` | The save was requested but the process stopped before it was confirmed |
-| `unrequested` | Nothing was asked of it, because the attempt failed first |
+| `unrequested` | Nothing was asked of it, because the attempt or an earlier save failed first |
 
-Each `backward` call is a new attempt, whatever earlier ones did. A memory may refuse a later
-attempt once it has moved past what the run saw: `episodic.stale_generation` and
-`reflective.stale_generation`. A `profile` save fails with the retryable
+Each `backward` call is a new attempt, whatever earlier ones did. An `episodic` or `reflective`
+memory refuses a save once anything was saved to it after the run started, by another run or an
+earlier attempt: `episodic.stale_generation` and `reflective.stale_generation`. A `profile` save fails with the retryable
 `profile.version_mismatch` when someone edited the document after the learner read it; start a new
 attempt to learn from the edited text.
 
@@ -179,8 +185,7 @@ prompts, values and feedback, so keep it as private as the memories. See
 gone when the command ends. Two flags keep them on disk:
 
 ```console
-$ yian run support.yaml --input question="First question" --memory-root ./mem
-$ yian run support.yaml --input question="Follow-up" --memory-root ./mem --memory-storage about=./ada.md
+$ yian run support.yaml --input question="Hi" --memory-root ./mem --memory-storage about=./ada.md
 ```
 
 | Flag | Stores |
@@ -188,12 +193,11 @@ $ yian run support.yaml --input question="Follow-up" --memory-root ./mem --memor
 | `--memory-root DIR` | Key `notes` at `DIR/<flow id>/notes.sqlite`, and `lib.notes` at `DIR/<flow id>/lib/notes.sqlite`. A `profile` uses `.md`. Folders are made on first use |
 | `--memory-storage KEY=PATH` | One memory at `PATH`, whose folder must exist. Repeatable; it wins over `--memory-root` for that key |
 
-- `--memory-root` needs a flow with an `id:`.
 - A malformed option, a repeated key, a key the flow doesn't declare, and a key of a custom type
   are usage errors (exit 2). A flow with a custom memory type can't run from the CLI.
 - A `.sqlite` file has one owner at a time: a second run on it fails with `storage.busy` until the
-  first ends. A `profile`'s `.md` file is plain text you can edit; writers take turns through a
-  lock file beside it.
+  first ends. A `profile`'s `.md` file is plain text you can edit. Beside it, `.<name>.versions/`
+  and `.<name>.writes.jsonl` keep every version, and writers take turns through `.<name>.lock`.
 - Changing an `episodic` or `reflective` limit against an existing file fails with
   `episodic.config_conflict` or `reflective.config_conflict`.
 - Give `--resume` the same flags, so a resumed run reopens the memories it started with.

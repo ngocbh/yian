@@ -51,10 +51,10 @@ This flow collects notes until its inbox closes, then returns them all.
 - An inbox input is required and has no default. A run takes no value for it: messages come
   through `send` (see [Sending messages](#sending-messages)).
 - Read an inbox only whole, as `${input.notes}`, in one of three places: a `take`'s `from:`, an
-  agent's `steer_inbox:` (see [Agents](/agents/)), or an `Inbox` input of a `call` or `loop`
-  child.
+  agent's `steer_inbox:` (see [Agents](/agents/)), or an `Inbox` input of a `kind: call` node's
+  or a `loop`'s child.
 - Anything else is a load error: text around it, a field read, a code or agent input, a `case`,
-  a `map`, a flow output.
+  a `map`, an inline `call(...)`, a flow output.
 - A loop passes an inbox to every run of its body and leaves it out of its output.
 - A child that a `map` runs can't declare an inbox.
 - An inbox nothing reads is a load error:
@@ -85,13 +85,12 @@ heard:
 
 | When the take runs | Its output |
 |---|---|
-| Messages are unread | One (`take: one`) or all of them, at once |
+| Messages are unread | One (`take: one`) or all of them, at once; `closed: true` when the inbox is closed and this take read the last one |
 | Nothing is unread and the inbox is open | It waits for the next message |
 | The timeout passes first | `{events: [], closed: false}` |
 | The inbox is closed and nothing is left | `{events: [], closed: true}` |
 
-A take on a closed inbox still gets the messages sent before the close. `closed` is true once a
-take has read the last of them. `take`'s output is fixed, so `output:`, `asserts:` and `retries:`
+A take on a closed inbox still gets the messages sent before the close. `take`'s output is fixed, so `output:`, `asserts:` and `retries:`
 are load errors.
 
 ## Sleep
@@ -142,13 +141,14 @@ output: ${plan.output}
 | Input | Meaning |
 |---|---|
 | `prompt:` | One free-text question |
-| `questions:` | A list of 1 to 4 questions, each with `question:` and a unique `header:`; optional `options:` (each a `label:` and an optional `description:`) and `multi_select:` |
+| `questions:` | A list of 1 to 4 questions (`YIAN_MAX_QUESTIONS` changes the 4), each with `question:` and a unique `header:`; optional `options:` (each a `label:` and an optional `description:`) and `multi_select:` |
 | `adaptive_questions:` | A block whose `prompt:` asks a model to write the questions from the node's other inputs |
 | `timeout:` | How long to wait; see below |
-| anything else | Passed to the host's `ask` handler as is, such as `to: lead` |
+| anything else | Refused before the run, unless the host's `ask` handler declares it; then it reaches the handler, such as `to: lead` |
 
 - `output:` is the answer's type. A `questions:` ask answers a record keyed by `header`. Without
-  `output:`, a `prompt:` ask answers text and a `questions:` ask answers an `object`.
+  `output:`, a `questions:` ask answers an `object`, and a `prompt:` ask takes whatever the host
+  answers (text at the terminal).
 - With a `timeout:`, an unanswered ask is `null` when `output:` is `Optional(...)`. Otherwise it
   fails with `tool.timeout`.
 - `asserts:` apply to the answer. `retries:` is a load error.
@@ -172,7 +172,7 @@ An agent can also ask a person, only when its model chooses to, through the `ask
 | `h` | `24h` | 86,400 |
 | `d` | `2d` | 172,800 |
 
-A plain number is a load error: `timeout: 86400` fails with
+A plain number is a load error: `timeout: 86400` fails with an error that ends
 ``a duration is text such as 24h, got 86400; write 86400s``. A duration read from a reference
 must be typed `str` (`timeout: !str ${input.wait}`) and is checked when the node runs. A literal
 duration takes no tag.
@@ -186,13 +186,14 @@ A host program moves messages and answers into a run through its log:
 | `send` | Adds a message to an inbox |
 | `withdraw` | Takes back every message no take or agent has read yet |
 | `close` | Closes an inbox: later sends are refused, and takes still read what is queued |
-| `complete` | Answers a question a host's `ask` handler held |
+| `complete` | Answers a call a host's tool handler held, such as an `ask` |
 
 None of these moves the run; the host then calls `advance`. [Embedding yian](/embedding/) covers
 the calls in full.
 
 `yian chat` does this for you. It runs a flow with one `Inbox(str)` or `Inbox(Message)` input
-(pick one with `--inbox NAME` when there are several), and sends each line you type:
+(pick one with `--inbox NAME` when there are several), sends each line you type, and prints the
+output of each node named `reply`:
 
 ```console
 $ yian chat collect.yaml
@@ -203,7 +204,7 @@ $ yian chat collect.yaml
 | Type a line | `send`, then `advance` |
 | Type `/exit` or `/quit`, or press Ctrl-D | `close`, then `advance` until the run ends |
 | Press Esc | `withdraw`, puts the unread lines back in the prompt, then stops the reply |
-| Press Ctrl-C while a turn runs | stops the reply; a second Ctrl-C within 2 s cancels the run |
+| Press Ctrl-C | during a turn, stops the reply; at the prompt, or a second time within 2 s, cancels the run |
 
 A message larger than `YIAN_MAX_EVENT_BYTES` (1 MiB by default) is refused, and the chat prints
 `not sent: <reason>`. While the prompt is up, the chat moves the run on when a `sleep` or a
@@ -233,10 +234,10 @@ $ yian run collect.yaml --json
 | `waits[].tool` | `take`, `sleep`, `ask` or a host tool |
 | `waits[].inbox` | The inbox a take reads, else `null` |
 | `waits[].deadline` | When the wait times out, else `null` |
-| `waits[].settled` | Whether it already has its answer, so the node wakes on the next move |
+| `waits[].settled` | Whether it already has its answer, timed out or was closed, so the node wakes on the next move |
 | `wake_at` | The earliest deadline of a wait that isn't settled, else `null` |
 
-To go on, resume the log:
+To go on, resume the log (this run was started with `--log ./run.jsonl`):
 
 ```console
 $ yian run --resume ./run.jsonl

@@ -1,8 +1,12 @@
 // Check the built site for what the Astro build doesn't fail on: every YAML block is highlighted
 // (at least two token colours), every Mermaid block reached the client renderer, and no
-// `check=` option of a fence leaked into a code block's frame (its title or attributes).
+// `check=` option of a fence leaked into a code block's frame (its title or attributes). Mermaid
+// renders in the browser, so a diagram that doesn't parse only shows as an error on the page:
+// parse every Mermaid block of the pages and of ARCHITECTURE.md with Mermaid's own parser.
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+
+import DOMPurify from "dompurify";
 
 const dist = new URL("../dist/", import.meta.url).pathname;
 const pages = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((path) => path.endsWith(".html"));
@@ -22,8 +26,35 @@ for (const page of pages) {
   }
 }
 if (yamlBlocks === 0) problems.push("no YAML block found in the built site");
+
+// Without a DOM, DOMPurify has no hooks and can't sanitize; parsing needs neither, and this is
+// the instance mermaid imports, so stub what mermaid calls before loading it.
+Object.assign(DOMPurify, { addHook() {}, removeHook() {}, removeHooks() {}, sanitize: (text) => text });
+const { default: mermaid } = await import("mermaid");
+const repo = new URL("../../", import.meta.url).pathname;
+const content = new URL("../src/content/docs/", import.meta.url).pathname;
+const sources = [
+  ...readdirSync(content, { recursive: true, encoding: "utf8" })
+    .filter((path) => /\.mdx?$/.test(path))
+    .map((path) => join(content, path)),
+  join(repo, "ARCHITECTURE.md"),
+];
+let diagrams = 0;
+for (const source of sources) {
+  const text = readFileSync(source, "utf8");
+  for (const block of text.matchAll(/^( *)```mermaid[^\n]*\n([\s\S]*?)^ *```\s*$/gm)) {
+    diagrams++;
+    const line = text.slice(0, block.index).split("\n").length;
+    try {
+      await mermaid.parse(block[2]);
+    } catch (error) {
+      problems.push(`${relative(repo, source)}:${line}: a Mermaid block doesn't parse: ${error.message ?? error}`);
+    }
+  }
+}
+if (diagrams === 0) problems.push("no Mermaid block found in the docs");
 if (problems.length > 0) {
   console.error(problems.join("\n"));
   process.exit(1);
 }
-console.log(`check-build: ${pages.length} pages, ${yamlBlocks} YAML blocks highlighted`);
+console.log(`check-build: ${pages.length} pages, ${yamlBlocks} YAML blocks highlighted, ${diagrams} Mermaid blocks parsed`);

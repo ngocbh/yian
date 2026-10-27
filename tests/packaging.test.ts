@@ -1,21 +1,7 @@
-// Ported from tests/test_packaging.py: the package ships what it needs.
-// `test_package_data_covers_every_runtime_data_file` becomes "every file under `src/` is a `.ts`
-// file", since `files` ships `src` and its `dist/src` build whole. `test_python_floor_is_3_11`
-// becomes the `engines` check and `test_mcp_extra_pins_the_mcp_sdk` the MCP SDK's optional peer.
-// Added here: the npm fields (`files`, `bin`, `exports`, `prepack`, `publishConfig`), exact
-// dependency pins, and the names each entry point exports, Python's `yian.__all__`, `yian.run`,
-// `yian.tools`, `yian.skills`, and `yian.llm_clients` with `yian.llm_clients.auth` (one
-// `./llm_clients` entry; `./platform`, the lock and SQLite helpers for hosts, has no Python
-// counterpart); and `LICENSES`, the text `yian --licenses` prints, against `NOTICE`, Bun's license
-// and the license files of the packages the binaries bundle, and of the packages copied into their
-// `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes `src/cli/licenses.ts` instead, taking Bun's
-// license from the file `YIAN_BUN_LICENSE` names and the copied packages' from the npm packages
-// extracted under `YIAN_VENDORED_LICENSES`, or else each from the current `LICENSES`. With
-// `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the file also runs that binary:
-// `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a
-// cwd `.env` and `bunfig.toml` it must ignore. The `./code-worker` entry resolves to the build on
-// the Node `YIAN_TEST_NODE` names, and on Bun a compiled host runs CODE nodes with a shim entry
-// importing it, and fails them without one.
+// The package ships what it needs: the npm fields in package.json, the README that is the npm page,
+// the names each entry point exports, and LICENSES against the notices (`YIAN_UPDATE_LICENSES=1`
+// rewrites it). Opt-in runs: `YIAN_TEST_BINARY` a `bun run build:bin` binary, `YIAN_TEST_NODE` the
+// built `./code-worker` on that Node, and `YIAN_TEST_PACK=1` the packed, installed npm tarball.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawn, spawnSync } from "node:child_process";

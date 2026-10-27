@@ -1,5 +1,0 @@
-"""XXX node — <one line>."""
-
-from yian.nodes.xxx.node import XxxNode
-
-__all__ = ["XxxNode"]

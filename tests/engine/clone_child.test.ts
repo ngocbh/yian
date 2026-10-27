@@ -1,32 +1,10 @@
 /**
  * The pure child cloner `cloneChild` of `compile/expand.ts`, and a cloned child END's lowered
- * post-assert firing record-scoped through `evalNode`: a port of `tests/engine/test_clone_child.py`.
+ * post-assert firing record-scoped through `evalNode`.
  *
  * A cross-node ref (`${<callsite>/X.output}`) is lowered to a synth param (`__assert_tail`) fed by
  * a `${.../X.output:-null}` wiring, so binding puts the value into the record and the assert reads
  * it node-locally; nothing reads the pool around the record.
- *
- * Ported: `test_clone_child_namespaces_ids`,
- * `test_clone_child_preserves_node_origin_while_namespacing_runtime_ids`,
- * `test_clone_child_prefixes_existing_generated_origin_context`,
- * `test_clone_child_rejects_a_dynamic_static_memory_template_atomically`,
- * `test_clone_child_revalidates_forged_occurrence_before_propagation`,
- * `test_clone_child_revalidates_forged_static_scope_without_mutating_source`,
- * `test_clone_child_rewrites_one_binding_layer_and_preserves_its_origin`,
- * `test_clone_child_does_not_rewrite_a_nested_binding_payload`,
- * `test_clone_child_seeds_start_with_call_args_as_constants`,
- * `test_clone_child_alias_target_is_child_end`, `test_clone_child_end_carries_producer_edges`,
- * `test_clone_child_lowered_post_asserts_survive_clone`,
- * `test_spawner_assert_append_preserves_child_and_spawner_origins`,
- * `test_child_end_satisfied_synth_param_post_assert_succeeds` and
- * `test_child_end_violated_synth_param_post_assert_fails`.
- *
- * Changed:
- * - the END's wiring in the two `evalNode` rows is passed as a one-node flow, where Python stamps
- *   it on the node for the stub flow to derive;
- * - the forged occurrence and scope are objects of the carrier's prototype built without its
- *   constructor (carriers are frozen): an index of `false`, and a `String` object as a memory key,
- *   where Python sets `False` and a `str` subclass on a built carrier.
  */
 
 import { expect, test } from "bun:test";
@@ -155,7 +133,7 @@ test("clone child rejects a dynamic static memory template atomically", () => {
 test("clone child revalidates a forged occurrence before propagation", () => {
   const flow = single();
   for (const [nodeId, node] of flow.nodes) node.memoryScope = new MemoryScope(["call", nodeId]);
-  // `false == 0` in Python; an equality-only guard would silently propagate this.
+  // An index of `false`: a guard that only compared values could pass it as 0.
   const occurrence = Object.assign(Object.create(MemoryOccurrenceSegment.prototype) as object, {
     kind: MemoryOccurrenceKind.MAP_ITEM,
     staticPath: ["map"],

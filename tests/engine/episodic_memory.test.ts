@@ -1,50 +1,6 @@
 /**
- * Session and snapshot foundations for process-local episodic memory: a port of
- * `tests/engine/test_episodic_memory.py`.
- *
- * Ported: `test_constructor_and_protocol_are_exact`,
- * `test_session_operations_validate_context_and_generation`,
- * `test_keys_of_one_instance_share_one_history_and_one_limit`,
- * `test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match`,
- * `test_snapshot_is_closed_canonical_and_defensive`, `test_snapshot_restore_rules_and_recorded_defaults`,
- * `test_snapshot_format_is_strict`, `test_empty_commit_idempotency_collision_and_staleness`,
- * `test_commit_inputs_are_exact`, `test_closed_session_rejects_every_operation`,
- * `test_module_imports_only_stdlib_and_lower_memory_modules`,
- * `test_learning_is_deterministic_complete_and_round_trips_snapshot`,
- * `test_commit_is_atomic_rejects_malformed_and_duplicate_entries`,
- * `test_handcrafted_out_of_scope_commit_is_rejected_atomically`,
- * `test_retention_recall_order_relevance_and_pinned_history`,
- * `test_rewrite_query_is_overridable_and_must_return_text`,
- * `test_nonempty_snapshot_rejects_malformed_episode_and_duplicate_identity` and
- * `test_session_recalls_and_learns_under_the_memory_key`.
- *
- * TS-only: the constructor's `bigint` limits (`0n` refused, one past 2^53 − 1 refused), `null`
- * limits as unset and a non-boolean `createParent`; an episode holding `Infinity` in its inputs
- * fails `learn` as `episodic.invalid_context`; a snapshot holding `Infinity` in an episode is
- * `episodic.invalid_snapshot`, and one holding `-0` reads as `0`; a host mutation whose payload holds
- * `-0` is `episodic.invalid_batch` (not canonical JSON); the base `rewriteQuery` text and its
- * `TypeError`; an async `rewriteQuery` is awaited, a rejecting one is `episodic.invalid_query` with
- * its cause, and a re-entrant `memory.close()` from inside it is `episodic.busy`; a snapshot whose
- * `revision` is `2n ** 60n` or whose `epoch` is `2n ** 53n` (beyond 2^53 − 1) is
- * `episodic.invalid_snapshot`; `reset()` at epoch 2^53 − 1 is a `RangeError` that changes nothing.
- *
- * Changed:
- * - `test_constructor_and_protocol_are_exact`: `1.0` is the int 1 in JS, so it's accepted; `1.5`
- *   and `"1"` stand in for Python's non-int rows. `isMemory` and the session's methods stand in for
- *   the runtime-checkable protocol `isinstance` checks.
- * - `test_snapshot_rejects_nesting_beyond_the_memory_limit`: TS has no memory nesting limit, so the
- *   200-level `config.extra` row fails only for its extra field, and a 10 000-level value inside an
- *   episode's inputs round-trips through learn, commit, snapshot and restore.
- * - `test_snapshot_is_closed_canonical_and_defensive`: a snapshot is deep-frozen, not a detached
- *   mutable copy, so the assignment throws `TypeError` and the snapshot is unchanged.
- * - `test_commit_inputs_are_exact`: an array is the valid batch type in TS, so the `[]` row commits;
- *   a non-array (`{}`, a `Set`) is `episodic.invalid_batch`.
- * - `test_closed_session_rejects_every_operation`: there is no `__enter__` row (no `with` form); the
- *   other operations are checked.
- * - JSON ints written into snapshots are `bigint`s; mutable copies are `structuredClone`s; `recall`
- *   is async; `with` blocks are `try`/`finally` around `close()`.
- *
- * Not ported: none.
+ * Session and snapshot foundations for process-local episodic memory: the constructor, sessions,
+ * snapshots, commits, learning, recall and `rewriteQuery`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -102,7 +58,7 @@ async function rejection(promise: Promise<unknown>): Promise<MemoryOperationErro
   throw new Error("expected a MemoryOperationError");
 }
 
-/** Open a run, await `fn` with it and close it (Python's `with memory.open_run() as session`). */
+/** Open a run, await `fn` with it, and close it. */
 async function withRun<T>(
   memory: EpisodicMemory,
   fn: (session: EpisodicSession) => T | Promise<T>,
@@ -319,7 +275,7 @@ describe("snapshot format is strict", () => {
     ["max_episodes 0", (x) => (x.config.max_episodes = 0n)],
     ["config extra", (x) => (x.config.extra = 1n)],
     ["empty episode", (x) => x.episodes.push({})],
-    // TS-only: counters beyond 2^53 − 1 that a double holds exactly.
+    // Counters beyond 2^53 − 1 that a double holds exactly.
     ["revision 2**60", (x) => (x.revision = 2n ** 60n)],
     ["epoch 2**53", (x) => (x.epoch = 2n ** 53n)],
   ];
@@ -334,7 +290,7 @@ describe("snapshot format is strict", () => {
   }
 });
 
-// test_snapshot_rejects_nesting_beyond_the_memory_limit (Changed: no memory nesting limit)
+// There is no memory nesting limit: only the extra field is refused.
 test("a deep value round-trips and a deep extra config field is still refused", async () => {
   const malformed: Mutable = structuredClone(snapshotOf(new EpisodicMemory()));
   let nested: Mutable = {};
@@ -584,7 +540,7 @@ test("session recalls and learns under the memory key", async () => {
   });
 });
 
-describe("TS-only", () => {
+describe("integer bounds, infinities and async hooks", () => {
   test("reset refuses to move the epoch past 2^53 - 1", () => {
     const recorded: Mutable = structuredClone(snapshotOf(new EpisodicMemory()));
     recorded.epoch = BigInt(Number.MAX_SAFE_INTEGER);

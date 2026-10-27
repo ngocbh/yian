@@ -1,25 +1,9 @@
 /**
  * `FunctionTool` construction, `tool()`, the types `toolTypes` reads from a tool's JSON Schemas,
- * and a `FunctionTool` in a `ToolSet` and the registry, a port of
- * `tests/engine/test_function_tool.py` and of the JSON Schema and output rows of
- * `test_tool_types.py` that read a tool. The `function_tool` rows are ported as `tool()` rows, with
- * a Standard Schema validator or a JSON Schema in place of the function's signature; the two
- * invocation rows, `test_function_tool_result_validates_like_a_function_and_passes_the_context` and
- * `test_function_tool_without_context_gets_its_validated_arguments`, are in the checking-order
- * rows, where the validator plays pydantic's role. Not ported: the decorator form and the docstring
- * defaults (TS has no runtime signatures), the async refusal (TS awaits an async `execute`), the
- * unresolvable annotation row (TS has no runtime annotations), Python's lax `"2"` to 2 coercion
- * (yian's argument check refuses `"2"` for an integer first),
- * `test_replace_drops_the_function_schema` (no `dataclasses.replace`),
- * `test_run_entry_points_and_tool_set_annotate_function_tool_entries` (needs the run entry points),
- * `test_function_tool_without_a_signature_cannot_be_called_directly`, the second half of
- * `test_function_tool_without_context_gets_its_validated_arguments` (calling `on_invoke` directly
- * validates; calling `execute` directly runs no validator), and the LangChain binding rows. The
- * exports row, `test_tool_names_are_exported_from_yian_and_yian_tools`, is in
- * `tool_errors.test.ts`. The library matrix builds one `place` tool with zod, valibot (with a JSON
- * Schema beside it, and through its Standard JSON Schema interface), ArkType and a raw JSON Schema.
- * With `YIAN_TEST_NODE` set to a Node binary, the built tools code on Node, beside a second copy of
- * its leaves, and a zod `tool()` there.
+ * and a `FunctionTool` in a `ToolSet` and the registry. The library matrix builds one `place` tool
+ * with zod, valibot (with a JSON Schema beside it, and through its Standard JSON Schema interface),
+ * ArkType and a raw JSON Schema. With `YIAN_TEST_NODE` set to a Node binary, the built tools code
+ * runs on Node, beside a second copy of its leaves, and a zod `tool()` there.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -264,7 +248,7 @@ describe("FunctionTool construction", () => {
   });
 
   test("refuses a schema nested past the value nesting limit", () => {
-    // Python leaves such an input unchecked; a TS tool's schema must be JSON the model can see.
+    // A tool's schema must be JSON the model can see.
     let deep: JsonObject = { type: "integer" };
     for (let i = 0; i < 150; i++) deep = { type: "array", items: deep };
     const schema = { type: "object", properties: { x: deep, y: { type: "string" } } };
@@ -506,7 +490,7 @@ describe("FunctionTool invocation", () => {
     return [tool, seen];
   }
 
-  test("test_function_tool_is_invoked_with_a_context_and_its_arguments", async () => {
+  test("function tool is invoked with a context and its arguments", async () => {
     const [ft, seen] = echo();
     const inputs = { text: "hi" };
 
@@ -523,7 +507,7 @@ describe("FunctionTool invocation", () => {
     expect(args).not.toBe(inputs);
   });
 
-  test("test_function_tool_rejects_an_unknown_argument_before_on_invoke", async () => {
+  test("function tool rejects an unknown argument before execute", async () => {
     const [ft, seen] = echo();
 
     const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: "hi", extra: 1 }), RangeError);
@@ -550,7 +534,7 @@ describe("FunctionTool invocation", () => {
     });
   }
 
-  test("test_function_tool_checks_extra_arguments_against_an_additional_properties_schema", async () => {
+  test("function tool checks extra arguments against an additional properties schema", async () => {
     const [ft, seen] = echo({ ...ECHO_SCHEMA, additionalProperties: { type: "integer" } });
 
     const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: "hi", extra: "x" }), TypeCheckError);
@@ -559,7 +543,7 @@ describe("FunctionTool invocation", () => {
     expect(seen).toEqual([]);
   });
 
-  test("test_function_tool_rejects_a_missing_required_argument", async () => {
+  test("function tool rejects a missing required argument", async () => {
     const [ft, seen] = echo();
 
     const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", {}), RangeError);
@@ -578,7 +562,7 @@ describe("FunctionTool invocation", () => {
     expect(error.message).toBe('tool \'echo\' is missing required argument(s) ["c","b"]');
   });
 
-  test("test_function_tool_rejects_a_value_of_the_wrong_type", async () => {
+  test("function tool rejects a value of the wrong type", async () => {
     const [ft, seen] = echo();
 
     const error = await rejection(new ToolSet({ echo: ft }).invoke("echo", { text: 3 }), TypeCheckError);
@@ -588,7 +572,7 @@ describe("FunctionTool invocation", () => {
     expect(seen).toEqual([]);
   });
 
-  test("test_function_tool_passes_an_untranslatable_property_through_unchecked", async () => {
+  test("function tool passes an untranslatable property through unchecked", async () => {
     const [ft, seen] = echo({
       type: "object",
       properties: { v: { anyOf: [{ type: "string" }, { type: "integer" }] } },
@@ -599,7 +583,7 @@ describe("FunctionTool invocation", () => {
     expect(seen[0]![1]).toEqual({ v: [1, 2] });
   });
 
-  test("test_function_tool_accepts_an_integral_float_for_an_integer_as_given", async () => {
+  test("function tool accepts an integral float for an integer as given", async () => {
     const [ft, seen] = echo({ type: "object", properties: { n: { type: "integer", minimum: 1 } } });
     const tools = new ToolSet({ echo: ft });
 
@@ -610,7 +594,7 @@ describe("FunctionTool invocation", () => {
     await rejection(tools.invoke("echo", { n: 0 }), TypeCheckError);
   });
 
-  test("test_function_tool_trusted_invocation_validates_the_same_way", async () => {
+  test("function tool trusted invocation validates the same way", async () => {
     const [ft] = echo();
     const tools = new ToolSet({ echo: ft });
 
@@ -635,7 +619,7 @@ describe("FunctionTool invocation", () => {
     await rejection(tools.invoke("order", { side: "hold" }), TypeCheckError);
   });
 
-  test("test_on_invoke_gets_a_deep_copy_of_the_arguments", async () => {
+  test("execute gets a deep copy of the arguments", async () => {
     const ft = new FunctionTool({
       name: "grow",
       description: "",
@@ -654,7 +638,7 @@ describe("FunctionTool invocation", () => {
     expect(inputs).toEqual({ items: ["a"] });
   });
 
-  test("test_function_tool_accepts_integral_floats_in_an_integer_array_as_given", async () => {
+  test("function tool accepts integral floats in an integer array as given", async () => {
     const [ft, seen] = echo({ type: "object", properties: { ns: { type: "array", items: { type: "integer" } } } });
     const tools = new ToolSet({ echo: ft });
 
@@ -664,7 +648,7 @@ describe("FunctionTool invocation", () => {
     await rejection(tools.invoke("echo", { ns: [1.5] }), TypeCheckError);
   });
 
-  test("test_function_tool_accepts_integral_floats_in_a_closed_record", async () => {
+  test("function tool accepts integral floats in a closed record", async () => {
     const [ft, seen] = echo({
       type: "object",
       properties: {
@@ -785,7 +769,7 @@ describe("tool()", () => {
     throw new Error("expected a throw");
   }
 
-  test("test_function_tool_builds_a_function_tool_from_a_function", () => {
+  test("tool() builds a function tool", () => {
     const placed = place();
 
     expect(isFunctionTool(placed)).toBe(true);
@@ -820,7 +804,7 @@ describe("tool()", () => {
     expectPlaceTypes(new ToolSet({ g: [placed] }).resolve(["place"])[0]!);
   });
 
-  test("test_register_tool_description_override_on_a_function_tool_from_a_function", async () => {
+  test("registerTool's description override on a tool() tool", async () => {
     const placed = place();
     registerTool("place", placed, { descriptionOverride: "Buy." });
 
@@ -842,7 +826,7 @@ describe("tool()", () => {
     expect(seen.map(([args]) => args)).toEqual([{ sym: "X", qty: 1 }]);
   });
 
-  test("test_registered_tools_copy_keeps_the_output_type", () => {
+  test("registered tools copy keeps the output type", () => {
     registerTool("place", place());
 
     expectPlaceTypes(new ToolSet(registeredTools()).resolve(["place"])[0]!);
@@ -866,7 +850,7 @@ describe("tool()", () => {
     expect(plain.outputJsonSchema).toBeNull();
   });
 
-  test("test_explicit_none_return_is_none_kind", () => {
+  test("an explicit null output is the null kind", () => {
     const nothing = tool({
       name: "echo",
       description: "",
@@ -958,7 +942,7 @@ describe("tool()", () => {
     );
   });
 
-  test("test_function_tool_names_the_tool_when_an_argument_has_no_json_schema", () => {
+  test("function tool names the tool when an argument has no json schema", () => {
     const error = thrown(
       () =>
         tool({ name: "when", description: "", parameters: z.object({ when: z.coerce.date() }), execute: () => null }),
@@ -1212,7 +1196,7 @@ describe("tool() checking order", () => {
     expect(count.calls).toBe(2);
   });
 
-  test("test_function_tool_result_validates_like_a_function_and_passes_the_context", async () => {
+  test("function tool result validates like a function and passes the context", async () => {
     const app = { name: "broker" };
     const { placed, seen } = checkedPlace();
     const tools = new ToolSet({ place: placed }, { context: app }).forRun("r");
@@ -1227,7 +1211,7 @@ describe("tool() checking order", () => {
     await rejection(tools.invoke("place", { sym: "X", qty: "many" }), TypeCheckError);
   });
 
-  test("test_function_tool_without_context_gets_its_validated_arguments", async () => {
+  test("function tool without context gets its validated arguments", async () => {
     const add = tool({
       name: "add",
       description: "Add two integers.",

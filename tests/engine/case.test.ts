@@ -1,55 +1,7 @@
 /**
- * The `case` build to a `CaseNode`: a port of `tests/engine/test_case.py`.
- *
- * Ported: `test_searched_desugar_builds_case`, `test_searched_control_edges`,
- * `test_searched_data_edge_reconciled_to_input_group`, `test_searched_multiref_allocates_r0_r1`,
- * `test_searched_when_all_spellings_desugar_equivalently`,
- * `test_searched_when_default_reads_through_an_optional_edge`,
- * `test_searched_when_coalesce_adds_a_required_join_input`,
- * `test_searched_when_join_reuses_a_plain_read`,
- * `test_searched_when_input_read_inside_an_escape_stays_plain`,
- * `test_searched_when_same_escape_in_two_cases_shares_locals`,
- * `test_searched_when_malformed_is_loud`, `test_on_desugar_builds_case`, `test_on_control_edges`,
- * `test_on_data_edge_reconciled`, `test_desugared_searched_routes_via_evaluate_when_record`,
- * `test_desugared_on_routes_via_evaluate_when_record`, `test_handles_align_with_control_edges`,
- * `test_on_value_with_double_quote_uses_single_quote_and_routes`,
- * `test_on_value_with_both_quotes_is_loud_load_error`,
- * `test_build_emits_reconciled_edges_no_provisional_group`,
- * `test_exhaustiveness_missing_tag_no_else_raises`, `test_exhaustiveness_else_satisfies_coverage`,
- * `test_exhaustiveness_all_tags_covered_no_else_ok`,
- * `test_exhaustiveness_walks_dotted_field_into_record`,
- * `test_exhaustiveness_dotted_missing_tag_raises`,
- * `test_exhaustiveness_projects_known_field_from_partial_record`,
- * `test_exhaustiveness_rejects_noncanonical_producer_contract`,
- * `test_exhaustiveness_rejects_noncanonical_unused_producer_contract`,
- * `test_no_exhaustiveness_for_searched_form`, `test_on_non_enum_producer_skips_exhaustiveness`, the
- * build half of
- * `tests/engine/test_validate_refs.py`'s `test_case_node_local_ref_does_not_error`, and the
- * allocation order of `tests/compose/test_null_narrowing_case.py`'s
- * `test_a_case_param_read_after_a_null_check_sees_the_value_as_not_null` (`__r0`, `__r1`, `__r2` in
- * read order); the whole row, with its narrowing, is ported in `compose/null_narrowing_case.test.ts`.
- *
- * Changed: the seed rows parse seeds 02, 06 and 10 through the conformance cases
- * `load-case/seed_02_case`, `load-case/seed_06_case_on` and
- * `load-leaves/seed_10_asserts_arithmetic` (`parseFile`, `flowNodesCursor`, `parseNodes`), where
- * Python reads the seed files. The quote rows build an `on:` case whose `when:` holds the quotes,
- * where Python calls `_quote`, which stays module-private. The exhaustiveness rows build without
- * the producers, which a build doesn't read. The non-canonical producer row pins the whole message,
- * which names the class (`Type`). The malformed-`when:` row pins the whole
- * message, where Python matches a fragment. The multiref row pins the whole data-edge list, where
- * Python checks for the `score` edge and against a `weight` one.
- *
- * TS-only: the seed `e38` row (`load-case/seed_e38_case_when_ref_locates_node_header`): the build
- * locates each `__rN` at the whole value of its `cases[N].when` (`__r1` on line 36) and labels it
- * so; the conformance case's full error comes from the reference check (pinned in
- * `errors.test.ts`). The missing-`then:` rows: a searched entry without a `then:` ("each searched
- * case needs a `then:`") is located at its `then:` range when the descriptor has one (a parsed
- * entry's is null, so no frame), else at `cases:`, else at the node; an `on:` entry with a `when:`
- * and no `then:` ("each on:-form case needs a `when:` value and a `then:`") at `cases:`, else at
- * the node.
- *
- * Pinned in `validate_refs.test.ts`: the `validate_references` half of
- * `test_case_node_local_ref_does_not_error`.
+ * The `case` build to a `CaseNode`: the searched and `on:` desugars, their control and data
+ * edges, `__rN` allocation, routing, quoting, exhaustiveness, and where a missing `then:` is
+ * located.
  */
 
 import { expect, test } from "bun:test";

@@ -1,5 +1,5 @@
 /**
- * `${<case>.output}` = the taken-branch value: a port of `tests/engine/test_case_value.py`.
+ * `${<case>.output}` = the taken-branch value.
  *
  * A `case` read as a VALUE: `${<case>.output}` desugars at load to a COALESCE over the case's
  * branch targets (`${t1.output | t2.output | … | else.output}`). Pure loader sugar — skip-flood
@@ -9,29 +9,7 @@
  * Descriptor-level coverage exercises `expandCaseOutputs` over constructed descriptors: whole,
  * dotted, embedded, `on:` form, nested cases flattened to leaves, non-case, and fast-path
  * references. It also covers loud rejection of a case value in a non-clean binding position, a
- * condition, or an assert. The load rows assemble CODE branches with `output: ${gate.output}` and
- * with a node consuming `${gate.output}`.
- *
- * (The `then:/else: call(...)` inline-call branch form is covered by `case_call.test.ts`.)
- *
- * Ported through `loadFlow` and `runFlow`: `test_case_value_returns_taken_branch` and the run half
- * of `test_case_of_case_value_runs_taken_nested_leaf`. Covered by `run-case` cases running the
- * same flows on the same inputs: the run halves of `test_node_consuming_case_value_runs`
- * (`engine_case_value__a_node_input_reads_the_case_value`) and
- * `test_case_value_in_inline_call_arg_runs`
- * (`engine_case_value__an_inline_call_argument_reads_the_case_value`).
- *
- * Changed: the load rows assemble with `assembleText` (a `defs:` callee built by hand with
- * `handChild`), where Python loads; `test_seed_22_case_value_output_expanded` reads seed
- * 22 from the `load-case/seed_22_case_value` case. A rejection row pins the whole message where
- * Python matches a fragment. `test_no_case_fast_path_is_identity` checks the same descriptors in a
- * fresh map, since `expandCaseOutputs` returns a mutable `Map` for its read-only input. The load
- * halves of the `_e2e` rows are named for what they check, and the coalesce-position rejection row
- * uses a variant of the shared flow (the harvested case holds Python's `cv_bad` flow word for word).
- *
- * TS-only: the harvested `load-case/engine_case_value__case_value_in_a_coalesce_is_rejected` and
- * `load-case/seed_22_case_value`, pinned at the end; `shared nested cases flatten once per case`
- * and `a case reached by two paths keeps each path's cycle cut`, which pin the memoized flatten.
+ * condition, or an assert. The `then:/else: call(...)` branch form is in `case_call.test.ts`.
  */
 
 import { expect, test } from "bun:test";

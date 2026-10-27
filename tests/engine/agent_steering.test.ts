@@ -1,26 +1,9 @@
 /**
- * Steers to a running AGENT: mirrors the steer rows of `tests/engine/test_agent_steering.py`.
- *
- * Python's inbox answers `drain(node_id)` when asked. In TS a steer is a send to the agent's steer
- * inbox (`steer_inbox:`, a top-level `Inbox(str)`), which the agent reads at the top of each
- * iteration as a recorded `steer` step. Flows are hand-built (`START(notes) -> chat [-> after] ->
- * END`) and run by `FlowEngine` with a `ScriptedModel` from `models` and tools in the run's
- * `ToolSet`; a tool sends a steer through the live engine's `deliver`. The interrupt rows moved to
- * `agent_interrupt.test.ts`, as `interrupt(run, inbox)` changed their meaning.
- *
- * Changed: `test_non_steerable_agent_never_calls_the_inbox` (an agent without `steer_inbox` never
- * reads it, and the event stays unread); `test_steers_are_sent_as_user_messages_at_the_top_of_each_iteration`
- * (steers are sends; one read is one user message, a text part per event, and each read is a
- * `steer` step); `test_run_context_receives_steering_only_when_steerable` (the steer inbox opener
- * records its calls: only an agent with a steer inbox opens it);
- * `test_python_built_steerable_agent_with_structured_output_fails_before_the_model` (any output
- * runs now: at an interrupt the output contract decides);
- * `test_resume_reuses_a_finished_steered_node_without_calling_the_inbox` (a crash is a frozen log).
- *
- * Not ported: the session rows (TS yian has no session memory; a recorded steer replays:
- * `agent_steer_messages.test.ts`).
- *
- * TS-only: a steer queued between two calls of a reply joins after both results.
+ * Steers to a running AGENT. A steer is a send to the agent's steer inbox (`steer_inbox:`, a
+ * top-level `Inbox(str)`), which the agent reads at the top of each iteration as a recorded `steer`
+ * step. Flows are hand-built (`START(notes) -> chat [-> after] -> END`) and run by `FlowEngine`
+ * with a `ScriptedModel` from `models`; a tool sends a steer through the live engine's `deliver`.
+ * Interrupts are in `agent_interrupt.test.ts`.
  */
 
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -76,7 +59,7 @@ function reply(text: string, ...calls: (readonly [string, JsonObject, string])[]
   return new Response({ message: new Message({ role: "assistant", parts }), finishReason });
 }
 
-/** Python's `_two_calls`: text and two `lookup` calls. */
+/** Text and two `lookup` calls. */
 function twoCalls(): Response {
   return reply("Checking both.", ["lookup", { topic: "a" }, "call-1"], ["lookup", { topic: "b" }, "call-2"]);
 }
@@ -139,7 +122,7 @@ function steer(event: string): void {
 const NO_STEERS = (inbox: string): SteerInbox => ({ inbox, queued: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null });
 
 /**
- * Python's `_flow`, loaded: one `chat` agent granted `tools`, output `${chat.output}`; with
+ * One loaded `chat` agent granted `tools`, output `${chat.output}`; with
  * `after`, a summarizing agent reads it.
  */
 function steerFlow(options: { tools?: readonly string[]; after?: boolean } = {}): string {
@@ -248,7 +231,7 @@ test("only an agent with a steer inbox opens it", async () => {
 test.each([
   ["a structured output", new Type({ kind: ValueKind.OBJECT, fields: new Map([["answer", Type.scalar(ValueKind.INTEGER)]]), required: new Set(["answer"]) })],
   ["an Optional(str) output", new Type({ kind: ValueKind.STRING, nullable: true })],
-])("a Python-built agent with a steer inbox and %s runs", async (_name, type) => {
+])("an agent built in code with a steer inbox and %s runs", async (_name, type) => {
   const node = new AgentNode("chat", { prompt: "hi", llmConfig: CONFIG, steerInbox: true });
   node.outputContract = new ValueContract(type);
   const answer = type.kind === ValueKind.STRING ? "ok" : '{"answer": 1}';

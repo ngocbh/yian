@@ -1,7 +1,7 @@
 /**
- * TS-only: an AGENT's tool call may wait. A handler that returns `pending()` registers the call;
- * the agent runs the reply's other calls and waits; `complete` answers it; the woken agent
- * replays and calls the model with every result.
+ * An AGENT's tool call may wait. A handler that returns `pending()` registers the call; the agent
+ * runs the reply's other calls and waits; `complete` answers it; the woken agent replays and calls
+ * the model with every result.
  */
 
 import { afterAll, expect, test } from "bun:test";

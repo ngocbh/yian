@@ -1,17 +1,6 @@
 /**
- * A bad adaptive brief is reported on the gate at the brief: a port of
- * `tests/engine/test_adaptive_brief_errors.py`.
- *
- * Ported: `test_bad_brief_is_named_and_located_at_the_brief`,
- * `test_brief_and_gate_prompt_errors_are_both_reported`, `test_aliased_brief_shares_the_anchor_line`,
- * `test_compact_flow_brief_error_names_the_flow_node` and `test_a_clean_brief_loads`; and the case
- * `load-agent/engine_adaptive_brief_errors__brief_and_gate_prompt_errors_are_both_reported`, with
- * `full` (every frame and the notes).
- *
- * Changed: the flows assemble with `assembleText`, where Python loads them. The gate is a TOOL
- * `ask`, so its prompt is the input `prompt:`, a wiring template whose errors are a reference's.
- *
- * Ported through `loadFlow`: `test_defs_body_brief_error` (a `defs:` body).
+ * A bad adaptive brief is reported on the gate at the brief, beside the gate's prompt errors, in
+ * full, compact and `defs:` flows.
  */
 
 import { expect, test } from "bun:test";

@@ -1,9 +1,7 @@
-// Ported from tests/engine/test_cli_utils.py: the key prompt, with a fake terminal
-// standing in for questionary and a TTY; plus the argument parser, the usage text and `printJson`.
-// The `_agent_connections` / `_ensure_provider_keys` rows load the hello-agent seed from its
-// harvested case, `load-core/seed_00_hello_agent`, and set the default provider and model the
-// Python suite's conftest sets where they rely on it.
-// Added: `ensureProviderKeys` resolves a saved login without a prompt.
+// The key prompt, with a fake terminal standing in for a TTY; the argument parser, the usage text
+// and `printJson`; and `ensureProviderKeys`, which also resolves a saved login without a prompt.
+// The provider-key rows load the hello-agent seed from its harvested case,
+// `load-core/seed_00_hello_agent`, and set a default provider and model where they rely on one.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -175,7 +173,7 @@ describe("agentConnections / ensureProviderKeys pre-flight", () => {
     return connections.map(([provider, connection]) => [provider, connection?.source]);
   }
 
-  /** The default provider and model the Python suite's conftest sets. */
+  /** Set a default provider and model. */
   function conftestDefaults(): void {
     vars.set("YIAN_DEFAULT_PROVIDER", "openai");
     vars.set("YIAN_DEFAULT_MODEL", "gpt-5.5");
@@ -328,7 +326,7 @@ describe("parseCommand", () => {
     expect(usage(RUN, [flow, "--input"])).toBe("Option '--input' requires an argument.");
   });
 
-  test("float options take Python's float() syntax", () => {
+  test("float options accept signs, underscores, exponents and inf", () => {
     const timeout: OptionSpec = { name: "timeout", type: "float", metavar: "FLOAT", help: "Seconds." };
     const spec: CommandSpec = { name: "models", summary: "Models.", positionals: [], options: [timeout] };
     const value = (text: string) => (parseCommand(spec, [`--timeout=${text}`]) as ParsedArgs).options["timeout"];

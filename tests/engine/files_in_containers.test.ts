@@ -1,79 +1,7 @@
 /**
- * Files inside typed containers, a port of the value checks (`buildValueAs`), file
- * normalization (`normalizeFiles`), the overlap tests, the two typed `bindParams` reads, the
- * `field_of` table, the two traced item reads and
- * `test_a_partial_loop_keeps_an_omitted_file_as_a_file` of
- * `tests/engine/test_files_in_containers.py`, and the inequality half of
- * `test_a_source_entry_with_a_record_reading_type_is_hashable` (through `sameSourceEntry`), with
- * `FileRef` constructor refusals (`RangeError`, as pydantic's `ValidationError` is a
- * `ValueError`). Where Python checks that a value is kept with `is`, these tests use `toBe`.
- *
- * Changed: in `test_a_partial_loop_keeps_an_omitted_file_as_a_file` the child is a stub object in
- * place of `_child_flow()`, and Python ints in carried values are `bigint`. In the runs, the CODE
- * bodies are TS (decisions 6, 11): a body builds a file with the `FileRef` it imports from
- * `src/typesys/values.ts` (as Python's body calls `__import__`) and reads `x.constructor.name`
- * where Python reads `type(x).__name__`; ints arrive in a body as `number` (decision 45) and the
- * outputs' ints are bigints (decision 4a).
- *
- * TS-only: the `normalizeTypedFiles` tests, and the `normalizeFiles` rows keeping an `object`
- * value that holds NaN, turning a `-0` at an `object` position into `0`, and keeping a file
- * form whose text holds a lone surrogate.
- *
- * Ported, each flow loaded with its `defs:` and run through `runFlow` (with `learnable` where
- * Python passes it): `test_a_map_over_a_list_of_files_into_a_file_input_succeeds`,
- * `test_a_loop_carrying_a_file_succeeds`, `test_a_call_into_a_list_of_files_input_succeeds`,
- * `test_a_call_body_returning_a_record_with_a_file_succeeds`, for learnable false and true
- * `test_a_map_body_reads_its_file_input_as_a_file`,
- * `test_a_call_body_reads_its_list_of_files_input_as_files`,
- * `test_the_parent_reads_a_file_a_call_body_returns`,
- * `test_the_parent_reads_the_typed_file_of_a_partial_record_body_output`,
- * `test_the_parent_reads_a_file_a_loop_carries` and
- * `test_a_loop_reads_a_file_in_a_carried_object_as_a_mapping_on_every_iteration`, and for each
- * learnable and body output `test_a_partial_loop_compares_an_omitted_file_with_a_returned_one` (4)
- * and `test_a_partial_loop_compares_a_carried_file_the_body_does_not_take` (4).
- *
- * Ported through `runFlow` (and `advance`), each run in `hostEnv`: the flow runs
- * `test_a_tagged_union_of_a_file_and_an_object_member_loads`,
- * `test_an_object_binding_delivers_a_nested_file_as_its_mapping`,
- * `test_an_object_output_binding_over_a_record_with_a_file_succeeds`,
- * `test_a_file_binding_delivers_the_json_form_as_a_file`, `test_a_float_binding_still_delivers_an_int`,
- * `test_a_constructor_in_a_flow_delivers_a_nested_file_as_its_mapping`,
- * `test_a_binding_reads_the_fields_of_a_file`, `test_a_template_binding_reads_the_uri_of_a_file`,
- * `test_a_prompt_reads_the_name_of_a_file`, `test_a_case_routes_on_the_uri_of_a_file` (2),
- * `test_a_flow_assert_reads_the_uri_of_a_file`, `test_a_node_pre_assert_reads_the_uri_of_a_file`,
- * `test_a_node_post_assert_reads_the_uri_of_a_file_in_its_output`,
- * `test_another_field_of_a_file_is_missing_like_a_missing_key` (2),
- * `test_render_as_json_writes_a_file_as_its_mapping`,
- * `test_a_run_reads_the_fields_of_a_file_through_its_trace` (2),
- * `test_a_reader_sees_the_files_of_a_typed_output` (2),
- * `test_the_success_event_holds_the_files_of_a_typed_output` (2),
- * `test_an_untyped_output_holding_files_is_read_as_mappings` (2),
- * `test_a_flow_input_file_reaches_code_as_a_file` (2),
- * `test_the_run_result_holds_the_files_of_a_typed_output` (6) and
- * `test_the_run_result_holds_the_files_of_an_untyped_output_as_mappings` (2); on the engine
- * fixtures' `engine`, `test_backward_context_holds_the_files_of_a_typed_output_as_json`; and the
- * resume rows `test_resuming_a_run_with_a_typed_list_of_files_succeeds`,
- * `test_resuming_a_finished_run_with_files_replays_its_output` (both flows),
- * `test_a_reader_after_resume_sees_the_files_of_a_replayed_output` (2),
- * `test_resuming_an_unfinished_run_returns_the_files_of_a_typed_output` (2),
- * `test_resuming_a_finished_run_returns_the_files_of_a_typed_output` (6) and
- * `test_a_log_whose_loop_default_was_digested_as_a_mapping_still_resumes` (`LoopNode`'s private
- * `carriedValue` replaced on the prototype with `spyOn`, where Python patches `_carried_value`).
- * Changed: a body reads a plain record's `constructor.name` as `Object` (Python's `dict`), the
- * float binding's int is 2^60, so the body sees a `bigint` (an int up to 2^53 and a float both
- * arrive as a `number`; Python reads `type(n).__name__`), and a body writes a missing value as
- * `String(x)`, `null` (Python's `repr`, `None`); the interruption before
- * the human answer is the run's `signal`, which the `ask` handler aborts (Python: the
- * handler raises `_HostStop`). The gates are TOOL `ask` nodes where Python's are HUMAN_INPUT
- * nodes (TS yian has no HUMAN_INPUT kind), so the prompt row reads the file in the ask's prompt
- * template.
- *
- * Not ported: the hash half of `test_a_source_entry_with_a_record_reading_type_is_hashable`, since
- * a `SourceEntry` has no hash (maps key sources by `sourceKey`); the `field_of` rows on dict
- * subclasses, `defaultdict` and a `FileRef` subclass; a record is a plain object and a dotted read
- * gives its own keys. The tuple in `test_an_object_without_files_is_stored_as_given` is a list
- * here, and `test_normalize_files_reads_a_tuple_as_a_list_only_when_it_changes` is not ported (no
- * tuples in TS).
+ * Files inside typed containers: value checks (`buildValueAs`), file normalization
+ * (`normalizeFiles`, `normalizeTypedFiles`), overlap, typed binds, field reads, and flows that pass
+ * files through MAP, LOOP, CALL, prompts, conditions, results and resume.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -306,14 +234,14 @@ describe("normalizeFiles", () => {
     ["Union(XFile, IntUri)", { y: form() }],
     ["Union(XFile, IntUri)", [form()]],
     // An object position reads with the write check's JSON walk, which refuses NaN, so the
-    // whole value is kept; Python still maps the file.
+    // whole value is kept.
     ["object", { f: REF, bad: NaN }],
   ])("keeps a value that fails the type: %s", (declared, value) => {
     expect(normalizeFiles(t(declared), value)).toBe(value);
   });
 
   test("turns a -0 at an object position into 0", () => {
-    // Negative zero becomes 0 when a float becomes a value; Python keeps -0.0 and the value.
+    // Negative zero becomes 0 when a float becomes a value.
     const value = { x: { a: -0 } };
     const normalized = normalizeFiles(t("Box"), value) as ValueRecord;
     expect(normalized).not.toBe(value);
@@ -322,7 +250,7 @@ describe("normalizeFiles", () => {
 
   test("keeps a file form whose text holds a lone surrogate", () => {
     // Text holding a lone surrogate is not a yian value, and normalizeFiles never throws for
-    // a value that doesn't fit; Python builds the FileRef.
+    // a value that doesn't fit.
     const value = { f: { uri: "\ud800", mime: null, name: null }, n: 1n };
     expect(normalizeFiles(t("Rec"), value)).toBe(value);
   });
@@ -382,9 +310,9 @@ describe("untagged unions whose members can share a file", () => {
 
 // --- flows that carry files in typed containers --- //
 
-// A CODE body has no `FileRef` in scope, so it imports this module to build one, as Python's
-// body calls `__import__` on `yian.typesys.values`. The extension follows this file's (`.ts` from
-// source, `.js` when built), so the body gets the module instance the run uses.
+// A CODE body has no `FileRef` in scope, so it imports this module to build one. The extension
+// follows this file's (`.ts` from source, `.js` when built), so the body gets the module instance
+// the run uses.
 const VALUES_EXT = import.meta.url.endsWith(".ts") ? "ts" : "js";
 const VALUES_URL = new URL(`../../src/typesys/values.${VALUES_EXT}`, import.meta.url).href;
 const F = `new (await import(${JSON.stringify(VALUES_URL)})).FileRef({ uri: "f" })`;
@@ -589,7 +517,7 @@ describe("fieldOf", () => {
     ["a name on text", "text", "upper", [false, null]],
     ["an index on a list", [1n], "0", [false, null]],
     ["a name on null", null, "a", [false, null]],
-    // TS-only: a dotted read gives own keys only, never an inherited JS property.
+    // A dotted read gives own keys only, never an inherited JS property.
     ["constructor on a record", { a: 1n }, "constructor", [false, null]],
     ["toString on a record", { a: 1n }, "toString", [false, null]],
     ["__proto__ on a record", { a: 1n }, "__proto__", [false, null]],
@@ -1158,7 +1086,7 @@ const PRODUCERS = `\
       return ${NAMED_F}
 `;
 
-/** A flow whose nodes are the file producers `a` and `n`, then `nodes` (Python's `_file_flow`). */
+/** A flow whose nodes are the file producers `a` and `n`, then `nodes`. */
 const fileFlow = (nodes: string, output = "${b.output}", extra = "") =>
   `id: p\nname: p\nnodes:\n${PRODUCERS}${nodes}output: ${output}\n${extra}`;
 

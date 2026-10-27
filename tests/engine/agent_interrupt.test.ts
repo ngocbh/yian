@@ -1,39 +1,10 @@
 /**
  * A host's `interrupt(run, inbox)` of a running or waiting AGENT reading `inbox` as its steer
- * inbox: from `tests/engine/test_agent_steering.py`'s interrupt rows, whose meaning TS yian changes.
- *
- * Python's node returns its latest reply's text after an interrupt. TS yian records the cut (a
- * `model_call` with finish `interrupted` and the text so far, `skipped` results for calls not
- * started, `interrupted` closers for the reply's pending calls), writes the honor step
- * `interrupted {by: <record seq>}`, and the agent's output is null: `Optional(...)` succeeds with
- * it, anything else (no `output:` included) fails `agent.interrupted`. Flows are hand-built
- * (`START(notes) -> chat [-> after] -> END`) and run by `FlowEngine` with a `ScriptedModel` from
- * `models`; the host interrupts through the live engine's `deliver({kind: "interrupt"})`, from a
- * tool, an event, a stream chunk, or the agent's model build (after it opened its inbox). Steers
- * the interrupted agent never read stay unread.
- *
- * Ported (changed): `test_interrupt_before_the_first_model_call_returns_empty_text`,
- * `test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls`,
- * `test_interrupt_before_a_tool_call_skips_only_the_remaining_calls`,
- * `test_skipped_tool_calls_reach_the_host_as_interrupted_tool_events`,
- * `test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply`,
- * `test_interrupted_node_succeeds_and_the_flow_continues`,
- * `test_interrupt_for_a_finished_node_is_ignored`,
- * `test_interrupted_agent_in_a_loop_lets_the_loop_continue`,
- * `test_interrupt_mid_stream_keeps_the_partial_text_and_ends_the_stream`,
- * `test_interrupted_stream_reports_the_usage_received_so_far`,
- * `test_interrupt_mid_stream_in_a_pooled_run_keeps_partial_text`,
- * `test_interrupt_on_the_last_chunk_keeps_the_complete_reply` and
- * `test_interrupt_during_a_single_chunk_reply_keeps_the_complete_reply`: each output is null and
- * the text stays in the cut step.
- *
- * Not ported: `test_malformed_interrupted_answer_escapes_as_a_host_type_error` (the interrupt is
- * the engine's, not a host callback).
- *
- * TS-only: the honor step and its `by`; a pending interrupt at start; a final answer before the
- * interrupt stands; a stop wins; the structured calls are cut; pending calls close `interrupted`;
- * the output contract; one interrupt cuts every reader of its inbox; the model-retry wait rows at
- * the `callModel` level.
+ * inbox. The cut is recorded (a `model_call` with finish `interrupted` and the text so far,
+ * `skipped` results for calls not started, `interrupted` closers for the reply's pending calls),
+ * then the honor step `interrupted {by: <record seq>}`; the agent's output is null, so
+ * `Optional(...)` succeeds and anything else fails `agent.interrupted`. Steers the interrupted
+ * agent never read stay unread.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -110,7 +81,7 @@ function reply(text: string, ...calls: (readonly [string, JsonObject, string])[]
   return new Response({ message: new Message({ role: "assistant", parts }), finishReason });
 }
 
-/** Python's `_two_calls`: text and two `lookup` calls. */
+/** Text and two `lookup` calls. */
 function twoCalls(): Response {
   return reply("Checking both.", ["lookup", { topic: "a" }, "call-1"], ["lookup", { topic: "b" }, "call-2"]);
 }
@@ -616,7 +587,7 @@ test("a too-deep tool call fails the node even with the interrupt pending", asyn
   expect(ran).toEqual([]);
 });
 
-// Python's `test_agent_in_loop.FLOW` with an agent reading a steer inbox: two LOOP turns, each an
+// A LOOP flow whose agent reads a steer inbox: two LOOP turns, each an
 // AGENT reply folded into the transcript; an interrupted reply folds as "-".
 const LOOP_FLOW = `
 id: t

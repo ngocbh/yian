@@ -1,7 +1,6 @@
 /**
  * An AGENT's steer inbox: the reserved `__steer_inbox` wiring, how a steer read becomes model
- * messages, the loop's reads before each model call, and replay of recorded steers. TS-only:
- * Python yian has no inboxes.
+ * messages, the loop's reads before each model call, and replay of recorded steers.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

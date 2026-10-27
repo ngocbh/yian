@@ -1,7 +1,7 @@
 /**
- * TS-only: `examples/chat.yaml` driven through the host calls across every Phase 2 feature: send,
- * reply, a steer mid-reply, an interrupt, a pending call completed, a crash and `advance`, `close`.
- * The output equals the expected history.
+ * `examples/chat.yaml` driven through the host calls across every inbox feature: send, reply, a
+ * steer mid-reply, an interrupt, a pending call completed, a crash and `advance`, `close`. The
+ * output equals the expected history.
  */
 
 import { afterAll, expect, test } from "bun:test";

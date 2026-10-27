@@ -1,23 +1,6 @@
 /**
- * Tool-calling AGENT behavior inside a dynamically grown LOOP body: a port of
- * `tests/engine/test_agent_in_loop.py`.
- *
- * Python patches `model_from_config` with a fake chat and registers a fake `ping` tool; here the
- * run is given a `ScriptedModel` through `serving()` and its provider config (`models`,
- * `llmConfig`), and a `FunctionTool` ping in its `tools`. The fold is inline TS code, as the
- * fixtures have no `reply_fold`.
- *
- * Ported: `test_tool_calling_agent_in_loop_runs` and
- * `test_auth_failure_inside_loop_reaches_run_result`.
- *
- * Changed: `test_auth_failure_inside_loop_reaches_run_result`: the refusal is a `ProviderError` of
- * kind `auth`, so `causeType` is `"ProviderError"`, the JS error name, where Python's fake raises
- * an `AuthenticationError`.
- *
- * Ported through `runFlow` and `advance`, in `hostEnv`:
- * `test_tool_calling_agent_in_loop_retries_whole_node_after_process_loss`. Changed: the process
- * loss is `crashAfter`'s log refusing the append of the second turn's AGENT success, after its
- * tool call ran and its model answered (Python: the model's fourth call raises).
+ * Tool-calling AGENT behavior inside a dynamically grown LOOP body: the tool loop, an auth failure
+ * reaching the run result, and a whole-node retry after process loss.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -138,7 +121,7 @@ test("auth failure inside loop reaches run result", async () => {
 
 test("tool calling agent in loop replays its recorded steps after process loss", async () => {
   // The one namespaced AGENT the lost process left started runs again and replays the steps it
-  // recorded: neither the model nor the tool is called again (TS-only; Python reruns the node).
+  // recorded: neither the model nor the tool is called again.
   const path = join(dir, "agent-loop.jsonl");
   const seen: unknown[] = [];
   const tools = { ping: ping(seen) };

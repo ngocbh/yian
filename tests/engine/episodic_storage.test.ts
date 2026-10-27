@@ -1,51 +1,8 @@
 /**
- * Optional episodic persistence preserves state and backend ownership: a port of
- * `tests/engine/test_episodic_storage.py`.
- *
- * Ported: `test_first_open_initializes_identity_before_any_run_and_releases_owner`,
- * `test_none_storage_remains_resource_free`, `test_idle_handles_do_not_block_close_and_are_invalidated`,
- * `test_invalid_inventory_is_rejected_without_rewriting_or_retaining_owner`,
- * `test_history_limits_and_pinned_snapshots_survive_restart`, `test_nonpristine_flags_survive_restart`,
- * `test_pristine_adoption_persists_across_restart`,
- * `test_commit_tombstones_survive_eviction_reset_restart_and_stale_replay`,
- * `test_failed_save_never_publishes_candidate_ram`,
- * `test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary`,
- * `test_first_open_cleanup_preserves_cancellation_and_releases_ownership`,
- * `test_active_callback_makes_close_busy_without_releasing_file`, `test_invalid_limits_do_not_create_storage`,
- * `test_recorded_limits_survive_a_reopen`, `test_explicit_limits_must_match_stored_limits`,
- * `test_a_fresh_store_pins_its_default_limits`, `test_corrupt_private_state_never_partially_adopts_ram`
- * and `test_invalid_last_mutation_never_reaches_storage`.
- *
- * TS-only: an `epoch` row (`snapshot.epoch = 2n ** 60n`, beyond 2^53 − 1) of
- * `test_invalid_inventory_is_rejected_without_rewriting_or_retaining_owner` is
- * `episodic.invalid_storage`; a failed first open whose primary is an object (an `Error` or a plain object) gets the
- * note `EpisodicMemory cleanup failed: Cleanup` when closing the storage also fails. With
- * `YIAN_TEST_NODE` set to a Node binary, the built backend reopens a store Bun wrote (episodes,
- * limits, tombstones) under Node and commits, and Bun reads the result back.
- *
- * Changed:
- * - Python's `with EpisodicMemory(...)` is `withMemory`, which opens the storage first (Python's
- *   `__enter__` runs an operation) and closes the backend in `finally`; `_first_open` runs the
- *   private `operation` guard with an empty body.
- * - `test_none_storage_remains_resource_free`: spies on `SQLiteStorage.prototype.load` and `save`
- *   that throw stand in for Python forbidding `sqlite3.connect`.
- * - `test_uncertain_save_poisoning_blocks_ram_reads_and_keeps_primary`: the failure is injected by
- *   a spy on the storage's private connection's `exec` for `COMMIT`, where Python subclasses
- *   `sqlite3.Connection`; the cancel rows throw a non-`Error` value (Python's `KeyboardInterrupt`),
- *   and the other rows a SQLite driver-shaped error.
- * - `test_first_open_cleanup_preserves_cancellation_and_releases_ownership`: the primary is a thrown
- *   non-`Error` value from a spy on `SQLiteStorage.prototype.load` (the same failure path), where
- *   Python patches the module's `_parse_inventory`.
- * - `test_active_callback_makes_close_busy_without_releasing_file`: a plain async test whose
- *   instance `rewriteQuery` awaits a deferred promise, where Python runs a thread in a spawned
- *   process.
- * - JSON ints written into inventories are `bigint`s; mutable copies are `structuredClone`s;
- *   snapshots are frozen; `recall` is async.
- *
- * Not ported: `test_inherited_handle_rejects_before_an_inherited_backend_lock`,
- * `test_run_context_fork_cleanup_preserves_primary` and
- * `test_query_callback_fork_rejects_before_return_and_preserves_primary` (JS can't fork a live
- * process, so there is no fork guard).
+ * Optional episodic persistence preserves state and backend ownership across restarts: identity,
+ * limits, tombstones, failed and uncertain saves, and cleanup. With `YIAN_TEST_NODE` set to a Node
+ * binary, the built backend reopens a store Bun wrote under Node and commits, and Bun reads the
+ * result back.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -114,13 +71,13 @@ function thrown(fn: () => unknown): unknown {
   throw new Error("expected a throw");
 }
 
-/** Open lazy storage without starting a run (Python's `_first_open`). */
+/** Open lazy storage without starting a run. */
 function firstOpen(memory: EpisodicMemory): EpisodicMemory {
   (memory as Mutable).operation(() => {});
   return memory;
 }
 
-/** Open `memory`'s storage, await `fn` with it and close it (Python's `with EpisodicMemory(...)`). */
+/** Open `memory`'s storage, await `fn` with it and close it. */
 async function withMemory<T>(memory: EpisodicMemory, fn: (memory: EpisodicMemory) => T | Promise<T>): Promise<T> {
   firstOpen(memory);
   try {
@@ -130,7 +87,7 @@ async function withMemory<T>(memory: EpisodicMemory, fn: (memory: EpisodicMemory
   }
 }
 
-/** Open a run, await `fn` with it and close it (Python's `with memory.open_run() as session`). */
+/** Open a run, await `fn` with it, and close it. */
 async function withRun<T>(
   memory: EpisodicMemory,
   fn: (session: EpisodicSession) => T | Promise<T>,
@@ -197,7 +154,7 @@ function storageOf(memory: EpisodicMemory): SQLiteStorage {
   return (memory as Mutable).storage;
 }
 
-/** The publication fields of `memory`, in Python's tuple order. */
+/** The publication fields of `memory`, in a fixed order. */
 function published(memory: EpisodicMemory): unknown[] {
   const m = memory as Mutable;
   return [m.namespace, m.epoch, m.revision, m.state, m.appliedCommits, m.everOpened, m.everReset, m.everCommitted];

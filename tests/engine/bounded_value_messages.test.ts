@@ -1,42 +1,7 @@
 /**
- * Messages that show a value or key stay within the shown-value cap (200), a port of the
- * `value_repr` and unknown-record-field tests of `tests/engine/test_bounded_value_messages.py`.
- *
- * Also here: `test_long_ints.py::test_value_repr_of_a_small_int`, and the path renderings of
- * `test_nonfinite_values.py::test_reject_nonfinite_names_where_and_path`. The spelling,
- * placeholder and bounded-rendering rows are TS-only: a message shows a value in its text form
- * (JSON style, JS number spelling), not Python's `repr`. Also TS-only: a test pinning
- * `valueRepr` to `writeAsText`, the text form builtins and templates write, for every value that
- * isn't text.
- *
- * The unknown-field rows check `buildValueAs`;
- * `test_record_sorts_mixed_unknown_keys_by_type_without_crashing` keeps its two long names (a
- * record key is always a string, so the int and broken-repr keys have no TS counterpart). The
- * unknown-input row checks `checkInputNames`.
- *
- * Ported through `loadFlow` and `runFlow`, each CODE body the JavaScript of the
- * `_bounded_codefns.py` function it stands for:
- * `test_too_deep_value_under_long_keys_shows_a_bounded_path`,
- * `test_output_record_with_many_unknown_fields_shows_a_bounded_message`,
- * `test_long_declared_field_keeps_its_origin` and `test_deep_output_is_located` (`deep_list` and
- * `dict_of_deep_list`). Changed: `test_list_hiding_a_deep_list_stores_what_its_iteration_yields`
- * and `test_list_yielding_a_deep_list_fails_the_output_contract` return an `Array` subclass with
- * its own iterator, which fails `contract.output` as "`<Name>` is not a yian value": host value
- * intake reads only plain arrays and records and runs no host iterator (design 3.2.1). Changed
- * the same way: `test_output_holding_a_big_set_shows_a_cut_repr` and
- * `test_deep_frozenset_output_is_not_a_json_value` return a `Set`, which fails `contract.output`
- * as "Set is not a yian value", not Python's cut rendering or "is not a JSON value" (design 3.2.1
- * host intake reads no `Set`).
- *
- * Not ported, runs: `test_too_deep_value_under_a_non_text_key_shows_a_bounded_message` (a
- * JavaScript record key is always text) and the `deep_tuple` rows of `test_deep_output_is_located`
- * (no tuples; an array is the only list).
- *
- * Not ported: the long-int placeholders (`<int with N digits>`; an int is a `bigint` with no
- * digit limit, and a message shows its digits cut at the cap, which `long_ints.test.ts` checks as
- * `test_long_ints.py::test_value_repr_shows_a_digit_count_for_a_long_int`), the set rendering (no
- * set is a yian value) and `_sort_repr` (Python-only: it orders names whose cut renderings are
- * equal, which TS sorts uncut).
+ * Messages that show a value or key stay within the shown-value cap (200): a value shown in its
+ * text form (JSON style, JS number spelling), unknown record fields and inputs, deep paths, and
+ * host values that aren't yian values.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -71,7 +36,7 @@ afterEach(forget);
 class Foo {}
 
 describe("valueRepr", () => {
-  // A message shows text JSON-quoted, so the cut rendering starts with `"`, not Python's `'`.
+  // A message shows text JSON-quoted, so the cut rendering starts with `"`.
   test("cuts a long string to the cap", () => {
     expect(valueRepr("x".repeat(500))).toBe('"' + "x".repeat(CAP - 2) + "…");
   });
@@ -262,7 +227,7 @@ test("unknown inputs list within the cap", () => {
 const NEST =
   "const nest = (levels, wrap, leaf = 1) => { let v = leaf; for (let i = 0; i < levels; i++) v = wrap(v); return v; };";
 
-/** The CODE bodies Python's `tests/engine/_bounded_codefns.py` functions stand for. */
+/** The CODE bodies the run rows name. */
 const FNS: Record<string, string> = {
   long_str_keys: `${NEST} return {s: nest(200, (v) => ({["k".repeat(10000)]: v}))};`,
   big_set: "const s = new Set(); for (let i = 0; i < 200000; i++) s.add(i); return {s};",

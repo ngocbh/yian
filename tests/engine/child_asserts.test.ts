@@ -1,25 +1,11 @@
 /**
- * A def's `asserts:` enforced through the child's boundary nodes: a port of
- * `tests/engine/test_child_asserts.py`.
+ * A def's `asserts:` enforced through the child's boundary nodes.
  *
  * At build a def's asserts are lowered onto its synthesized START/END nodes (boundary asserts
  * onto `START.postAsserts` with each `${input.X}` rewritten to `${output.X}`, post asserts onto
  * `END.postAsserts`). When the def runs through a CALL (once) or a MAP (per element), the cloned
  * child START/END fire them like any node's post asserts, so a failed child assert fails the
  * child node and therefore the parent run, exactly as at the top-level boundaries.
- *
- * Ported: `test_call_child_boundary_assert_satisfying_value_succeeds`,
- * `test_call_child_boundary_assert_violating_value_fails`,
- * `test_call_child_post_assert_satisfying_value_succeeds`,
- * `test_call_child_post_assert_violating_value_fails`,
- * `test_map_child_asserts_all_elements_satisfy_succeeds`, and
- * `test_call_boundary_failure_fails_run` and `test_map_boundary_failure_fails_run` (each for 0
- * and 4 workers). The CODE reference is the TS fixture's (`./fixtures/compose_codefns.ts:double`).
- *
- * Not ported:
- * - `test_def_with_asserts_loads`: covered by `load-map-call/engine_child_asserts__def_with_asserts_loads`.
- * - `test_map_child_assert_one_violating_element_fails`: covered by
- *   `run-map-call/engine_child_asserts__map_child_assert_fails_for_one_element`.
  */
 
 import { expect, test } from "bun:test";

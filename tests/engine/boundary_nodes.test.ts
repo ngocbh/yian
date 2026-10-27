@@ -1,26 +1,8 @@
 /**
- * The synthesized START/END boundary nodes: a port of `tests/engine/test_boundary_nodes.py`'s load
- * rows. The loader puts real `START_ID`/`END_ID` nodes into every flow (the strings persist as the
- * reserved node ids), and an `${input.X}` read is a data edge from START. The rows check that the
- * nodes exist and that edges carry real adjacency, never that the strings are absent.
- *
- * Ported: `test_loader_synthesizes_start_and_end_nodes`,
- * `test_inputs_read_mints_producer_edge_from_start`, `test_input_reader_is_not_also_a_bare_root`,
- * `test_inputs_resolve_to_start_node`, and the load half of
- * `test_terminal_output_of_a_skipped_producer_is_null`.
- *
- * Changed: the flow assembles through `assembleText`, where Python calls `load_flow`; its CODE
- * reference is TS's (`./fixtures/compose_codefns.ts:echo_x`).
- *
- * Not ported: `test_terminal_helpers_retired` and `test_pool_inputs_namespace_retired`: they check
- * that Python-era engine helpers and a pool namespace are gone, and TS never had them.
- *
- * Ported, after rewrite (`graph()` with a `FuncNode` reading `${input.x}`, for the loaded CODE
- * node): the engine half of `test_engine_schedules_start_and_emits_succeeded`.
- *
- * Ported through `loadConformanceFlow` and `runFlow`, in `hostEnv`: `test_run_result_is_end_node_value`,
- * the `run_flow` half of `test_engine_schedules_start_and_emits_succeeded` and the run half of
- * `test_terminal_output_of_a_skipped_producer_is_null`.
+ * The synthesized START/END boundary nodes. The loader puts real `START_ID`/`END_ID` nodes into
+ * every flow (the strings persist as the reserved node ids), and an `${input.X}` read is a data
+ * edge from START. The rows check that the nodes exist and that edges carry real adjacency, and
+ * that a run's result is END's value.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

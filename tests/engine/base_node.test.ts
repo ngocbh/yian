@@ -1,31 +1,7 @@
 /**
- * The `Node` base class of `nodes/base.ts`: a port of `tests/engine/test_base_node.py`. Ported:
- * `test_node_stores_one_canonical_output_contract` and
- * `test_node_rejects_invalid_output_contract_inputs`. From `tests/engine/test_node_run_wrapper.py`:
- * `test_validate_assertions_names_the_given_path`.
- *
- * TS-only: a new node's defaults, a subclass overriding traits, the constructor's origin check, the
- * parse error's `cause`, the node's type table reaching the assertion parse, `parseNamedCondition`
- * refusing every constructor when given no table, `checkNamedPrompt`'s prefix and `cause`,
- * `validatePrompts` being a no-op on the base, `validateExecutionSetup` (a missing `forward`, then
- * the assertion parse), the stage markers' `original`, `cause` and message (a thrown value with no
- * text is named by its type), `NodeAssertFailed`'s defaults, `hostOutput` (a host value taken in as
- * a yian value, or a `HostOutputError` at the refused path), and the base `exceptionCode` and
- * `exceptionOrigin` giving a `HostOutputError` `contract.output` at the output contract's origin
- * for its path while any other error, a plain `TypeCheckError` too, stays `node.execute` at the
- * node's origin.
- *
- * Ported (adapted), through the shared `drive`: `test_result_node_returns_output`,
- * `test_streaming_node_forwards_chunks_and_returns_output` (the fake streams through
- * `caps.emitStream`), `test_raising_node_returns_evaluation_failure` (cause type `Error` for
- * Python's `RuntimeError`), `test_policy_exception_returns_typed_evaluation_failure` (the `Policy`
- * error sets its `name`, which is the cause type), `test_branch_node_returns_route_handle` and
- * `test_node_does_not_write_pool`.
- *
- * Changed: Python's `vars(node)` is `Object.hasOwn`, and `hasattr` is the `in` operator.
- *
- * Not ported: `test_node_rejects_removed_output_type_constructor_keyword`: TS rejects an unknown
- * option when it type-checks the call.
+ * The `Node` base class of `nodes/base.ts`: its output contract, defaults and traits, assertion
+ * parsing, stage markers, `hostOutput`, exception codes and origins, and evaluation through the
+ * shared `drive`.
  */
 
 import { describe, expect, test } from "bun:test";

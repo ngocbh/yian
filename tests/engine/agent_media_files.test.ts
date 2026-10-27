@@ -1,10 +1,10 @@
 /**
- * TS-only: media as files beside the run. `writeRunFile` stores bytes under the run folder's
- * `media/`, named by their sha256, and refers to them relative to the run folder;
- * `inlineToFile` turns a message's inline media into file references; `fileToInline` turns a
- * request's file references back into inline bytes for the provider, reading them from the run
- * folder, so a run folder copied elsewhere still inlines. The run folder (`dirname` of the log) reaches an AGENT's run context, on a fresh run
- * and on resume.
+ * Media as files beside the run. `writeRunFile` stores bytes under the run folder's `media/`,
+ * named by their sha256, and refers to them relative to the run folder; `inlineToFile` turns a
+ * message's inline media into file references; `fileToInline` turns a request's file references
+ * back into inline bytes for the provider, reading them from the run folder, so a run folder
+ * copied elsewhere still inlines. The run folder (`dirname` of the log) reaches an AGENT's run
+ * context, on a fresh run and on resume.
  */
 
 import { createHash } from "node:crypto";

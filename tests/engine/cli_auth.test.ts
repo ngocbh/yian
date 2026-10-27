@@ -1,53 +1,9 @@
-// Ported from tests/engine/test_cli_auth.py: `test_models_refuses_stdin_that_is_not_text`,
-// `test_invalid_setup_options_fail_before_external_requests`,
-// `test_option_combinations_fail_before_any_request`, `test_azure_options_are_checked_before_the_store`,
-// `test_connection_settings_are_refused_before_any_request`, `test_unset_header_variable_is_not_echoed`,
-// `test_bare_header_without_a_terminal_names_the_variable_form`,
-// `test_list_shows_saved_logins_without_secrets`, `test_default_switches_without_sign_in`,
-// `test_remove_deletes_one_login`, `test_remove_accepts_an_unsupported_saved_provider`,
-// `test_remove_finds_a_lowercase_saved_name`, `test_env_override_note_agrees_with_the_number_of_variables`,
-// `test_list_shows_connection_settings_by_name_only`,
-// `test_device_json_stopped_before_the_save_exits_130_and_saves_nothing`,
-// `test_device_json_stopped_after_the_rename_is_saved_and_done`,
-// `test_explicit_setup_saves_method_and_model_without_echoing_secrets`,
-// `test_interactive_setup_defaults_to_subscription_and_catalog_first_model`,
-// `test_failed_or_cancelled_setup_preserves_previous_connection`,
-// `test_noninteractive_setup_requires_explicit_choices`, `test_setup_keeps_existing_default`,
-// `test_openai_api_key_setup_saves_connection_settings`,
-// `test_subscription_chosen_at_the_prompt_refuses_settings`,
-// `test_openai_listing_failure_is_scrubbed_of_header_values`, `test_model_answers_builds_and_invokes_once`,
-// `test_model_answers_mutes_the_unknown_model_warning`, `test_model_answers_scrubs_the_azure_ad_token`,
-// `test_model_answers_sends_and_scrubs_connection_headers`,
-// `test_api_key_provider_setup_saves_key_and_model`, `test_api_key_setup_keeps_another_default`,
-// `test_api_key_env_option_names_the_variable`,
-// `test_unlisted_model_is_checked_with_one_reply`, `test_listing_failure_falls_back_to_one_reply`,
-// `test_listing_failure_on_a_terminal_asks_for_a_model_name`, `test_base_url_variable_skips_the_listing`,
-// `test_vertex_switch_does_not_skip_the_google_listing`,
-// `test_base_url_variable_on_a_terminal_asks_for_a_model_name`, `test_ollama_setup_saves_model_only`,
-// `test_vllm_key_is_optional`, `test_vllm_named_key_variable_is_required`,
-// `test_hidden_prompt_reads_the_key`, `test_hidden_prompt_empty_answer_means_no_vllm_key`,
-// `test_noninteractive_setup_requires_model`, `test_azure_setup_saves_endpoint_key_and_deployment`,
-// `test_azure_setup_requires_the_api_version`,
-// `test_provider_setup_sends_headers_to_listing_and_reply_check`,
-// `test_saving_again_without_settings_keeps_none`, `test_bare_header_reads_a_hidden_prompt`,
-// `test_headers_need_a_vllm_key` and `test_listing_failure_text_is_scrubbed_of_header_values`.
-// Dropped: `test_model_answers_reports_a_missing_extra` (TS yian has no extras to install).
-// Added here, since Python left them to the `cli` conformance cases or didn't test them: `yian
-// providers`, `yian config check` (including `_config_errors`'s rows), the rest of `yian models`
-// (usage errors, the provider and subscription forms, the deadline), `--default` with `--remove`,
-// `--json` on a form that doesn't take it, whole-file removal and its refusals, "Name a provider" and
-// the removal documents under `--json`, SIGINT during a removal, no signal listener left behind, and
-// the JSON device sign-in's error lines (a `--model` not offered, a malformed store) and default rule,
-// the OpenAI sign-in picker's SSH initial, OpenAI's hidden key and header prompts and their
-// refusals, a listing with no text model, SIGINT during a picker, the stop reaching the OpenAI
-// service, the real terminal built for a TTY stdin, `openBrowser`'s opener commands (resolving only
-// once the opener spawned, a later error not thrown), the reply check's failure text (whitespace folded, cut at 200 characters, a thrown
-// non-`Error`), its 30 s deadline and a stop during it, and in provider setup the model picker, an
-// empty listing, the Azure prompts, an empty or cancelled model name, `ANTHROPIC_API_URL`, and
-// SIGINT during the listing or the reply check.
-// Python's monkeypatched `list_models`, `OpenAIAuth`, `create_llm_client`, `_choose`, questionary and
-// `webbrowser` are `deps` fakes here (a fake terminal, a fake chat model, a recording opener and
-// `launch`), so no test reaches a real host or opens a browser.
+// `yian auth`, `yian models`, `yian providers` and `yian config check`: sign-in and setup, saved
+// logins and their removal, the model listing and the one-reply check, secrets scrubbed from
+// messages, and SIGINT at each step.
+// The model listing, OpenAI sign-in service, chat client, pickers, terminal and browser are `deps`
+// fakes (a fake terminal, a fake chat model, a recording opener and `launch`), so no test reaches
+// a real host or opens a browser.
 // The handlers are called directly with the `ParsedArgs` the parser would give, so parsing stays
 // covered by cli_utils.test.ts and the `cli` cases.
 
@@ -224,7 +180,7 @@ describe("configErrors", () => {
     expect(configErrors({ provider: "openai", a: 1, b: 2 })).toEqual([{ field: null, message: EXTRA_FIELD }]);
   });
 
-  test("messages drop pydantic's value error prefix", () => {
+  test("config messages carry no \"Value error, \" prefix", () => {
     const errors = configErrors({ provider: "openai", openai: { tools: [] } });
     expect(errors).toHaveLength(1);
     expect(errors[0]!.field).toBe("openai");
@@ -575,7 +531,7 @@ function authArgs(provider?: string, options: Record<string, OptionValue> = {}):
 }
 
 /**
- * Python's `Service`: a fake OpenAI authentication service recording each call, and the key,
+ * A fake OpenAI authentication service recording each call, and the key,
  * headers and settings each API-key listing is sent. Its browser login opens a fixed URL. Its
  * factory records the options it is given in `built`.
  */
@@ -626,8 +582,8 @@ function fakeService() {
 }
 
 /**
- * Python's `setup_auth`: a store path in `YIAN_AUTH_FILE`, `OPENAI_API_KEY=private-key`, the
- * environment defaults the Python suite sets for every test, and a fake service. The store's
+ * A store path in `YIAN_AUTH_FILE`, `OPENAI_API_KEY=private-key`, the suite's environment
+ * defaults, and a fake service. The store's
  * directory is private (`storeOpen`, the default), or 0755, so any store read fails with
  * "Credential storage must be private to its owner". The browser opener records each URL in
  * `opened`.
@@ -678,7 +634,7 @@ describe("auth option checks", () => {
     expect(existsSync(setup.path)).toBe(false);
   }
 
-  // Python: test_invalid_setup_options_fail_before_external_requests.
+  // Invalid setup options fail before external requests.
   test.each<[string | undefined, Record<string, OptionValue>, string]>([
     ["unknown", {}, unsupported("unknown")],
     ["openai", { method: "unknown" }, "Choose --method subscription or --method api-key"],
@@ -688,7 +644,7 @@ describe("auth option checks", () => {
     await refuses(provider, options, message);
   });
 
-  // Python: test_option_combinations_fail_before_any_request.
+  // Option combinations fail before any request.
   test.each<[string | undefined, Record<string, OptionValue>, string]>([
     ["codex", {}, unsupported("codex")],
     ["codex", { default: true }, unsupported("codex")],
@@ -707,7 +663,7 @@ describe("auth option checks", () => {
     await refuses("openai", { default: true, remove: true }, "Use either --default or --remove, not both");
   });
 
-  // Python: test_azure_options_are_checked_before_the_store.
+  // Azure options are checked before the store.
   test.each<[string | undefined, string, string]>([
     [undefined, "https://r.openai.azure.com/", "Azure needs OPENAI_API_VERSION set to its API version (runs read it too)"],
     [
@@ -720,7 +676,7 @@ describe("auth option checks", () => {
     await refuses("azure", { endpoint, model: "dep" }, message, env);
   });
 
-  // Python: test_connection_settings_are_refused_before_any_request.
+  // Connection settings are refused before any request.
   const settingsEnv = { GW_TOKEN: "private-gw", EMPTY_TOKEN: "", BAD_TOKEN: " private-bad" };
   const subscription = { method: "subscription" };
   const apiKey = { method: "api-key" };
@@ -1077,7 +1033,7 @@ describe("auth device sign-in as JSON lines", () => {
   const WAITING = { format: "yian.cli.v1", event: "waiting" };
 
   /**
-   * Python's `device_json`: `setupAuth` with an emitter as the signal source and a service factory
+   * `setupAuth` with an emitter as the signal source and a service factory
    * recording the options each service is built with.
    */
   function deviceJson() {
@@ -1105,7 +1061,7 @@ describe("auth device sign-in as JSON lines", () => {
   /** How many SIGINT and SIGTERM listeners `signals` has. */
   const listeners = (signals: EventEmitter) => signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM");
 
-  // Python: test_device_json_stopped_before_the_save_exits_130_and_saves_nothing.
+  // Device json stopped before the save exits 130 and saves nothing.
   test.each(["SIGTERM", "SIGINT"] as const)("%s before the save exits 130 and saves nothing", async (name) => {
     const setup = deviceJson();
     const counts: number[] = [];
@@ -1127,7 +1083,7 @@ describe("auth device sign-in as JSON lines", () => {
     expect(setup.built[0]!.signal?.aborted).toBe(true);
   });
 
-  // Python: test_device_json_stopped_after_the_rename_is_saved_and_done.
+  // Device json stopped after the rename is saved and done.
   test("SIGTERM after the rename is saved and done", async () => {
     const setup = deviceJson();
     const rename = fs.renameSync;
@@ -1260,7 +1216,7 @@ describe("auth OpenAI setup", () => {
   const METHOD = { kind: "choice", label: "OpenAI authentication method:", choices: ["subscription", "api-key"] };
   const LOGIN = { kind: "choice", label: "Subscription sign-in:", choices: ["browser", "device"] };
 
-  // Python: test_explicit_setup_saves_method_and_model_without_echoing_secrets.
+  // Explicit setup saves method and model without echoing secrets.
   test.each<[string, string | undefined, string]>([
     ["subscription", "device", "Open https://example.invalid/device and enter code: TEST-CODE\n"],
     ["subscription", "browser", ""],
@@ -1284,7 +1240,7 @@ describe("auth OpenAI setup", () => {
     expect(setup.opened).toEqual(login === "browser" ? ["https://example.invalid/authorize"] : []);
   });
 
-  // Python: test_interactive_setup_defaults_to_subscription_and_catalog_first_model.
+  // Interactive setup defaults to subscription and catalog first model.
   test("interactive setup defaults to a subscription and the catalog's first model", async () => {
     const setup = setupAuth();
     const fake = fakeTerminal(["subscription", "device", "gpt-test"]);
@@ -1312,7 +1268,7 @@ describe("auth OpenAI setup", () => {
     expect(fake.asked).toEqual([{ ...LOGIN, initial: "device" }]);
   });
 
-  // Python: test_failed_or_cancelled_setup_preserves_previous_connection.
+  // Failed or cancelled setup preserves previous connection.
   test.each(["login", "model", "cancel", "missing_model"])("a %s failure keeps the previous login", async (failure) => {
     const setup = setupAuth();
     const previous = await setup.store.save("openai", new ApiKeyCredentials("old-key"), "old-model");
@@ -1340,7 +1296,7 @@ describe("auth OpenAI setup", () => {
     expect(result.output).not.toContain("private-");
   });
 
-  // Python: test_noninteractive_setup_requires_explicit_choices.
+  // Noninteractive setup requires explicit choices.
   test.each<[string, boolean, AuthDeps]>([
     ["stdin is not a TTY", false, {}],
     ["the terminal is null", true, { terminal: null }],
@@ -1374,7 +1330,7 @@ describe("auth OpenAI setup", () => {
     expect(existsSync(setup.path)).toBe(false);
   });
 
-  // Python: test_setup_keeps_existing_default.
+  // Setup keeps existing default.
   test("setup keeps an existing default", async () => {
     const setup = setupAuth();
     const options = { method: "api-key", model: "gpt-test" };
@@ -1396,7 +1352,7 @@ describe("auth OpenAI setup", () => {
     expect(result.out).toEndWith("Default provider: anthropic (switch with 'yian auth openai --default')\n");
   });
 
-  // Python: test_openai_api_key_setup_saves_connection_settings.
+  // Openai api key setup saves connection settings.
   test("API-key setup saves the connection settings", async () => {
     const setup = setupAuth();
     const result = await runSetup(
@@ -1456,7 +1412,7 @@ describe("auth OpenAI setup", () => {
     expect(existsSync(setup.path)).toBe(false);
   });
 
-  // Python: test_subscription_chosen_at_the_prompt_refuses_settings.
+  // Subscription chosen at the prompt refuses settings.
   test("a subscription chosen at the prompt refuses settings", async () => {
     const setup = setupAuth();
     const fake = fakeTerminal(["subscription"]);
@@ -1469,7 +1425,7 @@ describe("auth OpenAI setup", () => {
     expect(existsSync(setup.path)).toBe(false);
   });
 
-  // Python: test_openai_listing_failure_is_scrubbed_of_header_values.
+  // Openai listing failure is scrubbed of header values.
   test("the listing failure is scrubbed of header values", async () => {
     const setup = setupAuth();
     setup.service.service.apiModels = async () => {
@@ -1511,7 +1467,7 @@ describe("auth OpenAI setup", () => {
   });
 });
 
-/** An error named `name`, as Python's tests raised an exception of a named class. */
+/** An error named `name`. */
 function named(name: string, message: string): Error {
   return Object.assign(new Error(message), { name });
 }
@@ -1562,7 +1518,7 @@ describe("modelAnswers", () => {
   const never = new AbortController().signal;
   const io = (env: Record<string, string> = {}) => fakeIo({ env }).io;
 
-  // Python: test_model_answers_builds_and_invokes_once.
+  // Model answers builds and invokes once.
   test("builds the model from what it is given and sends it one prompt", async () => {
     const fake = fakeChatModel();
     const deps = { chatModel: fake.chatModel };
@@ -1602,7 +1558,7 @@ describe("modelAnswers", () => {
     expect(fake.built.at(-1)!.config).toEqual({ provider: "ollama", model: "m1" });
   });
 
-  // Python: test_model_answers_mutes_the_unknown_model_warning.
+  // Model answers mutes the unknown model warning.
   test("mutes only the unknown-model warning", async () => {
     const emitted = spyOn(process, "emitWarning").mockImplementation(() => {});
     try {
@@ -1630,7 +1586,7 @@ describe("modelAnswers", () => {
     }
   });
 
-  // Python: test_model_answers_scrubs_the_azure_ad_token.
+  // Model answers scrubs the azure ad token.
   test("scrubs the Azure AD token", async () => {
     const [token, key] = ["private-ad-token-k7qz", "private-azure-key-m2vd"];
     const fake = fakeChatModel();
@@ -1641,7 +1597,7 @@ describe("modelAnswers", () => {
     expect(problem).toBe("RuntimeError: bad token [REDACTED] key [REDACTED]");
   });
 
-  // Python: test_model_answers_sends_and_scrubs_connection_headers.
+  // Model answers sends and scrubs connection headers.
   test("sends the connection headers and scrubs their values", async () => {
     const fake = fakeChatModel();
     fake.failure = named("RuntimeError", "gateway rejected gwvalue7");
@@ -1716,7 +1672,7 @@ describe("modelAnswers", () => {
 });
 
 /**
- * Python's `checks`: `setupAuth` with a fake `listModels` and a fake `chatModel`. The listing
+ * `setupAuth` with a fake `listModels` and a fake `chatModel`. The listing
  * records `[provider, apiKey, baseUrl]`, the headers and the signal of each call, then waits for
  * its signal when `wait` is set, throws `models` when it is an error, or answers it. Each reply
  * check's config is in `chat.built`; `answers()` gives `[provider, model, api_key, base_url]` per
@@ -1765,7 +1721,7 @@ describe("auth provider setup", () => {
 
   const MODEL = { kind: "text", label: "Model:", secret: false };
 
-  // Python: test_api_key_provider_setup_saves_key_and_model.
+  // Api key provider setup saves key and model.
   test.each(
     Object.keys(PROVIDER_API_KEY_ENV)
       .filter((name) => !["openai", "azure", "ollama", "vllm"].includes(name))
@@ -1790,7 +1746,7 @@ describe("auth provider setup", () => {
     expect(c.answers()).toEqual([]);
   });
 
-  // Python: test_api_key_setup_keeps_another_default.
+  // Api key setup keeps another default.
   test("API-key setup keeps another default", async () => {
     const c = checks();
     await c.store.save("openai", new ApiKeyCredentials("private-other"), "gpt-test");
@@ -1802,7 +1758,7 @@ describe("auth provider setup", () => {
     expect(result.out).toContain("Default provider: openai (switch with 'yian auth anthropic --default')\n");
   });
 
-  // Python: test_api_key_env_option_names_the_variable.
+  // Api key env option names the variable.
   test("--api-key-env names the key variable", async () => {
     const c = checks();
     let result = await runAuth(c, "anthropic", { model: "m1" });
@@ -1819,7 +1775,7 @@ describe("auth provider setup", () => {
     expect(c.fake.listings).toEqual([["anthropic", "private-key", null]]);
   });
 
-  // Python: test_unlisted_model_is_checked_with_one_reply.
+  // Unlisted model is checked with one reply.
   test("an unlisted model is checked with one reply", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";
@@ -1839,7 +1795,7 @@ describe("auth provider setup", () => {
     expect(readFileSync(c.path)).toEqual(before);
   });
 
-  // Python: test_listing_failure_falls_back_to_one_reply.
+  // Listing failure falls back to one reply.
   test("a listing failure falls back to one reply", async () => {
     const c = checks();
     const previous = await c.store.save("anthropic", new ApiKeyCredentials("old-key"), "claude-old");
@@ -1857,7 +1813,7 @@ describe("auth provider setup", () => {
     expect(result.output).not.toContain("old-key");
   });
 
-  // Python: test_listing_failure_on_a_terminal_asks_for_a_model_name.
+  // Listing failure on a terminal asks for a model name.
   test("a listing failure on a terminal asks for a model name", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";
@@ -1905,7 +1861,7 @@ describe("auth provider setup", () => {
     expect(existsSync(c.path)).toBe(false);
   });
 
-  // Python: test_base_url_variable_skips_the_listing.
+  // Base url variable skips the listing.
   test.each([
     ["anthropic", "ANTHROPIC_BASE_URL"],
     ["anthropic", "ANTHROPIC_API_URL"],
@@ -1921,7 +1877,7 @@ describe("auth provider setup", () => {
     expect(c.store.selection(provider)?.model).toBe("m1");
   });
 
-  // Python: test_vertex_switch_does_not_skip_the_google_listing.
+  // Vertex switch does not skip the google listing.
   test("the Vertex switch doesn't skip the Google listing", async () => {
     const c = checks();
     c.env["GOOGLE_API_KEY"] = "private-key";
@@ -1933,7 +1889,7 @@ describe("auth provider setup", () => {
     expect(c.store.selection("google")?.model).toBe("m1");
   });
 
-  // Python: test_base_url_variable_on_a_terminal_asks_for_a_model_name.
+  // Base url variable on a terminal asks for a model name.
   test("a base-URL variable on a terminal asks for a model name", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";
@@ -1949,7 +1905,7 @@ describe("auth provider setup", () => {
     expect(c.answers()).toEqual([["anthropic", "claude-x", "private-key", null]]);
   });
 
-  // Python: test_ollama_setup_saves_model_only.
+  // Ollama setup saves model only.
   test("ollama setup saves the model only", async () => {
     const c = checks();
     c.env["OLLAMA_BASE_URL"] = "http://localhost:9999";
@@ -1963,7 +1919,7 @@ describe("auth provider setup", () => {
     expect(result.out).toContain("Saved ollama login (none) with model llama3\n");
   });
 
-  // Python: test_vllm_key_is_optional.
+  // Vllm key is optional.
   test("vllm's key is optional", async () => {
     const c = checks();
     let result = await runAuth(c, "vllm", { model: "m1" });
@@ -1980,7 +1936,7 @@ describe("auth provider setup", () => {
     expect(result.output).not.toContain("private-");
   });
 
-  // Python: test_vllm_named_key_variable_is_required.
+  // Vllm named key variable is required.
   test("a vllm key variable named by --api-key-env is required", async () => {
     const c = checks();
     const result = await runAuth(c, "vllm", { model: "m1", "api-key-env": "MY_KEY" });
@@ -1989,7 +1945,7 @@ describe("auth provider setup", () => {
     expect(existsSync(c.path)).toBe(false);
   });
 
-  // Python: test_hidden_prompt_reads_the_key.
+  // Hidden prompt reads the key.
   test("a hidden prompt reads the key", async () => {
     const c = checks();
     let fake = fakeTerminal(["private-key"]);
@@ -2005,7 +1961,7 @@ describe("auth provider setup", () => {
     expect(c.store.selection("anthropic")?.model).toBe("m1");
   });
 
-  // Python: test_hidden_prompt_empty_answer_means_no_vllm_key.
+  // Hidden prompt empty answer means no vllm key.
   test("an empty hidden-prompt answer means no vllm key", async () => {
     const c = checks();
     let fake = fakeTerminal([""]);
@@ -2021,7 +1977,7 @@ describe("auth provider setup", () => {
     expect(c.store.selection("vllm")?.model).toBe("m1");
   });
 
-  // Python: test_noninteractive_setup_requires_model.
+  // Noninteractive setup requires model.
   test("non-interactive setup requires --model", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";
@@ -2036,7 +1992,7 @@ describe("auth provider setup", () => {
     expect(existsSync(c.path)).toBe(false);
   });
 
-  // Python: test_azure_setup_saves_endpoint_key_and_deployment.
+  // Azure setup saves endpoint key and deployment.
   test("azure setup saves the endpoint, key and deployment", async () => {
     const c = checks();
     c.env["AZURE_OPENAI_API_KEY"] = "private-key";
@@ -2079,7 +2035,7 @@ describe("auth provider setup", () => {
     expect(c.store.selection("azure")?.endpoint).toBe(endpoint);
   });
 
-  // Python: test_azure_setup_requires_the_api_version.
+  // Azure setup requires the api version.
   test("azure setup requires the API version", async () => {
     const c = checks();
     const result = await runAuth(c, "azure", { endpoint: "https://r.openai.azure.com/", model: "dep" });
@@ -2090,7 +2046,7 @@ describe("auth provider setup", () => {
     expect(existsSync(c.path)).toBe(false);
   });
 
-  // Python: test_provider_setup_sends_headers_to_listing_and_reply_check.
+  // Provider setup sends headers to listing and reply check.
   test("provider setup sends the headers to the listing and the reply check", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";
@@ -2107,7 +2063,7 @@ describe("auth provider setup", () => {
     expect(result.output).not.toContain("private-");
   });
 
-  // Python: test_saving_again_without_settings_keeps_none.
+  // Saving again without settings keeps none.
   test("saving again without settings keeps none", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";
@@ -2120,7 +2076,7 @@ describe("auth provider setup", () => {
     expect(c.fake.listingHeaders.at(-1)).toEqual({});
   });
 
-  // Python: test_bare_header_reads_a_hidden_prompt.
+  // Bare header reads a hidden prompt.
   test("a bare header reads a hidden prompt", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";
@@ -2141,7 +2097,7 @@ describe("auth provider setup", () => {
     expect(c.store.selection("anthropic")?.model).toBe("m1");
   });
 
-  // Python: test_headers_need_a_vllm_key.
+  // Headers need a vllm key.
   test("headers need a vllm key", async () => {
     const c = checks();
     c.env["GW_TOKEN"] = "private-gw";
@@ -2160,7 +2116,7 @@ describe("auth provider setup", () => {
     expect(c.store.selection("vllm")?.headerNames).toEqual(["X-G"]);
   });
 
-  // Python: test_listing_failure_text_is_scrubbed_of_header_values.
+  // Listing failure text is scrubbed of header values.
   test("the listing failure text is scrubbed of header values", async () => {
     const c = checks();
     c.env["ANTHROPIC_API_KEY"] = "private-key";

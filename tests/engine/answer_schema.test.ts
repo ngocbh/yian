@@ -1,8 +1,6 @@
 /**
- * `answerSchema` derives a light answer schema from an `ask` node's output type: a port of
- * `tests/engine/test_answer_schema.py`, where TS exports the helper Python keeps private.
- *
- * TS-only: an enum is sorted by code units, whatever order the `Literal` lists its values in.
+ * `answerSchema` derives a light answer schema from an `ask` node's output type; an enum is sorted
+ * by code units, whatever order the `Literal` lists its values in.
  */
 
 import { expect, test } from "bun:test";
@@ -55,6 +53,6 @@ test("nested record recurses", () => {
 });
 
 test("an enum is sorted by code units", () => {
-  // U+FF01 sorts before U+1F600 by code point (Python) but after its surrogate pair by code unit.
+  // U+FF01 sorts after U+1F600's surrogate pair by code unit, though before it by code point.
   expect(schema('Literal("\uFF01", "\u{1F600}")')[0]!["enum"]).toEqual(["\u{1F600}", "\uFF01"]);
 });

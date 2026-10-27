@@ -1,12 +1,4 @@
-/**
- * Splicing and pruning one run's private topology: a port of `tests/engine/test_add_subgraph.py`.
- * Ported: `test_add_subgraph_extends_nodes_edges_wiring` and
- * `test_remove_subgraph_drops_nodes_edges_wiring_and_adjacency`.
- *
- * Changed: Python's `FuncNode` is a minimal `Node` subclass; node and wiring tables are `Map`s;
- * `flow._outgoing` / `flow._incoming` read as `outgoingEdges` / `incomingEdges`; bindings compare
- * by `source`, `origin` and `contract`.
- */
+/** Splicing and pruning one run's private topology: its nodes, edges, wiring and adjacency. */
 
 import { expect, test } from "bun:test";
 
@@ -14,7 +6,7 @@ import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 
-/** A minimal concrete node standing in for Python's `FuncNode`. */
+/** A minimal concrete node. */
 class FuncNode extends Node {
   readonly kind = NodeKind.CODE;
 

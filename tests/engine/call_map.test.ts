@@ -1,33 +1,6 @@
 /**
- * CALL and MAP build over a child's signature: a port of `tests/engine/test_call_map.py`.
- *
- * Ported through `loadFlow`: `test_seed03_loads_as_child_flow`,
- * `test_seed04_call_loads_and_reexports_child_output`,
- * `test_seed04_downstream_dotted_ref_validates_against_child_record`,
- * `test_seed05_map_loads_with_list_output_and_parallel`, `test_map_input_named_over_is_reserved`,
- * `test_call_binding_to_undeclared_child_input_is_loud`, `test_map_child_with_no_output_is_loud`,
- * `test_call_accepts_proven_null_for_nullable_child_input`, `test_call_map_without_resolver_is_loud`
- * and `test_flow_without_calls_loads_without_resolver`.
- *
- * Changed: the seeds come from the conformance cases `load-map-call/seed_04_call` (with its file
- * `03-research-one.yaml`, whose CODE reference is TS's `./fixtures/seeds.ts:fetch_facts`),
- * `load-map-call/seed_05_call_map` and `load-agent/seed_01_structured_agent`; seeds 04 and 05 load
- * with a search path holding seed 03, written into a temporary directory linked to the
- * conformance fixtures; seeds 01 and 03 load with the conformance directory as `baseDir`. The seed 04 row also checks where its binding's origin resolves. The
- * reserved-`over`, undeclared-binding (both joined errors) and no-output rows pin the whole
- * message, where Python matches fragments. The no-output child's CODE node names
- * `./fixtures/compose_codefns.ts:echo` (Python: `m:f`), and the MAP flow declares `uses:
- * {no-output: no-output}`: without the alias the loader rejects the callable before the MAP
- * check, which Python's row accepts only because the alias error's text contains "output". The
- * resolver-less seed 04 row pins the loader's `uses:` message, where Python checks for "resolver".
- *
- * TS-only: a MAP over a child whose output is partial leaves its contract unset, and a
- * descriptor's `fieldLabels` name an inline call's argument and the call in the binding errors
- * (both build a descriptor over a hand-built child, `handChild`).
- *
- * Pinned at the end: `load-map-call/engine_call_map__map_input_named_over_is_reserved` and the
- * `ok` case `load-map-call/engine_call_map__call_accepts_proven_null_for_nullable_child_input`
- * (`assembled`).
+ * CALL and MAP build over a child's signature: the seed flows, the reserved `over` input,
+ * undeclared bindings, children without output, nullable inputs, and the resolver requirement.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

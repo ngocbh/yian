@@ -1,50 +1,7 @@
 /**
- * Feedback follows the values and selected operations actually evaluated: a port of
- * `tests/engine/test_expr_lineage.py`. A `FileRef` stands in for Python's non-JSON temporaries
- * (`object()`), since a file is the one yian value JSON can't hold.
- *
- * TS-only: the codec form of literal snapshots, a file as an unavailable leaf, own-key record
- * fields, the depth bound inside a partial snapshot, the focused `validateFeedback` and
- * `hasFeedback` checks, a scalar route lifting a projected selection, a traced resolver that
- * doesn't return `ResolvedValue`, interpolation spans counting code points (also in
- * `validateRoute`), frozen routed feedback, `sourceKey`, `sameSource` (separately built sources with
- * the same key), and `sameFeedback` (true for separately built equal values, false for each kind of
- * difference), a slice's `list` route of projected base items, `len`'s `opaque` route, and a
- * comprehension's `list` route of each item's own route. Python's
- * `test_routes_are_immutable_serializable_and_keep_opaque_snapshots` is split in two: `routes are
- * immutable and serializable` (hand-built) and `routes keep opaque snapshots` (through a traced
- * binding).
- *
- * Changed: an infinite temporary has a codec snapshot (`{"$float":"inf"}`), where Python's JSON
- * has none; `a deep temporary keeps a complete snapshot` (10,000 levels) replaces
- * `test_unrepresentable_temporary_does_not_prevent_the_outer_call`, since a snapshot here has no
- * recursion limit; builtin results are copied by host intake, so Python's `is` checks are
- * `toEqual`; `opaque stops preserve concat and interpolation context` evaluates
- * `reorder(items) + items` for Python's `reorder(items) * count`, so it has one stop instead of
- * two; `unavailable snapshot projects available fields and composed items` composes with `+ []`
- * and projects item 0, for Python's `* 2` and item 1; `accepted projected value stops at a
- * bounded ancestor` and `projected partial container uses recorded operation positions` build
- * their opaque route by hand (`ValueRoute.literal(x).with({kind: "opaque"})`, the route the
- * evaluator records for a builtin call), so they don't check Python's single builtin call.
- * `test_equal_map_items_get_distinct_recorded_indices` maps over `${left + right + right}` for
- * Python's `${left + right * 2}`, since list repetition is a type error in TS: the same six
- * items, with items 2-5 tracing to `right`, but `right` is read twice.
- *
- * Ported: `test_reserved_map_over_uses_the_same_capture_path`.
- *
- * Not ported:
- * - `test_wait_capture_retains_the_delivered_iso_value_after_normalization`: TS yian has no WAIT
- *   kind; the `sleep` built-in reads `until` as an ordinary input.
- * - Temporaries `fromHost` refuses, so a builtin can't return them: the NaN row of
- *   `test_nonfinite_temporary_keeps_a_valid_final_interpolation`, the lone-surrogate
- *   `test_noncanonical_unicode_temporary_preserves_comparison_and_partial_snapshot`,
- *   `test_cyclic_temporary_keeps_outer_shape_for_composition`, the `__repr__`/`__str__` render
- *   counts of the temporary tests, `test_capture_does_not_call_dictionary_subclass_hooks`,
- *   `test_repetition_capture_does_not_call_integer_conversion` and the dict-subclass hooks of
- *   the two item-tracing tests.
- * - Repetition is a type error in TS, so `test_repetition_preserves_copy_messages_and_shape_context`,
- *   `test_empty_repetition_does_not_infer_its_original_content_from_the_result` and the other
- *   `repeat` / `* 2` rows are gone.
+ * Feedback follows the values and selected operations actually evaluated: routes, snapshots,
+ * projections and opaque stops. A `FileRef` stands in for a temporary that isn't JSON, since a file
+ * is the one yian value JSON can't hold.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -583,8 +540,7 @@ class Sources {
 /** A traced resolver that resolves nothing. */
 const nothing = MISSING_ROOT;
 
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
+// Each registration's previous entry (or its absence), put back after the test.
 const saved: [string, TemplateFn | undefined][] = [];
 
 /** Register a stand-in builtin `name` running `call` for this test only. */

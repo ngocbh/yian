@@ -1,4 +1,3 @@
-# From tests/seeds/10-asserts-arithmetic.yaml.
 # Node and flow asserts pass, and the `when:` with arithmetic and `and` holds, so `take` runs;
 # `skip` is skipped and gets no model call.
 kind: run

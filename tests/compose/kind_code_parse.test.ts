@@ -1,25 +1,4 @@
-/**
- * The `code` kind's parse side: a port of `tests/compose/test_kind_code_parse.py`.
- *
- * Changed: Python compares the descriptor to a `CodeDescriptor` with `field_ranges` excluded; TS
- * compares its class and fields.
- * `test_code_build_stamps_descriptor_origin_without_affecting_equality` drops its `==` half (TS
- * has no dataclass `==`), and its message ends "or null" where Python's ends "or None".
- *
- * Changed: the CODE check runs after assembly, so a valid output type keeps the
- * syntax error reachable: `test_code_build_frames_inline_syntax_error_at_yaml_line` and
- * `test_nonliteral_syntax_error_uses_whole_code_scalar` write `outputs: str` where Python writes
- * the invalid `outputs: string`/`output: string`, and go through `parse`, `withSourceOrigins`,
- * `build` and `checkCodeNode` with the catalog builder's registered-origin resolver (the second
- * where Python loads the flow). Only the message's `node 'broken': ` prefix is pinned; the rest is
- * the runtime's (`'(' was never closed` is CPython's).
- *
- * TS-only: `build` passes the context's `baseDir`, the descriptor's code origins and its title to
- * the node, and compiles nothing; `checkFlowCode` reaches a CODE node inside a child flow.
- *
- * Pinned at the end: the harvested cases whose error the CODE parse raises, each under a comment
- * naming the Python file it comes from, and the flows that assemble.
- */
+/** The `code` kind's parse side. */
 
 import { expect, test } from "bun:test";
 
@@ -49,7 +28,7 @@ function readerFor(text: string, nodeId: string): SourceCursor {
   return SourceDocument.parse(text).root.child("nodes").child(nodeId);
 }
 
-/** Return a descriptor's fields, leaving out the parse metadata (Python's `compare=False`). */
+/** Return a descriptor's fields, leaving out the parse metadata. */
 function fieldsOf(desc: CodeDescriptor): Record<string, unknown> {
   const { range: _range, fieldRanges: _fieldRanges, assertRanges: _assertRanges, ...fields } = desc;
   return fields;
@@ -162,8 +141,6 @@ test.each([
   expect(error.diagnostic.frames[0]!.range).toEqual(codeCursor.range!);
 });
 
-// --- TS-only rows --- //
-
 test("build passes the base directory, the code origins and the title, and compiles nothing", () => {
   const codeOrigin = new OriginRef("code");
   const codeLineOrigins = [new OriginRef("code/line/0")];
@@ -229,17 +206,14 @@ output: \${invoke.output}
 // errors come from compiling the CODE body, which the runner's `load` kind runs.
 
 test.each<CaseRow>([
-  // tests/seeds/errors/
   { id: "load-leaves/seed_e11_field_not_allowed", call: parsedNodes },
   { id: "load-leaves/seed_e12_missing_required_field", call: parsedNodes },
 ])("parseNodes: $id", runCase);
 
 test.each<CaseRow>([
-  // tests/seeds/
   { id: "load-agent/seed_01_structured_agent", call: assembled },
   { id: "load-agent/seed_03_research_one", call: assembled },
   { id: "load-leaves/seed_29_inline_code", call: assembled },
   { id: "load-leaves/seed_30_reference_code", call: assembled },
-  // tests/seeds/errors/
   { id: "load-leaves/seed_e31_inline_no_return", call: assembled },
 ])("assembles: $id", runCase);

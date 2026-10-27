@@ -1,54 +1,4 @@
-/**
- * Load-time checks and types for dotted reads of a file's uri, mime and name: a port of
- * `tests/compose/test_file_field_reads.py`, loading each flow with `assembleText` (`assemble` as
- * the loader calls it) where Python calls `load_flow`.
- *
- * Ported: `test_file_field_type_gives_the_type_of_each_file_field`,
- * `test_project_output_contract_types_the_fields_of_a_file`,
- * `test_another_field_of_a_file_is_a_located_load_error` (6),
- * `test_another_field_of_a_top_level_file_output_is_a_load_error`,
- * `test_a_node_assert_reading_another_field_of_its_file_output_is_a_load_error`,
- * `test_another_field_of_an_optional_file_is_a_load_error`, `test_a_field_of_a_file_uri_is_a_load_error`,
- * `test_another_field_of_a_file_flow_input_is_a_load_error`,
- * `test_another_field_of_a_carried_file_in_a_loop_predicate_is_a_load_error`,
- * `test_a_carried_file_uri_in_a_loop_predicate_loads` (a load row, then a run row),
- * `test_another_field_of_a_file_item_in_a_named_map_is_a_load_error`,
- * `test_another_field_of_a_record_item_file_in_a_named_map_is_a_load_error`,
- * `test_another_field_of_a_file_every_union_member_has_is_a_load_error`,
- * `test_another_field_of_a_file_after_a_constructor_is_a_load_error`,
- * `test_a_constructor_trailer_on_an_optional_file_is_nullable`,
- * `test_the_uri_of_a_file_after_a_constructor_is_typed_str` (the run, then the `!int` binding's error),
- * `test_another_field_of_a_file_in_an_inline_body_is_a_located_load_error` (pinning the whole
- * message), `test_the_uri_of_a_file_into_an_int_typed_binding_is_a_load_error`,
- * `test_a_str_typed_binding_of_a_file_field_loads_like_a_record_field`,
- * `test_the_uri_of_an_optional_file_is_optional_str`, `test_reads_on_object_and_any_stay_unchecked`,
- * `test_a_file_field_into_a_child_input_is_checked_at_load` (4, the cross-flow binding check) and
- * `test_a_case_on_the_uri_of_a_file_with_an_int_when_is_a_load_error`, pinning the whole message
- * where Python matches a fragment. The flow runs, with `loadConformanceFlow` and `runFlow`:
- * `test_a_node_assert_reads_the_uri_of_its_file_output`,
- * `test_the_uri_of_a_file_item_in_a_named_map_feeds_a_str_input`,
- * `test_the_uri_of_a_file_every_union_member_has_loads_and_reads`,
- * `test_an_inline_map_body_reads_the_fields_of_a_file_item` (both runs),
- * `test_an_inline_call_body_input_from_a_file_uri_is_typed_str`,
- * `test_the_uri_of_a_file_into_a_str_child_input_runs` and `test_the_fields_of_a_file_load_and_read_at_run`.
- *
- * Ported through `prepareExpanded`: `test_a_growth_fragment_reading_another_field_of_a_file_is_rejected`,
- * where Python calls the private `_validate_growth_wiring_refs`. The grown fragment's START carries
- * a `{f: file}` record and its END wires `value` from it (the `run_state_fixtures.ts` spawner and
- * fragment); reading `f.uri` prepares, and `f.urii` is a `GrowthRejected`.
- *
- * Covered by `run-core/compose_file_field_reads__an_inline_call_body_reads_a_file_uri`:
- * `test_an_inline_call_body_reads_the_uri_of_a_file_input`.
- *
- * Changed: the load rows' `child` and `child_int` defs are hand-built children (`handChild`) with
- * the defs' signatures and output contracts; the runs load the defs' text. CODE bodies are JS
- * (decision 11); a body returns a file as its JSON form (`{uri, mime, name}`), which its `file`
- * output reads as a file, where Python builds a `FileRef` (a body's return value crosses a worker
- * boundary, decision 47).
- *
- * Pinned at the end, the harvested `load-core/compose_file_field_reads__*` cases the reference
- * validator and the typed-binding check decide, the `child` def built by hand (`assembledWith`).
- */
+/** Load-time checks and types for dotted reads of a file's uri, mime and name. */
 
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -96,7 +46,7 @@ test.each<[string, Type | null]>([
   ["urii", null],
   ["__class__", null],
   ["", null],
-  // TS-only: a file has no inherited JS property as a field.
+  // A file has no inherited JS property as a field.
   ["constructor", null],
   ["__proto__", null],
 ])("fileFieldType gives the type of each file field: %p", (name, expected) => {

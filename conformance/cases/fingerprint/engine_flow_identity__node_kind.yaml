@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_node_kind_and_execution_source.
 # A node's kind is identity: CODE and TOOL with the same output differ.
 kind: fingerprint
 flow: |

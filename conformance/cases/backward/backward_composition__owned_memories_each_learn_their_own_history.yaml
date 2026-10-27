@@ -1,5 +1,3 @@
-# From tests/engine/test_backward_composition.py::test_owned_memories_learn_complete_history_and_reject_invalid_proposals
-# (invalid_proposal False; built-in episodic memories in place of the fakes).
 # Pins: memories declared on the flow (outer), on a called child (inner) and on its AGENT (local)
 # each learn the episodes of their own scope: local only the AGENT's, inner the child's nodes,
 # outer everything; one AGENT backward call serves all three.

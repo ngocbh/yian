@@ -1,4 +1,3 @@
-# From tests/seeds/18-research-pipeline.yaml.
 # Fan-out, fan-in to a typed record, a `case ... on` an enum, a `|` join and a flow assert load.
 kind: load
 flow: |

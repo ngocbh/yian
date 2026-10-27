@@ -1,4 +1,4 @@
-# TS spells the field lists as JSON text (rules: messages); Python's repr in python_expect.
+# The message spells the field lists as JSON text.
 kind: load
 flow: |
   id: inline-loop-bad-contract

@@ -1,5 +1,5 @@
-# hand TS expect: 1e308 * 10 is inf in TS (infinity is a float value), so the flow output is inf and the run succeeds;
-# output only (no TS trace or events). python_expect is Python's END failure.
+# 1e308 * 10 is inf (infinity is a float value), so the flow output is inf and the run succeeds;
+# output only (no trace or events).
 kind: run
 flow: |2
 

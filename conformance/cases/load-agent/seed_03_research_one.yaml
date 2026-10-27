@@ -1,4 +1,3 @@
-# From tests/seeds/03-research-one.yaml.
 # A CODE leaf feeding an AGENT, with a typed `!date` input default and an object output, loads.
 kind: load
 flow: |

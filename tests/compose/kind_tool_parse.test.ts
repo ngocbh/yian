@@ -1,16 +1,4 @@
-/**
- * The `tool` kind's parse side: a port of `tests/compose/test_kind_tool_parse.py`.
- *
- * Changed: Python compares the descriptor to a `ToolDescriptor` with `field_ranges` excluded; TS
- * compares its class and fields. `test_a_tool_node_with_an_authored_output_loads` assembles the
- * root flow with `assembleText`, where Python loads it.
- *
- * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused; `build` passes the title and
- * the retries to the node.
- *
- * Pinned at the end: the harvested flows that assemble, each under a comment naming where it comes
- * from.
- */
+/** The `tool` kind's parse side. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -36,7 +24,7 @@ function readerFor(text: string, nodeId: string): SourceCursor {
   return SourceDocument.parse(text).root.child("nodes").child(nodeId);
 }
 
-/** Return a descriptor's fields, leaving out the parse metadata (Python's `compare=False`). */
+/** Return a descriptor's fields, leaving out the parse metadata. */
 function fieldsOf(desc: ToolDescriptor): Record<string, unknown> {
   const { range: _range, fieldRanges: _fieldRanges, assertRanges: _assertRanges, ...fields } = desc;
   return fields;
@@ -113,8 +101,6 @@ test("tool build sets a record output contract", () => {
   expect(fields.get("qty")).toEqual(Type.scalar(ValueKind.INTEGER));
 });
 
-// --- TS-only rows --- //
-
 describe("retries", () => {
   /** Parse node `a` of a TOOL flow with `line` added. */
   const parseA = (line: string) =>
@@ -142,6 +128,5 @@ test("build passes the title and the retries to the node", () => {
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  // tests/seeds/
   { id: "load-leaves/seed_08_tool_news", call: assembled },
 ])("assembles: $id", runCase);

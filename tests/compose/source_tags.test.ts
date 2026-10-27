@@ -1,15 +1,6 @@
 /**
- * Local YAML tags kept by the source layer: a port of `tests/compose/test_source_tags.py`.
- *
- * The merge-source, bare-tag, unknown-tag and tag-hint errors live in `source_document.test.ts`.
- * `test_space_ends_the_tag`: a tag written with `,` is now a YAML syntax error with the tag hint
- * (YAML 1.2 tag syntax; `source_document.test.ts`, "the tag hint").
- * `test_bare_tag_check_does_not_shrink_nesting_depth` and
- * `test_parse_leaves_the_composed_node_tags_unchanged` have no counterpart: the TS build walks
- * with an explicit stack and keeps no composed tree.
- *
- * Changed: `test_single_node_def_generated_binding_has_no_tag` calls the loader's
- * `singleNodeDefCursor`, exported for it (Python's `_single_node_def_cursor`).
+ * Local YAML tags kept by the source layer. The merge-source, bare-tag, unknown-tag and tag-hint
+ * errors live in `source_document.test.ts`.
  */
 
 import { describe, expect, test } from "bun:test";

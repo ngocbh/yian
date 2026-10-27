@@ -1,8 +1,6 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupt_after_a_reply_keeps_it_and_records_skipped_calls
-# (Python's node keeps the reply's text; TS yian's output is null). An interrupt delivered once
-# model call 1 has finished skips both of the reply's tool calls (ToolCallFinished error
-# `interrupted`), then the agent writes `interrupted {by}`; the Optional(str) agent succeeds null.
+# An interrupt delivered once model call 1 has finished skips both of the reply's tool calls
+# (ToolCallFinished error `interrupted`), then the agent writes `interrupted {by}`; the
+# Optional(str) agent succeeds null.
 kind: run
 flow: |
   id: steer

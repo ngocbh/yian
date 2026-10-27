@@ -1,44 +1,4 @@
-/**
- * Literals in an untyped flow output: a port of `tests/compose/test_untyped_output_dates.py`,
- * through `assembleText` where Python loads the flow.
- *
- * Changed: Python refuses a literal in an untyped output that isn't a JSON value. In TS an
- * unquoted date or datetime is text (rule `dates`), and so is a date under `!!timestamp`, so each
- * loads and the output binding holds the text: the rows of
- * `test_untagged_date_in_an_untyped_output_field_is_a_load_error`,
- * `test_nested_untagged_date_names_its_path`, `test_a_nested_date_is_located_at_the_value`,
- * `test_a_datetime_or_timestamp_in_an_untyped_output_is_a_load_error`,
- * `test_untagged_date_as_the_whole_output_is_a_load_error` and
- * `test_an_aliased_date_names_the_output_field`, and `!Any 2026-01-01` in
- * `test_quoted_or_tagged_dates_keep_their_behavior`. Infinity is a float value (rule `infinity`),
- * so `.inf` and its spellings in `test_a_non_finite_number_in_an_untyped_output_is_a_load_error`
- * load. The YAML reader refuses the rest before any output check: `!!set` and `!!binary`
- * (`test_set_or_binary_literal_in_an_untyped_output_is_a_load_error`), `!!omap` and `!!pairs`
- * (`test_a_non_json_value_in_an_omap_pair_is_a_load_error`, and the `!!omap` row of
- * `test_other_untagged_literals_in_untyped_outputs_still_load`), `.nan` and a float too large to
- * read (the other rows of `test_a_non_finite_number_in_an_untyped_output_is_a_load_error`,
- * `test_a_nested_or_core_tagged_non_finite_number_is_a_load_error`, whose `!!omap [{a: .nan}]` row
- * is refused as `!!omap`, and `test_a_non_finite_number_as_the_whole_output_is_a_load_error`), and
- * `!float .nan`, which Python refuses at run (the load half of
- * `test_quoted_tagged_or_finite_numbers_keep_their_behavior`), and the `.nan` of
- * `test_a_non_finite_number_in_a_body_output_is_a_load_error` (through `loadFlow`, located at the
- * value as Python locates it). So do the inline CALL, MAP and LOOP rows of
- * `test_untagged_date_in_a_body_output_is_a_load_error`: the date in the child's output binding is
- * text; its named CALL and LOOP rows load through `loadFlow` the same way, so
- * `test_a_body_output_date_is_located_at_the_value` has no error to locate and checks the
- * named CALL's text instead.
- *
- * The harvested `yaml/compose_untyped_output_dates__*` cases are pinned at the end;
- * `any_tag_on_a_date` is pinned in `tags.test.ts`.
- *
- * Ported as run rows (`loadConformanceFlow` and `runFlow`) next to their load rows: the runs of
- * `test_quoted_or_tagged_dates_keep_their_behavior`,
- * `test_other_untagged_literals_in_untyped_outputs_still_load` (its `!!omap` run is refused at load,
- * above) and `test_quoted_tagged_or_finite_numbers_keep_their_behavior` (its `!float .nan` run is
- * refused at load, above).
- *
- * Changed: the ints of those runs read back as `bigint`s (decision 4a).
- */
+/** Literals in an untyped flow output. */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

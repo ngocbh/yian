@@ -1,4 +1,3 @@
-# From tests/engine/test_run_connection_settings.py::test_resume_needs_exactly_the_recorded_header_names[None-missing X-Gateway, X-Trace].
 # A resume of a run whose host key came with headers needs the same header names; with none it names both,
 # shows no value, and appends nothing.
 # Record 8 is agent's node_started: its first model call runs, its result is refused.

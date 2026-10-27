@@ -1,4 +1,3 @@
-# From tests/seeds/09-interpolation-ops.yaml.
 # `:?`, a `|` chain onto `system.today`, `$$` in a prompt and `system.run_id` load.
 kind: load
 flow: |

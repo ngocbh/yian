@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e11-field-not-allowed.yaml.
 # A CODE node with a `prompt:` fails at its value, listing the allowed fields as authored.
 kind: load
 flow: |

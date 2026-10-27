@@ -1,19 +1,4 @@
-/**
- * Output contracts for bindings that default a maybe-skipped reference to null: a port of the
- * direct tests of `tests/compose/test_skipped_outputs.py`
- * (`test_null_default_over_a_reference_is_optional_and_keeps_origins`,
- * `test_null_default_over_a_dotted_field_is_optional`,
- * `test_null_default_over_a_coalesce_of_equal_types_is_optional`,
- * `test_null_default_over_a_coalesce_of_different_types_is_untyped`,
- * `test_null_default_over_a_nullable_head_stays_optional`,
- * `test_null_default_over_a_partial_or_unknown_producer_is_untyped`,
- * `test_other_defaults_stay_untyped` and `test_null_default_over_a_flow_input_is_optional`), and
- * `test_on_over_a_null_default_is_checked_for_exhaustiveness`, whose harvested case is pinned at the
- * end.
- *
- * Changed: producer and flow-input tables are `Map`s. The flow assembles (`assembleText`), where
- * Python loads it.
- */
+/** Output contracts for bindings that default a maybe-skipped reference to null. */
 
 import { expect, test } from "bun:test";
 

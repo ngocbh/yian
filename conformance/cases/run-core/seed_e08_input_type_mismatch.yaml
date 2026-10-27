@@ -1,6 +1,5 @@
-# From tests/seeds/errors/e08-input-type-mismatch.yaml.
 # A run input that doesn't fit its declared type fails START, at the input's type.
-# The header's `build_segment_with_type` names a Python function.
+# The flow's header comment's `build_segment_with_type` is an older function name.
 kind: run
 flow: |
   # e08 — Flow input fails type enforcement at the boundary.

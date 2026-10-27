@@ -1,4 +1,3 @@
-# From tests/compose/test_any_name_literals.py::test_a_case_call_target_with_a_credential_keyword_loads.
 # A literal argument of a CASE branch's `call(...)` target is identity.
 kind: fingerprint
 flow: |

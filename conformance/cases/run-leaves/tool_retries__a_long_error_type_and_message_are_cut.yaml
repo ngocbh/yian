@@ -1,7 +1,5 @@
-# From tests/engine/test_tool_retries.py::test_odd_error_text_is_recorded_safely[x*10000] and
-# ::test_a_long_error_type_name_is_capped.
 # A failed step's error type and message are each cut to the cap less one character plus "…".
-# YIAN_MAX_SHOWN_VALUE_CHARS is 8 so the case stays short (the tests use the 200 default).
+# YIAN_MAX_SHOWN_VALUE_CHARS is 8 so the case stays short.
 kind: run
 flow: |
   id: t

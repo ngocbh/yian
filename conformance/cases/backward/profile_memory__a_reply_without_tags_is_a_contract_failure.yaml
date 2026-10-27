@@ -1,5 +1,3 @@
-# From tests/engine/test_profile_memory.py::test_parse_reply_enforces_tags_content_and_budget (the no-tags row)
-# and ::test_provider_failure_is_retryable_and_bad_replies_are_not.
 # Pins: a profile learner reply without <profile> tags fails the backward call at the learn stage as
 # a final contract error, and the document stays as it was.
 # YIAN_DEFAULT_PROVIDER/MODEL: a profile learner's model config comes from the defaults, not the flow.

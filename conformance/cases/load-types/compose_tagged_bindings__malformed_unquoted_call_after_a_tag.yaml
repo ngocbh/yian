@@ -1,4 +1,4 @@
-# Trailing text after call(...) is source text shown as written: Python-quoted, shared.
+# Trailing text after call(...) is source text shown as written, quoted by reprText.
 kind: load
 flow: |2
 

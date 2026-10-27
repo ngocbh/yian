@@ -1,10 +1,9 @@
-# From tests/seeds/13-types-objects.yaml.
 # Every input, typed, reaches a reference CODE node, and deep dotted reads build the output.
 # Only `output` is checked: the trace holds `summary.total`, an int CODE returns into a float
-# slot, which TS keeps as an int (`int-in-float`); the output doesn't hold it.
+# slot, which keeps it an int; the output doesn't hold it.
 kind: run
 flow: |
-  # 13 — The type grammar (Python typing): scalars, lists, objects, nesting.
+  # 13 — The type grammar: scalars, lists, objects, nesting.
   #
   # A planning CODE node whose I/O exercises every type form. Shows: all scalars
   # (str / int / float / bool / date), list(X), inline vs block objects (records),

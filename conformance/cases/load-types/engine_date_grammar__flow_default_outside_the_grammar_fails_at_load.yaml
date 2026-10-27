@@ -1,4 +1,3 @@
-# Shared: both languages add the datetime grammar hint.
 kind: load
 flow: |
   id: f

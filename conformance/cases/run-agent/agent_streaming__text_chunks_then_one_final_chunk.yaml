@@ -1,4 +1,3 @@
-# From tests/engine/test_agent_streaming.py::test_plain_agent_streams_text_chunks_then_one_final_chunk.
 # A streamed text reply reaches the host chunk by chunk under its step's n, then one empty
 # final chunk; a usage chunk carries no text, and ModelCallFinished reports its usage (5/3/8).
 kind: run

@@ -1,4 +1,3 @@
-# The frames sit on def lines (flow structure), not CODE text: shared.
 kind: load
 flow: |2
 

@@ -1,4 +1,4 @@
-# TS-only (#1025): an AGENT's tool call may wait. The reply calls `hold`, whose handler returns
+# An AGENT's tool call may wait. The reply calls `hold`, whose handler returns
 # pending(), and `lookup`, answered inline: the agent writes `hold`'s pending step and `lookup`'s
 # result, then waits (node_waiting, run_waiting). The host's complete answers `hold` by its call
 # id; the woken agent replays its steps and the next request reads both results in call order.

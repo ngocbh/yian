@@ -1,25 +1,7 @@
 /**
- * Classifying `nodes:` entries, a node has `kind:` and a value has a YAML tag: a port of
- * `tests/compose/test_value_entry_parse.py`. The Python tests read the flow with `load_flow`;
- * these read its `nodes:` mapping with `parseNodes`, so the entry under test comes first and the
- * `code` node after it is parsed, by the registered `CodeDescriptor`, only by the rows that load
- * every entry.
- *
- * Re-expected: TS reads unquoted dates as text (rule `dates`), so the four date rows of
- * `test_untagged_scalar_or_list_shows_the_tag_to_write` are deliberate TS rows, not Python's: a
- * list holding a date is a list of mixed items or of text, and a lone date is `!str`. Infinity is
- * a float value in TS (rule `infinity`), so an untagged `.inf` gets its example, and the YAML
- * layer refuses `.nan` before `parseNodes` sees it.
- *
- * TS-only: `!!str 3`, whose example quotes the text since plain `3` reads as an int (Python checks
- * it through `test_the_example_entry_loads`), and `exampleType` and `containsItself` called
- * directly.
- *
- * The harvested `load-case/compose_value_entry_parse__*` cases are pinned at the end; each fails
- * at its first entry, so no stand-in is registered.
- *
- * Ported through `loadFlow` and `runFlow`: `test_the_example_entry_loads`, which reads the
- * example from `parseNodes`'s error, then loads and runs it.
+ * Classifying `nodes:` entries: a node has `kind:` and a value has a YAML tag. Infinity is a float
+ * value, so an untagged `.inf` gets its example, and the YAML layer refuses `.nan` before
+ * `parseNodes` sees it.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -113,18 +95,16 @@ describe("untagged scalar or list shows the tag to write", () => {
     ["  x: [[1, null], a]\n", "`x: !list(Any) [[1, null], a]`"],
     ["  x: [null, 1, a]\n", "`x: !list(Optional(Any)) [null, 1, a]`"],
     ["  x: [[1, a], [b, 2]]\n", "`x: !list(list(Any)) [[1, a], [b, 2]]`"],
-    // Dates are text in TS, so these lists hold mixed items and need no quotes, where Python
-    // asks to quote the dates.
+    // Dates are text, so these lists hold mixed items and need no quotes.
     ["  x: [1, 2024-01-01]\n", "`x: !list(Any) [1, 2024-01-01]`"],
     ["  x: [null, [2024-01-01], a]\n", "`x: !list(Optional(Any)) [null, [2024-01-01], a]`"],
     ["  x:\n", "`x: !Optional(str) null`"],
-    // A lone date is text in TS, where Python suggests `!date` or `!datetime` with quotes.
+    // A lone date is text.
     ["  x: 2024-01-01\n", "`x: !str 2024-01-01`"],
     ["  x: 2024-01-01T10:00:00\n", "`x: !str 2024-01-01T10:00:00`"],
     // Plain `3` would read back as an int, so the example quotes the text.
     ["  x: !!str 3\n", '`x: !str "3"`'],
-    // Infinity is a float value in TS (rule `infinity`), and `x: !float .inf` loads; Python gives
-    // no example.
+    // Infinity is a float value, and `x: !float .inf` loads.
     ["  x: .inf\n", "`x: !float .inf`"],
   ])("%j", (entry, example) => {
     const text = flow(entry);
@@ -142,7 +122,7 @@ describe("the example entry loads", () => {
 
   test.each<[string, unknown]>([
     ["  x: [null, 1]\n", [null, 1n]],
-    // A float field keeps an int, as in Python, whose `[1.0, 2.5]` compares equal to `[1, 2.5]`.
+    // A float field keeps an int.
     ["  x: [1, 2.5]\n", [1n, 2.5]],
     ["  x: [[1], [null]]\n", [[1n], [null]]],
     ["  x: [[], [1]]\n", [[], [1n]]],
@@ -175,8 +155,7 @@ describe("an untagged value no tag can hold gets no example", () => {
   });
 
   test("a NaN is refused before the entry is parsed", () => {
-    // NaN is not a yian value, so the YAML layer refuses `.nan` while it parses the document;
-    // Python reads it and gives the entry no example.
+    // NaN is not a yian value, so the YAML layer refuses `.nan` while it parses the document.
     expect(() => nodesCursor(flow("  x: [{a: .nan}]\n"))).toThrow("NaN is not a yian value");
   });
 });

@@ -1,34 +1,6 @@
 /**
  * A literal under any name is an ordinary value: a name like `password` or `api_key` loads in every
- * slot, and the literal is part of the manifest and fingerprint. A port of the rows of
- * `tests/compose/test_any_name_literals.py` the cross-flow binding check takes part in,
- * assembling each flow with `assembleText` where Python calls `load_flow`.
- *
- * Ported: `test_a_value_entry_call_argument_under_a_credential_name_loads`,
- * `test_a_map_over_literal_under_a_credential_name_loads`,
- * `test_an_inline_call_in_a_node_assert_shows_the_assert_under_any_keyword` (the node-assert check
- * refuses the call before the `g` def is resolved), the multi-node-def and single-node-def params
- * of `test_a_def_env_literal_under_a_credential_name_loads`,
- * `test_a_def_input_default_under_a_credential_name_loads` (loaded with `loadFlow`) and
- * `test_a_value_entry_under_a_credential_name_is_identity` (its fingerprints and its run).
- *
- * Changed: CODE bodies are TS.
- *
- * Not ported (no load validator decides them; already-ported modules do: the manifest and
- * fingerprint, the tags reader, inline calls): `test_a_node_env_literal_under_a_credential_name_loads` (4),
- * `test_a_flow_env_literal_under_a_credential_name_loads`, the compact-flow param of
- * `test_a_def_env_literal_under_a_credential_name_loads`
- * `test_an_input_default_under_a_credential_name_loads` (2),
- * `test_an_agent_variable_under_a_credential_name_loads`,
- * `test_a_node_input_literal_under_a_credential_name_is_identity` (11),
- * `test_a_nested_key_under_a_credential_name_loads`,
- * `test_a_typed_binding_under_a_credential_name_loads` (its case is pinned in `tags.test.ts`),
- * `test_a_flow_output_under_a_credential_name_is_identity`,
- * `test_a_call_argument_under_a_credential_name_is_identity`,
- * `test_a_case_call_target_with_a_credential_keyword_loads`,
- * `test_an_inline_call_flow_output_with_a_credential_keyword_loads` and
- * `test_a_malformed_call_with_a_credential_keyword_quotes_its_text` (pinned in
- * `inline_calls.test.ts`).
+ * slot, and the literal is part of the manifest and fingerprint.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,4 +1,3 @@
-# From tests/engine/test_tool_context_run.py::test_each_map_item_gets_its_own_call_id.
 # A TOOL node in a MAP body gets one call id per item: <run id>/m#<i>/place.
 kind: run
 flow: |

@@ -1,5 +1,5 @@
 kind: value
-# Hand-written from tests/engine/test_typedefs.py::test_all_bare_tags_sequence_rejected_e05: a bad typedef raises when the typedefs are read.
+# A bad typedef raises when the typedefs are read.
 type: Category
 typedefs: {Category: [pro, con]}
 value: 1

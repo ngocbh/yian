@@ -1,4 +1,4 @@
-# TS-only: an agent with a steer inbox and no tools loads (yian #1025 replaced `steerable:`).
+# An agent with a steer inbox and no tools loads (yian #1025 replaced `steerable:`).
 kind: load
 flow: |
   id: removed

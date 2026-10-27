@@ -1,4 +1,3 @@
-# From tests/engine/test_reported_tool_error.py::test_tool_retries_retry_a_reported_error.
 # A ReportedToolError is retried like any other error.
 kind: run
 flow: |

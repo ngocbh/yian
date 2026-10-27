@@ -1,4 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_an_optional_input_starts_and_the_tool_validates_none.
 # An Optional(int) binding into an integer parameter passes the run-start check; a null fails the
 # node when its arguments are checked, before any call.
 kind: run

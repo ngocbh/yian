@@ -1,4 +1,3 @@
-# From tests/engine/test_lifted_node_gating.py::test_loop_seed_call_does_not_run_on_an_untaken_route.
 # Pins: a LOOP seed `call(...)` never starts on the untaken route.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run

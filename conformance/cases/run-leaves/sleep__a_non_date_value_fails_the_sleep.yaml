@@ -1,4 +1,3 @@
-# From tests/engine/test_resolve_until.py::test_non_date_error_is_origin_neutral_for_raw_and_wrapped_sources.
 # A sleep `until` that resolves to a non-text value fails contract.input at the node. The input is
 # `!Any`: an int-typed reference is refused at load.
 kind: run

@@ -1,4 +1,4 @@
-# TS-only: a spliced history whose tool call has no result before the next user message isn't a
+# A spliced history whose tool call has no result before the next user message isn't a
 # conversation a model route can send, so the node fails before any model call.
 kind: run
 flow: |

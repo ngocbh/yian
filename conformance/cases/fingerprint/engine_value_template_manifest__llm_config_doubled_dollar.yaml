@@ -1,4 +1,3 @@
-# From tests/engine/test_value_template_manifest.py::test_a_literal_llm_config_with_a_doubled_dollar_reads_unescaped.
 # `$$` in a literal llm_config reads as `$`, so the two spellings fingerprint the same.
 kind: fingerprint
 flow: |

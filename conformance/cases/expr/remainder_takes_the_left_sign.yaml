@@ -1,4 +1,4 @@
 kind: expr
-# `%` takes the left operand's sign, as JavaScript's does; Python's takes the right's.
+# `%` takes the left operand's sign, as JavaScript's does.
 expr: "-7 % 2"
 expect: {value: -1}

@@ -1,27 +1,6 @@
 /**
- * Flow inputs declared with YAML tags (`qty: !int`, `history: !list(ChatMsg) []`): a port of
- * the declaration tests of `tests/compose/test_tagged_inputs.py`, reading the declarations with
- * `parametersFromYaml` (`readSourceParameters`) where Python loads a flow. Ints are `bigint`;
- * a missing-field list is written in the text form (`["kind"]`).
- *
- * Ported: `test_a_tag_does_not_fill_in_a_missing_field`,
- * `test_tagged_parameters_read_required_and_default_from_the_value`,
- * `test_source_free_inputs_accept_the_parenthesized_spelling`, and the declarations of
- * `test_a_tagged_default_must_fit_its_tag`, read once. An unquoted date is text (rule `dates`), so
- * `d: !str 2026-01-01` loads where Python asks for quotes.
- *
- * Ported through `loadFlow`: the placements of `test_a_tagged_default_must_fit_its_tag`,
- * `test_a_tagged_default_with_a_non_string_key_is_a_load_error` (TS reads `{true: 1}`'s key as
- * `"true"` and records it in `document.nonTextKey`, which the loader refuses),
- * `test_tagged_parameter_origins_point_at_the_declaration` and
- * `test_a_single_node_input_list_shows_the_tagged_spelling`.
- *
- * TS-only: the harvested-case table, which makes the loader's call on the `input:` declarations
- * of the conformance cases these readers decide, comparing the message and the last frame.
- *
- * Ported through `loadFlow` and `runFlow`: `test_tagged_inputs_load_and_run_with_their_defaults`
- * and `test_a_tagged_input_without_a_value_is_required`. The worker's CODE body is TS's
- * (`return {...inputs}` for Python's `return dict(inputs)`).
+ * Flow inputs declared with YAML tags (`qty: !int`, `history: !list(ChatMsg) []`). Ints are
+ * `bigint`; a missing-field list is written in the text form (`["kind"]`).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

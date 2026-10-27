@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e09-unknown-top-level-key.yaml.
 # An unknown top-level key fails at the key, listing allowed keys as authored (`input`, `output`).
 # The seed's line-14 comment names the retired `inputs`/`outputs`; flow text stays verbatim.
 kind: load

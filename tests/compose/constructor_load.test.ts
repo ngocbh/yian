@@ -1,57 +1,8 @@
 /**
- * `${T(...)}` constructors resolve at load into each node's type table: a port of
- * `tests/compose/test_constructor_load.py`.
+ * `${T(...)}` constructors resolve at load into each node's type table.
  *
  * A constructor name is a `typedefs:` name; `T(x)` checks a value (exactly `!T ${x}`), and
  * `T(a=..., b=...)` builds a record from exactly the given fields and checks it.
- *
- * Ported: `test_a_constructor_resolves_into_the_node_type_table`,
- * `test_a_span_inside_a_constructor_shows_the_rewrite`,
- * `test_isinstance_with_a_builtin_name_does_not_make_it_a_constructor`,
- * `test_a_flow_call_with_several_arguments_keeps_the_flow_call_message`,
- * `test_a_malformed_constructor_call_is_a_load_error`,
- * `test_a_builtin_type_name_in_a_binding_is_not_a_conversion`,
- * `test_a_builtin_type_name_in_a_case_when_is_not_a_conversion`,
- * `test_an_unknown_name_in_a_case_when_is_an_unknown_function`,
- * `test_a_constructor_in_wait_until_is_a_located_load_error` (on a sleep's `until`, a TOOL input
- * where a constructor builds a value that must be a date),
- * `test_a_constructor_in_an_agent_prompt_is_a_located_load_error`,
- * `test_a_field_read_on_a_constructor_result_type_checks`,
- * `test_a_field_read_on_a_constructor_in_a_case_when_type_checks`,
- * `test_a_disjoint_argument_is_a_load_error`, `test_a_narrower_or_unknown_argument_loads`,
- * `test_keywords_missing_a_required_field_are_a_load_error`,
- * `test_keywords_missing_a_field_in_a_case_when_are_a_load_error`,
- * `test_an_unknown_keyword_field_is_a_load_error`, `test_a_disjoint_keyword_field_is_a_load_error`,
- * `test_keywords_cannot_build_a_union`, `test_keywords_cannot_build_a_scalar_type`,
- * `test_a_constructor_in_a_call_nodes_asserts_is_a_located_load_error` (the node-assert check,
- * pinning the whole message), the typed-binding row `test_downstream_sees_the_constructed_type` and
- * the call-type row `test_a_call_argument_is_checked_with_the_constructed_type`;
- * `test_a_union_typedef_and_an_enum_alias_check` (both runs; its case
- * `run-core/compose_constructor_load__an_enum_alias_constructor_rejects_a_non_member` holds the
- * second); each as a load row then a run row (`loadConformanceFlow` and `runFlow`, every run),
- * `test_a_constructor_in_a_case_when` (its type table, then both parameter rows),
- * `test_a_constructor_in_node_and_flow_asserts`, `test_a_constructor_in_a_flow_output`,
- * `test_a_constructor_in_a_map_per_item_input`,
- * `test_an_inline_body_parameter_takes_the_constructed_type` (the inline child's START parameter
- * type), `test_a_caller_sees_a_childs_constructed_output_type` and
- * `test_a_uses_child_resolves_constructors_against_its_own_typedefs` (loaded with `loadFlow`);
- * the load rows of the covered `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`,
- * `test_a_bad_built_field_fails_with_binding_type` and `test_a_nested_constructor_failure_is_binding_type`;
- * and `test_a_parent_cannot_construct_a_childs_typedef`. `engine/inline_calls.test.ts` pins the
- * cases of the binding sites the inline-call desugar raises.
- *
- * Covered by `run-core/compose_constructor_load__<case>`: `test_a_value_that_fits_passes_unchanged`
- * (`a_value_that_fits_passes_unchanged`), `test_a_value_lacking_a_field_fails_with_binding_type_naming_it`
- * (`a_value_lacking_a_field_fails`, which pins the frame Python reads through `diagnose`; TS
- * expect, decision 43),
- * `test_keywords_build_the_record` (same name), `test_a_bad_built_field_fails_with_binding_type`
- * (same name), `test_constructors_in_a_list_literal_and_a_nested_value`
- * (`constructors_in_a_list_and_a_nested_value`) and `test_a_nested_constructor_failure_is_binding_type`
- * (same name).
- *
- * TS-only: one row per constructor message the type-table pass reports at a `case when` (a union,
- * a scalar type, an unknown field, a disjoint value, a disjoint field, a builtin field read); Python
- * reports them there too, but its tests pin them only at binding sites.
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";

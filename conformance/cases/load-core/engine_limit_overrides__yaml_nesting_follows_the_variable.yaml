@@ -1,4 +1,4 @@
-# The TS message has no location trailer; Python's carries PyYAML's (rules: yaml).
+# The message has no location trailer.
 kind: load
 flow: |
   id: f

@@ -1,6 +1,3 @@
-# From tests/engine/test_blocking_wait.py::test_deadline_at_or_before_now_returns_immediately, with the
-# forms of ::test_naive_datetime_means_utc, ::test_aware_datetime_is_normalized_to_utc and
-# ::test_deadline_accepts_z_short_fraction_and_space_separator, moved into the past (no clock).
 # A sleep whose deadline has passed returns null at once, in each accepted spelling.
 kind: run
 flow: |

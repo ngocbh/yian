@@ -1,14 +1,10 @@
 /**
- * The host each desugar pass records on a node it lifts out of an authored node: a port of
- * `tests/compose/test_lifted_hosts.py`.
+ * The host each desugar pass records on a node it lifts out of an authored node.
  *
  * A lifted node's `host` is the node whose text it was written in. A later edge step gives the
  * lifted node its host's CASE routes, `dependsOn`, and `runsAfter`. A node that is itself a route
  * target (a branch `call(...)`), a value entry, or a node that comes from the flow
  * `output:`/`asserts:` has no host.
- *
- * Changed: `test_host_is_not_an_authored_key` assembles the flow (`assembleText`) where Python
- * loads it.
  */
 
 import { expect, test } from "bun:test";

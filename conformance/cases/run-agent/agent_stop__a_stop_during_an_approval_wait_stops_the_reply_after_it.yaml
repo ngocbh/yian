@@ -1,4 +1,3 @@
-# TS-only: withdraw and the remembered Stop (#1106).
 # The take takes the message, then `approve` (a TOOL calling the pending host tool `approve`)
 # waits. An interrupt now finds no reader and records `interrupted {notes, []}`; the wait that came
 # before it doesn't end the Stop, and nothing has been stopped yet, so it stands. Once the host

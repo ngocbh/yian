@@ -1,4 +1,4 @@
-# TS-only: a CODE input can't take an inbox; only a child's Inbox input can.
+# A CODE input can't take an inbox; only a child's Inbox input can.
 kind: load
 flow: |
   id: f

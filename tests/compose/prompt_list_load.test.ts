@@ -1,8 +1,4 @@
-/**
- * An AGENT `prompt:` may be a list of messages: what loads, and each load error at its item.
- *
- * TS-only: Python yian has no list prompt.
- */
+/** An AGENT `prompt:` may be a list of messages: what loads, and each load error at its item. */
 
 import { afterEach, expect, test } from "bun:test";
 

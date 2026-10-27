@@ -1,4 +1,4 @@
-# TS reads the unquoted date as text (rules: dates); Python's "read it as a date" in python_expect.
+# yian reads the unquoted date as text.
 kind: load
 flow: |
   id: f

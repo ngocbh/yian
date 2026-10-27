@@ -1,12 +1,4 @@
-/**
- * Immutable, occurrence-backed Compose source catalogs: a port of
- * `tests/compose/test_source_catalog.py`.
- *
- * The `deepcopy` halves have no counterpart, since TS has no deepcopy protocol. Site paths
- * are arrays, not tuples. The str and int subclass cases have no counterpart, and `0.0` is
- * the integer `0` here, so the non-integer index cases use `1.5` instead. Python's
- * `ValueError` is a `RangeError` (a `SourceAccessError` for duplicates and line indexes).
- */
+/** Immutable, occurrence-backed Compose source catalogs. Site paths are arrays. */
 
 import { describe, expect, test } from "bun:test";
 

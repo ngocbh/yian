@@ -1,26 +1,6 @@
 /**
- * Each old type form of a flow input or agent variable is a located load error that shows the
- * tag spelling: a port of the declaration tests of `tests/compose/test_old_forms.py`, reading
- * the declarations with `parametersFromYaml` (`readSourceParameters`) where Python loads a flow.
- *
- * Ported: `test_untagged_flow_input_shows_the_tag`, `test_untagged_agent_variable_shows_the_tag`,
- * `test_source_free_declarations_take_a_type_only`,
- * `test_source_free_input_rejects_a_record_map`, and `test_typed_flow_output_text_shows_the_tag`
- * and `test_typed_single_flow_output_text_shows_the_tag`, which assemble the flow with
- * `assembleText`.
- *
- * TS-only: an untagged float default's example, spelled as Python's `repr` spells a finite
- * float and as `.inf` for infinity, which YAML reads back as a float (Python writes `inf`,
- * which reads back as text); a type with a default that doesn't parse (`n: int = [`), kept as
- * written where Python reads an unbound name; and the harvested-case table, comparing the
- * message and the last frame: its flow-input rows read the declarations, and its agent-variable
- * and flow-output rows assemble the flow as the loader calls `assemble`.
- *
- * Ported through `loadFlow`: `test_bracket_typedef_shows_the_parenthesized_spelling`,
- * `test_bracket_node_output_shows_the_parenthesized_spelling`,
- * `test_typed_binding_text_shows_the_tag`, `test_typed_binding_text_that_reads_as_words_offers_quoting`
- * and `test_untagged_input_in_a_definition_shows_the_tag`; and, run with `runFlow`,
- * `test_text_without_a_type_on_the_left_is_plain_text`.
+ * Each old type form of a flow input or agent variable is a located load error that shows the tag
+ * spelling.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

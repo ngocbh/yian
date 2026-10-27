@@ -1,29 +1,12 @@
 /**
- * Tags outside typed slots: a port of `tests/compose/test_tag_positions.py`.
+ * Tags outside typed slots.
  *
  * A tag types a flow input, a binding, a flow output, an agent variable, or a value inside one. A
  * tag anywhere else (on `kind:`, a node's `output:` declaration, a typedef, a mapping key, ...)
  * would be silently ignored, so it is a located load error. Tags under top-level `x-*` keys are
- * exempt unless used in a slot. A tag on a CASE branch makes the branch a value, even a word
- * naming a node, so its error shows the value entry to write; a tagged case `output:` is rejected
- * at the `output:`, like an untagged one.
- *
- * Ported through `assembleText`: `test_a_tagged_case_branch_naming_a_node_is_a_value`,
- * `test_tagged_case_output_is_rejected_at_its_line`, each pinning the whole message where Python
- * matches its end; and their harvested `load-types/compose_tag_positions__*` cases, pinned at the
- * end (the other cases of the loader's tag checks are pinned in `tags.test.ts`;
- * `load-types/compose_tag_positions__tags_in_a_uses_child_slot_load` is covered by the
- * conformance runner's `load` kind).
- *
- * Ported through `loadFlow` (`loadConformanceFlow`, since the CODE references are TS's
- * `./fixtures/compose_codefns.ts:echo`), matching the message's end as Python does: every other
- * row. The `uses:` child rows write the child into a temporary directory linked to the conformance
- * fixtures. `test_loading_the_same_document_twice_behaves_the_same` calls the loader's
- * `loadFlowFile`, exported for it (Python's `_load_flow`). The null-key row puts its value under a
- * sleep's `until` input.
- *
- * Dropped: `test_tag_on_wait_until_is_rejected_at_its_line`. A sleep's `until` is a TOOL input,
- * where a tag types the binding, so it loads.
+ * exempt unless used in a slot. A tag on a CASE branch makes the branch a value, even a word naming
+ * a node, so its error shows the value entry to write; a tagged case `output:` is rejected at the
+ * `output:`, like an untagged one.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

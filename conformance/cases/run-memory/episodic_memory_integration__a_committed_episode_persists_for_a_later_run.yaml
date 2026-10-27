@@ -1,4 +1,3 @@
-# From tests/engine/test_episodic_memory_integration.py::test_backward_commits_episode_recalled_by_a_fresh_run.
 # Pins: an AGENT-level episodic memory commits the earlier run's episode (the AGENT's only) on its
 # backward, and it persists for a later run (fresh memories over the same root); the earlier run's
 # request has no memory block. The main run's request (the episode recalled in the memory block)

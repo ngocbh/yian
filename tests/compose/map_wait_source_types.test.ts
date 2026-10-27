@@ -1,31 +1,8 @@
 /**
- * A MAP `over:` of the wrong type is a load error at that value: a port of the MAP rows of
- * `tests/compose/test_map_wait_source_types.py`, loading each flow with `assembleText` where
- * Python calls `load_flow`.
+ * A MAP `over:` of the wrong type is a load error at that value.
  *
  * Literals are checked where the node is parsed; references and expressions by their inferred type
  * once the graph is built.
- *
- * Ported: `test_value_type_error_wording`, `test_non_list_over_literal_is_a_load_error` (9),
- * `test_null_over_is_empty`, `test_text_over_is_a_load_error` (7), `test_list_over_literals_load`
- * (2), `test_call_directive_over_is_left_to_the_graph_stage`, the defs half of
- * `test_literal_check_reaches_defs_and_inline_bodies`, the MAP half of
- * `test_tagged_wrong_literal_reports_the_type_first`, `test_disjoint_over_reference_is_a_load_error`
- * (10), the MAP rows of `test_fitting_or_unproven_sources_load` (6),
- * `test_call_directive_over_with_a_str_output_is_a_load_error`, the MAP half of
- * `test_isinstance_keeps_its_own_error`, `test_dangling_reference_keeps_its_error`,
- * `test_record_typedef_is_named`, the MAP half of `test_none_typed_source_is_a_load_error` and
- * the MAP half of `test_a_case_branch_narrows_the_source`.
- *
- * Not ported: the WAIT rows. TS yian removed WAIT; a `sleep`'s `until` is an ordinary tool input,
- * checked as `load-*` conformance cases show (`compose_map_wait_source_types__*_until_*`).
- *
- * Changed: TS YAML reads an unquoted date or timestamp as text, so `over: 2026-01-01` and
- * `over: 2026-01-01T10:00:00` are read as text (Python: "a date", "a date and time").
- *
- * Pinned elsewhere: `kind_map_parse.test.ts` pins this file's MAP literal cases
- * (`compose_map_wait_source_types__{date_over_literal,int_over_literal,null_over_is_empty,
- * quoted_call_over_is_text}`).
  */
 
 import { afterEach, expect, test } from "bun:test";

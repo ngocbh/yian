@@ -1,6 +1,6 @@
-# TS-only (yian #1025): a steer inbox of `Message`s. A `Message` event is its own user message,
-# keeping its author; its role becomes `user`. The second call's request isn't listed (Python's
-# case check has no `author`); its `request_sha256` in the trace covers the authored message.
+# A steer inbox of `Message`s. A `Message` event is its own user message,
+# keeping its author; its role becomes `user`. The second call's request isn't listed; its
+# `request_sha256` in the trace covers the authored message.
 kind: run
 flow: |
   id: steer

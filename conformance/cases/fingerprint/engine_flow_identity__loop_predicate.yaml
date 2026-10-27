@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_flow_fingerprint_covers_each_included_kind_field.
 # A LOOP's condition is identity.
 kind: fingerprint
 flow: |

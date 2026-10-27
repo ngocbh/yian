@@ -1,4 +1,4 @@
-# `None` is yian's type name for null (type text), shared.
+# `None` is yian's type name for null.
 kind: load
 flow: |
   id: p

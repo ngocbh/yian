@@ -1,4 +1,4 @@
-# TS-only (run-log). Pins: a learnable AGENT whose pre-assert fails never renders, so its node data
+# Pins: a learnable AGENT whose pre-assert fails never renders, so its node data
 # holds no render and the trace shows none; learning checks the pre-asserts again before it renders
 # the occurrence.
 kind: run

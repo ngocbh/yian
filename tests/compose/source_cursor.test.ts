@@ -1,17 +1,4 @@
-/**
- * Immutable, occurrence-aware YAML source cursors: a port of
- * `tests/compose/test_source_cursor.py`.
- *
- * Dropped: the tuple, set, frozenset, date and timezone snapshot cases and the container
- * subclasses other than arrays (a YAML value here is text, a number, a boolean, null, a plain
- * array or a plain record), the `_value_view` set operations, and the hash-call-count test
- * (ropes are cached by identity, with no hashing). Mapping keys are text, so the constructed-key
- * cases read keys as written, and the wide projection refuses occurrence walks rather than
- * counting key comparisons.
- *
- * Changed: `test_scalar_style_survives_the_single_node_def_projection` calls the loader's
- * `singleNodeDefCursor`, exported for it (Python's `_single_node_def_cursor`).
- */
+/** Immutable, occurrence-aware YAML source cursors. */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
@@ -55,7 +42,7 @@ function accessError(action: () => unknown): SourceAccessError {
   throw new Error("expected a SourceAccessError");
 }
 
-/** Return a document whose root aliases a binary DAG of `levels` lists (Python's builder). */
+/** Return a document whose root aliases a binary DAG of `levels` lists. */
 function binaryAliasDocument(levels = 24): SourceDocument {
   const lines = ["level_0: &level_0 [leaf]"];
   for (let level = 1; level <= levels; level++) {
@@ -66,7 +53,7 @@ function binaryAliasDocument(levels = 24): SourceDocument {
   return SourceDocument.parse(lines.join("\n") + "\n");
 }
 
-/** Return a short document with exponentially many merged pairs (Python's builder). */
+/** Return a short document with exponentially many merged pairs. */
 function binaryMergeDocument(levels: number): SourceDocument {
   const lines = ["level_0: &level_0", "  value: leaf"];
   for (let level = 1; level <= levels; level++) {
@@ -201,7 +188,6 @@ describe("value snapshots", () => {
 
 describe("values", () => {
   test("keys read as written and ranges locate them", () => {
-    // Python's `!!binary` line is refused in TS, so the lines below it shift up by one.
     const text =
       "values:\n" +
       "  0x10: hexadecimal\n" +
@@ -466,7 +452,7 @@ describe("merges and aliases", () => {
 
   test("a double recursive merge keeps three local occurrences", () => {
     // A merge source still being flattened contributes its own pairs once per merge key,
-    // then the mapping's own: three, where Python's in-place flattening keeps four.
+    // then the mapping's own: three.
     const root = SourceDocument.parse(
       "root: &root\n  <<: *root\n  <<: *root\n  value: local\n",
     ).root.child("root");

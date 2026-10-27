@@ -1,4 +1,3 @@
-# From tests/seeds/00-hello-agent.yaml.
 # One AGENT turns a text input into its text output, which the flow returns.
 kind: run
 flow: |

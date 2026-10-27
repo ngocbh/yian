@@ -1,4 +1,4 @@
-# TS-only: a prompt list item is `${name}` or `user:`/`assistant:` text; a two-key mapping is refused at the item.
+# A prompt list item is `${name}` or `user:`/`assistant:` text; a two-key mapping is refused at the item.
 kind: load
 flow: |
   id: chat

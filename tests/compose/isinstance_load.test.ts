@@ -1,42 +1,6 @@
 /**
- * The type names `isinstance(x, T)` and `T(...)` constructors name, their resolution, and the
- * type tables load fills from them: a port of `tests/compose/test_isinstance_load.py`.
- *
- * Ported: `test_collect_isinstance_names`;
- * `test_an_inline_body_cannot_take_a_whole_value_isinstance_argument` (pinning the whole message);
- * `test_an_unknown_type_name_is_a_located_load_error`,
- * `test_a_flow_assert_error_is_located_by_its_own_assert`,
- * `test_list_is_not_an_isinstance_type_name`,
- * `test_isinstance_in_wait_until_is_a_located_load_error`,
- * `test_isinstance_in_map_over_is_a_located_load_error`,
- * `test_isinstance_in_an_agent_prompt_is_a_located_load_error` and
- * `test_isinstance_in_a_human_input_question_is_a_located_load_error`; and, each as a load row
- * (the type tables) then a run row (`loadConformanceFlow` and `runFlow`, every parameter row),
- * `test_isinstance_in_a_node_input`,
- * `test_isinstance_in_a_searched_case_is_first_true_wins`, `test_isinstance_in_a_node_assert`,
- * `test_isinstance_in_flow_asserts_fills_start_and_end`, followed by
- * `test_a_failing_flow_input_assert_fails_at_start`, `test_isinstance_in_a_flow_output`,
- * `test_isinstance_in_a_loop_while_runs_several_iterations`, followed by
- * `test_a_run_that_used_isinstance_replays` (`advance` over the finished log, then over the log
- * cut after the second iteration),
- * `test_isinstance_in_defs_and_nested_inline_children`,
- * `test_isinstance_in_a_map_per_item_input`, `test_isinstance_in_a_call_directive_argument`,
- * `test_isinstance_in_a_loop_seed_and_until` and `test_isinstance_in_a_case_on`; and
- * `test_isinstance_in_a_call_nodes_asserts_is_a_located_load_error` and
- * `test_isinstance_in_a_loop_nodes_asserts_is_a_load_error` (the node-assert check); and, loaded
- * with `loadFlow`, `test_a_parent_cannot_use_a_childs_typedef` and
- * `test_a_uses_child_resolves_names_against_its_own_typedefs` (a load row, then a run row).
- *
- * Changed: TS yian has no `wait` or `human_input`, so the wait-until and human-input-question rows
- * use a `sleep` and an `ask`: `isinstance` is allowed in their inputs, and the error is the input's
- * type check, at the same line. CODE bodies are JS, getting ints as `number`s (decision 45), and ints read back as
- * `bigint`s (decision 4a). The harvested `run-core/compose_isinstance_load__isinstance_in_a_node_input`
- * and `..._isinstance_in_a_searched_case_first_true_wins` hold one parameter row each, and a case
- * doesn't pin the type tables, so both tests are ported whole.
- *
- * TS-only: `collectConstructorNames`, `expressionTrees`, `resolveIsinstanceType`,
- * `resolveConstructorType`, `constructorTypeFn` and `isinstanceMembers` rows (Python's own
- * `isinstanceMembers` test is ported with the narrowing tests).
+ * The type names `isinstance(x, T)` and `T(...)` constructors name, their resolution, and the type
+ * tables load fills from them.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

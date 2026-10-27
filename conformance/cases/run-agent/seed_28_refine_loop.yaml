@@ -1,4 +1,3 @@
-# From tests/seeds/28-refine-loop.yaml.
 # The `until:` loop runs the body twice: a score of 0.6 continues and prunes the first
 # iteration, 0.9 stops it, and the loop commits the carried record under `polish`.
 # The header's "need a provider to RUN" is met by scripted replies.
@@ -111,7 +110,7 @@ expect:
     - [pool_commit, "polish#0/__end__", {from: {polish#0/critic: 15}}]
     - [node_succeeded, polish#0/__end__, {commit: 19}]
     # `docs/` doesn't give the LOOP driver ids (`<loop>~k`), the seed `[carried, k]` or
-    # `prune_ids`; see src/yian/nodes/loop/node.py.
+    # `prune_ids`; see src/nodes/loop/node.ts.
     - [node_started, polish~1]
     - [pool_commit, polish~1, {from: {polish#0/__end__: 19}, key: polish#1/__start__}]
     - - node_expanded

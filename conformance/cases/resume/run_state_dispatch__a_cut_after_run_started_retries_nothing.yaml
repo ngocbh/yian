@@ -1,5 +1,3 @@
-# From tests/engine/test_run_state_dispatch.py::test_run_resumed_allows_an_empty_retry_segment_and_changes_workers.
-# Also tests/engine/test_run_recovery_prefixes.py::test_replay_every_prefix_matches_live_state_and_uses_commit_path.
 # A run cut right after its run start has nothing in flight: the resume retries nothing and starts at __start__.
 # Records 0-4 are the run start (run_started, then its four commits): __start__'s node_started is refused, so
 # nothing ran before the resume.

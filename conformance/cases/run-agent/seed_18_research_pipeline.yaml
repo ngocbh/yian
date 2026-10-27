@@ -1,4 +1,3 @@
-# From tests/seeds/18-research-pipeline.yaml.
 # Three reviewers fan in to a typed View; the `case ... on` its stance takes `pro_note`, the other
 # notes are skipped, and the join and the flow assert pass.
 kind: run

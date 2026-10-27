@@ -1,4 +1,3 @@
-# From tests/engine/test_run_tools_flow.py::test_each_map_item_and_call_asks_with_its_own_node_id[call].
 # An ask in a called child asks with the CALL occurrence's id (c1/ask, c2/ask).
 kind: run
 flow: |

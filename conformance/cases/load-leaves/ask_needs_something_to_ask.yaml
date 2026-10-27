@@ -1,4 +1,4 @@
-# TS-only: an ask needs a prompt, questions or adaptive_questions.
+# An ask needs a prompt, questions or adaptive_questions.
 kind: load
 flow: |
   id: f

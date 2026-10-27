@@ -1,32 +1,4 @@
-/**
- * Null checks in CASE conditions: what a branch and a param read after a null check see. A port of
- * `tests/compose/test_null_narrowing_case.py::test_a_read_after_an_is_null_check_in_an_or_is_guarded`
- * and `::test_a_case_param_read_after_a_null_check_sees_the_value_as_not_null` (`engine/case.test.ts`
- * pins its allocation order too); through `assembleText`, the rows the CALL/MAP type check decides,
- * each error pinned whole where Python matches a fragment:
- * `::test_a_branch_under_a_null_check_passes_the_value_as_not_null` (2),
- * `::test_a_branch_under_a_null_check_on_an_input_passes_it_as_not_null` (4),
- * `::test_a_negated_is_null_check_narrows_the_branch`,
- * `::test_a_null_check_that_may_not_hold_does_not_narrow_the_branch`,
- * `::test_the_else_of_a_null_check_is_not_narrowed`,
- * `::test_a_node_two_null_checking_cases_route_is_narrowed`,
- * `::test_a_node_that_only_one_of_two_cases_proves_not_null_is_not_narrowed`,
- * `::test_an_on_case_over_an_optional_union_narrows_its_branch_as_before` (3),
- * `::test_a_null_check_keeps_an_isinstance_narrowing_of_the_branch` (4),
- * `::test_a_null_check_keeps_a_nullable_isinstance_narrowing_of_the_branch` (8),
- * `::test_a_null_check_case_under_an_isinstance_branch_keeps_its_narrowing` (2),
- * `::test_a_null_check_alone_does_not_prove_a_type`,
- * `::test_an_assert_read_after_a_null_check_is_guarded_by_it`,
- * `::test_a_node_assert_read_after_a_null_check_names_the_non_null_type` and
- * `::test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type`.
- *
- * Changed: the guard and the facts compare with `toStrictEqual`, which also compares classes, and
- * types with `typeEquals`. The CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
- *
- * TS-only: the harvested `load-types/compose_null_narrowing_case__a_node_assert_null_check_narrows_its_read`
- * and `load-types/compose_null_narrowing_case__a_flow_assert_null_check_narrows_its_read`, pinned at
- * the end.
- */
+/** Null checks in CASE conditions: what a branch and a param read after a null check see. */
 
 import { describe, expect, test } from "bun:test";
 

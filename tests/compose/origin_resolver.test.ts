@@ -1,17 +1,4 @@
-/**
- * Installing the complete origin resolver at the Compose boundary: a port of
- * `tests/compose/test_origin_resolver.py`.
- *
- * Ported: every row but the one below. A Python resolver class is a plain object with `resolve`,
- * and its broken property a getter. Changed: `ResolverTable` has no `origins` list in TS, so the
- * table's exact keys are checked as its `size` plus `has` for each reachable origin; Python's
- * `deepcopy` of a loaded child is `copyGraph` of its compiled flow; Python's
- * `dataclasses.replace` is a new `ComposedFlow`; the check that a loaded flow has no
- * `_local_catalog` attribute is dropped, since a TS `ComposedFlow` has no private fields to probe.
- *
- * Not ported: `test_resolver_metadata_is_immutable_copy_reused_and_equality_neutral`, which
- * pins dataclass `deepcopy` and equality; a TS `ComposedFlow` has neither.
- */
+/** Installing the complete origin resolver at the Compose boundary. */
 
 import { expect, test } from "bun:test";
 

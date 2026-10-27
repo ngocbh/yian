@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e34-dup-assert.yaml.
 # Of two identical false node asserts, the failure is at the first one.
 kind: run
 flow: |

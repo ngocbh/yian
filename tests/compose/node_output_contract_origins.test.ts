@@ -1,42 +1,4 @@
-/**
- * The authored-site origins of a node's `output:` contract: a port of
- * `tests/compose/test_node_output_contract_origins.py`.
- *
- * Changed: the flows assemble with `assembleText`, where Python loads them, and an origin
- * resolves through the scope's catalog builder (`builder.resolveRegistered`) in place of
- * `loaded.origin_resolver`.
- * `test_formatting_only_relocation_preserves_output_origins_and_fingerprint` keeps its origin half.
- * `test_nested_inline_child_output_contract_uses_its_physical_site` reads the CODE node of the
- * CALL's baked child. `test_agent_structured_failure_selects_exact_authored_output_field` runs
- * the assembled AGENT through `evalNode` (`drive`) with a `ScriptedModel` from `models` where
- * Python runs the loaded flow, and checks the failure's origin site through the builder (Python:
- * `loaded.diagnose`); the exhausted reply is an `OutputInvalidError` coded `agent.output_invalid`
- * (Python: a `ValidationError`, `node.execute`).
- *
- * Pinned in `engine/read_type.test.ts` (the cases of the reader that raises):
- * `test_compact_invalid_output_type_reports_the_top_level_output_site`,
- * `test_invalid_nested_output_type_reports_the_exact_value_site`,
- * `test_unsupported_nested_output_type_reports_the_exact_value_site` and
- * `test_invalid_output_list_item_reports_the_exact_item_site`.
- *
- * Changed: `test_code_syntax_error_precedes_an_invalid_output_type` becomes `an invalid output
- * type precedes a CODE syntax error`: the CODE check runs after assembly, so `build`
- * throws the output-type error and compiles nothing.
- *
- * Ported through `loadFlow` (origins resolve through `loaded.originResolver`):
- * `test_multi_node_def_output_contract_uses_the_nested_node_site`,
- * `test_flat_def_output_contract_uses_the_projected_def_output_site`,
- * `test_external_alias_rebases_every_output_contract_origin` and the fingerprint half of the
- * formatting row.
- *
- * Ported through `loadFlow` and `runFlow`: `test_root_output_failure_selects_the_contract_root`
- * and `test_scalar_list_output_failure_falls_back_to_the_contract_root`.
- *
- * Covered by `run-core/compose_node_output_contract_origins__nested_output_failure_frame`:
- * `test_nested_output_failure_selects_the_exact_contract_field`; by
- * `run-core/compose_node_output_contract_origins__named_call_output_failure_frames`:
- * `test_named_call_output_failure_keeps_call_ancestry_and_exact_child_field`.
- */
+/** The authored-site origins of a node's `output:` contract. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

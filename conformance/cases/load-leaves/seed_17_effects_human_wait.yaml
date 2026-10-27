@@ -1,4 +1,3 @@
-# From tests/seeds/17-effects-human-wait.yaml.
 # An ask with a typed answer, a `case ... on` it, a sleep `until` and `depends_on:` load.
 kind: load
 flow: |

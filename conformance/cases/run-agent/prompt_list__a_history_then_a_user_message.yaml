@@ -1,4 +1,4 @@
-# TS-only: an AGENT `prompt:` list sends the system message, then the spliced history's turns
+# An AGENT `prompt:` list sends the system message, then the spliced history's turns
 # with their roles, then the user message, as separate messages.
 # The flow returns the history with the new turn appended.
 kind: run

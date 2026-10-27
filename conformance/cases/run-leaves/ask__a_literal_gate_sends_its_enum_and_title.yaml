@@ -1,5 +1,3 @@
-# From tests/engine/test_blocking_human_input.py::test_prompt_only_returns_host_answer_with_trusted_metadata
-# and tests/engine/test_answer_schema.py::test_literal_enum_carries_values.
 # An ask typed Literal(...) sends its tags as the answer schema's enum, and its `node_name:` as
 # the title.
 kind: run

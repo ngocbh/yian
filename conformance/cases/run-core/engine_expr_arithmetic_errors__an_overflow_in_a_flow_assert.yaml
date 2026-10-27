@@ -1,5 +1,5 @@
-# hand TS expect: 2.0 ** 5000 is inf in TS (infinity is a float value) and inf > 0 holds, so the START assert passes
-# and the run succeeds; output only (no TS trace or events). python_expect is Python's assertion failure.
+# 2.0 ** 5000 is inf (infinity is a float value) and inf > 0 holds, so the START assert passes
+# and the run succeeds; output only (no trace or events).
 kind: run
 flow: |2
 

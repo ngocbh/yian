@@ -1,4 +1,3 @@
-# TS-only: Python records no step for a model retry.
 # The agent's first attempt fails with a 503 (YIAN_MODEL_RETRIES=1, a draw of 0: a 0.5 s wait)
 # and is written as a failed model_call (record 9); the crash cuts the run in the wait, losing
 # the second attempt's reply. The resumed agent waits the recorded 0.5 s again and makes the

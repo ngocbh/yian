@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e26-three-level-raise.yaml.
 # A CODE throw two CALLs deep fails `outer/via/boom`: frames both CALLs, then the `code:`.
 # The header's `outer/mid/boom` is stale: the CALL node `via` namespaces the leaf, `outer/via/boom`.
 kind: run

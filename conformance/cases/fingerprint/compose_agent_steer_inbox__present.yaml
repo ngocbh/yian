@@ -1,4 +1,4 @@
-# TS-only: a steer inbox is identity through its wiring (yian #1025).
+# A steer inbox is identity through its wiring (yian #1025).
 kind: fingerprint
 flow: |
   id: steer

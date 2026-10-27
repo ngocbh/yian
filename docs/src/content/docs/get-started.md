@@ -30,8 +30,8 @@ $ npx @ngocbh/yian --version
 ```
 
 :::caution
-Always spell out the package name. Plain `npx yian` or `bunx yian` fetches a different,
-unrelated package called `yian`.
+Always spell out the package name. Where yian isn't installed, plain `npx yian` or `bunx yian`
+fetches a different, unrelated package called `yian`.
 :::
 
 The rest of the docs write the command as `yian`. Run `yian --help` to list the commands.

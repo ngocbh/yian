@@ -1177,18 +1177,25 @@ describe("main", () => {
     ran = [];
   });
 
+  /** Return a new temporary directory, removed after the test. */
+  function caseRoot(): string {
+    const root = mkdtempSync(join(tmpdir(), "conformance-cases-"));
+    roots.push(root);
+    return root;
+  }
+
   /**
-   * Run `main` over `files` in a `cases/` directory, with `fixtures` beside it and `kinds`
-   * injected; return its exit code and output.
+   * Run `main` over `files` in `root`'s `cases/` directory, with `fixtures` beside it and `kinds`
+   * injected; return its exit code and output. A test reading `root` after passes its own, not
+   * the last in `roots`, which a timed-out test still running may have added to.
    */
   async function run(
     argv: string[],
     files: Record<string, string> = FILES,
     fixtures: Record<string, string> = {},
     kinds: Partial<Record<Kind, KindRunner>> = { expr },
+    root = caseRoot(),
   ) {
-    const root = mkdtempSync(join(tmpdir(), "conformance-cases-"));
-    roots.push(root);
     const casesDir = join(root, "cases");
     const written = [
       ...Object.entries(files).map(([name, text]) => [join(casesDir, name), text] as const),
@@ -1506,9 +1513,10 @@ describe("main", () => {
 
   test("writes a golden log with --write-logs, then compares it byte for byte", async () => {
     const kinds = { run: RUNNERS.run! };
-    const written = await run(["--write-logs", "--case", "a/two"], { "a/two.yaml": TWO_NODES }, {}, kinds);
+    const root = caseRoot();
+    const written = await run(["--write-logs", "--case", "a/two"], { "a/two.yaml": TWO_NODES }, {}, kinds, root);
     expect(written.code).toBe(0);
-    const golden = readFileSync(join(roots.at(-1)!, "cases", "a", "two.log.jsonl"), "utf8");
+    const golden = readFileSync(join(root, "cases", "a", "two.log.jsonl"), "utf8");
     const lines = golden.trimEnd().split("\n");
     expect(lines).toHaveLength(17);
     expect(lines[1]).toContain('"payload":{"key":"system.now","kind":"datetime","node_id":"__start__","value":"<masked>"}');
@@ -1566,13 +1574,14 @@ describe("main", () => {
     );
     expect(edited).not.toBe(FORMS);
     const argv = ["--write-expect", "--case", "a/forms"];
-    const written = await run(argv, { "a/forms.yaml": edited }, {}, kinds);
+    const root = caseRoot();
+    const written = await run(argv, { "a/forms.yaml": edited }, {}, kinds, root);
     expect(written).toEqual({
       code: 0,
       out: ["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"],
       err: [],
     });
-    const path = join(roots.at(-1)!, "cases", "a", "forms.yaml");
+    const path = join(root, "cases", "a", "forms.yaml");
     const text = readFileSync(path, "utf8");
     // Comments, styles and key order stay.
     expect(text).toBe(FORMS);
@@ -1585,19 +1594,20 @@ describe("main", () => {
     ]);
     expect(typeof (trace[9]![2] as { value: Case }).value["f"]).toBe("number");
     // Run again, it writes nothing.
-    const again = await run(argv, { "a/forms.yaml": text }, {}, kinds);
+    const again = await run(argv, { "a/forms.yaml": text }, {}, kinds, root);
     expect(again.out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(text);
+    expect(readFileSync(path, "utf8")).toBe(text);
   });
 
   test("--write-expect writes a whole number in an event or chunk without a fraction", async () => {
     const cut = readFileSync(join(CASES, "run-agent", "model_stream_cut.yaml"), "utf8");
     const wrong = cut.replace("chunk: lo, final: false, n: 1, index: 1}", "chunk: lo, final: false, n: 7, index: 1}");
     expect(wrong).not.toBe(cut);
-    const written = await run(["--write-expect"], { "a/cut.yaml": wrong }, {}, { run: RUNNERS.run! });
+    const root = caseRoot();
+    const written = await run(["--write-expect"], { "a/cut.yaml": wrong }, {}, { run: RUNNERS.run! }, root);
     expect(written.out).toEqual(["wrote a/cut: stream", "1 case: 1 passed, 0 failed, 0 pending"]);
     // Numbers compare by value in a stream, so the int stays an int, not `1.0`.
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "cut.yaml"), "utf8")).toBe(cut);
+    expect(readFileSync(join(root, "cases", "a", "cut.yaml"), "utf8")).toBe(cut);
   });
 
   test("--write-expect leaves a `?` in a flow collection bare, as YAML 1.2 allows", async () => {
@@ -1605,9 +1615,10 @@ describe("main", () => {
       .replace("output: {id: <id:1>, f: 2.0, big: 9007199254740993}", "output: {id: <id:1>, f: 2.0, big: 9007199254740993, q: \"why?\"}")
       .replace("{value: {big: 9007199254740993, f: 2.0, id: <id:1>}}", "{value: {big: 1}}");
     expect(asked).not.toBe(FORMS);
-    const written = await run(["--write-expect"], { "a/forms.yaml": asked }, {}, { run: RUNNERS.run! });
+    const root = caseRoot();
+    const written = await run(["--write-expect"], { "a/forms.yaml": asked }, {}, { run: RUNNERS.run! }, root);
     expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
-    const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
+    const text = readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8");
     expect(text).toContain("q: why?}}]");
     expect(text).not.toContain('q: "why?"}}]');
   });
@@ -1622,9 +1633,10 @@ describe("main", () => {
     expect(block).not.toBe(FORMS);
     const edited = block.replace("    - value: {big: 9007199254740993,", "    - value: {big: 1,");
     expect(edited).not.toBe(block);
-    const written = await run(["--write-expect"], { "a/forms.yaml": edited }, {}, kinds);
+    const root = caseRoot();
+    const written = await run(["--write-expect"], { "a/forms.yaml": edited }, {}, kinds, root);
     expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
-    const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
+    const text = readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8");
     expect(text).toBe(block);
   });
 
@@ -1632,24 +1644,26 @@ describe("main", () => {
     const kinds = { run: RUNNERS.run! };
     // Padding inside braces is a spelling the writer doesn't keep.
     const padded = FORMS.replace("{value: 1}]", "{ value: 2 }]");
-    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": padded }, {}, kinds);
+    const root = caseRoot();
+    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": padded }, {}, kinds, root);
     expect(code).toBe(1);
     expect(out[0]).toBe(
       "FAIL a/forms: --write-expect can't write expect back: the writer doesn't reproduce its text",
     );
     expect(out.at(-1)).toBe("1 case: 0 passed, 1 failed, 0 pending");
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(padded);
+    expect(readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8")).toBe(padded);
   });
 
   test("--write-expect leaves a case whose output differs as it is, and fails it", async () => {
     const kinds = { run: RUNNERS.run! };
     const wrong = FORMS.replace("output: {id: <id:1>, f: 2.0,", "output: {id: <id:1>, f: 3.0,")
       .replace("{value: 1}", "{value: 2}");
-    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": wrong }, {}, kinds);
+    const root = caseRoot();
+    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": wrong }, {}, kinds, root);
     expect(code).toBe(1);
     expect(out[0]).toBe("FAIL a/forms: output differs");
     expect(out.at(-1)).toBe("1 case: 0 passed, 1 failed, 0 pending");
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(wrong);
+    expect(readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8")).toBe(wrong);
   });
 });
 

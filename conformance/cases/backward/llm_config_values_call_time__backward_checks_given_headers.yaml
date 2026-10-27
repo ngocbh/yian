@@ -3,7 +3,6 @@
 # run-map-call/seed_e24_nested_code_raise), and the TS `code:` scalar spans columns 11-73; Python's message and
 # columns 11-31 are in python_expect.
 kind: backward
-rules: [code, run-log]
 flow: |
   id: f
   name: f
@@ -13,20 +12,6 @@ flow: |
       kind: code
       output: str
       code: "throw new RangeError(\"integer division or modulo by zero\")"  # fails on purpose
-    chat:
-      kind: agent
-      prompt: Go.
-      llm_config: {model: '${pick.output}'}
-  output: ${chat.output}
-python_flow: |
-  id: f
-  name: f
-  llm_config: {provider: openai}
-  nodes:
-    pick:
-      kind: code
-      output: str
-      code: "return str(1 // 0)"  # fails on purpose
     chat:
       kind: agent
       prompt: Go.
@@ -131,89 +116,6 @@ expect:
         - label: flow.yaml
           range: [8, 11, 8, 73]
         message: 'RangeError: integer division or modulo by zero'
-        node: pick
-  backward:
-  - raises:
-      class: ValueError
-      message: 'headers must have the header names this run recorded for its host key: missing X-Tenant; not recorded X-Other'
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      frames:
-      - label: flow.yaml
-        range: [8, 11, 8, 31]
-      message: integer division or modulo by zero
-      node: pick
-  trace:
-  - - run_started
-    - null
-    - call_time_llm:
-        agents:
-          chat:
-            provider: openai
-      inputs: {}
-      learnable: true
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - forward_capture:
-        bound_inputs: {}
-        node_data:
-          input_output_paths: {}
-        route:
-          kind: record
-        scope:
-          boundary: start
-          flow_path: []
-          occurrence_path: []
-          static_path: [__start__]
-      value: {}
-  - [node_started, pick]
-  - - node_failed
-    - pick
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [8, 11, 8, 31]
-        message: integer division or modulo by zero
-        node: pick
-      forward_capture:
-        bound_inputs: {}
-        route:
-          kind: record
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [pick]
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output: {}
-  - - NodeStarted
-    - node_id: pick
-  - - NodeFailed
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [8, 11, 8, 31]
-        message: integer division or modulo by zero
-        node: pick
-  - - RunFailed
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [8, 11, 8, 31]
-        message: integer division or modulo by zero
         node: pick
   backward:
   - raises:

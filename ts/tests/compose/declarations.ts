@@ -444,7 +444,7 @@ export function assembleText(
  * prefix; skipped when the expected diagnostic has none), last frame label and last frame range
  * are the expected diagnostic's. With `row.full`, every frame (label, range and note, in order)
  * and the notes must be the expected diagnostic's, an omitted `notes` or frame `note` reading as
- * empty, as the conformance README writes them.
+ * empty, as the conformance spec writes them.
  */
 export function runCase(row: CaseRow): void {
   const { case_, document } = caseDocument(row.id, { file: row.file });

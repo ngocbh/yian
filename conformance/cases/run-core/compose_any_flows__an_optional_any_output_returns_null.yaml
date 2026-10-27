@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: p
   name: p
@@ -13,20 +12,6 @@ flow: |
       output: Optional(Any)
       code: |
         return null
-  output: ${mk.output}
-python_flow: |
-  id: p
-  name: p
-  input:
-    s: !str
-  nodes:
-    mk:
-      kind: code
-      input:
-        s: ${input.s}
-      output: Optional(Any)
-      code: |
-        return None
   output: ${mk.output}
 inputs:
   s: x

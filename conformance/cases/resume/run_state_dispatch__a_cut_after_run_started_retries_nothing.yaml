@@ -4,7 +4,6 @@
 # Records 0-4 are the run start (run_started, then its four commits): __start__'s node_started is refused, so
 # nothing ran before the resume.
 kind: resume
-rules: [run-log]
 flow: |
   id: one-tool
   name: one_tool

@@ -1,7 +1,7 @@
 /**
  * Run the language-neutral conformance cases in `conformance/cases/` against TypeScript yian.
  *
- * Each case file is one test, named by its id `<group>/<name>`. `conformance/README.md` defines
+ * Each case file is one test, named by its id `<group>/<name>`. `conformance/SPEC.md` defines
  * the case format and what each kind checks.
  *
  * Runs under Bun from source and under Node from `dist/`; only `node:` APIs and `yaml`.
@@ -142,12 +142,10 @@ export type Kind =
   | "cli"
   | "json";
 
-// The closed format, as conformance/README.md defines it. Sets, and tables keyed by a checked
+// The closed format, as conformance/SPEC.md defines it. Sets, and tables keyed by a checked
 // `Kind`, so a case value such as `kind: toString` never finds an `Object.prototype` member.
-const COMMON: ReadonlySet<string> = new Set([
-  "kind", "rules", "pending", "python_skip", "expect", "python_expect",
-]);
-const FLOW: ReadonlySet<string> = new Set(["flow", "python_flow", "files", "python_files", "env"]);
+const COMMON: ReadonlySet<string> = new Set(["kind", "pending", "expect"]);
+const FLOW: ReadonlySet<string> = new Set(["flow", "files", "env"]);
 const RUN: ReadonlySet<string> = new Set([...FLOW, "inputs", "run", "host"]);
 const KIND_KEYS = {
   load: FLOW,
@@ -157,7 +155,6 @@ const KIND_KEYS = {
   expr: new Set(["expr", "template", "values", "item", "mode", "typedefs", "env"]),
   value: new Set(["type", "typedefs", "value", "env"]),
   defaults: new Set(["env"]),
-  // Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
   fingerprint: new Set(["flow", "files", "env", "other"]),
   cli: new Set([...FLOW, "args", "stdin", "signal", "http"]),
   json: new Set(["read", "mode", "write", "form"]),
@@ -223,15 +220,10 @@ const USAGE_COUNTS: readonly string[] = ["input_tokens", "output_tokens", "total
 const USAGE_DETAILS: readonly string[] = [
   "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens",
 ];
-const RULES: ReadonlySet<string> = new Set([
-  "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
-  "messages", "text", "yaml", "dates", "infinity", "llm", "code", "failure-codes", "run-log",
-  "null-field-read",
-]);
 // Keys holding text, or plain JSON (`http`), that is not a case value: no codec form, no number
 // checks.
 const TEXT_KEYS: ReadonlySet<string> = new Set([
-  "flow", "python_flow", "other", "files", "python_files", "stdin", "read", "http",
+  "flow", "other", "files", "stdin", "read", "http",
 ]);
 const SECRET_KEYS: ReadonlySet<string> = new Set([
   "run", "resume", "backward", "env", "host", "stdin", "http",
@@ -790,42 +782,31 @@ export function checkCase(case_: Case): Case {
     required: ["kind", "expect", ...(REQUIRED[kind] ?? [])],
   });
   const optional = OPTIONAL[kind] ?? new Set<string>();
-  for (const key of ["expect", "python_expect"]) {
-    if (!Object.hasOwn(case_, key)) continue;
-    const expect = keys(key, case_[key], expectKeys(kind), {
-      known: ALL_EXPECT_KEYS,
-      kind,
-    });
-    const groups: readonly (readonly string[])[] = RESULTS[kind];
-    const results = Object.keys(expect).filter((name) => !optional.has(name));
-    const matches = (group: readonly string[]) =>
-      group.length === results.length && group.every((name) => results.includes(name));
-    if (!groups.some(matches)) {
-      const needs = groups
-        .map((group) => group.map((name) => `\`${name}\``).join(" and "))
-        .join(", or ");
-      throw new Error(`\`${key}\` needs ${needs}`);
-    }
+  const expect = keys("expect", case_["expect"], expectKeys(kind), {
+    known: ALL_EXPECT_KEYS,
+    kind,
+  });
+  const groups: readonly (readonly string[])[] = RESULTS[kind];
+  const results = Object.keys(expect).filter((name) => !optional.has(name));
+  const matches = (group: readonly string[]) =>
+    group.length === results.length && group.every((name) => results.includes(name));
+  if (!groups.some(matches)) {
+    const needs = groups
+      .map((group) => group.map((name) => `\`${name}\``).join(" and "))
+      .join(", or ");
+    throw new Error(`\`expect\` needs ${needs}`);
   }
-  if (Object.hasOwn(case_, "python_expect") && !truthy(get(case_, "rules"))) {
-    throw new Error("`python_expect` needs `rules`");
+  const args = get(case_, "args", []);
+  if (!Array.isArray(args) || args.some((item) => typeof item !== "string")) {
+    throw new Error("`args` must be a list of text");
   }
-  for (const [key, what] of [["rules", "rule ids"], ["args", "text"]] as const) {
-    const items = get(case_, key, []);
-    if (!Array.isArray(items) || items.some((item) => typeof item !== "string")) {
-      throw new Error(`\`${key}\` must be a list of ${what}`);
-    }
-  }
-  const rules = get(case_, "rules", []) as string[];
-  const unknown = rules.filter((rule) => !RULES.has(rule));
-  if (unknown.length > 0) throw new Error(`unknown rule ids: ${unknown.join(", ")}`);
-  for (const key of ["env", "files", "python_files"]) {
+  for (const key of ["env", "files"]) {
     if (Object.values(mapping(key, get(case_, key, {}))).some((text) => typeof text !== "string")) {
       throw new Error(`\`${key}\` values must be text`);
     }
   }
   for (const key of TEXT_KEYS) {
-    if (["files", "python_files", "http"].includes(key)) continue;
+    if (["files", "http"].includes(key)) continue;
     if (typeof get(case_, key, "") !== "string") {
       throw new Error(`\`${key}\` must be text`);
     }
@@ -847,30 +828,24 @@ export function checkCase(case_: Case): Case {
     }
   }
   if (Object.hasOwn(case_, "http")) checkHttp(case_["http"]);
-  for (const key of ["expect", "python_expect"]) {
-    // Checked as a mapping above when present.
-    const expect = get(case_, key, {}) as Case;
-    const paths = mapping(`${key}.exists`, get(expect, "exists", {}));
-    for (const [path, exists] of Object.entries(paths)) {
-      if (typeof exists !== "boolean") {
-        throw new Error(`\`${key}.exists\` values must be true or false`);
-      }
-      if (path.startsWith("/") || path.split("/").includes("..")) {
-        throw new Error(`\`${key}.exists\`: \`${path}\` must be a relative path without \`..\``);
-      }
+  const paths = mapping("expect.exists", get(expect, "exists", {}));
+  for (const [path, exists] of Object.entries(paths)) {
+    if (typeof exists !== "boolean") {
+      throw new Error("`expect.exists` values must be true or false");
+    }
+    if (path.startsWith("/") || path.split("/").includes("..")) {
+      throw new Error(`\`expect.exists\`: \`${path}\` must be a relative path without \`..\``);
     }
   }
   if (Object.hasOwn(case_, "backward")) checkBackward("backward", case_["backward"]);
   if (Object.hasOwn(case_, "host")) checkHost(case_["host"], kind);
-  for (const key of ["expect", "python_expect"]) {
-    const expect = get(case_, key, {}) as Case;
-    if (!Object.hasOwn(expect, "memory")) continue;
+  if (Object.hasOwn(expect, "memory")) {
     if (!Object.hasOwn(get(case_, "host", {}) as Case, "memory")) {
-      throw new Error(`\`${key}.memory\` needs \`host.memory\``);
+      throw new Error("`expect.memory` needs `host.memory`");
     }
-    const texts = Object.values(mapping(`${key}.memory`, expect["memory"]));
+    const texts = Object.values(mapping("expect.memory", expect["memory"]));
     if (texts.some((text) => typeof text !== "string")) {
-      throw new Error(`\`${key}.memory\` values must be text`);
+      throw new Error("`expect.memory` values must be text");
     }
   }
   // Both were checked as mappings above when present.
@@ -1069,7 +1044,7 @@ export function compare(
 /**
  * TS error class names that differ from the case names, mapped to the case names. A change that
  * introduces such a class adds its entry here and the matching row to the error-class table in
- * `conformance/README.md`.
+ * `conformance/SPEC.md`.
  */
 export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map([
   // TS throws a RangeError wherever Python raises ValueError at a yian boundary.
@@ -1257,7 +1232,7 @@ async function runCase(
 }
 
 const USAGE =
-  "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
+  "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] " +
   "[--diagnostic-code CODE] [--crash-sweep] [--write-logs] [--write-expect]";
 
 /** What `main` reads cases from, runs them with and writes lines to. */
@@ -1294,7 +1269,7 @@ export async function main(
   }: MainOptions = {},
 ): Promise<number> {
   const option = { type: "string", multiple: true } as const;
-  let flags: Partial<Record<"group" | "kind" | "case" | "rules" | "diagnostic-code", string[]>> & {
+  let flags: Partial<Record<"group" | "kind" | "case" | "diagnostic-code", string[]>> & {
     "crash-sweep"?: boolean;
     "write-logs"?: boolean;
     "write-expect"?: boolean;
@@ -1304,7 +1279,7 @@ export async function main(
       args: [...argv],
       strict: true,
       options: {
-        group: option, kind: option, case: option, rules: option, "diagnostic-code": option,
+        group: option, kind: option, case: option, "diagnostic-code": option,
         "crash-sweep": { type: "boolean" },
         "write-logs": { type: "boolean" },
         "write-expect": { type: "boolean" },
@@ -1340,16 +1315,14 @@ export async function main(
     try {
       case_ = prepare(checkCase(readCase(readFileSync(join(casesDir, `${id}.yaml`), "utf8"))));
     } catch (error) {
-      // `--kind`, `--rules` and `--diagnostic-code` never hide a broken file; `--group` and
+      // `--kind` and `--diagnostic-code` never hide a broken file; `--group` and
       // `--case`, read from its path, still select or skip it.
       selected.push({ id, unreadable: error instanceof Error ? error.message : String(error) });
       continue;
     }
-    const rules = get(case_, "rules", []) as string[];
     const codes = diagnosticCodes(case_);
     if (
       allows(flags.kind, (wanted) => wanted === case_["kind"]) &&
-      allows(flags.rules, (wanted) => rules.includes(wanted)) &&
       allows(flags["diagnostic-code"], (wanted) => codes.includes(wanted))
     ) {
       selected.push({ id, case_ });
@@ -2030,7 +2003,7 @@ function eventForm(event: RunEvent, flow: ComposedFlow): Value[] {
   return Object.keys(data).length > 0 ? [event.type, data] : [event.type];
 }
 
-// The README's trace table: record kind -> [the payload field naming the node, the payload fields
+// SPEC.md's trace table: record kind -> [the payload field naming the node, the payload fields
 // kept].
 type TraceRow = readonly [string | null, readonly string[]];
 const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
@@ -2148,7 +2121,7 @@ function capture(captured: Case): Case {
   );
 }
 
-/** Return the run log's `lines` projected to the README's trace. */
+/** Return the run log's `lines` projected to SPEC.md's trace. */
 export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
   const failure = (payload: Case): Case => {
     const origins = (payload["trace"] as Case[]).map(
@@ -3294,10 +3267,9 @@ function quoteQuestionMarks(node: unknown): void {
 
 /**
  * Return the case file `text` with each result in `results` written into `expect` in case form
- * (as `updated` changes it), and `run-log` added to its `rules`; a new `rules` goes right after
- * `kind`. Only the lines of `rules` and `expect` change: they are cut from the whole file written
- * again and put in place of the old ones, because the writer spells some other text (block scalar
- * headers, for one) unlike the case.
+ * (as `updated` changes it). Only the lines of `expect` change: they are cut from the whole file
+ * written again and put in place of the old ones, because the writer spells some other text (block
+ * scalar headers, for one) unlike the case.
  */
 function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): string {
   const doc = parseDocument(text, CASE_YAML);
@@ -3318,25 +3290,12 @@ function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): strin
     const value = results.get(name) as Value | undefined;
     if (value !== undefined) pair.value = updated(doc, pair.value, value, { byValue: BY_VALUE.has(name) });
   }
-  const rules = doc.get("rules");
-  if (!isSeq(rules)) {
-    const top = doc.contents as YAMLMap;
-    const kind = top.items.findIndex((pair) => isScalar(pair.key) && pair.key.value === "kind");
-    top.items.splice(kind + 1, 0, doc.createPair("rules", caseNode(doc, ["run-log"])));
-  } else if (!rules.items.some((item) => isScalar(item) && item.value === "run-log")) {
-    rules.add("run-log");
-  }
   quoteQuestionMarks(doc.get("expect"));
   const written = doc.toString(options(indentSeq));
-  let result = text;
-  for (const key of ["expect", "rules"]) {
-    // A new key goes right after `kind`, which is one line.
-    const after = result.indexOf("\n", section(result, "kind")![0]) + 1;
-    const [start, end] = section(result, key) ?? [after, after];
-    result = result.slice(0, start) + cut(written, key) + result.slice(end);
-  }
+  const [start, end] = section(text, "expect")!;
+  const result = text.slice(0, start) + cut(written, "expect") + text.slice(end);
   if (!same(readCase(result), readCase(written))) {
-    throw new Error("rewriting the case changed more than its rules and expect");
+    throw new Error("rewriting the case changed more than its expect");
   }
   return result;
 }

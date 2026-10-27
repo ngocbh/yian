@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: pages
   name: pages
@@ -18,34 +17,6 @@ flow: |
           code: |
             if (inputs["cursor"] === null) throw new Error("body saw a null cursor")
             return ({p1: "p2", p2: null})[inputs["cursor"]] ?? null
-      output:
-        cursor: ${get.output}
-  nodes:
-    pages:
-      kind: loop
-      while: cursor != null
-      input:
-        cursor: ${input.start}
-      call: fetch_page
-  output: ${pages.output}
-python_flow: |
-  id: pages
-  name: pages
-  input:
-    start: !Optional(str)
-  defs:
-    fetch_page:
-      input:
-        cursor: !str
-      nodes:
-        get:
-          kind: code
-          input:
-            cursor: ${input.cursor}
-          output: Optional(str)
-          code: |
-            assert inputs["cursor"] is not None, "body saw a null cursor"
-            return {"p1": "p2", "p2": None}.get(inputs["cursor"])
       output:
         cursor: ${get.output}
   nodes:

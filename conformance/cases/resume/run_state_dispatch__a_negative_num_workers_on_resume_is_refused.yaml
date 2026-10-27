@@ -3,7 +3,6 @@
 # compared: a resume with num_workers other than 0 is grouped as pooled, so its trace is not recorded.
 # Record 8 is n's node_started: the tool runs, its result is refused.
 kind: resume
-rules: [run-log]
 flow: |
   id: one-tool
   name: one_tool

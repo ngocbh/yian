@@ -1,11 +1,6 @@
 kind: expr
-rules: [arithmetic, messages]
 expr: 1 + "a"
 expect:
   raises:
     class: ExpressionError
     message: 'type error evaluating 1 + "a": unsupported operand kinds for `+`: `int` and `str`'
-python_expect:
-  raises:
-    class: ExpressionError
-    message: 'type error evaluating 1 + ''a'': unsupported operand type(s) for +: ''int'' and ''str'''

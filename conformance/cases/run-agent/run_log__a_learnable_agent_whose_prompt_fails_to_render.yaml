@@ -3,7 +3,6 @@
 # prompt, and the run's model config; learning renders the occurrence again up to the same failure.
 kind: run
 # A present null is a value, so the strict prompt refuses the null span (#1149).
-rules: [run-log, null-field-read]
 flow: |
   id: noted
   name: noted

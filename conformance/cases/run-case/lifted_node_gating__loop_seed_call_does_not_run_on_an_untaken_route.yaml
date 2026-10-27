@@ -2,7 +2,6 @@
 # Pins: a LOOP seed `call(...)` never starts on the untaken route.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -16,51 +15,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: ${input.go}
-          then: lp
-      else: skip_it
-    lp:
-      kind: loop
-      times: 1
-      input:
-        s: call(side, tag="seed")
-      nodes:
-        k:
-          kind: code
-          input:
-            s: ${input.s}
-          output:
-            s: str
-          code: |
-            return {"s": inputs["s"]}
-      output: ${k.output}
-    skip_it:
-      kind: code
-      output: str
-      code: return "skipped"
-  output:
-    r: ${skip_it.output :- "none"}
-python_flow: |
-  id: t
-  name: t
-  input:
-    go: !bool
-  defs:
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

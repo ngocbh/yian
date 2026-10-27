@@ -34,40 +34,5 @@ flow: |2
   output: ${main.output}
   asserts:
     - "dbl_call.output >= 0"
-python_flow: |2
-
-  id: ai
-  name: ai
-  input:
-    v: !int
-
-  defs:
-    dbl:
-      input:
-        n: !int
-      nodes:
-        x:
-          kind: code
-          code: tests.engine._compose_codefns:double
-          input:
-            n: ${input.n}
-          output: int
-      output: ${x.output}
-
-  nodes:
-    main:
-      kind: code
-      code: tests.engine._compose_codefns:double
-      input:
-        n: ${input.v}
-      output: int
-    dbl_call:
-      kind: call
-      call: dbl
-      input:
-        n: ${input.v}
-  output: ${main.output}
-  asserts:
-    - "dbl_call.output >= 0"
 expect:
   load: ok

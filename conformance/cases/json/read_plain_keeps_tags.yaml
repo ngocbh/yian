@@ -1,6 +1,5 @@
 kind: json
 # Plain mode decodes neither the tag nor the escape.
-rules: [numbers, infinity]
 read: '[{"$float": "inf"}, {"$record": {"a": 1}}]'
 mode: plain
 expect:

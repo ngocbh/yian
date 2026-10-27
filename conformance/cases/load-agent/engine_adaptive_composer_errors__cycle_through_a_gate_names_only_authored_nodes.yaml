@@ -1,6 +1,5 @@
 # TS spells the node list as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -19,20 +18,6 @@ flow: |
       adaptive_questions:
         prompt: "Q ${proj}"
   output: ${ask.output}
-python_flow: |
-  id: f
-  name: f
-  input: {proj: !str }
-  nodes:
-    b:
-      kind: agent
-      input: {a: '${ask.output}'}
-      prompt: "x ${a}"
-    ask:
-      kind: human_input
-      input: {proj: '${b.output}'}
-      adaptive_questions: {prompt: "Q ${proj}"}
-  output: ${ask.output}
 expect:
   load:
     diagnostics:
@@ -43,19 +28,6 @@ expect:
         range: [5, 3, 5, 4]
       - label: flow.yaml
         range: [10, 3, 10, 6]
-      notes:
-      - ask depends on b (ask.input.proj)
-      - b depends on ask (b.input.a)
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: flow has a cycle involving ['ask', 'b']; flows must be acyclic
-      frames:
-      - label: flow.yaml
-        range: [5, 3, 5, 4]
-      - label: flow.yaml
-        range: [9, 3, 9, 6]
       notes:
       - ask depends on b (ask.input.proj)
       - b depends on ask (b.input.a)

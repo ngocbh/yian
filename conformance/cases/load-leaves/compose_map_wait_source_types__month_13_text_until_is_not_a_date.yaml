@@ -1,5 +1,4 @@
 kind: load
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -27,31 +26,6 @@ flow: |
       code: |
         return 1
   output: ${after.output}
-python_flow: |
-  id: f
-  name: f
-  input:
-    d: !date
-  defs:
-    items:
-      nodes:
-        c:
-          kind: code
-          output: list(str)
-          code: |
-            return ["a", "b"]
-      output: ${c.output}
-  nodes:
-    w:
-      kind: wait
-      until: '2026-13-01'
-    after:
-      kind: code
-      depends_on: [w]
-      output: int
-      code: |
-        return 1
-  output: ${after.output}
 expect:
   load:
     diagnostics:
@@ -60,11 +34,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [19, 14, 19, 26]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'node ''w'' (kind=wait): `until:` must be a date or datetime, but YAML read it as text that is not a date or datetime; write one such as `until: 2026-05-21`, or a reference such as `until: ${input.as_of}`'
-      frames:
-      - label: flow.yaml
-        range: [17, 12, 17, 24]

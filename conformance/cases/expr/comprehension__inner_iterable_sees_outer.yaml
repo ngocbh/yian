@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
 expr: "[m for t in ts for m in t]"
 values: {ts: [[1], [2, 3]]}
 expect:

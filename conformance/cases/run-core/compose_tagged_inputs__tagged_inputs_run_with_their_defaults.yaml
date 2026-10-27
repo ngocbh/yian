@@ -1,6 +1,5 @@
 # Renamed from tests/compose/test_tagged_inputs.py:44's Message: TS yian reserves Message as a built-in type.
 kind: run
-rules: [run-log]
 flow: |
   id: tagged_inputs
   name: tagged_inputs
@@ -19,32 +18,6 @@ flow: |
       kind: code
       output: object
       code: "return {...inputs}"
-      input:
-        qty: ${input.qty}
-        history: ${input.history}
-        model: ${input.model}
-        note: ${input.note}
-        cfg: ${input.cfg}
-        s: ${input.s}
-  output: ${worker.output}
-python_flow: |
-  id: tagged_inputs
-  name: tagged_inputs
-  typedefs:
-    Cfg: {kind: Literal(cfg), a: int}
-    ChatMsg: {role: str, content: str}
-  input:
-    qty: !int
-    history: !list(ChatMsg) []
-    model: !Optional(str)
-    note: !Optional(str) null
-    cfg: !Cfg {kind: cfg, a: 1}
-    s: !str ${x}
-  nodes:
-    worker:
-      kind: code
-      output: object
-      code: return dict(inputs)
       input:
         qty: ${input.qty}
         history: ${input.history}

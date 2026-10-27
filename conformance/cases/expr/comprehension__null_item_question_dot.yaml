@@ -1,5 +1,4 @@
 kind: expr
-rules: [null-field-read]
 # An item is returned as is, as in Python; `?.k` on a null item reads null.
 expr: "[[x for x in [null, 1]], [x for x in [null, 1] if x], [x?.k for x in [null]]]"
 expect:

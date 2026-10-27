@@ -1,5 +1,4 @@
 kind: json
-rules: [numbers, infinity]
 read: '[{"$record": {"$float": "inf"}}, {"$record": {"$record": {"a": 1}}}]'
 mode: codec
 expect:

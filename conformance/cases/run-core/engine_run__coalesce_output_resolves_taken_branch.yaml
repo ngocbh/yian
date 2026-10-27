@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: run-case
@@ -29,39 +28,6 @@ flow: |2
     cautious:
       kind: code
       code: ./fixtures/compose_codefns.ts:cautious
-      input:
-        topic: ${input.topic}
-      output: str
-  output: ${positive.output | cautious.output}
-python_flow: |2
-
-  id: run-case
-  name: case_flow
-  input:
-    topic: !str
-    seed: !float
-  nodes:
-    score:
-      kind: code
-      code: tests.engine._compose_codefns:score
-      input:
-        seed: ${input.seed}
-      output: float
-    gate:
-      kind: case
-      cases:
-        - when: "score.output >= 0.5"
-          then: positive
-      else: cautious
-    positive:
-      kind: code
-      code: tests.engine._compose_codefns:positive
-      input:
-        topic: ${input.topic}
-      output: str
-    cautious:
-      kind: code
-      code: tests.engine._compose_codefns:cautious
       input:
         topic: ${input.topic}
       output: str

@@ -1,6 +1,5 @@
 # A finished run: succeeded, nothing in flight, no crashed attempts.
 kind: cli
-python_skip: "yian status is TS-only"
 files:
   run.jsonl: |
     {"at":"2026-10-21T17:52:48.430Z","kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow":null,"flow_fingerprint":"fa51bad8a38bedb69c3b2a72adfe8207098933ee92ea65f8aa4e46bc7576b746","learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"parent":null,"skills":{},"start_wiring_override":{},"tool_groups":{},"tools":{},"yian_version":"0.0.0"},"run_id":"dec0b325312242018a72385ba6c51119","schema":23,"seq":0}

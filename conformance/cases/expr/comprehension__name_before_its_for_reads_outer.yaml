@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
 expr: "[y for x in xs if y for y in ys]"
 values: {"y": 1, xs: [1, 2], ys: [7]}
 expect:

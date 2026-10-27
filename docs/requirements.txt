@@ -1,0 +1,4 @@
+# The documentation build (MkDocs with Material), for docs.yml and Read the Docs.
+mkdocs==1.6.1
+mkdocs-material==9.8.0
+pymdown-extensions==12.3

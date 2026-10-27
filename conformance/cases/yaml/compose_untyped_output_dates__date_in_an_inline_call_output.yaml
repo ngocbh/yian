@@ -1,6 +1,5 @@
 # TS reads the unquoted date as text (rules: dates); Python's error in python_expect.
 kind: load
-rules: [dates]
 flow: |
   id: p
   name: p
@@ -17,11 +16,3 @@ flow: |
   output: ${c.output}
 expect:
   load: ok
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''d'': `2026-01-01` is not a JSON value (YAML reads it as a date); quote it to keep it as text: `d: "2026-01-01"`'
-      frames:
-      - label: flow.yaml
-        range: [11, 10, 11, 20]

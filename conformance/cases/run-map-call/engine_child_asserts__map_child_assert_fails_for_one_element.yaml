@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: dm
@@ -15,37 +14,6 @@ flow: |2
         x:
           kind: code
           code: ./fixtures/compose_codefns.ts:double
-          input:
-            n: ${input.n}
-          output: int
-      output: ${x.output}
-      asserts:
-        - "input.n >= 0"
-        - "x.output < 100"
-
-  nodes:
-    map_it:
-      kind: map
-      call: checked
-      over: ${input.vs}
-      input:
-        n: ${item}
-  output: ${map_it.output}
-python_flow: |2
-
-  id: dm
-  name: dm
-  input:
-    vs: !list(int)
-
-  defs:
-    checked:
-      input:
-        n: !int
-      nodes:
-        x:
-          kind: code
-          code: tests.engine._compose_codefns:double
           input:
             n: ${input.n}
           output: int

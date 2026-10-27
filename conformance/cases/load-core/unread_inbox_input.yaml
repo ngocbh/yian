@@ -1,6 +1,5 @@
 # TS-only: an inbox input nothing reads is a load error, at its declaration.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

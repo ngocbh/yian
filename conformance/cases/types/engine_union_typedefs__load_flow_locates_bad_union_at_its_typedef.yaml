@@ -11,18 +11,6 @@ flow: |
   nodes:
     a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
   output: {y: "${a.output}"}
-python_flow: |
-  id: f
-  name: f
-  input:
-    x: !str
-  typedefs:
-    Bull: {conviction: float}
-    Bear: {conviction: float}
-    Mood: Union(Bull, Bear)
-  nodes:
-    a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
-  output: {y: "${a.output}"}
 expect:
   load:
     diagnostics:

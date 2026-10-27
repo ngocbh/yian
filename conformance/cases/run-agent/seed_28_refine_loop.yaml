@@ -3,7 +3,6 @@
 # iteration, 0.9 stops it, and the loop commits the carried record under `polish`.
 # The header's "need a provider to RUN" is met by scripted replies.
 kind: run
-rules: [run-log]
 flow: |
   # 28 — loop + the new expression grammar.
   #

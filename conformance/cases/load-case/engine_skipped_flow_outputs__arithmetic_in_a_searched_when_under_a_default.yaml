@@ -1,5 +1,4 @@
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -49,11 +48,3 @@ expect:
         frames:
           - label: flow.yaml
             range: [26, 15, 26, 44]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'node ''gate2'' cases[0].when: ((a.output.n + 1) :- 0) > 1 does arithmetic on a.output.n, which is null when node ''a'' is skipped; give it a default with :-, e.g. (a.output.n :- <default>)'
-      frames:
-      - label: flow.yaml
-        range: [26, 15, 26, 44]

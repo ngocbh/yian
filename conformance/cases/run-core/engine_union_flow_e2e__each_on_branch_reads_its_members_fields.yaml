@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: unions
   name: unions
@@ -47,64 +46,6 @@ flow: |
         qty: ${d.output.qty}
       code: |
         return "buy " + String(inputs["qty"])
-      output: str
-    log_hold:
-      kind: code
-      input:
-        note: ${d.output.note}
-      code: |
-        return "hold: " + inputs["note"]
-      output: str
-  output:
-    action: ${d.output.action}
-    trade: ${place_buy.output | __call_0.output | log_hold.output}
-python_flow: |
-  id: unions
-  name: unions
-  typedefs:
-    Buy: {action: 'Literal(buy)', qty: int}
-    Sell: {action: 'Literal(sell)', qty: int, price: float}
-    Hold: {action: 'Literal(hold)', note: str}
-    Decision: Union(Buy, Sell, Hold)
-  input:
-    decision: !object
-  defs:
-    sell_flow:
-      input:
-        order: !Sell
-      nodes:
-        fill:
-          kind: code
-          input:
-            qty: ${input.order.qty}
-            price: ${input.order.price}
-          code: |
-            return inputs["qty"] * inputs["price"]
-          output: float
-      output: ${fill.output}
-  nodes:
-    d:
-      kind: code
-      input:
-        decision: ${input.decision}
-      code: |
-        return inputs["decision"]
-      output: Decision
-    route:
-      kind: case
-      on: ${d.output.action}
-      cases:
-        - when: buy
-          then: place_buy
-        - when: sell
-          then: call(sell_flow, order=${d.output})
-      else: log_hold
-    place_buy:
-      kind: code
-      input:
-        qty: ${d.output.qty}
-      code: |
-        return "buy " + str(inputs["qty"])
       output: str
     log_hold:
       kind: code

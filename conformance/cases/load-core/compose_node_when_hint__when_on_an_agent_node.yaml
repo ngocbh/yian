@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only (#1025): the allowed list has steer_inbox, which Python yian doesn't have"
 flow: |
   id: f
   name: f

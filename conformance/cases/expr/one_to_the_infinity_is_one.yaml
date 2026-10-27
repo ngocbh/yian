@@ -1,5 +1,4 @@
 kind: expr
 # `**` follows IEEE `pow`.
 expr: "1 ** inf"
-rules: [infinity]
 expect: {value: 1.0}

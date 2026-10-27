@@ -1,5 +1,4 @@
 kind: json
-rules: [canonical]
 write: 9007199254740992
 form: canonical
 expect:

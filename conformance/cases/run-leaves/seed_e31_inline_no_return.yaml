@@ -2,8 +2,6 @@
 # A TS inline CODE body with no `return` loads, then fails its node at the `code:` value.
 # The header (the has-`return` load gate) describes the Python form.
 kind: run
-# A body returning nothing is a TS run-time rule; Python rejects it at load, so the case is TS-only.
-rules: [code, run-log]
 flow: |
   # e31 — an inline CODE body with no `return`. COMPILE: the has-`return` load gate rejects
   # it with a located LoadError before any node runs — a value-producing node that never

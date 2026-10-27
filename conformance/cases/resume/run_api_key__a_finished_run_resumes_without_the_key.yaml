@@ -2,7 +2,6 @@
 # Also ::test_backward_sends_the_key_and_records_none_of_it (its keyless resume). A finished run's resume skips
 # the host-key check: without api_key it returns the recorded result.
 kind: resume
-rules: [run-log]
 flow: |
   id: keyed
   name: keyed

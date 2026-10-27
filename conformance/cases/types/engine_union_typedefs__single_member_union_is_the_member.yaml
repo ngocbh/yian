@@ -1,5 +1,4 @@
 kind: value
-rules: [messages]
 typedefs:
   Buy:
     action: Literal(buy)
@@ -12,9 +11,4 @@ expect:
   raises:
     class: TypeCheckError
     message: '"sell" is not a member of variant ["buy"]'
-    path: [action]
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: '''sell'' is not a member of variant [''buy'']'
     path: [action]

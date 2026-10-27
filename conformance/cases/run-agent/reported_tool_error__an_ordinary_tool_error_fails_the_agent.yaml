@@ -3,7 +3,6 @@
 # Any other tool error fails the AGENT node with the error's message ("disk on fire") after one
 # model call; the call's ToolCallFinished names the error by its type (RuntimeError).
 kind: run
-rules: [run-log]
 flow: |
   id: reported
   name: reported

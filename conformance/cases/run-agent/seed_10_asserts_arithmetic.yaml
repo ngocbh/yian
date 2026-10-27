@@ -2,7 +2,6 @@
 # Node and flow asserts pass, and the `when:` with arithmetic and `and` holds, so `take` runs;
 # `skip` is skipped and gets no model call.
 kind: run
-rules: [run-log]
 flow: |
   # 10 — Arithmetic + boolean logic in when: / asserts:.
   #

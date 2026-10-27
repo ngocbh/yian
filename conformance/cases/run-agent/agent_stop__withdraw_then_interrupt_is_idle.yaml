@@ -3,8 +3,6 @@
 # again with nothing unread, so the interrupt that follows records nothing. The next message gets
 # a full reply, and the log holds no `interrupted` record.
 kind: run
-python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
-rules: [run-log]
 flow: |
   id: stop
   name: stop

@@ -7,7 +7,6 @@
 # unchanged; the next call is a whole pass (AGENTs and learner again) that commits under attempt 2.
 # YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
 kind: backward
-rules: [run-log]
 flow: |
   id: backward-recovery
   name: backward_recovery

@@ -1,9 +1,7 @@
 kind: expr
 # `*` no longer repeats text; the message shows the operands in the text form.
 expr: '"ab" * 2'
-rules: [arithmetic, messages]
 expect:
   raises:
     class: ExpressionError
     message: 'type error evaluating "ab" * 2: unsupported operand kinds for `*`: `str` and `int`'
-python_expect: {value: abab}

@@ -2,10 +2,6 @@
 # A CALL through a `uses:` alias grows the child's nodes under `research/`, the child's date
 # default filling the omitted `as_of`; an AGENT then reads fields of the CALL's record.
 kind: run
-# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS stores the int
-# 100 (an integral host number reads as an int and a float slot keeps it); `expect` doesn't pin the
-# trace yet, and `python_expect` pins Python's.
-rules: [numbers, int-in-float]
 flow: |
   # 04 — CALL: typed function application (call another flow).
   #
@@ -92,52 +88,6 @@ files:
     output:
       report: ${synth.output}
       asof:   ${input.as_of}
-# The child's CODE reference differs by language: `files` names the TS function,
-# this the Python one.
-python_files:
-  03-research-one.yaml: |
-    # 03 — Single-topic research (a reusable child flow).
-    #
-    # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
-    # This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
-    # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
-    # object output, and a node binding from another node's object field.
-
-    id: research-one
-    name: research_one
-    description: Research a single topic into {report, asof} as of a date.
-
-    input:
-      topic: !str
-      as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
-
-    nodes:
-      fetch:
-        kind: code
-        input:
-          topic: ${input.topic}
-          as_of:  ${input.as_of}
-        output:                    # an object: values + recent headlines
-          values: list(float)
-          news:   list(str)
-        code: tests.seeds.fns:fetch_facts   # deterministic data pull
-
-      synth:
-        kind: agent
-        input:
-          topic: ${input.topic}
-          asof:   ${input.as_of}
-          values: ${fetch.output.values}          # dot into fetch's object output
-          news:   ${fetch.output.news}
-        output: str
-        prompt: |-
-          Write a neutral research brief for ${topic} as of ${asof}.
-          Recent closes: ${values}. Headlines: ${news}.
-          Cite the headlines as [n]. No recommendations.
-
-    output:
-      report: ${synth.output}
-      asof:   ${input.as_of}
 # The flows name no provider or model, so `run.llm_config` gives both to every AGENT, the
 # child's included; run start resolves them, and the key makes the recorded connection source
 # `environment`, which the trace pins.
@@ -162,48 +112,3 @@ expect:
   output:
     status: succeeded
     output: {report: "ACME closed near 102 [1][2].", observation: Closes stayed in a narrow band.}
-python_expect:
-  output:
-    status: succeeded
-    output: {report: "ACME closed near 102 [1][2].", observation: Closes stayed in a narrow band.}
-  trace:
-    - - run_started
-      - null
-      - inputs: {topic: ACME}
-        learnable: false
-        num_workers: 0
-        effective_llm_by_static_path:
-          research/synth:
-            provider: openai
-            model: gpt-5.5
-            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
-          take:
-            provider: openai
-            model: gpt-5.5
-            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: ACME}}]
-    - [node_started, research]
-    # The seed is the CALL's bound arguments; the child's START fills the `as_of` default.
-    - [node_expanded, research, {seed: {topic: ACME}, prune_ids: []}]
-    - [node_started, research/__start__]
-    - [node_succeeded, research/__start__, {value: {topic: ACME, as_of: "2026-01-01"}}]
-    - [node_started, research/fetch]
-    - - node_succeeded
-      - research/fetch
-      - value:
-          values: [100.0, 101.5, 99.75, 102.25]
-          news: ["ACME: quarterly update", "ACME: reviewer note"]
-    - [node_started, research/synth]
-    - [node_succeeded, research/synth, {value: "ACME closed near 102 [1][2]."}]
-    - [node_started, research/__end__]
-    - - node_succeeded
-      - research/__end__
-      - value: {report: "ACME closed near 102 [1][2].", asof: "2026-01-01"}
-        commit_target: research
-    - [node_started, take]
-    - [node_succeeded, take, {value: Closes stayed in a narrow band.}]
-    - [node_started, __end__]
-    - - node_succeeded
-      - __end__
-      - value: {report: "ACME closed near 102 [1][2].", observation: Closes stayed in a narrow band.}

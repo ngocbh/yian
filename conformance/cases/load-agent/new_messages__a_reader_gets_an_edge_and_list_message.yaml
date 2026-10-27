@@ -1,6 +1,5 @@
 # A CODE node reads an AGENT's new messages through a typed list(Message) input.
 kind: load
-python_skip: "new_messages is TS-only (#1081)"
 flow: |
   id: f
   name: f

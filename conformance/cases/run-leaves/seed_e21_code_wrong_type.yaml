@@ -1,8 +1,6 @@
 # From tests/seeds/errors/e21-code-wrong-type.yaml.
 # A reference CODE function's text return into an `int` output fails `contract.output`.
 kind: run
-# The message quotes the returned text as a value: JSON text in TS, a repr in Python.
-rules: [messages, run-log]
 flow: |
   # e21 — a CODE node returns the wrong type for its declared `output:`. RUNTIME:
   # the typed write boundary rejects it.
@@ -17,22 +15,6 @@ flow: |
         topic: ${input.topic}
       output: int                       # declares int...
       code: ./fixtures/seeds.ts:wrong_type  # ...returns "not-an-int"
-  output: ${calc.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # e21 — a CODE node returns the wrong type for its declared `output:`. RUNTIME:
-  # the typed write boundary rejects it.
-  id: err-code-wrong-type
-  name: err_code_wrong_type
-  input:
-    topic: !str
-  nodes:
-    calc:
-      kind: code
-      input:
-        topic: ${input.topic}
-      output: int                       # declares int...
-      code: tests.seeds.fns:wrong_type  # ...returns "not-an-int"
   output: ${calc.output}
 inputs: {topic: X}
 run: {run_id: r1, num_workers: 0}
@@ -60,25 +42,5 @@ expect:
       - failure:
           code: contract.output
           message: '"not-an-int" does not match declared type int'
-          node: calc
-          frames: [{label: flow.yaml, range: [12, 13, 12, 16]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.output
-      message: "'not-an-int' does not match declared type int"
-      node: calc
-      frames: [{label: flow.yaml, range: [12, 13, 12, 16]}]
-  trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
-    - [node_started, calc]
-    - - node_failed
-      - calc
-      - failure:
-          code: contract.output
-          message: "'not-an-int' does not match declared type int"
           node: calc
           frames: [{label: flow.yaml, range: [12, 13, 12, 16]}]

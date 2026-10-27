@@ -1,7 +1,6 @@
 # TS writes the missing-field list in the text form (rules: messages); Python's wording in python_expect.
 # Renamed from tests/compose/test_tagged_inputs.py:44's Message: TS yian reserves Message as a built-in type.
 kind: load
-rules: [messages]
 flow: |
   id: tagged_inputs
   name: tagged_inputs
@@ -14,31 +13,11 @@ flow: |
   kind: code
   output: object
   code: "return {...inputs}"
-python_flow: |
-  id: tagged_inputs
-  name: tagged_inputs
-  typedefs:
-    Cfg: {kind: Literal(cfg), a: int}
-    ChatMsg: {role: str, content: str}
-  input:
-    qty: !int
-    cfg: !Cfg {a: 1}
-  kind: code
-  output: object
-  code: return dict(inputs)
 expect:
   load:
     diagnostics:
     - code: compose.load
       message: '''cfg'': the value is not a valid Cfg: record missing required fields: ["kind"] (at `cfg.kind`)'
-      frames:
-      - label: flow.yaml
-        range: [8, 8, 8, 19]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: '''cfg'': the value is not a valid Cfg: record missing required fields: [''kind''] (at `cfg.kind`)'
       frames:
       - label: flow.yaml
         range: [8, 8, 8, 19]

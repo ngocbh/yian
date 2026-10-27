@@ -2,8 +2,6 @@
 # A CODE throw inside a called `defs:` child fails `run/boom`: frames the CALL, then the `code:`.
 # The header's `--engine-trace` is a `yian run` flag; this run case doesn't use it.
 kind: run
-# A thrown error's text and the reference's length differ by language.
-rules: [code, run-log]
 flow: |
   # e24 — a CODE callable that raises INSIDE a called child (a `defs:` sub-flow).
   #
@@ -25,41 +23,6 @@ flow: |
         boom:
           kind: code
           code: ./fixtures/seeds.ts:fail_always
-          input:
-            topic: ${input.topic}
-          output: str
-      output: ${boom.output}
-
-  nodes:
-    run:
-      kind: call
-      call: inner
-      input:
-        topic: ${input.topic}
-
-  output: ${run.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # e24 — a CODE callable that raises INSIDE a called child (a `defs:` sub-flow).
-  #
-  # RUNTIME: the inner `boom` node fails with runtime id `run/boom`. Its canonical
-  # origin trace contains the outer CALL site followed by the inner `code:` scalar,
-  # independent of that runtime namespace. Also exercises `--engine-trace`.
-  # The resolver supplies both frames; the CLI neither parses the id nor walks the
-  # baked child graph.
-  id: err-nested-code-raise
-  name: err_nested_code_raise
-  input:
-    topic: !str
-
-  defs:
-    inner:
-      input:
-        topic: !str
-      nodes:
-        boom:
-          kind: code
-          code: tests.seeds.fns:fail_always
           input:
             topic: ${input.topic}
           output: str
@@ -111,31 +74,3 @@ expect:
           frames:
             - {label: flow.yaml, range: [27, 3, 27, 6]}
             - {label: flow.yaml, range: [20, 15, 20, 46]}
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      message: "intentional CODE failure"
-      node: run/boom
-      frames:
-        - {label: flow.yaml, range: [27, 3, 27, 6]}
-        - {label: flow.yaml, range: [20, 15, 20, 42]}
-  trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
-    - [node_started, run]
-    - [node_expanded, run, {seed: {topic: X}, prune_ids: []}]
-    - [node_started, run/__start__]
-    - [node_succeeded, run/__start__, {value: {topic: X}}]
-    - [node_started, run/boom]
-    - - node_failed
-      - run/boom
-      - failure:
-          code: node.execute
-          message: "intentional CODE failure"
-          node: run/boom
-          frames:
-            - {label: flow.yaml, range: [27, 3, 27, 6]}
-            - {label: flow.yaml, range: [20, 15, 20, 42]}

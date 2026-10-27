@@ -2,7 +2,6 @@
 # A `Literal(...)` AGENT output takes one tag from its wrapped carrier; the flow returns it in a
 # one-field object.
 kind: run
-rules: [run-log]
 flow: |
   # classify — one AGENT that labels text with a constrained (Literal) output.
   #

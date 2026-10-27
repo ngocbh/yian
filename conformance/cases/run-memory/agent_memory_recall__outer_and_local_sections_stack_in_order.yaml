@@ -4,7 +4,6 @@
 # numbered from 1: outer first even though `own` sorts before `team`, and the flow-level
 # declaration comes after the AGENT's in the file.
 kind: run
-rules: [run-log]
 flow: |
   id: office
   name: office

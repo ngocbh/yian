@@ -2,8 +2,6 @@
 # A message sent to the waiting take is withdrawn before the take wakes: `inbox_withdrawn` names
 # it, and the take waits again. The next message is the one it takes.
 kind: run
-python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
-rules: [run-log]
 flow: |
   id: f
   name: f

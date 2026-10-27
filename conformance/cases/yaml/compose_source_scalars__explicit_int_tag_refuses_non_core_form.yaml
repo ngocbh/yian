@@ -1,5 +1,4 @@
 kind: load
-rules: [yaml]
 flow: |
   id: p
   name: p
@@ -14,18 +13,6 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      frames:
-      - label: flow.yaml
-        range: [8, 6, 8, 7]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        invalid YAML: expected a YAML 1.2 core integer, but found '1_000'
-          in "<unicode string>", line 8, column 6:
-              i: !!int 1_000
-                 ^
       frames:
       - label: flow.yaml
         range: [8, 6, 8, 7]

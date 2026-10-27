@@ -1,7 +1,6 @@
 # A loop predicate reading a field of an Optional carried value is a load error: after a run that
 # leaves it null, `until: draft.done` would never end.
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -40,5 +39,3 @@ expect:
         frames:
           - label: flow.yaml
             range: [24, 12, 24, 22]
-python_expect:
-  load: ok

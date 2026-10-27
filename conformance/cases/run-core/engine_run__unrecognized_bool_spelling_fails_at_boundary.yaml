@@ -1,5 +1,4 @@
 kind: run
-rules: [messages, run-log]
 flow: |2
 
   id: bool_flag
@@ -74,51 +73,4 @@ expect:
         - label: flow.yaml
           range: [5, 9, 5, 14]
         message: 'input ''flag'': "ture" does not match declared type bool'
-        node: __start__
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.input
-      frames:
-      - label: flow.yaml
-        range: [5, 9, 5, 14]
-      message: 'input ''flag'': ''ture'' does not match declared type bool'
-      node: __start__
-  trace:
-  - - run_started
-    - null
-    - inputs:
-        flag: ture
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_failed
-    - __start__
-    - failure:
-        code: contract.input
-        frames:
-        - label: flow.yaml
-          range: [5, 9, 5, 14]
-        message: 'input ''flag'': ''ture'' does not match declared type bool'
-        node: __start__
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeFailed
-    - failure:
-        code: contract.input
-        frames:
-        - label: flow.yaml
-          range: [5, 9, 5, 14]
-        message: 'input ''flag'': ''ture'' does not match declared type bool'
-        node: __start__
-  - - RunFailed
-    - failure:
-        code: contract.input
-        frames:
-        - label: flow.yaml
-          range: [5, 9, 5, 14]
-        message: 'input ''flag'': ''ture'' does not match declared type bool'
         node: __start__

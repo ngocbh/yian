@@ -4,7 +4,6 @@
 # env: YIAN_MAX_TOTAL_NODES is the recorded default under test (the built-in value is 10000).
 # Record 7 is __start__'s node_succeeded (the test's cut): n's node_started is refused.
 kind: resume
-rules: [run-log]
 flow: |
   id: one-tool
   name: one_tool

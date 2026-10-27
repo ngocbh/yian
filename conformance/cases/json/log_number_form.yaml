@@ -1,6 +1,5 @@
 kind: json
 # A float with no `.` or exponent in its shortest form gets `.0`; ints keep every digit.
-rules: [canonical, numbers]
 write: [1, 1.0, 100.0, 1.0e+21, 0.5, 1.0e-7, -1.5, 123456789012345678901234567890]
 form: log
 expect:

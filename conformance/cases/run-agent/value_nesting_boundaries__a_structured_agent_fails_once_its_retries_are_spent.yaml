@@ -5,7 +5,6 @@
 # message "structured output at a.a.a: value nests deeper than 3 levels ...". TS fails
 # agent.output_invalid and Python node.execute.
 kind: run
-rules: [llm, failure-codes, run-log]
 flow: |
   id: plain-session
   name: plain_session
@@ -170,95 +169,6 @@ expect:
   - - RunFailed
     - failure:
         code: agent.output_invalid
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 8]
-        message: 'structured output at a.a.a: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)'
-        node: agent
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      frames:
-      - label: flow.yaml
-        range: [5, 3, 5, 8]
-      message: 'structured output at a.a.a: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)'
-      node: agent
-  trace:
-  - - run_started
-    - null
-    - defaults:
-        MAX_VALUE_NESTING: 3
-      effective_llm_by_static_path:
-        agent:
-          _connection:
-            endpoint: https://api.openai.com/v1
-            method: api_key
-            source: missing
-          model: gpt-4o
-          provider: openai
-      inputs: {}
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value: {}
-  - [node_started, agent]
-  - - node_failed
-    - agent
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 8]
-        message: 'structured output at a.a.a: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)'
-        node: agent
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output: {}
-  - - NodeStarted
-    - node_id: agent
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-4o
-      node_id: agent
-      provider: openai
-      purpose: structured_native
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-4o
-      node_id: agent
-      provider: openai
-      purpose: structured_native
-  - - ModelCallStarted
-    - exchange_id: <id:2>
-      model: gpt-4o
-      node_id: agent
-      provider: openai
-      purpose: structured_native
-  - - ModelCallFinished
-    - exchange_id: <id:2>
-      model: gpt-4o
-      node_id: agent
-      provider: openai
-      purpose: structured_native
-  - - NodeFailed
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 8]
-        message: 'structured output at a.a.a: value nests deeper than 3 levels, the limit for a yian value (each record and list is a level)'
-        node: agent
-  - - RunFailed
-    - failure:
-        code: node.execute
         frames:
         - label: flow.yaml
           range: [5, 3, 5, 8]

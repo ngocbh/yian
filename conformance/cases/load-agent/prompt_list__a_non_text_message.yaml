@@ -1,6 +1,5 @@
 # TS-only: a prompt list message's text must be text; `user: 5` is refused at the value.
 kind: load
-python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
   id: chat
   name: chat

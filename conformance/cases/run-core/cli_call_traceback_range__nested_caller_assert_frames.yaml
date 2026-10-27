@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: nested-assert-parent
   name: nested_assert_parent
@@ -11,40 +10,6 @@ flow: |
         x:
           kind: code
           code: ./fixtures/compose_codefns.ts:double
-          input:
-            n: ${input.v}
-          output: int
-      output: ${x.output}
-    middle:
-      input:
-        v: !int
-      nodes:
-        via:
-          kind: call
-          call: deep
-          input:
-            v: ${input.v}
-          asserts:
-            - output < 100
-      output: ${via.output}
-  nodes:
-    outer:
-      kind: call
-      call: middle
-      input:
-        v: 60
-  output: ${outer.output}
-python_flow: |
-  id: nested-assert-parent
-  name: nested_assert_parent
-  defs:
-    deep:
-      input:
-        v: !int
-      nodes:
-        x:
-          kind: code
-          code: tests.engine._compose_codefns:double
           input:
             n: ${input.v}
           output: int

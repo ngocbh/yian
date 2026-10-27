@@ -1,35 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: c2loop
-  name: c2_loop
-  input:
-    start: !int
-  defs:
-    body:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-          output: {n: int}
-          code: |
-            return {"n": inputs["n"] + 1}
-      output: ${step.output}
-      asserts:
-        - "step.output.n >= 1"
-  nodes:
-    spin:
-      kind: loop
-      call: body
-      input:
-        n: ${input.start}
-      times: 3
-  output: ${spin.output}
-python_flow: |2
 
   id: c2loop
   name: c2_loop

@@ -1,5 +1,4 @@
 kind: run
-rules: [messages, int-in-float, run-log]
 flow: |2
 
   id: f
@@ -87,65 +86,4 @@ expect:
         - label: flow.yaml
           range: [8, 18, 8, 40]
         message: 'value entry ''v'' at a: division by zero: 1 / 0'
-        node: v
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.evaluate
-      frames:
-      - label: flow.yaml
-        range: [8, 18, 8, 40]
-      message: 'value entry ''v'' at a: division by zero: 1.0 / 0.0'
-      node: v
-  trace:
-  - - run_started
-    - null
-    - inputs:
-        x: 1.0
-        z: 0.0
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        x: 1.0
-        z: 0.0
-  - [node_started, v]
-  - - node_failed
-    - v
-    - failure:
-        code: binding.evaluate
-        frames:
-        - label: flow.yaml
-          range: [8, 18, 8, 40]
-        message: 'value entry ''v'' at a: division by zero: 1.0 / 0.0'
-        node: v
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        x: 1.0
-        z: 0.0
-  - - NodeStarted
-    - node_id: v
-  - - NodeFailed
-    - failure:
-        code: binding.evaluate
-        frames:
-        - label: flow.yaml
-          range: [8, 18, 8, 40]
-        message: 'value entry ''v'' at a: division by zero: 1.0 / 0.0'
-        node: v
-  - - RunFailed
-    - failure:
-        code: binding.evaluate
-        frames:
-        - label: flow.yaml
-          range: [8, 18, 8, 40]
-        message: 'value entry ''v'' at a: division by zero: 1.0 / 0.0'
         node: v

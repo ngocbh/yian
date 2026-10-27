@@ -1,41 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |
-  id: f
-  name: f
-  input:
-    flip: !bool
-  nodes:
-    repeat:
-      kind: loop
-      times: 1
-      input:
-        n: 0
-        note: !str "start"
-        flip: ${input.flip}
-      nodes:
-          gate:
-            kind: case
-            cases:
-              - when: ${input.flip}
-                then: mk
-          mk:
-            kind: code
-            output: str
-            code: |
-              return "made"
-          bump:
-            kind: code
-            input:
-              n: ${input.n}
-            output: int
-            code: |
-              return inputs["n"] + 1
-      output:
-        n: ${bump.output}
-        note: ${mk.output}
-  output: ${repeat.output}
-python_flow: |
   id: f
   name: f
   input:

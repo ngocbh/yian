@@ -1,6 +1,5 @@
 kind: json
 # An int token reads as an int of any size, any other number as a float; `-0` is the int 0.
-rules: [numbers]
 read: '{"i": 1, "f": 1.0, "e": 1e5, "z": -0, "big": 123456789012345678901234567890}'
 mode: plain
 expect:

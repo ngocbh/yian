@@ -2,7 +2,6 @@
 # Pins: a defaulted (`:-`) host input only makes the lifted call wait: it runs after the skip.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -16,42 +15,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-  nodes:
-    pick:
-      kind: case
-      cases:
-        - when: ${input.other}
-          then: maybe
-    maybe:
-      kind: code
-      output: str
-      code: return "m"
-    publish:
-      kind: code
-      input:
-        draft: call(side, tag="draft")
-        notes: ${maybe.output :- "none"}
-      output: str
-      code: return inputs["draft"] + inputs["notes"]
-  output:
-    r: ${publish.output}
-python_flow: |
-  id: t
-  name: t
-  input:
-    other: !bool
-  defs:
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

@@ -3,7 +3,6 @@
 # shows no value, and appends nothing.
 # Record 8 is agent's node_started: its first model call runs, its result is refused.
 kind: resume
-rules: [run-log]
 flow: |
   id: keyed
   name: keyed

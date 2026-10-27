@@ -1,5 +1,4 @@
 kind: expr
-rules: [null-field-read]
 # A step reads only own keys, never a property; TS yian (#1149) raises on the key the record lacks.
 expr: obj.__class__
 values: {obj: {a: 1}}
@@ -7,5 +6,3 @@ expect:
   raises:
     class: ExpressionError
     message: "cannot read ${obj.__class__}: obj has no field '__class__'"
-python_expect:
-  value: null

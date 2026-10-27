@@ -2,7 +2,6 @@
 # Pins: a call lifted from a host two CASEs route to runs when the second one reaches it.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -17,43 +16,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-  nodes:
-    c1:
-      kind: case
-      cases:
-        - when: ${input.go}
-          then: publish
-    c2:
-      kind: case
-      cases:
-        - when: ${input.other}
-          then: publish
-    publish:
-      kind: code
-      input:
-        draft: call(side, tag="publish")
-      output: str
-      code: return "published " + inputs["draft"]
-  output:
-    r: ${publish.output :- "none"}
-python_flow: |
-  id: t
-  name: t
-  input:
-    go: !bool
-    other: !bool
-  defs:
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

@@ -2,8 +2,6 @@
 # of the steps its new messages are made of (the reply calling `lookup`, its result, the final
 # reply), then `node_succeeded` naming both commits.
 kind: run
-rules: [run-log]
-python_skip: "the messages commit is TS-only (#1081)"
 flow: |
   id: messages
   name: messages

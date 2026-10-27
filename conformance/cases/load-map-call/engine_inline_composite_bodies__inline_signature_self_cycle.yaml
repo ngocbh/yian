@@ -16,23 +16,6 @@ flow: |
           output: str
       output: ${echo.output}
   output: ${first.output}
-python_flow: |
-  id: inline-signature-self-cycle
-  name: inline_signature_self_cycle
-  nodes:
-    first:
-      kind: call
-      input:
-        value: ${first.output}
-      nodes:
-        echo:
-          kind: code
-          code: tests.engine._compose_codefns:echo_x
-          input:
-            x: ${input.value}
-          output: str
-      output: ${echo.output}
-  output: ${first.output}
 expect:
   load:
     diagnostics:

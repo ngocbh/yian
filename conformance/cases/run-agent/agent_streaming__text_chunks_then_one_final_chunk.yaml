@@ -2,7 +2,6 @@
 # A streamed text reply reaches the host chunk by chunk under its step's n, then one empty
 # final chunk; a usage chunk carries no text, and ModelCallFinished reports its usage (5/3/8).
 kind: run
-rules: [run-log]
 flow: |
   id: stream
   name: stream

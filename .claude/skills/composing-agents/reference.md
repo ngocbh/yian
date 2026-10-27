@@ -18,7 +18,7 @@ Copy, rename, and edit.
 | [`minimal.yaml`](templates/minimal.yaml) | one AGENT node, `str` in/out |
 | [`compact.yaml`](templates/compact.yaml) | the same one-node flow in compact form (no `nodes:` map) |
 | [`pipeline.yaml`](templates/pipeline.yaml) | AGENT node → CODE node (typed record) — deterministic post-processing |
-| [`inline-code.yaml`](templates/inline-code.yaml) | inline `code:` source — a bare body run in-process (no `module:function`) |
+| [`inline-code.yaml`](templates/inline-code.yaml) | inline `code:` source — a bare TS/JS body (no `./file.ts:fn` reference) |
 | [`typed_output.yaml`](templates/typed_output.yaml) | AGENT node with a record `output:` — structured generation + `retries:` |
 | [`branching.yaml`](templates/branching.yaml) | classify → `case` route → `${route.output}` |
 | [`tool-use.yaml`](templates/tool-use.yaml) | a TOOL node (no LLM) feeding an AGENT node |

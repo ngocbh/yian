@@ -27,34 +27,6 @@ flow: |2
           then: ${ take(stance="pro") }
       else: call(take, stance="con")
   output: ${gate.output}
-python_flow: |2
-
-  id: bad
-  name: bad
-  input:
-    score: !float
-
-  defs:
-    take:
-      input:
-        stance: !str
-      nodes:
-        x:
-          kind: code
-          code: tests.engine._compose_codefns:took
-          input:
-            stance: ${input.stance}
-          output: str
-      output: ${x.output}
-
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: "input.score >= 0.5"
-          then: ${ take(stance="pro") }
-      else: call(take, stance="con")
-  output: ${gate.output}
 expect:
   load:
     diagnostics:

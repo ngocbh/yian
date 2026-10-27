@@ -1,6 +1,5 @@
 # TS-only: a node output can't be an inbox.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: f
   name: f

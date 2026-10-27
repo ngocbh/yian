@@ -1,5 +1,4 @@
 kind: json
-rules: [canonical, infinity]
 write: {a: {$float: inf}, b: {$float: -inf}}
 form: canonical
 expect:

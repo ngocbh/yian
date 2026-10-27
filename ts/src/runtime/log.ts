@@ -1527,9 +1527,6 @@ export class RunLogChangedError extends RangeError {
   override name = "RunLogChangedError";
 }
 
-/** The message for schema 9, which only Python yian reads. */
-const PYTHON_SCHEMA_MESSAGE = "run log schema 9 was written by Python yian; resume it with Python yian";
-
 /** The error for a retired TS schema, in Python's wording for its retired schemas. */
 function retiredSchema(schema: number): RunLogSchemaError {
   return new RunLogSchemaError(`run log schema ${schema} predates schema ${SCHEMA_VERSION} and is not supported`, schema);
@@ -1587,11 +1584,10 @@ export function recordTimeMs(at: unknown, label = "run-record envelope at"): num
 /**
  * Check an envelope's schema version.
  *
- * @throws RunLogSchemaError when it isn't `SCHEMA_VERSION`, naming Python yian for schema 9 and
- *   a retired TS schema (one of `RETIRED_SCHEMAS`) as retired.
+ * @throws RunLogSchemaError when it isn't `SCHEMA_VERSION`, naming a retired TS schema (one of
+ *   `RETIRED_SCHEMAS`) as retired.
  */
 function requireSchema(schema: unknown): void {
-  if (schema === 9) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
   if (schema === SCHEMA_VERSION) return;
   if (typeof schema === "number" && RETIRED_SCHEMAS.has(schema)) throw retiredSchema(schema);
   // `valueRepr` prints a bigint like a number, so `10n` would read as the supported schema.
@@ -1603,12 +1599,11 @@ function requireSchema(schema: unknown): void {
 /**
  * Check a decoded envelope's `schema` member.
  *
- * @throws RunLogSchemaError when it isn't the int token `SCHEMA_VERSION`, naming Python yian for 9
- *   and a retired TS schema (one of `RETIRED_SCHEMAS`) as retired.
+ * @throws RunLogSchemaError when it isn't the int token `SCHEMA_VERSION`, naming a retired TS
+ *   schema (one of `RETIRED_SCHEMAS`) as retired.
  */
 function requireWireSchema(schema: unknown): void {
   if (schema === BigInt(SCHEMA_VERSION)) return;
-  if (schema === 9n) throw new RunLogSchemaError(PYTHON_SCHEMA_MESSAGE, 9);
   if (typeof schema === "bigint" && RETIRED_SCHEMAS.has(Number(schema))) throw retiredSchema(Number(schema));
   // Only an int token (a `bigint`) names a schema; a float token reads as a number, shown as the
   // log writes floats (`10.0`), so it doesn't read as a supported schema.
@@ -2252,8 +2247,8 @@ export interface IterRunRecordsOptions {
  * @param options.runId The run id of the record that ends at `afterOffset`.
  * @param options.afterSeq The seq of the record that ends at `afterOffset`.
  * @returns A generator of `{ seq, offset, end, runId, at, kind, nodeId, envelope }`.
- * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION` (schema 9 is Python
- *   yian's); the message names the line.
+ * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`; the message names the
+ *   line.
  * @throws RunLogChangedError when the file is shorter than where the reader got to (`afterOffset`
  *   or the end of the last line read), or, given `runId` or `afterSeq`, the offset no longer ends
  *   a line or the first record read doesn't continue the saved one.

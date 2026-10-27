@@ -2,7 +2,6 @@
 # An Optional(int) binding into an integer parameter passes the run-start check; a null fails the
 # node when its arguments are checked, before any call.
 kind: run
-rules: [messages, run-log]
 flow: |
   id: placing
   name: placing
@@ -97,64 +96,6 @@ expect:
     - failure:
         code: node.execute
         message: 'tool ''place_order'' argument ''qty'': null does not match declared type int'
-        frames:
-        - label: flow.yaml
-          range: [6, 3, 6, 8]
-        node: place
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      message: 'tool ''place_order'' argument ''qty'': None does not match declared type int'
-      frames:
-      - label: flow.yaml
-        range: [6, 3, 6, 8]
-      node: place
-  trace:
-  - - run_started
-    - null
-    - learnable: false
-      num_workers: 0
-      inputs:
-        n: null
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        n: null
-  - [node_started, place]
-  - - node_failed
-    - place
-    - failure:
-        code: node.execute
-        message: 'tool ''place_order'' argument ''qty'': None does not match declared type int'
-        frames:
-        - label: flow.yaml
-          range: [6, 3, 6, 8]
-        node: place
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        n: null
-  - - NodeStarted
-    - node_id: place
-  - - NodeFailed
-    - failure:
-        code: node.execute
-        message: 'tool ''place_order'' argument ''qty'': None does not match declared type int'
-        frames:
-        - label: flow.yaml
-          range: [6, 3, 6, 8]
-        node: place
-  - - RunFailed
-    - failure:
-        code: node.execute
-        message: 'tool ''place_order'' argument ''qty'': None does not match declared type int'
         frames:
         - label: flow.yaml
           range: [6, 3, 6, 8]

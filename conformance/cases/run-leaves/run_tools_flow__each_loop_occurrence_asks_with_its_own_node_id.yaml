@@ -2,7 +2,6 @@
 # An ask in a LOOP body asks once per iteration, each request naming its occurrence
 # (loop#0/ask, loop#1/ask).
 kind: run
-rules: [run-log]
 flow: |
   id: loop_ask
   name: loop_ask

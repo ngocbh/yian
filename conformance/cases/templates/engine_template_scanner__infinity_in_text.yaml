@@ -1,10 +1,7 @@
 kind: expr
-rules: [infinity, text-form]
 template: x=${x}
 values:
   x:
     $float: inf
 expect:
   value: x=Infinity
-python_expect:
-  value: x=inf

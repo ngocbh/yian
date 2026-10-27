@@ -1,5 +1,4 @@
 kind: value
-rules: [messages]
 typedefs:
   Buy:
     action: Literal(buy)
@@ -19,9 +18,4 @@ expect:
   raises:
     class: TypeCheckError
     message: '"wait" is not a tag of the union (expected one of ["buy","hold","sell"])'
-    path: [action]
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: '''wait'' is not a tag of the union (expected one of [''buy'', ''hold'', ''sell''])'
     path: [action]

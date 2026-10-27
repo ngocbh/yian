@@ -1,5 +1,4 @@
 kind: value
-rules: [int-in-float]
 typedefs:
   Count:
     n: int
@@ -13,10 +12,5 @@ value:
 expect:
   value:
     n: 3
-    label: x
-  kind: object
-python_expect:
-  value:
-    n: 3.0
     label: x
   kind: object

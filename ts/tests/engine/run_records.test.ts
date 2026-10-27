@@ -24,7 +24,7 @@
  * `test_decode_rejects_extra_nested_route_terminal_failure_field`,
  * `test_decode_rejects_malformed_nested_failures` (20 rows),
  * `test_node_failure_rejects_legacy_location_fields`,
- * `test_decode_rejects_old_schemas_even_with_a_nested_failure` (1-8, and 9 naming Python yian),
+ * `test_decode_rejects_old_schemas_even_with_a_nested_failure` (1-9),
  * `test_decode_rejects_flattened_failure_aliases`,
  * `test_decode_rejects_duplicate_keys_at_any_object_depth` (`invalid run-record JSON`, caused by
  * the reader's `JSONDecodeError` `duplicate JSON object key: "node_id"`, double-quoted),
@@ -34,8 +34,8 @@
  * `test_record_wire_examples_cover_the_closed_record_inventory` (against `RUN_RECORD_TYPES`).
  *
  * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
- * record keys come out in code-unit order; the envelope's schema rows (7, 8 and 23 are
- * unsupported, 10-21 are retired, 9 names Python yian, a boolean is unsupported, and the schema is checked first),
+ * record keys come out in code-unit order; the envelope's schema rows (7, 8, 9 and 23 are
+ * unsupported, 10-21 are retired, a boolean is unsupported, and the schema is checked first),
  * its run-id rows (empty, a lone surrogate) and its unsupported-record row; the `RunStopped`
  * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
  * valid); a failure without a node id, a capture of another class, a bad worker
@@ -50,7 +50,7 @@
  * round trip and its unknown-reason, extra-field, non-text and repeated-id rows; the
  * `run_resumed` float-counter, negative-counter, text-ids and closed-calls rows; envelope rows for a float or
  * too-large `seq`, a non-text run id or kind, a non-object payload or envelope, a missing schema,
- * and schema 9 named before anything else is checked; an empty `node_started` node id, a
+ * and the schema named before anything else is checked; an empty `node_started` node id, a
  * non-text failure code, a failure or origin that isn't an object; a byte-pinned `node_succeeded`
  * line whose capture holds route sizes, spans and path indexes, an item index and an occurrence
  * index, all written as ints; a memory commit's `attempt_id` of 0 or -1; `run_started` rows for a
@@ -874,7 +874,7 @@ test.each<[string, () => unknown, string]>([
 test.each<[string, unknown, string]>([
   ["7", 7, "unsupported run-record schema: 7"],
   ["8", 8, "unsupported run-record schema: 8"],
-  ["9", 9, "run log schema 9 was written by Python yian; resume it with Python yian"],
+  ["9", 9, "unsupported run-record schema: 9"],
   ["10", 10, "run log schema 10 predates schema 23 and is not supported"],
   ["11", 11, "run log schema 11 predates schema 23 and is not supported"],
   ["12", 12, "run log schema 12 predates schema 23 and is not supported"],
@@ -899,7 +899,7 @@ test("the envelope checks its schema before any other field", () => {
   expectError(
     () => new RecordEnvelope(9, "", -1, {} as never),
     RunLogSchemaError,
-    "run log schema 9 was written by Python yian; resume it with Python yian",
+    "unsupported run-record schema: 9",
   );
 });
 
@@ -1605,10 +1605,10 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     'invalid run-record envelope fields; missing=["schema"], extra=[]',
   ],
   [
-    "a Python schema whatever else the line holds",
+    "an old schema whatever else the line holds",
     '{"schema":9,"seq":"x","kind":"node_frobbed","extra":1}',
     RunLogSchemaError,
-    "run log schema 9 was written by Python yian; resume it with Python yian",
+    "unsupported run-record schema: 9",
   ],
 ])("decode rejects an invalid envelope: %s", (_name, text, cls, message) => {
   expectError(() => decodeRecord(text), cls, message);
@@ -1848,10 +1848,7 @@ test.each(["locator", "range"])("a node failure rejects the legacy location fiel
 test.each([1, 2, 3, 4, 5, 6, 7, 8, 9])("decode rejects old schema %d even with a nested failure", (schema) => {
   const wire = nodeFailureWire();
   wire.schema = schema;
-  const message =
-    schema === 9
-      ? "run log schema 9 was written by Python yian; resume it with Python yian"
-      : `unsupported run-record schema: ${schema}`;
+  const message = `unsupported run-record schema: ${schema}`;
   expectError(() => decodeRecord(JSON.stringify(wire)), RunLogSchemaError, message);
 });
 

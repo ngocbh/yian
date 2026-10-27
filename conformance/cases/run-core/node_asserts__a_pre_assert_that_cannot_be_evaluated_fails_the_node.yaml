@@ -2,7 +2,6 @@
 # TS fails condition.evaluate, naming the assert and the evaluation error; Python counts an assert
 # that raises as false and fails assertion.failed.
 kind: run
-rules: [failure-codes, run-log]
 flow: |
   id: na
   name: na
@@ -12,22 +11,6 @@ flow: |
     x:
       kind: code
       code: ./fixtures/compose_codefns.ts:double
-      input:
-        n: ${input.v}
-      output: int
-      asserts:
-        - "10 / n > 0"
-  output: ${x.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  id: na
-  name: na
-  input:
-    v: !int
-  nodes:
-    x:
-      kind: code
-      code: tests.engine._compose_codefns:double
       input:
         n: ${input.v}
       output: int
@@ -60,25 +43,5 @@ expect:
       - failure:
           code: condition.evaluate
           message: "node 'x' pre-assert '10 / n > 0' could not be evaluated: division by zero: 10 / 0"
-          node: x
-          frames: [{label: flow.yaml, range: [13, 9, 13, 21]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: assertion.failed
-      message: "node 'x' pre-assert failed: 10 / n > 0"
-      node: x
-      frames: [{label: flow.yaml, range: [13, 9, 13, 21]}]
-  trace:
-    - [run_started, null, {inputs: {v: 0}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {v: 0}}]
-    - [node_started, x]
-    - - node_failed
-      - x
-      - failure:
-          code: assertion.failed
-          message: "node 'x' pre-assert failed: 10 / n > 0"
           node: x
           frames: [{label: flow.yaml, range: [13, 9, 13, 21]}]

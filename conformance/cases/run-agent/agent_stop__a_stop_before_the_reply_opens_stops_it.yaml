@@ -5,8 +5,6 @@
 # opens the inbox while the Stop stands, gets its own `interrupted {notes, [reply]}` record and
 # honors it before any model call: output null.
 kind: run
-python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
-rules: [run-log]
 flow: |
   id: stop
   name: stop

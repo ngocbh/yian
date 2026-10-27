@@ -2,7 +2,6 @@
 # The prompt the AGENT sends: `:?` and a `|` chain resolve from given inputs, `$$` renders `$`,
 # and `system.run_id` is the run's id.
 kind: run
-rules: [run-log]
 flow: |
   # 09 — Interpolation operator forms.
   #

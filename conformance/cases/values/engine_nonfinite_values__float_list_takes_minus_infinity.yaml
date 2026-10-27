@@ -1,15 +1,9 @@
 kind: value
-rules: [infinity]
 type: list(float)
 value:
 - 1.5
 - $float: -inf
 expect:
-  value:
-  - 1.5
-  - $float: -inf
-  kind: list[float]
-python_expect:
   value:
   - 1.5
   - $float: -inf

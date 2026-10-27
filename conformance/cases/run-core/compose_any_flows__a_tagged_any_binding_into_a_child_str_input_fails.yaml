@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: p
   name: p
@@ -14,37 +13,6 @@ flow: |
             x: ${input.x}
           output: str
           code: "return String(inputs['x'])"
-      output: ${n.output}
-  input:
-    s: !str
-  nodes:
-    mk:
-      kind: code
-      input:
-        s: ${input.s}
-      output: Any
-      code: |
-        return 3
-    c:
-      kind: call
-      call: child
-      input:
-        x: !str ${mk.output}
-  output: ${c.output}
-python_flow: |
-  id: p
-  name: p
-  defs:
-    child:
-      input:
-        x: !str
-      nodes:
-        n:
-          kind: code
-          input:
-            x: ${input.x}
-          output: str
-          code: return repr(inputs['x'])
       output: ${n.output}
   input:
     s: !str

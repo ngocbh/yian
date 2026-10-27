@@ -1,6 +1,5 @@
 # The quoted `${` and template are source text as written (shared, as the templates scanner cases are).
 kind: load
-python_skip: "human_input and wait are removed in TS yian, which uses tool_id: ask, sleep and take (#1025)"
 flow: |
   id: f
   name: f

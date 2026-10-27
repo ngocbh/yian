@@ -29,36 +29,6 @@ flow: |2
       while: n.value < 3
       max: 5
   output: ${chat_loop.output}
-python_flow: |2
-
-  id: loop-good
-  name: loop_good
-  defs:
-    bump:
-      input:
-        n: !int
-        exited: !bool
-      nodes:
-        step:
-          kind: code
-          code: tests.engine._compose_codefns:make_report
-          input:
-            n: ${input.n}
-            exited: ${input.exited}
-          output:
-            n: int
-            exited: bool
-      output: ${step.output}
-  nodes:
-    chat_loop:
-      kind: loop
-      call: bump
-      input:
-        n: 0
-        exited: false
-      while: n.value < 3
-      max: 5
-  output: ${chat_loop.output}
 expect:
   load:
     diagnostics:

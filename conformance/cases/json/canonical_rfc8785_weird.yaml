@@ -1,5 +1,4 @@
 kind: json
-rules: [canonical]
 write:
   "\u20ac": Euro Sign
   "\r": Carriage Return

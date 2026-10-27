@@ -3,7 +3,6 @@
 # profile learner rewrite it (one call, a <profile> reply), and the commit writes the new document.
 # YIAN_DEFAULT_PROVIDER/MODEL: a profile learner's model config comes from the defaults, not the flow.
 kind: backward
-rules: [run-log]
 flow: |
   id: chat
   name: chat

@@ -1,6 +1,5 @@
 # TS spells the rejected value in the text form (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: shapes
   name: shapes
@@ -15,14 +14,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'node ''a'': llm_config `inherit:` must be true or false, got "on"; `on` is text; write `true`'
-      frames:
-      - label: flow.yaml
-        range: [7, 17, 7, 30]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'node ''a'': llm_config `inherit:` must be true or false, got ''on''; `on` is text; write `true`'
       frames:
       - label: flow.yaml
         range: [7, 17, 7, 30]

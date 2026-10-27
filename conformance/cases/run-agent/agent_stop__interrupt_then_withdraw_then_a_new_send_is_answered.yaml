@@ -3,8 +3,6 @@
 # it records `interrupted {notes, []}`. The withdraw then takes the message back and reopens the
 # take, a pickup that ends the Stop. The next message gets a full reply, with no applied record.
 kind: run
-python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
-rules: [run-log]
 flow: |
   id: stop
   name: stop

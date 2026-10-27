@@ -1,5 +1,4 @@
 kind: backward
-rules: [run-log]
 # The CODE body is the same text in TS and Python.
 flow: |
   id: code-feedback

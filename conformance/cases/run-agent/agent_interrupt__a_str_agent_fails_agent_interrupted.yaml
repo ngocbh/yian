@@ -3,8 +3,6 @@
 # agent's output is `str`: the interrupt delivered mid-stream cuts the reply and the agent writes
 # `interrupted {by}`, then fails with `agent.interrupted`.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

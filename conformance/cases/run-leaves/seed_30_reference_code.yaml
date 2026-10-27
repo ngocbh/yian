@@ -2,7 +2,6 @@
 # A reference CODE node returns the same verdict line as seed 29's inline body.
 # The header (`module:function`, `tests.seeds.fns:verdict_line`) describes the Python form.
 kind: run
-rules: [run-log]
 flow: |
   # 30 — reference CODE source. A `code:` node names a `module:function` token; the engine
   # imports the module and calls `func(inputs)` IN-PROCESS — the alternative to the inline
@@ -27,33 +26,6 @@ flow: |
         label:  ${input.label}
       output: str
       code: ./fixtures/seeds.ts:verdict_line   # file:function — imported and called in-process
-
-  output: ${verdict.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # 30 — reference CODE source. A `code:` node names a `module:function` token; the engine
-  # imports the module and calls `func(inputs)` IN-PROCESS — the alternative to the inline
-  # bare-body form (seed 29). This is the reference twin of seed 29: the referenced function
-  # `tests.seeds.fns:verdict_line` has the SAME body as seed 29's inline block, so the two
-  # seeds show one computation both ways (an inline body promotes to a `module:function` by
-  # copy-paste). Same one-dict `inputs` convention; the return is validated against `output:`.
-
-  id: reference-code
-  name: reference_code
-  description: Reference `code:` source — a `module:function` imported and called in-process.
-
-  input:
-    rating: !float
-    label: !str
-
-  nodes:
-    verdict:
-      kind: code
-      input:
-        rating: ${input.rating}
-        label:  ${input.label}
-      output: str
-      code: tests.seeds.fns:verdict_line   # module:function — imported and called in-process
 
   output: ${verdict.output}
 inputs: {rating: 0.42, label: ACME}

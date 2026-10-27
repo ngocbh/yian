@@ -3,8 +3,6 @@
 # take beside the running AGENT. The in-flight invariant counts the woken take as holding no
 # worker (a woken AGENT would hold one).
 kind: run
-rules: [run-log]
-python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
 flow: |
   id: woken_take
   name: woken_take

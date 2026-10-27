@@ -1,7 +1,6 @@
 # From tests/engine/test_flow_identity.py::test_flow_fingerprint_changes_with_node_kind_and_execution_source.
 # A CODE body is identity.
 kind: fingerprint
-rules: [code]
 flow: |
   id: kind
   name: kind
@@ -23,6 +22,4 @@ other: |
         return "no"
   output: ${leaf.output}
 expect:
-  fingerprint: different
-python_expect:
   fingerprint: different

@@ -5,12 +5,13 @@ clear, and tied to a GitHub issue.
 
 ## Development setup
 
-Yian supports Python 3.11 or newer.
+Yian is TypeScript, in `ts/`. It needs Bun 1.4 or newer, and Node 22.18 or newer for the Node
+checks.
 
 ```bash
 git clone https://github.com/ngocbh/yian
-cd yian
-python -m pip install -e ".[all,dev]"
+cd yian/ts
+bun install --frozen-lockfile
 ```
 
 ## GitHub workflow
@@ -138,8 +139,12 @@ Run focused tests while working, then the relevant suite before opening a pull
 request:
 
 ```bash
-PYTHONPATH=src python -m pytest tests/engine
-PYTHONPATH=src python -m pytest
+cd ts
+bun run typecheck
+bun test ./tests/engine        # focused tests
+bun run test                   # the whole suite on Bun
+bun run test:node              # the same tests on Node
+bun tests/conformance.ts       # the conformance cases
 ```
 
 Add or update a test for every behavior change. Make one logical change per
@@ -148,7 +153,7 @@ you ran it.
 
 ## Engine rules
 
-Read [`src/yian/README.md`](src/yian/README.md) before an
+Read [`docs/engine.md`](docs/engine.md) before an
 engine change.
 
 - Keep `runtime/` kind-blind.
@@ -168,42 +173,31 @@ Update docs and project skills in the same pull request as the code they explain
 | Change | Update |
 | --- | --- |
 | YAML, expressions, or node authoring | `docs/syntax.md` and the `composing-agents` skill |
-| Engine behavior or rules | `src/yian/README.md` and the `engine` skill |
-| Package layout | The package `__init__.py` and the `structure` skill |
-| CLI or public API | `README.md` and rendered docstrings |
+| Engine behavior or rules | `docs/engine.md` |
+| CLI or public API | `README.md`, `ts/README.md` and the docstrings |
 
 Check edited flow templates still load. Build the docs when they change:
 
 ```bash
-python -m pip install -e ".[docs]"
+python -m pip install -r docs/requirements.txt
 mkdocs build --strict
 ```
 
 ## Docstrings
 
-Use Google-style `Args`, `Returns`, and `Raises` sections. Put types in backticks.
-Document every argument, including its meaning, shape, limits, and default. List
-only exceptions the function raises. Omit `Returns` when the function returns
-`None`.
+Write TSDoc: a first sentence that says what the symbol does, then `@param`, `@returns` and
+`@throws` where they add something the signature doesn't say. Document an argument's meaning,
+shape, limits and default. List only errors the function throws.
 
-```python
-def fn(required, optional=None):
-    """Return the result for the input.
-
-    Args:
-        required (`dict[str, Item]`):
-            Items keyed by node id. Unknown ids are not allowed.
-        optional (`str`, *optional*, defaults to `None`):
-            Name used in messages. `None` uses the default name.
-
-    Returns:
-        `Result`:
-            The computed value and its status.
-
-    Raises:
-        `ValueError`:
-            Raised when `required` contains an unknown node id.
-    """
+```ts
+/**
+ * Return the result for the input.
+ *
+ * @param items Items keyed by node id. Unknown ids are not allowed.
+ * @param name The name used in messages; the default name when absent.
+ * @throws RangeError when `items` holds an unknown node id.
+ */
+export function fn(items: Record<string, Item>, name?: string): Result {
 ```
 
 Add examples to public APIs. Docstrings explain what code does; comments explain

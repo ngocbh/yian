@@ -1,5 +1,4 @@
 kind: load
-rules: [messages]
 flow: |
   id: wait_refs
   name: wait_refs
@@ -17,21 +16,6 @@ flow: |
       input:
         until: ${input.missing}
   output: ${settle.output}
-python_flow: |
-  id: wait_refs
-  name: wait_refs
-  input:
-    deadline: !datetime
-  nodes:
-    clock:
-      kind: code
-      output: datetime
-      code: |
-        return "2026-01-01T00:00:00Z"
-    settle:
-      kind: wait
-      until: ${input.missing}
-  output: ${settle.output}
 expect:
   load:
     diagnostics:
@@ -42,13 +26,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [15, 14, 15, 30]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        flow has unresolved references:
-          node 'settle' wait until: reference ${input.missing} points to unknown flow input 'missing'
-      frames:
-      - label: flow.yaml
-        range: [13, 12, 13, 28]

@@ -1,38 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: loop-seed
-  name: loop_seed
-  typedefs:
-    Done: {answer: str}
-    More: {hint: str}
-  defs:
-    body:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: int
-            r: Done
-          code: |
-            return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
-      output: ${step.output}
-  nodes:
-    ask:
-      kind: loop
-      call: body
-      while: not isinstance(r, Done)
-      max: 5
-      input:
-        n: 0
-        r: null
-  output: ${ask.output}
-python_flow: |2
 
   id: loop-seed
   name: loop_seed

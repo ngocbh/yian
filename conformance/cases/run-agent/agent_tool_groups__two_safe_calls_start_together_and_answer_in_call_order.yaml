@@ -3,8 +3,6 @@
 # The stub tools return at once, so they finish in call order (call a, then b), and the next
 # request holds their two tool messages in call order.
 kind: run
-rules: [run-log]
-python_skip: concurrent tool calls are TS-only (D29)
 flow: |
   id: groups
   name: groups

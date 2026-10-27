@@ -1,8 +1,6 @@
 # From tests/seeds/errors/e20-code-raises.yaml.
 # A reference CODE function that throws fails its node, at the `code:` value, and the run.
 kind: run
-# A thrown error's text and the reference's length differ by language.
-rules: [code, run-log]
 flow: |
   # e20 — a CODE callable that raises. RUNTIME: the node fails -> the run fails.
   id: err-code-raises
@@ -16,21 +14,6 @@ flow: |
         topic: ${input.topic}
       output: str
       code: ./fixtures/seeds.ts:fail_always
-  output: ${boom.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # e20 — a CODE callable that raises. RUNTIME: the node fails -> the run fails.
-  id: err-code-raises
-  name: err_code_raises
-  input:
-    topic: !str
-  nodes:
-    boom:
-      kind: code
-      input:
-        topic: ${input.topic}
-      output: str
-      code: tests.seeds.fns:fail_always
   output: ${boom.output}
 inputs: {topic: X}
 run: {run_id: r1, num_workers: 0}
@@ -60,23 +43,3 @@ expect:
           message: "Error: intentional CODE failure"
           node: boom
           frames: [{label: flow.yaml, range: [12, 11, 12, 42]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      message: "intentional CODE failure"
-      node: boom
-      frames: [{label: flow.yaml, range: [12, 11, 12, 38]}]
-  trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
-    - [node_started, boom]
-    - - node_failed
-      - boom
-      - failure:
-          code: node.execute
-          message: "intentional CODE failure"
-          node: boom
-          frames: [{label: flow.yaml, range: [12, 11, 12, 38]}]

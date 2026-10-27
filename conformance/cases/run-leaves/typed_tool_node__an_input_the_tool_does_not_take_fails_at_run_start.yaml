@@ -2,7 +2,6 @@
 # A TOOL input the tool doesn't take fails the run at its start, before the log, naming the inputs
 # the tool takes.
 kind: run
-rules: [messages]
 flow: |
   id: placing
   name: placing
@@ -33,11 +32,5 @@ expect:
   raises:
     class: ValueError
     message: 'TOOL node ''place'' input ''qtty'': tool ''place_order'' takes no such input; it takes ["qty","sym"]'
-  trace: []
-  events: []
-python_expect:
-  raises:
-    class: ValueError
-    message: 'TOOL node ''place'' input ''qtty'': tool ''place_order'' takes no such input; it takes [''qty'', ''sym'']'
   trace: []
   events: []

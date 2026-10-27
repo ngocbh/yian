@@ -1,6 +1,5 @@
 kind: value
 # A range with no lower end admits minus infinity.
-rules: [infinity]
 type: float(..1.0)
 value: {$float: -inf}
 expect: {value: {$float: -inf}, kind: float}

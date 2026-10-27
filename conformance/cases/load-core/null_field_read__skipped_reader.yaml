@@ -1,6 +1,5 @@
 # A node that runs while its producer may be skipped reads the producer's fields through ?.
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -40,5 +39,3 @@ expect:
         frames:
           - label: flow.yaml
             range: [26, 10, 26, 37]
-python_expect:
-  load: ok

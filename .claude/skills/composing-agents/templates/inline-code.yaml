@@ -1,11 +1,10 @@
-# Inline `code:` source — a bare body run IN-PROCESS (no `module:function` reference).
+# Inline `code:` source — a bare TypeScript/JavaScript body (no `./file.ts:fn` reference).
 #
-# The author writes statements that read the node's inputs via the `inputs` dict and
-# `return` a value; the engine wraps them as `def main(inputs):`. This is the SAME
-# one-dict convention a `module:function` callable gets, so a body promotes to a
-# reference by copy-paste. A body must `return` (no-`return` is rejected at load), and
-# the returned value must be JSON-representable. In-process = no isolation (author ==
-# operator): a runaway is not killed; interrupt the run to stop it.
+# The author writes statements that read the node's inputs from the `inputs` object and
+# `return` a value. This is the SAME one-object convention a `./file.ts:fn` function gets, so
+# a body promotes to a reference by copy-paste. A body must `return`, and the returned value
+# must be a yian value. Bodies run on worker threads, so stopping the run ends even a body
+# that never yields.
 
 id: inline_code_demo
 name: inline_code_demo
@@ -23,7 +22,8 @@ nodes:
       label:  ${input.label}
     output: str
     code: |
-      lean = "positive" if inputs["rating"] >= 0 else "negative"
-      return f"{inputs['label']}: {lean} ({inputs['rating']:+.2f})"
+      const lean = inputs.rating >= 0 ? "positive" : "negative";
+      const sign = inputs.rating >= 0 ? "+" : "";
+      return `${inputs.label}: ${lean} (${sign}${inputs.rating.toFixed(2)})`;
 
 output: ${verdict.output}

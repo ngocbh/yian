@@ -1,5 +1,4 @@
 kind: expr
-rules: [null-field-read]
 # `x?.flag` reads null on an item without `flag`, so the condition is falsy.
 expr: "[x.k for x in ms if x?.flag]"
 values: {ms: [{k: 1, flag: true}, {k: 2}]}

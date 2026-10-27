@@ -1,5 +1,4 @@
 kind: load
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -11,14 +10,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'compact (single-node) flow: `kind:` must be text, but YAML read it as a boolean; write one of agent, code, tool'
-      frames:
-      - label: flow.yaml
-        range: [4, 7, 4, 11]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'compact (single-node) flow: `kind:` must be text, but YAML read it as a boolean; write one of agent, code, human_input, tool'
       frames:
       - label: flow.yaml
         range: [4, 7, 4, 11]

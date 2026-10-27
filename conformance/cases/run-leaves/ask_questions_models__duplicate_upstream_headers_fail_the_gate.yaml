@@ -2,7 +2,6 @@
 # and docs/syntax.md ("headers unique").
 # Upstream questions with a repeated header fail the ask before it asks.
 kind: run
-rules: [messages, run-log]
 flow: |
   id: manual_ref
   name: manual_ref
@@ -14,18 +13,6 @@ flow: |
       tool_id: ask
       input:
         questions: ${input.qs}
-  output: ${ask.output}
-# Python yian has no ask built-in: it runs the human_input gate.
-python_flow: |
-  id: manual_ref
-  name: manual_ref
-  input:
-    qs: !list(object)
-  nodes:
-    ask:
-      kind: human_input
-      input: {qs: "${input.qs}"}
-      questions: "${qs}"
   output: ${ask.output}
 inputs:
   qs:
@@ -117,76 +104,6 @@ expect:
     - failure:
         code: node.execute
         message: question headers must be unique, got ["D","D"]
-        frames:
-        - label: flow.yaml
-          range: [6, 3, 6, 6]
-        node: ask
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      message: question headers must be unique, got ['D', 'D']
-      frames:
-      - label: flow.yaml
-        range: [6, 3, 6, 6]
-      node: ask
-  trace:
-  - - run_started
-    - null
-    - learnable: false
-      num_workers: 0
-      inputs:
-        qs:
-        - header: D
-          question: a
-        - header: D
-          question: b
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        qs:
-        - header: D
-          question: a
-        - header: D
-          question: b
-  - [node_started, ask]
-  - - node_failed
-    - ask
-    - failure:
-        code: node.execute
-        message: question headers must be unique, got ['D', 'D']
-        frames:
-        - label: flow.yaml
-          range: [6, 3, 6, 6]
-        node: ask
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        qs:
-        - header: D
-          question: a
-        - header: D
-          question: b
-  - - NodeStarted
-    - node_id: ask
-  - - NodeFailed
-    - failure:
-        code: node.execute
-        message: question headers must be unique, got ['D', 'D']
-        frames:
-        - label: flow.yaml
-          range: [6, 3, 6, 6]
-        node: ask
-  - - RunFailed
-    - failure:
-        code: node.execute
-        message: question headers must be unique, got ['D', 'D']
         frames:
         - label: flow.yaml
           range: [6, 3, 6, 6]

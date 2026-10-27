@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: defaulted
@@ -17,26 +16,6 @@ flow: |2
         report: str
         n: int
       code: ./fixtures/compose_codefns.ts:make_report
-  output:
-    report: ${emit.output.report}
-    n: ${emit.output.n}
-python_flow: |2
-
-  id: defaulted
-  name: defaulted
-  input:
-    topic: !str
-    window: !int 30
-  nodes:
-    emit:
-      kind: code
-      input:
-        topic: ${input.topic}
-        window: ${input.window}
-      output:
-        report: str
-        n: int
-      code: tests.engine._compose_codefns:make_report
   output:
     report: ${emit.output.report}
     n: ${emit.output.n}

@@ -3,7 +3,6 @@
 # `assemble` binds every stance (plain, join, `:-`, a bare-ref default, `:?`).
 # On `con`, `detail` is null, and a null span fails `assemble`'s strict prompt, so this takes `pro`.
 kind: run
-rules: [run-log]
 flow: |
   # 19 — Input-binding stances: required, optional, branch-join, fail-loud, co-skip.
   #

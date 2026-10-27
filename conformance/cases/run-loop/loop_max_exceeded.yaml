@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: loop-max-exceeded
   name: loop_max_exceeded
@@ -19,27 +18,6 @@ flow: |
             n: int
           code: |
             return {n: inputs.n + 1}
-      output: ${bump.output}
-  output: ${repeat.output}
-python_flow: |
-  id: loop-max-exceeded
-  name: loop_max_exceeded
-  nodes:
-    repeat:
-      kind: loop
-      while: "true"
-      max: 2
-      input:
-        n: 0
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: int
-          code: |
-            return {"n": inputs["n"] + 1}
       output: ${bump.output}
   output: ${repeat.output}
 run: {run_id: r1, num_workers: 0}

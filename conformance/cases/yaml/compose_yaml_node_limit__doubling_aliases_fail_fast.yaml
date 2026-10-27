@@ -1,5 +1,4 @@
 kind: load
-rules: [yaml]
 flow: |
   id: f
   name: f
@@ -46,18 +45,6 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      frames:
-      - label: flow.yaml
-        range: [20, 5, 20, 6]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        invalid YAML: this list holds more than 100000 YAML nodes, counting each alias as a copy of what it names; the limit for a YAML document is 100000 (YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)
-          in "<unicode string>", line 20, column 5:
-              - &a16 [*a15, *a15]
-                ^
       frames:
       - label: flow.yaml
         range: [20, 5, 20, 6]

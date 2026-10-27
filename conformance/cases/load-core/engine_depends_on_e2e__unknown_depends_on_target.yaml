@@ -14,21 +14,6 @@ flow: |2
         topic: ${input.topic}
       output: str
   output: ${fetch.output}
-python_flow: |2
-
-  id: bad-dep
-  name: bad_dep
-  input:
-    topic: !str
-  nodes:
-    fetch:
-      kind: code
-      depends_on: [nope]
-      code: tests.engine._compose_codefns:pick_pro
-      input:
-        topic: ${input.topic}
-      output: str
-  output: ${fetch.output}
 expect:
   load:
     diagnostics:

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: usu
@@ -19,36 +18,6 @@ flow: |2
             n: int
           code: |
             return {"seen": ["a", "b"].slice(0, inputs["n"] + 1), "n": inputs["n"] + 1}
-      output: ${bump.output}
-  nodes:
-    repeat:
-      kind: loop
-      call: step
-      until: "'b' in seen"
-      max: 5
-      input:
-        seen: ${null}
-        n: 0
-  output: ${repeat.output}
-python_flow: |2
-
-  id: usu
-  name: usu
-  defs:
-    step:
-      input:
-        seen: !Optional(list(str))
-        n: !int
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            seen: Optional(list(str))
-            n: int
-          code: |
-            return {"seen": ["a", "b"][: inputs["n"] + 1], "n": inputs["n"] + 1}
       output: ${bump.output}
   nodes:
     repeat:

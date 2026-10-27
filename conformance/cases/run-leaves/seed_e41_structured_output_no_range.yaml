@@ -1,8 +1,6 @@
 # From tests/seeds/errors/e41-structured-output-no-range.yaml.
 # A record output's one wrong field fails `contract.output` at that field's declared type.
 kind: run
-# The message quotes the returned text as a value: JSON text in TS, a repr in Python.
-rules: [messages, run-log]
 flow: |
   # e41 — a structured `output:` whose one bad field fails validation at the typed
   # write boundary. Run with no inputs. The message describes the type mismatch without
@@ -46,25 +44,5 @@ expect:
       - failure:
           code: contract.output
           message: '"not-an-int" does not match declared type int'
-          node: calc
-          frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: contract.output
-      message: "'not-an-int' does not match declared type int"
-      node: calc
-      frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
-  trace:
-    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {}}]
-    - [node_started, calc]
-    - - node_failed
-      - calc
-      - failure:
-          code: contract.output
-          message: "'not-an-int' does not match declared type int"
           node: calc
           frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]

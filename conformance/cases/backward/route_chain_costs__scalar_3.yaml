@@ -3,7 +3,6 @@
 # Pins: feedback on a CALL whose argument adds `input.x` three times reaches the flow input as one
 # message per operand.
 kind: backward
-rules: [run-log]
 flow: |
   id: bw
   name: bw

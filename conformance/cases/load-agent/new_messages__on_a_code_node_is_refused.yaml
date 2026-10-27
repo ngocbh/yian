@@ -1,6 +1,5 @@
 # Only an AGENT node has new_messages; reading it from a CODE node is a load error.
 kind: load
-python_skip: "new_messages is TS-only (#1081)"
 flow: |
   id: f
   name: f

@@ -1,7 +1,6 @@
 # From tests/seeds/errors/e19-false-post-assert.yaml.
 # A false flow assert over a node's output fails END after the node succeeds, at the assert.
 kind: run
-rules: [run-log]
 flow: |
   # e19 — a false POST-TERMINAL assert (X.output). RUNTIME: flips success to failed.
   id: err-false-post-assert
@@ -15,23 +14,6 @@ flow: |
         topic: ${input.topic}
       output: int
       code: ./fixtures/seeds.ts:const_one     # returns 1
-  asserts:
-    - "calc.output > 100"      # 1 > 100 is false
-  output: ${calc.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # e19 — a false POST-TERMINAL assert (X.output). RUNTIME: flips success to failed.
-  id: err-false-post-assert
-  name: err_false_post_assert
-  input:
-    topic: !str
-  nodes:
-    calc:
-      kind: code
-      input:
-        topic: ${input.topic}
-      output: int
-      code: tests.seeds.fns:const_one     # returns 1
   asserts:
     - "calc.output > 100"      # 1 > 100 is false
   output: ${calc.output}

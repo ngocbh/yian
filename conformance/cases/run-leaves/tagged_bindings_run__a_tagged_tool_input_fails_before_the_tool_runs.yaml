@@ -2,7 +2,6 @@
 # A tagged TOOL input (`!int`) over an untyped value "5" fails binding.type before the tool runs;
 # an `!Any` flow input stands in for the test's untyped CODE source.
 kind: run
-rules: [messages, run-log]
 flow: |
   id: tagged_tool
   name: tagged_tool
@@ -97,64 +96,6 @@ expect:
     - failure:
         code: binding.type
         message: 'binding ''qty'': "5" does not match declared type int'
-        frames:
-        - label: flow.yaml
-          range: [10, 12, 10, 27]
-        node: place
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.type
-      message: 'binding ''qty'': ''5'' does not match declared type int'
-      frames:
-      - label: flow.yaml
-        range: [10, 12, 10, 27]
-      node: place
-  trace:
-  - - run_started
-    - null
-    - learnable: false
-      num_workers: 0
-      inputs:
-        n: '5'
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        n: '5'
-  - [node_started, place]
-  - - node_failed
-    - place
-    - failure:
-        code: binding.type
-        message: 'binding ''qty'': ''5'' does not match declared type int'
-        frames:
-        - label: flow.yaml
-          range: [10, 12, 10, 27]
-        node: place
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        n: '5'
-  - - NodeStarted
-    - node_id: place
-  - - NodeFailed
-    - failure:
-        code: binding.type
-        message: 'binding ''qty'': ''5'' does not match declared type int'
-        frames:
-        - label: flow.yaml
-          range: [10, 12, 10, 27]
-        node: place
-  - - RunFailed
-    - failure:
-        code: binding.type
-        message: 'binding ''qty'': ''5'' does not match declared type int'
         frames:
         - label: flow.yaml
           range: [10, 12, 10, 27]

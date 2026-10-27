@@ -6,8 +6,6 @@
 # results, finds the interrupt still pending, writes `interrupted {by: 9}` and succeeds null,
 # calling neither the model nor the tool.
 kind: resume
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: replay-interrupt
   name: replay_interrupt

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: list-none-call
   name: list_none_call
@@ -14,27 +13,6 @@ flow: |
       kind: code
       code: |
         return [null]
-      output: list(None)
-    invoke:
-      kind: call
-      call: echo
-      input:
-        values: ${source.output}
-  output: ${invoke.output}
-python_flow: |
-  id: list-none-call
-  name: list_none_call
-  defs:
-    echo:
-      input:
-        values: !list(Optional(str))
-      nodes: {}
-      output: ${input.values}
-  nodes:
-    source:
-      kind: code
-      code: |
-        return [None]
       output: list(None)
     invoke:
       kind: call

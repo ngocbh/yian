@@ -1,8 +1,6 @@
 # TS-only: a LOOP of agents carries a history: each turn's prompt splices the history so far, and
 # the turn adds its agent's new messages to it.
 kind: run
-rules: [run-log]
-python_skip: "new_messages is TS-only (#1081)"
 flow: |
   id: talk
   name: talk

@@ -4,7 +4,6 @@
 # node's among them), separately from the run's own success; the commit records come before
 # backward_finished.
 kind: backward
-rules: [run-log]
 flow: |
   id: memory-run
   name: memory_run

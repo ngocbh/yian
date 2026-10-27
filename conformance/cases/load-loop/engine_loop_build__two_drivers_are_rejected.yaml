@@ -1,6 +1,5 @@
 # TS spells the list as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |2
 
   id: loop-never-ends
@@ -28,14 +27,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'loop node ''wait'': exactly one of while:/until:/times: is required (got ["until","while"])'
-      frames:
-      - label: flow.yaml
-        range: [13, 3, 13, 7]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'loop node ''wait'': exactly one of while:/until:/times: is required (got [''until'', ''while''])'
       frames:
       - label: flow.yaml
         range: [13, 3, 13, 7]

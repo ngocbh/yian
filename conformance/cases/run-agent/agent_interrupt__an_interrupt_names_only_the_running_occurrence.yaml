@@ -7,8 +7,6 @@
 # occurrences, so `loop#1/reply` opens while it stands, gets its own `interrupted` record and
 # ends null before its model call: "s|-|-".
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: t
   name: t

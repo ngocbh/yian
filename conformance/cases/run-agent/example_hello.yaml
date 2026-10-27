@@ -1,7 +1,6 @@
 # From examples/hello.yaml.
 # The compact flow's one AGENT, named by the flow id, greets the input; the flow returns its text.
 kind: run
-rules: [run-log]
 flow: |
   # hello — the smallest agent flow, written in COMPACT form: the flow IS one node,
   # so there is no `nodes:` map and no `output: ${greet.output}` wiring step. The flow

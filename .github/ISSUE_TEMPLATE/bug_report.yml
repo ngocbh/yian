@@ -99,11 +99,11 @@ body:
       required: true
 
   - type: input
-    id: python-version
+    id: runtime-version
     attributes:
-      label: Python Version
-      description: Output of `python --version` (the package requires 3.11+)
-      placeholder: "3.11.9"
+      label: Runtime Version
+      description: Bun (`bun --version`, 1.4+) or Node (`node --version`, 22.18+), whichever runs yian
+      placeholder: "Bun 1.4.2"
     validations:
       required: true
 
@@ -129,7 +129,7 @@ body:
         If you've dug into the code and identified the root cause, share it here.
         Include file paths, line numbers, and code snippets if possible. This massively speeds up fixes.
       placeholder: |
-        The bug is in `compose/build.py` line 585. `_output_value_type` infers the
+        The bug is in `ts/src/compose/build/pipeline.ts` line 558. `stampBindingLabels` reads the
         binding type from ref leaves only and ignores the `==` operator...
 
   - type: textarea

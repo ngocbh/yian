@@ -3,8 +3,6 @@
 # together; `save`, which isn't marked, waits for both to finish and runs alone. The next request
 # holds the three tool messages in call order.
 kind: run
-rules: [run-log]
-python_skip: concurrent tool calls are TS-only (D29)
 flow: |
   id: groups
   name: groups

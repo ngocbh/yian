@@ -3,8 +3,6 @@
 # `inbox_withdrawn` names the steer, so no `steer` step reads it; the interrupt cuts the reply
 # and it honors it: output null.
 kind: run
-python_skip: "withdraw and the remembered Stop are TS-only (#1106)"
-rules: [run-log]
 flow: |
   id: stop
   name: stop

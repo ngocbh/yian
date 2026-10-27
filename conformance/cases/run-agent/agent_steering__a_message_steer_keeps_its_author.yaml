@@ -2,8 +2,6 @@
 # keeping its author; its role becomes `user`. The second call's request isn't listed (Python's
 # case check has no `author`); its `request_sha256` in the trace covers the authored message.
 kind: run
-rules: [run-log]
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: steer
   name: steer

@@ -1,8 +1,8 @@
 # yian (TypeScript)
 
 The TypeScript implementation of yian ([ngocbh/yian#736][issue-736]), the npm package `@ngocbh/yian`
-(`yian` is taken on npm). The Python package in `src/yian/` stays until the cut-over. Until then the
-guides in `docs/` describe Python yian, with a "Changed (TS yian):" note wherever TS yian differs.
+(`yian` is taken on npm). The guides in `docs/` still describe Python yian, which is retired, with
+a "Changed (TS yian):" note wherever TS yian differs, until they are rewritten.
 This README gives the TypeScript shape of the API: names, option objects and types. For what each
 option does, follow its link to [`docs/api.md`][docs/api.md]; the flow YAML is in
 [`docs/syntax.md`][docs/syntax.md].
@@ -1712,7 +1712,7 @@ them when a Bun upgrade or a newly copied package changes those sections.
 
 ### Conformance
 
-`tests/conformance.ts` runs the cases in `../conformance/cases/` (see `../conformance/README.md`).
+`tests/conformance.ts` runs the cases in `../conformance/cases/` (see `../conformance/SPEC.md`).
 Run from `ts/`:
 
 ```sh
@@ -1722,9 +1722,8 @@ bun run build && node dist/tests/conformance.js           # every case, on Node
 ```
 
 Flags, each repeatable (values of one flag are alternatives; different flags all apply):
-`--group G`, `--kind K`, `--case <group>/<name>`, `--rules R` (cases whose `rules` hold R),
-`--diagnostic-code C` (`load` cases expecting a diagnostic with code C). `--kind`, `--rules` and
-`--diagnostic-code` never hide a case file that can't be read; `--group` and `--case`, read from
+`--group G`, `--kind K`, `--case <group>/<name>`, `--diagnostic-code C` (`load` cases expecting a
+diagnostic with code C). `--kind` and `--diagnostic-code` never hide a case file that can't be read; `--group` and `--case`, read from
 its path, still select or skip it. `--crash-sweep` also gives each eligible `run` case a crash
 sweep: the run is cut after each record but the last, resumed, and checked. `--write-logs` (for
 development; it needs `--case`) writes each selected `run`, `resume` or `backward` case's golden

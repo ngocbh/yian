@@ -3,7 +3,6 @@
 # An ask typed Literal(...) sends its tags as the answer schema's enum, and its `node_name:` as
 # the title.
 kind: run
-rules: [run-log]
 flow: |
   id: approval
   name: approval

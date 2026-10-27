@@ -1,5 +1,4 @@
 kind: expr
-rules: [text-form]
 template: ${settings}
 values:
   settings:
@@ -8,5 +7,3 @@ values:
 mode: strict
 expect:
   value: '{"nested":{"items":["a","b"]}}'
-python_expect:
-  value: '{''nested'': {''items'': [''a'', ''b'']}}'

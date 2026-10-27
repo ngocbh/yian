@@ -21,28 +21,6 @@ flow: |2
             n: int
       output: ${bump.output}
   output: ${repeat.output}
-python_flow: |2
-
-  id: loop-inline-subset
-  name: loop_inline_subset
-  nodes:
-    repeat:
-      kind: loop
-      until: exited
-      input:
-        n: 0
-        exited: false
-      nodes:
-        bump:
-          kind: code
-          code: tests.engine._compose_codefns:loop_bump
-          input:
-            n: ${input.n}
-            exited: ${input.exited}
-          output:
-            n: int
-      output: ${bump.output}
-  output: ${repeat.output}
 expect:
   load:
     diagnostics:

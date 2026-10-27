@@ -1,5 +1,4 @@
 kind: run
-rules: [messages]
 flow: |
   id: hello
   name: hello
@@ -21,11 +20,5 @@ expect:
   raises:
     class: ValueError
     message: 'unknown inputs "a", "b"; declared inputs: (none)'
-  trace: []
-  events: []
-python_expect:
-  raises:
-    class: ValueError
-    message: 'unknown inputs ''a'', ''b''; declared inputs: (none)'
   trace: []
   events: []

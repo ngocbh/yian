@@ -1,5 +1,4 @@
 kind: resume
-rules: [run-log]
 flow: |
   id: crash-after-tool-call
   name: crash_after_tool_call

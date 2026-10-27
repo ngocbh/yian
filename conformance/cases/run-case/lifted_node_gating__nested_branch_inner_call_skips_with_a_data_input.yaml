@@ -2,7 +2,6 @@
 # Pins: on the taken route, a nested branch call's inner call is skipped with the branch call's skipped argument.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t
@@ -30,59 +29,6 @@ flow: |
         fx:
           kind: code
           code: ./fixtures/compose_codefns.ts:record
-          input:
-            tag: ${input.tag}
-          output: str
-      output: ${fx.output}
-  nodes:
-    pick:
-      kind: case
-      cases:
-        - when: ${input.other}
-          then: maybe
-    maybe:
-      kind: code
-      output: str
-      code: return "m"
-    gate:
-      kind: case
-      cases:
-        - when: ${input.go}
-          then: call(pair, x=call(side, tag="inner"), y=${maybe.output})
-      else: b
-    b:
-      kind: code
-      output: str
-      code: return "B"
-  output:
-    r: ${gate.output}
-python_flow: |
-  id: t
-  name: t
-  input:
-    go: !bool
-    other: !bool
-  defs:
-    pair:
-      input:
-        x: !str
-        y: !str
-      nodes:
-        j:
-          kind: code
-          input:
-            x: ${input.x}
-            y: ${input.y}
-          output: str
-          code: return inputs["x"] + inputs["y"]
-      output: ${j.output}
-    side:
-      input:
-        tag: !str
-      nodes:
-        fx:
-          kind: code
-          code: tests.engine._compose_codefns:record
           input:
             tag: ${input.tag}
           output: str

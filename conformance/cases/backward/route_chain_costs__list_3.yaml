@@ -3,7 +3,6 @@
 # Pins: feedback on a CALL whose argument concatenates `input.values` three times reaches the flow
 # input as one message per operand.
 kind: backward
-rules: [run-log]
 flow: |
   id: lc
   name: lc

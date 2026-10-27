@@ -1,5 +1,4 @@
 kind: load
-rules: [yaml]
 flow: |
   id: p
   name: p
@@ -26,21 +25,6 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      frames:
-      - label: flow.yaml
-        range: [9, 7, 9, 12]
-        note: uses alias 'ch'
-      - label: child.yaml
-        range: [8, 14, 8, 15]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        invalid YAML: not a valid date: month must be in 1..12; quote it to keep it as text
-          in "<unicode string>", line 8, column 14:
-                  topic: 2026-13-45
-                         ^
       frames:
       - label: flow.yaml
         range: [9, 7, 9, 12]

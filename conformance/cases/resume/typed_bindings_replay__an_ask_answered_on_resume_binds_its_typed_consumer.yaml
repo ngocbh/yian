@@ -6,7 +6,6 @@
 # hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
-rules: [run-log]
 flow: |
   id: typed-gate-replay
   name: typed_gate_replay

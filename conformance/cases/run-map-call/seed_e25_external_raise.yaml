@@ -1,8 +1,6 @@
 # From tests/seeds/errors/e25-external-raise.yaml.
 # A CODE throw inside a `uses:` child fails `go/kaboom`: frames the CALL, then the child's `code:`.
 kind: run
-# A thrown error's text and the reference's length differ by language.
-rules: [code, run-log]
 flow: |
   # e25 — a CODE callable that raises INSIDE an EXTERNAL `uses:` flow (a different .yaml).
   #
@@ -54,33 +52,6 @@ files:
         output: str
 
     output: ${kaboom.output}
-# The child's CODE reference differs by language: `files` names the TS function,
-# this the Python one.
-python_files:
-  lib_boom.yaml: |
-    # lib_boom — a tiny EXTERNAL flow whose CODE node always raises.
-    #
-    # Imported by e25-external-raise.yaml via `uses:`. The inner `kaboom` node's
-    # `code:` origin resolves through this document's catalog, so the canonical frame
-    # uses this filename. CODE-only -> runs locally, no model.
-    # The parent composes this catalog through its external alias resolver.
-
-    id: lib_boom
-    name: lib_boom
-    description: An external flow whose only node raises (external-frame traceback fixture).
-
-    input:
-      topic: !str
-
-    nodes:
-      kaboom:
-        kind: code
-        code: tests.seeds.fns:fail_always
-        input:
-          topic: ${input.topic}
-        output: str
-
-    output: ${kaboom.output}
 inputs: {topic: X}
 run: {run_id: r1, num_workers: 0}
 expect:
@@ -119,31 +90,3 @@ expect:
           frames:
             - {label: flow.yaml, range: [19, 3, 19, 5]}
             - {label: lib_boom.yaml, range: [18, 11, 18, 42]}
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      message: "intentional CODE failure"
-      node: go/kaboom
-      frames:
-        - {label: flow.yaml, range: [19, 3, 19, 5]}
-        - {label: lib_boom.yaml, range: [18, 11, 18, 38]}
-  trace:
-    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
-    - [node_started, __start__]
-    - [node_succeeded, __start__, {value: {topic: X}}]
-    - [node_started, go]
-    - [node_expanded, go, {seed: {topic: X}, prune_ids: []}]
-    - [node_started, go/__start__]
-    - [node_succeeded, go/__start__, {value: {topic: X}}]
-    - [node_started, go/kaboom]
-    - - node_failed
-      - go/kaboom
-      - failure:
-          code: node.execute
-          message: "intentional CODE failure"
-          node: go/kaboom
-          frames:
-            - {label: flow.yaml, range: [19, 3, 19, 5]}
-            - {label: lib_boom.yaml, range: [18, 11, 18, 38]}

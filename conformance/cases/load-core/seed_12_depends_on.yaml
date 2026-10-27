@@ -47,52 +47,5 @@ flow: |
       prompt: "Write a neutral one-line note on ${topic} given recent closes ${values}. No advice."
 
   output: ${note.output}
-# The CODE references differ by language: `flow` names the TS functions, these the Python ones.
-python_flow: |
-  # 12 — Explicit run-ordering with depends_on / runs_after.
-  #
-  # Most edges are inferred from ${...} data bindings. When a node must run AFTER
-  # another with no data flowing between them (a side effect — priming a shared
-  # cache), an ORDERING edge adds the constraint. Two forms are available:
-  #   - `depends_on: [X]` — run after X AND co-skip if X is skipped ("I need X").
-  #   - `runs_after:  [X]` — run after X but still run if X is skipped (pure order).
-  # Both gate on X settling. This seed uses `depends_on` (the source `warm_cache` is
-  # unconditional, so it always runs); the co-skip vs survive distinction only shows
-  # when the source sits behind a `case` (see tests/engine/test_depends_on_e2e.py).
-  # Shows: depends_on, a bool output nobody binds, and a CODE side-effect node.
-
-  id: depends-on
-  name: depends_on_demo
-  description: Run a cache-priming side-effect node before fetch via depends_on (no data binding).
-
-  input:
-    topic: !str
-
-  nodes:
-    warm_cache:
-      kind: code
-      input:
-        topic: ${input.topic}
-      output: bool                # returns true; nothing binds it
-      code: tests.seeds.fns:prime_cache
-
-    fetch:
-      kind: code
-      depends_on: [warm_cache]     # ordering edge — run AFTER warm_cache even though we do
-      input:                      #   not consume its output (it primed a shared cache)
-        topic: ${input.topic}
-      output:
-        values: list(float)
-      code: tests.seeds.fns:fetch_facts
-
-    note:
-      kind: agent
-      input:
-        topic: ${input.topic}
-        values: ${fetch.output.values}
-      output: str
-      prompt: "Write a neutral one-line note on ${topic} given recent closes ${values}. No advice."
-
-  output: ${note.output}
 expect:
   load: ok

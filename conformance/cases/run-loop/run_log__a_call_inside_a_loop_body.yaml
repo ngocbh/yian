@@ -1,7 +1,6 @@
 # A learnable loop whose body CALLs another def. The golden log pins the captures and seed
 # routes through a LOOP and a CALL.
 kind: run
-rules: [run-log]
 flow: |
   id: count
   name: count

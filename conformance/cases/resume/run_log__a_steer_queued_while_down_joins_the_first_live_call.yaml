@@ -4,8 +4,6 @@
 # `steer` step for the send, which joins the first live request after the closer's result (its
 # `request` below).
 kind: resume
-rules: [run-log]
-python_skip: "steer_inbox reads an Inbox, which Python yian doesn't have (#1025)"
 flow: |
   id: replay-steer
   name: replay_steer

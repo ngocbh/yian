@@ -1,9 +1,6 @@
 kind: expr
-rules: [text-form]
 template: x=${x}
 values:
   x: -0.0
 expect:
   value: x=0
-python_expect:
-  value: x=-0.0

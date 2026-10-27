@@ -1,6 +1,5 @@
 # env: YIAN_DEFAULT_MODEL/PROVIDER kept: the flow names no model, and without them the run fails before its model call.
 kind: run
-rules: [llm, run-log]
 flow: |2
 
   id: guess
@@ -145,73 +144,6 @@ expect:
       provider: openai
       purpose: structured_native
       n: 1
-  - - NodeSucceeded
-    - node_id: a
-      output:
-        a: [1, null]
-  - - NodeStarted
-    - node_id: __end__
-  - - NodeSucceeded
-    - node_id: __end__
-      output:
-        a: [1, null]
-  - - RunSucceeded
-    - output:
-        a: [1, null]
-python_expect:
-  output:
-    status: succeeded
-    output:
-      a: [1, null]
-  trace:
-  - - run_started
-    - null
-    - effective_llm_by_static_path:
-        a:
-          _connection:
-            endpoint: https://api.openai.com/v1
-            method: api_key
-            source: missing
-          model: gpt-5.5
-          provider: openai
-      inputs: {}
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value: {}
-  - [node_started, a]
-  - - node_succeeded
-    - a
-    - value:
-        a: [1, null]
-  - [node_started, __end__]
-  - - node_succeeded
-    - __end__
-    - value:
-        a: [1, null]
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output: {}
-  - - NodeStarted
-    - node_id: a
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
-      node_id: a
-      provider: openai
-      purpose: structured_native
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
-      node_id: a
-      provider: openai
-      purpose: structured_native
   - - NodeSucceeded
     - node_id: a
       output:

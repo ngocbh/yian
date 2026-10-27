@@ -3,7 +3,6 @@
 # Pins: a flow-level profile reaches the AGENT's context on a later run: the profile document in the
 # system prompt once, then this run's message, and no earlier turn.
 kind: run
-rules: [run-log]
 flow: |
   id: office
   name: office

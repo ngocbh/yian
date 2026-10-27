@@ -3,7 +3,6 @@
 # its model_call is written (record 9), then the crash cuts the run before the node's failure.
 # The resumed agent replays the reply and fails at the same check, calling no model.
 kind: resume
-rules: [run-log]
 flow: |
   id: replay-invalid-arguments
   name: replay_invalid_arguments

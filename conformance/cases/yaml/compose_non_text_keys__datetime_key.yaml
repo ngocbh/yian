@@ -1,6 +1,5 @@
 # TS reads the unquoted date and time key as text (rules: dates); Python's error in python_expect.
 kind: load
-rules: [dates]
 flow: |
   id: f
   name: f
@@ -53,11 +52,3 @@ flow: |
     2026-10-13 10:00:00: v
 expect:
   load: ok
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: the key `2026-10-13 10:00:00` was read by YAML as a date and time, but names in a flow must be text. Quote it ("2026-10-13 10:00:00") or choose another name.
-      frames:
-      - label: flow.yaml
-        range: [49, 3, 49, 22]

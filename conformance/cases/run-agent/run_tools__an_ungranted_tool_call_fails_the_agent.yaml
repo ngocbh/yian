@@ -4,7 +4,6 @@
 # message names the tool and the granted list ("requested tool 'shout', but it is not granted;
 # granted tools: ['lookup']").
 kind: run
-rules: [messages, run-log]
 flow: |
   id: grant
   name: grant
@@ -157,84 +156,3 @@ expect:
     node_id: agent
     n: 1
     index: 0
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
-      frames:
-      - label: flow.yaml
-        range: [5, 3, 5, 8]
-      message: 'agent node ''agent'' requested tool ''shout'', but it is not granted; granted tools: [''lookup'']'
-      node: agent
-  trace:
-  - - run_started
-    - null
-    - effective_llm_by_static_path:
-        agent:
-          _connection:
-            endpoint: https://api.openai.com/v1
-            method: api_key
-            source: missing
-          model: gpt-5.5
-          provider: openai
-      inputs: {}
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value: {}
-  - [node_started, agent]
-  - - node_failed
-    - agent
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 8]
-        message: 'agent node ''agent'' requested tool ''shout'', but it is not granted; granted tools: [''lookup'']'
-        node: agent
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output: {}
-  - - NodeStarted
-    - node_id: agent
-  - - ModelCallStarted
-    - exchange_id: <id:1>
-      model: gpt-5.5
-      node_id: agent
-      provider: openai
-      purpose: chat
-  - - ModelCallFinished
-    - exchange_id: <id:1>
-      model: gpt-5.5
-      node_id: agent
-      provider: openai
-      purpose: chat
-  - - NodeFailed
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 8]
-        message: 'agent node ''agent'' requested tool ''shout'', but it is not granted; granted tools: [''lookup'']'
-        node: agent
-  - - RunFailed
-    - failure:
-        code: node.execute
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 8]
-        message: 'agent node ''agent'' requested tool ''shout'', but it is not granted; granted tools: [''lookup'']'
-        node: agent
-  stream:
-  - chunk: ''
-    exchange_id: <id:1>
-    final: true
-    key: text
-    node_id: agent

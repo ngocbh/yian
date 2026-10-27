@@ -4,7 +4,6 @@
 # model's answer is the output. The tool ran once; its ToolCallFinished has error
 # ReportedToolError and no result.
 kind: run
-rules: [run-log]
 flow: |
   id: reported
   name: reported

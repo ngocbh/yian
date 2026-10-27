@@ -4,7 +4,6 @@
 # the second attempt's reply. The resumed agent waits the recorded 0.5 s again and makes the
 # call as attempt 2, the retry the first start had left: its reply is step 2.
 kind: resume
-rules: [run-log]
 flow: |
   id: replay-mid-retry
   name: replay_mid_retry

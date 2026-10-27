@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log, null-field-read]
 flow: |
   id: p
   name: p
@@ -17,23 +16,6 @@ flow: |
   output:
     a: ${step.output?.a}
     note: 'a=${step.output?.a}'
-python_flow: |
-  id: p
-  name: p
-  typedefs:
-    Rec: {a: str}
-  input:
-    s: !str
-  nodes:
-    step:
-      kind: code
-      input:
-        x: ${input.s}
-      output: Optional(Rec)
-      code: return None
-  output:
-    a: ${step.output.a}
-    note: 'a=${step.output.a}'
 inputs:
   s: x
 run:

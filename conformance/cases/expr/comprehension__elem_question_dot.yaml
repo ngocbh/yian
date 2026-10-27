@@ -1,5 +1,4 @@
 kind: expr
-rules: [null-field-read]
 # `m?.text` reads null on an item without `text`.
 expr: "[m?.text for m in ms]"
 values: {ms: [{text: a}, {role: user}]}

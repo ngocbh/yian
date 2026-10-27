@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: p
@@ -52,62 +51,6 @@ flow: |2
         d:
           kind: code
           code: ./fixtures/compose_codefns.ts:echo
-          input:
-            topic: ${input.v}
-          output: str
-      output: ${d.output}
-python_flow: |2
-
-  id: p
-  name: p
-  input:
-    s: !Optional(str)
-    items: !list(int)
-  nodes:
-    x:
-      kind: code
-      code: tests.engine._compose_codefns:echo
-      input:
-        topic: ${input.s}
-      output: Optional(str)
-    gate:
-      kind: case
-      cases:
-        - when: x.output != null
-          then: use
-      else: skip
-    use:
-      kind: call
-      call: take
-      input:
-        v: ${x.output}
-    skip:
-      kind: code
-      code: tests.engine._compose_codefns:echo
-      input:
-        topic: skipped
-      output: str
-  output: ${use.output :- skip.output}
-  defs:
-    take:
-      input:
-        v: !str
-      nodes:
-        d:
-          kind: code
-          code: tests.engine._compose_codefns:echo
-          input:
-            topic: ${input.v}
-          output: str
-      output: ${d.output}
-    take_each:
-      input:
-        i: !int
-        v: !str
-      nodes:
-        d:
-          kind: code
-          code: tests.engine._compose_codefns:echo
           input:
             topic: ${input.v}
           output: str

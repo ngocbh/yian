@@ -1,6 +1,5 @@
 # TS spells the compared text and the suggested tag as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: p
   name: p
@@ -38,14 +37,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'case node ''route'': `cases[1].when`: `d.output.action == "biy"` compares d.output.action with "biy", which is not one of its tags (buy, hold, sell); did you mean "buy"?'
-      frames:
-      - label: flow.yaml
-        range: [22, 15, 22, 41]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'case node ''route'': `cases[1].when`: `d.output.action == "biy"` compares d.output.action with ''biy'', which is not one of its tags (buy, hold, sell); did you mean ''buy''?'
       frames:
       - label: flow.yaml
         range: [22, 15, 22, 41]

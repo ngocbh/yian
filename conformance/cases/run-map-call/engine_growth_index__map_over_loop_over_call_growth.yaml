@@ -1,41 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: map-over-loop-over-call
-  name: map-over-loop-over-call
-  input:
-    xs: !list(int)
-  nodes:
-    each:
-      kind: map
-      over: ${input.xs}
-      input:
-        x: ${item}
-      nodes:
-        repeat:
-          kind: loop
-          times: 3
-          input:
-            n: ${input.x}
-          nodes:
-            inner:
-              kind: call
-              input:
-                n: ${input.n}
-              nodes:
-                a:
-                  kind: code
-                  input: {n: "${input.n}"}
-                  output: int
-                  code: |
-                    return inputs["n"] + 1
-              output: ${a.output}
-          output:
-            n: ${inner.output}
-      output: ${repeat.output}
-  output: ${each.output}
-python_flow: |2
 
   id: map-over-loop-over-call
   name: map-over-loop-over-call

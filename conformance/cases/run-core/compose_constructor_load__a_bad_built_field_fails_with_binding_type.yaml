@@ -1,5 +1,4 @@
 kind: run
-rules: [messages, run-log]
 flow: |
   id: p
   name: p
@@ -117,76 +116,4 @@ expect:
         - label: flow.yaml
           range: [21, 10, 21, 57]
         message: 'Buy(...): "high" does not match declared type float'
-        node: c
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.type
-      frames:
-      - label: flow.yaml
-        range: [21, 10, 21, 57]
-      message: 'Buy(...): ''high'' does not match declared type float'
-      node: c
-  trace:
-  - - run_started
-    - null
-    - inputs:
-        order:
-          price: high
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_succeeded
-    - __start__
-    - value:
-        order:
-          price: high
-  - [node_started, d]
-  - - node_succeeded
-    - d
-    - value:
-        price: high
-  - [node_started, c]
-  - - node_failed
-    - c
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [21, 10, 21, 57]
-        message: 'Buy(...): ''high'' does not match declared type float'
-        node: c
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeSucceeded
-    - node_id: __start__
-      output:
-        order:
-          price: high
-  - - NodeStarted
-    - node_id: d
-  - - NodeSucceeded
-    - node_id: d
-      output:
-        price: high
-  - - NodeStarted
-    - node_id: c
-  - - NodeFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [21, 10, 21, 57]
-        message: 'Buy(...): ''high'' does not match declared type float'
-        node: c
-  - - RunFailed
-    - failure:
-        code: binding.type
-        frames:
-        - label: flow.yaml
-          range: [21, 10, 21, 57]
-        message: 'Buy(...): ''high'' does not match declared type float'
         node: c

@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: pooled-siblings
   name: pooled_siblings

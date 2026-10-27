@@ -2,7 +2,6 @@
 # holds no render and the trace shows none; learning checks the pre-asserts again before it renders
 # the occurrence.
 kind: run
-rules: [run-log]
 flow: |
   id: guarded
   name: guarded

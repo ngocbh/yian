@@ -5,7 +5,6 @@
 # and the whole recall lists every lesson in order.
 # YIAN_DEFAULT_PROVIDER/MODEL: a reflective learner's model config comes from the defaults, not the flow.
 kind: run
-rules: [run-log]
 flow: |
   id: tutor
   name: tutor

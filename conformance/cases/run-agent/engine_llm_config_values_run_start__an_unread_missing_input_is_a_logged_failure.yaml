@@ -2,7 +2,6 @@
 # hand TS expect: Python prints `from=None` in this message and no shim converts it, so the TS
 # text `from=null` was written by hand.
 kind: run
-rules: [messages, run-log]
 flow: |
   id: f
   name: f
@@ -84,59 +83,4 @@ expect:
         - label: flow.yaml
           range: [5, 3, 5, 4]
         message: required input 'n' is unbound (from=null)
-        node: __start__
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: binding.evaluate
-      frames:
-      - label: flow.yaml
-        range: [5, 3, 5, 4]
-      message: required input 'n' is unbound (from=None)
-      node: __start__
-  trace:
-  - - run_started
-    - null
-    - effective_llm_by_static_path:
-        chat:
-          _connection:
-            endpoint: https://api.openai.com/v1
-            method: api_key
-            source: missing
-          model: gpt-x
-          provider: openai
-      inputs:
-        m: gpt-x
-      learnable: false
-      num_workers: 0
-  - [node_started, __start__]
-  - - node_failed
-    - __start__
-    - failure:
-        code: binding.evaluate
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 4]
-        message: required input 'n' is unbound (from=None)
-        node: __start__
-  events:
-  - [RunStarted]
-  - - NodeStarted
-    - node_id: __start__
-  - - NodeFailed
-    - failure:
-        code: binding.evaluate
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 4]
-        message: required input 'n' is unbound (from=None)
-        node: __start__
-  - - RunFailed
-    - failure:
-        code: binding.evaluate
-        frames:
-        - label: flow.yaml
-          range: [5, 3, 5, 4]
-        message: required input 'n' is unbound (from=None)
         node: __start__

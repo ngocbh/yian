@@ -1,5 +1,4 @@
 kind: expr
-rules: [null-field-read]
 template: x ${sig.nope} y
 values:
   sig:
@@ -9,7 +8,3 @@ expect:
   raises:
     class: ExpressionError
     message: "cannot read ${sig.nope}: sig has no field 'nope'"
-python_expect:
-  raises:
-    class: ExpressionError
-    message: unresolved reference ${sig.nope} in expression

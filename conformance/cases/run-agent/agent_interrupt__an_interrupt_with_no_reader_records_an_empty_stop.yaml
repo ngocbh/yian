@@ -4,8 +4,6 @@
 # during its model call records `interrupted {notes, []}`, naming no node. The agent answers in
 # full. A send during it goes to the inline take after it, a pickup that ends the Stop.
 kind: run
-rules: [run-log]
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
 flow: |
   id: steer
   name: steer

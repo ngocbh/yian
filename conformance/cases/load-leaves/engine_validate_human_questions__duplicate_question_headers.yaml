@@ -1,6 +1,5 @@
 # TS spells the list of headers as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |2
 
   id: f
@@ -14,17 +13,6 @@ flow: |2
           - {question: "dup", header: "H"}
           - {question: "dup2", header: "H"}
   output: ${ask.output}
-python_flow: |2
-
-  id: f
-  name: f
-  nodes:
-    ask:
-      kind: human_input
-      questions:
-        - {question: "dup", header: "H"}
-        - {question: "dup2", header: "H"}
-  output: ${ask.output}
 expect:
   load:
     diagnostics:
@@ -33,13 +21,3 @@ expect:
       frames:
       - label: flow.yaml
         range: [10, 9, 12, 1]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        flow has invalid human_input questions:
-          node 'ask' (kind=human_input): question headers must be unique, got ['H', 'H']
-      frames:
-      - label: flow.yaml
-        range: [8, 7, 10, 1]

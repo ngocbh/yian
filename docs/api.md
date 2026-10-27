@@ -2449,8 +2449,7 @@ The run log does not rebuild SessionMemory.
 without changing state if **any** turn is active or queued. When idle, it clears
 the conversation and advances the generation. Older run
 handles then fail as stale. Reset does not delete
-external provider history or files. See the [rendered contracts](reference.md#session-memory-foundation)
-for the lower-level signatures.
+external provider history or files.
 
 ## Diagnosing a failed run
 
@@ -2521,8 +2520,7 @@ revalidates before restoring; no separate forward terminal record exists.
 
 Changed (TS yian, schema 23): `inbox_withdrawn`; `interrupted` may name no node. Records use
 schema 23, and readers accept only schema 23. The schema
-is checked before anything else in a line. A schema 9 log is rejected with "run log
-schema 9 was written by Python yian; resume it with Python yian", a schema 10 to 22 log
+is checked before anything else in a line. A schema 10 to 22 log
 (TS yian's, from before record times, before `RunStarted` held the flow files, before pool
 writes were `pool_commit` records, before node steps were numbered, before an unfinished
 backward attempt was `backward.unfinished`, before derived commits held `from` pointers,

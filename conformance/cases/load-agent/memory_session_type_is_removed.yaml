@@ -1,6 +1,5 @@
 # TS yian has no session memory: a `session` memory, on an AGENT or a flow, is a load error that
 # says to carry the history as a LOOP field.
-python_skip: Python yian keeps session memory
 kind: load
 flow: |
   id: chat

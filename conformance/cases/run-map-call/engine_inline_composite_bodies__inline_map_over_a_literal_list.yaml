@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |
   id: inline-map-literal-over
   name: inline_map_literal_over

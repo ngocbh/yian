@@ -4,8 +4,6 @@
 # reply's text; TS yian's output is null). An interrupt delivered while tool call 1 runs lets it
 # finish and skips call 2 (ToolCallFinished error `interrupted`), then the honor step.
 kind: run
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: steer
   name: steer

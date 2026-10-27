@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: ab
@@ -10,22 +9,6 @@ flow: |2
     x:
       kind: code
       code: ./fixtures/compose_codefns.ts:double
-      input:
-        n: ${input.maybe}
-      output: int
-      asserts:
-        - "n >= 0"
-  output: ${x.output}
-python_flow: |2
-
-  id: ab
-  name: ab
-  input:
-    maybe: !Optional(int)
-  nodes:
-    x:
-      kind: code
-      code: tests.engine._compose_codefns:double
       input:
         n: ${input.maybe}
       output: int

@@ -1,37 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: partial-typed-seed
-  name: partial_typed_seed
-  defs:
-    bump:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-          output: int
-          code: |
-            return inputs["n"] + 1
-      output:
-        n: ${step.output}
-  nodes:
-    p:
-      kind: code
-      code: |
-        return "seed"
-    loop:
-      kind: loop
-      times: 2
-      input:
-        n: 0
-        label: !Optional(str) ${p.output}
-      call: bump
-  output: ${loop.output}
-python_flow: |2
 
   id: partial-typed-seed
   name: partial_typed_seed

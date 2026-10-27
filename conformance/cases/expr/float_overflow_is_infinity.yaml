@@ -1,4 +1,3 @@
 kind: expr
 expr: "2.0 ** 5000"
-rules: [infinity]
 expect: {value: {$float: inf}}

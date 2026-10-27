@@ -3,7 +3,6 @@
 # ::test_deadline_accepts_z_short_fraction_and_space_separator, moved into the past (no clock).
 # A sleep whose deadline has passed returns null at once, in each accepted spelling.
 kind: run
-rules: [run-log]
 flow: |
   id: waits
   name: waits

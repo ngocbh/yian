@@ -1,6 +1,5 @@
 # A `.` step on an Optional value is a load error naming the fix (`?.` or a null check).
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -25,5 +24,3 @@ expect:
         frames:
           - label: flow.yaml
             range: [11, 10, 11, 26]
-python_expect:
-  load: ok

@@ -1,14 +1,8 @@
 kind: value
-rules: [messages]
 type: date
 value: 0000-01-01
 expect:
   raises:
     class: TypeCheckError
     message: '"0000-01-01" does not match declared type date: not a valid date: year 0 is out of range'
-    path: []
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: '''0000-01-01'' does not match declared type date: not a valid date: year 0 is out of range'
     path: []

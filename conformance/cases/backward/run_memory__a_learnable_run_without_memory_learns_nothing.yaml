@@ -1,5 +1,4 @@
 kind: backward
-rules: [run-log]
 flow: |
   id: memory-run
   name: memory_run

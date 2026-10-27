@@ -1,6 +1,5 @@
 # TS spells the list as JSON text (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -28,46 +27,11 @@ flow: |
       until: [x]
       max: 3
   output: ${lp.output}
-python_flow: |
-  id: f
-  name: f
-  input:
-    n: !int
-  defs:
-    body:
-      input:
-        x: !int
-      nodes:
-        inc:
-          kind: code
-          code: return inputs["x"] + 1
-          input:
-            x: ${input.x}
-          output: int
-      output:
-        x: ${inc.output}
-  nodes:
-    lp:
-      kind: loop
-      call: body
-      input:
-        x: ${input.n}
-      until: [x]
-      max: 3
-  output: ${lp.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
       message: 'loop node ''lp'': `until:` must be an expression string over the carried record, such as `until: done` (got ["x"])'
-      frames:
-      - label: flow.yaml
-        range: [24, 12, 24, 15]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'loop node ''lp'': `until:` must be an expression string over the carried record, such as `until: done` (got [''x''])'
       frames:
       - label: flow.yaml
         range: [24, 12, 24, 15]

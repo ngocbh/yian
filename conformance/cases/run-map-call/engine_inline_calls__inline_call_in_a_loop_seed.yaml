@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: ic_loop
@@ -25,44 +24,6 @@ flow: |2
         step:
           kind: code
           code: ./fixtures/compose_codefns.ts:loop_countdown
-          input:
-            n: ${input.n}
-          output:
-            n: int
-      output: ${step.output}
-  nodes:
-    repeat:
-      kind: loop
-      call: body
-      input:
-        n: call(seed, n=${input.start})
-      times: 1
-  output: ${repeat.output}
-python_flow: |2
-
-  id: ic_loop
-  name: ic_loop
-  input:
-    start: !int
-  defs:
-    seed:
-      input:
-        n: !int
-      nodes:
-        echo:
-          kind: code
-          code: tests.engine._compose_codefns:echo
-          input:
-            topic: ${input.n}
-          output: int
-      output: ${echo.output}
-    body:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          code: tests.engine._compose_codefns:loop_countdown
           input:
             n: ${input.n}
           output:

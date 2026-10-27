@@ -1,5 +1,4 @@
 kind: load
-rules: [messages]
 flow: |
   id: f
   name: f
@@ -27,31 +26,6 @@ flow: |
       input:
         n: 1
   output: ${a.output}
-python_flow: |
-  id: f
-  name: f
-  defs:
-    pause:
-      input:
-        n: !int
-      nodes:
-        w:
-          kind: wait
-          until: ${input.n}
-        after:
-          kind: code
-          depends_on: [w]
-          output: int
-          code: |
-            return 1
-      output: ${after.output}
-  nodes:
-    a:
-      kind: call
-      call: pause
-      input:
-        n: 1
-  output: ${a.output}
 expect:
   load:
     diagnostics:
@@ -63,14 +37,3 @@ expect:
         note: definition 'pause'
       - label: flow.yaml
         range: [12, 18, 12, 28]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'defs entry ''pause'': node ''w'' (kind=wait): `until:` must be a date or datetime, but the value is int; write a reference to a date, datetime, or text'
-      frames:
-      - label: flow.yaml
-        range: [5, 5, 18, 1]
-        note: definition 'pause'
-      - label: flow.yaml
-        range: [10, 16, 10, 26]

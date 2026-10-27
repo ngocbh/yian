@@ -27,34 +27,6 @@ flow: |2
             return {"n": n, "r": n >= 3 ? {"kind": "done", "answer": "ok"} : {"kind": "more", "hint": "again"}}
       output: ${step.output}
   output: ${ask.output}
-python_flow: |2
-
-  id: loop-union
-  name: loop_union
-  typedefs:
-    Done: {kind: 'Literal(done)', answer: str}
-    More: {kind: 'Literal(more)', hint: str}
-    Step: Union(Done, More)
-  nodes:
-    ask:
-      kind: loop
-      until: r.answer == 'ok'
-      input:
-        n: 0
-        r: !Step {"kind":"more","hint":"start"}
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: int
-            r: Step
-          code: |
-            n = inputs["n"] + 1
-            return {"n": n, "r": {"kind": "done", "answer": "ok"} if n >= 3 else {"kind": "more", "hint": "again"}}
-      output: ${step.output}
-  output: ${ask.output}
 expect:
   load:
     diagnostics:

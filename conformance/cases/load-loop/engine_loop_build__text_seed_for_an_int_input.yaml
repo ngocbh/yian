@@ -27,34 +27,6 @@ flow: |
         extra: "abc"
       call: body
   output: ${loop.output}
-python_flow: |
-  id: p
-  name: p
-  defs:
-    body:
-      input:
-        n: !int
-        k: !int
-      nodes:
-        step:
-          kind: code
-          input:
-            n: ${input.n}
-            k: ${input.k}
-          output:
-            k: int
-          code: return dict(k=inputs["k"] + 1)
-      output: ${step.output}
-  nodes:
-    loop:
-      kind: loop
-      times: 1
-      input:
-        n: "abc"
-        k: 0
-        extra: "abc"
-      call: body
-  output: ${loop.output}
 expect:
   load:
     diagnostics:

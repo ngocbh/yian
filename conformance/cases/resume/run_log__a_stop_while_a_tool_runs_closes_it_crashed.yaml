@@ -4,7 +4,6 @@
 # with a `crashed` tool_result (an error the model reads as "outcome unknown") instead of
 # running it again; the next call reads that result.
 kind: resume
-rules: [run-log]
 flow: |
   id: replay-stop-in-tool
   name: replay_stop_in_tool

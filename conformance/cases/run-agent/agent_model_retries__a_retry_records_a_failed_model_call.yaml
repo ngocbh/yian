@@ -4,8 +4,6 @@
 # with its error and wait, waits the first backoff (0.5 s), and the second attempt answers and is
 # recorded as the next model_call step.
 kind: run
-rules: [run-log]
-python_skip: model_call steps are TS-only
 flow: |
   id: agent-model-retries
   name: agent_model_retries

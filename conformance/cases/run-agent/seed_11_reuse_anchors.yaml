@@ -3,7 +3,6 @@
 # reads the other two's text.
 # The header's PyYAML note describes the Python loader.
 kind: run
-rules: [run-log]
 flow: |
   # 11 — DRY reuse with YAML anchors + x- extension keys.
   #

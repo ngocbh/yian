@@ -1,7 +1,6 @@
 # TS-only: a spliced history whose tool call has no result before the next user message isn't a
 # conversation a model route can send, so the node fails before any model call.
 kind: run
-python_skip: "the built-in Message type is TS-only (#1042)"
 flow: |
   id: chat
   name: chat

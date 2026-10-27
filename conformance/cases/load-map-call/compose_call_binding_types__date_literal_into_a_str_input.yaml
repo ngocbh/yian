@@ -1,6 +1,5 @@
 # TS reads the unquoted date as text, which fills the `str` input (rules: dates); Python's error in python_expect.
 kind: load
-rules: [dates]
 flow: |
   id: p
   name: p
@@ -39,11 +38,3 @@ flow: |
   output: ${c.output}
 expect:
   load: ok
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'call node ''c'': binding ''t'' — child expects ''str'', but the value 2026-01-01 does not fit; quote it to keep it as text: "2026-01-01"'
-      frames:
-      - label: flow.yaml
-        range: [34, 7, 35, 1]

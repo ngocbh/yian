@@ -1,7 +1,4 @@
 kind: value
-# A list(float) keeps its int items as ints; Python yian widens each to a float.
-rules: [int-in-float]
 type: list(float)
 value: [1, 2.5]
 expect: {value: [1, 2.5], kind: "list[float]"}
-python_expect: {value: [1.0, 2.5], kind: "list[float]"}

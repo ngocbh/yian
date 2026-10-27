@@ -5,8 +5,6 @@
 # commit. The resumed agent replays the reply, the two skipped results and the honor step, and
 # succeeds null as the interrupt did, calling neither the model nor the tool.
 kind: resume
-python_skip: "interrupt(run, inbox) is TS-only (#1025)"
-rules: [run-log]
 flow: |
   id: replay-interrupt
   name: replay_interrupt

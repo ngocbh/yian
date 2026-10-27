@@ -3,8 +3,6 @@
 # pins the captured transforming bindings: the last turn's END binding holds six messages (four
 # carried in, two appended) and an interpolation route.
 kind: run
-rules: [run-log]
-python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
 flow: |
   id: chat
   name: chat

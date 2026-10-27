@@ -1,6 +1,5 @@
 # A producer that may be skipped is null whatever its type, so an untyped one needs ?. too.
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -38,5 +37,3 @@ expect:
         frames:
           - label: flow.yaml
             range: [24, 10, 24, 37]
-python_expect:
-  load: ok

@@ -1,7 +1,6 @@
 kind: json
 # Keys sort by UTF-16 code units, where U+10000 (D800 DC00) comes before U+E000; code-point
 # order would swap them.
-rules: [canonical]
 write: {"\ue000": 1, "\U00010000": 2}
 form: canonical
 expect:

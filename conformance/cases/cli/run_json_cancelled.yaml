@@ -10,16 +10,6 @@ flow: |
         prompt: "Proceed?"
       output: str
   output: ${ok.output}
-# Python yian has no ask built-in: it runs the human_input gate.
-python_flow: |
-  id: ask
-  name: ask
-  nodes:
-    ok:
-      kind: human_input
-      prompt: "Proceed?"
-      output: str
-  output: ${ok.output}
 args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
 expect:
   exit: 1

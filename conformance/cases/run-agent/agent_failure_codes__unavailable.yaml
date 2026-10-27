@@ -1,7 +1,6 @@
 # The AGENT's model call fails with a 503 reply.
 # No retry (YIAN_MODEL_RETRIES=0); TS fails provider.unavailable and Python node.execute.
 kind: run
-rules: [failure-codes]
 flow: |
   id: agent-failure-unavailable
   name: agent_failure_unavailable
@@ -25,14 +24,6 @@ expect:
     status: failed
     failure:
       code: provider.unavailable
-      message: The server is temporarily unavailable
-      node: write
-      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]
-python_expect:
-  output:
-    status: failed
-    failure:
-      code: node.execute
       message: The server is temporarily unavailable
       node: write
       frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]

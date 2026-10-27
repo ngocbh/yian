@@ -1,7 +1,6 @@
 # TS yian (#1149): `dict(str, str)` reads as untyped `object`, so `.zzz` on a dict without it raises
 # before the tag check; Python reads it as None, which breaks the tag.
 kind: run
-rules: [messages, null-field-read]
 flow: |
   id: f
   name: f
@@ -24,11 +23,5 @@ expect:
   raises:
     class: ValueError
     message: "node 'chat' llm_config.model: cannot read ${input.d.zzz}: input.d has no field 'zzz'"
-  trace: []
-  events: []
-python_expect:
-  raises:
-    class: ValueError
-    message: 'node ''chat'' llm_config.model: None does not match declared type str'
   trace: []
   events: []

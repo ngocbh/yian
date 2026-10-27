@@ -2,7 +2,6 @@
 # capture: the interpolation route of `line` in both, without its text, which learning rebuilds
 # by binding the MAP and its items again up to the same failure.
 kind: run
-rules: [run-log]
 flow: |
   id: labels
   name: labels

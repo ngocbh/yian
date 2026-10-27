@@ -1,6 +1,4 @@
 kind: load
-rules: [null-field-read]
-python_skip: "TS-only: list comprehensions (#1086)"
 # An untyped list's variable narrowed by `if isinstance(p, T)` needs ?. for a field T doesn't
 # require: the value is only checked against T at load.
 flow: |

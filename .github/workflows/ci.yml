@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typecheck, tests and conformance
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      # The minimum Node yian supports (package.json engines), for test:node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.18"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Some tests run the built dist/ on Node.
+      - name: Build
+        run: bun run build
+
+      - name: Tests on Bun
+        run: bun run test
+
+      - name: Tests on Node
+        run: bun run test:node
+
+      - name: Conformance
+        run: bun tests/conformance.ts

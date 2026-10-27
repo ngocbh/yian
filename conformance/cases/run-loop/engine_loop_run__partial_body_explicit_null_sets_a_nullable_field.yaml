@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: partial-note
@@ -15,36 +14,6 @@ flow: |2
           kind: code
           code: |
             return {"n": inputs["n"] + 1, "note": null}
-          input:
-            n: ${input.n}
-          output:
-            n: int
-            note: Optional(str)
-      output: ${step.output}
-  nodes:
-    loop:
-      kind: loop
-      call: clear_note
-      input:
-        n: 0
-        note: ${input.note0}
-      times: 2
-  output: ${loop.output}
-python_flow: |2
-
-  id: partial-note
-  name: partial_note
-  input:
-    note0: !Optional(str)
-  defs:
-    clear_note:
-      input:
-        n: !int
-      nodes:
-        step:
-          kind: code
-          code: |
-            return {"n": inputs["n"] + 1, "note": None}
           input:
             n: ${input.n}
           output:

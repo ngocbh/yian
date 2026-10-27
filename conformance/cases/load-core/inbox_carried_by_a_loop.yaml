@@ -1,6 +1,5 @@
 # TS-only: the chat shape: a loop carries the inbox into each turn, which takes from it.
 kind: load
-python_skip: "TS-only: inboxes and durable suspend (#1025)"
 flow: |
   id: chat
   name: chat

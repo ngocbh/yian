@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: named
@@ -19,35 +18,6 @@ flow: |2
             n: Optional(int)
           code: |
             return {"n": inputs["n"] >= 2 ? null : inputs["n"] + 1}
-      output: ${bump.output}
-  nodes:
-    repeat:
-      kind: loop
-      while: ${n != null}
-      max: 10
-      call: step
-      input:
-        n: ${input.z}
-  output: ${repeat.output}
-python_flow: |2
-
-  id: named
-  name: named
-  input:
-    z: !int
-  defs:
-    step:
-      input:
-        n: !int
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.n}
-          output:
-            n: Optional(int)
-          code: |
-            return {"n": None if inputs["n"] >= 2 else inputs["n"] + 1}
       output: ${bump.output}
   nodes:
     repeat:

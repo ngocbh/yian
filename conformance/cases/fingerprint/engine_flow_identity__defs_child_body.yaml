@@ -1,7 +1,6 @@
 # From tests/engine/test_flow_identity.py::test_flow_fingerprint_recursively_includes_static_child_flows.
 # A called def's CODE body is part of the parent's identity.
 kind: fingerprint
-rules: [code]
 flow: |
   id: recursive
   name: recursive
@@ -37,6 +36,4 @@ other: |
       call: child
   output: ${invoke.output}
 expect:
-  fingerprint: different
-python_expect:
   fingerprint: different

@@ -1,7 +1,6 @@
 # From tests/seeds/errors/e22-required-missing.yaml.
 # A `:?` binding on an omitted Optional input fails its CODE node, at the binding.
 kind: run
-rules: [run-log]
 flow: |
   # e22 — a required `:?` use-site on an omitted value. RUNTIME: run with as_of omitted.
   id: err-required-missing
@@ -15,21 +14,6 @@ flow: |
         as_of: ${input.as_of:?"as_of is required"}   # null when omitted -> required error at run
       output: str
       code: ./fixtures/seeds.ts:echo_value
-  output: ${use.output}
-# The CODE reference differs by language: `flow` names the TS function, this the Python one.
-python_flow: |
-  # e22 — a required `:?` use-site on an omitted value. RUNTIME: run with as_of omitted.
-  id: err-required-missing
-  name: err_required_missing
-  input:
-    as_of: !Optional(date)
-  nodes:
-    use:
-      kind: code
-      input:
-        as_of: ${input.as_of:?"as_of is required"}   # null when omitted -> required error at run
-      output: str
-      code: tests.seeds.fns:echo_value
   output: ${use.output}
 inputs: {}
 run: {run_id: r1, num_workers: 0}

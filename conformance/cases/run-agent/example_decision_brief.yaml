@@ -2,7 +2,6 @@
 # Three angles fan in to a `go` Decision, the `case ... on` it takes `go_brief`, and `finalize`
 # reads it through the `|` join; the other briefs are skipped and get no model call.
 kind: run
-rules: [run-log]
 flow: |
   # decision-brief — a realistic multi-stage flow (fan-out → synth → route → finalize).
   #

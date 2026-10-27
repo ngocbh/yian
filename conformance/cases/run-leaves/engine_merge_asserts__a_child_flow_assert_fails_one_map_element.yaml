@@ -1,37 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: c2mapv
-  name: c2_map_violate
-  input:
-    seeds: !list(int)
-
-  defs:
-    child:
-      input:
-        seed: !int
-      nodes:
-        emit:
-          kind: code
-          input:
-            seed: ${input.seed}
-          output: {n: int}
-          code: |
-            return {"n": inputs["seed"] + 1}
-      output: ${emit.output}
-      asserts:
-        - "emit.output.n >= 1"
-
-  nodes:
-    fan:
-      kind: map
-      call: child
-      over: ${input.seeds}
-      input:
-        seed: ${item}
-  output: ${fan.output}
-python_flow: |2
 
   id: c2mapv
   name: c2_map_violate

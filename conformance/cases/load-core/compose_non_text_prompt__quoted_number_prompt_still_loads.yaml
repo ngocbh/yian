@@ -11,15 +11,5 @@ flow: |
         prompt: "5"
         proj: ${input.proj}
   output: ${ask.output}
-python_flow: |
-  id: f
-  name: f
-  input: {proj: !str }
-  nodes:
-    ask:
-      kind: human_input
-      prompt: "5"
-      input: {proj: '${input.proj}'}
-  output: ${ask.output}
 expect:
   load: ok

@@ -60,32 +60,5 @@ files:
           rationale: ${input.rationale}
 
     output: ${v.output}                    # the verdict string itself, not a record
-# The child's CODE reference differs by language: `files` names the TS function,
-# this the Python one.
-python_files:
-  lib_verdict.yaml: |
-    # lib_verdict — a small reusable CODE flow, called as an EXTERNAL flow by seed 24.
-    #
-    # Lives next to 24-uses-external.yaml so the default file resolver finds it on the
-    # search path (the importing file's own dir). CODE-only -> runs locally, no model.
-
-    id: lib_verdict
-    name: lib_verdict
-    description: Turn a (rating, rationale) pair into a one-line verdict string.
-    version: v1
-
-    input:
-      rating: !float
-      rationale: !str
-
-    nodes:
-      v:
-        kind: code
-        code: tests.seeds.fns:one_line_summary   # {rating, rationale} -> str
-        input:
-          rating: ${input.rating}
-          rationale: ${input.rationale}
-
-    output: ${v.output}                    # the verdict string itself, not a record
 expect:
   load: ok

@@ -1,38 +1,5 @@
 kind: run
-rules: [run-log]
 flow: |2
-
-  id: c1
-  name: c1
-  input:
-    v: !int
-
-  nodes:
-    gate:
-      kind: case
-      cases:
-        - when: "input.v >= 100"
-          then: hi
-      else: lo
-    hi:
-      kind: code
-      input:
-        n: ${input.v}
-      output: int
-      code: |
-        return inputs["n"] * 2
-    lo:
-      kind: code
-      input:
-        n: ${input.v}
-      output: int
-      code: |
-        return inputs["n"] * 2
-  output: ${hi.output | lo.output}
-
-  asserts:
-    - "lo.output >= 0"
-python_flow: |2
 
   id: c1
   name: c1

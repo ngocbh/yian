@@ -41,7 +41,7 @@
  *
  * Changed: `test_an_old_tool_crash_log_resumes_at_attempt_two` and
  * `test_an_old_loop_tool_crash_log_resumes_with_its_growth` resume Python's committed schema-9
- * logs; TS reads only schema 13, so each resume rejects with a `RangeError` naming Python yian,
+ * logs; TS reads only its own schema, so each resume rejects with a `RangeError` naming schema 9,
  * calls no tool and leaves the log unchanged.
  *
  * Changed (vocabulary): a TS resume also publishes `NodeAttemptResumed` for each retried node; no
@@ -90,7 +90,7 @@ afterEach(forget);
 const dir = mkdtempSync(join(tmpdir(), "yian-tool-retries-resume-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-const PY_FIXTURES = fileURLToPath(new URL("../../../tests/fixtures", import.meta.url));
+const SCHEMA9_FIXTURES = fileURLToPath(new URL("../fixtures/schema9", import.meta.url));
 
 /** JS has no built-in `TimeoutError`; the rows throw this one, as Python's throw its own. */
 class TimeoutError extends Error {
@@ -655,7 +655,7 @@ test("a long loop keeps no steps for finished iterations", async () => {
   }
 });
 
-// --- Python's old logs ------------------------------------------------------------------ //
+// --- Schema-9 logs ---------------------------------------------------------------------- //
 
 const OLD_TOOL_FLOW = `id: old_tool_crash
 name: old_tool_crash
@@ -695,9 +695,9 @@ for (const [name, fixture, source] of [
   ["an old tool crash log", "old_tool_crash.jsonl", OLD_TOOL_FLOW],
   ["an old loop tool crash log", "old_loop_tool_crash.jsonl", OLD_LOOP_FLOW],
 ] as const) {
-  test(`${name} is Python's to resume`, async () => {
+  test(`${name} is refused untouched`, async () => {
     const path = freshLog();
-    copyFileSync(join(PY_FIXTURES, fixture), path);
+    copyFileSync(join(SCHEMA9_FIXTURES, fixture), path);
     const before = readFileSync(path);
     const calls: unknown[] = [];
     const place = tool({
@@ -715,7 +715,7 @@ for (const [name, fixture, source] of [
 
     expect(error).toBeInstanceOf(RangeError);
     expect((error as Error).message).toBe(
-      `run log ${path} line 1 (seq 0): run log schema 9 was written by Python yian; resume it with Python yian`,
+      `run log ${path} line 1 (seq 0): unsupported run-record schema: 9`,
     );
     expect(calls).toEqual([]);
     expect(readFileSync(path).equals(before)).toBe(true);

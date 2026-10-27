@@ -1,5 +1,4 @@
 kind: value
-rules: [infinity, messages]
 type: int
 value:
   $float: inf
@@ -7,9 +6,4 @@ expect:
   raises:
     class: TypeCheckError
     message: Infinity does not match declared type int
-    path: []
-python_expect:
-  raises:
-    class: TypeCheckError
-    message: inf does not match declared type int
     path: []

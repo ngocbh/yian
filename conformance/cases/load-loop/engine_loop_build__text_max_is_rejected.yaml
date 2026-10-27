@@ -1,6 +1,5 @@
 # TS spells the text value as JSON text, "5" (rules: messages); Python's repr in python_expect.
 kind: load
-rules: [messages]
 flow: |2
 
   id: loop-good
@@ -31,49 +30,11 @@ flow: |2
       while: not exited
       max: "5"
   output: ${chat_loop.output}
-python_flow: |2
-
-  id: loop-good
-  name: loop_good
-  defs:
-    bump:
-      input:
-        n: !int
-        exited: !bool
-      nodes:
-        step:
-          kind: code
-          code: tests.engine._compose_codefns:make_report
-          input:
-            n: ${input.n}
-            exited: ${input.exited}
-          output:
-            n: int
-            exited: bool
-      output: ${step.output}
-  nodes:
-    chat_loop:
-      kind: loop
-      call: bump
-      input:
-        n: 0
-        exited: false
-      while: not exited
-      max: "5"
-  output: ${chat_loop.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
       message: 'loop node ''chat_loop'': `max:` must be an integer (got "5")'
-      frames:
-      - label: flow.yaml
-        range: [21, 3, 21, 12]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'loop node ''chat_loop'': `max:` must be an integer (got ''5'')'
       frames:
       - label: flow.yaml
         range: [21, 3, 21, 12]

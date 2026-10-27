@@ -3,8 +3,6 @@
 # result, then waits (node_waiting, run_waiting). The host's complete answers `hold` by its call
 # id; the woken agent replays its steps and the next request reads both results in call order.
 kind: run
-rules: [run-log]
-python_skip: an agent's pending host call is TS-only (#1025)
 flow: |
   id: pending
   name: pending

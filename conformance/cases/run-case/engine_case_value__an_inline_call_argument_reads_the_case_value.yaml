@@ -1,5 +1,4 @@
 kind: run
-rules: [run-log]
 flow: |2
 
   id: cvi
@@ -47,57 +46,6 @@ flow: |2
     wrap:
       kind: code
       code: ./fixtures/compose_codefns.ts:echo
-      input:
-        topic: call(passthru, v=${gate.output})
-      output: str
-  output: ${wrap.output}
-python_flow: |2
-
-  id: cvi
-  name: case_value_into_inline
-  input:
-    seed: !float
-    topic: !str
-  defs:
-    passthru:
-      input:
-        v: !str
-      nodes:
-        x:
-          kind: code
-          code: tests.engine._compose_codefns:echo
-          input:
-            topic: ${input.v}
-          output: str
-      output: ${x.output}
-  nodes:
-    s:
-      kind: code
-      code: tests.engine._compose_codefns:score
-      input:
-        seed: ${input.seed}
-      output: float
-    gate:
-      kind: case
-      cases:
-        - when: "s.output >= 0.5"
-          then: pro
-      else: caut
-    pro:
-      kind: code
-      code: tests.engine._compose_codefns:positive
-      input:
-        topic: ${input.topic}
-      output: str
-    caut:
-      kind: code
-      code: tests.engine._compose_codefns:cautious
-      input:
-        topic: ${input.topic}
-      output: str
-    wrap:
-      kind: code
-      code: tests.engine._compose_codefns:echo
       input:
         topic: call(passthru, v=${gate.output})
       output: str

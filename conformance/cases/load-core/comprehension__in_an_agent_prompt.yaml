@@ -1,5 +1,4 @@
 kind: load
-python_skip: "TS-only: list comprehensions (#1086)"
 # A prompt may hold a comprehension; its variables pass the prompt's name checks.
 flow: |
   id: p

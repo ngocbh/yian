@@ -1,5 +1,4 @@
 kind: json
-rules: [numbers]
 read: '[NaN]'
 mode: plain
 expect:

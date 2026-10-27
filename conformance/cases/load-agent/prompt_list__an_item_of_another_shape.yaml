@@ -1,6 +1,5 @@
 # TS-only: a prompt list item is `${name}` or `user:`/`assistant:` text; a two-key mapping is refused at the item.
 kind: load
-python_skip: "the prompt: list style is TS-only (#1002)"
 flow: |
   id: chat
   name: chat

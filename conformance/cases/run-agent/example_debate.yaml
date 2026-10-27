@@ -1,7 +1,6 @@
 # From examples/debate.yaml.
 # A four-AGENT diamond: `frame` feeds both sides, and `verdict` reads both; the flow returns it.
 kind: run
-rules: [run-log]
 flow: |
   # debate — frame a question, argue both sides IN PARALLEL, then decide.
   #

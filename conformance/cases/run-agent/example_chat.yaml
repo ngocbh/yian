@@ -9,8 +9,6 @@
 # result included). Closing the inbox makes the next take return no events with `closed: true`,
 # so `answered` is skipped and the loop ends.
 kind: run
-rules: [run-log]
-python_skip: "host.sends drives inbox runs, which Python yian doesn't have (#1025)"
 flow: |
   # chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary.
   #

@@ -1,7 +1,6 @@
 # From tests/engine/test_tool_retries.py::test_retry_after_replaces_the_backoff_up_to_the_cap[7-7].
 # A TransientToolError's retry_after replaces the backoff and takes no draw.
 kind: run
-rules: [run-log]
 flow: |
   id: t
   name: t

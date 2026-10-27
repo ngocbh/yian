@@ -1,5 +1,4 @@
 kind: load
-rules: [yaml]
 flow: |
   id: f
   name: f
@@ -11,33 +10,10 @@ flow: |
         topic: 0000-01-01
       output: str
   output: ${use.output}
-python_flow: |
-  id: f
-  name: f
-  nodes:
-    use:
-      kind: code
-      code: tests.engine._compose_codefns:echo
-      input:
-        topic: 0000-01-01
-      output: str
-  output: ${use.output}
 expect:
   load:
     diagnostics:
     - code: compose.load
-      frames:
-      - label: flow.yaml
-        range: [8, 14, 8, 15]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: |-
-        invalid YAML: not a valid date: year 0 is out of range; quote it to keep it as text
-          in "<unicode string>", line 8, column 14:
-                  topic: 0000-01-01
-                         ^
       frames:
       - label: flow.yaml
         range: [8, 14, 8, 15]

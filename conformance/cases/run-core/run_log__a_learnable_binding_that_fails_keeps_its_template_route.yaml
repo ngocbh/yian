@@ -2,7 +2,6 @@
 # records the partial capture: the interpolation route of `line`, without its text, which
 # learning rebuilds by binding the node again up to the same failure.
 kind: run
-rules: [run-log]
 flow: |
   id: greet
   name: greet

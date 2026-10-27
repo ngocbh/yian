@@ -1,7 +1,6 @@
 # An untyped value narrowed by isinstance is still untyped at run time, so a field its type doesn't
 # require is read through ?. (or the value is typed where it is bound).
 kind: load
-rules: [null-field-read]
 flow: |
   id: f
   name: f
@@ -33,5 +32,3 @@ expect:
         frames:
           - label: flow.yaml
             range: [18, 10, 18, 60]
-python_expect:
-  load: ok

@@ -1,6 +1,5 @@
 # TS spells the float 5.0 in the hint as 5 (rules: messages); Python's 5.0 in python_expect.
 kind: load
-rules: [messages]
 flow: |
   id: p
   name: p
@@ -42,14 +41,6 @@ expect:
     diagnostics:
     - code: compose.load
       message: 'call node ''c'': binding ''t'' — child expects ''float'', but the value "5" does not fit; text is not converted between flows, so write 5 without quotes'
-      frames:
-      - label: flow.yaml
-        range: [34, 7, 35, 1]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'call node ''c'': binding ''t'' — child expects ''float'', but the value "5" does not fit; text is not converted between flows, so write 5.0 without quotes'
       frames:
       - label: flow.yaml
         range: [34, 7, 35, 1]

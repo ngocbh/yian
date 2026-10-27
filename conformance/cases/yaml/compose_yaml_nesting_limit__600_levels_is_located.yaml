@@ -1,5 +1,4 @@
 kind: load
-rules: [yaml]
 flow: |
   id: f
   name: f
@@ -15,14 +14,6 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      frames:
-      - label: flow.yaml
-        range: [8, 210, 8, 211]
-python_expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: "invalid YAML: this list nests deeper than 200 levels, the limit for a YAML document (each mapping and list is a level; a yian value nests at most 100); flatten it\n  in \"<unicode string>\", line 8, column 210:\n     ... [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ ... \n                                         ^"
       frames:
       - label: flow.yaml
         range: [8, 210, 8, 211]

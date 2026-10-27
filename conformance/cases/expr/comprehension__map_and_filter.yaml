@@ -1,5 +1,4 @@
 kind: expr
-python_skip: "TS-only: list comprehensions (#1086)"
 expr: "[[x * 2 for x in xs], [x for x in xs if x > 1]]"
 values: {xs: [1, 2, 3, 4]}
 expect:

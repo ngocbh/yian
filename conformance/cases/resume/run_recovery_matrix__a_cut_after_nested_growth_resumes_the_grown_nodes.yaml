@@ -4,7 +4,6 @@
 # Record 17 is outer/mapped's node_expanded: an expansion settles its spawner, so nothing is in flight.
 # The LOOP after the cut stays because the source test asserts its output.
 kind: resume
-rules: [run-log]
 flow: |
   id: recovery-matrix-growth
   name: recovery_matrix_growth
@@ -34,59 +33,6 @@ flow: |
             n: int
             exited: bool
           code: ./fixtures/compose_codefns.ts:loop_bump
-      output: ${bump.output}
-    composite:
-      nodes:
-        mapped:
-          kind: map
-          call: echo_one
-          over: ${[1, 2]}
-          input:
-            value: ${item}
-        repeated:
-          kind: loop
-          call: bump_once
-          input:
-            n: 0
-            exited: false
-          times: 2
-      output:
-        mapped: ${mapped.output}
-        repeated: ${repeated.output}
-  nodes:
-    outer:
-      kind: call
-      call: composite
-  output: ${outer.output}
-python_flow: |
-  id: recovery-matrix-growth
-  name: recovery_matrix_growth
-  defs:
-    echo_one:
-      input:
-        value: !int
-      nodes:
-        echo:
-          kind: code
-          input:
-            x: ${input.value}
-          output: int
-          code: tests.engine._compose_codefns:echo_x
-      output: ${echo.output}
-    bump_once:
-      input:
-        n: !int
-        exited: !bool
-      nodes:
-        bump:
-          kind: code
-          input:
-            n: ${input.n}
-            exited: ${input.exited}
-          output:
-            n: int
-            exited: bool
-          code: tests.engine._compose_codefns:loop_bump
       output: ${bump.output}
     composite:
       nodes:

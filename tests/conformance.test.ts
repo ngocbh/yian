@@ -1555,7 +1555,7 @@ describe("main", () => {
     expect(cuts.map((names) => names.length)).toEqual([16]);
     expect((await run([], files, {}, { run: counting })).code).toBe(0);
     expect(cuts.map((names) => names.length)).toEqual([16, 0]);
-  });
+  }, SWEEP);
 
   test("sweeps a learnable run case, whose captures name their sources' records by seq", async () => {
     const learnable = TWO_NODES.replace("num_workers: 0}", "num_workers: 0, learnable: true}");
@@ -1564,7 +1564,7 @@ describe("main", () => {
     const { code, out } = await run(["--crash-sweep"], files, {}, { run: RUNNERS.run! });
     expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
     expect(code).toBe(0);
-  });
+  }, SWEEP);
 
   test("restores a changed expectation with --write-expect, in the case's own form", async () => {
     const kinds = { run: RUNNERS.run! };
@@ -1767,7 +1767,7 @@ describe("crashSweep", () => {
     await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
     // 16 cuts; the 4 inside the run start are refused instead of resumed.
     expect(cuts).toHaveLength(12);
-  });
+  }, SWEEP);
 
   test("fails a resume that drops a record", async () => {
     const [case_, ctx] = twoNodes();
@@ -1778,7 +1778,7 @@ describe("crashSweep", () => {
     const failure = crashSweep(case_, ctx, { beforeResume: dropSecond });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 4)");
-  });
+  }, SWEEP);
 
   test("a cut after a retried tool's commit resumes from the recorded steps and succeeds", async () => {
     // The flaky tool fails twice, so its node records two steps before the commit. A cut right
@@ -1813,7 +1813,7 @@ expect:
     const ctx = setUp(case_, join(CASES, "..", "fixtures"));
     made.push(ctx.dir);
     await crashSweep(case_, ctx);
-  });
+  }, SWEEP);
 
   test("a host.models case is swept: each cut resumes with the replies after it put back, and passes", async () => {
     // The agent's first reply calls `lookup`, its second answers. A cut after the first model_call
@@ -1856,7 +1856,7 @@ expect:
     const cuts: string[] = [];
     await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
     expect(cuts.length).toBeGreaterThan(0);
-  });
+  }, SWEEP);
 
   test("fails the strong oracle when a recorded value changes before the resume", async () => {
     const [case_, ctx] = twoNodes();

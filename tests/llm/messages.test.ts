@@ -1194,6 +1194,8 @@ describe("message schema", () => {
     expect(validate(SCHEMA, RECORD, { ...replayRecord(KEY, {}), v: 0n })).toEqual(["$.v: 0 is below 1"]);
   });
 
+  // It reads every case file, as checkCase's test does: under 1 s alone on a fast host, several
+  // seconds on a slow or busy one, past bun's 5 s default.
   test("every scripted reply and request message in the conformance cases validates", () => {
     const root = fileURLToPath(new URL("../../conformance/cases", import.meta.url));
     const files = { reply: new Set<string>(), messages: new Set<string>() };
@@ -1206,7 +1208,10 @@ describe("message schema", () => {
     };
     for (const file of readdirSync(root, { recursive: true, encoding: "utf8" }).sort()) {
       if (!file.endsWith(".yaml")) continue;
-      const host = readCase(readFileSync(join(root, file), "utf8"))["host"] as Case | undefined;
+      const text = readFileSync(join(root, file), "utf8");
+      // Parsing every case is most of the test's time; a file never naming `models` has none.
+      if (!text.includes("models")) continue;
+      const host = readCase(text)["host"] as Case | undefined;
       if (host?.["models"] === undefined) continue;
       const models = decode(host["models"]) as Record<string, Record<string, Case[]>>;
       for (const consumers of Object.values(models)) {
@@ -1226,5 +1231,5 @@ describe("message schema", () => {
     expect(counts.reply).toBeGreaterThanOrEqual(70);
     expect(files.messages.size).toBeGreaterThanOrEqual(4);
     expect(counts.messages).toBeGreaterThanOrEqual(10);
-  });
+  }, 30_000);
 });

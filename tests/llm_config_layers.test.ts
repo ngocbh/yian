@@ -1,4 +1,4 @@
-/** Mirrors `tests/test_llm_config_layers.py`. */
+/** How `llm_config` layers and defaults resolve to a provider and model. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -124,7 +124,7 @@ output: \${chat.output}
   expect(authored.openai.temperature).toBe(0.3);
 });
 
-describe("TS additions", () => {
+describe("edge cases", () => {
   test("a non-string default provider takes the default model, then is not concrete", () => {
     expect(rangeError(() => resolve({}, { defaults: { provider: 1n, model: "m" } }))).toBe(
       'effective LLM config for \'review/chat\' lacks concrete fields: ["provider"]',

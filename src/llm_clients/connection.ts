@@ -9,7 +9,7 @@
  * from. `connectionCredentials` resolves the credentials a model call sends, `callCredentials`
  * lists them, and `scrubCallCredentials` scrubs them from the call's errors. Recorded metadata is
  * internal, never a YAML option, and never contains a token, API key or header value; its keys
- * are snake_case because it goes into run logs as Python yian writes them.
+ * are snake_case because it goes into run logs, which spell keys that way.
  *
  * The `YIAN_*` limits, such as `YIAN_MAX_BASE_URL_CHARS`, come through `defaults.ts`'s `current()`;
  * everything else is read only through the `env` parameter (default `processEnv`), one variable
@@ -138,7 +138,7 @@ export function missingModelMessage(
   const { strayModel = false, label = null } = options;
   let agent: string | null;
   if (label !== null) {
-    // Python's `label[:1].upper()` takes the first code point; `slice(0, 1)` would split a surrogate pair.
+    // Uppercase the first code point; `slice(0, 1)` would split a surrogate pair.
     const [first = "", ...rest] = label;
     agent = first.toUpperCase() + rest.join("");
   } else if (path) {
@@ -808,7 +808,7 @@ export function validateHeaderNames(value: unknown, provider: unknown): string[]
  */
 function checkHostHeaders(raw: Readonly<AgentConfig>, names: readonly string[]): void {
   const value = raw["headers"];
-  // Python's `or {}`: an absent or empty value means no headers.
+  // An absent or empty value means no headers.
   const headers = !value || (Array.isArray(value) && value.length === 0) ? {} : value;
   // `LLMConfig` names the malformed field.
   if (!isRecord(headers)) return;
@@ -1236,8 +1236,8 @@ export function callCredentials(config: unknown, options: { env?: Env } = {}): r
     try {
       const source = isRecord(connection) ? connection["source"] : connection === null ? null : undefined;
       if (source === "store" && isRecord(connection)) {
-        // Python's `connection["store_path"]` raises inside this guard when the key is missing,
-        // and `AuthStore` rejects a path that is neither text nor `None`.
+        // A store connection without `store_path` adds nothing, and `AuthStore` takes only a
+        // string or null path.
         const path = Object.hasOwn(connection, "store_path") ? connection["store_path"] : undefined;
         if (typeof path === "string" || path === null) found.push(...new AuthStore(path, { env }).savedSecrets(name));
       } else if (source === null || source === "environment" || source === "legacy_environment") {

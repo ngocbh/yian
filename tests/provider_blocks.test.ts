@@ -1,11 +1,4 @@
-/**
- * Mirrors `tests/test_provider_blocks.py`. Not ported: the SDK-signature tests
- * (`test_responses_fields_and_reserved_keys_are_keywords_of_responses_create`,
- * `test_responses_nested_fields_are_keys_of_the_sdk_params`,
- * `test_ollama_block_fields_are_keywords_of_client_chat`; TS has no SDKs) and the
- * `merge_request_body` tests, which live with `mergeRequestBody` in `tests/llm/body.test.ts`
- * (TS has no `top_level`/`extra_body`).
- */
+/** The provider blocks of `llm_config`: fields, reserved keys and the problems reported. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -994,7 +987,7 @@ const SAMPLES: [BlockSchema, Record<string, unknown>][] = [
       chat_template_kwargs: { enable_thinking: false },
       ignore_eos: false,
       include_stop_str_in_output: true,
-      // Python's float 1.0.
+      // The float 1.0.
       length_penalty: 1,
       max_tokens: 512n,
       min_p: 0.05,
@@ -1320,7 +1313,7 @@ describe("Ollama chat block", () => {
     { keep_alive: "5m" },
     { keep_alive: 300n },
     { keep_alive: -1n },
-    // Python's float 5.0.
+    // The float 5.0.
     { options: { mirostat: 2n, mirostat_tau: 5, numa: false } },
     { options: { min_p: 0.05 } },
   ];
@@ -1436,8 +1429,7 @@ describe("logit_bias", () => {
       expect(validateBlock(block, { logit_bias: { "50256": -100n, "1734": 5n } })).toEqual({
         logit_bias: { "50256": -100n, "1734": 5n },
       });
-      // A YAML int, float or bool key arrives as text in TS and fails the digit pattern,
-      // where Python reports a type error.
+      // A YAML int, float or bool key arrives as text and fails the digit pattern.
       for (const badKey of ["abc", "-1", "true", "1.5"]) {
         expect(checkBlock(block, { logit_bias: { [badKey]: 1n } }).issues).toEqual([
           {

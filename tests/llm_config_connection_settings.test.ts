@@ -1,8 +1,4 @@
-/**
- * Mirrors `tests/test_llm_config_connection_settings.py`: all but
- * `test_secret_str_header_values_are_accepted` (TS has no `SecretStr`; the `SecretStr` rows of
- * other tests are dropped too).
- */
+/** `LLMConfig`'s connection settings: organization, project and headers. */
 
 import { inspect } from "node:util";
 
@@ -272,7 +268,7 @@ test("openaiIdHeaders maps the ids to their headers", () => {
   expect(error.message).not.toContain("proj secret");
 });
 
-describe("TS additions", () => {
+describe("edge cases", () => {
   test("a non-string header value is refused without echo", () => {
     const error = thrown(() => validateHeaders({ "X-V": 2024 }, "openai"));
     expect(error).toBeInstanceOf(RangeError);
@@ -294,7 +290,7 @@ describe("TS additions", () => {
     expect(() => validateHeaders({ "X-A": "1", "X-B": "2" }, null)).toThrow("at most 1 headers");
   });
 
-  test("lengths count code points, as Python's len", () => {
+  test("lengths count code points", () => {
     install({ ...BUILTIN, maxOrganizationChars: 2, maxHeaderValueChars: 2 });
     // Two emoji are four UTF-16 units but two code points: within the cap, refused as non-ASCII.
     expect(() => validateOrganization("😀😀", "organization")).toThrow("non-empty visible ASCII");

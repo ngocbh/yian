@@ -1,4 +1,4 @@
-/** Mirrors `tests/test_llm_config_blocks.py`. */
+/** Provider blocks in `llm_config`: which block checks each key, block names, and dumps. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -87,7 +87,7 @@ test.each([
   ["qwen_cn", "qwen-cn"],
   ["glm_cn", "glm-cn"],
   ["minimax_cn", "minimax-cn"],
-])("python spelling %s of a dash block is rejected", (underscoreName, authored) => {
+])("underscore spelling %s of a dash block is rejected", (underscoreName, authored) => {
   expect(error({ [underscoreName]: {} })).toContain(`write \`${authored}\``);
 });
 
@@ -233,7 +233,7 @@ test("merge is associative over every triple of layers", () => {
   expect(checked).toBe(2744);
 });
 
-test("host layer rejects the python spelling of a dash block", () => {
+test("host layer rejects the underscore spelling of a dash block", () => {
   const layer = { qwen_cn: { enable_thinking: true } };
   expect(() => validateLayer(layer)).toThrow(RangeError);
   expect(() => validateLayer(layer)).toThrow("`qwen_cn` is not an llm_config key; write `qwen-cn`");
@@ -255,14 +255,14 @@ test("host layer accepts a dash block", () => {
   validateLayer({ "qwen-cn": { enable_thinking: true } });
 });
 
-describe("TS additions", () => {
+describe("edge cases", () => {
   test("a non-record is not a config", () => {
     for (const data of [[1], null, "provider: openai", new Map()]) {
       expect(issues(data)).toEqual([{ loc: [], type: "model_type", msg: "Input should be a valid dictionary" }]);
     }
   });
 
-  test("a Python block name comes before a retired key, which comes before the Codex options", () => {
+  test("an underscore block name comes before a retired key, which comes before the Codex options", () => {
     expect(issues({ sandbox: 1n, temperature: 1n, qwen_cn: {} })).toEqual([
       { loc: [], type: "value_error", msg: "Value error, `qwen_cn` is not an llm_config key; write `qwen-cn`" },
     ]);

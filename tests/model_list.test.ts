@@ -1,7 +1,6 @@
 /**
- * Mirrors `tests/test_model_list.py`: model listing per provider host, through an injected
- * `request` (no network), plus two loopback tests through the default `request`. The `status`
- * tests are TS-only.
+ * Model listing per provider host, through an injected `request` (no network), plus two loopback
+ * tests through the default `request`, and the `status` a failed listing carries.
  */
 
 import http from "node:http";
@@ -213,8 +212,7 @@ describe("openai custom base url", () => {
 });
 
 test("routed provider without an endpoint never falls back to openai", async () => {
-  // Python adds a routed provider without an endpoint by monkeypatching; the TS tables are frozen,
-  // so pin that every routed provider but openai has its own endpoint, and that names the tables
+  // The tables are frozen, so pin that every routed provider but openai has its own endpoint, and that names the tables
   // only inherit are unsupported.
   for (const provider of OPENAI_COMPATIBLE.filter((name) => name !== "openai")) {
     expect(Object.hasOwn(PROVIDER_BASE_URL, provider)).toBe(true);
@@ -488,7 +486,6 @@ describe("listing sends connection headers beside the key", () => {
 });
 
 test("listing takes header values as strings", async () => {
-  // Python's other half passes a SecretStr; TS has no such wrapper.
   const fake = ok({ data: [{ id: "m" }] });
   await listModels("openai", { apiKey: KEY, headers: { "X-Gateway": GATEWAY }, request: fake });
   expect(fake.calls[0]!.headers["x-gateway"]).toBe(GATEWAY);

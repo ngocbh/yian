@@ -11,7 +11,7 @@ import { JSONDecodeError, parseJson, type JsonValue } from "../typesys/json.ts";
 
 const LINE_END = /\r\n|\r|\n/g;
 const LF = 0x0a;
-// The bytes Python's `bytes.strip()` removes: space, tab, LF, CR, VT, FF.
+// The ASCII whitespace bytes stripped from a line: space, tab, LF, CR, VT, FF.
 const ASCII_SPACE = new Set([0x20, 0x09, 0x0a, 0x0d, 0x0b, 0x0c]);
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 

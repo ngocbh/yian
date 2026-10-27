@@ -1,9 +1,8 @@
 /**
- * Mirrors `tests/test_call_credentials.py`; each `scrub_call_credentials` test runs twice, on text
- * through `redactKeys` and on errors through `scrubCallCredentials`. The scrub set follows what
- * yian's own clients send: Azure doesn't fall back to `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` is
- * never listed, and a subscription lists its account id. TS has no `SecretStr`, so the rows that
- * pass one are left out.
+ * The credentials a call sends are scrubbed: each scrub test runs on text through `redactKeys`
+ * and on errors through `scrubCallCredentials`. The scrub set follows what yian's own clients
+ * send: Azure doesn't fall back to `OPENAI_API_KEY`, `ANTHROPIC_AUTH_TOKEN` is never listed, and
+ * a subscription lists its account id.
  */
 
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,8 +28,7 @@ import { redactKeys } from "../src/llm_clients/redact.ts";
 
 const AZURE_URL = "https://r.openai.azure.com/";
 
-// Each test's environment: a store path in a fresh directory and no key, token or default, as
-// Python's `clean_env` leaves it.
+// Each test's environment: a store path in a fresh directory and no key, token or default.
 let home: string;
 let vars: Map<string, string>;
 const env: Env = (name) => vars.get(name);

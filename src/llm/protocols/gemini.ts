@@ -131,7 +131,7 @@ export class Gemini implements SseProtocol {
   readonly #block: JsonObject | null;
   readonly #key: ReplayKey;
   readonly #onReplayDegraded: ((reason: ReplayDegradedReason) => void) | null;
-  // Python's `warnings.warn` shows a warning once per call site, so warn once here.
+  // The warning is shown once, not on every call.
   #emptyUserWarned = false;
 
   constructor(options: GeminiOptions) {

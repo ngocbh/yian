@@ -266,8 +266,8 @@ function jsonDiffs(recorded: JsonValue, actual: JsonValue, path: string, out: st
 /**
  * Return whether `a` and `b` are a `bigint` and a `number` of the same value.
  *
- * Python tells an int from an equal float; TS can't, since `encodeBody` never writes `1.0`, so a
- * sent body never holds an integral float, and a recorded `1` must match the `1` it sends.
+ * They match because `encodeBody` never writes `1.0`: a sent body never holds an integral float,
+ * and a recorded `1` must match the `1` it sends.
  */
 function sameInt(a: JsonValue, b: JsonValue): boolean {
   const [int, other] = typeof a === "bigint" ? [a, b] : [b, a];
@@ -646,8 +646,8 @@ export type ScriptedReply = Response | readonly (Event | Error)[] | Error;
 /**
  * Yield the events a provider would stream for `response`.
  *
- * A tool call's delta text is `logJson` text (sorted keys; ints written as digits), unlike
- * Python's `json.dumps`; `collect` is unaffected because the `PartDone` wins.
+ * A tool call's delta text is `logJson` text (sorted keys; ints written as digits); `collect` is
+ * unaffected because the `PartDone` wins.
  */
 function* responseEvents(response: Response): Generator<Event> {
   const parts = response.message.parts;

@@ -213,8 +213,8 @@ function promptHead(mark: string, label: string, hint?: string): string {
 
 /**
  * The lines of a multi-line label before its last, the first after the mark, each ending in
- * `\r\n`: written once above the frame, so a long label (a plan to approve) is never redrawn, and
- * the screen ends as Python's does. Empty for a one-line label.
+ * `\r\n`: written once above the frame, so a long label (a plan to approve) is never redrawn.
+ * Empty for a one-line label.
  */
 function labelPreface(mark: string, label: string): string {
   const lines = label.split("\n").slice(0, -1);
@@ -977,7 +977,7 @@ interface Choice {
   value: unknown;
 }
 
-/** Compare two strings by code point, as Python sorts `str`. */
+/** Compare two strings by code point. */
 function compareCodePoints(a: string, b: string): number {
   // Equal code points take equal code units, so one index walks both strings.
   let i = 0;

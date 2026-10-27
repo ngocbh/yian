@@ -104,7 +104,7 @@ export class ProviderError extends Error {
   readonly causeName: string | null;
 
   constructor(kind: ErrorKind, message: string, options: ProviderErrorOptions = {}) {
-    // Python's ErrorKind(kind) raises on an unknown kind too.
+    // An unknown kind is refused.
     if (!ERROR_KINDS.includes(kind)) throw new TypeError(`unknown provider error kind: ${String(kind)}`);
     super(message);
     this.kind = kind;
@@ -141,7 +141,7 @@ export function parseRetryAfter(headers: Headers, now: number = Date.now() / 100
     }
     if (!DECIMAL.test(text)) continue;
     const delay = Number(text);
-    // Python checks only for +inf, so a negative overflow stays -Infinity.
+    // Only +Infinity is capped, so a negative overflow stays -Infinity.
     if (delay === Infinity) return OVERFLOW_RETRY_AFTER;
     return delay / divisor;
   }
@@ -163,10 +163,10 @@ function parseHttpDate(text: string): number | null {
     const sign = zone[0] === "-" ? -1 : 1;
     offset = sign * (Number(zone.slice(1, 3)) * 3600 + Number(zone.slice(3, 5)) * 60);
   }
-  // Python's parsedate_tz rule, which Date.UTC would otherwise read as 19YY.
+  // A two-digit year above 68 is 19YY, else 20YY; Date.UTC would read every one as 19YY.
   let year = Number(m[3]);
   if (year < 100) year += year > 68 ? 1900 : 2000;
-  // Out-of-range fields (day 32, hour 24, ...) roll over on purpose, as in Python's parsedate_tz/mktime_tz.
+  // Out-of-range fields (day 32, hour 24, ...) roll over on purpose.
   const utc = Date.UTC(year, month, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6] ?? 0));
   return utc / 1000 - offset;
 }

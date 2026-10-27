@@ -17,8 +17,8 @@ import { validateHeaderName, validateHeaders, validateOrganization } from "./con
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
 /**
- * Every provider an `llm_config` may name, in Python yian's order; the validated config carrier and
- * the factory that consumes it share this one list.
+ * Every provider an `llm_config` may name; the validated config carrier and the factory that
+ * consumes it share this one list.
  */
 export const SUPPORTED_LLM_PROVIDERS = Object.freeze([
   "openai",
@@ -201,10 +201,10 @@ const OLLAMA_URL =
 const OLLAMA_SHAPE =
   "OLLAMA_BASE_URL must be an http:// or https:// URL of a host, an optional port, and a path, " +
   "without a query or fragment";
-// Python's UTF-8 codec keeps a leading BOM, so the decoder must too.
+// A decoded leading BOM stays in the text.
 const UTF8 = new TextDecoder("utf-8", { ignoreBOM: true });
 
-/** Decode `text` like Python's `urllib.parse.unquote`; invalid escapes stay as written. */
+/** Decode each run of `%XX` escapes in `text` as UTF-8; invalid escapes stay as written. */
 function unquote(text: string): string {
   return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) =>
     UTF8.decode(Uint8Array.from(run.slice(1).split("%"), (hex) => parseInt(hex, 16))),
@@ -255,7 +255,7 @@ export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credential
 /**
  * Return why `data` uses a removed `llm_config` form, or `null`.
  *
- * Checks, first match wins: a Python spelling of a dash block (`qwen_cn` for `qwen-cn`), a
+ * Checks, first match wins: an underscore spelling of a dash block (`qwen_cn` for `qwen-cn`), a
  * retired key (`retiredKeyError`), then the native Codex options (`provider: codex`, `sandbox`,
  * `cwd`), which point at the unified OpenAI connection.
  */
@@ -529,7 +529,7 @@ export class LLMConfig {
   }
 
   /**
-   * Return the config as a fresh record, Python's `model_dump()`.
+   * Return the config as a fresh record.
    *
    * `provider` and `model` are always there (`null` when unset); `base_url`, `organization` and
    * `project` only when set; then each set block by its authored name, in
@@ -615,7 +615,7 @@ export function hostOnlyFieldError(config: unknown): string | null {
 }
 
 /**
- * Whether Python would read `value` as false: unset, `false`, `""`, zero, or an empty list or record
+ * Whether `value` counts as empty: unset, `false`, `""`, zero, or an empty list or record
  * (a record whose values are all `undefined` counts as empty).
  */
 function isFalsy(value: unknown): boolean {

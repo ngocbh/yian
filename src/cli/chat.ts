@@ -359,7 +359,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     if (options.log === undefined) runDir = dirname(path);
     await reportRunLog(path, io.stderr, io.env);
     log = path;
-    // Python's rule: a node named `reply`, at any depth, is what the chat says.
+    // A node named `reply`, at any depth, is what the chat says.
     const onEvent = (event: RunEvent) => {
       if (!(event instanceof NodeSucceeded)) return;
       if (event.nodeId.slice(event.nodeId.lastIndexOf("/") + 1) !== "reply") return;

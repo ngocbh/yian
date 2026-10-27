@@ -28,7 +28,7 @@ export const compiled: boolean = runtime === "bun" && Bun.isStandaloneExecutable
 
 /**
  * A value bound to a positional `?` parameter. A `number` passing
- * `Number.isSafeInteger` binds as INTEGER, as Python's `int` does; any other
+ * `Number.isSafeInteger` binds as INTEGER; any other
  * `number` binds as REAL.
  */
 export type SqliteParam = null | number | bigint | string | Uint8Array;
@@ -91,8 +91,8 @@ function driver(): (path: string, readonly: boolean) => DriverDatabase {
       new BunDatabase(path, { create: !readonly, readwrite: !readonly, readonly, strict: true, safeIntegers: true });
   } else {
     const { DatabaseSync: NodeDatabase } = requireNodeSqlite();
-    // Node's defaults differ from Bun's and Python's sqlite3, which leave foreign keys
-    // off and accept double-quoted string literals.
+    // Node's defaults differ from Bun's, which leaves foreign keys off and accepts
+    // double-quoted string literals.
     openDriver = (path, readonly) =>
       new NodeDatabase(path, {
         readOnly: readonly,
@@ -143,7 +143,7 @@ function plainRow(row: object): SqliteRow {
  * Open the SQLite database file at `path`, creating it unless `readonly`.
  *
  * Integers read back as `number` on both runtimes, and one outside
- * `Number.isSafeInteger` throws `RangeError`. As with Python's sqlite3, foreign keys
+ * `Number.isSafeInteger` throws `RangeError`. On both runtimes foreign keys
  * are off and double-quoted string literals are accepted. Driver errors pass
  * through; read their result code with `sqliteErrorCode`.
  */
@@ -590,8 +590,8 @@ function utf16Index(line: string, column: number, transformSync: TransformSync):
 function toTypeStripError(error: AmaroError, body: string, transformSync: TransformSync): TypeStripError {
   const lines = body.split(/\r\n|\r|\n/);
   if (error.startLine > lines.length) {
-    // An unclosed construct is reported at the wrapper's closing `}`; Python reports it
-    // on the last line with text, which such an error always has.
+    // An unclosed construct is reported at the wrapper's closing `}`; report it on the last
+    // line with text instead, which such an error always has.
     let last = lines.length - 1;
     while (last > 0 && lines[last]!.trim() === "") last--;
     return new TypeStripError(error.message, last + 1, lines[last]!.length + 1);
@@ -643,7 +643,7 @@ type WarningHandler = (message: string, type: string | undefined) => void;
 const warningHandlers = new AsyncLocalStorage<WarningHandler>();
 
 /**
- * Raise a yian warning, as Python yian's `warnings.warn`: to the innermost `withWarnings`
+ * Raise a yian warning: to the innermost `withWarnings`
  * handler around this call, else through `process.emitWarning` (with `type` when given).
  */
 export function warn(message: string, type?: string): void {
@@ -694,9 +694,8 @@ export function redirectDetail(location: string | null): string {
   const text = location.trim();
   const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(text)?.[0] ?? "";
   const rest = text.slice(scheme.length);
-  // Follows only urlsplit's "is there an authority" rule (`//` then a non-empty authority);
-  // the URL parser alone would read `http:///x` or `http:x` as host `x`. `//user@/x` and
-  // `//:80/x` give "unparsable" here where Python says relative.
+  // Absolute only when `//` comes before a non-empty authority; the URL parser alone would read
+  // `http:///x` or `http:x` as host `x`. `//user@/x` and `//:80/x` give "unparsable" here.
   if (!/^\/\/[^/?#]/.test(rest)) return "redirect to a relative Location";
   let url: URL;
   try {

@@ -3,10 +3,9 @@
  *
  * Each block mirrors the request body of one provider API with the same names, nesting and
  * allowed values. A block is described by plain field specs (`Field`, `ObjectSchema`), and
- * the value pass checks a value against them the way Python yian's pydantic models do in
- * strict mode: no coercion (`"5"` is not an integer), no non-finite numbers, unknown keys
+ * the value pass checks a value against them strictly: no coercion (`"5"` is not an integer), no non-finite numbers, unknown keys
  * refused, unset (`null`) fields left out of the result at every level, and errors that
- * never echo values. Issues carry pydantic's `loc`, `type` and `msg`. Before the value pass,
+ * never echo values. Each issue carries a location `loc`, an error `type` and a message `msg`. Before the value pass,
  * the key walk refuses the paths yian builds itself (`reserved`) and unknown keys, naming each.
  * `locatedBlockProblems` checks a block whose leaves may be values resolved later, and
  * `blockFieldAnnotation` gives the simple type a value for one field must have.
@@ -17,7 +16,7 @@ import { isList, isRecord } from "../typesys/index.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { valueRepr } from "../typesys/values.ts";
 
-/** A path into a value: keys, list indices and pydantic's union labels and variant tags. */
+/** A path into a value: keys, list indices, union labels and variant tags. */
 type Loc = readonly (string | number)[];
 
 /** What a value of one block field must be. */
@@ -33,7 +32,7 @@ export type Field =
   | { readonly kind: "union"; readonly members: readonly Field[] }
   /** Objects told apart by their `type` key, which names the variant. */
   | { readonly kind: "tagged"; readonly variants: Readonly<Record<string, ObjectSchema>> }
-  /** Any JSON value (Python's `Dict[str, Any]` values). */
+  /** Any JSON value. */
   | { readonly kind: "json" };
 
 /** The fields of an object, in declaration order; the ones not in `required` are optional. */
@@ -42,19 +41,22 @@ export interface ObjectSchema {
   readonly required: readonly string[];
 }
 
-/** One problem the value pass found, shaped like a pydantic error. */
+/** One problem the value pass found: where, its error type and its message. */
 export interface Issue {
   readonly loc: Loc;
   readonly type: string;
   readonly msg: string;
-  /** For a `value_error`: the validator's own message, without "Value error, " (Python's `ctx["error"]`). */
+  /** For a `value_error`: the validator's own message, without "Value error, ". */
   readonly error?: string;
 }
 
-/** A value a block refuses; the message keeps pydantic's layout without the help URL and type. */
+/**
+ * A value a block refuses. The message is a count header ("N validation errors for <title>"), then
+ * each issue's dotted location, if any, and its indented message.
+ */
 export class ValidationError extends RangeError {
   override name = "ValidationError";
-  /** What was validated, e.g. the block's Python class name. */
+  /** What was validated, e.g. the block's schema name. */
   readonly title: string;
   readonly issues: readonly Issue[];
 
@@ -107,7 +109,7 @@ const JSON_MAP: Extract<Field, { kind: "map" }> = Object.freeze({ kind: "map", k
 const ok = (value: JsonValue): Checked => ({ value, issues: [] });
 const fail = (loc: Loc, type: string, msg: string): Checked => ({ value: null, issues: [{ loc, type, msg }] });
 
-/** The value pass of one object: pydantic's model validation and dump, without the key walk. */
+/** The value pass of one object: validate it and drop unset fields, without the key walk. */
 export function checkObject(schema: ObjectSchema, data: unknown): { value: JsonObject | null; issues: Issue[] } {
   const { value, issues } = checkFields(schema, data, []);
   return issues.length > 0 ? { value: null, issues } : { value: value as JsonObject, issues };
@@ -189,7 +191,7 @@ export function choices(values: readonly string[]): string {
 /** Check a list's length, then each item at its index. */
 function checkList(field: Extract<Field, { kind: "list" }>, value: unknown, loc: Loc): Checked {
   if (!isList(value)) return fail(loc, "list_type", "Input should be a valid list");
-  // pydantic refuses an over-long list before looking at its items.
+  // An over-long list is refused before its items are checked.
   if (field.maxLength !== undefined && value.length > field.maxLength) {
     const msg = `List should have at most ${field.maxLength} items after validation, not ${value.length}`;
     return fail(loc, "too_long", msg);
@@ -217,7 +219,7 @@ function checkMap(field: Extract<Field, { kind: "map" }>, value: unknown, loc: L
     entries.push([key, checked.value]);
   }
   if (issues.length > 0) return { value: null, issues };
-  // pydantic checks a mapping's length only once its keys and values pass.
+  // A mapping's length is checked only once its keys and values pass.
   if (field.maxLength !== undefined && entries.length > field.maxLength) {
     const msg = `Dictionary should have at most ${field.maxLength} items after validation, not ${entries.length}`;
     return fail(loc, "too_long", msg);
@@ -277,7 +279,7 @@ function label(field: Field): string {
 function checkTagged(variants: Readonly<Record<string, ObjectSchema>>, value: unknown, loc: Loc): Checked {
   const tag = isRecord(value) && Object.hasOwn(value, "type") ? value["type"] : undefined;
   if (typeof tag !== "string" || !Object.hasOwn(variants, tag)) {
-    // Python yian's own message: it lists the tags and never echoes the value.
+    // The message lists the tags and never echoes the value.
     const tags = Object.keys(variants).sort(compareCodeUnits).join(", ");
     return fail(loc, "unknown_type", `\`type\` must be one of: ${tags}`);
   }
@@ -303,7 +305,7 @@ function checkJson(value: unknown, loc: Loc): Checked {
 
 /** A top-level block: an object schema that names itself and refuses reserved and unknown keys. */
 export interface BlockSchema extends ObjectSchema {
-  /** The Python class name, e.g. "OpenAIResponsesBlock", for the error header. */
+  /** The schema name, e.g. "OpenAIResponsesBlock", for the error header. */
   readonly title: string;
   /** The block name used in messages, e.g. "qwen-cn". */
   readonly name: string;
@@ -313,7 +315,7 @@ export interface BlockSchema extends ObjectSchema {
   readonly reserved: Readonly<Record<string, string>>;
 }
 
-/** Check `data` against a block: the key walk, then the value pass (pydantic's validate and dump). */
+/** Check `data` against a block: the key walk, then the value pass. */
 export function checkBlock(schema: BlockSchema, data: unknown): { value: JsonObject | null; issues: Issue[] } {
   if (isRecord(data)) {
     const problems: string[] = [];
@@ -507,8 +509,7 @@ const OPENAI_RESERVED: Readonly<Record<string, string>> = Object.freeze({
 /**
  * The `openai` block: the request body of the OpenAI Responses API (`POST /v1/responses`).
  *
- * Mirrors Python yian's `OpenAIResponsesBlock`: every body keyword of the request is a
- * field here or reserved.
+ * Every body keyword of the request is a field here or reserved.
  */
 export const OpenAIResponsesBlock: BlockSchema = block({
   title: "OpenAIResponsesBlock",
@@ -579,8 +580,8 @@ const CHAT_LOGPROBS: Readonly<Record<string, Field>> = Object.freeze({
   top_logprobs: int({ ge: 0n, le: 20n }),
 });
 
-// Blocks spread the shared field records last base first, then their own fields, which is
-// Python's field order; an own field replaces a shared one in place.
+// Blocks spread the shared field records last base first, then their own fields, which sets the
+// field order; an own field replaces a shared one in place.
 
 /**
  * The `xai` block: the request body of the xAI Chat Completions API.
@@ -1169,7 +1170,7 @@ export const OllamaChatBlock: BlockSchema = block({
 // Registry
 // --------------------------------------------------------------------------------------- //
 
-/** Provider name -> the block of the API a call to it reaches, in Python yian's order. */
+/** Provider name -> the block of the API a call to it reaches. */
 export const PROVIDER_BLOCKS: Readonly<Record<string, BlockSchema>> = table({
   openai: OpenAIResponsesBlock,
   azure: AzureChatBlock,
@@ -1399,7 +1400,7 @@ function checkLiteral(
     }
   };
   if (model === top) {
-    // Python assigns the field to the block, whose key walk runs first and stops on a problem.
+    // The field is checked as part of the block, whose key walk runs first and stops on a problem.
     const found: string[] = [];
     keyProblems(top, top, { [name]: value }, "", found);
     if (found.length > 0) {

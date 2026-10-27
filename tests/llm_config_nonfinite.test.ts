@@ -1,7 +1,4 @@
-/**
- * Mirrors `tests/test_llm_config_nonfinite.py`: the `LLMConfig` test. The load tests go with the
- * loader and the run test with `runFlow`.
- */
+/** `LLMConfig` refuses a non-finite number in a block. */
 
 import { expect, test } from "bun:test";
 

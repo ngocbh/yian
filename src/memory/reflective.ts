@@ -53,8 +53,7 @@ const SNAPSHOT_VERSION = 2n;
 const POLICY_NAME = "reflective";
 
 /**
- * @internal The reflector's reply schema, Python's `_ReflectionResponse.model_json_schema()`,
- * frozen.
+ * @internal The reflector's reply schema, frozen.
  */
 export const REFLECTION_SCHEMA: JsonObject = freezeJsonObject(
   {
@@ -91,7 +90,7 @@ const REFLECTION_SYSTEM =
   "You maintain atomic workflow lessons. Return only the requested structured actions. Use add for a " +
   "new id, revise/remove only for an existing id, or one noop when nothing should change. Never use tools.";
 
-/** One closed model-proposed lesson action (Python's `_ReflectionAction`). */
+/** One closed model-proposed lesson action. */
 interface ReflectionAction {
   readonly action: (typeof REFLECTION_KINDS)[number];
   readonly lessonId: string | null;
@@ -117,7 +116,7 @@ interface State {
   readonly lessons: readonly Lesson[];
 }
 
-/** Build the learner's model from the config Python passes to `model_from_config`. */
+/** Build the learner's model from its resolved config. */
 type CreateModel = (config: Readonly<Record<string, unknown>>) => ChatModel | Promise<ChatModel>;
 
 /** Observe one retried learner model call. */
@@ -142,12 +141,12 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Whether `data` has exactly the keys `fields` (Python's `set(data) == {...}`). */
+/** Whether `data` has exactly the keys `fields`. */
 function hasFields(data: JsonObject, fields: readonly string[]): boolean {
   return Object.keys(data).length === fields.length && fields.every((field) => Object.hasOwn(data, field));
 }
 
-/** Build one stable typed backend failure, with `cause` (Python's `raise ... from`) when given. */
+/** Build one stable typed backend failure, with `cause` when given. */
 function operationError(
   stage: string,
   code: string,
@@ -218,7 +217,7 @@ function jsonString(value: unknown, name: string, nonempty = false): string {
 }
 
 /**
- * Require one exact non-empty string (Python's `_nonempty_string`).
+ * Require one exact non-empty string.
  *
  * @throws TypeError when `value` isn't a string.
  * @throws RangeError when it's empty or holds a lone surrogate.
@@ -234,8 +233,7 @@ function nonemptyString(value: unknown, name: string): string {
  * @throws RangeError for NaN, `±Infinity`, a lone surrogate or a cycle.
  */
 function copyObject(value: unknown, name: string): JsonObject {
-  // The value number rule reads `-0` as `0`; reflective JSON then refuses `±Infinity`, as Python's
-  // `_copy_json` refuses non-finite floats. A walk over the copy, not recursion, so depth is free.
+  // The value number rule reads `-0` as `0`; reflective JSON then refuses `±Infinity`. A walk over the copy, not recursion, so depth is free.
   const copy = freezeJsonObject(value, name, { limitNesting: false, valueNumbers: true });
   const stack: [JsonValue, string][] = [[copy, name]];
   while (stack.length > 0) {
@@ -252,9 +250,9 @@ function copyObject(value: unknown, name: string): JsonObject {
   return copy;
 }
 
-/** Split text into case-insensitive retrieval words (Python's `\w+` over `casefold()`). */
+/** Split text into case-insensitive retrieval words: runs of letters, numbers and `_`. */
 function words(text: string): Set<string> {
-  // Upper then lower case is the design's stand-in for Python's `casefold`, as in `episodic.ts`.
+  // Upper then lower case is the design's stand-in for case folding, as in `episodic.ts`.
   return new Set(text.toUpperCase().toLowerCase().match(/[\p{L}\p{N}_]+/gu));
 }
 
@@ -284,7 +282,7 @@ function stateJson(namespace: string, epoch: number, revision: number, state: St
       recall_limit: BigInt(state.limits.recallLimit),
     }),
     epoch: BigInt(epoch),
-    // Lesson sources are frozen, so the encoding shares them (Python copies each).
+    // Lesson sources are frozen, so the encoding shares them.
     lessons: Object.freeze(
       state.lessons.map((lesson) => Object.freeze({ id: lesson.lessonId, source: lesson.source, text: lesson.text })),
     ),
@@ -323,8 +321,8 @@ function snapshotError(message: string, cause?: unknown): MemoryOperationError {
 }
 
 /**
- * Require one recorded positive integer limit: a JSON int is a `bigint`; a `number` is Python's
- * float, which `_positive_int` refuses.
+ * Require one recorded positive integer limit: a JSON int is a `bigint`; a `number` is a float,
+ * which is refused.
  *
  * @throws TypeError when `value` isn't a `bigint`.
  * @throws RangeError when it isn't positive or is beyond 2^53 − 1.
@@ -390,8 +388,7 @@ function parseState(value: unknown): [string, number, number, State] {
  *
  * @returns The namespace, epoch, revision, state and the pinned model configuration (frozen).
  * @throws MemoryOperationError `reflective.invalid_snapshot` for anything but the canonical form.
- * @throws AuthError when `llm_config` carries the host key marker without a key, as Python's
- *   `RuntimeError` escapes.
+ * @throws AuthError when `llm_config` carries the host key marker without a key.
  */
 function parseSnapshot(value: unknown): [string, number, number, State, JsonObject] {
   try {
@@ -474,7 +471,7 @@ export function boundedJsonMaterial(value: JsonValue, limit: number): string {
   const material = writeAsJson(value as Value);
   // UTF-16 length is at least the code-point count, so short material never needs the split below.
   if (material.length <= limit) return material;
-  // Code points, as Python's `len` and slices count, so a cut never splits a surrogate pair.
+  // Code points, so a cut never splits a surrogate pair.
   const chars = Array.from(material);
   if (chars.length <= limit) return material;
   const digest = crypto.createHash("sha256").update(material).digest("hex");
@@ -620,7 +617,7 @@ function parseInventory(value: unknown): Inventory {
  * ```
  */
 export class ReflectiveMemory implements Memory {
-  // TS-private, not `#`, so the session and tests can read them, as Python's read `_state`.
+  // TS-private, not `#`, so the session and tests can read them.
   private readonly requested: readonly [number | null, number | null];
   private readonly llmConfig: JsonObject;
   private readonly env: Env;
@@ -658,8 +655,7 @@ export class ReflectiveMemory implements Memory {
    * @param options.createParent Create the storage file's parent directory at first open.
    * @param options.env The environment model defaults and credentials are read from; default
    *   `processEnv`.
-   * @param options.createModel Build the learner's model from the config Python passes to
-   *   `model_from_config`; default `chatModelFromConfig(config, {env})`.
+   * @param options.createModel Build the learner's model from its resolved config; default `chatModelFromConfig(config, {env})`.
    * @param options.onRetry Called before the learner's model call is retried, with the error
    *   scrubbed of the call's credentials; unset publishes nothing.
    * @throws TypeError when a limit or `llmConfig` has an invalid type, or `createParent` isn't a
@@ -758,7 +754,7 @@ export class ReflectiveMemory implements Memory {
   }
 
   /**
-   * Enter one operation, independently of run-handle lifetime (Python's `_operation()` entry):
+   * Enter one operation, independently of run-handle lifetime:
    * open storage at the first operation and reject an unusable handle.
    *
    * @throws MemoryOperationError `reflective.closed` after `close()`; the storage can't be opened,
@@ -866,7 +862,7 @@ export class ReflectiveMemory implements Memory {
       const snapshot = options.snapshot ?? null;
       const parsed = snapshot === null ? null : parseSnapshot(snapshot);
       let adopt = false;
-      // The state is frozen, so a session pins it without Python's defensive copy.
+      // The state is frozen, so a session pins it without a defensive copy.
       const [namespace, epoch, revision, state, llmConfig] = parsed ?? [
         this.namespace,
         this.epoch,
@@ -936,10 +932,10 @@ export class ReflectiveMemory implements Memory {
 }
 
 /**
- * One run-scoped view over a pinned reflective-memory generation (Python's `_ReflectiveSession`).
+ * One run-scoped view over a pinned reflective-memory generation.
  *
  * It reads and publishes its backend's private state through element access (`memory["state"]`),
- * TypeScript's escape for private members, as Python's session reads `self._memory._state`.
+ * TypeScript's escape for private members.
  */
 export class ReflectiveSession implements MemorySession {
   private readonly memory: ReflectiveMemory;
@@ -1218,7 +1214,7 @@ export class ReflectiveSession implements MemorySession {
           for (const word of words(lesson.text)) if (queryWords.has(word)) overlap += 1;
           return { lesson, index, overlap };
         })
-        // Indexes are unique, so Python's final lesson-id key never decides.
+        // Indexes are unique, so no further tiebreak is needed.
         .toSorted((a, b) => b.overlap - a.overlap || a.index - b.index)
         .slice(0, this.state.limits.recallLimit)
         .map((ranked) => ranked.lesson);
@@ -1266,7 +1262,7 @@ export class ReflectiveSession implements MemorySession {
       return [];
     }
 
-    // Only membership and size matter, so the ids stand in for Python's lesson dict.
+    // Only membership and size matter, so a set of ids is enough.
     const lessonIds = new Set(this.state.lessons.map((lesson) => lesson.lessonId));
     const touched = new Set<string>();
     const proposals: MemoryMutation[] = [];
@@ -1360,7 +1356,7 @@ export class ReflectiveSession implements MemorySession {
 
       let plan: StructuredPlan;
       try {
-        // A throwing `stream` getter counts as no stream, as Python's `invoke()` check.
+        // A throwing `stream` getter counts as no stream.
         if (typeof model.stream !== "function") throw new TypeError("the reflector model must provide stream()");
         plan = planStructured(structuredTarget(model), REFLECTION_SCHEMA as SchemaObject);
       } catch (error) {

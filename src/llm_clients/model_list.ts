@@ -202,7 +202,7 @@ function validRequest(base: unknown, apiKey: unknown, timeout: unknown, checkUrl
       throw error;
     }
   }
-  // Stands in for Python's urlsplit check: the URL parses, its scheme is http(s), and it names a host.
+  // The URL parses, its scheme is http(s), and it names a host.
   return URL.canParse(base) && /^https?:\/\/[^/?#]/i.test(base);
 }
 
@@ -254,8 +254,8 @@ function text(value: unknown): string {
 /**
  * Return model ids from every page of Anthropic's model listing.
  *
- * `last_id` must be a string, stricter than Python, whose `urlencode` takes any value: the JSON
- * decoder here turns integers into bigints.
+ * `last_id` must be a string; the JSON decoder here turns integers into bigints, which aren't
+ * taken.
  */
 async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];
@@ -271,9 +271,8 @@ async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
 /**
  * Return the `generateContent` model ids from every page of Google's listing.
  *
- * `nextPageToken` must be a string and `supportedGenerationMethods` an array, stricter than
- * Python, which takes any token `urlencode` accepts and any container `in` works on: the JSON
- * decoder here turns integers into bigints.
+ * `nextPageToken` must be a string and `supportedGenerationMethods` an array; the JSON decoder
+ * here turns integers into bigints, which aren't taken.
  */
 async function googleIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];

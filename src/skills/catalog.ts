@@ -15,7 +15,7 @@ import { valueRepr } from "../typesys/values.ts";
 
 export const SKILL_FILE = "SKILL.md";
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// Python's `Path.is_file()` answers false for these instead of raising.
+// These errors mean the path isn't a file, rather than a failure.
 const IGNORED_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP", "EBADF"]);
 
 /** A skill package, grant, or resource request is invalid. */
@@ -93,7 +93,7 @@ export function checkSkillName(name: unknown): string {
 export function readSkillFile(skill: Skill, path: string): string {
   const where = `skill ${reprText(skill.name)}: file ${reprText(path)}`;
   if (skill.directory === null) throw new SkillError(`skill ${reprText(skill.name)} has no bundled files`);
-  // The parts Python's `PurePosixPath` keeps: empty and `.` segments drop out.
+  // Empty and `.` segments drop out.
   const parts = path.split("/").filter((part) => part !== "" && part !== ".");
   if (path === "" || path.includes("\\") || path.includes("\0") || path.startsWith("/") || parts.includes("..")) {
     throw new SkillError(`${where} must be a relative path inside the skill directory`);
@@ -131,13 +131,12 @@ export function readSkillText(path: string, where: string | null = null): string
     if (error instanceof TypeError) throw new SkillError(`${label} is not UTF-8 text`);
     throw error;
   }
-  // Python's `read_text` reads universal newlines.
+  // `\r\n` and `\r` read as `\n`.
   return text.replace(/\r\n?/g, "\n");
 }
 
 /**
- * @internal Python's non-strict `Path.resolve()`: the real path of the longest existing
- * prefix of `path`, with the rest appended unchanged.
+ * @internal The real path of the longest existing prefix of `path`, with the rest appended unchanged.
  */
 export function resolvedPath(path: string): string {
   const abs = resolve(path);
@@ -155,7 +154,7 @@ export function resolvedPath(path: string): string {
   }
 }
 
-/** @internal `statSync`, or `null` for the errors Python's `Path.is_file()` treats as false. */
+/** @internal `statSync`, or `null` for the errors that mean the path isn't a file. */
 export function statOrNull(path: string): Stats | null {
   try {
     return statSync(path);

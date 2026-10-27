@@ -1,8 +1,7 @@
 /**
- * Mirrors `tests/test_provider_auth.py`: `auth/index.ts`'s exports, the credential values, the
- * store, `isAuthFailure`, `request`, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs;
- * and the scenarios of `auth_both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node.
- * The `AuthError` status tests are TS-only.
+ * `auth/index.ts`'s exports, the credential values, the store, `isAuthFailure`, `request`,
+ * `AuthError`'s status, and `OpenAIAuth`'s sign-in flows, refresh and model catalogs; and the
+ * scenarios of `auth_both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node.
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
@@ -58,7 +57,7 @@ async function rejected(promise: Promise<unknown>): Promise<Error> {
   throw new Error("expected a rejection");
 }
 
-test("auth/index.ts exports Python's auth package names", async () => {
+test("auth/index.ts exports the auth package names", async () => {
   // The types (AuthState, Credentials) have no runtime value.
   const names = Object.keys(await import("../src/llm_clients/auth/index.ts")).sort();
   expect(names).toEqual([
@@ -1426,7 +1425,7 @@ describe("AuthStore", () => {
     }
   });
 
-  test("a store written by save reads back in Python's format", async () => {
+  test("save writes the store as sorted, spaced JSON", async () => {
     const store = new AuthStore(file);
     const subscription = await store.save("openai", oauth("access", "refresh", 9000), "gpt");
     const key = await store.save("p", gateway(), "m", { endpoint: "https://e.example/", makeDefault: false });

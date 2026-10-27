@@ -1,25 +1,15 @@
 /**
- * A port of `tests/test_defaults_single_source.py`: every default and limit is defined only in
- * `defaults.ts`.
+ * Every default and limit is defined only in `defaults.ts`.
  *
  * The scan reads `src` as text, with comments and strings blanked by `blank`, and never
- * imports it.
- *
- * Ported: the shape self-test, the scan of `src`, the stale-allowlist and allowed-files
- * checks, the inline-cap-guard shapes, and the OAuth-callback and question-count cap rows.
- * Changed: the same rule holds in TS (decision 4b), so a small token scanner replaces Python's
- * `ast` walk and the allowlist names TS sites. A flagged literal is an integer of 2 or more or a
- * negative integer (decimal, hex, binary, octal, separators, bigint; floats are not flagged, as
- * in Python), anywhere in: a top-level `const`/`let`/`var` value, including inside top-level
- * blocks; a class field value; a parameter default, including inside a destructured parameter;
- * and, as the TS forms of a keyword default, a destructuring default in a declaration
- * (`const { timeoutMs = 30_000 } = options`) and a numeric constant right of `??` or `||`.
- * `len(...)` comparisons become `.length` comparisons. The self-test's Python-only shapes
- * (positional-only parameters, a `with` block, a nested class) have no TS form and are left out
- * of its source. The scanner assumes class members and
- * statements end in `;` (nothing in `src` relies on automatic semicolon insertion). It is not a
- * real parser because the `typescript` 7 package has no stable JS AST API and no other parser is
- * a dependency.
+ * imports it. A flagged literal is an integer of 2 or more or a negative integer (decimal, hex,
+ * binary, octal, separators, bigint; floats are not flagged), anywhere in: a top-level
+ * `const`/`let`/`var` value, including inside top-level blocks; a class field value; a
+ * parameter default, including inside a destructured parameter; a destructuring default in a
+ * declaration (`const { timeoutMs = 30_000 } = options`); and a numeric constant right of `??`
+ * or `||`. The scanner assumes class members and statements end in `;` (nothing in `src`
+ * relies on automatic semicolon insertion). It is not a real parser because the `typescript` 7
+ * package has no stable JS AST API and no other parser is a dependency.
  */
 
 import { expect, test } from "bun:test";
@@ -107,9 +97,9 @@ const ALLOWED: Record<string, string> = {
   "tools/types.ts: MAX_NODES": "schema nodes one tool-type translation visits; past it the schema is unchecked, which only widens",
   "platform.ts: LOCK_POLL_MS": "sleep between tries on a busy file lock",
   // Provider contracts.
-  "llm/errors.ts: MAX_RETRY_AFTER_SECONDS": "provider retry-after cap, as openai's (Python's is a float its scan skips)",
+  "llm/errors.ts: MAX_RETRY_AFTER_SECONDS": "provider retry-after cap, as openai's",
   "llm/errors.ts: OVERFLOW_RETRY_AFTER": "one past the retry-after cap, so an overflowing delay is refused",
-  "llm/executor.ts: MAX_RETRY_DELAY_SECONDS": "longest model retry backoff, as openai's (Python writes it inline in _delay)",
+  "llm/executor.ts: MAX_RETRY_DELAY_SECONDS": "longest model retry backoff, as openai's",
   "llm/protocols/anthropic_messages.ts: MAX_TOKENS": "Anthropic's max_tokens per model, a provider contract",
   "llm/protocols/anthropic_messages.ts: DEFAULT_MAX_TOKENS": "Anthropic's max_tokens for other models, a provider contract",
 };

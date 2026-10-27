@@ -8,10 +8,7 @@
  * those fields to a request, gives the prompt strategy's `instruction` and the retry
  * `correction` texts, and `parse`s the reply's JSON object; `parse` throws
  * `StructuredOutputError`, or its subclass `MissingToolCallError` for a tool strategy. The caller
- * validates replies against the schema it passed. Ported from Python yian's
- * `with_structured_output` overrides in `llm_clients/*_client.py`, the native-structured gate and
- * code-fence strip in `nodes/agent/structured.py`, and `missing_tool_call` in
- * `llm_clients/base_client.py`.
+ * validates replies against the schema it passed.
  */
 
 import type { JsonObject } from "../typesys/json.ts";
@@ -229,7 +226,7 @@ export class StructuredPlan {
 }
 
 const FENCE = "```";
-/** LangChain's strip set: Python's `" \n\r\t`"`. */
+/** LangChain's strip set. */
 const STRIPPED = " \n\r\t`";
 
 /** Return `text` without the whitespace and backticks around it. */

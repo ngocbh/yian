@@ -579,8 +579,8 @@ function jsonTypeName(value: JsonValue): string {
  *   other than an object.
  */
 export function readInputsJson(path: string): Record<string, JsonValue> {
-  // The BOM is kept, so the JSON reader refuses it as Python's does. Universal newlines change only
-  // an error's line and column, which then match Python's: JSON's whitespace includes them all.
+  // The BOM is kept, so the JSON reader refuses it. Universal newlines change only an error's line
+  // and column: JSON's whitespace includes them all.
   let text: string;
   try {
     text = readFlowText(path);
@@ -801,8 +801,7 @@ export class NotUtf8Error extends Error {
 }
 
 /**
- * @internal Read the flow or inputs file at `path` as Python's `read_text(encoding="utf-8")` does: strict UTF-8, a BOM
- * kept, `\r\n` and `\r` read as `\n`.
+ * @internal Read the flow or inputs file at `path` as strict UTF-8, a BOM kept, `\r\n` and `\r` read as `\n`.
  *
  * @throws {NotUtf8Error} When the file isn't UTF-8 text.
  * @throws {Error} A system error when the file can't be read.
@@ -853,8 +852,8 @@ export function isSetupError(error: unknown): error is Error {
     error instanceof AuthError ||
     error instanceof MemoryOperationError ||
     error instanceof McpConnectError ||
-    // A lock file that is unsafe, not private or changed; a locked log (Python's
-    // `BlockingIOError`) is a plain `Error` over the lock's.
+    // A lock file that is unsafe, not private or changed; a locked log is a plain `Error` over
+    // the lock's.
     error instanceof FileLockError ||
     (error instanceof Error && error.cause instanceof FileLockError) ||
     // The missing MCP SDK; any other plain `Error` is a bug and keeps its stack.
@@ -1125,7 +1124,7 @@ async function resumeEnvKey(
 
 /**
  * Return the error refusing a resume whose `provider` key came from a host's
- * `llm_config.api_key`, pointing to `resume_flow` (messages keep Python's names); `headerNames`
+ * `llm_config.api_key`, pointing to `resume_flow`; `headerNames`
  * are the recorded names of headers sent with the key, if any.
  */
 function hostKeyRefusal(provider: string, headerNames: unknown): ResumeKeyError {
@@ -1639,8 +1638,8 @@ export function waitingText(result: RunResult): string {
 }
 
 /**
- * Return `path` resolved as Python's non-strict `Path.resolve()` does, except that a symlink loop
- * throws its `ELOOP` system error.
+ * Return `path` resolved without requiring it to exist (the real path of its longest existing
+ * prefix, with the rest appended), except that a symlink loop throws its `ELOOP` system error.
  */
 function resolveFlowPath(path: string): string {
   try {

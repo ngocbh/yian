@@ -16,7 +16,7 @@ const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const ISSUER = "https://auth.openai.com";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
 
-/** Python's `float()` decimal syntax, digit underscores included. */
+/** A decimal float: optional sign, digits with single `_` between them, an optional fraction and exponent. */
 const FLOAT_TEXT = /^\s*[+-]?(\d(_?\d)*(\.(\d(_?\d)*)?)?|\.\d(_?\d)*)([eE][+-]?\d(_?\d)*)?\s*$/;
 
 /** The options `OpenAIAuth` passes to its `request`. */
@@ -127,12 +127,12 @@ function untilStopped<T>(work: T | PromiseLike<T>, signal: AbortSignal): Promise
   });
 }
 
-/** Return `record[key]` if it is an own key, else `fallback` (Python's `dict.get`). */
+/** Return `record[key]` if it is an own key, else `fallback`. */
 function get(record: Record<string, unknown>, key: string, fallback: unknown = null): unknown {
   return Object.hasOwn(record, key) ? record[key] : fallback;
 }
 
-/** Python truthiness for decoded JSON values. */
+/** Whether a decoded JSON value is set: not null, `false`, zero, `""`, or an empty list or record. */
 function truthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (isRecord(value)) return Object.keys(value).length > 0;
@@ -242,7 +242,7 @@ export class OpenAIAuth {
   ): Promise<HttpResponse> {
     const { signal, jsonBody, form } = options;
     signal.throwIfAborted();
-    // Python sent a bare `yian`; every request here, auth included, sends `yian/<version>`.
+    // Every request here, auth included, sends `yian/<version>`.
     const headers: Record<string, string> = { "User-Agent": USER_AGENT, ...options.headers };
     const sent: AuthRequestOptions = { headers, timeoutMs: this.#requestTimeoutMs, signal };
     if (jsonBody !== undefined) {

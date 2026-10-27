@@ -5,7 +5,8 @@
  * what a route sends: whether the schema has an open part, the forced tool LangChain builds from
  * it, or the schema rewritten for a provider's subset. None changes its input. Ints in a schema
  * are `bigint`s and floats numbers, so numbers are compared as JSON values, never across kinds.
- * The transforms are ported from Python yian and the SDKs it calls (each function names its source).
+ * Some transforms are ported from the provider SDKs and langchain-core; each such function names
+ * its source.
  */
 
 import { type JsonObject, type JsonValue, logJson } from "../typesys/json.ts";
@@ -19,8 +20,7 @@ import { copyJson, isPlainObject, put, ToolSpec } from "./messages.ts";
  * These are the shapes `typeToSchema` emits for an `object`, `Any` or elementless-list output;
  * strict structured-output modes reject them. It reads the root and the subschemas under `items`,
  * `additionalProperties`, the `properties` and `$defs` maps, and the `anyOf`, `oneOf` and `allOf`
- * lists; other keywords (`prefixItems`, `not`) are not inspected. Ported from yian's
- * `capabilities.has_open_schema`.
+ * lists; other keywords (`prefixItems`, `not`) are not inspected.
  *
  * @param schema The JSON schema; it is only read.
  * @returns `true` when it has an open part; `false` when it has none or is not an object.
@@ -155,8 +155,7 @@ function removeTitles(object: JsonObject, parentKey: string): JsonObject {
  * `{const: v}` and `{enum: [v]}` accept the same values. A boolean or `null` `const` is left as
  * written, and so is one whose existing `enum` lacks `v` (members compared as JSON values, an int
  * never equal to a float). It rewrites the root and the subschemas under `properties`, `$defs`,
- * `items`, `prefixItems`, `additionalProperties`, `anyOf`, `oneOf` and `allOf`. Ported from yian's
- * `google_client._const_as_enum`.
+ * `items`, `prefixItems`, `additionalProperties`, `anyOf`, `oneOf` and `allOf`.
  *
  * @param schema The JSON schema; it is not changed.
  * @returns The rewritten copy.
@@ -169,7 +168,7 @@ export function constAsEnum(schema: JsonObject): JsonObject {
     if (!isPlainObject(node)) continue;
     const value = node["const"];
     if (typeof value === "string" || typeof value === "bigint" || typeof value === "number") {
-      // `logJson` writes an int and a float apart (`1` and `1.0`), as Python's `json.dumps` does.
+      // `logJson` writes an int and a float apart (`1` and `1.0`).
       const wanted = logJson(value);
       const members = node["enum"];
       const matches = Array.isArray(members) && members.some((member) => logJson(member) === wanted);
@@ -290,7 +289,7 @@ function expectSchema(value: JsonValue, path: string): JsonObject {
   return value;
 }
 
-/** Return whether `value` is falsy in Python: `null`, `false`, a zero, `""`, `[]` or `{}`. */
+/** Return whether `value` is falsy: `null`, `false`, a zero, `""`, `[]` or `{}`. */
 function isFalsy(value: JsonValue): boolean {
   if (Array.isArray(value)) return value.length === 0;
   if (isPlainObject(value)) return Object.keys(value).length === 0;
@@ -335,8 +334,7 @@ export const AZURE_STRICT_UNSUPPORTED: readonly string[] = Object.freeze([
  * list's order, as a `{key: <JSON value>, …}` note: its `description` when that is absent, empty or
  * not a string, else after the description and a blank line. It visits the root and the subschemas
  * under `properties`, `$defs`, `items`, `prefixItems`, `additionalProperties`, `anyOf`, `oneOf` and
- * `allOf`, so a property named like a keyword is kept. Ported from yian's
- * `azure_client._strict_schema_without`.
+ * `allOf`, so a property named like a keyword is kept.
  *
  * @param schema The JSON schema, usually `strictJsonSchema`'s result; it is not changed.
  * @returns The rewritten copy, or `null` when no subschema holds a listed keyword.
@@ -386,7 +384,7 @@ const ANTHROPIC_STRING_FORMATS = new Set([
  * alone (its siblings dropped) or `anyOf` (from `anyOf`, else `oneOf`), `allOf` or `type`, then
  * an array `enum`, `description` and `title`. An `object` gets its rebuilt `properties` (`{}` when
  * absent), `additionalProperties: false` (an open object is closed) and its `required`; a
- * `string` keeps a supported `format` and drops a falsy one (as Python does); an `array` keeps
+ * `string` keeps a supported `format` and drops a falsy one; an `array` keeps
  * its rebuilt `items` and a `minItems` of 0 or 1. Every other keyword is stated in the description
  * as a `{key: <JSON value>, …}` note, in the schema's key order, after the description and a blank
  * line when there is a string one.
@@ -406,7 +404,7 @@ export function anthropicOutputSchema(schema: JsonObject): JsonObject {
 function anthropicSchema(schema: JsonValue, path: string): JsonObject {
   const out: JsonObject = {};
   const src: JsonObject = { ...expectSchema(schema, path) };
-  /** Remove `key` from `src` and return its value, `null` when absent (Python's `pop(key, None)`). */
+  /** Remove `key` from `src` and return its value, `null` when absent. */
   const take = (key: string): JsonValue => {
     const value = src[key] ?? null;
     delete src[key];

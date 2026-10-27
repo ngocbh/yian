@@ -752,7 +752,7 @@ export class Message {
     if (!isPlainObject(data)) throw new MessageFormatError("", `expected an object, got ${typeName(data)}`);
     const record = ownRecord(data);
     if (!Object.hasOwn(record, "format")) throw new MessageFormatError("format", "missing");
-    // Python's repr quoting, kept so both ports word the error alike.
+    // The expected value in single quotes, as the other format errors quote values.
     if (record["format"] !== MESSAGE_FORMAT) throw new MessageFormatError("format", `expected '${MESSAGE_FORMAT}'`);
     refuseSymbolKeys(data, "");
     for (const key of Object.keys(record)) {

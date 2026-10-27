@@ -348,7 +348,7 @@ const PRIVATE_INDIRECTION_FIELDS = withHighConfidencePlurals(["dir", "directory"
 const PRIVATE_WEBHOOK_FIELDS: ReadonlySet<string> = new Set(["signature", "url"]);
 const CODE_IMPORT_FIELDS = withHighConfidencePlurals(["class", "import", "module", "path"]);
 
-// Single code points tested the way Python's `str.isalnum`, `isupper`, `islower` and `isdigit` do.
+// Single code points tested as a letter or number, uppercase, lowercase, and a digit.
 const ALNUM = /^[\p{L}\p{N}]$/u;
 const UPPER = /^\p{Uppercase}$/u;
 const LOWER = /^\p{Lowercase}$/u;
@@ -358,7 +358,7 @@ const DIGIT =
   /^[\p{Nd}\u{B2}-\u{B3}\u{B9}\u{1369}-\u{1371}\u{19DA}\u{2070}\u{2074}-\u{2079}\u{2080}-\u{2089}\u{2460}-\u{2468}\u{2474}-\u{247C}\u{2488}-\u{2490}\u{24EA}\u{24F5}-\u{24FD}\u{24FF}\u{2776}-\u{277E}\u{2780}-\u{2788}\u{278A}-\u{2792}\u{10A40}-\u{10A43}\u{10E60}-\u{10E68}\u{11052}-\u{1105A}\u{1F100}-\u{1F10A}]$/u;
 
 /**
- * Return one code point folded as Python's `str.casefold` does, for the private-key vocabularies.
+ * Return one code point case-folded, for the private-key vocabularies.
  * Upper-then-lower case differs from `casefold` only for `ı` (U+0131, kept), `ẞ` (U+1E9E, `ss`)
  * and Cherokee letters; Cherokee folds to non-ASCII either way, so the ASCII vocabularies match
  * the same keys.
@@ -371,7 +371,7 @@ function casefold(ch: string): string {
 
 /** Return one case-, camel- and punctuation-neutral authored key: `apiKey` and `API-Key` give `api_key`. */
 function normalizeConfigKey(value: string): string {
-  // By code point, as Python indexes a `str`.
+  // By code point, so a surrogate pair stays one character.
   const chars = Array.from(value);
   const normalized: string[] = [];
   for (let i = 0; i < chars.length; i++) {
@@ -456,7 +456,7 @@ function rejectPrivateMemoryKeys(
   }
   if (value === null || typeof value !== "object") return;
   const object = value as JsonObject;
-  // Sorted again because enumeration puts integer-like keys first, unlike Python's sorted snapshot.
+  // Sorted, because enumeration puts integer-like keys first.
   for (const key of Object.keys(object).sort(compareCodeUnits)) {
     const normalized = normalizeConfigKey(key);
     const tokens = normalized.split("_");
@@ -586,7 +586,7 @@ function checkedConfig(name: unknown, typeName: unknown, config: unknown): JsonO
   if (type === "session") throw new RangeError("session memory was removed; carry the history as a loop field");
   const frozen = freezeJsonObject(config, "config");
   rejectPrivateMemoryKeys(frozen, "config");
-  // The caller's key order, as Python iterates the authored dict.
+  // Checked in the caller's key order.
   for (const key of Object.keys(config as object)) {
     if (LOCATION_CONFIG_KEYS.has(key)) {
       throw new RangeError(
@@ -983,7 +983,7 @@ export class MemoryEpisode {
   readonly interactions: readonly VisibleInteraction[];
 
   /**
-   * Validate one accepted success or failure episode and snapshot its JSON, in Python's order:
+   * Validate one accepted success or failure episode and snapshot its JSON, in this order:
    * run id, execution sequence, occurrence path, owner path, status, outcome shape, inputs,
    * output, failure, prompts, sections, interactions. The arrays are copied and their carriers
    * kept by reference.
@@ -1314,14 +1314,13 @@ export class MemorySetupError extends RangeError {
   readonly related: readonly OriginRef[];
   /**
    * Extra lines a diagnostic shows after the message, such as the other declaration sites; an own
-   * array only when there are notes, so later `addNote` calls (Python's `add_note`) can append.
+   * array only when there are notes, so later `addNote` calls can append.
    */
   declare notes?: string[];
 
   /**
    * Create one setup failure with optional origins and notes; `related` is copied, a non-empty
-   * `notes` (Python's `add_note`, given here at construction) becomes the error's own copy, and
-   * `cause` (Python's `raise ... from`) is passed to `RangeError` when given.
+   * `notes` becomes the error's own copy, and `cause` is passed to `RangeError` when given.
    *
    * @throws TypeError when `message` isn't a string, `origin` is neither `null` nor an
    *   `OriginRef`, `related` isn't an array of `OriginRef` values, or `notes` isn't an array of
@@ -1361,7 +1360,7 @@ export class MemoryRecallError extends Error {
   readonly origin: OriginRef | null;
 
   /**
-   * Create one recall wrapper; `cause` (Python's `raise ... from`) is passed to `Error` when given.
+   * Create one recall wrapper; `cause` is passed to `Error` when given.
    *
    * @throws TypeError when `message` isn't a string or `origin` is neither `null` nor an `OriginRef`.
    * @throws RangeError when `message` holds a lone surrogate.
@@ -1382,7 +1381,7 @@ export class MemorySnapshotEnvelope {
   readonly snapshot: JsonObject;
 
   /**
-   * Snapshot `snapshot`, then check the memory key, as Python does.
+   * Snapshot `snapshot`, then check the memory key.
    *
    * @throws TypeError when `snapshot` isn't an exact JSON object or `memory` isn't a string.
    * @throws RangeError for a bad JSON value, an empty `memory`, or a lone surrogate.
@@ -1397,16 +1396,16 @@ export class MemorySnapshotEnvelope {
 
 /**
  * Whether two envelopes have the same memory key and equal snapshots, by value and type at each
- * node: stricter than Python's `==`, which equates `1`, `1.0` and `True`.
+ * node, so an int, a float and a boolean are never equal.
  */
 export function sameMemorySnapshotEnvelope(a: MemorySnapshotEnvelope, b: MemorySnapshotEnvelope): boolean {
   return a.memory === b.memory && sameJson(a.snapshot, b.snapshot);
 }
 
 /**
- * Whether two specs have the same key, type, config and owners, by value and type:
- * Python's dataclass equality, with configs compared as `sameMemorySnapshotEnvelope` compares
- * snapshots and owners item by item with `DeclSite.compare`.
+ * Whether two specs have the same key, type, config and owners, by value and type: configs
+ * compare as `sameMemorySnapshotEnvelope` compares snapshots, and owners item by item with
+ * `DeclSite.compare`.
  */
 export function sameMemorySpec(a: MemorySpec, b: MemorySpec): boolean {
   return (
@@ -1787,7 +1786,7 @@ export interface Memory {
   reset(): void | Promise<void>;
 }
 
-/** Whether `value` has `Memory`'s methods (Python's runtime-checkable `isinstance`). */
+/** Whether `value` has `Memory`'s methods. */
 export function isMemory(value: unknown): value is Memory {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as { openRun?: unknown; reset?: unknown };

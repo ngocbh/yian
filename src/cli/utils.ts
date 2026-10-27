@@ -1,6 +1,6 @@
 /**
  * CLI helpers: the command I/O, the argument parser, the `--json` writer, the API key prompt, and
- * `osReason` (a system error's reason in Python's words).
+ * `osReason` (a system error's reason in words, such as `No such file or directory`).
  *
  * - `parseCommand` reads a command's arguments against its `CommandSpec` with `node:util`'s
  *   `parseArgs`, then converts int and float options and checks paths with Click's messages;
@@ -282,13 +282,13 @@ function toInt(option: OptionSpec, text: string): number {
   return value;
 }
 
-// Python's float() syntax in ASCII: surrounding ASCII whitespace (float() refuses U+001C to
-// U+001F, though `str.isspace` counts them), single underscores between digits, an optional
-// fraction and exponent, or inf, infinity or nan in any case.
+// Float syntax in ASCII: surrounding whitespace (tab to carriage return, and space), single
+// underscores between digits, an optional fraction and exponent, or inf, infinity or nan in any
+// case.
 const FLOAT_TEXT =
   /^[\t-\r ]*([+-]?)(?:(inf|infinity|nan)|((?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:e[+-]?\d(?:_?\d)*)?))[\t-\r ]*$/i;
 
-/** Return `text` as a float, as Python's `float()` reads it, or throw a `UsageError`. */
+/** Return `text` as a float, or throw a `UsageError`. */
 function toFloat(option: OptionSpec, text: string): number {
   const match = FLOAT_TEXT.exec(text);
   if (!match) {
@@ -534,7 +534,7 @@ export async function ensureEnvKey(provider: string, { env, terminal }: PromptCo
 }
 
 /**
- * Return a system error's reason as Python's `strerror` words it: Node's message without its
+ * Return a system error's reason in words: Node's message without its
  * `CODE: ` prefix and `, <syscall> '<path>'` suffix, first letter capitalised
  * (`No such file or directory`).
  */

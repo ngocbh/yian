@@ -1,7 +1,7 @@
 /**
- * The suite's preload, as Python's `tests/conftest.py` and `tests/cli/conftest.py`: every test
- * starts from built-in yian defaults, an empty private auth store and an empty home, and from an
- * environment that an earlier test's changes no longer reach.
+ * The suite's preload: every test starts from built-in yian defaults, an empty private auth
+ * store and an empty home, and from an environment that an earlier test's changes no longer
+ * reach.
  *
  * At load it clears `XDG_CONFIG_HOME`, every defaults variable, `YIAN_DEFAULT_PROVIDER` and
  * `YIAN_DEFAULT_MODEL` (never `YIAN_TEST_*`, which switch test groups on) and keeps that
@@ -9,10 +9,6 @@
  * `YIAN_AUTH_FILE` at `auth.json` (not created) and `HOME` at `home/`, both in a fresh dir inside
  * one per-process `yian-test-*` dir, and the cached defaults are dropped, so the next `current()`
  * reads the built-in ones.
- *
- * Changed: Python sets `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL` for every test; TS clears them
- * (no TS test relied on a suite-wide default model). Python points `HOME` at a fresh directory for
- * CLI tests only; TS does it for every test.
  *
  * Node also loads `--import` preloads in each worker thread, such as a CODE body's, which shares
  * the test's environment; there this module does nothing, since a reset would change the

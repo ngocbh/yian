@@ -1,14 +1,9 @@
 /**
- * Mirrors `tests/test_openai_connection.py`. The model calls build with `chatModelFromConfig` and
- * answer from a recording `send` (`engine/run_state_fixtures.ts`'s) that replies with one Responses
- * stream. Adapted: `test_snapshot_does_not_follow_reconnect` fails at build with 0 requests, since
- * TS reads the pinned login at build too; the structured output test keeps the route half (the
- * strategy table is `llm/structured.test.ts`'s);
- * `test_saved_api_key_and_preflight_ignore_incidental_environment` and
- * `test_subscription_preflight_needs_no_api_key` keep their factory halves (the key preflight goes
- * with the CLI). `test_missing_identity_does_not_adopt_later_environment_key` is here as its
- * `connectionCredentials` twin. The two cascade tests are ported over `resolveLlmCascade`. The
- * three run tests go through `runFlow` with the test's environment.
+ * OpenAI connections: saved logins, subscriptions, refresh and the environment key. The model
+ * calls build with `chatModelFromConfig` and answer from a recording `send`
+ * (`engine/run_state_fixtures.ts`'s) that replies with one Responses stream. A pinned login is
+ * read at build. The cascade tests go through `resolveLlmCascade` and the run tests through
+ * `runFlow` with the test's environment.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -42,7 +37,7 @@ import { runFlow } from "../src/run.ts";
 import { recorder, responsesText, toolReply } from "./engine/run_state_fixtures.ts";
 
 // Each test's environment: a private store in a fresh directory and no default provider, model,
-// OpenAI key or endpoint, as Python's `isolated_auth` leaves it.
+// OpenAI key or endpoint.
 let home: string;
 let vars: Map<string, string>;
 const env: Env = (name) => vars.get(name);
@@ -159,7 +154,7 @@ test("authored model still inherits across provider fields", async () => {
 });
 
 test("snapshot does not follow reconnect", async () => {
-  // Python fails the first request; TS reads the pinned login at build, so the build fails.
+  // The pinned login is read at build, so the build fails.
   await subscription();
   const config = resolveModelConfig({}, { env });
   await authStore().save("openai", new ApiKeyCredentials("new-secret"), "other");
@@ -296,7 +291,7 @@ function freshTokens(): OAuthCredentials {
 }
 
 test("refresh retains connection identity on model requests", async () => {
-  // The connection half of Python's test: model requests resolve credentials this way.
+  // Model requests resolve credentials this way.
   const selected = await expiringSubscription();
   const refreshed: OAuthCredentials[] = [];
   const spy = spyOn(OpenAIAuth.prototype, "refresh").mockImplementation(async (credentials) => {

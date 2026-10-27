@@ -3,10 +3,12 @@
 # arithmetic, validation in code). To have the AGENT node emit a structured value directly,
 # declare the typed shape as its `output:` instead — see `typed_output.yaml`.
 #
-# Customize: point `code:` at an importable `module:function` on your PYTHONPATH.
-#   def parse_note(inputs: dict) -> dict:   # receives its bound input record
-#       text = inputs["text"]
-#       return {"title": text.split("\n", 1)[0], "word_count": len(text.split())}
+# Customize: edit the inline body, or move it to a file and point `code:` at it as
+# `./parsing.ts:parseNote`, resolved against the flow's folder:
+#   export function parseNote(inputs: { text: string }) {   // receives its bound input record
+#     const text = inputs.text;
+#     return { title: text.split("\n", 1)[0], word_count: text.split(/\s+/).filter(Boolean).length };
+#   }
 
 id: pipeline
 name: pipeline
@@ -33,6 +35,8 @@ nodes:
     input:
       text: ${draft.output}        # the reference IS the edge draft -> parse
     output: Parsed                 # one typed value; an AGENT node supports records too
-    code: your_package.parsing:parse_note
+    code: |
+      const text = inputs.text;
+      return { title: text.split("\n", 1)[0], word_count: text.split(/\s+/).filter(Boolean).length };
 
 output: ${parse.output}

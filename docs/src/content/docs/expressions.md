@@ -36,7 +36,7 @@ ADA and 2 more
 | Values: a node's `input:`, a value entry, a flow's `output:` | `${...}`, alone or inside text | Computes a typed value |
 | Conditions: `asserts:`, `case` conditions, a `loop`'s `while:` or `until:` | A bare expression, such as `qty > 0` | Tests it as true or false |
 | Prompts: an agent's `prompt:` and `system_prompt:` | `${...}` inside text | Writes each value into the text |
-| Model settings: values in `llm_config:` | `${...}` | Computes the setting (see [Models and providers](/models/)) |
+| Model settings: values in `llm_config:` | `${...}`, with no `isinstance` or constructor | Computes the setting (see [Models and providers](/models/)) |
 
 A condition may also be written as one whole `${...}`: `when: ${qty > 0}` means the same as
 `when: qty > 0`.
@@ -117,8 +117,9 @@ There is no record literal. Write a record as a YAML mapping (`!object {a: 1}`) 
 | `system.today`, `system.now` | Today's date and the current time, in UTC, read once per run |
 | `system.run_id` | The run's id |
 | `item` | The current item, inside a `map` (see [Control flow](/control-flow/)) |
-| `reply.new_messages` | The messages an agent added (see [Agents](/agents/)) |
+| `draft.new_messages` | The messages agent `draft` added (see [Agents](/agents/)) |
 | `qty` | A node's own input, in its prompt and asserts |
+| `output`, `output.amount` | A node's own result, in its asserts |
 
 A dot reads a field. When the loader knows a value's type, reading a field the type doesn't have
 is a load error. `and`, `or`, `not` and `in` can't start a reference, but they can name a field:
@@ -159,7 +160,8 @@ Use parentheses to group. Comparisons don't chain: write `0 < x and x < 10`, not
 ### Comparisons
 
 - `==` compares numbers by value (`1 == 1.0` is true), and texts, lists and records by content.
-  Values of different kinds are unequal: `"1" == 1` is false.
+  A boolean counts as 0 or 1 (`true == 1` is true); other values of different kinds are
+  unequal: `"1" == 1` is false.
 - `<`, `<=`, `>` and `>=` compare two numbers or two texts. A null on either side gives false.
   A date is text such as `2026-10-14`, so two dates compare in calendar order.
 - `in` tests for a substring (`"ell" in "hello"`), a list item (`3 in [1, 2, 3]`), or a record
@@ -195,7 +197,8 @@ flat: ${[x for row in rows for x in row]}
 ```
 
 Add more `for` and `if` clauses after the first; the leftmost `for` is the outer loop. A variable
-is local to the comprehension. It can't be named `input`, `output`, `system` or `item`.
+is local to the comprehension. It can't be a keyword, `input`, `output`, `system` or `item`,
+start with `__`, or reuse the name of an enclosing comprehension's variable.
 Parenthesize a list or condition that uses `:-`, `:?` or `|`: `${[m for m in (ms :- [])]}`.
 
 Quote a YAML value that holds a slice or a comprehension, as in the first example, since YAML
@@ -214,23 +217,23 @@ that holds null. These forms handle it:
 | `x :? "x is required"` | `x`, or the run fails with the message `x is required` |
 | `x != null and x.name == "Ada"` | `true` when `x` isn't null and its name is Ada; `x.name` is read only after the check |
 
-A `.` read on a value whose type allows null is a load error: write `x?.name`, or check
-`x != null` first. A `?.` makes the rest of the chain null too: `${x?.a.b}` is null when `x` is.
+A `.` read is a load error on a value whose type allows null, and right after a node that may
+be skipped, whatever its type: write `x?.name`, or check `x != null` first. A `?.` makes the rest of the chain null too: `${x?.a.b}` is null when `x` is.
 
 The default after `:-` is an expression, so quote text: `${input.when :- "today"}`. A bare
 `today` would read a value named `today`. Defaults also cover a skipped node: in
-`${(order.output.qty :- 0) + 1}`, a skipped `order` gives `1`.
+`${(order.output?.qty :- 0) + 1}`, a skipped `order` gives `1`.
 
 ## Builtins
 
 | Builtin | Gives |
 |---|---|
-| `len(x)` | The number of items in a list, or of characters in a text |
+| `len(obj)` | The number of items in a list, or of characters in a text |
 | `upper(s)`, `lower(s)` | The text in upper or lower case |
-| `join(list, sep="\n")` | The items as text, joined by `sep` |
+| `join(value, sep="\n")` | The items of a list as text, joined by `sep` |
 | `render_as_json(value, indent=2)` | The value as indented JSON text |
 
-Arguments may be given by name: `${join(items, sep=", ")}`. A null argument fails the call, so
+Arguments may be given by the names in the table: `${join(items, sep=", ")}`. A null argument fails the call, so
 give a default: `${upper(name :- "")}`. Calling a builtin with arguments it doesn't take, or a
 name that isn't a builtin, is a load error. A flow isn't a function: to run a child flow from a
 value, use the `call(...)` form (see [Control flow](/control-flow/)).
@@ -247,7 +250,8 @@ YAML tags can't go inside `${...}`, so two forms work with [types](/types/) ther
 | `Buy(x)` | `x`, checked as a `Buy`, like `!Buy ${x}` |
 | `Buy(action="buy", qty=2)` | A `Buy` record with exactly those fields, checked |
 
-`Buy` is a name from `typedefs:`. A constructor that can never succeed, such as a text where
+`Buy` is a name from `typedefs:`; `isinstance` also takes a built-in type, as in
+`isinstance(v, int)`. A constructor that can never succeed, such as a text where
 the type wants an int, is a load error; others are checked when they run.
 
 `isinstance` and field checks also narrow a value for the reads after them; see
@@ -255,6 +259,6 @@ the type wants an int, is a load error; others are checked when they run.
 
 ## Limits
 
-An expression nests at most 100 levels: each call, list, comparison, default and chain of
-operators is one level. A deeper one is a load error; split it across values. See
+An expression nests at most 100 levels: each call, list, comprehension, slice, comparison,
+unary operator, `:-`, `:?` or `|`, and chain of operators is one level. A deeper one is a load error; split it across values. See
 [Reference](/reference/) for every limit.

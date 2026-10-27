@@ -59,11 +59,12 @@ A flow file is a mapping of these top-level keys:
 | `uses` | no | Child flows from other files, by alias (see [Control flow](/control-flow/)) |
 | `system` | no | `paths:`, a list of folders, relative to this file, where `uses:` also looks |
 | `llm_config` | no | Model defaults for every agent (see [Models and providers](/models/)) |
-| `env` | no | Settings for every node, such as an agent's `max_tool_iterations` (see [Agents](/agents/)) |
+| `env` | no | Settings for every node in this flow, such as an agent's `max_tool_iterations`; a child flow doesn't inherit them (see [Agents](/agents/)) |
 | `long_term_memory` | no | Long-term memory for the flow's agents (see [Agents](/agents/)) |
 
 Any other key is a load error, so a typo such as `nodez:` fails loudly. Keys that start with
 `x-` are the exception: yian ignores them, so use them for notes or to hold YAML anchors.
+Run `yian check flow.yaml` to see a flow's load errors without running it.
 
 ```yaml
 id: weekly-report
@@ -117,16 +118,16 @@ Text from `--input` becomes an `int`, `float` or `bool` when the input has that 
 
 ## Nodes
 
-Each entry under `nodes:` is either a node, a mapping with `kind:`, or a value, a tagged YAML
-value. Its key is its id.
+Each entry under `nodes:` is either a node (a mapping with `kind:`) or a value (a tagged YAML
+value). Its key is its id.
 
 ### Node ids
 
 A node id is an identifier: ASCII letters, digits and `_`, not starting with a digit. Write
 `fetch_data`, not `fetch-data`, so that `${fetch_data.output}` can read it. These ids are taken:
 
-- `input`, `output`, `system` and `item`, which start references;
-- `inputs` and `outputs`;
+- `input`, `output`, `system` and `item`, which begin `${...}` paths;
+- `inputs`, `outputs`, `__start__` and `__end__`;
 - the expression keywords `and`, `or`, `not`, `in`, `true`, `false`, `null`, `none` and `inf`.
 
 ### Node kinds
@@ -209,7 +210,7 @@ when it runs. An entry with neither `kind:` nor a tag is a load error that shows
 | You write | The flow returns |
 |---|---|
 | `output: ${total.output}` | That one value |
-| `output: {total: ${total.output}, note: ${note.output}}` | A record with those fields, however many |
+| `output: {total: ${total.output}, note: ${note.output}}` | A record with those fields |
 | `output: !float ${total.output}` | One value, checked against the type |
 | `output: 5` | The literal as written |
 | no `output:` | null |
@@ -220,7 +221,8 @@ reads a field of a child's record output as `${child.output.total}`.
 ## Compact form
 
 A flow whose body is one `agent`, `code` or `tool` node can drop `nodes:` and put the node's
-fields at the top level:
+fields at the top level. Only `id`, `name`, `description`, `version` and `typedefs` stay with the
+flow; every other key, `asserts:` included, belongs to the node:
 
 <!-- yian-test {"replies": ["Hello, Ada! Lovely to meet you."]} -->
 ```yaml title="hello.yaml" check=runnable

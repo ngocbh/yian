@@ -24,7 +24,7 @@ A tag on a type definition is a load error, and so is a type without a tag on a 
 | Type | Values |
 |---|---|
 | `str` | Text |
-| `int` | A whole number of any size |
+| `int` | A whole number of any size; [code](/code-and-tools/) gets one past 2^53 as a `bigint` |
 | `float` | A number; an int fits too |
 | `bool` | `true` or `false` |
 | `date` | Text in the form `2026-10-14` |
@@ -43,8 +43,8 @@ A tag on a type definition is a load error, and so is a type without a tag on a 
 | `int(..100)` | 100 or less |
 | `float(0.0..1.0)` | 0.0 to 1.0 |
 
-Types are case-sensitive: write `Any`, not `any`. An unknown name is a load error that suggests
-a close match.
+Write `Any`, not `any`; `none`, `List` and `Dict` also work, for `None`, `list` and `dict`. An
+unknown name is a load error that suggests a close match.
 
 ## Containers
 
@@ -52,13 +52,13 @@ a close match.
 |---|---|
 | `list(X)` | A list of `X` |
 | `Optional(X)` | An `X`, or null |
-| `Literal(a, b, c)` | One of these texts |
+| `Literal(a, b, c)` | One of these texts, written as names or quoted strings, not numbers |
 | `Union(A, B)` | A value of one of these records (see [Unions](#unions)) |
 | `dict(K, V)` | The same as `object` |
 | `Inbox(X)` | A handle on an inbox of `X` events (see [Inboxes and waiting](/inboxes/)) |
 | `Message` | A chat message, built in (see [Agents](/agents/)) |
 
-Types use parentheses: `Optional[str]` is a load error that shows `Optional(str)`.
+Types use parentheses, not brackets: `Optional[str]` is a load error.
 
 `list(X)` holds no null unless `X` allows it: write `list(Optional(int))` for a list that may
 hold null. A `list(int)` fits where a `list(Optional(int))` is expected, not the other way round.
@@ -148,8 +148,9 @@ A `file` is a reference to a file, with three fields:
 | `name` | `Optional(str)` |
 
 Read them as `${f.uri}`, `${f.mime}` and `${f.name}`; any other field is a load error. Where a
-`file` is expected, the JSON mapping `{"uri": ..., "mime": ..., "name": ...}` is read as a file,
-so you can pass one in an `--inputs` file.
+`file` is expected, a JSON mapping with exactly the keys `uri`, `mime` and `name` is read as a
+file, so you can pass one in an `--inputs` file. Write null for an unknown `mime` or `name`; a
+mapping that leaves a key out isn't a file.
 
 ## YAML tags
 
@@ -279,7 +280,7 @@ nodes:
     output: Order
     code: |
       if (inputs.action === "buy") return { action: "buy", qty: inputs.amount };
-      return { action: "sell", price: inputs.amount / 100 };
+      return { action: "sell", price: Number(inputs.amount) / 100 };
   route:
     kind: case
     on: ${order.output.action}
@@ -325,5 +326,5 @@ converted.
 
 ## Limits
 
-A value, a type and a YAML file each nest a limited number of levels, and the limits can be
-lowered with environment variables. See [Reference](/reference/).
+A value, a type and a YAML file each nest a limited number of levels. Environment variables
+can change each limit within its bounds. See [Reference](/reference/).

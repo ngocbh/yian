@@ -1,29 +1,9 @@
 /**
- * `isinstance(x, T)` in the expression language: the evaluation and parse tests of
- * `tests/engine/test_isinstance.py`, `test_reference_walks_skip_the_type_name`,
- * `test_rewrites_leave_the_type_name_alone`, `test_isinstance_subject_is_the_tested_expression`,
- * `test_infer_expr_type_gives_bool_without_looking_up_the_type_name`,
- * `test_eval_binding_and_eval_template_use_the_type_table` (an embedded `false` is written
- * `false`), the co-skip, flow-callee and prompt-function tests, and an `isinstanceTypeNames`
- * test.
+ * `isinstance(x, T)` in the expression language: evaluation, parsing, reference walks, rewrites
+ * and type inference.
  *
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
- *
- * Ported: `test_a_node_starts_with_an_empty_type_table` (the loaded flow through `assembleText`)
- * and `test_case_forward_routes_with_its_type_table`. Ported through `loadFlow` and `runFlow` (and
- * `advance`), a loaded node's type table set by hand as Python sets it:
- * `test_bindings_and_case_conditions_use_the_node_type_table`,
- * `test_a_node_without_the_type_name_fails_naming_it` (failing `binding.evaluate`),
- * `test_node_asserts_use_the_node_type_table`, `test_loop_respawn_copies_the_type_table`,
- * `test_loop_while_uses_the_type_table_across_iterations`,
- * `test_loop_with_a_type_table_resumes_mid_loop`,
- * `test_a_read_guarded_by_isinstance_routes_a_non_member_to_else` and
- * `test_a_then_target_named_default_is_narrowed_by_a_searched_isinstance`.
- *
- * Changed: the CODE bodies are JavaScript, and a flow's int output is a `bigint`. The guarded
- * rows' limits `9.0` and `2.0` reach the run as ints (a whole host number reads as an int,
- * decisions 9A and 45), which a `float` field accepts (decision 38).
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

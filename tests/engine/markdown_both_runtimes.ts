@@ -10,8 +10,8 @@ import type { MarkdownStore } from "../../src/memory/storage/markdown.ts";
 const CRLF_DOC = "# Ada\r\nPrefers email.\r\nCafé ☕ 日本語 😀\r\n";
 
 /**
- * Run the fixture generator's operations on `store`. Python's ints are `bigint`s and its floats
- * `number`s: a `number` `3` would be written `3.0`.
+ * Run the operations that wrote the fixture on `store`. Ints are `bigint`s and floats `number`s:
+ * a `number` `3` would be written `3.0`.
  */
 export async function replay(store: MarkdownStore): Promise<void> {
   const [, empty] = await store.read();

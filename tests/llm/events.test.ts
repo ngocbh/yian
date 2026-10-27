@@ -1,8 +1,7 @@
 /**
- * Stream events: argument parsing, collecting a reply and the owning stream, a port of
- * `tests/llm/test_events.py`, plus JavaScript's own cases: ints of any size, raw control
- * characters inside strings, async sources, and the rule that a stream ends with exactly one
- * `Finish`.
+ * Stream events: argument parsing, collecting a reply and the owning stream, plus JavaScript's own
+ * cases: ints of any size, raw control characters inside strings, async sources, and the rule that
+ * a stream ends with exactly one `Finish`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

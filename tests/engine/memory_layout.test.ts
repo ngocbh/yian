@@ -1,56 +1,6 @@
 /**
- * Pure static memory-layout derivation and atomic scope application (`compile/memory_layout.ts`):
- * the rows of `tests/engine/test_memory_layout.py` that build flows by hand.
- *
- * Ported: `test_disabled_layout_needs_no_flow_id_and_leaves_every_scope_none`,
- * `test_memory_owning_python_flow_requires_exact_direct_boundaries` (every case),
- * `test_recursive_static_child_cycle_is_rejected`,
- * `test_memory_table_compares_configs_as_canonical_json` (every case),
- * `test_memory_table_merges_identical_declarations_at_one_site`,
- * `test_disabled_layout_has_an_empty_key_table`,
- * `test_config_clash_carries_every_other_site_as_a_related_origin`,
- * `test_config_clash_lists_a_repeated_declaration_once` (every case),
- * `test_memory_flow_without_an_id_resolves`, `test_one_agent_stacks_several_keys_in_authored_order`,
- * `test_agent_declaration_must_name_its_own_node` and `test_flow_declaration_must_not_name_a_node`.
- *
- * Changed:
- * - Python's `ValueError` is a `RangeError`; `MemorySetupError` extends `RangeError`.
- * - Python's private `_memory_table` is `memoryTable`, exported for tests.
- * - The configs are TS JSON: Python's int `1` is `1n`, its float `1.0` is the number `1`.
- * - The noncanonical boundary id (Python's `str` subclass) is `new String("__start__")`; the
- *   boundary ids are reassigned with `Object.assign` (they're `readonly` in TS's types only).
- * - `caught.value.__notes__` (Python's `add_note`) is `error.notes`.
- * - Python's `copy.deepcopy` of a declaration is a declaration rebuilt from equal parts.
- *
- * Ported too, the rows that load flows: `test_flow_start_and_end_scopes_carry_the_enclosing_keys`,
- * `test_composite_drivers_see_only_enclosing_keys`,
- * `test_repeated_definition_shares_one_owner_and_inline_children_own_their_keys`,
- * `test_apply_is_idempotent_and_does_not_change_authored_identity`,
- * `test_apply_scope_mismatch_is_atomic`,
- * `test_apply_revalidates_forged_nested_layout_scope_before_stamping`,
- * `test_apply_revalidates_a_forged_key_table_before_stamping`,
- * `test_apply_revalidates_forged_equal_existing_scope_atomically`,
- * `test_apply_stale_object_target_is_atomic`, `test_apply_rejects_shared_child_targets_before_stamping`,
- * `test_key_table_retains_config_and_origin_outside_node_scopes`,
- * `test_layout_records_key_table_with_sorted_owners_and_placements`,
- * `test_memory_stacks_dedupe_a_repeated_key_at_its_outermost_position`,
- * `test_single_agent_owner_is_conversation_eligible`,
- * `test_one_key_with_two_configs_is_a_load_error_at_the_first_site`,
- * `test_session_def_called_twice_has_one_owner_and_two_placements` (on a custom type),
- * `test_scopes_are_root_relative_and_carry_outermost_first_keys` and
- * `test_one_def_under_two_parents_has_one_stack_per_placement_and_one_owner`. Their CODE references
- * are TS's form (`./fixtures/compose_codefns.ts:echo`), resolved against the conformance directory.
- * Frozen values can't be changed in place, so Python's `object.__setattr__` forgeries are
- * unfrozen objects of the same class carrying the forged field (`forged`), and its
- * `copy.deepcopy` of a node is `copyGraph`. A key has no `placements` and no
- * `conversation_eligible` flag (session memory is gone), so those rows check the owners only.
- *
- * Not ported: the session rows (`test_agent_with_two_session_memories_is_a_setup_error`,
- * `test_flow_level_session_is_a_load_error`, `test_session_key_with_two_agent_owners_is_a_load_error`,
- * `test_flow_level_session_in_an_uncalled_def_is_not_an_error`,
- * `test_session_placements_must_resolve_one_compatibility` and
- * `test_session_compatibility_ignores_other_types_and_disabled_layouts`). TS-only instead: a
- * `session` memory, from YAML or built in code, is a load error.
+ * Pure static memory-layout derivation and atomic scope application (`compile/memory_layout.ts`),
+ * over flows built by hand.
  */
 
 import { expect, test } from "bun:test";

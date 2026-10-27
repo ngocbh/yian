@@ -1,24 +1,9 @@
 /**
- * Render-only node metadata stays out of program identity and the run log: a port of
- * `tests/engine/test_node_range.py`.
+ * Render-only node metadata stays out of program identity and the run log.
  *
  * A node's `wiringLabels` and `bindingLabels` name synthesized params for error messages only:
  * they change neither the flow manifest nor any record of the run, and a resume rebuilds the same
  * terminal result from the authored flow.
- *
- * Ported: `test_manifest_rejects_retired_node_range_fields`, each of its four rows, and
- * `test_render_only_node_metadata_does_not_ride_run_log`. The CODE reference is TS's
- * (`./fixtures/seeds.ts:confirm_action`). The log is searched for both the TS property names
- * (`wiringLabels`) and Python's (`wiring_labels`). `flow_identity.test.ts`'s
- * `test_manifest_rejects_unknown_execution_fields_instead_of_omitting_them` has similar rows on
- * another flow.
- *
- * Changed: the retired node properties are camelCase (`fieldRanges`, not `field_ranges`), the TS
- * API spelling (decision 12), as in `flow_identity.test.ts`, and the manifest refuses them with a
- * `RangeError` where Python raises `ValueError`.
- *
- * Not ported: `test_node_has_no_compose_range_metadata`, which guards against Python-era range
- * fields TS nodes never had (listed in `start_node.test.ts` too).
  */
 
 import { afterAll, expect, test } from "bun:test";

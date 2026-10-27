@@ -1,129 +1,6 @@
 /**
  * Memory identity values, the memory JSON snapshot, the learning result carriers, the recall
- * context and the host memory interfaces, from `tests/engine/test_memory_contracts.py`:
- * `test_identity_values_are_frozen_structured_products`, `test_memory_scope_has_no_boundary`,
- * `test_identity_values_reject_ambiguous_paths_and_indices`,
- * `test_scope_occurrence_path_must_strictly_contain_the_node`,
- * `test_memory_decls_preserve_origin_and_isolate_canonical_json`,
- * `test_json_contracts_reject_non_exact_or_non_finite_values`, `test_json_contracts_reject_cycles`,
- * `test_scope_carries_a_root_relative_path_and_memory_keys`, the declaration rows of
- * `test_memory_strings_must_have_a_canonical_utf8_representation`,
- * `test_json_scalar_identity_preserves_exact_types_at_every_depth`, the recall context and mutation
- * parts of `test_context_episode_and_mutation_keep_json_snapshots`, the `MemoryMutation`,
- * `MemoryProposal`, `LearningFailure` and `BackwardFailure` rows of
- * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
- * `test_learning_result_keeps_primary_independent_failure_attribution`,
- * `test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints`,
- * `test_learning_completion_is_independent_of_retryability_and_policy_confirmation`,
- * `test_policy_commit_outcome_rejects_inconsistent_optional_fields`,
- * `test_policy_commit_outcome_requires_exact_valid_unicode_identities`, the rows without forgery of
- * `test_learning_result_revalidates_exact_nested_policy_carriers`,
- * `test_memory_errors_expose_typed_fields_and_origin`,
- * `test_protocols_accept_narrow_structural_implementations` (with a synchronous and an async fake),
- * `test_session_protocol_recalls_and_learns_without_frames`,
- * `test_memory_recall_error_preserves_an_explicit_exception_cause`, the scope row of
- * `test_nested_memory_carriers_reject_forged_subclass_values` and the subclass row of
- * `test_memory_origins_revalidate_subclass_keys_without_losing_identity`, the memory package,
- * `contracts.ts` and `runtime/contracts.ts` rows of `test_frame_types_are_gone` and
- * `test_importing_memory_contracts_does_not_load_heavy_backends`; the episode and learn context
- * parts of `test_context_episode_and_mutation_keep_json_snapshots`,
- * `test_episode_status_enforces_output_or_failure_shape`, the rows 0 and 17 of
- * `test_episode_execution_sequence_is_optional_and_survives_context_copy`,
- * `test_episode_rejects_nonphysical_execution_sequences`,
- * `test_learn_context_requires_episodes_of_its_run`, the episode and context rows of
- * `test_episodes_contexts_mutations_and_failures_name_the_memory_key`,
- * `test_freeze_still_detects_cycles`, `test_freeze_shares_a_repeated_subtree`,
- * `test_learn_context_equal_feedback` and `test_propose_learning_shares_canonical_feedback` (as "the
- * learner receives the exact `LearnContext`"); plus JavaScript's own values (a `"__proto__"` key, a
- * null-prototype object, a repeated subtree, an array hole), the value nesting limit, and the
- * depth-first order of the first error. 100 000-level arrays and objects are copied through a
- * snapshot envelope, a mutation and learn feedback (compared as log JSON text, since Bun's
- * `toEqual` overflows the stack at that depth), and an error deep inside one names its full path.
- * It also covers the occurrence nesting order, the operation failure's field checks (Python pins
- * those through the learning outcome and backward records), `validateMutations`, a mutation's id
- * and payload checks (a payload deeper than the value nesting limit is kept), each learning
- * carrier's field checks in Python's order, the recall context's field checks, its value number
- * rule at any depth, and the recall error's field checks.
- *
- * TS-only (episodes and learn contexts): one row per `MemoryEpisode` and `LearnContext`
- * constructor message with its class, in Python's check order; the episode JSON and the learn
- * feedback keep `±Infinity`, read `-0` back as `0` and refuse NaN; `LearnContext.fromFrozen` stores
- * the given feedback (`toBe`) and checks run, memory and episodes; `freezeFeedback` names items from
- * `firstIndex` and shares a subtree across calls through its memo; each memory `same*` comparison
- * (`sameMemoryScope`, `sameMemoryOperationFailure`, `sameMemoryMutation`,
- * `sameMemorySnapshotEnvelope`, `sameMemorySpec`, `sameLearningFailure`, `samePolicyCommitOutcome`,
- * `sameLearningResult`) is true for separately built equal values and false for each differing
- * field; `sameMemorySnapshotEnvelope` also tells `1n` from `1` and `1` from `true` at depth; a
- * setup error keeps an explicit `cause` and its origin, and has no `cause` without one.
- *
- * Changed (setup error notes): Python's `MemorySetupError` gathers notes through `add_note` after
- * it is built; here they are a `notes` constructor option, each checked as a string; the error
- * holds its own copy only when there are notes, as `addNote` in the memory runtime expects.
- *
- * Changed (episodes and learn contexts): the episode and the context hold deep-frozen JSON, so a
- * reader's edit of `inputs`, an interaction value or `feedback` throws `TypeError` where Python
- * edits a private copy. Python's keyword arguments are an options object (`{ output, failure,
- * interactions, baseSystemPrompt, prompt, memorySections, executionSeq }`); the 11-argument
- * positional "legacy" row passes `{ output: "answer" }`. The non-physical sequence rows are
- * `false, true, -1, 1.5, "1", 1n` (`1.0` is `1` in JS), each with its class and message.
- * `test_freeze_shares_a_repeated_subtree` checks the read feedback (`feedback[0].a` is
- * `feedback[0].b`), since the stored snapshot is what `feedback` returns. Python's dataclass `==`
- * of two contexts is `toEqual`; `copy.deepcopy` is `structuredClone`. `proposeLearning` doesn't
- * rebuild a context, so the canonical-feedback test checks that the learner receives the very
- * context and its very `feedback` (`toBe`, where Python checks the private canonical feedback is
- * shared); its rebuilt non-canonical scalar row has no counterpart (a frozen context can't be
- * forged).
- *
- * Changed: the JSON tests build a custom-type `MemoryDecl`, as Python's `_decl` does. The non-exact
- * rows are JavaScript's (a `Map`, a `Date`, an own symbol key, a class instance, an array subclass
- * for `_ListSubclass`, a top-level class instance for `_DictSubclass`), each with its exact class
- * and message. The scalar identity test checks that `true`, `1n` and `1` keep their exact JS types
- * at every depth of the snapshot. A memory config nests at most `maxValueNesting` levels (memory
- * JSON nesting doesn't exist here), with that limit's message. The ambiguous-index rows add `1.5`,
- * `1n` and a `"MAP_ITEM"` kind; the non-array paths are `Set`s (Python passes lists). A scope's
- * lack of a boundary is checked on the module's exports and the scope's fields (TS takes extra
- * constructor arguments silently). The scope row of the forged-carrier test passes a plain object
- * shaped like a segment. The memory protocols are checked on plain-object fakes: `Memory` with
- * `isMemory` (Python's `isinstance` on a runtime-checkable protocol), `MemorySession` by its type,
- * and its missing `openFrame` with `@ts-expect-error` and `in`. A host method may return a promise,
- * so the protocol test runs a synchronous and an async fake and awaits each call; a session has no
- * context-manager methods, so the test calls `close()`. The recall context's `inputs` follow the
- * yian value number rule and are a deep-frozen snapshot, so editing them throws `TypeError` (Python
- * returns a fresh copy). `MemoryRecallError` takes its cause as `{ cause }`, read back as
- * `error.cause` (Python's `raise ... from` and `__cause__`). The fake's `snapshot` is frozen, so a
- * reader's edit of it throws `TypeError` and leaves the snapshot unchanged (Python's fake returns a
- * copy). The backend-import test reads `memory/index.ts` and checks that it imports only
- * `./contracts.ts` (the layer-direction test pins `contracts.ts` to `diagnostics` and `defaults`),
- * where Python imports the package in a fresh interpreter. Python's `ValueError` is `RangeError`; a
- * frozen field throws `TypeError` where Python raises `FrozenInstanceError`. A mutation's payload
- * is its deep-frozen snapshot, so editing it throws `TypeError` (Python returns a fresh copy);
- * Python's int payloads are `bigint`s. The learning carriers keep their nested carriers by
- * reference: where Python asserts a copied policy `is not` the one passed in, the test checks that
- * it is the same frozen value. The policy outcome's optional fields are an options object
- * (`{ commitId, failure }`), and the learning result's arrays are `{ failures, policies }`. The
- * identity rows check only the error class, as Python does.
- *
- * Not ported: the tuple and bytes rows and the list-for-tuple path row (TS has only arrays and no
- * bytes in a config); `test_memory_json_rejects_nesting_beyond_the_memory_limit` (its carriers
- * aren't ported; the nesting test below replaces it for declarations); the forged rows of
- * `test_nested_memory_carriers_reject_forged_subclass_values` and
- * `test_memory_origins_revalidate_subclass_keys_without_losing_identity` (a JS subclass can't skip
- * its base constructor, so no carrier holds an unvalidated segment or origin);
- * `test_memory_operation_error_survives_copy_and_pickle` (no `copy` or `pickle`); dataclass `==`
- * and `hash` (Bun's `toEqual` replaces equality); the `MemorySession` row of
- * `test_frame_types_are_gone` (`MemorySession` is an interface, with no runtime members; the
- * session protocol test checks a session's missing `openFrame`); the forged rows of
- * `test_learning_result_revalidates_exact_nested_policy_carriers` (Python's `object.__setattr__` on
- * a frozen dataclass; a TS carrier is frozen by its constructor, so none holds an unchecked
- * `commitId` or `retryable`); `test_freeze_memo_keeps_the_nesting_limit` (TS has no memory nesting
- * limit); the forged row of `test_episode_execution_sequence_is_optional_and_survives_context_copy`
- * and the episode and context rows of `test_nested_memory_carriers_reject_forged_subclass_values`
- * (a frozen TS carrier can't be forged, so a context keeps its checked episodes by reference);
- * `test_episode_rejects_integer_subclass_execution_sequence` (no integer subclasses in JS);
- * `test_propose_learning_parity_on_deleted_slots` (`object.__delattr__` and
- * `LearnContext._revalidated`, which TS doesn't need) and
- * `test_propose_learning_rebuild_of_forged_feedback` (`object.__setattr__` on a frozen context; a
- * TS context is frozen by its constructor, so none holds forged feedback).
+ * context and the host memory interfaces.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -210,7 +87,6 @@ class Point {
 
 class Items extends Array<unknown> {}
 
-// test_json_contracts_reject_non_exact_or_non_finite_values
 test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
   ["a Map in an array", { array: [new Map()] }, TypeError, "config.array[0] must contain exact JSON values"],
   ["a Date", { date: new Date(0) }, TypeError, "config.date must contain exact JSON values"],
@@ -230,7 +106,6 @@ test("a null-prototype object is a JSON object", () => {
   decl({ a: Object.assign(Object.create(null), { b: 1n }) });
 });
 
-// test_json_contracts_reject_cycles
 test("JSON contracts reject cycles", () => {
   const config: Record<string, unknown> = {};
   config.self = config;
@@ -247,7 +122,6 @@ test("an array hole is refused", () => {
   expectError(() => decl({ a: [1n, , 2n] }), TypeError, "config.a[1] must contain exact JSON values");
 });
 
-// test_memory_strings_must_have_a_canonical_utf8_representation
 test.each<[string, unknown]>([
   ["a value", { text: "\ud800" }],
   ["a key", { "\ud800": "text" }],
@@ -255,7 +129,6 @@ test.each<[string, unknown]>([
   expectError(() => decl(config), RangeError, "Unicode surrogate is not valid canonical JSON");
 });
 
-// test_json_scalar_identity_preserves_exact_types_at_every_depth (the declaration row)
 test("JSON scalars keep their exact types at every depth", () => {
   for (const [value, type] of [
     [true, "boolean"],
@@ -352,7 +225,6 @@ test("an error deep inside a 100 000-level value names its full path", () => {
   expectError(() => new MemoryMutation("m", value), TypeError, `${path} must contain exact JSON values`);
 });
 
-// test_identity_values_are_frozen_structured_products
 test("identity values are frozen structured products", () => {
   const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["child"], 2);
   const scope = new MemoryScope(["child", "agent"], { memories: ["outer", "local"], occurrencePath: [segment] });
@@ -368,14 +240,12 @@ test("identity values are frozen structured products", () => {
   expect(Object.isFrozen(segment.staticPath)).toBe(true);
 });
 
-// test_memory_scope_has_no_boundary
 test("a memory scope has no boundary", () => {
   expect("MemoryBoundary" in contracts).toBe(false);
   expect("MemoryBoundaryKind" in contracts).toBe(false);
   expect(Object.keys(new MemoryScope(["root"]))).toEqual(["staticPath", "memories", "occurrencePath"]);
 });
 
-// test_identity_values_reject_ambiguous_paths_and_indices
 test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>([
   [
     "an empty segment path",
@@ -436,7 +306,6 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
   expectError(factory, cls, message);
 });
 
-// test_scope_occurrence_path_must_strictly_contain_the_node
 test.each([[["other"]], [["child", "agent"]], [["child", "agent", "inner"]]])(
   "an occurrence segment at %p doesn't contain the node",
   (segmentPath) => {
@@ -460,7 +329,6 @@ test("occurrence segments follow lexical nesting order", () => {
   expectError(() => new MemoryScope(["c", "x"], { occurrencePath: [outer, sibling] }), RangeError, message);
 });
 
-// test_nested_memory_carriers_reject_forged_subclass_values (the scope row)
 test("a scope refuses an occurrence item that isn't a segment", () => {
   const shaped = { kind: MemoryOccurrenceKind.MAP_ITEM, staticPath: ["root", "mapped"], index: -1 };
   expectError(
@@ -470,7 +338,6 @@ test("a scope refuses an occurrence item that isn't a segment", () => {
   );
 });
 
-// test_memory_decls_preserve_origin_and_isolate_canonical_json
 test("a declaration keeps its origin and isolates its canonical JSON", () => {
   const origin = new OriginRef("decl");
   const source = { z: [{ enabled: true }], a: { threshold: 0.5 } };
@@ -486,14 +353,12 @@ test("a declaration keeps its origin and isolates its canonical JSON", () => {
   expect(declaration).toEqual(decl({ a: { threshold: 0.5 }, z: [{ enabled: true }] }, origin));
 });
 
-// test_memory_origins_revalidate_subclass_keys_without_losing_identity (the subclass row)
 test("a declaration keeps an OriginRef subclass by identity", () => {
   class SubOrigin extends OriginRef {}
   const valid = new SubOrigin("valid");
   expect(decl({}, valid).origin).toBe(valid);
 });
 
-// test_memory_errors_expose_typed_fields_and_origin
 test("a setup error exposes its origin", () => {
   const origin = new OriginRef("memory-policy");
   const setup = new MemorySetupError("unknown policy", { origin });
@@ -580,7 +445,6 @@ function fakeMemory(async = false): Memory & FakeMemoryLog {
   };
 }
 
-// test_protocols_accept_narrow_structural_implementations
 test.each([
   ["synchronous", false],
   ["async", true],
@@ -617,7 +481,6 @@ test.each([
   expect(memory.resets).toBe(1);
 });
 
-// test_session_protocol_recalls_and_learns_without_frames
 test("the session protocol recalls and learns without frames", async () => {
   const session: MemorySession = {
     snapshot: {},
@@ -633,7 +496,6 @@ test("the session protocol recalls and learns without frames", async () => {
   expect(session.openFrame).toBeUndefined();
 });
 
-// test_memory_recall_error_preserves_an_explicit_exception_cause
 test("a recall error preserves an explicit cause", () => {
   const origin = new OriginRef("agent-policy");
   const cause = new Error("backend failed");
@@ -654,7 +516,6 @@ test("a recall error preserves an explicit cause", () => {
   expectError(() => new MemoryRecallError(1 as never), TypeError, "message must be a string");
 });
 
-// test_scope_carries_a_root_relative_path_and_memory_keys
 test("a scope carries a root-relative path and memory keys", () => {
   const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["child"], 2);
   const scope = new MemoryScope(["child", "agent"], { memories: ["notes", "chat"], occurrencePath: [segment] });
@@ -686,7 +547,6 @@ test("a scope carries a root-relative path and memory keys", () => {
   );
 });
 
-// test_frame_types_are_gone (the memory package, contracts.ts and runtime/contracts.ts rows)
 test("the frame types are gone", () => {
   for (const name of ["MemoryFrame", "MemoryFrameRef", "MemoryFrameSpec", "MemoryOccurrenceRef", "MemoryOwner"]) {
     expect(name in memoryPackage).toBe(false);
@@ -695,7 +555,6 @@ test("the frame types are gone", () => {
   expect("FrameProposal" in runtimeContracts).toBe(false);
 });
 
-// test_importing_memory_contracts_does_not_load_heavy_backends
 test("the memory package imports only its contracts", () => {
   // The facade must stay a dependency-light leaf: contracts.ts's own imports are pinned by the
   // layer-direction test, so the facade importing nothing else keeps the whole package light.
@@ -705,7 +564,6 @@ test("the memory package imports only its contracts", () => {
   );
 });
 
-// test_context_episode_and_mutation_keep_json_snapshots (the mutation part)
 test("a mutation keeps a frozen JSON snapshot", () => {
   const payload: { add: { id: string; text: string }[] } = { add: [{ id: "lesson", text: "remember" }] };
   const mutation = new MemoryMutation("m1", payload);
@@ -718,7 +576,6 @@ test("a mutation keeps a frozen JSON snapshot", () => {
   expect(Object.isFrozen(mutation.payload)).toBe(true);
 });
 
-// test_json_scalar_identity_preserves_exact_types_at_every_depth (the mutation row)
 test("mutation JSON scalars keep their exact types at every depth", () => {
   for (const [value, type] of [
     [true, "boolean"],
@@ -733,7 +590,6 @@ test("mutation JSON scalars keep their exact types at every depth", () => {
   }
 });
 
-// test_json_scalar_identity_preserves_exact_types_at_every_depth (the recall context row)
 test("recall context JSON scalars keep their exact types at every depth", () => {
   for (const [value, type] of [
     [true, "boolean"],
@@ -749,7 +605,6 @@ test("recall context JSON scalars keep their exact types at every depth", () => 
   }
 });
 
-// test_context_episode_and_mutation_keep_json_snapshots (the recall context part)
 test("a recall context keeps a frozen JSON snapshot", () => {
   const inputs = { items: [1n, 2n] };
   const path = ["root", "agent"];
@@ -831,8 +686,6 @@ test("validateMutations keeps an array of unique mutations by reference", () => 
   expectError(() => validateMutations([a, new MemoryMutation("a", {})]), RangeError, "mutation IDs must be unique");
 });
 
-// test_episodes_contexts_mutations_and_failures_name_the_memory_key (the mutation, proposal and
-// failure rows)
 test("mutations, proposals and failures name the memory key", () => {
   const mutation = new MemoryMutation("m1", { add: 1n });
   expect([mutation.mutationId, mutation.payload]).toEqual(["m1", { add: 1n }]);
@@ -869,7 +722,6 @@ test("a learning failure checks its attribution and failure", () => {
   expectError(() => new LearningFailure("notes", "learn", new SubFailure("learn", "c", "m", true)), TypeError, message);
 });
 
-// test_learning_result_keeps_primary_independent_failure_attribution
 test("a learning result keeps primary, independent failure attribution", () => {
   const busy = new MemoryOperationFailure("learn", "busy", "try later", true);
   const rejected = new MemoryOperationFailure("commit", "rejected", "not applied", false);
@@ -884,7 +736,6 @@ test("a learning result keeps primary, independent failure attribution", () => {
   expect(new LearningResult("incomplete", { failures: [final] }).failures).toEqual([final]);
 });
 
-// test_policy_commit_outcome_keeps_protocol_identity_and_backend_hints
 test.each<[PolicyCommitStatus, string | null, boolean]>([
   ["unrequested", null, false],
   ["unknown", "commit-1", false],
@@ -905,7 +756,6 @@ test.each<[PolicyCommitStatus, string | null, boolean]>([
   }).toThrow(TypeError);
 });
 
-// test_learning_completion_is_independent_of_retryability_and_policy_confirmation
 test("learning completion is independent of retryability and policy confirmation", () => {
   const cause = new MemoryOperationFailure("backend", "busy", "Retry.", true);
   const failure = new LearningFailure("history", "commit", cause);
@@ -929,7 +779,6 @@ test("learning completion is independent of retryability and policy confirmation
   );
 });
 
-// test_policy_commit_outcome_rejects_inconsistent_optional_fields
 test.each<[string, string | null, boolean, string]>([
   ["unrequested", "commit-1", false, "unrequested policy cannot carry commit data"],
   ["unrequested", null, true, "unrequested policy cannot carry commit data"],
@@ -945,7 +794,6 @@ test.each<[string, string | null, boolean, string]>([
   expectError(() => new PolicyCommitOutcome("history", status as never, { commitId, failure }), RangeError, text);
 });
 
-// test_policy_commit_outcome_requires_exact_valid_unicode_identities
 test.each(
   (["memory", "status", "commit_id"] as const).flatMap((field) =>
     (
@@ -973,7 +821,6 @@ test("a policy commit outcome refuses a failure that isn't a MemoryOperationFail
   );
 });
 
-// test_learning_result_revalidates_exact_nested_policy_carriers (the rows without forgery)
 test("a learning result checks its exact nested policy carriers", () => {
   const first = new PolicyCommitOutcome("second", "unknown", { commitId: "commit-2" });
   const second = new PolicyCommitOutcome("first", "unrequested");
@@ -999,7 +846,7 @@ test("a learning result checks its exact nested policy carriers", () => {
   );
 });
 
-test("a learning result checks its status and failures in Python's order", () => {
+test("a learning result checks its status, then its failures", () => {
   const cause = new MemoryOperationFailure("learn", "busy", "try later", true);
   const a = new LearningFailure("notes", "learn", cause);
   expectError(
@@ -1055,7 +902,6 @@ function episodeOf(
   return new MemoryEpisode(run, [], AGENT_PATH, MemoryEpisodeStatus.SUCCEEDED, {}, options);
 }
 
-// test_context_episode_and_mutation_keep_json_snapshots (the episode and learn context parts)
 test("an episode and a learn context keep frozen JSON snapshots", () => {
   const inputs = { items: [1n, 2n] };
   const interactionValue = { text: "answer" };
@@ -1092,7 +938,6 @@ test("an episode and a learn context keep frozen JSON snapshots", () => {
   }
 });
 
-// test_episode_status_enforces_output_or_failure_shape
 test("an episode's status enforces its output or failure shape", () => {
   const failed = new MemoryEpisode("run", [], AGENT_PATH, MemoryEpisodeStatus.FAILED, {}, {
     failure: { code: "node.execute", message: "failed" },
@@ -1124,7 +969,6 @@ test("an episode's status enforces its output or failure shape", () => {
   );
 });
 
-// test_episode_execution_sequence_is_optional_and_survives_context_copy (rows 0 and 17)
 test.each([0, 17])("an episode's execution sequence %p is optional and survives a context", (sequence) => {
   const legacy = episodeOf();
   expect(legacy.executionSeq).toBeNull();
@@ -1139,7 +983,6 @@ test.each([0, 17])("an episode's execution sequence %p is optional and survives 
   expect(context.episodes[0]!.inputs).toEqual({ items: [1n] });
 });
 
-// test_episode_rejects_nonphysical_execution_sequences
 test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
   ["false", false, TypeError, "execution_seq must be an integer or null"],
   ["true", true, TypeError, "execution_seq must be an integer or null"],
@@ -1151,7 +994,6 @@ test.each<[string, unknown, typeof TypeError | typeof RangeError, string]>([
   expectError(() => episodeOf("run", { executionSeq: sequence as number }), cls, message);
 });
 
-// test_learn_context_requires_episodes_of_its_run
 test("a learn context requires episodes of its run", () => {
   expectError(
     () => new LearnContext("run", "notes", [episodeOf("other-run")]),
@@ -1160,7 +1002,6 @@ test("a learn context requires episodes of its run", () => {
   );
 });
 
-// test_episodes_contexts_mutations_and_failures_name_the_memory_key (the episode and context rows)
 test("episodes and learn contexts name the memory key", () => {
   const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["loop"], 0);
   const episode = new MemoryEpisode("run", [segment], ["loop", "agent"], MemoryEpisodeStatus.SUCCEEDED, {}, {
@@ -1179,7 +1020,6 @@ test("episodes and learn contexts name the memory key", () => {
   expectError(() => new LearnContext("run", "", []), RangeError, "memory must be non-empty");
 });
 
-// test_freeze_still_detects_cycles
 test("freezing feedback still detects cycles", () => {
   const loop: unknown[] = [];
   loop.push(loop);
@@ -1197,7 +1037,6 @@ test("freezing feedback still detects cycles", () => {
   );
 });
 
-// test_freeze_shares_a_repeated_subtree
 test("freezing feedback shares a repeated subtree", () => {
   const shared = { note: ["kept", 1n] };
   const context = new LearnContext("run", "notes", [], [{ a: shared, b: shared }]);
@@ -1206,7 +1045,6 @@ test("freezing feedback shares a repeated subtree", () => {
   expect(context.feedback).toEqual([{ a: shared, b: shared }]);
 });
 
-// test_learn_context_equal_feedback
 test("learn contexts over aliased and copied feedback are equal", () => {
   const shared = { note: ["kept", 1n] };
   const feedback = [{ a: shared, b: [shared] }, shared];
@@ -1217,7 +1055,6 @@ test("learn contexts over aliased and copied feedback are equal", () => {
   expect(aliased).toEqual(copied);
 });
 
-// test_propose_learning_shares_canonical_feedback
 test("the learner receives the exact LearnContext", async () => {
   const memory = new FakeMemory();
   const runtime = await MemoryRuntime.open({

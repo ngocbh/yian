@@ -1,9 +1,6 @@
 /**
- * Mirrors `tests/engine/test_llm_cascade_call_time.py`.
- *
- * Changed: errors pin their class (`RangeError` where Python raises `ValueError`); a path list in
- * a message is written in the text form (`["chat"]`); the private flow is a `copyGraph` copy where
- * Python deep-copies the flow; `JSON.stringify` stands in for `repr` in the no-secret checks.
+ * Call-time `llm_config` agents: the layers each one gets as its base, applying the resolved
+ * values, and the host credentials reaching them on the private flow only.
  */
 
 import { describe, expect, test } from "bun:test";

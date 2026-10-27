@@ -1,27 +1,7 @@
 /**
- * The incrementally kept growth index and adjacency match a rebuild after every growth: a port of
- * `tests/engine/test_growth_index.py`.
- *
- * Ported: `test_growth_index_matches_a_rebuild_after_every_growth` (all four rows).
- *
- * Changed: Python runs `run_flow` with `_apply_growth` patched to check the state after each
- * growth; a TS module binding can't be patched, so each row runs through the `engine()` fixture,
- * which exposes `state`, and `onEvent` runs `expectIndexMatchesRebuild` on each `NodeExpanded`,
- * which the engine publishes once the reducer has applied the growth. A failed check stops the run
- * and `run()` rejects with it. Integers are bigints (decision 4a), and `slow`'s `time.sleep(0.05)`
- * is an awaited 50 ms `setTimeout`.
- *
- * TS-only: each row also checks the running join counts (`state.unknownIncoming`) against a
- * recount after every growth and its prune, live and on a replay of each record prefix that ends
- * at a growth.
- *
- * The `run_flow` half, through `runFlow` with a durable log (all four rows): the run succeeds,
- * and the replay (`replayRunLog`) of each log prefix ending at a growth holds a growth index and
- * join counts equal to a rebuild, with more than six growths and deferred pruned work exactly in
- * the deferred rows.
- *
- * Covered by `run-map-call/engine_growth_index__map_over_loop_over_call_growth`: the
- * `nested-serial` run's output.
+ * The incrementally kept growth index and adjacency match a rebuild after every growth: through
+ * `runFlow` with a durable log, each log prefix ending at a growth replays (`replayRunLog`) to a
+ * growth index and join counts equal to a rebuild.
  */
 
 import { afterAll, expect, test } from "bun:test";

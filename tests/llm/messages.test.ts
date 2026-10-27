@@ -1,8 +1,8 @@
 /**
- * Messages, requests and replies: the stable JSON shape, strict decoding and construction checks, a port of
- * `tests/llm/test_messages.py`; replay records; plus JavaScript's own values: ints of any size, `-0`, a
- * `"__proto__"` key, non-plain objects, `undefined` and array holes; and
- * `conformance/schema/message.schema.json`, which describes the JSON shape.
+ * Messages, requests and replies: the stable JSON shape, strict decoding and construction checks;
+ * replay records; plus JavaScript's own values: ints of any size, `-0`, a `"__proto__"` key,
+ * non-plain objects, `undefined` and array holes; and `conformance/schema/message.schema.json`,
+ * which describes the JSON shape.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

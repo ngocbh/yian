@@ -1,9 +1,4 @@
-/**
- * The `NodeKind` vocabulary of `nodes/base.ts`, a port of `tests/engine/test_node_kinds.py`.
- *
- * Changed: `NodeKind` is a const object of strings, so a member is its value and has no
- * `.value`; `hasattr` is the `in` operator.
- */
+/** The `NodeKind` vocabulary of `nodes/base.ts`. */
 
 import { expect, test } from "bun:test";
 

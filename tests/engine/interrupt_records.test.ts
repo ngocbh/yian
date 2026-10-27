@@ -1,6 +1,4 @@
-/**
- * TS-only: the `interrupted` record and step in the waits fold and the reducer.
- */
+/** The `interrupted` record and step in the waits fold and the reducer. */
 import { describe, expect, test } from "bun:test";
 
 import { Failure } from "../../src/diagnostics.ts";

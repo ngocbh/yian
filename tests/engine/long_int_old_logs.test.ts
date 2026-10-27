@@ -1,24 +1,7 @@
 /**
- * A port of `tests/engine/test_long_int_old_logs.py`: a run log edited to hold a 5000-digit int,
- * in three places: the START inputs' `pool_commit` (Python's `run_started` initial pool), a CODE
- * node's `pool_commit` value (Python's `node_succeeded` value), and a route's `value_json` text. Each log is written by a run here and then edited, as in Python.
- *
- * Ported: `test_resume_fails_clearly_and_leaves_the_log`, `test_replay_read_fails_clearly`,
- * `test_decode_record_fails_clearly` and `test_cli_resume_fails_clearly`, each over the three logs,
- * and `test_route_value_json_with_a_long_int_is_rejected`.
- *
- * Changed: ints are `bigint`s with no digit limit (decisions 4a, 23), so each log reads whole
- * where Python refuses it with its old-log message. `advance` returns the finished run's
- * recorded result and leaves the log unchanged; `JsonlRunLog.resume`, the reader replay and the
- * CLI use, and `decodeRecord` read the edited record with the whole int (the route keeps it as
- * its `value_json` text); `yian run --resume` exits 0, prints the recorded output and leaves the
- * log unchanged. The CODE body is JS. A route literal whose `value_json` holds a long int is
- * valid, where Python refuses it with its old-log message.
- *
- * Already ported: `test_invalid_record_json_keeps_its_message` in `run_records.test.ts`.
- *
- * Not ported: `test_decode_record_fails_clearly_whatever_pythons_limit` (Python's
- * `sys.set_int_max_str_digits`).
+ * A run log edited to hold a 5000-digit int, in three places: the START inputs' `pool_commit`, a
+ * CODE node's `pool_commit` value, and a route's `value_json` text. Each log is written by a run
+ * here and then edited.
  */
 
 import { afterAll, expect, test } from "bun:test";

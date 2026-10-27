@@ -1,11 +1,4 @@
-/**
- * Observable injected memory sessions shared by runtime tests: a port of
- * `tests/engine/_memory_fakes.py`.
- *
- * Changed: the snapshot is a deep-frozen copy, kept once and returned as is (Python's fake returns
- * a fresh deep copy each time); a session has no `with` form, so Python's `__enter__`/`__exit__`
- * are left out and a test calls `close()`.
- */
+/** Observable injected memory sessions shared by runtime tests. */
 
 import {
   freezeJsonObject,

@@ -1,8 +1,8 @@
 /**
- * TS-only: every write to the variable pool is a `pool_commit` record. The run start writes the
- * system values and the START inputs as commits right after `run_started`; a node's output is a
- * commit its `node_succeeded` names by seq. An orphan commit (its node never succeeded) is ignored
- * on replay and its node reruns; a log cut inside the run start can't be resumed.
+ * Every write to the variable pool is a `pool_commit` record. The run start writes the system
+ * values and the START inputs as commits right after `run_started`; a node's output is a commit
+ * its `node_succeeded` names by seq. An orphan commit (its node never succeeded) is ignored on
+ * replay and its node reruns; a log cut inside the run start can't be resumed.
  *
  * Also checks the public JSON form hosts read `pool_commit` values with (`TypedValue`, `logJson`,
  * `parseJson` from `yian/run`), on Bun and, with `YIAN_TEST_NODE` set to a Node binary, on the

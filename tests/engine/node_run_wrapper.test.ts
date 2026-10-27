@@ -1,41 +1,6 @@
 /**
- * The base `run` template checks the pre- and post-asserts against the bound record only: a
- * port of `tests/engine/test_node_run_wrapper.py`. The tests drive the template directly, on a
- * small node that implements `forward`.
- *
- * Ported: `test_default_backward_stops_feedback_with_empty_channels`,
- * `test_run_returns_forward_output_when_asserts_hold`,
- * `test_pre_assert_failure_raises_before_forward_runs`, `test_post_assert_failure_on_output_raises`,
- * `test_assertion_evaluates_expression_and_reports_display`,
- * `test_assertion_display_is_not_evaluated_when_expression_holds`,
- * `test_duplicate_assertions_retain_first_occurrence_origin`, `test_wrapper_delegates_for_route_kind`
- * (with the shared `BranchNode` fake), `test_unparseable_pre_assert_raises_its_parse_error_before_forward`,
- * `test_unparseable_post_assert_raises_before_forward_runs` and
- * `test_assert_evaluation_error_still_fails_the_assert`. `test_validate_assertions_names_the_given_path`
- * is in `base_node.test.ts`.
- *
- * Changed: `run` is async, so every failure is a rejection. Changed (rule `condition.evaluate`,
- * decision 36): in `test_assert_evaluation_error_still_fails_the_assert` the condition that throws
- * while evaluating still rejects with `NodeAssertFailed`, now with `failureCode`
- * `condition.evaluate`, a "could not be evaluated" message and the `ExpressionError` as `cause`.
- *
- * TS-only: a failing pre-assert rejects rather than throws; a node without `forward` rejects; a
- * body changing its input record doesn't change what a post-assert sees; a false assert's
- * `failureCode`; a `Route` and a `Grow` pass a failing post-assert; `runForEvaluator`'s stage
- * markers (a thrown value with no text included) and its input capture; `run` rejects with the
- * original errors; an async `forward` that throws after an `await` rejects (a `NodeBodyError` under
- * `runForEvaluator`), and its `Output` gets the post-asserts.
- *
- * Ported: `test_wrapper_delegates_to_real_code_node_forward` and
- * `test_wrapper_delegates_for_grow_kind` (the baked child is a stub object, for Python's
- * `test_expand._child_flow`, which `run` never reads).
- *
- * Ported (adapted), through the shared `drive`: `test_runtime_does_not_drive_backward`,
- * `test_eval_node_does_not_fire_when_run_bypasses_firing` (the bypassing `run` is async) and
- * `test_eval_node_fires_via_wrapper_positive_control` (the control simply doesn't override `run`).
- *
- * Not ported: `test_eval_node_no_longer_has_first_failing_assert`: it checks that a Python module
- * attribute is gone, which TS never had.
+ * The base `run` template checks the pre- and post-asserts against the bound record only. The
+ * tests drive the template directly, on a small node that implements `forward`.
  */
 
 import { expect, test } from "bun:test";

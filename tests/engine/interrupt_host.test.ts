@@ -1,6 +1,6 @@
 /**
- * TS-only: the host call `interrupt(log, inbox)` on a run log, live through this process's engine
- * or offline under the log's lock, and the agents it cuts.
+ * The host call `interrupt(log, inbox)` on a run log, live through this process's engine or
+ * offline under the log's lock, and the agents it cuts.
  */
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";

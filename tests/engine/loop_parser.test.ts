@@ -1,9 +1,6 @@
 /**
- * Parsing `kind: loop` into a `LoopDescriptor`: a port of `tests/engine/test_loop_parser.py`,
- * through `parseFile`, `flowNodesCursor` and `parseNodes` with the registered kinds.
- *
- * Ported: `test_parser_reads_loop_node` (`max` is `1000n`), `test_parser_accepts_until_and_times_keys`
- * (`times` is `4n`).
+ * Parsing `kind: loop` into a `LoopDescriptor`, through `parseFile`, `flowNodesCursor` and
+ * `parseNodes` with the registered kinds.
  */
 
 import { expect, test } from "bun:test";

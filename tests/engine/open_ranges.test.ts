@@ -1,12 +1,6 @@
 /**
- * One-sided numeric ranges' shape, labels, overlap, parsing, resolution and value checks, a
- * port of `tests/engine/test_open_ranges.py`. `test_value_check_one_sided_rejects_nan` is
- * rewritten: NaN is never a value, so it is refused before any range check.
- *
- * TS-only: which ranges admit `Infinity` and `-Infinity`.
- *
- * Not ported: `test_numeric_interval_maps_open_ends_to_infinity` (design 3.2.12: open ends stay
- * `null`).
+ * One-sided numeric ranges' shape, labels, overlap, parsing, resolution and value checks. NaN is
+ * never a value, so it is refused before any range check.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -151,14 +145,14 @@ describe("open range values", () => {
     expect(buildError(new Type({ kind: INT, bounds: [1n, 12n] }), 13n)).toBe(
       "13 is outside inclusive int bounds (1, 12)",
     );
-    // Not in Python's test: pins the bounds spelling, Python's tuple spelling of the ends.
+    // Pins the bounds spelling: the ends in parentheses, a float with a fraction digit.
     expect(buildError(new Type({ kind: NUM, bounds: [0.0, 1.0] }), 2n)).toBe(
       "2 is outside inclusive float bounds (0.0, 1.0)",
     );
   });
 
   test("NaN is refused before any range check", () => {
-    // NaN is never a value, so Python's "outside the inclusive range" message can't occur.
+    // NaN is never a value, so the "outside the inclusive range" message can't occur.
     expect(buildError(new Type({ kind: NUM, bounds: [0.0, null] }), NaN)).toBe(
       "NaN is not a yian value",
     );

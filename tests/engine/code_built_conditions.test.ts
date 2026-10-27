@@ -1,21 +1,6 @@
 /**
- * A CASE `when` or LOOP predicate set in code that doesn't parse is a setup error: a port of
- * `tests/engine/test_python_built_conditions.py`.
- *
- * Ported: `test_unparseable_case_when_raises_its_parse_error_from_setup`,
- * `test_unparseable_loop_predicate_raises_before_the_first_body`,
- * `test_times_loop_has_no_predicate_to_check`, `test_validate_conditions_names_the_given_path` and
- * `test_python_set_loop_predicate_fails_before_the_run_starts`.
- *
- * Ported (adapted): `test_case_when_evaluation_error_still_fails_in_forward` (the rejection's stack
- * names `forward`, where Python reads the traceback's frames).
- *
- * Ported (adapted): `test_python_set_case_when_fails_before_the_run_starts` (a `Case` is frozen,
- * so the test replaces the first one where Python sets its `when`).
- *
- * Changed: `run` is async, so the setup error is a rejection. The LOOP's child is a stub object.
- *
- * TS-only: LOOP's `validateConditions` names the given path.
+ * A CASE `when` or LOOP predicate set in code that doesn't parse is a setup error: `run` rejects
+ * before the run starts, and an evaluation error still fails in `forward`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -203,7 +188,7 @@ function run(flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
   return runFlow(flow, inputs, { env: (name) => env.get(name), ...options });
 }
 
-test("python set case when fails before the run starts", async () => {
+test("a case when set in code fails before the run starts", async () => {
   // A downstream CASE's bad `when` rejects before any node runs or any record is written.
   const flow = await loadFlow(GATED, { baseDir: FIXTURES });
   const gate = flow.compiled.nodes.get("gate") as CaseNode;
@@ -220,7 +205,7 @@ test("python set case when fails before the run starts", async () => {
   expect(existsSync(path)).toBe(false);
 });
 
-test("python set loop predicate fails before the run starts", async () => {
+test("a loop predicate set in code fails before the run starts", async () => {
   const flow = await loadFlow(COUNTER, { baseDir: FIXTURES });
   (flow.compiled.nodes.get("loop") as LoopNode).predicate = "not ${exited}";
   const path = join(dir, "run.jsonl");

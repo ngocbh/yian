@@ -1,10 +1,6 @@
 /**
- * `ToolSet` takes an open MCP server as a tool group, a port of `tests/engine/test_mcp_toolset.py`.
- * The construction, `expand` and invoke rows run against a stand-in open server;
- * `test_a_dead_server_is_rejected` runs against the stand-in and against the real fixture
- * (`tests/fixtures/mcp/fake_server.ts` over stdio). The import-without-the-SDK row is among the
- * Node rows of `mcp_server.test.ts`; the exports row is the `tools/index.ts` exports row in
- * `tool_errors.test.ts`.
+ * `ToolSet` takes an open MCP server as a tool group, against a stand-in open server and the real
+ * fixture (`tests/fixtures/mcp/fake_server.ts` over stdio).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -87,7 +83,7 @@ function thrown(fn: () => unknown, kind: typeof TypeError | typeof RangeError): 
 const server = new FakeServer("fake", [serverTool("echo"), serverTool("add")]);
 
 describe("an MCP server in a ToolSet", () => {
-  test("test_an_open_server_is_a_group_of_its_tools", async () => {
+  test("an open server is a group of its tools", async () => {
     const tools = new ToolSet({ fake: server });
     expect(tools.groups).toEqual(["fake"]);
     expect(tools.expand(["fake"])).toEqual(server.tools.map((tool) => tool.name));
@@ -95,20 +91,20 @@ describe("an MCP server in a ToolSet", () => {
     expect(await tools.invoke("echo", { text: "hi" })).toBe("hi");
   });
 
-  test("test_an_unopened_server_is_rejected", () => {
+  test("an unopened server is rejected", () => {
     const unopened = mcpServer({ command: "fake" });
     expect(thrown(() => new ToolSet({ fake: unopened }), TypeError)).toBe(
       `tools["fake"] is an MCP server that isn't open; open it with "await server.open()" or pass it to runFlow/advance, which open it`,
     );
   });
 
-  test("test_a_server_inside_a_list_group_is_rejected", () => {
+  test("a server inside a list group is rejected", () => {
     expect(thrown(() => new ToolSet({ g: [server as unknown as FunctionTool] }), TypeError)).toBe(
       'tools["g"][0] is an MCP server; pass it as its own tools entry, which becomes its group',
     );
   });
 
-  test("test_two_servers_with_one_tool_name_clash", () => {
+  test("two servers with one tool name clash", () => {
     const first = new FakeServer("a", [serverTool("echo")]);
     const second = new FakeServer("b", [serverTool("echo")]);
     expect(thrown(() => new ToolSet({ a: first, b: second }), RangeError)).toBe(
@@ -116,19 +112,19 @@ describe("an MCP server in a ToolSet", () => {
     );
   });
 
-  test("test_a_server_tool_named_like_a_top_level_key_clashes", () => {
+  test("a server tool named like a top level key clashes", () => {
     expect(thrown(() => new ToolSet({ echo: serverTool("echo"), fake: server }), RangeError)).toBe(
       `tool 'echo' in group 'fake' clashes with tools["echo"]`,
     );
   });
 
-  test("test_one_server_under_two_keys_lists_each_tool_once", () => {
+  test("one server under two keys lists each tool once", () => {
     const tools = new ToolSet({ a: server, b: server });
     expect(tools.groups).toEqual(["a", "b"]);
     expect(tools.expand(["a", "b"])).toEqual(server.tools.map((tool) => tool.name));
   });
 
-  test("test_a_renamed_tool_in_a_list_group_calls_the_servers_tool", async () => {
+  test("a renamed tool in a list group calls the servers tool", async () => {
     const echo = server.tools.find((tool) => tool.name === "echo")!;
     const renamed = new FunctionTool({
       name: "other",
@@ -147,7 +143,7 @@ describe("an MCP server in a ToolSet", () => {
     expect(thrown(() => new ToolSet({ odd }), TypeError)).toBe('tools["odd"][1] must be a FunctionTool, got Object');
   });
 
-  test("test_a_dead_server_is_rejected", () => {
+  test("a dead server is rejected", () => {
     const quitter = new FakeServer("quitter", [serverTool("exit_now")], { dead: true });
     expect(thrown(() => new ToolSet({ fake: quitter }), RangeError)).toBe(
       `tools["fake"]: MCP server 'quitter' is closed`,
@@ -155,7 +151,7 @@ describe("an MCP server in a ToolSet", () => {
   });
 
   test(
-    "test_a_dead_server_is_rejected with a real server",
+    "a dead server is rejected with a real server",
     async () => {
       const quitter = await mcpServer({ ...stdioOptions("--marker", marker), label: "quitter" }).open();
       try {

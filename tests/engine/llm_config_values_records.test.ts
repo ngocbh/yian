@@ -1,29 +1,4 @@
-/**
- * A port of `tests/engine/test_llm_config_values_records.py`: the config a call-time `llm_config`
- * agent resolves, its node step, and the resume check.
- *
- * Ported: all 19 tests (the parametrized one whole). The model is a `ScriptedModel` given through
- * `serving`, whose `configs` are the configs of the models built, where Python patches
- * `model_from_config`. Records are read from the run's JSONL log. Each run's environment is the
- * file's (`hostEnv`, with Python's conftest default provider and model), plus the keys a row sets.
- *
- * Changed:
- * - A host dying in a model call is `crashAfter` refusing the record after the agent's step (the
- *   model call has run; its result is never recorded), where Python's model raises a
- *   `BaseException`.
- * - Python's `_resume_flow_controlled` with `check_llm_configs` is `advance`'s internal
- *   `checkLlmConfigs`; Python's `_check_resume_credentials`, which TS keeps private to the CLI, is
- *   reached through `yian run --resume` with no terminal, whose output carries its message ("a
- *   host's" for Python's "a Python host's").
- * - The bound key and headers are plain strings in the built config (Python's `SecretStr`).
- * - `FakeMemory`, an AGENT memory `notes`, records the recall contexts, where Python spies on
- *   `RecallContext` over a `SessionMemory`; the reflector is given as `ReflectiveMemory`'s `createModel`.
- * - Spies patch `AgentNode.prototype.bindReserved` and the producer's prototype `backward`; the
- *   drift row patches `bindReserved` to throw the `BindingError` Python's patched
- *   `call_time_config` raises. Resume errors are `RangeError`s where Python raises `ValueError`.
- * - MAP inherits `modelHiddenInputs` and `learningMaterial` from `Node`'s prototype
- *   (Python's class attributes).
- */
+/** The config a call-time `llm_config` agent resolves, its node step, and the resume check. */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,7 +37,7 @@ import { crashAfter, rejected, serving, textReply } from "./run_state_fixtures.t
 const dir = mkdtempSync(join(tmpdir(), "yian-llm-values-records-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-// Python's conftest: the default provider and model.
+// The default provider and model.
 const CONFTEST = { YIAN_DEFAULT_PROVIDER: "openai", YIAN_DEFAULT_MODEL: "gpt-5.5" };
 const env = hostEnv(dir, CONFTEST);
 

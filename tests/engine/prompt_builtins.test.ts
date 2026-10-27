@@ -1,24 +1,6 @@
 /**
- * Prompt builtins, a port of `tests/engine/test_prompt_builtins.py`: `renderTemplateRecord`
- * evaluates a prompt span as a plain reference, a builtin call (positional and keyword
- * arguments, optional dotted access on the result), or a larger expression, and raises on a miss
- * or a final `null`; a call-result dotted miss coalesces, defaults or is falsy outside strict
- * mode; `promptRefs` collects the references a prompt reads and rejects an unknown builtin; and
- * the result type a shipped builtin always returns (`builtinResultType`).
- *
- * The values follow the TS number model (ints are `bigint`s). Python's `_mkrec`, registered for
- * good, is a stand-in registered for one test each.
- *
- * The loader rows (`test_loader_accepts_builtin_call_over_declared_input`,
- * `test_loader_rejects_undeclared_input_inside_call`, `test_loader_rejects_unknown_builtin`) load
- * with `assembleText` (`assemble` as the loader calls it) where Python calls `load_flow`;
- * `test_prompt_default_fires_in_a_running_flow` runs through `loadFlow` and `runFlow`, on an
- * AGENT's prompt (a scripted model) where Python's is a HUMAN_INPUT node's (TS yian has no
- * HUMAN_INPUT kind).
- *
- * TS-only: `len`, the one shipped builtin that isn't text (`int`); that no typedef can be named
- * after a shipped builtin (typedef names are PascalCase, the builtins lowercase); and a host's own
- * `len`, which is neither the shipped one's result type nor refused in a prompt.
+ * Prompt builtins: `renderTemplateRecord` evaluates a prompt span as a plain reference, a builtin
+ * call, or a larger expression, and raises on a miss or a final `null`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -44,8 +26,7 @@ import { NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
 
 const REC: ValueRecord = { briefs: ["ab", "adf"], name: "zeta", sig: { value: 0.8 } };
 
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
+// Each registration's previous entry (or its absence), put back after the test.
 const saved: [string, TemplateFn | undefined][] = [];
 
 /** Register a stand-in builtin `name` taking `params` and running `call`, for this test only. */

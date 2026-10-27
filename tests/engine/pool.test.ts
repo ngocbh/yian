@@ -1,16 +1,6 @@
 /**
  * `VariablePool`: typed reads and writes of a node's single value, the `${...}` resolver, the
- * declared-type write check and the lossless round trip, a port of `tests/engine/test_pool.py`.
- *
- * TS-only: the default and a custom `startId`, read rows for `system` with a longer path and
- * `input` with none, a dotted read through a `FileRef` field, a failed `set` keeping the
- * previous value, the exact `dumps()` text, the int-in-float and infinity round trips, node ids
- * `constructor` and `__proto__`, `fromWire` reading `toWire`'s object, the `fromWire` refusal
- * table (Python's strict reader is `runtime/log.py::decode_pool`, whose messages these keep) and
- * `loads` of bad JSON.
- *
- * Not ported: Python's carrier-class check (`type(stored) is ListObjectValue`); TS has one
- * `TypedValue` class, so the round trip checks the kind and `instanceof TypedValue`.
+ * declared-type write check and the lossless round trip.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -30,7 +20,7 @@ function read(pool: VariablePool, path: string): Value {
 }
 
 describe("VariablePool reads and writes", () => {
-  test("set and get a node's value (test_set_and_get)", () => {
+  test("set and get a node's value", () => {
     const pool = new VariablePool();
     pool.set("n1", "hello");
     expect(pool.get("n1")).toBe("hello");
@@ -39,7 +29,7 @@ describe("VariablePool reads and writes", () => {
     expect(pool.get("missing", "d")).toBe("d");
   });
 
-  test("get reads an object value whole (test_get_whole_object_value)", () => {
+  test("get reads an object value whole", () => {
     // "multiple outputs" are fields of one object value, read back whole.
     const pool = new VariablePool();
     pool.set("n1", { answer: "txt", score: 0.8 });
@@ -47,7 +37,7 @@ describe("VariablePool reads and writes", () => {
     expect(pool.get("nope")).toBeNull();
   });
 
-  test("a declared type rejects a drifting value (test_declared_type_drift_raises)", () => {
+  test("a declared type rejects a drifting value", () => {
     const pool = new VariablePool();
     // a node declaring an integer output but emitting a string fails at the write
     expect(() => pool.set("n1", "twelve", ValueKind.INTEGER)).toThrow(TypeCheckError);
@@ -56,7 +46,7 @@ describe("VariablePool reads and writes", () => {
     expect(pool.get("n1")).toBe(12n);
   });
 
-  test("set takes a Type and enforces it (test_pool_set_accepts_type_and_enforces)", () => {
+  test("set takes a Type and enforces it", () => {
     const pool = new VariablePool();
     const action = new Type({ kind: ValueKind.STRING, tags: new Set(["Approve", "Reject"]) });
     pool.set("n", "Approve", action);
@@ -73,7 +63,7 @@ describe("VariablePool reads and writes", () => {
 });
 
 describe("VariablePool.readRoot through the evaluator", () => {
-  test("a node-first head walks the value (test_resolve_node_first_and_structured)", () => {
+  test("a node-first head walks the value", () => {
     // `.output` is a syntactic discriminator the resolver skips: store the node's value
     // directly (wrapping it as `{output: ...}` would only test the record-key arm by accident).
     const pool = new VariablePool();
@@ -89,7 +79,7 @@ describe("VariablePool.readRoot through the evaluator", () => {
     expect(read(pool, "ghost.output")).toBeNull();
   });
 
-  test("retired heads resolve to null (test_retired_heads_resolve_none)", () => {
+  test("retired heads resolve to null", () => {
     // `node` and `ref_outputs` were unified into `<id>.output`; they are now just unknown heads.
     const pool = new VariablePool();
     pool.set("reviewer", "txt");
@@ -98,7 +88,7 @@ describe("VariablePool.readRoot through the evaluator", () => {
     expect(() => read(pool, "node.reviewer.output")).toThrow("cannot read ${node.reviewer}: node is missing");
   });
 
-  test("input and system heads (test_resolve_inputs_and_system)", () => {
+  test("input and system heads", () => {
     const pool = new VariablePool();
     pool.set(START_ID, { topic: "ACME" }); // ${input.X} ≡ store[START_ID].X
     expect(read(pool, "input.topic")).toBe("ACME"); // the flow's run args
@@ -111,8 +101,7 @@ describe("VariablePool.readRoot through the evaluator", () => {
   });
 
   test(
-    "a subflow's value resolves via its node-first head " +
-      "(test_subflow_outputs_resolve_via_node_first_head)",
+    "a subflow's value resolves via its node-first head",
     () => {
       // A CALL/subflow node's value lives under its own id in `store`.
       const pool = new VariablePool();
@@ -121,7 +110,7 @@ describe("VariablePool.readRoot through the evaluator", () => {
     },
   );
 
-  test("input reads the START record (test_inputs_resolve_via_start_store)", () => {
+  test("input reads the START record", () => {
     // The standalone `inputs` namespace (and `add_inputs`) is retired: ${input.X} resolves to
     // store[START_ID].X, the START node's committed bound-input record.
     const pool = new VariablePool();
@@ -164,7 +153,7 @@ describe("VariablePool.readRoot through the evaluator", () => {
 });
 
 describe("VariablePool round trip", () => {
-  test("dumps and loads keep every value's type (test_full_pool_round_trip)", () => {
+  test("dumps and loads keep every value's type", () => {
     const pool = new VariablePool();
     pool.set("n1", { a: 1n, b: [1.5, 2.5] });
     pool.set("flag_node", true);
@@ -182,8 +171,7 @@ describe("VariablePool round trip", () => {
   });
 
   test(
-    "nullable specialized list items survive " +
-      "(test_pool_round_trip_preserves_nullable_specialized_list_elements)",
+    "nullable specialized list items survive",
     () => {
       const row = new Type({
         kind: ValueKind.OBJECT,

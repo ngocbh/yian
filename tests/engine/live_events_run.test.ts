@@ -1,21 +1,6 @@
 /**
- * End to end, a tool-calling AGENT publishes in-loop observers with token usage: a port of
- * `tests/engine/test_live_events_run.py`.
- *
- * `runFlow` forwards in-loop observers to `onEvent`, strictly between the node's `NodeStarted`
- * and `NodeSucceeded`, serial and pooled. They never reach `RunResult.events` or the run log, and
- * the usage totals equal what the scripted provider reported. The model is a `ScriptedModel`
- * given as `models` (Python patches `model_from_config` with a streaming chat), the `lookup` tool
- * is registered for the test (Python patches `TOOL_REGISTRY`), and two concurrent tool calls meet
- * at a promise barrier (Python's `threading.Barrier`). Every run sees only the test's credential
- * store in its environment.
- *
- * Ported: `test_tool_calling_agent_reports_ordered_events_and_usage` (both rows),
- * `test_run_without_callbacks_is_unchanged` and
- * `test_parallel_agents_keep_their_own_events_in_pooled_runs`.
- *
- * Changed: Python's `chat.mode == ["invoke", "invoke"]` (no stream without a stream callback) has
- * no TS form, since every call streams on the wire; the rows check the model got two requests.
+ * End to end, a tool-calling AGENT publishes in-loop observers with token usage, strictly between
+ * the node's `NodeStarted` and its outcome.
  */
 
 import { afterAll, afterEach, expect, test } from "bun:test";

@@ -1,23 +1,6 @@
 /**
- * Built-in SQLite backends open storage on first use, never in the constructor: a port of
- * `tests/engine/test_memory_lazy_open.py`, over `EpisodicMemory` and `ReflectiveMemory` (TS yian
- * has no `SessionMemory`).
- *
- * Ported: `test_construction_touches_no_file`, `test_bad_path_shape_fails_at_construction_without_io`,
- * `test_reset_also_opens_storage`, `test_missing_parent_fails_at_first_open_without_create_parent`,
- * `test_create_parent_makes_the_directory_at_first_open`,
- * `test_close_before_open_does_no_io_and_blocks_later_use`, `test_failed_open_can_be_retried` and
- * `test_failed_load_can_be_retried`.
- *
- * TS-only: none.
- *
- * Changed: the `reflective` backend gets an environment map standing in for Python's
- * `conftest.py` variables, beside Python's `_REFLECTIVE_LLM`.
- *
- * Not ported: `test_pid_ownership_starts_at_construction` and `test_ram_backend_ignores_pid` (JS
- * can't fork a live process, so there is no fork guard); `test_concurrent_first_open_constructs_storage_once`
- * (JS runs one thread, and the module's `SQLiteStorage` binding can't be patched);
- * `test_entering_the_backend_opens_storage` (there is no `with` form).
+ * Built-in SQLite backends open storage on first use, never in the constructor, over
+ * `EpisodicMemory` and `ReflectiveMemory`.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -66,7 +49,7 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-/** Python's `conftest.py` environment: an empty private store and an explicit model default. */
+/** The test environment: an empty private store and an explicit model default. */
 function baseEnv(): Env {
   const vars = new Map([
     ["YIAN_AUTH_FILE", path.join(home, "auth.json")],

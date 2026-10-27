@@ -1,7 +1,7 @@
 /**
  * Inbox runs end to end through the host calls: a run waits on a take of its `Inbox` input, the
  * host sends and closes, and `advance` moves it on; across a call, around a loop, and an `ask`
- * that times out. TS-only: Python yian has no inboxes.
+ * that times out.
  */
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

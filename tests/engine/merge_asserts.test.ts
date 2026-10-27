@@ -1,29 +1,4 @@
-/**
- * Flow assertions lowered onto the synthesized boundaries: a port of
- * `tests/engine/test_merge_asserts.py`.
- *
- * Ported through `loadFlow` and `runFlow`: `test_map_bare_internal_assert_all_satisfy_succeeds`,
- * `test_braced_boundary_assert_fail_fast_and_pass` and
- * `test_bare_record_scoped_boundary_assert_fail_fast_and_pass`, each failing run checked for
- * `assertion.failed` at `__start__` where Python checks the status. Ported through `assembleText`
- * where Python calls `load_flow`: `test_system_ref_in_flow_assert_is_load_error`, pinning the
- * whole message where Python only expects a `LoadError`.
- *
- * Covered by `run-leaves` cases running the same flows on the same inputs:
- * `test_call_bare_internal_assert_succeeds`
- * (`engine_merge_asserts__a_child_flow_assert_passes_through_a_call`),
- * `test_map_bare_internal_assert_one_element_violates_fails_loudly`
- * (`engine_merge_asserts__a_child_flow_assert_fails_one_map_element`),
- * `test_loop_bare_internal_assert_succeeds`
- * (`engine_merge_asserts__a_child_flow_assert_passes_each_loop_turn`),
- * `test_optional_edge_taken_branch_completes`
- * (`engine_merge_asserts__a_flow_assert_on_the_taken_branch_waits_for_it`) and
- * `test_ordered_assert_on_skipped_producer_fails_loudly`
- * (`engine_merge_asserts__a_flow_assert_on_a_skipped_producer_fails`).
- *
- * TS-only: the harvested `load-leaves/engine_merge_asserts__system_ref_in_a_flow_assert`, pinned at
- * the end.
- */
+/** Flow assertions lowered onto the synthesized boundaries, through `loadFlow` and `runFlow`. */
 
 import { expect, test } from "bun:test";
 

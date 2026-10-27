@@ -1,25 +1,4 @@
-/**
- * A port of `tests/engine/test_openai_connection_recovery.py`: the recorded OpenAI connection
- * identity governs resume and delayed backward.
- *
- * Ported: every test but those below. The model calls go through the real `chatModelFromConfig`
- * with a recording `send` that answers one Responses stream (`recording`), where Python routes the
- * OpenAI clients to `ResponsesServer`; the old run row answers from a scripted model (`serving`),
- * where Python patches `model_from_config`. Each row has its own environment (`hostEnv`) and so
- * its own credential store, which logins are saved to.
- *
- * Adapted: a record from before connections were recorded is a run log without `_connection`; the
- * rows build it by deleting `_connection` from the run's own log, where
- * `test_old_api_run_resumes_shared_message_history` patches Python's `connection_snapshot` to
- * record none. That row's patched snapshot, which fails the test when the resume reads it, is a
- * store file holding `not json`, which fails any read of it (a fresh run of the flow reads it and
- * fails). TS yian has no session memory, so that row checks the resume, not a shared history.
- *
- * Not ported: `test_fresh_connected_run_reuses_pre_cutover_api_message_history` (session memory).
- *
- * Already ported: `test_old_backward_config_gets_api_semantics_before_factory`, in
- * `agent_backward.test.ts` (TS pins an old record without I/O, so no saved login is involved).
- */
+/** The recorded OpenAI connection identity governs resume and delayed backward. */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

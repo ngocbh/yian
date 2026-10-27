@@ -1,6 +1,6 @@
 /**
  * Learning reads an AGENT occurrence's steps, render and recall (`learningMaterials`), and what it
- * builds from them for AGENT backward (`evaluationEvidence`) and memory episodes. TS-only.
+ * builds from them for AGENT backward (`evaluationEvidence`) and memory episodes.
  *
  * Each run is learnable and logged; its log is replayed, and the material of each occurrence is
  * rebuilt from the replayed trace. Interactions follow step order: a reply's calls, then their

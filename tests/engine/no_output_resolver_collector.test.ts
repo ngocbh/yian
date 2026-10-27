@@ -1,16 +1,4 @@
-/**
- * A spliced child END's re-namespaced post-assert fires record-scoped: the `evalNode` row of
- * `tests/engine/test_no_output_resolver_collector.py`.
- *
- * Ported: `test_child_end_record_scoped_post_assert_fires_via_synth_param`.
- *
- * Changed: the END's wiring is passed as a one-node flow, where Python stamps it on the node for
- * the stub flow to derive.
- *
- * Not ported: `test_node_kind_has_no_output_resolver_or_collector` and
- * `test_output_resolver_and_collector_packages_are_gone`: they check that retired Python node kinds
- * and packages are gone, which TS never had.
- */
+/** A spliced child END's re-namespaced post-assert fires record-scoped, through `evalNode`. */
 
 import { expect, test } from "bun:test";
 

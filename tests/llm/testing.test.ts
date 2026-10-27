@@ -1,7 +1,6 @@
 /**
- * Test helpers, a port of `tests/llm/test_testing.py`: cassette replay and recording through
- * `RouteModel` and `safeFetch`, `recordMode`, `findSecrets`, and the scripted model, plus an
- * aborted signal ending a stream.
+ * Test helpers: cassette replay and recording through `RouteModel` and `safeFetch`, `recordMode`,
+ * `findSecrets`, and the scripted model, plus an aborted signal ending a stream.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -453,7 +452,7 @@ function dump(value: unknown): string {
   return JSON.stringify(value, (_, item: unknown) => (typeof item === "bigint" ? Number(item) : item));
 }
 
-/** Return `text` as a JSON string holds it with everything outside printable ASCII `\\u`-escaped, as Python writes it. */
+/** Return `text` as a JSON string holds it with everything outside printable ASCII `\\u`-escaped. */
 function asciiJson(text: string): string {
   return JSON.stringify(text).replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
@@ -523,7 +522,7 @@ describe("CassetteRecorder", () => {
     const cassette = recorder.cassette({ description: "keys" });
     expect(cassette.interactions[0]!.request.json).toEqual({ [CASSETTE_REDACTED]: 1n, note: CASSETTE_REDACTED });
 
-    // `<redacted>` stands for any value, never any key, as in Python.
+    // `<redacted>` stands for any value, never any key.
     const replay = new CassetteReplay(cassette);
     const error = await rejection(safeFetch(`${BASE}/responses`, { method: "POST", body: body(OTHER_KEY) }, replay.send));
     expect((error as Error).message).toBe(

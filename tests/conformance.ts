@@ -1143,11 +1143,15 @@ export const KINDS: Record<Kind, KindRunner> = {
 
 /**
  * Make the case directory under the OS temp directory: `flow.yaml`, the `files`, and a copy of
- * `fixturesDir` as `fixtures/` when it is a directory. Except for `cli`, the environment is the
- * process's without yian's own variables, plus `YIAN_AUTH_FILE` naming a missing file in the
- * directory, plus the case's `env`; for `cli` it is the case's `env` alone.
+ * `fixturesDir` as `fixtures/` when it is a directory. Except for `cli`, the environment is
+ * `outer` (the process's) without yian's own variables, plus `YIAN_AUTH_FILE` naming a missing
+ * file in the directory, plus the case's `env`; for `cli` it is the case's `env` alone.
  */
-export function setUp(case_: Case, fixturesDir: string): CaseContext {
+export function setUp(
+  case_: Case,
+  fixturesDir: string,
+  outer: Readonly<Record<string, string | undefined>> = process.env,
+): CaseContext {
   const dir = mkdtempSync(join(tmpdir(), "yian-conformance-"));
   try {
     const flow = get(case_, "flow");
@@ -1168,7 +1172,7 @@ export function setUp(case_: Case, fixturesDir: string): CaseContext {
   }
   const env = get(case_, "env", {}) as Record<string, string>;
   if (case_["kind"] === "cli") return { dir, env: { ...env } };
-  const inherited = Object.entries(process.env).filter(
+  const inherited = Object.entries(outer).filter(
     (entry): entry is [string, string] =>
       entry[1] !== undefined &&
       !entry[0].startsWith("YIAN_") &&
@@ -1387,14 +1391,10 @@ export async function main(
  * and CODE references in the case directory.
  */
 async function loadText(text: string, ctx: CaseContext): Promise<ComposedFlow> {
-  // The defaults stay installed across the load's awaits; safe, since cases run one at a time.
-  try {
-    reload(caseEnv(ctx));
-    const options = { searchPaths: [ctx.dir], sourceLabel: "flow.yaml", baseDir: ctx.dir };
-    return await loadFlow(text, options);
-  } finally {
-    forget();
-  }
+  // Scoped to the load's own async work, not installed, so a load still running after its test
+  // timed out can't change what a later test reads.
+  const options = { searchPaths: [ctx.dir], sourceLabel: "flow.yaml", baseDir: ctx.dir };
+  return await withEnv(caseEnv(ctx), () => loadFlow(text, options));
 }
 
 /** Return `diagnostic` in the case's diagnostic form. */

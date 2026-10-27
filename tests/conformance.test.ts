@@ -869,13 +869,8 @@ describe("expectRaises and results", () => {
 describe("setUp", () => {
   const made: string[] = [];
   const leaks = ["YIAN_LEAK", "FOO_API_KEY", "FOO_BASE_URL", "FOO_ENDPOINT", "FOO_API_VERSION"];
-  const saved = new Map([...leaks, "KEEP_ME"].map((name) => [name, process.env[name]]));
   afterEach(() => {
     for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
-    for (const [name, value] of saved) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
   });
 
   /** Return a new temporary directory, removed after the test. */
@@ -909,19 +904,24 @@ describe("setUp", () => {
   });
 
   test("gives yian only the case's variables", () => {
-    for (const name of leaks) process.env[name] = "leak";
-    process.env["KEEP_ME"] = "1";
-    const ctx = setUp({ kind: "load", env: { YIAN_X: "1", A_API_KEY: "k" } }, temp());
+    const outer: Record<string, string | undefined> = { KEEP_ME: "1", UNSET: undefined };
+    for (const name of leaks) outer[name] = "leak";
+    const before = { ...outer };
+    const ctx = setUp({ kind: "load", env: { YIAN_X: "1", A_API_KEY: "k" } }, temp(), outer);
     made.push(ctx.dir);
-    for (const name of leaks) expect(Object.hasOwn(ctx.env, name)).toBe(false);
+    for (const name of [...leaks, "UNSET"]) expect(Object.hasOwn(ctx.env, name)).toBe(false);
     expect(ctx.env["KEEP_ME"]).toBe("1");
     expect(ctx.env["YIAN_AUTH_FILE"]).toBe(join(ctx.dir, "auth.json"));
     expect(ctx.env["YIAN_X"]).toBe("1");
     expect(ctx.env["A_API_KEY"]).toBe("k");
-    // The process environment is never changed.
-    expect(process.env["YIAN_LEAK"]).toBe("leak");
-    expect(process.env["YIAN_X"]).toBeUndefined();
-    expect(process.env["YIAN_AUTH_FILE"]).not.toBe(ctx.env["YIAN_AUTH_FILE"]);
+    // The outer environment is never changed.
+    expect(outer).toEqual(before);
+  });
+
+  test("inherits the process environment by default", () => {
+    const ctx = setUp({ kind: "load" }, temp());
+    made.push(ctx.dir);
+    expect(ctx.env["PATH"]).toBe(process.env["PATH"]);
   });
 
   test("lets the case's `env` set YIAN_AUTH_FILE", () => {

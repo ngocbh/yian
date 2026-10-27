@@ -84,10 +84,10 @@ export function markdownVersion(text: string): string {
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
 }
 
-/** The errors Python's `Path.exists()`, `is_file()` and `is_dir()` treat as false. */
+/** The errors that make a path read as missing, so neither a file nor a directory. */
 const IGNORED_CODES = new Set(["ENOENT", "ENOTDIR", "EBADF", "ELOOP"]);
 
-/** `fs.statSync`, or `null` for the errors Python's `Path` predicates treat as false. */
+/** `fs.statSync`, or `null` for the errors that make a path read as missing. */
 function statOrNull(file: string): fs.Stats | null {
   try {
     return fs.statSync(file);
@@ -97,7 +97,7 @@ function statOrNull(file: string): fs.Stats | null {
   }
 }
 
-/** Compare two strings by code point, as Python sorts `str`. */
+/** Compare two strings by code point. */
 function compareCodePoints(a: string, b: string): number {
   // Equal code points take equal code units, so one index walks both strings.
   let i = 0;
@@ -141,7 +141,7 @@ function readExact(source: string): string {
   }
 }
 
-/** Write `text` to `target` through a synced temporary file in its directory, as Python's `mkstemp` makes. */
+/** Write `text` to `target` through a synced temporary file in its directory. */
 function replace(target: string, text: string): void {
   const temporary = join(dirname(target), `.${basename(target)}.${randomBytes(8).toString("hex")}`);
   const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
@@ -168,9 +168,9 @@ const VERSION = /^sha256:[0-9a-f]{64}$/;
  * The current document is `path`; a missing file reads as an empty document. Text is stored and
  * read back exactly, line endings and a BOM included. Every version this store returns or writes
  * is kept under `.<name>.versions/` next to it, so recorded runs can reopen it later. Each write
- * appends its versions and provenance to `.<name>.writes.jsonl`, one line as Python yian writes
- * it. Writers on one host take turns through `.<name>.lock` (a different lock from Python's, so
- * the two don't see each other). Nothing on disk is touched until the first read or write. A
+ * appends its versions and provenance to `.<name>.writes.jsonl` as one JSON line: keys sorted by
+ * code point, separators `, ` and `: `, non-ASCII as `\uXXXX`, floats with a fraction digit.
+ * Writers on one host take turns through `.<name>.lock`. Nothing on disk is touched until the first read or write. A
  * person may edit `path` directly; the next compare-and-set write then reports a mismatch. A
  * symlinked `path` is resolved when the store is built: writes update the link's target, and the
  * versions, write log and lock sit next to the target.

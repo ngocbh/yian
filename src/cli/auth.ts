@@ -637,7 +637,7 @@ export async function modelAnswers(
     const secrets = key === null ? Object.values(headers) : callCredentials(sent, { env: io.env });
     const message = error instanceof Error ? error.message : String(error);
     const folded = redactKeys(message, secrets).split(/\s+/).filter(Boolean).join(" ");
-    // Cut by code points, as Python's `text[:200]` cuts characters, so no surrogate pair splits.
+    // Cut by code points, so no surrogate pair splits.
     const text = Array.from(folded).slice(0, 200).join("");
     return error instanceof Error ? `${error.name}: ${text}` : text;
   }
@@ -806,7 +806,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
     throw new UsageError("Invalid value: --json applies to --remove and to openai --method subscription --login device");
   }
   const stop = new AbortController();
-  // Only the JSON device sign-in handles SIGTERM, as Python's did; every form takes Ctrl-C.
+  // Only the JSON device sign-in handles SIGTERM; every form takes Ctrl-C.
   const names: NodeJS.Signals[] = json && device ? ["SIGTERM", "SIGINT"] : ["SIGINT"];
   const authFile = (o["auth-file"] as string | undefined) ?? null;
   const open = (path: string | null) => new AuthStore(path, { env: io.env, signal: stop.signal });

@@ -225,7 +225,7 @@ const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
 function checkFieldValue(name: string, value: unknown): string {
   if (typeof value !== "string") throw new TypeError(`header ${name} value must be a string`);
   const limit = current().maxHeaderValueChars;
-  // Spread counts code points, as Python's len does, not UTF-16 units.
+  // Spread counts code points, not UTF-16 units.
   if ([...value].length > limit) throw new TypeError(`header ${name} value must be at most ${limit} characters`);
   if (!FIELD_VALUE.test(value)) {
     throw new TypeError(
@@ -277,7 +277,7 @@ export interface SecretForm {
   ignoreCase?: boolean;
 }
 
-/** Percent-encode `value` as Python's `quote(value, safe="")` does: all but `A-Za-z0-9_.-~`. */
+/** Percent-encode `value`: every character but `A-Za-z0-9_.-~`. */
 function percentEncode(value: string): string {
   return encodeURIComponent(value).replace(
     /[!'()*]/g,
@@ -314,7 +314,8 @@ export function secretForms(value: string): SecretForm[] {
     candidates.push({ form: "plus-encoded", text: percent.replaceAll("%20", "+") });
   }
   const json = JSON.stringify(value).slice(1, -1);
-  // Python's json.dumps escapes everything outside printable ASCII; JSON.stringify keeps it.
+  // Encoders that escape everything outside printable ASCII write the first form; JSON.stringify
+  // keeps it.
   const asciiJson = json.replace(/[^\x20-\x7e]/g, unicodeEscape);
   for (const escaped of [asciiJson, json]) {
     candidates.push({ form: "JSON-escaped", text: escaped });

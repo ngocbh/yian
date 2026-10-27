@@ -55,8 +55,7 @@ const SYSTEM =
 
 /**
  * Build the learner's model from its resolved config: `llmConfig` with the host credentials, and
- * with any unset provider, model or connection filled from the defaults in `env` (Python's
- * `model_from_config` input).
+ * with any unset provider, model or connection filled from the defaults in `env`.
  */
 type CreateModel = (config: Readonly<Record<string, unknown>>) => ChatModel | Promise<ChatModel>;
 
@@ -68,7 +67,7 @@ function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-/** Build one typed profile failure, with `cause` (Python's `raise ... from`) when given. */
+/** Build one typed profile failure, with `cause` when given. */
 function error(
   stage: string,
   code: string,
@@ -95,7 +94,7 @@ function readError(stage: string, cause: unknown): MemoryOperationError {
   throw cause;
 }
 
-/** The number of code points in `text` (Python's `len`). */
+/** The number of code points in `text`. */
 function codePoints(text: string): number {
   return Array.from(text).length;
 }
@@ -135,7 +134,7 @@ export function parseReply(response: Response, currentText: string, maxChars: nu
   return text ? `${text}\n` : "";
 }
 
-/** One key of a feedback record, `null` when absent (Python's `entry.get`). */
+/** One key of a feedback record, `null` when absent. */
 function entryGet(entry: Readonly<Record<string, unknown>>, key: string): JsonValue {
   // Feedback records hold JSON values; `isRecord` narrows them only to yian records.
   return Object.hasOwn(entry, key) ? (entry[key] as JsonValue) : null;
@@ -185,7 +184,7 @@ export class ProfileMemory implements Memory {
   readonly maxChars: number;
   /** Character budget for episode JSON sent to the learner. */
   readonly inputBudgetChars: number;
-  // TS-private, not `#`, so sessions can read them, as Python's read `_store`.
+  // TS-private, not `#`, so sessions can read them.
   private readonly store: MarkdownStore;
   private readonly llmConfig: Record<string, unknown>;
   private readonly host: HostConnection;
@@ -238,7 +237,7 @@ export class ProfileMemory implements Memory {
     }
     const llmConfig = options.llmConfig ?? null;
     if (llmConfig !== null && !isRecord(llmConfig)) throw new TypeError("llm_config must be a record or null");
-    // Defaults are read only for unset budgets, both resolved before either is checked, as Python does.
+    // Defaults are read only for unset budgets, both resolved before either is checked.
     const maxChars = options.maxChars ?? current().profileMaxChars;
     const inputBudgetChars = options.inputBudgetChars ?? current().profileInputBudgetChars;
     this.maxChars = budget(maxChars, "max_chars");
@@ -352,10 +351,10 @@ export class ProfileMemory implements Memory {
 }
 
 /**
- * One run's pinned view of the profile and its commit authority (Python's `_ProfileSession`).
+ * One run's pinned view of the profile and its commit authority.
  *
- * It reads its backend's private members through element access (`memory["store"]`), as Python's
- * session reads `self._memory._store`.
+ * It reads its backend's private members through element access (`memory["store"]`),
+ * TypeScript's escape for private members.
  */
 export class ProfileSession implements MemorySession {
   /** The pinned version and text hash, never the text itself. Frozen. */
@@ -364,7 +363,7 @@ export class ProfileSession implements MemorySession {
   private readonly text: string;
   private readonly version: string;
   private readonly applied = new Map<string, readonly MemoryMutation[]>();
-  // Commits run one at a time through this chain (Python's `Lock`).
+  // Commits run one at a time through this chain.
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
 
@@ -510,7 +509,7 @@ export class ProfileSession implements MemorySession {
     try {
       return [new MemoryMutation(`profile:${sha256(text)}`, payload)];
     } catch (cause) {
-      // Feedback may hold infinity, which a mutation payload can't; Python's json would write it.
+      // Feedback may hold infinity, which a mutation payload can't.
       if (cause instanceof RangeError && feedback.some(hasNonFinite)) {
         throw error("learn", "profile.invalid_context", "feedback must be finite JSON", { cause });
       }

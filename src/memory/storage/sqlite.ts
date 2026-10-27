@@ -13,7 +13,7 @@ import { openSqlite, type Sqlite, sqliteErrorCode } from "../../platform.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../typesys/json.ts";
 import { freezeJsonObject, MemoryOperationError } from "../contracts.ts";
 
-// Python yian's envelope is version 2; TS never reads Python store formats.
+// The envelope format version; a store holding any other version isn't read.
 const VERSION = 3n;
 const SCHEMA = "CREATE TABLE memory_state (id INTEGER PRIMARY KEY CHECK (id = 1), envelope TEXT NOT NULL)";
 
@@ -32,7 +32,7 @@ export function isSystemError(error: unknown): error is NodeJS.ErrnoException & 
   return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");
 }
 
-/** Whether `error` is an I/O failure (Python's `OSError` or `sqlite3.Error`). */
+/** Whether `error` is an I/O failure (a system error or an SQLite error). */
 function isIoError(error: unknown): boolean {
   return sqliteErrorCode(error) !== undefined || isSystemError(error);
 }
@@ -124,7 +124,7 @@ function normpath(path: string): string {
 }
 
 /**
- * Join `rest` to the resolved `path`, following symlinks: Python 3.12's `_joinrealpath` with
+ * Join `rest` to the resolved `path`, following symlinks: CPython 3.12's `_joinrealpath` with
  * `strict=False`. Returns the path and whether it was fully resolved (`false` on a loop).
  */
 function joinRealPath(path: string, rest: string, seen: Map<string, string | null>): [string, boolean] {
@@ -178,7 +178,7 @@ function joinRealPath(path: string, rest: string, seen: Map<string, string | nul
 }
 
 /**
- * Return `path` with its symlinks resolved, as Python's non-strict `os.path.realpath` does: a
+ * Return `path` with its symlinks resolved, without requiring it to exist: a
  * missing component is kept and later ones are still resolved, a symlink is followed before a
  * later `..` applies, a loop leaves the rest unresolved, and the result is absolute and normalized.
  * The markdown store resolves its paths with it too.
@@ -223,7 +223,7 @@ export function checkStoragePath(path: unknown): string {
  */
 export class SQLiteStorage {
   readonly #backend: string;
-  // TS-private, not `#`, so tests can inspect it, as Python's tests read `store._connection`.
+  // TS-private, not `#`, so tests can inspect it.
   private connection: Sqlite | null = null;
   #closed = false;
   #poisoned = false;

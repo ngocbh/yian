@@ -62,8 +62,8 @@ const ASK_USER_DESCRIPTION =
   "sentences. When there are clear choices, pass 2-4 short `options`; the user can always type " +
   "their own answer.";
 
-// The schema Python's LangChain binding gives the model for `ask_user`, key order included, plus
-// `timeout`, which TS yian adds.
+// The schema LangChain's binding gives the model for `ask_user`, key order included, plus
+// `timeout`.
 const ASK_USER_PARAMETERS: JsonObject = {
   properties: {
     question: { type: "string" },
@@ -315,12 +315,12 @@ export function normalizeOptions(value: unknown): string[] | null {
   for (const item of value) {
     if (typeof item !== "string") continue;
     let label = item.split(/\s+/).filter((part) => part !== "").join(" ");
-    // Code points, as Python's `len` counts them.
+    // Code points, not UTF-16 units.
     const chars = Array.from(label);
     if (chars.length > caps.maxQuestionOptionChars) {
       label = chars.slice(0, caps.maxQuestionOptionChars - 1).join("") + "…";
     }
-    // Close to Python's `casefold`: "Straße" and "STRASSE" are the same label.
+    // Upper then lower case folds case: "Straße" and "STRASSE" are the same label.
     const key = label.toUpperCase().toLowerCase();
     if (label === "" || seen.has(key)) continue;
     seen.add(key);
@@ -1016,7 +1016,7 @@ function thrownText(error: unknown): string {
 /**
  * Return a value a tool threw as an `Error`: an `Error`, or a value carrying a tool error brand,
  * as it is; anything else wrapped in an `Error` whose message is its text and whose `cause` is
- * the value. TS-only: Python can raise only an exception.
+ * the value.
  */
 function asError(error: unknown): unknown {
   // The brand check keeps a branded error from another realm, which fails `instanceof`, unwrapped

@@ -1,15 +1,8 @@
 /**
- * Mirrors `tests/test_llm_config_base_url.py`: the `LLMConfig`, `host_only_field_error`,
- * `pop_host_credentials` and `check_model_config` tests, the pinned-connection tests (their
- * `chatModelFromConfig` half included), and the client tests, which build the model with
- * `chatModelFromConfig` and record what a fake `send` receives (it answers 400, so a test checks
- * the request, not a reply). One redirect test stays: `safeFetch` refuses every 3xx, so the
- * redirect is checked once through the factory for Anthropic and Google, over two loopback
- * servers with the default transport, as in Python; Python's Azure redirect test, which pins the
- * openai SDK's and httpx's redirect behavior, is left out. The
- * `splitOllamaBaseUrl` tests come from s3's planned `split_ollama_base_url` list (not in Python
- * yet); its "pinned against today" half runs each value through LangChain and the ollama SDK, so
- * it is left out.
+ * Base URLs and host fields in `LLMConfig`, pinned connections, `splitOllamaBaseUrl`, and the
+ * requests each client sends to a fake `send` (it answers 400, so a test checks the request, not
+ * a reply). `safeFetch` refuses every 3xx, so one redirect test runs through the factory for
+ * Anthropic and Google, over two loopback servers with the default transport.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -51,8 +44,7 @@ const AZURE_V1 = "https://res.openai.azure.com/openai/v1/";
 const AZURE_RESOURCE = "https://res.openai.azure.com/";
 const GATEWAY = "https://gateway.example.com/";
 
-// Each test's environment: a private store in a fresh directory and no key, endpoint or default,
-// as Python's `clean_env` leaves it.
+// Each test's environment: a private store in a fresh directory and no key, endpoint or default.
 let home: string;
 let vars: Map<string, string>;
 const env: Env = (name) => vars.get(name);
@@ -498,7 +490,7 @@ test.each<[unknown, string]>([
   expect(error.message).not.toContain("secret-pw-9");
 });
 
-describe("TS additions", () => {
+describe("edge cases", () => {
   test("azureResourceEndpoint strips /openai/v1, /openai and trailing slashes", () => {
     expect(azureResourceEndpoint(AZURE_V1)).toBe("https://res.openai.azure.com");
     expect(azureResourceEndpoint("https://res.openai.azure.com/openai")).toBe("https://res.openai.azure.com");

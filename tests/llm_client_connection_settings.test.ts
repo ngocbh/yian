@@ -1,27 +1,8 @@
 /**
- * Mirrors `tests/test_llm_client_connection_settings.py`: connection settings (organization,
- * project, headers) reach the request and nothing else. The models are built with
- * `chatModelFromConfig` from a config's `organization`, `project` and `headers` (Python's
- * `connection_headers`) or a saved login, in an environment holding every SDK header and
- * credential variable as an `env-` value, and call a recording `send` (it answers 400, so a test
- * checks the request). Python's sync and async calls are one call here.
- *
- * Ported: the openai, compatible-provider, Azure, Anthropic and Google sends tests (without the
- * env-header warning halves: TS reads no header variables, so it has nothing to warn about),
- * `model_from_config` with and without settings and with Anthropic headers, the saved-login tests,
- * and the Ollama and subscription refusals (`LLMConfig` refuses headers for Ollama, and headers
- * without a config key, so a subscription connection never gets them; 0 requests). Adapted: the
- * stay-out-of-the-model-fields tests check the header values are not in `route.headers` or
- * `inspect(model)` and are in `route.auth.credentials()`, so the scrub knows them; an OpenAI
- * organization and project are not secret in TS, so they are route headers and that half is
- * dropped.
- *
- * Elsewhere: the `get_llm_checks_connection_headers` and
- * `anthropic_and_google_get_llm_check_connection_headers` texts are the `validateHeaders` and
- * `LLMConfig` tests' in `llm_config_connection_settings.test.ts`; the three no-redirect tests are
- * the transport tests' (TS refuses every redirect). Dropped: the env-warning tests, the Vertex
- * switch test (TS reads neither), and the shared-HTTP-client, SDK-client, proxy, aiohttp and host
- * HTTP client tests (TS has no SDK or host HTTP clients).
+ * Connection settings (organization, project, headers) reach the request and nothing else. The
+ * models are built with `chatModelFromConfig` from a config's `organization`, `project` and
+ * `headers` or a saved login, in an environment holding every SDK header and credential variable
+ * as an `env-` value, and call a recording `send` (it answers 400, so a test checks the request).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -48,7 +29,7 @@ const show = typeof Bun === "undefined" ? inspect : Bun.inspect;
 const GATEWAY = "gw-secret-value";
 const AZURE_URL = "https://res.openai.azure.com";
 
-// Every SDK header and credential variable, as Python's `poisoned_env` sets them.
+// Every SDK header and credential variable, each set to an `env-` value.
 const POISONED: Record<string, string> = {
   OPENAI_CUSTOM_HEADERS:
     "X-Env-Injected: from-env\nAuthorization: Bearer env-custom-auth\napi-key: env-custom-api-key\n" +

@@ -1,18 +1,7 @@
 /**
- * Mirrors `tests/test_openai_subscription.py`: the subscription route built by
- * `chatModelFromConfig` from a saved login, against a recording `send`.
- *
- * Ported: `test_auth_failure_does_not_fall_back_to_api_key` and
- * `test_missing_credentials_fail_before_http` (the access source fails because the login was
- * removed after the build, since TS reads the login once at build too).
- *
- * Elsewhere: the continuation round trip, the partial-reply, instructions, non-text-system,
- * async completion guard and block tests are `llm/openai_responses_body.test.ts`'s "subscription"
- * tests and `llm/openai_responses_parse.test.ts`'s incomplete-reply tests; the per-request access
- * and the invalid access value tests are `llm/auth.test.ts`'s `SubscriptionAuth` tests; the
- * cooperative stop is `llm/transport.test.ts`'s caller-abort tests. Left out:
- * `test_incompatible_request_options_fail_before_http`, which passes LangChain call options that
- * TS has no equivalent of (`checkModelConfig` refuses such fields in the `openai` block).
+ * The subscription route `chatModelFromConfig` builds from a saved login, against a recording
+ * `send`: an auth failure never falls back to an API key, and missing credentials fail before
+ * any request.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

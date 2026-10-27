@@ -174,7 +174,7 @@ export class AnthropicMessages implements SseProtocol {
   readonly #block: JsonObject | null;
   readonly #key: ReplayKey;
   readonly #onReplayDegraded: ((reason: ReplayDegradedReason) => void) | null;
-  // Python's `warnings.warn` shows the hoist warning once per call site, so warn once here.
+  // The hoist warning is shown once, not on every call.
   #hoistWarned = false;
 
   constructor(options: AnthropicMessagesOptions) {
@@ -499,7 +499,7 @@ export class AnthropicMessages implements SseProtocol {
     if (system !== null) throw new TypeError("Received multiple non-consecutive system messages.");
     if (this.#hoistWarned) return content;
     this.#hoistWarned = true;
-    // LangChain's text, with the model in Python repr quotes (model ids hold no quote or escape).
+    // LangChain's text, with the model in single quotes (model ids hold no quote or escape).
     warn(
       "A non-leading `SystemMessage` was moved to the top-level `system` field and now applies to the " +
         "entire conversation. To send it in place, use a supported model and place it after a human or " +
@@ -743,7 +743,7 @@ function isSendable(block: JsonObject): boolean {
 function tool(spec: ToolSpec): JsonObject {
   const combinators = ["oneOf", "anyOf"].filter((key) => Object.hasOwn(spec.parameters, key));
   if (combinators.length > 0) {
-    // Python's repr quotes (tool names the API accepts hold no quote or escape).
+    // The tool name in single quotes (tool names the API accepts hold no quote or escape).
     throw new TypeError(
       `tool '${spec.name}' has a top-level ${combinators.join("/")} in its parameters, which the Anthropic API ` +
         "does not support",

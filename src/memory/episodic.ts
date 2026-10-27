@@ -7,7 +7,7 @@
  * adapter below this backend.
  *
  * Knows about: `memory/contracts`, `memory/storage/sqlite`, `defaults`, `diagnostics`, `typesys/json`.
- * Never imports: the `memory` facade (Python's import cycle), nodes, runtime, llm.
+ * Never imports: the `memory` facade (an import cycle), nodes, runtime, llm.
  */
 
 // The default import keeps calls patchable by test spies.
@@ -91,12 +91,12 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Whether `data` has exactly the keys `fields` (Python's `set(data) == {...}`). */
+/** Whether `data` has exactly the keys `fields`. */
 function hasFields(data: JsonObject, fields: readonly string[]): boolean {
   return Object.keys(data).length === fields.length && fields.every((field) => Object.hasOwn(data, field));
 }
 
-/** Build one stable nonretryable backend failure, with `cause` (Python's `raise ... from`) when given. */
+/** Build one stable nonretryable backend failure, with `cause` when given. */
 function operationError(
   stage: string,
   code: string,
@@ -176,8 +176,7 @@ function jsonString(value: unknown, name: string, nonempty = false): string {
  * @throws RangeError for NaN, `±Infinity`, a lone surrogate or a cycle.
  */
 function copyObject(value: unknown, name: string): JsonObject {
-  // The value number rule reads `-0` as `0`; episodic JSON then refuses `±Infinity`, as Python's
-  // `_copy_json` refuses non-finite floats. A walk over the copy, not recursion, so depth is free.
+  // The value number rule reads `-0` as `0`; episodic JSON then refuses `±Infinity`. A walk over the copy, not recursion, so depth is free.
   const copy = freezeJsonObject(value, name, { limitNesting: false, valueNumbers: true });
   const stack: [JsonValue, string][] = [[copy, name]];
   while (stack.length > 0) {
@@ -196,7 +195,7 @@ function copyObject(value: unknown, name: string): JsonObject {
 
 /** Split text into case-insensitive alphanumeric retrieval terms. */
 function lexicalTerms(value: string): Set<string> {
-  // Upper then lower case stands in for Python's `casefold`; `\p{L}\p{N}` is `isalnum`.
+  // Upper then lower case stands in for case folding; terms are runs of `\p{L}\p{N}`.
   return new Set(
     value
       .toUpperCase()
@@ -392,7 +391,7 @@ function snapshotJson(namespace: string, epoch: number, revision: number, state:
       max_episodes: BigInt(state.limits.maxEpisodes),
       recall_limit: BigInt(state.limits.recallLimit),
     }),
-    // Retained entries are deep-frozen, so the snapshot shares them (Python copies each).
+    // Retained entries are deep-frozen, so the snapshot shares them.
     episodes: state.episodes,
     epoch: BigInt(epoch),
     format: SNAPSHOT_FORMAT,
@@ -510,7 +509,7 @@ function parseInventory(value: unknown): Inventory {
     }
     return [snapshot, commits, opened, reset, committed];
   } catch (error) {
-    // Python's `raise ... from None`: the stored defect isn't chained.
+    // The stored defect isn't chained as the cause.
     if (!(error instanceof TypeError || error instanceof RangeError || error instanceof MemoryOperationError)) {
       throw error;
     }
@@ -536,7 +535,7 @@ function parseInventory(value: unknown): Inventory {
  * construction. Closing idle run handles is not required before closing this backend.
  */
 export class EpisodicMemory implements Memory {
-  // TS-private, not `#`, so tests can spy on and read them, as Python's tests patch `_save_state`.
+  // TS-private, not `#`, so tests can spy on and read them.
   private readonly requested: readonly [number | null, number | null];
   private storage: SQLiteStorage | null = null;
   private readonly storagePath: string | null;
@@ -627,7 +626,7 @@ export class EpisodicMemory implements Memory {
   }
 
   /**
-   * Enter one operation, independently of run-handle lifetime (Python's `_operation()` entry):
+   * Enter one operation, independently of run-handle lifetime:
    * open storage at the first operation and reject an unusable handle.
    *
    * @throws MemoryOperationError `episodic.closed` after `close()`; the storage can't be opened, or
@@ -699,7 +698,7 @@ export class EpisodicMemory implements Memory {
       const snapshot = options.snapshot ?? null;
       const parsed = snapshot === null ? null : parseSnapshot(snapshot);
       if (parsed !== null) resolveLimits(this.requested, parsed[3].limits, "openRun");
-      // The state is frozen, so a session pins it without Python's defensive copy.
+      // The state is frozen, so a session pins it without a defensive copy.
       const [namespace, epoch, revision, state] = parsed ?? [this.namespace, this.epoch, this.revision, this.state];
       let adopt = false;
       if (parsed !== null) {
@@ -783,10 +782,10 @@ export class EpisodicMemory implements Memory {
 }
 
 /**
- * One run-scoped view over a pinned episodic-memory generation (Python's `_EpisodicSession`).
+ * One run-scoped view over a pinned episodic-memory generation.
  *
  * It reads and publishes its backend's private state through element access (`memory["state"]`),
- * TypeScript's escape for private members, as Python's session reads `self._memory._state`.
+ * TypeScript's escape for private members.
  */
 export class EpisodicSession implements MemorySession {
   private readonly memory: EpisodicMemory;
@@ -895,8 +894,8 @@ export class EpisodicSession implements MemorySession {
           run_id: context.runId,
         };
         const entryId = crypto.createHash("sha256").update(logJson(identity)).digest("hex");
-        // An episode holding `±Infinity` can't be a mutation payload, so it fails as a learning
-        // context Python can't build.
+        // An episode holding `±Infinity` can't be a mutation payload, so it fails as an invalid
+        // learning context.
         try {
           return new MemoryMutation(entryId, { entry: storedEntry(entryId, episode), operation: "append" });
         } catch (error) {

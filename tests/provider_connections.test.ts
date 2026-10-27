@@ -1,13 +1,9 @@
 /**
- * Mirrors `tests/test_provider_connections.py`; `test_run_records_connections` goes with
- * `runFlow`. The factory tests build the model with `chatModelFromConfig` and check what a
- * recording `send` receives (it answers 400, so a test checks the request), in place of the
- * kwargs Python's fake `create_llm_client` captured. Adapted:
- * `test_saved_openai_ids_without_headers_read_no_credentials_at_build` becomes "read the
- * credentials once, at build", since TS reads an OpenAI key at build for the replay account; and
- * where Python leaves an environment key to the SDK, the test sets it and checks it is sent. The
- * environment table test also builds and calls a model for every provider and connection source,
- * so the factory's reads are held to the same table.
+ * Provider connections: the credentials and headers a model reads from the environment and the
+ * store. The factory tests build the model with `chatModelFromConfig` and check what a recording
+ * `send` receives (it answers 400, so a test checks the request). The environment table test
+ * also builds and calls a model for every provider and connection source, so the factory's reads
+ * are held to the same table.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -108,7 +104,7 @@ async function rejected(promise: Promise<unknown>): Promise<Error> {
 }
 
 // Each test's environment: conftest's base (a private store in a fresh directory, the default
-// provider and model), changed per test as Python's monkeypatch does.
+// provider and model), changed per test.
 let home: string;
 let vars: Map<string, string>;
 const env: Env = (name) => vars.get(name);
@@ -283,7 +279,7 @@ test("header name diff names missing and unrecorded headers ignoring case", () =
   expect(headerNameDiff(["X-Trace"], [])).toBe("missing X-Trace");
 });
 
-test("an environment key's identity is its SHA-256 hex, as Python records it", () => {
+test("an environment key's identity is its SHA-256 hex", () => {
   expect(keyIdentity("sk-test")).toBe("f3abf2a6cc4f00987743db5f544ba345b4899ae31f326d8ee9c4816de153c9e0");
 });
 
@@ -519,7 +515,7 @@ test("a legacy connection map pins each agent and leaves its input alone", () =>
   expect(effective).toEqual({ o: { provider: "openai", model: "m" }, a: { provider: "anthropic", model: "m" } });
 });
 
-describe("TS additions", () => {
+describe("edge cases", () => {
   test("blockProblem moves one leading key path and keeps the rest whole", () => {
     const extra = "Extra inputs are not permitted";
     expect(blockProblem("node 'chat' llm_config", "openai", `\`openai.temperature\`: ${extra}`, " in 'sub'")).toBe(
@@ -919,7 +915,7 @@ test("saved OpenAI settings reach the client", async () => {
 });
 
 test("saved OpenAI ids without headers read the credentials once, at build", async () => {
-  // Python reads none at build; TS reads the key once there for the replay account.
+  // The key is read once at build, for the replay account.
   noProviderKeys();
   await authStore().save("openai", new ApiKeyCredentials("sk-saved"), "gpt-x", { organization: "org-saved" });
   const reads = spyOn(AuthStore.prototype, "credentials");

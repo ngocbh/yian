@@ -1,20 +1,7 @@
 /**
- * Mirrors `tests/test_llm_client_blocks.py`: provider blocks reach the request body of the API
- * each model calls. The models are built with `chatModelFromConfig` and call a recording `send`
- * (it answers 400, so a test checks the request, not a reply).
- *
- * Ported: `test_direct_block_reaches_the_body_unchanged` (openai and azure),
- * `test_openai_compatible_block_reaches_the_body_unchanged` (a factory smoke over every Chat
- * Completions vendor's block), `test_azure_responses_deployment_rejects_a_chat_block`,
- * `test_azure_responses_deployment_without_a_block_still_runs` (checks the request reaches
- * `openai/responses`). Adapted: `test_every_supported_provider_has_a_request_body_case` also
- * builds and calls a model for every case, since TS keeps the other providers' cases in their
- * protocol body tests.
- *
- * Elsewhere: the text-beside-the-structured-output-format test is `llm/openai_responses_body.test.ts`'s; the
- * Azure no-renaming, DeepSeek, MiniMax `reasoning_split` and no-block body tests are the
- * `openai_chat` and `openai_responses` body tests'. Dropped: the `extra_body` merge test (TS has
- * no `extra_body`).
+ * Provider blocks reach the request body of the API each model calls. The models are built with
+ * `chatModelFromConfig` and call a recording `send` (it answers 400, so a test checks the
+ * request, not a reply).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -66,7 +53,7 @@ const DIRECT_CASES: Record<string, Case & { baseUrl?: string; path: string }> = 
   },
 };
 
-// The providers whose block tests are the protocol body tests' (Python's other BODY_CASES).
+// The providers whose block tests are the protocol body tests'.
 const OTHER_CASES: Record<string, Case> = {
   anthropic: { model: "claude-sonnet-4-5", block: { max_tokens: 64, top_k: 5 } },
   google: { model: "gemini-2.5-flash", block: { generationConfig: { topK: 5, maxOutputTokens: 64 } } },

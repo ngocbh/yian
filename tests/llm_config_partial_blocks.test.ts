@@ -1,4 +1,4 @@
-/** Mirrors `tests/test_llm_config_partial_blocks.py`: all tests. */
+/** Provider blocks whose leaves may be values resolved later. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -227,8 +227,8 @@ describe("blockFieldAnnotation", () => {
   });
 });
 
-describe("TS additions", () => {
-  test("a top-level list without values is key-walked as Python's assignment check does", () => {
+describe("edge cases", () => {
+  test("a top-level list without values is key-walked", () => {
     expect(locatedBlockProblems("google", { safetySettings: [{ bogus: 1n }] }, isValue)).toEqual([
       new BlockProblem(
         ["safetySettings"],

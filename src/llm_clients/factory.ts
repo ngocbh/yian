@@ -288,7 +288,7 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
 /**
  * Return the Azure auth, first match wins, and its replay account: the resolved key as `api-key`;
  * a non-empty `AZURE_OPENAI_AD_TOKEN` as a bearer token; a non-empty `AZURE_OPENAI_API_KEY` as
- * `api-key`. Each variable is read only when no earlier source matched, as in Python.
+ * `api-key`. Each variable is read only when no earlier source matched.
  *
  * Throws `RangeError` if none is found.
  */
@@ -581,7 +581,7 @@ export async function chatModelFromConfig(
     idHeaders,
     secretHeaders,
   };
-  // After the credential and header reads, as Python warns in `get_llm()`: a removed login or
+  // After the credential and header reads, so a removed login or
   // mismatched header names raise without a warning, while a missing environment key (outside
   // OpenAI) still warns first.
   if (!validateModel(provider, model)) {

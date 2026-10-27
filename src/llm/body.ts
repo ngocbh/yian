@@ -19,8 +19,8 @@ import { copyJson, isPlainObject, Message, type Part, put, TextPart, ToolResultP
  *
  * Objects merge key by key; arrays and scalars from `block` replace the body's value whole; a
  * `null` in `block` means unset and leaves the body alone. `block` is copied, never mutated or
- * shared. Keys are written as own data properties, so `"__proto__"` is an ordinary key. Like
- * Python's, it recurses once per nesting level: provider blocks are shallow config, checked at
+ * shared. Keys are written as own data properties, so `"__proto__"` is an ordinary key. It
+ * recurses once per nesting level: provider blocks are shallow config, checked at
  * load.
  *
  * @param body The request body yian built. Updated in place.

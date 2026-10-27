@@ -187,7 +187,7 @@ function spacedJson(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "number") return String(value);
   if (typeof value === "string") {
-    // Python's ensure_ascii: each code unit outside printable ASCII as lowercase \uXXXX.
+    // Each code unit outside printable ASCII is written as lowercase \uXXXX.
     return JSON.stringify(value).replace(
       /[^\x20-\x7e]/g,
       (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
@@ -510,7 +510,7 @@ export class AuthStore {
     } = {},
   ): Promise<ProviderSelection> {
     const { endpoint = null, organization = null, project = null, makeDefault = true } = options;
-    // Exactly these classes, as Python's `type(x) in`: a subclass could change what is stored.
+    // Exactly these classes, not subclasses: a subclass could change what is stored.
     if (
       credentials !== null &&
       !(
@@ -621,8 +621,8 @@ export class AuthStore {
       // Unlinking the lock file would let a waiter and a newcomer lock different files, so only
       // the store goes.
       await this.#locked(() => {
-        // The unlink goes by path, not through the checked directory's descriptor (Python's
-        // `dir_fd`), so check the path still names that directory, as `#write` does.
+        // The unlink goes by path, not through the checked directory's descriptor, so check the
+        // path still names that directory, as `#write` does.
         this.#checkSameDirectory(directory);
         try {
           fs.unlinkSync(this.path);
@@ -728,7 +728,7 @@ export class AuthStore {
         // Only the leader's own stop ended the flight, so the token is still due: start over, and
         // the first joiner back leads the next flight. A stop during the leader's refresh request
         // can't tell whether the server already rotated the token; the next flight sends the saved
-        // one, as Python's next thread does.
+        // one.
       }
     } finally {
       if (directory !== null) closeFd(directory.fd);

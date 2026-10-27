@@ -553,7 +553,7 @@ export class ReplayDegraded {
 
 /**
  * A model call outside a forward node failed with a retryable error and is sent again
- * after `retryIn` seconds; published before the wait. TS-only: Python yian publishes nothing.
+ * after `retryIn` seconds; published before the wait.
  *
  * `consumer` names what the model was built for, as `ModelAccess.createModel`'s `consumer`
  * option does (`llm_clients/factory.ts`). `attempt` is the

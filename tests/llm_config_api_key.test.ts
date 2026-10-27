@@ -1,16 +1,10 @@
 /**
- * Mirrors `tests/test_llm_config_api_key.py`: the 4 `LLMConfig` tests, the empty-key and host-key
- * marker tests with their `chatModelFromConfig` halves, the `resolve_model_config`,
- * `connection_credentials` and `validate_connection` tests, the saved-subscription test, and the
- * client tests, which check the built route's auth headers in place of the LangChain key field, or
- * the request a fake `send` receives (it answers 400, so a test checks the request, not a reply).
- * The empty-key test's `SecretStr("")` case is left out: TS has no `SecretStr`. The
- * `redact_key(s)` text tests are here, in `describe("redact")`, with the text half of the
- * `scrub_key(s)` chain tests; `describe("scrub")` runs the `scrub_key(s)`
- * exception tests through `scrubError`, with `cause` for Python's chaining, `AggregateError`
- * members for exception groups, and a string member for an exception note.
- * TS-only: host intake through `LLMConfig.fromHost`, and validation messages that never hold a
- * value.
+ * API keys in `LLMConfig` and `chatModelFromConfig`: empty keys and the host key marker, host
+ * intake through `LLMConfig.fromHost`, model config resolution, connection credentials, saved
+ * subscriptions, and the auth headers each client sends (a fake `send` answers 400, so a test
+ * checks the request). `describe("redact")` redacts keys from text; `describe("scrub")` scrubs
+ * them from errors, through `cause` chains, `AggregateError` members and string members.
+ * Validation messages never hold a value.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -42,8 +36,7 @@ import { type Send, virtualScheduler } from "../src/platform.ts";
 
 const SENTINEL = "sk-sentinel-3f9c1a7e";
 
-// Each test's environment: a private store in a fresh directory and no key or default, as
-// Python's `clean_env` leaves it.
+// Each test's environment: a private store in a fresh directory and no key or default.
 let home: string;
 let vars: Map<string, string>;
 const env: Env = (name) => vars.get(name);
@@ -252,8 +245,7 @@ test("split and resolve keep the key as a secret", () => {
   const config = new LLMConfig({ provider: "anthropic", model: "claude-sonnet-4-5", api_key: SENTINEL });
   const [validated] = splitModelConfig(config);
   expect(validated.apiKey).toBe(SENTINEL);
-  // TS has no `SecretStr`: the resolved record carries the key as text for the factory, and only
-  // `LLMConfig` hides it.
+  // The resolved record carries the key as plain text for the factory; only `LLMConfig` hides it.
   const resolved = resolveModelConfig({ ...config.dump(), api_key: SENTINEL }, { env });
   expect(resolved["api_key"]).toBe(SENTINEL);
 });
@@ -281,7 +273,7 @@ test("openai config key wins a saved subscription", async () => {
 
 // --- clients prefer the config key --- //
 
-// The key header each provider's route sends, in place of Python's LangChain key field.
+// The key header each provider's route sends.
 const KEYED: [string, string, string, string, string][] = [
   ["openai", "gpt-5.5", "OPENAI_API_KEY", "Authorization", `Bearer ${SENTINEL}`],
   ["vllm", "served-model", "VLLM_API_KEY", "Authorization", `Bearer ${SENTINEL}`],
@@ -447,7 +439,7 @@ describe("redact", () => {
 });
 
 /**
- * Return the stacks of `error` and each of its causes, as a Python traceback shows a chain. Bun
+ * Return the stacks of `error` and each of its causes, as a traceback shows a chain. Bun
  * builds a stack on its first read, so tests read the stacks before scrubbing too, as a logger may
  * have; the scrub then has to rewrite them.
  */
@@ -486,7 +478,7 @@ describe("scrub", () => {
     const deepest = new Error(`deepest ${KEY}`);
     const frozen = Object.freeze(new Error("frozen", { cause: deepest }));
     const broken = new Error(`broken ${KEY}`, { cause: frozen });
-    // The stack is built before the message breaks, so it holds the key, as Python's args do.
+    // The stack is built before the message breaks, so it holds the key.
     expect(broken.stack).toContain(KEY);
     Object.defineProperty(broken, "message", {
       get() {

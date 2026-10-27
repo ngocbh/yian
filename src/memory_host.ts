@@ -299,7 +299,7 @@ export async function buildMemories(
       throw new MemorySetupError(`flow id ${reprText(flowId)} cannot name a directory under the memory root`);
     }
     // Joined as text, never `path.join`, which folds `..` without looking at symlinks. An empty
-    // root adds no segment and a trailing `/` is dropped, as Python's `Path` reads them.
+    // root adds no segment and a trailing `/` is dropped.
     base = root === "" ? flowId : [root.replace(/\/+$/, ""), flowId].join("/");
   }
   // Copied into maps so a key such as `toString` never finds `Object.prototype`.

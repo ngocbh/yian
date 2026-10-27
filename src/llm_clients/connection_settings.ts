@@ -61,7 +61,7 @@ function own(table: Readonly<Record<string, string>>, key: string): string | und
   return Object.hasOwn(table, key) ? table[key] : undefined;
 }
 
-/** Return the number of code points in `text`, as Python's `len` counts. */
+/** Return the number of code points in `text`. */
 function codePoints(text: string): number {
   return [...text].length;
 }

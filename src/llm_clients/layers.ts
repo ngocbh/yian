@@ -73,8 +73,8 @@ export function resolveAgentConfig(
     throw new RangeError(missingModelMessage(path, null, { strayModel, label }));
   }
   if (!truthy(own(written, "model"))) {
-    // Keyed by value as Python's dict is: a primitive default provider matches its clone, a list or
-    // record one never does.
+    // Keyed by value: a primitive default provider matches its clone, a list or record one never
+    // does.
     const models = new Map<unknown, unknown>(Object.entries(providerModels));
     const defaultProvider = own(defaults, "provider");
     const defaultModel = own(defaults, "model");
@@ -224,7 +224,7 @@ function has(config: Readonly<AgentConfig>, key: string): boolean {
   return own(config, key) !== undefined;
 }
 
-/** Whether Python reads the yian value `value` as true: empty strings, lists and records are false. */
+/** Whether the yian value `value` counts as set: empty strings, lists and records don't. */
 function truthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (value !== null && typeof value === "object") return Object.values(value).some((item) => item !== undefined);

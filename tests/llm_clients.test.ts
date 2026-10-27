@@ -1,19 +1,10 @@
 /**
- * Mirrors `tests/test_llm_clients.py`: the `api_key_env` test, the model catalog, the
- * `validate_model` tests, and the client tests, which build the model with `chatModelFromConfig`
- * and check its route and protocol in place of the LangChain client's fields. The Responses
- * reasoning round trip keeps only its `Bearer` half here; the round trip itself is the
- * `openai_responses` cassette tests'. Ollama's no-`think` default is checked on the built body.
+ * The provider key variables, the model catalog, `validateModel`, and the clients, built with
+ * `chatModelFromConfig` and checked by their route, protocol and body.
  *
- * Elsewhere: the capability tests are `llm/capabilities.test.ts`'s; the Google no-temperature,
- * streaming-usage and normalization tests are covered by the protocol body and parse tests, and
- * the Anthropic early-close test by the transport tests. Left out: the Ollama `max_retries`
- * kwarg test and the normalize-reply tests (LangChain), and the DeepSeek non-streaming test (TS
- * streams DeepSeek).
- *
- * Added here: the `@ngocbh/yian/llm_clients` entry, imported by package self-reference, which
- * resolves through `package.json`'s "exports" as an installed copy does; with `YIAN_TEST_NODE` set
- * to a Node binary, also on Node, built.
+ * Also the `@ngocbh/yian/llm_clients` entry, imported by package self-reference, which resolves
+ * through `package.json`'s "exports" as an installed copy does; with `YIAN_TEST_NODE` set to a
+ * Node binary, also on Node, built.
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
@@ -189,7 +180,7 @@ test("getKnownModels gives each provider's sorted distinct values", () => {
   ]);
 });
 
-test("the catalog keeps Python's providers, labels and order", () => {
+test("the catalog's providers, labels and order", () => {
   expect(Object.keys(MODEL_OPTIONS)).toEqual([
     "openai",
     "anthropic",

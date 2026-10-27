@@ -1,8 +1,7 @@
 /**
- * Mirrors `tests/test_llm_values.py`. The `keepValues`, `resolveLayer`,
- * `checkResolvedLayer`, `agentLabel`/`fieldWhere`, `invocationConfig` and `callTimeConfig` rows
- * are TS-only: Python reaches those functions only through compile and runs. The
- * `callTimeConfig` rows pin the messages of `tests/engine/test_llm_config_values_call_time.py`.
+ * Yian values in `llm_config`: value leaves, shielding by literals, `keepValues`,
+ * `resolveLayer`, `checkResolvedLayer`, `agentLabel`/`fieldWhere`, `invocationConfig` and
+ * `callTimeConfig`, with the call-time messages.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -778,8 +777,8 @@ describe("callTimeConfig", () => {
 
     const error = bindingError(() => config(node, {}, 1e308));
 
-    // TS's binder takes Infinity as a value (`rejectInvalidBinding`), so the block check refuses
-    // it; Python's binder fails `binding.evaluate` with "non-finite number inf is not a yian value".
+    // The binder takes Infinity as a value (`rejectInvalidBinding`), so the block check refuses
+    // it.
     expect(error.failureCode).toBe("contract.input");
     expect(error.message).toBe("node 'chat' llm_config.openai.temperature: Input should be a finite number");
     expect(error.origin).toEqual(origin);

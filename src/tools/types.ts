@@ -74,7 +74,7 @@ export function typeFromJsonSchema(
   try {
     typ.validateShape();
   } catch (error) {
-    // A RangeError here stands for Python's ValueError: the shape is invalid, so "do not check".
+    // A RangeError here means the shape is invalid, so "do not check".
     if (error instanceof TypeError || error instanceof RangeError) return null;
     throw error;
   }
@@ -102,7 +102,7 @@ export function inputTypeFromJsonSchema(schema: unknown, root?: unknown): Type |
     typ = typeFromJsonSchema(schema, { closed: false, root });
   } catch (error) {
     // A host or MCP schema can nest deeper than the translator recurses. A RangeError (the
-    // runtime's stack overflow, standing for Python's RecursionError, or a shape the IR refuses)
+    // runtime's stack overflow, or a shape the IR refuses)
     // leaves the input unchecked rather than failing the run.
     if (!(error instanceof RangeError)) throw error;
     // Kept like any other result: a stack overflow depends on the depth of the first call, but
@@ -246,7 +246,7 @@ function stringTags(schema: ValueRecord): ReadonlySet<string> | null {
 function endpoint(schema: ValueRecord, keyword: string): Bound {
   const value = get(schema, keyword);
   if (typeof value === "bigint") return value;
-  // A safe integer is an int, so `{"minimum": 0}` labels `float(0..)` as Python's int does.
+  // A safe integer is an int, so `{"minimum": 0}` labels `float(0..)`, not `float(0.0..)`.
   if (Number.isSafeInteger(value)) return BigInt(value as number);
   if (typeof value === "number" && Number.isFinite(value)) return value;
   return null;
@@ -289,8 +289,7 @@ function bounds(schema: ValueRecord, kind: ValueKind): Bounds | undefined {
 }
 
 /**
- * Return the first of `ends` no other end beats by `better`, or `null` when there are none,
- * as Python's `max`/`min` pick.
+ * Return the first of `ends` no other end beats by `better`, or `null` when there are none.
  */
 function extreme(
   ends: readonly (bigint | number)[],
@@ -310,7 +309,7 @@ function exactFloat(value: Bound): value is bigint | number {
   return Number.isFinite(represented) && BigInt(represented) === value;
 }
 
-/** Return whether `value` is true as Python reads it: empty containers are false. */
+/** Return whether `value` is truthy, with empty lists and records false. */
 function truthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (isRecord(value)) return Object.keys(value).length > 0;
@@ -331,7 +330,7 @@ function object(
   const properties = get(schema, "properties");
   if (!isRecord(properties)) return plain;
   const extra = get(schema, "additionalProperties");
-  // An absent key and an explicit `null` both read as Python's `None`.
+  // An absent key and an explicit `null` read alike.
   if (extra !== false && !(closed && (extra === undefined || extra === null))) return plain;
   if (truthy(get(schema, "patternProperties"))) return plain;
   const required = Object.hasOwn(schema, "required") ? schema.required : [];

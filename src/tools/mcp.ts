@@ -253,7 +253,7 @@ export interface McpServerSpec {
  * const files = mcpServer({ command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] });
  */
 export function mcpServer(options: McpServerOptions): McpServer {
-  // As Python's None, a `null` option is absent.
+  // A `null` option is absent.
   const absent = <T>(value: T | null): T | undefined => (value === null ? undefined : value);
   const command = absent(options.command);
   const args = absent(options.args);
@@ -279,7 +279,7 @@ export function mcpServer(options: McpServerOptions): McpServer {
   } else {
     if (typeof url !== "string") throw new TypeError(`mcpServer url must be a string, got ${jsTypeName(url)}`);
     if (urlHost(url) === "") throw new RangeError("mcpServer url must be an http or https URL with a host");
-    // As Python's `bool(args)`: an empty args array or string counts as not given.
+    // An empty args array or string counts as not given.
     const argsGiven = args !== undefined && (args as unknown) !== "" && !(Array.isArray(args) && args.length === 0);
     for (const [name, given] of [
       ["args", argsGiven],
@@ -482,7 +482,7 @@ export class McpServer {
     this.spec = spec;
     this.secrets = secretsOf(spec);
     if (spec.label !== undefined) this.label = spec.label;
-    // As Python's POSIX `os.path.basename`: a command ending in `/` keeps the whole command.
+    // The text after the last `/`; a command ending in `/` keeps the whole command.
     else if (spec.command !== undefined) this.label = spec.command.split("/").pop() || spec.command;
     else this.label = urlHost(spec.url ?? "") || "mcp";
   }
@@ -899,7 +899,7 @@ function cancelledError(name: string): McpCallCancelled {
   return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
 }
 
-/** `seconds` as Python's `:g` prints it: six significant digits, `0.5`, `300`, `1e-05`. */
+/** `seconds` in `%g` form: six significant digits, `0.5`, `300`, `1e-05`. */
 function secondsText(seconds: number): string {
   const [mantissa, exponentText] = seconds.toExponential(5).split("e") as [string, string];
   const exponent = Number(exponentText);
@@ -931,7 +931,7 @@ function secretsOf(spec: McpServerSpec): string[] {
   return secrets.filter((value) => value.length >= 8);
 }
 
-/** An error's class name, as Python's `type(error).__name__`. */
+/** An error's class name. */
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : jsTypeName(error);
 }
@@ -1022,7 +1022,7 @@ async function loadSdk(stdio: boolean): Promise<{ sdk: typeof Sdk; defaultEnv: R
 
 /**
  * Return the error an HTTP connect failed with: under the `EraNegotiationFailed` wrappers that
- * the `auto` probe puts around it, so both modes report the same error (Python's `_leaf`).
+ * the `auto` probe puts around it, so both modes report the same error.
  */
 function leaf(error: unknown, sdk: typeof Sdk): unknown {
   let current = error;
@@ -1047,7 +1047,7 @@ function httpFailure(error: unknown, sdk: typeof Sdk): unknown {
   return undefined;
 }
 
-/** `<Name>: <message>` for an error, as Python's `type(error).__name__: error`. */
+/** `<Name>: <message>` for an error. */
 function describeError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : `${jsTypeName(error)}: ${String(error)}`;
 }
@@ -1202,7 +1202,7 @@ function renderContent(content: readonly unknown[]): string {
   return parts.join("\n\n");
 }
 
-/** The base64 alphabet, as Python's `base64.b64decode` reads it. */
+/** The base64 alphabet. */
 const BASE64_CHAR = /[A-Za-z0-9+/]/;
 
 /** Return the size of base64 `data` once decoded: `<n> B`, `<x.y> KB` or `<x.y> MB`. */
@@ -1215,7 +1215,7 @@ function size(data: string): string {
 }
 
 /**
- * Return how many bytes Python's `base64.b64decode(data)` gives, or `null` where it raises:
+ * Return how many bytes base64-decoding `data` gives, or `null` where decoding fails:
  * characters outside the alphabet are skipped, decoding stops where padding completes a group of
  * four, and a final partial group without padding is an error.
  */
@@ -1236,7 +1236,7 @@ function decodedSize(data: string): number | null {
   return group === 0 ? bytes : null;
 }
 
-/** `bytes / unit` with one decimal, rounded half to even as Python's `.1f` rounds. */
+/** `bytes / unit` with one decimal, rounded half to even. */
 function oneDecimal(bytes: number, unit: number): string {
   // Exact: `bytes * 10` is a safe integer and `unit` a power of two.
   const scaled = (bytes * 10) / unit;

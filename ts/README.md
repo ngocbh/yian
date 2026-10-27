@@ -1712,7 +1712,7 @@ them when a Bun upgrade or a newly copied package changes those sections.
 
 ### Conformance
 
-`tests/conformance.ts` runs the cases in `../conformance/cases/` (see `../conformance/README.md`).
+`tests/conformance.ts` runs the cases in `../conformance/cases/` (see `../conformance/SPEC.md`).
 Run from `ts/`:
 
 ```sh

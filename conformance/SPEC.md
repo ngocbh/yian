@@ -1,18 +1,18 @@
-# The yian conformance suite
+# The conformance case format
 
-Language-neutral test cases that pin what a flow does, shared by the Python implementation
-(`tests/test_conformance.py`) and the TypeScript one (`ts/tests/conformance.ts`). The two
-implementations share no run-log format, so a case states its expectations as data: load
-diagnostics, the run's output, its run log projected to a *trace*, observer events, and so on.
-Each runner turns a case into calls on its own implementation and compares the results.
+The format of the cases under `cases/`, and the contract of their runner,
+`ts/tests/conformance.ts`. A case states its expectations as data: load diagnostics, the run's
+output, its run log projected to a *trace*, observer events, and so on. The runner turns a case
+into calls on yian and compares the results.
 
 ## Layout
 
 ```
 conformance/
-  README.md                       # this file: the case format and the runner contract
+  README.md                       # what the suite is and how to run it
+  SPEC.md                         # this file: the case format and the runner contract
   cases/<group>/<name>.yaml       # one case per file; its id is <group>/<name>
-  cases/<group>/<name>.log.jsonl  # optional golden TS run log (TS-only; see Running the suite)
+  cases/<group>/<name>.log.jsonl  # optional golden run log (see Running the suite)
   fixtures/                       # files cases share: CODE helpers, golden profiles, stub data
   schema/                         # JSON Schemas of the documents yian gives hosts
 ```
@@ -24,7 +24,7 @@ A case file is YAML 1.2 core schema: `true`/`false`, `null`/`~`, integers (decim
 keys or `yes`/`no` booleans. A tag (`!!str`, `!!timestamp`, `!x` or a bare `!`) is an error. A
 duplicate key or a mapping key that isn't text is an error. `1` is an int and `1.0` a float.
 
-Values in a case (everything except flow text, `files`, `python_files`, `stdin`, `read` and `http`)
+Values in a case (everything except flow text, `files`, `stdin`, `read` and `http`)
 are read in yian's JSON codec form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and
 minus infinity, and `{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or
 `{$float: -inf}`, or whose only key is `$record`, is written inside `$record`. A bare `.inf` or
@@ -37,46 +37,33 @@ additions to this file.
 
 ```yaml
 kind: run                  # load | run | resume | backward | expr | value | defaults | fingerprint | cli | json
-rules: [text-form]         # TS-era rules the expectation depends on; absent or empty means shared
-pending: "#391"            # the TS runner expects this case to fail until that issue lands
-python_skip: why           # the Python runner can't run this case at all
-flow: |                    # the flow, in TS form (TS CODE bodies)
+pending: "#391"            # the runner expects this case to fail until that issue lands
+flow: |                    # the flow (TS CODE bodies)
   id: greet
   ...
-python_flow: |             # the flow for the Python runner, when it differs
 files: {}                  # more files in the case directory: relative path -> text
-python_files: {}           # the files for the Python runner, when they differ
 env: {}                    # environment variables: name -> text
 inputs: {name: Ada}        # run inputs
 run: {}                    # host arguments of the run
 host: {}                   # the host, as data
 expect: {}                 # the expected results
-python_expect: {}          # the Python expectation, when the rules changed it
 ```
 
 Each kind adds a few keys of its own (below). `kind` and `expect` are required, and so are the
-keys and results each kind requires (Kinds, below); `python_expect` needs `rules`.
+keys and results each kind requires (Kinds, below).
 
-### Which runner runs what
-
-- A runner runs `flow` and checks `expect`. The Python runner uses `python_flow`,
-  `python_files` and `python_expect` instead when they are present.
-- The Python runner skips a case with `python_skip`, and a case with `rules` but no
-  `python_expect`.
-- `pending` is for the TS runner: it reports the case as an expected failure, and fails if the
-  case passes, so the marker is removed in the change that makes it pass. The Python runner
-  ignores `pending`; a case Python can't pass uses `python_skip`.
-- The Python runner skips `json` cases: they check TS yian's own JSON reader and encoders.
+The runner runs `flow` and checks `expect`. With `pending`, it reports the case as an expected
+failure, and fails if the case passes, so the marker is removed in the change that makes it
+pass.
 
 ## The case directory and environment
 
 Every case runs in a new temporary directory, the *case directory*:
 
-- `flow` (or `python_flow`) is written to `flow.yaml`, and each `files` (or `python_files`) entry to
+- `flow` is written to `flow.yaml`, and each `files` entry to
   its relative path with mode 0600; `fixtures/` is a copy of `conformance/fixtures/`. The case
   directory, and every directory the runner makes for `files`, is 0700 (yian's auth store refuses
-  anything others can read; its own checks are pinned by `tests/test_provider_auth.py`, not by
-  cases). A TS CODE reference resolves relative to the file that holds it, so `flow.yaml`, or a
+  anything others can read; its own checks are pinned by unit tests, not by cases). A TS CODE reference resolves relative to the file that holds it, so `flow.yaml`, or a
   `files` entry at the top of the case directory, names a shared helper `./fixtures/<file>.ts:<fn>`.
 - The flow is loaded from the text of `flow.yaml` with the source label `flow.yaml`, resolving
   `uses:` and `call:` paths in the case directory. Frame labels are what the loader gives:
@@ -95,14 +82,13 @@ Every case runs in a new temporary directory, the *case directory*:
   `stdin` and `http`. The runner replaces each with the text `sk-conformance-N` and fails the case
   if one appears in the trace, events, stream, tool calls, output, the raised error's message,
   stdout, stderr or a run log file.
-- **Time.** The TS runner's runs use a virtual clock that starts at the real current time and
-  moves only by the waits, so waits take no time. The Python runner waits for real, so a case
-  keeps its waits short.
+- **Time.** The runner's runs use a virtual clock that starts at the real current time and
+  moves only by the waits, so waits take no time.
 
 ## Kinds
 
 Keys marked required must be present. In a `load`, `expr`, `value`, `defaults`, `fingerprint` or
-`json` case, `expect` and `python_expect` hold the results under Checks: exactly one group where
+`json` case, `expect` holds the results under Checks: exactly one group where
 it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of `raises` and
 `output`.
 
@@ -121,8 +107,7 @@ it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of
 
 ### `load`
 
-Loads the flow. `expect.load` is `ok`, or `{diagnostics: [<diagnostic>, ...]}` in order (Python
-reports one).
+Loads the flow. `expect.load` is `ok`, or `{diagnostics: [<diagnostic>, ...]}` in order.
 
 ### `run`
 
@@ -182,7 +167,7 @@ Evaluates one expression, or one template.
 | `template` | instead of `expr`: a template with `${...}` spans |
 | `values` | the names in scope; a dotted reference walks into them |
 | `item` | the MAP item in scope (`item`, `item.path`), when present (not with a strict `template`) |
-| `mode` | `binding` (the default): a missing root is null, and a template is a binding value (one whole span gives its value; embedded spans give text, null as empty); `condition`: the `expr` is evaluated as a `when:` condition (either spelling, `a > 1` or `${a > 1}`) and gives a bool, with no `item`; `strict`: a missing root is an error, and a template is a prompt rendered with the AGENT and HUMAN_INPUT prompt rules. In every mode (TS, rule `null-field-read`), a `.` field read on null, on a missing root, or of a key the declared type doesn't declare raises (`?.` reads null) |
+| `mode` | `binding` (the default): a missing root is null, and a template is a binding value (one whole span gives its value; embedded spans give text, null as empty); `condition`: the `expr` is evaluated as a `when:` condition (either spelling, `a > 1` or `${a > 1}`) and gives a bool, with no `item`; `strict`: a missing root is an error, and a template is a prompt rendered with the AGENT and HUMAN_INPUT prompt rules. In every mode, a `.` field read on null, on a missing root, or of a key the declared type doesn't declare raises (`?.` reads null) |
 | `typedefs` | a `typedefs:` mapping as in a flow, for `isinstance` and constructors (not with a strict `template`) |
 
 `expect.value` is the result; `expect.raises` the error.
@@ -204,17 +189,14 @@ implementation doesn't define fails the case. `expect.raises` is the error for a
 
 Loads `flow` twice and `other` once. The two loads of `flow` must have the same fingerprint, and
 `expect.fingerprint` says whether `other`'s is the `same` or `different`. A case never states a
-hash. `python_flow` and `python_files` are not keys of a `fingerprint` case: both runners load
-`flow` and `other` as written, so a pair with CODE bodies is in TS form and carries
-`rules: [code]`.
+hash.
 
 ### `cli`
 
 Runs the `yian` command with `args` (the arguments after `yian`) in the case directory, with
 `HOME` set to an empty `home/` directory there, `PATH`, `COLUMNS=1000`, the `env` variables
-and no other variables (the Python runner adds `PYTHONPATH`, to find yian, and `no_proxy=*`,
-so a system proxy doesn't take requests meant for the stub; the runner doesn't set
-`YIAN_AUTH_FILE`, so unless `env` does, its default under `HOME` applies), and `stdin` (absent:
+and no other variables (the runner doesn't set `YIAN_AUTH_FILE`, so unless `env` does, its
+default under `HOME` applies), and `stdin` (absent:
 empty; never a terminal). `expect.exit` is the exit code. In stdout and stderr the case
 directory's path, and its resolved real path, are
 replaced by `<tmp>`, and spaces at line ends are removed; then `stdout` and `stderr` are
@@ -266,10 +248,7 @@ http:
 - A `cli` case makes no HTTP request beyond those its `http` lists. The runner checks every
   request yian's auth and model-listing transport makes against `http` (an empty list when the
   case has none): it starts one server on 127.0.0.1 for every `cli` case and routes each such
-  request to it, whatever its origin, with the original URL. How it routes is the runner's: the
-  Python runner wraps yian's request function in the command's process and sends the original
-  URL in an `x-conformance-url` header, which the request check ignores; a TS runner hooks its
-  own HTTP seam.
+  request to it, whatever its origin, with the original URL, through yian's HTTP seam.
 - An exchange counts as requested once its request has been read, before its `delay`. A request
   that doesn't match the next exchange, or comes after the last one (unless that one has
   `repeat`), is answered 500 with no body and fails the case whatever the exit code; the failure
@@ -288,7 +267,7 @@ fingerprints) or `log` (a run-log line); `expect.text` is the text written. A `l
 also read back in `codec` mode and must give `write` again. `expect.raises` is the error
 instead. In `codec` mode a bare `{"$record": X}` whose `X` isn't an object (e.g.
 `{"$record": 5}`) reads as a record holding that one key (the case
-`json/read_codec_record_of_scalar` pins it). `json` cases are TS-only.
+`json/read_codec_record_of_scalar` pins it).
 
 ## The host, as data
 
@@ -298,8 +277,7 @@ A case can't hold code, so its host is declared under `host`.
   concurrency_safe: <bool>, results: <script>}` (`description` and `concurrency_safe`
   optional). With `concurrency_safe: true`, the tool's `isConcurrencySafe` returns true for every
   call, so an AGENT may run its calls together (see
-  [`docs/api.md`](../docs/api.md#tool-context)). The Python runner ignores it, since one call at
-  a time is a valid schedule. A script is a list of entries, taken one per call
+  [`docs/api.md`](../docs/api.md#tool-context)). A script is a list of entries, taken one per call
   in order, or a mapping from node id to such a list, taken by the calling node (for tools that
   several nodes call at once). An entry is `{return: <value>}` or `{raise: {class: <name>,
   message: <text>, retry_after: <seconds>}}` (`retry_after`, a finite non-negative number of
@@ -308,7 +286,7 @@ A case can't hold code, so its host is declared under `host`.
   `ConnectionError`; any other name raises a plain error with that class name.
   A call after the last entry fails the case before any result is compared, since it is the
   case's own error; an entry left unused fails it after the comparisons. In place of `results`, a
-  tool may have `pending: true` (TS-only; the case has `python_skip`): each call's handler
+  tool may have `pending: true`: each call's handler
   returns `pending()`, so the call waits until a `host.sends` `{complete}` item answers it. A tool
   takes `results` or `pending: true`, not both.
 - **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's ask handler gives to the
@@ -317,7 +295,7 @@ A case can't hold code, so its host is declared under `host`.
   every input the flow's TOOL `ask` nodes pass beyond `prompt`, `questions` and `timeout` (such
   as an `adaptive_questions:` brief's context). A case with `human` doesn't declare a tool named
   `ask` or `ask_user`.
-- **`sends`** (TS-only; a case using it has `python_skip`): a list of `{inbox: <name>, event:
+- **`sends`**: a list of `{inbox: <name>, event:
   <value>}`, `{close: <name>}`, `{withdraw: <name>}`, `{interrupt: <name>}` and `{complete:
   <call id>, output: <value>}` or `{complete: <call id>, error: <text>}` items. While the run
   ends `waiting` and items are left, the runner delivers the next one (`send`, `close`,
@@ -342,8 +320,7 @@ A case can't hold code, so its host is declared under `host`.
 - **`jitter`**: the random draws in `[0, 1)` retry backoffs take, TOOL retries and AGENT model
   retries alike, in the order they are drawn: one per retry that waits a backoff, even a zero one,
   and none for a `retry_after` wait (a provider's retry-after, for a model retry). The same rules
-  apply. Model-retry draws are TS-only: the Python runner gives `jitter` to TOOL retries alone, so
-  a case that draws for a model retry is `python_skip`.
+  apply.
   Without `jitter`, draws are the implementation's own, and the case doesn't depend on them.
 - **`models`**: scripted model calls, `{<node id>: {<consumer>: [<entry>, ...]}}`; each call
   takes the next entry of its node and consumer. The consumers are `agent` (an AGENT's calls),
@@ -373,19 +350,12 @@ A case can't hold code, so its host is declared under `host`.
   in `__compose` and `agent` for any other. Every TS model call streams, so no `chunks` entry is
   summed; the text chunks of an entry build one text part, ahead of its tool calls.
   Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
-  <JSON Schema>}` (Python's schema:
-  `convert_to_openai_tool(schema)["function"]["parameters"]`), which the runner compares
-  exactly with the call's, failing the case when they differ (`tools` absent: none bound;
-  `schema` present: the call asked for output matching it, Python's native structured call).
-  In TS, `schema` is the native structured output's schema, a structured call lowered to a tool
+  <JSON Schema>}`, which the runner compares exactly with the call's, failing the case when they
+  differ (`tools` absent: none bound; `schema` present: the call asked for output matching it).
+  `schema` is the native structured output's schema, a structured call lowered to a tool
   binds that tool in `tools`, and numbers compare by value, since a JS number doesn't keep `1`
   and `1.0` apart.
-  A request's `messages` and tool specs are yian's own and shared; its `schema`, any text built
-  from it (a fallback call's schema instruction) and a model call's `structured_*` `purpose` in
-  `events` record how Python lowers a structured call, so a case that depends on them carries
-  `rules: [llm]` (harvested cases are tagged before they are committed).
-  A tool spec is `{name, description, parameters}` (Python:
-  `convert_to_openai_tool(tool)["function"]`), in the bound order. A reply to a `schema` call is
+  A tool spec is `{name, description, parameters}`, in the bound order. A reply to a `schema` call is
   one text part holding the JSON value in the schema's carrier form (a wrapped scalar is
   `{"value": ...}`, a list `{"items": ...}`).
   A chunk is `{text: <delta>}`, `{tool_call: {index, id, name, arguments}}` (`id`
@@ -395,14 +365,13 @@ A case can't hold code, so its host is declared under `host`.
   served to a streamed call streams as one chunk; a `chunks` entry served to an unstreamed call
   is summed. The script replaces the provider below config resolution: the runner still
   resolves and checks each call's config, so a `models` case needs no provider key unless it
-  tests credentials. The Python runner resolves no credentials from the config, so it doesn't
-  check a pinned saved login that changed or was removed. In `run`, `resume` and `backward`
+  tests credentials. In `run`, `resume` and `backward`
   cases every model call is scripted, so a call with no script fails the case at once instead of
   reaching a provider; calls that run out and leftovers fail as above.
 - **`memory`**: `{before: [<run>, ...]}` turns memory on (`{}` with no earlier runs). For each
   run (each `before` run, the main run, and for a `resume` case the cut run and the resume) the
   runner builds the flow's memories from their declarations, fresh per run, rooted at
-  `<case dir>/memory` (Python: `build_memories(flow, root=...)`), passes them to the run, and
+  `<case dir>/memory`, passes them to the run, and
   closes them after that run's backward calls. An error building them is the case's `raises`
   (e.g. `MemorySetupError`), except in a `before` run (below); in a `resume` case, the cut run's
   error skips the resume. A `before` entry is `{inputs, run, backward}`, the case's own shapes
@@ -412,15 +381,10 @@ A case can't hold code, so its host is declared under `host`.
   shared by all runs in order; `tool_calls` lists every run's calls; `trace`, `events`,
   `stream`, `output` and `backward` are the main run's. A profile is seeded by a `files` entry
   at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
-  In TS, the memories are `buildMemories(flow, {root, models, onEvent})` with the runner's
+  The memories are `buildMemories(flow, {root, models, onEvent})` with the runner's
   scripted model access; the events `onEvent` gets (the learners' `ModelCallRetried` and
-  `ReplayDegraded`, TS-only) are kept apart and never compared with `expect.events`.
-- **`steering`** (Python runner only; TS fails a case holding it with "unknown host key"):
-  `{<node id>: [{after: <point>, interrupt: true}, ...]}`, the `steering` argument of Python's
-  `run_flow` and `resume_flow`. No committed case uses it: TS yian interrupts through
-  `interrupt(run, inbox)`, a `sends` item.
-- **`stop`**: `{<node id>: {after: <point>}}`, a stop of the run (TS only; the Python runner
-  doesn't support it yet). The [points](#points) and their counting are a `sends` item's, and `after` is
+  `ReplayDegraded`) are kept apart and never compared with `expect.events`.
+- **`stop`**: `{<node id>: {after: <point>}}`, a stop of the run. The [points](#points) and their counting are a `sends` item's, and `after` is
   required. When the run reaches the point, the runner aborts the run's `signal` with a
   `ConformanceStop` error, so the run rejects with it: a `run` case expects `raises: {class:
   ConformanceStop, message: conformance stop}`, and its trace ends with `run_stopped`. A stop
@@ -430,17 +394,16 @@ A case can't hold code, so its host is declared under `host`.
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
 attempt, node}`.
 Calls answered from `human` are listed too, under the name they were made by (`ask` for a
-TOOL `ask`, `ask_user` for an agent's call or Python's HUMAN_INPUT); their `args` are the request in
+TOOL `ask`, `ask_user` for an agent's call); their `args` are the request in
 data form (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`, `deadline`
 and the host's extras; nulls left out).
-A TOOL `ask` (and Python's HUMAN_INPUT) never sends `options`; a model's `ask_user` call can.
+A TOOL `ask` never sends `options`; a model's `ask_user` call can.
 
 `expect.memory` (it needs `host.memory`) is `{<key>: <text>}`: after the main run and its
 backward calls, the runner builds the memories afresh and reads each listed key's whole recall
-text (Python: `open_run().recall(None)`, a `MemoryContent`'s `text`). Its keys, like `<key>` in
+text. Its keys, like `<key>` in
 `memory:<key>`, are memory keys as the `memory_commit_*` records name them. A key the flow
-doesn't declare fails the case. The Python runner also fails a session key, whose whole recall is
-empty by contract; TS yian has no session memory.
+doesn't declare fails the case.
 
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
@@ -525,22 +488,13 @@ list indexes, `[]` at the root). `class` is the error's class name, read through
 table.
 
 **Error-class table.** Class names are compared through one table, used for `raises` and for the
-error type in TOOL steps. It maps each implementation's name to the case name; the Python names
-are the case names.
+error type in TOOL steps. It maps a class name to the case name. The case names are the TS
+names, except that the runner maps two classes to `ValueError`:
 
-- The tool classes `PermanentToolError`, `TransientToolError`, `ReportedToolError`,
-  `ToolCheckError`, `TimeoutError` and `ConnectionError`, and yian's own classes `LoadError`,
-  `FlowValidationError`, `ExpressionError`, `RequiredError`, `ConstructorTypeError`,
-  `TypeCheckError`, `DefaultsError` and `DefaultsMismatchError`, have the same name in both
-  implementations. `IntTooLongError` is Python-only (TS has no digit limit), so a case holding it
-  carries `rules: [numbers]`.
-- In `raises`, a Python class whose name starts with `_` is private, and its case name is its
-  nearest public base class's (`_NoUnionMember` is `TypeCheckError`).
-- TS's `RangeError` is the case's `ValueError`: TS throws it wherever Python raises `ValueError`
-  at a yian boundary. A JS-internal `RangeError`, such as a stack overflow, reads as `ValueError`
-  too.
-- TS's `RunLogSchemaError`, the `RangeError` a run log of a schema TS can't read throws, is the
-  case's `ValueError`, which Python raises there.
+- `RangeError` is the case's `ValueError`. A JS-internal `RangeError`, such as a stack overflow,
+  reads as `ValueError` too.
+- `RunLogSchemaError`, the `RangeError` a run log of a schema yian can't read throws, is the
+  case's `ValueError`.
 - Any other class compares by its name as given, a stub's declared class included.
 - A row mapping a TS class to a different case name is added by the change that introduces that
   TS class; rows are only added.
@@ -551,7 +505,7 @@ produced, such as an output or an answer); fields that are null are left out at 
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
 The `started_at` of `ModelCallStarted` is left out (a time), and so is a `NodeSucceeded`'s
-`interrupted` when it is false (TS-only; Python's events have no such field). A model call event and an AGENT's
+`interrupted` when it is false. A model call event and an AGENT's
 stream chunk name the step their record becomes by `n` (with `node_id`), and a chunk's `index`
 counts that step's chunks from 0.
 
@@ -561,7 +515,7 @@ counts that step's chunks from 0.
 
 ## The trace
 
-The trace is the run log projected to what both implementations must agree on. Each record
+The trace is the run log projected to what a case compares. Each record
 becomes one entry `[<kind>, <node>, <payload>]`, in log order. `node` is null for a run-level
 record. In a payload, a top-level field that is null is left out (nested values are kept as
 they are, except as the rules below say), and an empty payload is left out.
@@ -569,20 +523,20 @@ they are, except as the rules below say), and an empty payload is left out.
 | Record | Node | Payload fields |
 |---|---|---|
 | `run_started` | null | `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
-| `run_resumed` | null | `retry_node_ids`, `num_workers`, `closed_calls` (TS only) |
-| `run_stopped` (TS only) | null | `reason` (the reason's kind), `node_ids` |
-| `node_waiting` (TS only) | `node_id` | `call_ids`, `waits`, `steer_inbox` |
-| `node_woken` (TS only) | `node_id` | `timed_out` |
-| `run_waiting` (TS only) | null | `node_ids` |
-| `inbox_closed` (TS only) | null | `inbox` |
-| `inbox_withdrawn` (TS only, schema 23) | null | `inbox`, `events` |
-| `interrupted` (TS only; `nodes` may be empty from schema 23) | null | `inbox`, `nodes` |
-| `run_cancelled` (TS only) | null | none |
-| `run_failed` (TS only) | null | `failure` |
+| `run_resumed` | null | `retry_node_ids`, `num_workers`, `closed_calls` |
+| `run_stopped` | null | `reason` (the reason's kind), `node_ids` |
+| `node_waiting` | `node_id` | `call_ids`, `waits`, `steer_inbox` |
+| `node_woken` | `node_id` | `timed_out` |
+| `run_waiting` | null | `node_ids` |
+| `inbox_closed` | null | `inbox` |
+| `inbox_withdrawn` (schema 23) | null | `inbox`, `events` |
+| `interrupted` (`nodes` may be empty from schema 23) | null | `inbox`, `nodes` |
+| `run_cancelled` | null | none |
+| `run_failed` | null | `failure` |
 | `node_started` | `node_id` | none |
-| `node_step` | `node_id` | `n` (TS only: the step's number within the node), `step` |
-| `pool_commit` (TS only) | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's), `steps` (a messages commit's) |
-| `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `messages` (TS only: the seq of its messages commit), `forward_capture` |
+| `node_step` | `node_id` | `n` (the step's number within the node), `step` |
+| `pool_commit` | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's), `steps` (a messages commit's) |
+| `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `messages` (the seq of its messages commit), `forward_capture` |
 | `node_routed` | `node_id` | `handle`, `terminal_failure`, `forward_capture` |
 | `node_expanded` | `spawner_id` | `prune_ids`, `forward_capture` |
 | `node_failed` | the failure's node | `failure`, `forward_capture` |
@@ -676,11 +630,6 @@ For example:
   error-class table; so does a failed `model_call`'s error `kind` (a provider error's kind, such
   as `rate_limit`, is no class and stays).
 
-**Python reference.** The trace rules at tag `conformance-trace-python` are the last ones both
-implementations share. After that the TS trace shows the TS log as written; a shared case whose
-expectation changes is regenerated with `--write-expect` and gets `rules: [run-log]`, which the
-Python runner skips.
-
 **Placeholders.** Ids an implementation makes up are replaced by `<id:1>`, `<id:2>`, ...: a run id
 the case didn't give, and the values of `commit_id`, `mutation_id` and `note_id` fields. (This
 list grows only by fields no committed case holds yet.) The generated run id is the
@@ -708,30 +657,6 @@ when its own `num_workers` isn't 0.
 An entry's node is its trace `node`; an event's `node_id` (a `NodeFailed`'s failure node; run
 events are run-level); a chunk's `node_id`; a tool call's `node`.
 
-## Rule ids
-
-A case lists in `rules` the TS-era rules its expectation depends on (design #736, section 3.2).
-
-| Id | Rule |
-|---|---|
-| `numbers` | int is unbounded and kept apart from float; lossless JSON; host number intake; duplicate keys refused; `YIAN_*` values stop at 2^53-1 |
-| `int-in-float` | an int filling a float slot stays an int at any depth, and an int spelled as text for a `float` input reads as that int; Python widens it to a float |
-| `arithmetic` | the operator table: `/` gives a float, `%` takes the left sign, no repetition or `%` formatting, division by zero |
-| `compare` | equality across kinds, ordering, membership |
-| `text-form` | how a value becomes text: JSON-style values, JS number spelling |
-| `canonical` | RFC 8785 fingerprints and the log's canonical JSON |
-| `columns` | 1-based UTF-16 columns; line breaks only at LF, CRLF and CR |
-| `messages` | values, lists of names and quoted keys in messages spelled in the text form |
-| `text` | character counting, ASCII lexer classes, whitespace, `$` at the end of text only |
-| `yaml` | YAML 1.2 as the TS parser reads it |
-| `dates` | dates and times as text, `system.now` |
-| `infinity` | infinity is a float value |
-| `llm` | how the TS LLM layer builds requests |
-| `code` | TS CODE bodies and their failures |
-| `failure-codes` | decision 36's TS-only failure codes |
-| `run-log` | the TS run log redesign: the trace shows the TS log as written |
-| `null-field-read` | TS yian's null-safe field reads (#1149): `?.`, `.` on a null value is an error, and a declared field reads null when absent |
-
 ## Groups
 
 A case's group is its directory under `cases/`.
@@ -739,7 +664,7 @@ A case's group is its directory under `cases/`.
 | Group | Kind(s) | Covers |
 |---|---|---|
 | `defaults` | defaults | the defaults table, parse rules, messages |
-| `json` | json (TS-only) | lossless reader, canonical encoders, RFC 8785 vectors, log number form |
+| `json` | json | lossless reader, canonical encoders, RFC 8785 vectors, log number form |
 | `values` | value | building values, kinds, files, infinity and NaN, nesting, surrogates, `-0`, host intake |
 | `types` | value, load | type text, ranges, typedefs, type nesting |
 | `yaml` | load | YAML 1.2 scalars, dates, merge keys, non-text keys, limits, syntax errors, line breaks |
@@ -765,21 +690,13 @@ A case's group is its directory under `cases/`.
 ## Running the suite
 
 ```bash
-PYTHONPATH=src python -m pytest -q tests/test_conformance.py              # every case
-PYTHONPATH=src python -m pytest -q tests/test_conformance.py -k run-core  # one group
-CONFORMANCE_CASES=/tmp/cases PYTHONPATH=src python -m pytest -q tests/test_conformance.py  # cases under /tmp/cases
-```
-
-Each case is one test named by its id. A skipped case says why.
-
-```bash
 cd ts && bun tests/conformance.ts                                  # every case, on Bun
 cd ts && bun tests/conformance.ts --group defaults --kind defaults # a selection
 cd ts && bun run build && node dist/tests/conformance.js           # every case, on Node
 ```
 
-The TS runner's flags, each repeatable, are `--group`, `--kind`, `--case <group>/<name>`,
-`--rules` and `--diagnostic-code`. It prints one `FAIL` line per failing case and a summary,
+The runner's flags, each repeatable, are `--group`, `--kind`, `--case <group>/<name>` and
+`--diagnostic-code`. It prints one `FAIL` line per failing case and a summary,
 counts a failing `pending` case as expected, fails a case whose kind it doesn't run yet, and exits
 1 when any case fails. On every `run` and `resume` case with a log it also checks the log's invariants
 (in-flight nodes within `num_workers`, nothing but backward and memory records after the terminal
@@ -816,7 +733,7 @@ with a serial case that sets `run.run_id`, makes no random ids (no memory; an AG
 its scripted replies give every tool call id), and holds no file paths; the error texts in it are
 a stub's or the runner's own (the stop's `conformance stop`).
 `--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`,
-`resume` and `backward` case instead of comparing it. The Python runner ignores golden logs.
+`resume` and `backward` case instead of comparing it.
 
 ```bash
 cd ts && bun tests/conformance.ts --write-expect --group run-core      # regenerate a group's expectations
@@ -825,11 +742,10 @@ cd ts && bun tests/conformance.ts --write-expect --case run-core/x     # or one 
 
 `--write-expect` reruns each selected `run`, `resume` and `backward` case and, for each of
 `trace`, `events`, `stream` and `tool_calls` that the case already has and whose computed value
-differs, writes the computed value back into `expect`, then adds `run-log` to `rules` (a new `rules`
-goes right after `kind`). It prints a `wrote <id>: <keys>` line for each case it changes. Values
+differs, writes the computed value back into `expect`. It prints a `wrote <id>: <keys>` line for each case it changes. Values
 are written in the codec form above, after placeholders, so a float keeps its fraction (`2.0`), an
-int stays exact at any size, and a made-up id stays `<id:N>`. Only the lines of `rules` and
-`expect` change, and in them the parts that already held their value keep their text, comments
+int stays exact at any size, and a made-up id stays `<id:N>`. Only the lines of `expect`
+change, and in them the parts that already held their value keep their text, comments
 included. It never writes `output`, `raises`, `flow` or `host`, or any other key: a case whose
 `output` or `raises` differs (or that fails another way) is reported as a failure and left as it
 is, and a `pending` case is never written. Review the diff like a golden log: every changed line

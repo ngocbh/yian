@@ -68,7 +68,7 @@
             "format": {"$ref": "#/$defs/format"},
             "status": {"const": "succeeded"},
             "output": {
-              "description": "The flow's output in yian's JSON codec form (conformance/README.md): plain JSON, a file as {uri, mime, name}, a float infinity as {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, and a mapping that would read as one of those or whose only key is $record wrapped in {\"$record\": ...}."
+              "description": "The flow's output in yian's JSON codec form (conformance/SPEC.md): plain JSON, a file as {uri, mime, name}, a float infinity as {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, and a mapping that would read as one of those or whose only key is $record wrapped in {\"$record\": ...}."
             }
           }
         },

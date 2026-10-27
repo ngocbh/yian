@@ -1,7 +1,7 @@
 /**
  * Run the language-neutral conformance cases in `conformance/cases/` against TypeScript yian.
  *
- * Each case file is one test, named by its id `<group>/<name>`. `conformance/README.md` defines
+ * Each case file is one test, named by its id `<group>/<name>`. `conformance/SPEC.md` defines
  * the case format and what each kind checks.
  *
  * Runs under Bun from source and under Node from `dist/`; only `node:` APIs and `yaml`.
@@ -142,7 +142,7 @@ export type Kind =
   | "cli"
   | "json";
 
-// The closed format, as conformance/README.md defines it. Sets, and tables keyed by a checked
+// The closed format, as conformance/SPEC.md defines it. Sets, and tables keyed by a checked
 // `Kind`, so a case value such as `kind: toString` never finds an `Object.prototype` member.
 const COMMON: ReadonlySet<string> = new Set(["kind", "pending", "expect"]);
 const FLOW: ReadonlySet<string> = new Set(["flow", "files", "env"]);
@@ -1044,7 +1044,7 @@ export function compare(
 /**
  * TS error class names that differ from the case names, mapped to the case names. A change that
  * introduces such a class adds its entry here and the matching row to the error-class table in
- * `conformance/README.md`.
+ * `conformance/SPEC.md`.
  */
 export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map([
   // TS throws a RangeError wherever Python raises ValueError at a yian boundary.
@@ -2003,7 +2003,7 @@ function eventForm(event: RunEvent, flow: ComposedFlow): Value[] {
   return Object.keys(data).length > 0 ? [event.type, data] : [event.type];
 }
 
-// The README's trace table: record kind -> [the payload field naming the node, the payload fields
+// SPEC.md's trace table: record kind -> [the payload field naming the node, the payload fields
 // kept].
 type TraceRow = readonly [string | null, readonly string[]];
 const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
@@ -2121,7 +2121,7 @@ function capture(captured: Case): Case {
   );
 }
 
-/** Return the run log's `lines` projected to the README's trace. */
+/** Return the run log's `lines` projected to SPEC.md's trace. */
 export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
   const failure = (payload: Case): Case => {
     const origins = (payload["trace"] as Case[]).map(

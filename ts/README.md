@@ -1,8 +1,8 @@
 # yian (TypeScript)
 
 The TypeScript implementation of yian ([ngocbh/yian#736][issue-736]), the npm package `@ngocbh/yian`
-(`yian` is taken on npm). The Python package in `src/yian/` stays until the cut-over. Until then the
-guides in `docs/` describe Python yian, with a "Changed (TS yian):" note wherever TS yian differs.
+(`yian` is taken on npm). The guides in `docs/` still describe Python yian, which is retired, with
+a "Changed (TS yian):" note wherever TS yian differs, until they are rewritten.
 This README gives the TypeScript shape of the API: names, option objects and types. For what each
 option does, follow its link to [`docs/api.md`][docs/api.md]; the flow YAML is in
 [`docs/syntax.md`][docs/syntax.md].

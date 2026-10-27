@@ -1,36 +1,15 @@
 plans/
 scratch/
 
-# Byte-compiled / optimized
-__pycache__/
-*.py[cod]
-*$py.class
-
 # Distribution / packaging
-.Python
-/build/
-!src/yian/compose/build/
 dist/
 node_modules/
 /ts/LICENSE
 /ts/bin/
-*.egg-info/
-*.egg
-wheels/
-
-# Virtual environments
-.venv/
-venv/
-env/
 
 # Local env / secrets
 .env
 .envrc
-# Test / coverage
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
 
 # Editors / OS
 .idea/

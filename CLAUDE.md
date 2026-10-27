@@ -16,7 +16,7 @@ Goals:
 
 Use these documents as the source of truth:
 
-- [`src/yian/README.md`](src/yian/README.md) for engine design.
+- [`docs/engine.md`](docs/engine.md) for engine design.
 - [`docs/syntax.md`](docs/syntax.md) for flow syntax.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) for the GitHub workflow, tests, docs, and
   code style.
@@ -56,14 +56,13 @@ While working:
 
 ## Engine rules
 
-Read [`src/yian/README.md`](src/yian/README.md) before an
+Read [`docs/engine.md`](docs/engine.md) before an
 engine or flow change.
 
 - The author fixes the graph. A running flow does not rewrite itself, and an LLM
   does not choose the graph.
 - `runtime/` stays kind-blind. Kind-specific work belongs in the node. The kind
-  census in `tests/engine/test_kind_census.py` (TS:
-  `ts/tests/engine/kind_census.test.ts`) must stay at zero.
+  census in `ts/tests/engine/kind_census.test.ts` must stay at zero.
 - Nodes do not write the variable pool. They return one of `Output`, `Route`, or
   `Grow`; the engine records and binds the result.
 - Runtime transitions stay record-authoritative: prepare and validate, append to
@@ -77,7 +76,7 @@ engine or flow change.
 ## Failure codes
 
 `failure.code` is how a host tells failures apart. The list is `FAILURE_CODES` in
-`src/yian/diagnostics.py`; each code is documented in
+`ts/src/diagnostics.ts`; each code is documented in
 [`docs/api.md`](docs/api.md#failure-codes).
 
 1. A code names a category a host can act on differently from `node.execute`.
@@ -138,23 +137,19 @@ A stale guide or skill is a bug.
 
 ## Environment and tests
 
-Yian supports Python 3.11 or newer. On this host, use the
-`yian` conda environment; the default Python may be too old.
+Yian is TypeScript, in `ts/`. It needs Bun 1.4 or newer, and Node 22.18 or newer for the Node
+checks. Run from `ts/`:
 
 ```bash
-conda activate yian
-python -m pip install -e ".[all,dev]"
+bun install --frozen-lockfile
+bun run typecheck
+bun test ./tests/engine/kind_census.test.ts   # focused tests while working
+bun run test                                  # the whole suite on Bun
+bun run test:node                             # the same tests on Node
+bun tests/conformance.ts                      # the conformance cases
 ```
 
-Run focused tests while working, then the relevant suite:
-
-```bash
-PYTHONPATH=src python -m pytest tests/engine
-PYTHONPATH=src python -m pytest
-```
-
-The TypeScript tree's commands are in `ts/README.md`: from `ts/`, run
-`bun run typecheck`, `bun run test`, and `bun tests/conformance.ts`.
+More commands are in [`ts/README.md`](ts/README.md#commands).
 
 ## Code style
 

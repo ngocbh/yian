@@ -57,6 +57,7 @@ import { ApiKeyCredentials, OAuthCredentials } from "../../src/llm_clients/auth/
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
+import { VERSION } from "../../src/platform.ts";
 import { replayRunLog, runFlow, type RunFlowOptions, runStartInputs } from "../../src/run.ts";
 import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { hostEnv } from "./mcp_helpers.ts";
@@ -191,7 +192,7 @@ const GOLDEN_RUN_STARTED = {
     start_wiring_override: { topic: "${input.topic}" },
     tool_groups: {},
     tools: {},
-    yian_version: "0.0.0",
+    yian_version: VERSION,
   },
   run_id: "golden",
   schema: 23,

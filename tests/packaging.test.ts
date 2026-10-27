@@ -1,23 +1,9 @@
-// Ported from tests/test_packaging.py: the package ships what it needs.
-// `test_package_data_covers_every_runtime_data_file` becomes "every file under `src/` is a `.ts`
-// file", since `files` ships `src` and its `dist/src` build whole. `test_python_floor_is_3_11`
-// becomes the `engines` check and `test_mcp_extra_pins_the_mcp_sdk` the MCP SDK's optional peer.
-// Added here: the npm fields (`files`, `bin`, `exports`, `prepack`, `publishConfig`), exact
-// dependency pins, and the names each entry point exports, Python's `yian.__all__`, `yian.run`,
-// `yian.tools`, `yian.skills`, and `yian.llm_clients` with `yian.llm_clients.auth` (one
-// `./llm_clients` entry; `./platform`, the lock and SQLite helpers for hosts, has no Python
-// counterpart); and `LICENSES`, the text `yian --licenses` prints, against `NOTICE`, Bun's license
-// and the license files of the packages the binaries bundle, and of the packages copied into their
-// `dist/`. With `YIAN_UPDATE_LICENSES=1` the test writes `src/cli/licenses.ts` instead, taking Bun's
-// license from the file `YIAN_BUN_LICENSE` names and the copied packages' from the npm packages
-// extracted under `YIAN_VENDORED_LICENSES`, or else each from the current `LICENSES`. With
-// `YIAN_TEST_BINARY` set to a binary `bun run build:bin` made, the file also runs that binary:
-// `--licenses`, `--version`, CODE flows, one Ctrl-C, `--json`, `auth`, `check`, an MCP server, and a
-// cwd `.env` and `bunfig.toml` it must ignore. The `./code-worker` entry resolves to the build on
-// the Node `YIAN_TEST_NODE` names, and on Bun a compiled host runs CODE nodes with a shim entry
-// importing it, and fails them without one.
+// The package ships what it needs: the npm fields in package.json, the README that is the npm page,
+// the names each entry point exports, and LICENSES against the notices (`YIAN_UPDATE_LICENSES=1`
+// rewrites it). Opt-in runs: `YIAN_TEST_BINARY` a `bun run build:bin` binary, `YIAN_TEST_NODE` the
+// built `./code-worker` on that Node, and `YIAN_TEST_PACK=1` the packed, installed npm tarball.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -270,6 +256,17 @@ describe("package.json", () => {
     expect(PACKAGE.exports).toEqual(expected);
     // Resolution takes the first matching condition, so Bun must see its own before `default`.
     for (const path of Object.keys(ENTRIES)) expect(Object.keys(PACKAGE.exports[path])[0]).toBe("bun");
+  });
+
+  test("the README, which is the npm page, links only the docs site", () => {
+    const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+    expect(readme).toContain("https://yian.readthedocs.io/");
+    expect(readme).toContain("npm install @ngocbh/yian");
+    expect(readme).not.toContain("github.com/ngocbh/yian");
+    // npm resolves relative links against `repository`, which is unset while the repo is private.
+    expect(readme.match(/\]\((?!https:\/\/)[^)]*\)/g) ?? []).toEqual([]);
+    expect(readme).not.toMatch(/python|pytest|pip install/i);
+    expect(readme.split("\n").length).toBeLessThanOrEqual(60);
   });
 });
 
@@ -979,4 +976,92 @@ describe("the code-worker entry", () => {
     },
     HOST_TEST_LIMIT,
   );
+});
+
+/** Whether to pack the package and test the tarball: slow, and the install needs the network. */
+const PACK = process.env.YIAN_TEST_PACK === "1";
+/** The export paths a consumer imports (`./package.json` is data). */
+const IMPORTS = Object.keys(PACKAGE.exports).filter((path) => path !== "./package.json");
+
+describe.if(PACK)("the npm tarball", () => {
+  let dir = "";
+  let tarball = "";
+  let files: string[] = [];
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "yian-pack-"));
+    // Build first and pack with --ignore-scripts: a `prepack` run under `npm pack` prints npm's
+    // script banners to stdout, which would break the JSON parse.
+    execFileSync("npm", ["run", "build"], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
+    const [packed] = JSON.parse(
+      execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
+        cwd: ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      }),
+    ) as { filename: string; files: { path: string }[] }[];
+    tarball = join(dir, packed!.filename);
+    files = packed!.files.map((file) => file.path).sort();
+    execFileSync("tar", ["-xzf", tarball, "-C", dir]);
+  }, 300_000);
+
+  // Removing the extracted tree and the consumer's node_modules can outlast the 5 s hook default.
+  afterAll(() => {
+    if (dir !== "") rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  test("holds only the build, the sources, the notices and package.json", () => {
+    const top = new Set(["LICENSE", "NOTICE", "README.md", "package.json"]);
+    const stray = files.filter(
+      (path) =>
+        !(path.startsWith("dist/src/") || path.startsWith("src/") || top.has(path)) ||
+        /(^|\/)(tests?|fixtures|conformance)\//.test(path) ||
+        /\.test\./.test(path),
+    );
+    expect(stray).toEqual([]);
+  });
+
+  test("carries every export target and the bin", () => {
+    const targets = Object.values(PACKAGE.exports as Record<string, string | Record<string, string>>)
+      .flatMap((target) => (typeof target === "string" ? [target] : Object.values(target)))
+      .map((target) => target.replace(/^\.\//, ""));
+    expect([...targets, PACKAGE.bin.yian].filter((target) => !files.includes(target))).toEqual([]);
+  });
+
+  test("the bin starts with a node shebang", () => {
+    expect(readFileSync(join(dir, "package", PACKAGE.bin.yian), "utf8").startsWith("#!/usr/bin/env node\n")).toBe(true);
+  });
+
+  test("installs, runs and typechecks for a consumer on plain Node", () => {
+    const app = join(dir, "app");
+    mkdirSync(app);
+    writeFileSync(join(app, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }));
+    execFileSync("npm", ["install", "--no-audit", "--no-fund", tarball], { cwd: app, stdio: "pipe" });
+    const version = execFileSync(join(app, "node_modules", ".bin", "yian"), ["--version"], { cwd: app, encoding: "utf8" });
+    expect(version.trim()).toBe(PACKAGE.version);
+    const specifier = (path: string) => `@ngocbh/yian${path.slice(1)}`;
+    const imports = IMPORTS.map((path) => `await import(${JSON.stringify(specifier(path))});`).join("\n");
+    execFileSync("node", ["--input-type=module", "-e", imports], { cwd: app, stdio: "pipe" });
+    writeFileSync(
+      join(app, "index.ts"),
+      IMPORTS.map((path, i) => `import * as m${i} from ${JSON.stringify(specifier(path))};\nvoid m${i};`).join("\n"),
+    );
+    writeFileSync(
+      join(app, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          target: "ES2022",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: false,
+          types: ["node"],
+          typeRoots: [join(ROOT, "node_modules", "@types")],
+        },
+        include: ["index.ts"],
+      }),
+    );
+    execFileSync(join(ROOT, "node_modules", ".bin", "tsc"), ["-p", app], { cwd: app, stdio: "pipe" });
+  }, 300_000);
 });

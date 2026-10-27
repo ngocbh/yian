@@ -665,7 +665,7 @@ export function withWarnings<T>(handler: WarningHandler, fn: () => T): T {
 export type Send = (input: string | URL, init: RequestInit) => Promise<Response>;
 
 /** yian's version; a test keeps it equal to `package.json`'s. */
-export const VERSION = "0.0.0";
+export const VERSION = "0.1.0";
 
 /** The `User-Agent` every request carries unless its caller sets one. */
 export const USER_AGENT = `yian/${VERSION}`;

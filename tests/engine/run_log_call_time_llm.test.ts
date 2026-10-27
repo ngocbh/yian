@@ -28,6 +28,7 @@
 
 import { expect, test } from "bun:test";
 
+import { VERSION } from "../../src/platform.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -97,7 +98,9 @@ const GOLDEN =
   "a".repeat(64) +
   '","learnable":false,' +
   '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"parent":null,"skills":{},' +
-  '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"0.0.0"},"run_id":"r1",' +
+  '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"' +
+  VERSION +
+  '"},"run_id":"r1",' +
   '"schema":23,"seq":0}';
 
 test("the schema is twenty-three", () => {

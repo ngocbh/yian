@@ -32,7 +32,7 @@ import { NO_ENV, serving, textReply, userText } from "./run_state_fixtures.ts";
 const tmp = mkdtempSync(join(tmpdir(), "yian-chat-log-growth-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
+const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 const MESSAGE = 100;
 const REPLY = 200;

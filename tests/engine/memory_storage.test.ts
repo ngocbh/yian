@@ -133,7 +133,7 @@ function systemError(syscall: string): Error {
   return Object.assign(new Error("secret-host-path"), { code: "EIO", errno: -5, syscall });
 }
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/memory/storage/sqlite.js");
 
@@ -342,7 +342,7 @@ test.each([
   ["null", null],
   ["a number", 3],
 ])("only file paths are accepted (%s)", (_label, candidate) => {
-  // A regression that accepted a relative path would create it here, not under `ts/`.
+  // A regression that accepted a relative path would create it here, not under the package root.
   const previous = process.cwd();
   process.chdir(dir);
   try {

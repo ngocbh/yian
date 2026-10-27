@@ -95,12 +95,12 @@ import {
 import { FileLockError } from "../../src/platform.ts";
 import { type ExtendResult, readAndExtend, replay } from "./markdown_both_runtimes.ts";
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/memory/storage/markdown.js");
 const BUILT_SCENARIOS = path.join(ROOT, "dist/tests/engine/markdown_both_runtimes.js");
 const FIXTURE: Record<string, string> = JSON.parse(
-  fs.readFileSync(path.join(ROOT, "../conformance/fixtures/markdown_store.json"), "utf8"),
+  fs.readFileSync(path.join(ROOT, "conformance/fixtures/markdown_store.json"), "utf8"),
 );
 
 /** Return what the promise or call `fn` rejects or throws with; fail when it succeeds. */

@@ -403,7 +403,7 @@ test("runRecordOffsets maps each seq to its line's byte offset, without the writ
 });
 
 test("every pool_commit line of the conformance golden logs round-trips byte for byte through the public JSON form", () => {
-  const cases = join(import.meta.dirname, "../../../conformance/cases");
+  const cases = join(import.meta.dirname, "../../conformance/cases");
   let checked = 0;
   const kinds = new Set<string>();
   for (const name of readdirSync(cases, { recursive: true, encoding: "utf8" })) {

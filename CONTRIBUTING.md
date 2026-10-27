@@ -5,12 +5,12 @@ clear, and tied to a GitHub issue.
 
 ## Development setup
 
-Yian is TypeScript, in `ts/`. It needs Bun 1.4 or newer, and Node 22.18 or newer for the Node
+Yian is TypeScript. It needs Bun 1.4 or newer, and Node 22.18 or newer for the Node
 checks.
 
 ```bash
 git clone https://github.com/ngocbh/yian
-cd yian/ts
+cd yian
 bun install --frozen-lockfile
 ```
 
@@ -139,7 +139,6 @@ Run focused tests while working, then the relevant suite before opening a pull
 request:
 
 ```bash
-cd ts
 bun run typecheck
 bun test ./tests/engine        # focused tests
 bun run test                   # the whole suite on Bun
@@ -174,7 +173,7 @@ Update docs and project skills in the same pull request as the code they explain
 | --- | --- |
 | YAML, expressions, or node authoring | `docs/syntax.md` and the `composing-agents` skill |
 | Engine behavior or rules | `docs/engine.md` |
-| CLI or public API | `README.md`, `ts/README.md` and the docstrings |
+| CLI or public API | `README.md` and the docstrings |
 
 Check edited flow templates still load. Build the docs when they change:
 

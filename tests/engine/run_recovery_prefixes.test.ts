@@ -287,7 +287,7 @@ test("a replayed route to a handle that matches no edge throws the RangeError it
 
 // ---- Through run.ts's log replay and advance ----
 
-const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
 const RECOVERY_RUN_ID = "recovery-run";
 
 const LINEAR = `

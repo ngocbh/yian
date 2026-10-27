@@ -24,7 +24,7 @@ import { NO_ENV, PromptModel, serving, SUMMARIZER_FIRST_LINE, systemText, userTe
 const tmp = mkdtempSync(join(tmpdir(), "yian-chat-prompt-bound-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
+const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 const TURNS = 80;
 const BUDGET = 32_000;

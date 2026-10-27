@@ -728,7 +728,7 @@ describe("yian chat's inbox and inputs", () => {
 });
 
 /** The chat example (an `Inbox(Message)`): one model call per turn, the history carried by bindings. */
-const EXAMPLE_CHAT = fileURLToPath(new URL("../../../examples/chat.yaml", import.meta.url));
+const EXAMPLE_CHAT = fileURLToPath(new URL("../../examples/chat.yaml", import.meta.url));
 
 /** A one-word ("7") chat-completions stream. */
 const SEVEN =

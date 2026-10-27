@@ -65,7 +65,7 @@ import {
   SCHEMA_VERSION,
 } from "../src/runtime/log.ts";
 
-const CASES = fileURLToPath(new URL("../../conformance/cases/", import.meta.url));
+const CASES = fileURLToPath(new URL("../conformance/cases/", import.meta.url));
 
 describe("readCase", () => {
   test("reads YAML 1.2 core scalars, ints as bigint", () => {

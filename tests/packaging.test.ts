@@ -221,13 +221,13 @@ describe("package.json", () => {
   test("ships the build, the sources and the notices, publicly", () => {
     expect(PACKAGE.files).toEqual(["dist/src", "src", "LICENSE", "NOTICE", "README.md"]);
     expect(PACKAGE.publishConfig).toEqual({ access: "public" });
-    expect(PACKAGE.scripts.prepack).toBe("cp ../LICENSE LICENSE && bun run build");
+    expect(PACKAGE.scripts.prepack).toBe("npm run build");
   });
 
-  test("links the repository's ts directory, its README and its issues", () => {
-    expect(PACKAGE.repository).toEqual({ type: "git", url: "git+https://github.com/ngocbh/yian.git", directory: "ts" });
-    expect(PACKAGE.homepage).toBe("https://github.com/ngocbh/yian/tree/main/ts#readme");
-    expect(PACKAGE.bugs).toBe("https://github.com/ngocbh/yian/issues");
+  test("links only the docs site while the repository is private", () => {
+    expect(PACKAGE.homepage).toBe("https://yian.readthedocs.io/");
+    expect(PACKAGE).not.toHaveProperty("repository");
+    expect(PACKAGE).not.toHaveProperty("bugs");
   });
 
   test("the yian bin is the built CLI, run by node", () => {
@@ -847,7 +847,7 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
   test(
     "checks every example",
     async () => {
-      const examples = join(ROOT, "..", "examples");
+      const examples = join(ROOT, "examples");
       const flows = readdirSync(examples)
         .filter((name) => name.endsWith(".yaml"))
         .map((name) => join(examples, name));
@@ -947,7 +947,7 @@ describe("the code-worker entry", () => {
   });
 
   test.skipIf(!NODE)("on Node it resolves to the build and imports without running a job", () => {
-    // `ts/node_modules/@ngocbh` doesn't exist, so this resolves only by self-reference through `exports`.
+    // `node_modules/@ngocbh` doesn't exist, so this resolves only by self-reference through `exports`.
     const name = JSON.stringify(CODE_WORKER);
     const script = `await import(${name}); console.log(import.meta.resolve(${name}));`;
     const result = spawnSync(NODE!, ["--input-type=module", "-e", script], {

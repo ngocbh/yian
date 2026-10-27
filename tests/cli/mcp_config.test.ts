@@ -387,7 +387,7 @@ test("a __proto__ server name and a __proto__ env key stay data", () => {
   expect(Object.getOwnPropertyDescriptor(env, "__proto__")?.value).toBe("x");
 });
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = join(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/cli/mcp_config.js");
 

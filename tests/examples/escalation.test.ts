@@ -18,7 +18,7 @@ import type { AskRequest } from "../../src/tools/registry.ts";
 import { handClock } from "../engine/inbox_fixtures.ts";
 import { NO_ENV as env, rejected } from "../engine/run_state_fixtures.ts";
 
-const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
+const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 const TEXT = readFileSync(join(EXAMPLES_DIR, "approve-plan.yaml"), "utf8");
 const ROOT = mkdtempSync(join(tmpdir(), "yian-escalation-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));

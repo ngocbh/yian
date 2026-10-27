@@ -858,7 +858,7 @@ describe("redirectDetail", () => {
   });
 });
 
-/** The `ts/` directory: Bun children run from it, so Bun never looks for packages to install. */
+/** The package root: Bun children run from it, so Bun never looks for packages to install. */
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
 const BUILT = path.join(ROOT, "dist/src/platform.js");

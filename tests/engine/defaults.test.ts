@@ -263,7 +263,7 @@ describe("read", () => {
 });
 
 describe("docs/defaults.md", () => {
-  const DOC = readFileSync(new URL("../../../docs/defaults.md", import.meta.url), "utf8");
+  const DOC = readFileSync(new URL("../../docs/defaults.md", import.meta.url), "utf8");
 
   /** Return the stripped cells of one Markdown table row. */
   function cells(line: string): string[] {

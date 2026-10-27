@@ -2120,7 +2120,7 @@ test("a historical route keeps the schema in its trace line", () => {
   expect(decodeRecord(occurrence.recordJson).schema).toBe(SCHEMA_VERSION);
 });
 
-const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
 
 const HISTORICAL_FLOW = `id: historical-backward
 name: historical_backward

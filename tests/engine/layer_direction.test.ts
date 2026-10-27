@@ -1,5 +1,5 @@
 /**
- * Import-direction ratchets and source lints for `ts/src`, a port of
+ * Import-direction ratchets and source lints for `src`, a port of
  * `tests/engine/test_layer_direction.py`.
  *
  * Lower layers never import the layers that drive them, a few leaves import only

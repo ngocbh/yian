@@ -377,7 +377,7 @@ test("a Stop after the send, before the take wakes, stops the reply", async () =
   expectStoppedByApplied(log, done.output, model);
 });
 
-const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
+const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 /** `examples/chat.yaml`. */
 const chatExample = () => loadFlow(readFileSync(join(EXAMPLES_DIR, "chat.yaml"), "utf8"), { searchPaths: [EXAMPLES_DIR] });
 const CHUNKS = () => [new TextDelta(0, "one"), new TextDelta(0, " two"), new TextDelta(0, " three"), new Finish({ reason: "stop" })];

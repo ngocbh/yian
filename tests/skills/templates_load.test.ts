@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 
-const TEMPLATES = fileURLToPath(new URL("../../../.claude/skills/composing-agents/templates", import.meta.url));
+const TEMPLATES = fileURLToPath(new URL("../../.claude/skills/composing-agents/templates", import.meta.url));
 const NAMES = readdirSync(TEMPLATES)
   .filter((name) => name.endsWith(".yaml"))
   .sort();

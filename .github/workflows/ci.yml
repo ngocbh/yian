@@ -13,9 +13,6 @@ jobs:
   test:
     name: Typecheck, tests and conformance
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ts
     steps:
       - uses: actions/checkout@v4
 

@@ -90,7 +90,7 @@ const MODES: readonly Mode[] = ["auto", "legacy"];
 /** Node rows get 90 s: Node starts the built code and the fixture from cold. */
 const ON_NODE = 90_000;
 
-/** The `file:` URL of `file` under `ts/`, as a JavaScript string literal for an inline script. */
+/** The `file:` URL of `file` under the package root, as a JavaScript string literal for an inline script. */
 const builtUrl = (file: string): string => JSON.stringify(pathToFileURL(join(ROOT, file)).href);
 
 /** Run the module `script` on the Node from `YIAN_TEST_NODE`, with `flags` before it. */

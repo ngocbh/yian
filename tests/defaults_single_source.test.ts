@@ -2,10 +2,10 @@
  * A port of `tests/test_defaults_single_source.py`: every default and limit is defined only in
  * `defaults.ts`.
  *
- * The scan reads `ts/src` as text, with comments and strings blanked by `blank`, and never
+ * The scan reads `src` as text, with comments and strings blanked by `blank`, and never
  * imports it.
  *
- * Ported: the shape self-test, the scan of `ts/src`, the stale-allowlist and allowed-files
+ * Ported: the shape self-test, the scan of `src`, the stale-allowlist and allowed-files
  * checks, the inline-cap-guard shapes, and the OAuth-callback and question-count cap rows.
  * Changed: the same rule holds in TS (decision 4b), so a small token scanner replaces Python's
  * `ast` walk and the allowlist names TS sites. A flagged literal is an integer of 2 or more or a
@@ -17,7 +17,7 @@
  * `len(...)` comparisons become `.length` comparisons. The self-test's Python-only shapes
  * (positional-only parameters, a `with` block, a nested class) have no TS form and are left out
  * of its source. The scanner assumes class members and
- * statements end in `;` (nothing in `ts/src` relies on automatic semicolon insertion). It is not a
+ * statements end in `;` (nothing in `src` relies on automatic semicolon insertion). It is not a
  * real parser because the `typescript` 7 package has no stable JS AST API and no other parser is
  * a dependency.
  */
@@ -31,7 +31,7 @@ import { blank } from "./engine/source_scan.ts";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
-// Each `(path relative to ts/src, name)` the scan finds that is not a default or limit, with
+// Each `(path relative to src, name)` the scan finds that is not a default or limit, with
 // the reason, keyed `path: name`. A method parameter is `Class.method.parameter`, a fallback
 // `function.??` or `function.||`, and an unnamed arrow function `<arrow>`.
 const ALLOWED: Record<string, string> = {

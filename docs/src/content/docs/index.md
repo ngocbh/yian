@@ -1,9 +1,10 @@
 ---
 title: "yian"
-description: "Readable YAML flows of agents, code and tools that people and LLMs write, check and improve."
+description: "A small declarative language, written in YAML, for flows of agents, code and tools that people and LLMs write, check and improve."
 ---
 
-yian runs flows: YAML files that wire agents, code and tools into steps.
+yian is a small declarative language for flows: YAML files that wire agents, code and tools
+into steps.
 
 ## What yian is
 

@@ -2,9 +2,9 @@
 
 > Yet Another Agent Composer
 
-yian runs readable YAML flows of agents, code and tools that people and LLMs write, check and
-improve. You write the graph in a YAML file, and it doesn't change at run time: LLMs fill in
-values and choose among the tools you grant.
+yian is a small declarative language, written in YAML, for flows of agents, code and tools that
+people and LLMs write, check and improve. The graph you write doesn't change at run time: LLMs
+fill in values and choose among the tools you grant.
 
 - **A fixed graph you can read before it runs.** Data references wire the steps together.
 - **Typed values, checked at load.** A flow whose parts don't fit fails before it calls a model.

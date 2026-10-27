@@ -18,6 +18,3 @@ node_modules/
 
 # Runtime transcripts
 .yian/
-
-# MkDocs build output
-site/

@@ -178,8 +178,8 @@ Update docs and project skills in the same pull request as the code they explain
 Check edited flow templates still load. Build the docs when they change:
 
 ```bash
-python -m pip install -r docs/requirements.txt
-mkdocs build --strict
+bun test ./tests/docs
+(cd docs && bun install && bun run build)
 ```
 
 ## Docstrings

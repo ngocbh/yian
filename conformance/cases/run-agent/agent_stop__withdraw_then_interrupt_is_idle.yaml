@@ -1,4 +1,3 @@
-# TS-only: withdraw and the remembered Stop (#1106).
 # Esc right after a send: the withdraw takes the message back from the waiting take, which waits
 # again with nothing unread, so the interrupt that follows records nothing. The next message gets
 # a full reply, and the log holds no `interrupted` record.

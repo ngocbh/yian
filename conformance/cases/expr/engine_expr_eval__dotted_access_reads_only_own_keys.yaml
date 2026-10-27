@@ -1,5 +1,5 @@
 kind: expr
-# A step reads only own keys, never a property; TS yian (#1149) raises on the key the record lacks.
+# A step reads only own keys, never a property; a key the record lacks raises (#1149).
 expr: obj.__class__
 values: {obj: {a: 1}}
 expect:

@@ -1,23 +1,4 @@
-/**
- * Read authored `input:` or `variables:` declarations straight from YAML text: a port of
- * `tests/compose/_declarations.py`.
- *
- * TS-only: `nodesOf`, which parses a flow's `nodes:` with stand-in kinds registered, and
- * `fileOf`, which parses its top level; `CONFORMANCE_DIR`, the `baseDir` that resolves the
- * fixture CODE references, with `loadConformanceFlow` and `linkConformanceFixtures` built on it;
- * `caseText` and `caseDocument`, which read a conformance
- * case's flow as text or as a parsed document; and the harvested-case harness built on them
- * (`loadError`, `loadErrorAsync`, `cursorAt`, `caseRegistry`, `CaseRow`, `runCase`, `TextCaseRow`, `runTextCase`,
- * `inputsAt`, `variablesAt`, `parsedNodes`, `assembled`, `assembledWith`, `assembleText`), which
- * makes the loader's call on a case and compares the result with the case's `expect`; and
- * `handChild`, a child flow built by hand (START, producers with given output contracts, END)
- * where a case's `defs:` entry would be loaded, for the rows that read a child's signature or
- * build a CALL or MAP over one (`assembledWith` and `assembleText`'s `children`). The harness
- * assembles through the loader's real `CallableScope`, so a case's `defs:` entries resolve lazily
- * and inline bodies register through it; hand-built children are looked up in front of it. The
- * harness reads the flow's `llm_config:` as the loader reads a value layer; the loader's checks of
- * a plain record layer run only through `loadFlow`.
- */
+/** Read authored `input:` or `variables:` declarations straight from YAML text. */
 
 import { existsSync, readFileSync, symlinkSync } from "node:fs";
 import { basename, join } from "node:path";

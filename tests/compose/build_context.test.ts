@@ -1,12 +1,6 @@
 /**
- * The `BuildContext` and `BuildResult` carriers a node `build` reads and returns: a port of
- * `tests/compose/test_build_context.py`. The frozen rows check `Object.isFrozen`, the TS form of
- * a frozen dataclass.
- *
- * TS-only: `baseDir`, the directory a CODE reference resolves against, defaults to `null`.
- *
- * Dropped: `test_build_result_range_metadata_does_not_affect_equality` (TS has no dataclass
- * `==`).
+ * The `BuildContext` and `BuildResult` carriers a node `build` reads and returns; the frozen rows
+ * check `Object.isFrozen`.
  */
 
 import { expect, spyOn, test } from "bun:test";

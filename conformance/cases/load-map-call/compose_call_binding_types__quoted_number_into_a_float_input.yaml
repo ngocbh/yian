@@ -1,4 +1,4 @@
-# TS spells the float 5.0 in the hint as 5 (rules: messages); Python's 5.0 in python_expect.
+# The message spells the float 5.0 in the hint as 5.
 kind: load
 flow: |
   id: p

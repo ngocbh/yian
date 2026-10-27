@@ -1,26 +1,4 @@
-/**
- * Agent variables declared with YAML tags (`num_sentences: !int(1..12) 4`): a port of the
- * declaration tests of `tests/compose/test_tagged_variables.py`, reading the declarations with
- * `parametersFromYaml` (`readSourceParameters`) where Python loads a flow. Ints are `bigint`.
- *
- * Ported: `test_tagged_variables_read_their_types_and_defaults`, and
- * `test_a_tagged_variable_needs_a_default_that_fits`: its declarations read on their own, and
- * its compact and inline placements (through `assembleText`; the inline one pins the whole
- * message).
- *
- * TS-only: the harvested-case table, which assembles the conformance case's flow as the loader
- * calls `assemble`, comparing the message and the last frame.
- *
- * Ported: `test_tagged_variables_render_their_defaults`, its compact placement: the assembled AGENT
- * runs through `forward` with a `ScriptedModel` (its environment sets the default model, as
- * Python's test configuration does), the request's prompt checked where Python's patched
- * `run_agent` returns it as the run's output.
- *
- * Ported through `loadFlow`: the definition and flat-definition placements of
- * `test_a_tagged_variable_needs_a_default_that_fits`, and the definition, flat-definition and
- * inline placements of `test_tagged_variables_render_their_defaults`, run with `runFlow` and a
- * `ScriptedModel` from `models` (the request's prompt checked, as in the compact row).
- */
+/** Agent variables declared with YAML tags (`num_sentences: !int(1..12) 4`). Ints are `bigint`. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,7 +28,7 @@ install(BUILTIN);
 beforeEach(() => install(BUILTIN));
 afterEach(forget);
 
-/** The default model Python's test configuration sets; the compact flow has no `llm_config`. */
+/** The default model for the compact flow, which has no `llm_config`. */
 const DEFAULT_MODEL = { provider: "openai", model: "gpt-5.5" };
 
 const REG = readTypedefs({ Tone: "Literal(concise, detailed)" });

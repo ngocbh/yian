@@ -1,4 +1,4 @@
-# TS-only (decision 20): a resume after a crash mid-node publishes NodeAttemptResumed with the node's
+# A resume after a crash mid-node publishes NodeAttemptResumed with the node's
 # crashed count, 1 for one start no stop covered.
 # Record 8 is fetch's node_started: the tool runs, then its pool_commit is refused, so attempt 2 runs on resume.
 kind: resume

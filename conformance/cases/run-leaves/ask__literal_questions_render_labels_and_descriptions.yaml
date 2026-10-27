@@ -1,4 +1,3 @@
-# From tests/engine/test_blocking_human_input.py::test_literal_questions_are_rendered_validated_and_injected.
 # An ask's literal questions render `${...}` in the question, and in each option's label and
 # description; the request carries the validated list.
 kind: run

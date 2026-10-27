@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e02-cycle.yaml.
 # Two nodes that read each other fail as a cycle: one frame per node header, one note per edge.
 kind: load
 flow: |

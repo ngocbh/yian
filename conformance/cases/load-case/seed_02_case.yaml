@@ -1,4 +1,3 @@
-# From tests/seeds/02-case.yaml.
 # A searched `case` (when:/then: + else:) with a coalesce join over its branches loads.
 kind: load
 flow: |

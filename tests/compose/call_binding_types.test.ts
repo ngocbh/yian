@@ -1,47 +1,4 @@
-/**
- * CALL/MAP bindings from `${item}`, literals and null escapes are type-checked at load: a port of
- * `tests/compose/test_call_binding_types.py`, assembling each flow with `assembleText` where Python
- * calls `load_flow`, its `child` def built by hand (`handChild`: an input `t` of the row's type, read
- * with the flow's typedefs, one `n: str` producer, returning `${n.output}`).
- *
- * Ported: `test_unprovable_fit_is_a_load_error` (32 of 36), asserted with `toContain` as Python
- * asserts `in`; `test_no_rewrite_hint_when_rewriting_cannot_help` (7), asserted on the first line's
- * end as Python asserts `endswith`;
- * `test_inline_call_with_a_former_boolean_word_names_the_boolean_to_write`; the load halves of
- * `test_bindings_that_fit_load_and_run` (16),
- * `test_text_from_an_unproven_source_is_not_converted_at_the_child_start` and
- * `test_text_supplied_to_the_top_level_flow_is_still_converted`, and their run halves, through
- * `runFlow` on the same flow text with its own `child` def.
- *
- * Changed: the four date params of `test_unprovable_fit_is_a_load_error`
- * (`("date", "2026-01-01")`, `("datetime", "2026-01-01T10:00:00")`, `("str", "2026-01-01")` and
- * `("list(date)", "[2026-01-01]")`) load: an unquoted date is text in TS (rule `dates`), so it fits
- * a `str` input, and a `date` or `datetime` input when it parses as one. Its `("float", '"5"')`
- * param hints `write 5 without quotes` (Python: `5.0`): TS reads `"5"` for a `float` input as the
- * int 5, which a float input keeps (rule `messages`). The list row of
- * `test_no_rewrite_hint_when_rewriting_cannot_help` shows `[true,"no"]` and `"no"` (Python:
- * `[true, "no"]` and `'no'`; rule `messages`).
- * `test_no_rewrite_hint_for_text_spelling_an_int_past_the_digit_limit` gets the hint: TS has no
- * int digit limit, so the text reads as that int. The CODE bodies are TS. The runs' child body
- * returns `JSON.stringify(inputs["t"])` where Python returns `repr(inputs["t"])`, so each expected
- * output is the text form (decision 7): Python's `"1"` stays `"1"`, `"'z'"` is `"\"z\""`, `"None"`
- * is `"null"`, a date reads as text so `"'2026-01-01'"` is `"\"2026-01-01\""`, and the `float`
- * rows' `"1.0"` and `"5.0"` are `"1"` and `"5"`: a CODE body gets ints as `number` and can't tell
- * an int from a float (decision 45), so these rows pin only the value (that a whole number in a
- * `float` input stays an int, decision 38, is pinned by `values/int_fills_float`). The unproven
- * text's message shows `"3"` (Python: `'3'`), and the top-level row's output is
- * `[3,2.5,true]` (Python: `[3, 2.5, True]`).
- *
- * TS-only: a float spelling past the double range (`"1e400"`) and `"inf"` (YAML reads an unquoted
- * inf as text) for a `float` input get no hint; the
- * harvested `load-map-call/compose_call_binding_types__*` cases, pinned at the end
- * (`…__date_literal_into_a_str_input` is `ok`, rule `dates`); and, as "Pinned harvested cases
- * (TS-only placement)", the case this check decides that its Python file's mirror,
- * `open_range_flows.test.ts`, lists as Covered:
- * `types/compose_open_range_flows__call_with_a_wider_open_range_source`.
- * `load-types/compose_union_narrowing__a_nullable_union_defensive_else_sees_none` is pinned in
- * `union_narrowing.test.ts`, its Python file's mirror.
- */
+/** CALL/MAP bindings from `${item}`, literals and null escapes are type-checked at load. */
 
 import { afterAll, afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -167,7 +124,7 @@ test.each<[string, string, string | null, string]>([
     null,
     "child expects 'int', but the value \"3\" does not fit; text is not converted between flows, so write 3 without quotes",
   ],
-  // Changed: TS reads "5" for a float input as the int 5, which the input keeps (Python: 5.0).
+  // "5" for a float input reads as the int 5, which the input keeps.
   [
     "float",
     '"5"',
@@ -238,7 +195,7 @@ test.each<[string, string, string | null, string]>([
     null,
     'child expects \'str\', but the default 1.50 does not fit; quote it to keep it as text: "1.50"',
   ],
-  // TS-only: the `inf` constant is shown as written, as a number is.
+  // The `inf` constant is shown as written, as a number is.
   [
     "str",
     "${input.m:-inf}",
@@ -261,15 +218,15 @@ test.each<[string, string, string]>([
   ["int", "yes", "child expects 'int', but the value \"yes\" does not fit"],
   ["AB", "no", "child expects 'Literal(a, b)', but the value \"no\" does not fit"],
   ["TY", "false", "child expects 'Literal(true, yes)', but the value false does not fit"],
-  // Changed: the text form shows [true,"no"] and "no" (Python: [true, "no"] and 'no').
+  // The text form shows [true,"no"] and "no".
   [
     "list(bool)",
     "[true, no]",
     'child expects \'list(bool)\', but the value [true,"no"] does not fit ("no" does not match declared type bool)',
   ],
-  // TS-only: a float spelling past the double range fits no float however it's written.
+  // A float spelling past the double range fits no float however it's written.
   ["float", '"1e400"', "child expects 'float', but the value \"1e400\" does not fit"],
-  // TS-only: "inf" reads as infinity, but the hint would spell it `Infinity`, which YAML reads as text.
+  // "inf" reads as infinity, but the hint would spell it `Infinity`, which YAML reads as text.
   ["float", '"inf"', "child expects 'float', but the value \"inf\" does not fit"],
 ])("no rewrite hint when rewriting cannot help: %s from %s", (type, binding, message) => {
   const error = loadError(() => load(flow(type, binding), child(type)));
@@ -277,8 +234,8 @@ test.each<[string, string, string]>([
   expect(firstLine(error).endsWith(`binding 't' — ${message}`)).toBe(true);
 });
 
-test("text spelling an int past Python's digit limit gets the rewrite hint (Changed)", () => {
-  // Python's int-from-text digit limit refuses this text, so Python gives no hint; TS has no limit.
+test("text spelling a 5000-digit int gets the rewrite hint", () => {
+  // Int text has no digit limit.
   const digits = "1".repeat(5000);
   const error = loadError(() => load(flow("int", `"${digits}"`), child("int")));
 
@@ -483,7 +440,7 @@ test.each<[string, string]>([
   runCase({ id, call: assembledWith({ child: child(type) }) });
 });
 
-// ---------- Pinned harvested cases (TS-only placement) ----------
+// ---------- Pinned conformance cases ----------
 
 test.each<CaseRow>([
   {

@@ -1,4 +1,4 @@
-# TS-only: an agent with a steer inbox may declare any output; at an interrupt the output contract
+# An agent with a steer inbox may declare any output; at an interrupt the output contract
 # decides (Optional(...) takes null, anything else fails agent.interrupted) (yian #1025).
 kind: load
 flow: |

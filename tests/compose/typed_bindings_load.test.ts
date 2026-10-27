@@ -1,14 +1,4 @@
-/**
- * Loading typed node input bindings, `name: !Type value` carries a contract: a port of
- * `tests/compose/test_typed_bindings_load.py`.
- *
- * Ported: every row. Types compare with `typeEquals`, as Python's `==` compares them; a typed
- * literal `!int 0` holds the int `0n` (decision 4a). The CODE references are TS's
- * (`./fixtures/compose_codefns.ts:echo`), and the inline CODE bodies are Python's, which read the
- * same in JS (decision 11). `test_typed_binding_changes_the_flow_fingerprint` is ported too: the
- * case `fingerprint/compose_typed_bindings_load__typed_binding` harvested from it fingerprints
- * TOOL nodes, not this flow's CODE nodes.
- */
+/** Loading typed node input bindings, `name: !Type value` carries a contract. */
 
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

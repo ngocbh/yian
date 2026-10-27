@@ -1,22 +1,4 @@
-/**
- * Typed bindings over unions of records: a port of `tests/compose/test_typed_bindings_unions.py`,
- * loading each flow with `assembleText` (`assemble` as the loader calls it) where Python calls
- * `load_flow`.
- *
- * Ported: `test_a_member_over_the_union_loads`, `test_a_declared_union_accepts_one_member`,
- * `test_a_union_disjoint_from_the_declared_type_fails`,
- * `test_a_member_over_another_branchs_member_fails_in_that_branch`,
- * `test_the_else_branch_reads_the_unlisted_members`, `test_each_branch_may_name_its_own_member`,
- * `test_a_flow_output_narrows_to_a_member_and_a_call_parent_sees_it` (through `loadFlow`) and
- * `test_an_isinstance_branch_narrows_the_typed_binding_too`; the harvested cases
- * `load-types/compose_typed_bindings_unions__a_union_disjoint_from_the_declared_type_fails`,
- * `…__a_declared_union_accepts_one_member`, `…__a_member_over_another_branchs_member_fails`,
- * `…__the_else_branch_reads_the_unlisted_members` and
- * `…__an_isinstance_branch_narrows_the_typed_binding`.
- *
- * Changed: `test_a_union_disjoint_from_the_declared_type_fails` pins the whole message and its line,
- * where Python matches a fragment.
- */
+/** Typed bindings over unions of records. */
 
 import { afterEach, expect, test } from "bun:test";
 

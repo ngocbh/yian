@@ -1,15 +1,4 @@
-/**
- * A mapping that repeats one of its own keys is a load error: a port of
- * `tests/compose/test_duplicate_keys.py`, through `parseSourceDocument` and `parseFile`.
- *
- * Changed: TS keeps mapping keys as the text written, so `017` and `17` are two keys and the
- * document has no repeated key (Python's `repeated_key` is the int `17`); the non-text key still
- * fails first. The `x-meta` value of the `on`/`true` row has the text key `true`.
- *
- * TS-only: the `parseFile` half of `test_merged_keys_may_be_overridden`, beside its loaded half.
- *
- * The harvested `yaml/compose_duplicate_keys__*` cases are pinned at the end.
- */
+/** A mapping that repeats one of its own keys is a load error. */
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -165,7 +154,7 @@ output: \${a.output}
 
   expect(error.message).toContain("the key `017` was read by YAML as an integer");
   expect(error.diagnostic.frames.at(-1)!.range.startLine).toBe(4);
-  // Changed: the keys stay the text written, so `017` and `17` don't repeat.
+  // The keys stay the text written, so `017` and `17` don't repeat.
   expect(SourceDocument.parse(text).repeatedKey).toBeNull();
 });
 

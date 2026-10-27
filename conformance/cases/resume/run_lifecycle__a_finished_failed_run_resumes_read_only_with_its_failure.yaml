@@ -1,5 +1,4 @@
-# From tests/engine/test_run_lifecycle.py::test_terminal_resume_preserves_compose_failure_and_diagnosis.
-# Also ::test_terminal_resume_is_read_only_silent_and_unlocks[failed]. Resuming a failed run returns its failure,
+# Resuming a failed run returns its failure,
 # located as before, read-only: nothing is appended and no event fires.
 kind: resume
 flow: |

@@ -1,8 +1,7 @@
-# From tests/engine/test_llm_config_values_records.py::test_resume_recomputes_the_recorded_config.
 # A call-time llm_config agent records its resolved config as a step before its model call; resumed after a
 # crash in that call, it recomputes the config and records an equal step.
 # Record 12 is chat's effective_llm_config step: its model call runs, its result is refused.
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# Events left out: a resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |

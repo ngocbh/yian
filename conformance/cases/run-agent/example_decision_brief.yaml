@@ -15,7 +15,7 @@ flow: |
   # Exercises: a Literal typedef, an Optional input with a default, fan-out + fan-in, a
   # typed enum output, `case ... on` with `else`, an n-ary `|` coalesce consumed by a
   # downstream node, multi-output, and asserts — all with AGENT nodes, so it runs against
-  # any provider/model with no extra Python.
+  # any provider/model.
   #
   # Note on typed outputs: an AGENT can declare any `output:` shape. A bare `str` is free
   # text; a `Literal(...)` enum, record, number, or list uses structured generation (see

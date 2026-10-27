@@ -1,4 +1,4 @@
-# hand TS expect: The TS CODE body returns null; the message shows it in the text form (rules: messages).
+# The CODE body returns null; the message shows it in the text form.
 kind: run
 flow: |
   id: p

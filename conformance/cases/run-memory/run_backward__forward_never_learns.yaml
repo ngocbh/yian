@@ -1,4 +1,3 @@
-# From tests/engine/test_run_backward.py::test_forward_returns_before_any_learning_or_commit (the forward half).
 # Pins: a learnable run with memory and no backward learns nothing: no backward or memory commit
 # record, and the memory's whole recall is empty.
 kind: run

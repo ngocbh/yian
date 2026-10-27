@@ -1,33 +1,11 @@
 /**
- * Types of nested binding values are inferred from their structure: a port of
- * `tests/compose/test_nested_template_types.py`.
+ * Types of nested binding values are inferred from their structure.
  *
  * A mapping or list binding holding `${...}` spans is a `ValueTemplate`. Its type is inferred field
  * by field: a nested typed binding gives its declared type, a string its template type, a literal
  * its kind (its exact value only where a tag checks it). A tag on the whole value, a CALL child's
  * parameter, a TOOL's stamped input types, a LOOP's carried record and an inline body's generated
  * parameters all read that structural type.
- *
- * Ported: every row but those below, the parametrized ones with all their rows. The CODE bodies
- * are Python's, which read the same in JS (decision 11), but for `return null`.
- * `test_nested_typed_binding_is_checked_at_its_own_line` is ported here; `typed_bindings_check.test.ts`
- * has a flow-style variant of it.
- *
- * Changed: a CODE body gets an int as a `number` (decision 45) and a whole-number return reads back
- * as an int, so the outputs hold `bigint`s (decision 4a).
- *
- * Covered by `load-types/compose_nested_template_types__tagged_template_with_a_disjoint_field_fails`:
- * `test_tagged_template_with_a_disjoint_field_fails`; by
- * `load-types/compose_nested_template_types__template_into_a_record_child_param_loads`:
- * `test_template_into_a_record_child_param_loads`; by
- * `load-types/compose_nested_template_types__an_empty_list_in_an_inline_call_template` (TS expect,
- * decision 43): `test_inline_call_template_arg_with_no_proven_type_suggests_a_tag`;
- * by `load-types/compose_nested_template_types__nested_item_read_is_typed_from_the_map_element`:
- * `test_nested_item_read_is_typed_from_the_map_element`; by
- * `load-types/compose_nested_template_types__inline_call_template_list_of_mixed_types_fails`:
- * `test_inline_call_template_list_of_mixed_types_fails`; by
- * `load-types/compose_nested_template_types__wrong_literal_value_under_a_tag_fails_at_load`:
- * `test_wrong_literal_value_under_a_tag_fails_at_load`.
  */
 
 import { afterAll, expect, test } from "bun:test";

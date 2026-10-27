@@ -1,4 +1,4 @@
-# hand TS expect: Python prints `(from=None)` in this message and no shim converts it; TS shows the null in the text form (rules: messages).
+# The message shows the null in the text form, `(from=null)`.
 kind: run
 flow: |
   id: input-contract-origins

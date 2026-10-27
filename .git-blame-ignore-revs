@@ -1,0 +1,14 @@
+# Commits that only reword comments and test titles. Use with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Comment sweep L2: compose, nodes, typesys, runtime, expr, compile and the package root (#1187) (#1194)
+d7b5afc88d825745de80af157f2d77b79fc13505
+# Comment sweep L1: memory, LLM clients, tools, skills, CLI and root tests (#1187) (#1196)
+e862f1f10eaf534a8eac0f7c8b15cb910596c0ec
+# Comment sweep L4: tests/engine [g-q] and tests/llm (#1187) (#1195)
+4ae98b401941fb80052be70ba93a48d441bbff5a
+# Comment sweep L5: tests/engine [r-z] and tests/cli (#1187) (#1203)
+ea45e8ee54941050bba8398e80995f72b4122550
+# Comment sweep L3: tests/engine a-f (#1187) (#1208)
+060903a4b0597ba1c0f54e51ffc0dc1797eb0854
+# Comment sweep L6: conformance cases, runner and compose tests (#1187) (#1197)
+7a8b2fd599e4f3266b710005331ef2a573268d72

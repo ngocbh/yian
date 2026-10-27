@@ -1,4 +1,4 @@
-# TS-only: tool_id: ask_user is the ask built-in under its old name, so it takes ask's inputs.
+# Tool_id: ask_user is the ask built-in under its old name, so it takes ask's inputs.
 kind: load
 flow: |
   id: f

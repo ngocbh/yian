@@ -1,6 +1,6 @@
-# hand TS expect: the TS body throws `new Error('forward failed')`, whose failure message is "Error: forward failed"
+# The body throws `new Error('forward failed')`, whose failure message is "Error: forward failed"
 # (as in run-map-call/seed_e24_nested_code_raise), and its throwing line `  throw new Error('forward failed')` ends at
-# column 42; Python's "forward failed" and column 47 are in python_expect.
+# column 42.
 kind: backward
 flow: |
   id: failure

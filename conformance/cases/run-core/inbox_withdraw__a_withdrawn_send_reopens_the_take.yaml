@@ -1,4 +1,3 @@
-# TS-only: withdraw and the remembered Stop (#1106).
 # A message sent to the waiting take is withdrawn before the take wakes: `inbox_withdrawn` names
 # it, and the take waits again. The next message is the one it takes.
 kind: run

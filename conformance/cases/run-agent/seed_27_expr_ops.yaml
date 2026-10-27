@@ -1,4 +1,3 @@
-# From tests/seeds/27-expr-ops.yaml.
 # Every input given, the expression forms bind, the flow asserts pass and the AGENT's reply is the
 # output. Its prompt isn't pinned: it shows `sizable`, an `and` result.
 kind: run

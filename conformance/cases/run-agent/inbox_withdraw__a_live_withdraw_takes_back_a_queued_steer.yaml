@@ -1,4 +1,3 @@
-# TS-only: withdraw and the remembered Stop (#1106).
 # While the reply streams, the host sends a steer, withdraws it and interrupts, all at chunk 1:
 # `inbox_withdrawn` names the steer, so no `steer` step reads it; the interrupt cuts the reply
 # and it honors it: output null.

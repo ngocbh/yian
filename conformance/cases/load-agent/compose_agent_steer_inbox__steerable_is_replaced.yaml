@@ -1,4 +1,4 @@
-# TS-only: `steerable:` was replaced by `steer_inbox:` (yian #1025); the error says how to move.
+# `steerable:` was replaced by `steer_inbox:` (yian #1025); the error says how to move.
 kind: load
 flow: |
   id: steer

@@ -1,4 +1,3 @@
-# The frame is the binding, not CODE text (identity body, same columns): shared.
 kind: load
 flow: |2
 

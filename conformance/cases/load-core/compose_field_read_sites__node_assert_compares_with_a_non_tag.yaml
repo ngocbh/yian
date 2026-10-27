@@ -1,4 +1,4 @@
-# TS spells the compared value and the close tag as JSON text (rules: messages); Python's repr in python_expect.
+# The message spells the compared value and the close tag as JSON text.
 kind: load
 flow: |
   id: p

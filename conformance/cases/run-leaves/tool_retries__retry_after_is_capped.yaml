@@ -1,4 +1,3 @@
-# From tests/engine/test_tool_retries.py::test_retry_after_replaces_the_backoff_up_to_the_cap[100-30].
 # A retry_after above the cap waits the cap (1 s here), with no draw.
 kind: run
 flow: |

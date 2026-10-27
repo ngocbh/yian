@@ -1,4 +1,4 @@
-# TS-only: a take's output type is inferred from its inbox.
+# A take's output type is inferred from its inbox.
 kind: load
 flow: |
   id: f

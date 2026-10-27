@@ -1,4 +1,4 @@
-/** Loading a removed node kind is a load error that names its replacement. TS-only. */
+/** Loading a removed node kind is a load error that names its replacement. */
 import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";

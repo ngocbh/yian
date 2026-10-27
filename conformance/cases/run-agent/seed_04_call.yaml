@@ -1,4 +1,3 @@
-# From tests/seeds/04-call.yaml.
 # A CALL through a `uses:` alias grows the child's nodes under `research/`, the child's date
 # default filling the omitted `as_of`; an AGENT then reads fields of the CALL's record.
 kind: run

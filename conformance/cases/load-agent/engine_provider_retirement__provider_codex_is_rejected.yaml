@@ -1,4 +1,4 @@
-# No `message`: it is pydantic's text (with a versioned URL), which yian doesn't write.
+# No `message`: the case pins the code and the frame, not the schema error's text.
 kind: load
 flow: |
   id: old

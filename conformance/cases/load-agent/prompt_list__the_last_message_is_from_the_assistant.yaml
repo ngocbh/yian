@@ -1,4 +1,4 @@
-# TS-only: a list `prompt:` whose last item is an `assistant:` message is refused at it.
+# A list `prompt:` whose last item is an `assistant:` message is refused at it.
 kind: load
 flow: |
   id: chat

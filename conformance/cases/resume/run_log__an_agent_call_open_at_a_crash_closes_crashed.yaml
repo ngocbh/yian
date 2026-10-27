@@ -1,4 +1,4 @@
-# TS-only (#1025): the agent's `hold` handler returns pending() and the process is lost right
+# The agent's `hold` handler returns pending() and the process is lost right
 # after its `pending` step (record 10), before the node waits. The resume closes the open call by
 # record (`run_resumed.closed_calls`), the agent's replay writes the `crashed` closer (the model
 # reads that the call's outcome is unknown) and the next model call goes on; the handler isn't

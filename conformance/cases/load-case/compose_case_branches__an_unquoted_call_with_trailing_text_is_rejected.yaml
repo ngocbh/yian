@@ -1,5 +1,5 @@
 kind: load
-# The trailing text is quoted as written, the Python-repr way (TS reprText): shared.
+# The trailing text is quoted as written, by reprText.
 flow: |
   id: f
   name: f

@@ -1,4 +1,4 @@
-# TS-only: a take's from must be an inbox input.
+# A take's from must be an inbox input.
 kind: load
 flow: |
   id: f

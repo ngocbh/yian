@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e18-false-boundary-assert.yaml.
 # A false flow assert over the inputs fails START before any node runs, at the assert.
 kind: run
 flow: |

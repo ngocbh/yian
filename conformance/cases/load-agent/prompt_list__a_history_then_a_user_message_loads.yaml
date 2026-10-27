@@ -1,4 +1,4 @@
-# TS-only: an AGENT `prompt:` may be a list: a spliced history, then a user message.
+# An AGENT `prompt:` may be a list: a spliced history, then a user message.
 kind: load
 flow: |
   id: chat

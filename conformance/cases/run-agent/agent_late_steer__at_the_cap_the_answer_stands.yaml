@@ -1,4 +1,4 @@
-# TS-only (yian #1025): at `max_tool_iterations` the final answer stands. The agent checks the cap
+# At `max_tool_iterations` the final answer stands. The agent checks the cap
 # before it reads, so the steer sent during the last reply stays unread: no `steer` step, no second
 # model call.
 kind: run

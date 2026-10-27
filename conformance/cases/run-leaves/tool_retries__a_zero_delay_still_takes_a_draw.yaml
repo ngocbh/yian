@@ -1,7 +1,5 @@
-# From tests/engine/test_reported_tool_error.py::test_tool_retries_retry_a_reported_error (retries at
-# TOOL_RETRY_DELAY_SECONDS=0) and conformance/SPEC.md `host.jitter` ("one per retry that waits a
-# backoff, even a zero one").
-# A zero base delay still takes one draw per retry; the wait is 0.0 s.
+# A zero base delay still takes one draw per retry (`host.jitter` draws once per retry that waits
+# a backoff, even a zero one); the wait is 0.0 s.
 kind: run
 flow: |
   id: t

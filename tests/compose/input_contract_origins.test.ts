@@ -1,13 +1,4 @@
-/**
- * Compose provenance contracts for authored flow-input declarations: a port of
- * `tests/compose/test_input_contract_origins.py`.
- *
- * Ported: every row, through `loadFlow` (origins resolve through `loaded.originResolver`) and,
- * for the three failure rows, `runFlow`. Origins compare by key (`toEqual`), as Python's `==`
- * compares them; Python's set of origins is a set of keys. The CODE references are TS's
- * (`./fixtures/compose_codefns.ts:echo_x`). A non-text key is located through its parent's
- * `keyRangeOf`, where Python selects the child by its YAML value.
- */
+/** Compose provenance contracts for authored flow-input declarations. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -109,7 +100,7 @@ const distinct = (...origins: OriginRef[]) => new Set(origins.map((origin) => or
 const cursorAt = (document: SourceDocument, path: readonly string[]) =>
   path.reduce((cursor: SourceCursor, step) => cursor.child(step), document.root);
 
-/** Indent every non-empty line of `text` by `prefix`, as Python's `textwrap.indent`. */
+/** Indent every non-empty line of `text` by `prefix`. */
 const indent = (text: string, prefix: string) => text.replace(/^(?=.)/gm, prefix);
 
 test("agent variables keep declaration contract and default source sites", async () => {

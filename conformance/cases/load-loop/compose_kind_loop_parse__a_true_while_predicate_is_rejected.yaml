@@ -1,4 +1,4 @@
-# TS spells the bool in the text form, `true` (rules: messages); Python's `True` in python_expect.
+# The message spells the bool in the text form, `true`.
 kind: load
 flow: |
   id: f

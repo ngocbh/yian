@@ -1,4 +1,3 @@
-# From tests/compose/test_tool_retries_load.py::test_nonzero_retries_changes_the_flow_fingerprint.
 # Nonzero TOOL retries change the fingerprint.
 kind: fingerprint
 flow: |

@@ -1,4 +1,3 @@
-# From tests/seeds/27-expr-ops.yaml.
 # Every `${...}` expression form (arithmetic, lists, builtins, logic, membership) loads.
 kind: load
 flow: |

@@ -1,4 +1,3 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
 # The reply calls `hold`, whose handler returns pending(), and `lookup`, answered inline; the agent
 # waits on `hold`. An interrupt delivered while it waits wakes it (`interrupted`, then
 # `node_woken`): `hold` closes `interrupted` (CallClosed), the agent writes the call's closer

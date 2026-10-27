@@ -1,5 +1,5 @@
 /**
- * TS-only: `${x.new_messages}`, an AGENT's second readable value, typed `list(Message)`: what
+ * `${x.new_messages}`, an AGENT's second readable value, typed `list(Message)`: what
  * loads and where, and each load error; a comprehension variable over it is not a reference.
  */
 

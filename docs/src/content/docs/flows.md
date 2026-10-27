@@ -210,7 +210,7 @@ when it runs. An entry with neither `kind:` nor a tag is a load error that shows
 | You write | The flow returns |
 |---|---|
 | `output: ${total.output}` | That one value |
-| `output: {total: ${total.output}, note: ${note.output}}` | A record with those fields |
+| `output: {total: "${total.output}", note: "${note.output}"}` | A record with those fields (quote each `${...}` inside `{...}`) |
 | `output: !float ${total.output}` | One value, checked against the type |
 | `output: 5` | The literal as written |
 | no `output:` | null |

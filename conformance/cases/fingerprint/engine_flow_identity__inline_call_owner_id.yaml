@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_inline_identity_ignores_formatting_but_tracks_owner_and_child_semantics.
 # The id of the CALL that owns an inline body is identity.
 kind: fingerprint
 flow: |

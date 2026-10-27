@@ -1,4 +1,3 @@
-# From tests/engine/test_tool_retries.py::test_retries_zero_fails_as_before_and_records_no_step.
 # A TOOL node without `retries:` calls once; the tool's error fails the node unchanged, with no
 # step recorded and no backoff draw.
 kind: run

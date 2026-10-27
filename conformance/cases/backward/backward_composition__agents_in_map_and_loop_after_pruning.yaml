@@ -1,6 +1,3 @@
-# From tests/engine/test_backward_composition.py::test_call_and_map_loop_calls_retain_each_agent_after_pruning_and_terminal_resume
-# (shortest form: a MAP of a LOOP of a CALL to the AGENT; str output, no provider blocks, no
-# terminal-resume half).
 # Pins: backward calls every AGENT occurrence once, the LOOP's earlier (pruned) iterations too, and
 # returns the first iterations' input feedback to each MAP item's position.
 kind: backward

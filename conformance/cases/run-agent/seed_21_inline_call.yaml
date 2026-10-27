@@ -1,4 +1,3 @@
-# From tests/seeds/21-inline-call.yaml.
 # The inline `call(enrich, ...)` runs as the generated CALL node `__call_0`, which grows the
 # child's CODE node; `summary` reads the child's headlines.
 kind: run

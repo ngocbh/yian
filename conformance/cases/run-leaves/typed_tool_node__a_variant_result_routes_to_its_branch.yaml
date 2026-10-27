@@ -1,4 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_a_variant_result_routes_to_its_branch[interrupted].
 # A TOOL return checked against a declared union routes a CASE on its tag; the test's CODE branches
 # are value entries here.
 kind: run

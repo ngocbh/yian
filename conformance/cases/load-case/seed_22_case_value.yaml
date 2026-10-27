@@ -1,4 +1,3 @@
-# From tests/seeds/22-case-value.yaml.
 # `${gate.output}` of an exhaustive searched `case` (it has an `else:`) loads.
 kind: load
 flow: |

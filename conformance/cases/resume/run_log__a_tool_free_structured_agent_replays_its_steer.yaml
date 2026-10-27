@@ -1,4 +1,3 @@
-# TS-only: steer_inbox reads an Inbox, which Python yian doesn't have (#1025).
 # A tool-free structured AGENT read a steer (record 15) and the run crashed before its structured
 # call. The resumed agent replays the steer step with its value and sends it in the one structured
 # request, as the first start would have (its first call's reply, taken before the cut, is

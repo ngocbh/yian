@@ -1,4 +1,3 @@
-# From tests/seeds/25-nested-suspension.yaml.
 # A `call` to a `defs:` callable holding an ask loads.
 kind: load
 flow: |

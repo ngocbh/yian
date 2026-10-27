@@ -1,4 +1,3 @@
-# From tests/seeds/10-asserts-arithmetic.yaml.
 # Arithmetic and boolean logic in a `case` `when:`, node asserts and flow asserts load.
 kind: load
 flow: |

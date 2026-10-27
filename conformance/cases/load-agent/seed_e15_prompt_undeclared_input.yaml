@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e15-prompt-undeclared-input.yaml.
 # An AGENT prompt that reads an undeclared node input fails at the `prompt:` value.
 kind: load
 flow: |

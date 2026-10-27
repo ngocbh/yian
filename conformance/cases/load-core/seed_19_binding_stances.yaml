@@ -1,4 +1,3 @@
-# From tests/seeds/19-binding-stances.yaml.
 # Every binding stance (plain, `:-`, `|`, `| ... :-`, `:?`) around a `case` branch loads.
 kind: load
 flow: |

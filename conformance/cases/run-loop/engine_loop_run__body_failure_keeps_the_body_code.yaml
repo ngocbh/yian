@@ -1,6 +1,5 @@
-# From tests/engine/test_loop_run.py::test_body_failure_in_bounded_loop_keeps_the_body_code.
 # A failing body keeps its own code (node.execute), not loop.max_exceeded.
-# hand TS expect: the TS `boom` fixture throws `new Error("boom")`, whose failure message is "Error: boom" as in the
+# The `boom` fixture throws `new Error("boom")`, whose failure message is "Error: boom" as in the
 # committed run-map-call/seed_e24_nested_code_raise; the frames are unchanged (both references are 34 characters long).
 kind: run
 flow: |2

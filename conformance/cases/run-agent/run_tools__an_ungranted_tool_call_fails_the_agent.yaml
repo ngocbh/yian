@@ -1,5 +1,3 @@
-# From tests/engine/test_run_tools.py::test_agent_grant_check_sees_expanded_group_names.
-# (Also ::test_agent_cannot_call_a_per_run_tool_the_flow_did_not_grant).
 # A model call to a tool the AGENT wasn't granted fails the node before anything runs: the
 # message names the tool and the granted list ("requested tool 'shout', but it is not granted;
 # granted tools: ['lookup']").

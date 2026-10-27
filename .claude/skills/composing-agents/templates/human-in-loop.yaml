@@ -3,7 +3,7 @@
 # (validated against its `output:`). The host answers at once (`yian run` asks in the
 # terminal), or returns `pending()` and answers later while the run waits.
 # For "ask only if the model decides it needs to", grant an AGENT node the `ask_user`
-# tool instead (see ask-user in examples/).
+# tool instead.
 
 id: human-in-loop
 name: human_in_loop

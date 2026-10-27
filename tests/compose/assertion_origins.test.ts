@@ -1,11 +1,4 @@
-/**
- * Authored Compose assertion origins: mirrors `tests/compose/test_assertion_origins.py`.
- *
- * Ported: every row.
- *
- * Changed: CODE bodies and references are TS's (`./fixtures/compose_codefns.ts:*`, loaded with
- * `loadConformanceFlow`). Origins compare by `key`, as Python's set compares them.
- */
+/** Authored Compose assertion origins. */
 
 import { expect, test } from "bun:test";
 

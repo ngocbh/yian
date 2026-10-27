@@ -1,4 +1,3 @@
-# From tests/engine/test_lifted_node_gating.py::test_inline_call_does_not_run_on_an_untaken_route.
 # Pins: an inline `call(...)` in a node on the untaken `then:` route never starts.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run

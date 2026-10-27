@@ -1,17 +1,9 @@
 /**
- * Ownership lints for the compose source package, a port of the source checks in
- * `tests/compose/test_source_ownership.py`.
+ * Ownership lints for the compose source package.
  *
- * Only `compose/source` touches the `yaml` package, it imports no other compose
- * module, and the rest of compose never reaches into the document graph's private
- * slots. Each check is a function of `{path, text}` sources, so snippets prove the
- * rules the real tree is held to.
- *
- * The `parse_file` and root-variant rows spy on `SourceDocument.parse`, the one way TS makes a
- * document, where Python patches its document loader; the captured-document row wraps it, where
- * Python patches the loader's `parse_source_document`. The `load_flow` rows load through
- * `loadFlow`, each CODE node naming the conformance fixture `echo`. The legacy-module check has
- * no counterpart, and Python's `_root_node` and `_index` slots don't exist in TypeScript.
+ * Only `compose/source` touches the `yaml` package, it imports no other compose module, and the
+ * rest of compose never reaches into the document graph's private slots. Each check is a function
+ * of `{path, text}` sources, so snippets prove the rules the real tree is held to.
  */
 
 import { describe, expect, spyOn, test } from "bun:test";

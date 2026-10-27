@@ -1,9 +1,6 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupt_at_the_top_of_a_later_iteration_returns_the_latest_reply
-# (Python returns the latest reply's text; TS yian's output is null). A steer sent and an
-# interrupt delivered once tool call 1 returns are seen at the top of the next iteration: the
-# interrupt wins before the steer inbox is read, so there is no second model call and the steer
-# stays unread.
+# A steer sent and an interrupt delivered once tool call 1 returns are seen at the top of the next
+# iteration: the interrupt wins before the steer inbox is read, so there is no second model call,
+# the steer stays unread, and the agent's output is null.
 kind: run
 flow: |
   id: steer

@@ -1,6 +1,5 @@
-# From tests/seeds/30-reference-code.yaml.
 # A reference CODE node returns the same verdict line as seed 29's inline body.
-# The header (`module:function`, `tests.seeds.fns:verdict_line`) describes the Python form.
+# The flow's header comment (`module:function`, `tests.seeds.fns:verdict_line`) describes an older CODE form.
 kind: run
 flow: |
   # 30 — reference CODE source. A `code:` node names a `module:function` token; the engine

@@ -1,5 +1,5 @@
 kind: expr
-# TS yian (#1149): `.` on a null value raises; Python reads it as a falsy miss.
+# `.` on a null value raises, in a condition too (#1149).
 expr: rating.value > 0.7
 values:
   rating: null

@@ -1,1528 +1,242 @@
 ---
 name: composing-agents
-description: Use when authoring a Yian flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / call / map / loop, the ask / sleep / take built-ins), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `yian run` flow-authoring request.
+description: Use when writing or editing a yian flow (a YAML file run with `yian run`): wiring agent, code, tool, case, call, map or loop nodes, asking a person, waiting on an inbox or a time, or answering "how do I write a flow that ...". Trigger on "write a flow", "create an agent", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow".
 ---
 
-# Composing an agent flow
+# Writing yian flows
 
-In Yian, an **agent** is a composable typed transformation represented
-by a node, a flow, or a child flow. A **flow is a function**: a typed `input:`, a
-graph of `nodes:`, and a typed `output:`. The concrete **AGENT node**
-(`kind: agent`) is the LLM-backed leaf. `${...}` references infer data edges;
-`depends_on:` and `runs_after:` add ordering-only edges. The human owns the
-structure; the LLM only fills the AGENT node leaves.
+A flow is a YAML file that works like a typed function: typed `input:`, a graph of `nodes:` keyed
+by id, and an `output:`. A node reads another with `${node.output}`, and that reference is the
+edge; yian works out the order. This skill gives the workflow and the rules authors most often get
+wrong. The docs at https://yian.readthedocs.io/ have every rule; [reference.md](reference.md) is a
+lookup sheet; [templates/](templates/) holds a flow that loads for each common shape.
 
-Conceptual vocabulary: [`docs/agent.md`](../../../docs/agent.md). Full authoring
-reference: [`docs/syntax.md`](../../../docs/syntax.md). Working flows:
-[`examples/`](../../../examples). This skill is the authoring workflow + the
-parts that bite.
+## Workflow
 
-**Companions:** [`reference.md`](reference.md) — operators, the three expression
-contexts, type forms, recipes, and gotchas. [`templates/`](templates/) — minimal
-loadable starter flows for each shape (single AGENT node, AGENT node → CODE node pipeline,
-branch+join, tool use, asking a person, sleeping, a chat on an inbox, named and inline
-`call`/`map`/`loop` composition); copy one and edit.
+1. **State the signature.** One line on the job, then the typed inputs and the output. Name
+   records, enums and unions under `typedefs:`.
+2. **Start from a template** (index in [reference.md](reference.md#templates)). Copy it beside
+   your flow and edit it.
+3. **Write one node per step.** A model call is an `agent`; deterministic work is `code` (not a
+   prompt); a host tool is `tool`; a branch is `case`; a child flow is `call`, `map` or `loop`.
+   Prefer several small typed nodes to one large prompt.
+4. **Check.** `yian check` loads the flow, checks every type and reference, and runs nothing.
+   Each error names its place, and most show the rewrite. Fix and repeat until it prints `ok`.
+5. **Run.** Agents need a provider and model: run `yian auth <provider>` once, or pass
+   `--provider` and `--model`. A flow with only `code` and `tool` nodes needs neither.
 
-## The workflow — author a flow in order
+```console
+$ yian check flow.yaml
+flow.yaml: ok
+$ yian run flow.yaml --input topic=tides
+$ yian run flow.yaml --inputs inputs.json
+```
 
-1. **State the function.** Write the one-line job, then its **signature**: what
-   typed values come in (`input:`) and what comes out (`output:`). If you can't
-   name the input and output types, the design isn't done.
-2. **Name reusable types** in `typedefs:` (enums, records, aliases).
-3. **Decompose into leaf nodes.** Each node is one step: an LLM call (`agent`),
-   deterministic code (`code`), a registered tool (`tool`), a branch (`case`), a
-   question to a person (`tool_id: ask`), a UTC deadline (`tool_id: sleep`), reading the
-   messages a host sends (`tool_id: take`), a child-flow call (`call`/`map`), or an
-   iterated body (`loop`). A reusable child lives in
-   `defs:`/`uses:`; a one-off child may put `nodes:` + `output:` directly on
-   CALL/MAP/LOOP. Prefer many small typed nodes over one mega-prompt.
-4. **Wire by reference, not by edges.** A node consumes another by putting
-   `${producer.output}` in its `input:` block. That reference *is* the edge.
-5. **Bind the flow `output:`** to the terminal node(s).
-6. **Add `asserts:`** for invariants that must hold (boundary or post checks).
-7. **Validate, then run** (see "Validate & run").
+`--input k=v` is text, converted when the input is an `int`, `float` or `bool`; pass lists,
+records and `null` in a JSON file with `--inputs`. See [CLI](https://yian.readthedocs.io/cli/) for every flag.
 
-## The flow skeleton
+## A flow
 
 ```yaml
-id: my-flow                  # stable identifier (no spaces)
-name: my_flow                # display name
-description: One line.       # optional
-
-typedefs:                    # optional — named/composed types
-  Verdict: Literal(go, no_go, wait)
-
-input:                       # the parameters — each typed with a YAML tag
-  question: !str             # required
-  audience: !Optional(str)   # nullable; omitted -> null
-  lookback: !int 30          # default-fill when omitted
-
-nodes:                       # the body — a map keyed by node id (no per-node id:, no wrappers)
-  step_a:
+id: triage-ticket
+name: triage ticket
+description: Classify a support ticket, then page someone or draft a reply.
+typedefs:
+  Severity: Literal(low, high)
+input:
+  ticket: !str
+  team: !str support                  # a default
+nodes:
+  severity:
     kind: agent
     input:
-      question: ${input.question}
+      ticket: ${input.ticket}         # bind first; the prompt reads the local name
+    output: Severity                  # a non-str type asks for structured output
+    prompt: Classify this ticket's severity as low or high. ${ticket}
+  route:
+    kind: case
+    on: ${severity.output}
+    cases:
+      - when: high
+        then: page
+      - when: low
+        then: reply
+  page: !str "Paged the ${input.team} on-call."   # a value entry
+  reply:
+    kind: agent
+    input:
+      ticket: ${input.ticket}
     output: str
-    prompt: "Answer: ${question}"
-
-output: ${step_a.output}     # one value, OR a record {name: ${x}, ...}; may be typed: !str ${step_a.output}
-
-asserts:                     # optional — boolean invariants
-  - step_a.output != ""
-```
-
-There is **no `edges:` block**, no `__start__`/`__end__`, no per-node `id:`, and
-no body wrappers — a node body is flat. Flows, nodes, and `defs:` entries all write
-`input:`/`output:`; the old plural `inputs:`/`outputs:` is a load error.
-
-**The `output:` shape sets the return.** `output: ${x}` returns the value of `x` as
-is. `output: {name: ${x}, ...}` always returns a record, even with one field
-(`output: {order: ${x}}` returns `{order: x}`, read by a caller as
-`${child.output.order}`) or none (`output: {}` returns `{}`). No `output:` (or
-`output: null`) returns `None`. Either form may declare types with tags:
-`output: !Size ${x}`, or a field `size: !Size ${x}` under a block `output:`.
-`output: !T {...}` is one typed value, not a record of fields.
-Every key in a flow must be text: quote a `true`/`1`/`null`/date key (`'true': ${x}`).
-Text fields (`code:`, `tool_id:`, `call:`, `on:`, `kind:`, `node_name:`, asserts, `uses:` refs)
-must be text: quote a number, boolean, date, or a value starting with `[` or `{`
-(`on:` takes a reference, `kind:` a kind name).
-A scalar literal (`output: 5`, a field `x: 5`) is returned as written.
-
-Node IDs are the keys under `nodes:`. A node id must be an identifier: ASCII
-letters, digits, and `_`, not starting with a digit (`fetch_data`, not `fetch-data`
-or `2x`), so that `${fetch_data.output}` can reference it. The expression keywords
-`and`, `or`, `not`, `in`, `true`, `false`, `null`, and `none` can't be node ids
-either. In compact mode the flow `id:`, and for a single-node `defs:` entry the def
-name, also names the node and must be an identifier; a full-form flow id or a
-multi-node def name may keep hyphens.
-
-A `nodes:` entry is a node (a mapping with `kind:`) or a **value entry**, a tagged value
-such as `total: !int ${a.output + b.output}` (see "Values in `nodes:`" under Typed
-slots). An untagged entry without `kind:` is a load error.
-
-A mapping can't repeat a key (two nodes with one id, a field written twice): it's
-a load error at the second key. Keys a `<<:` merge brings in may still be overridden.
-
-Unquoted values follow YAML 1.2's core rules plus unquoted dates and `<<:` merges:
-only `true`/`false` are booleans, so `yes`/`no`/`on`/`off` are text (CASE's `on:`
-key too); `017` is 17 (octal is `0o17`); `1e3` is a float; `1:30` and `1_000` are
-text; `2026-10-14` is a date. An unquoted date-shaped value that is not a real
-date (`2026-13-45`, `2026-01-01T10:00:00+05:99`) is a load error at the value;
-quote it to keep it as text. A bare `call(...)` argument reads the same way, as
-one scalar (`x=None` is text; write `x=null`). An unquoted date in an untyped
-output (a flow or body `output:` without a tag) is a load error; quote it. So is a
-number there that is not finite (`.nan`, `.inf`, `1e400`). A `yes`
-in a tagged binding or default, a call input, a value entry, `steerable:`, or
-`inherit:` that needs a `bool` fails with "`yes` is text; write `true`". Under a `bool` `on:`, write
-`when: true`: a `when: yes` there is a load error with the same fix.
-
-Never write a secret in a flow file: every written value is part of the flow's
-fingerprint and the file is recorded in full. Pass credentials as flow inputs or from
-the host (`llm_config.api_key` only from the host). No name is special: a literal
-under `password` loads like any value. See `docs/syntax.md`, "Secrets stay out of
-flow files".
-
-### Compact mode — when the flow is a single node
-
-For the "one flow, one node" case, drop the `nodes:` map and the redundant
-`output: ${node.output}` line — put the node `kind:` and its fields at the top
-level. The flow `id:` names the node; the flow `input:` is the node signature
-(auto-wired by name); the flow `output:` is the node's output type, re-exported.
-A full flow declares its output type with a tag instead
-(`output: !str ${greet.output}`).
-
-```yaml
-id: hello
-name: hello
-input:
-  name: !str                 # auto-wired into the node as ${input.name}
-output: str                  # the node's output TYPE (no tag) — also the flow output
-kind: agent
-prompt: "Write a warm one-sentence greeting to ${name}."
-```
-
-Allowed only for the **leaf kinds** (`agent`, `code`, `tool`) —
-`case`/`call`/`map`/`loop` need the full `nodes:` form. See
-[`templates/compact.yaml`](templates/compact.yaml).
-
-## References — how you wire values
-
-| Write | Means |
-|-------|-------|
-| `${input.X}` | field `X` of the flow input |
-| `${node.output}` | node `node`'s whole (typed) value |
-| `${node.output.field}` | dot into an object value |
-| `${agent.new_messages}` | TS yian: the messages AGENT `agent` added (replies and tool results), `list(Message)` |
-| `${name}` (bare) | a local input inside an AGENT `prompt:` or `system_prompt:`, an `adaptive_questions.prompt:`, or `case` `when:`; AGENT prompts also see their own `variables:` |
-
-A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
-text it is **stringified**.
-
-Prompt templates are strict: a missing reference or any span whose final value is
-null raises, including an embedded span. `:-`, `|`, and `:?` still fire on a missing
-or null operand (`${note :- "none"}`); only the fallback must resolve. Binding
-templates stay non-strict—a whole null remains typed null and an embedded null
-contributes empty text.
-
-When the loader knows a value's type, reading a field that type can't have is a load
-error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, or a field a
-record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
-`${item...}` in bindings, `case` conditions, and flow outputs, the carried fields a
-LOOP `while:`/`until:` predicate reads, a node's local names in its prompts
-(`prompt:`, `system_prompt:`, `adaptive_questions.prompt:`)
-and its own `asserts:`, and `${input.X...}` in flow `asserts:`. Reading a declared field
-through an `Optional(...)` record still gives `null` when the whole value is null (in TS yian a
-`.` through a value that may be null, such as an `Optional` record or a node a `case` may skip,
-is a load error: write `x?.k`, or check `x != null` first), and
-values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
-below them) aren't checked. `a.output?.k` reads null when `a` was skipped or `k` is
-absent (TS yian).
-
-In TS yian a `.` read must find its value at run time: `x.k` raises when `x` is null or
-missing (a skipped node), is not a record, or lacks a `k` its declared type doesn't declare.
-The fix is `x?.k` (with a default where a value is needed: `${x?.k :- "none"}`; `:-` doesn't
-catch the raise), or a check (`x != null and x.k`). One step:
-
-| Receiver | `.k` | `?.k` |
-|---|---|---|
-| null, or a skipped node / absent input | raises | null |
-| record with `k` | its value | its value |
-| record without `k`, `k` declared by its type | null | null |
-| record without `k`, untyped or not declared | raises | null |
-| text, number, bool, list, file (other than `uri`/`mime`/`name`) | raises | raises |
-
-A local name is typed by its binding: a typed binding by its declared type (plus its
-inferred type when that fits, e.g. a case branch's member or a literal tag), a literal by
-its value, else the inferred type. So a CALL input can't read a field only the child's
-declared input has, and a LOOP's carried name may read a field the seed or the body's
-returned type has. Every shipped builtin but `len` returns text (`len` returns `int`), so
-`${upper(x).f}` and `${len(x).f}` are load errors (`reads field 'f' on type str, which has no
-fields`, and `on type int` for `len`); a host-registered builtin's result isn't checked.
-
-TS yian also has Python list comprehensions, `${[p.text for t in input.history for m in t if
-m.role == "user" for p in m.parts if p.type == "text"]}`: a variable is local (it may share a
-node's or input's name), and an iterable or `if` needs parentheses around an escape
-(`(xs :- [])`). A variable has its list's element type, so `m.txt` on a `list(Msg)` is a load
-error, and an `if` narrows it (`if p.type == "text"`, `if m != null`). Flatten or measure lists
-in a CALL binding or a `when:`, not in an AGENT binding, which records one route per item in
-learnable runs.
-
-On a `Union(...)`, a field every member has reads anywhere (one type if the members
-agree, the merged `Literal` if every member's field is a string `Literal`, else
-untyped). A field only some members have
-is a load error outside a narrowing `case` branch (see `case` below): `reference
-${d.output.qty} reads field 'qty', which only union members with action buy, sell have;
-read it inside a case on ${d.output.action}`. Flow outputs are never narrowed; a node's
-prompt and assert reads of its inputs are checked too, and narrowed when the node sits in
-a `case` branch.
-
-**Narrowing inside a condition.** In node and flow asserts, a searched `case` `when:`,
-and a LOOP `while:`/`until:`, a check narrows the reads after it by short-circuit logic:
-in `A and B`, `B` knows `A` is true; in `A or B`, that `A` is false; `not` flips it. The
-checks are `isinstance(<ref>, T)`, a tag comparison `<ref>.<tag> == "<text>"` (`!=`
-proves the opposite), and a null check `<ref> != null` (`== null` proves it when false;
-`none` is `null`), which narrows `Optional(T)` to `T`; the narrowed type replaces the
-declared one. Two checks on one value keep the narrower type
-(`x != null and isinstance(x, Item)` over `Optional(Any)` is `Item`), and a non-null
-nested field makes its parents non-null and present (`input.a.b != null` narrows
-`input.a`). No check proves a value is null, so a false null check narrows nothing. So
-`isinstance(v, Buy) and v.qty > 0`, `not isinstance(v, Buy) or v.qty > 0`, and
-`v.action != "buy" or v.qty > 0` all load; a check after the read doesn't narrow, and an
-unguarded member-only read in an assert or predicate says to check the member first with
-`isinstance(v, <Type>) and ...` (in a `call` or `loop` node's asserts, which can't use
-`isinstance`, with `v.<tag> == "<value>" and ...` for a tagged union). A read the narrowed type lacks is a load error
-(`reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, by the
-checks before this read; did you mean 'answer'?`), and so is a check that can never be
-true: ruled out by the checks before it or the routing (`` `v.action == "sell"` can never
-be true here: v is Buy, by the checks before it ``), an `isinstance` no value of the
-declared type fits, or a tag comparison (`==` or `!=`) with text that is no tag
-(`` `v.action != "biy"` compares v.action with 'biy', which is not one of its tags (buy,
-sell); did you mean 'buy'? ``). A null check the checks before it leave only null is
-reported too (`` `x != null` can never be true here: x is None, by the checks before
-it ``), but one on a value that is never null is not. A `while:` first runs on the
-seeds, so a check is impossible
-there only when it is on the seed's type too (a seed of another or unproven type leaves it
-unknown), and a flow assert reads every producer it names as possibly null (END binds
-each with `:- null`), for its checks and reads alike, so `not isinstance(d.output, Order)`
-is not reported even on an always-run `d`; read errors still name the declared type.
-
-**Operators inside `${...}`** — one expression grammar, everywhere:
-
-| Form | Meaning |
-|------|---------|
-| `${a + b}`, `${a * b + 1}` | arithmetic — `+ - * / % **`, unary minus |
-| `${a == b}`, `${x in [1, 2]}` | comparisons / membership / `and`/`or`/`not` |
-| `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call (null or wrong-typed args fail: `${upper(x :- "")}`) |
-| `${isinstance(x, Buy)}` | type test; `T` is a `typedefs:` name or `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` (not `Any`) |
-| `${Buy(action="buy", qty=n)}`, `${Buy(x)}` | constructor: build a typedef record from exactly these fields, or check and narrow `x` (like `!Buy ${x}`) |
-| `${X:-default}` | value, else `default` if absent |
-| `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
-| `${a \| b \| c}` | first present among peers (e.g. the branches of a routing-only `case`) |
-| `$$` | a literal `$` (universal escape — in a prompt `$$` renders a single `$`) |
-
-Arithmetic is Python's: `+` concatenates text and lists, `*` repeats them, `%` formats text
-(`${"%.2f" % p}`), a bool is 0/1 (but a CASE `on:` never equates a bool with a number). No
-cost limits; an operator Python can't complete (overflow), or writing an int longer than 4300
-digits as text (a template, a prompt, `%`, `join`, `render_as_json`), fails like an
-expression error.
-
-`and`, `or`, `not`, and `in` are reserved operators, so none can be the root
-name of a reference. A dotted field may use those names (`${record.output.in}`).
-
-Inside an expression, name values directly and group with parentheses:
-`${a :- (b :- "lit")}` or `${a | b | "lit"}`. A `${...}` inside an expression
-(`${a :- ${b}}`, `when: "${a.output} > 5"`) is a load error that shows the rewrite.
-The `:-`/`:?` RHS is an expression, so a string default must be **quoted**
-(`${x:-"today"}`; bare `today` reads a variable). A child-flow call is the
-whole-value `call(...)` directive (see below), never a `${flow(args)}` span.
-Arithmetic on a value that is null when a `case` skips its node is a load error;
-give it a default: `${(o.output.qty :- 0) + 1}`. This holds in a searched `when:` too:
-`(o.output.qty :- 0) + 1 > 1`, not `((o.output.qty + 1) :- 0) > 1`.
-
-For child-flow output contracts, a direct ref preserves its exact or partial contract;
-selecting a known partial-record field yields an exact type. A comparison/membership or
-`not`/`and`/`or` result is proven `bool`. This permits a
-LOOP body field such as `exited: ${ask.output == "/exit"}` without a CODE fold.
-Other computed result types remain unknown unless an explicit typed node supplies them.
-In LOOP records, an unknown field does not disable enforcement of proven siblings,
-including when `while:` stops before the first iteration or a run is replayed.
-
-## Types
-
-Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`, `object`, `Any`, `None`.
-Forms use parentheses: `list(X)`, `Optional(X)`, `Literal(a, b)` (an enum of tags),
-named **records**, `Union(A, B, ...)` of records, and `dict(K, V)`. Brackets
-(`Optional[str]`, `int[1, 12]`) are a load error that shows the new spelling.
-`date` is `YYYY-MM-DD`; `datetime` is `YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]` (a
-space may replace `T`; `.fff` is 1–6 digits); other forms are rejected.
-
-`Any` is any JSON value except null (object, list, text, number, bool); `Optional(Any)`
-adds null, and `list(Optional(Any))` is a list that may hold null (`list(Any)` can't).
-Write `Any`, never `any` (load error). An `Any` value fills only an `Any` input: tag the
-slot (`n: !int ${x.output}`, checked at runtime) or narrow it with `isinstance` in a
-`case`. `object` is a JSON object: text keys and JSON values only, so a dict with a
-non-text key, a date object, or a set fails the node. A node output with no `output:`
-follows the same rule but may also hold files; a date, set, or non-text key in it fails
-`contract.output` with its path (`output at d: ...`). A `file` is a `FileRef` (`uri`,
-`mime`, `name`; read them as `${f.uri}`, typed at load: `uri` is `str`, `mime` and
-`name` `Optional(str)`, and any other field is a load error). It keeps its type inside
-typed containers: a `list(file)` item, a record `file` field, or a LOOP-carried `file`
-reaches CODE as a `FileRef` (`x["f"].uri`, not `x["f"]["uri"]`). A `file` slot also
-reads the mapping `{uri, mime, name}`, and an `object` slot reads a nested file as its
-mapping; untyped outputs keep nested files as mappings. A MAP's list is typed only when
-its body's output has one exact type (a typed whole value, or a record with every field
-typed); over a body returning a record with an untyped field, `${m.output}` readers in
-the parent and the run result see nested files as mappings. A list the loader can't type
-(a tool's untyped array, a mixed or empty literal) is `list(Optional(Any))`; its items
-are checked at runtime when passed on.
-
-Use `int(1..12)` or `float(0.0..1.0)` for inclusive numeric ranges. Either end may
-be open: `int(0..)` is 0 or more, `int(..100)` is at most 100; `int(..)` is an error
-(write `int`). The lower must not exceed the upper (`0..1` reads as a range). Integer
-ends are exact, up to 4300 digits; float ends must be finite, and integer ends in a
-float domain must convert without rounding. Booleans are invalid. Ranges compose
-with lists, records, aliases, and nullable types. Defaults and supplied values are
-checked; cross-flow sources must fit the destination domain, with an open end
-counting as unbounded (an `int(0..)` source into `int(0..100)` needs a tag).
-
-A `float` is finite: a binding whose value is NaN, infinity, or complex (say an
-overflowing `${x * 10}`, or `${(0 - 8) ** 0.5}`) fails its node with
-`binding.evaluate`, so keep the value in range (a `case` guard or a `code` clamp)
-or return null explicitly (a `case` routed to a value entry
-`no_value: !Optional(float) null`, or a `code` node returning `None`). An `int` has at
-most 4300 digits: a longer literal is a load error, and a longer value fails where it
-crosses a boundary (input, binding, output, model reply, feedback) with
-`integer with 5000 digits is larger than yian allows (4300 digits)`. A temporary
-inside an expression may be longer (`${10 ** n > 0}`); writing one as text fails.
-
-A value nests at most 100 levels (each record and list is one): a binding, MAP
-`over` list, or node output nested deeper fails its node, and wrapping a 100-level
-value (`${[x]}`, a record flow output, a MAP's result list) adds the level that fails.
-An AGENT's tool call whose arguments nest deeper fails the node before any call runs.
-A value written out in the flow file (a node input, MAP `over:`, a value
-entry, a default, a flow `output:`, an `env:` value) nested deeper is a located load
-error instead, YAML aliases included; a record output's fields may nest 99.
-A type nests at most 100 levels: in type text each constructor (`Optional(` and `Union(`
-included) is one; in a record written as a mapping in `output:`, each record is one and
-a field's type adds its records and lists (a typedef counts as deep as its definition).
-Deeper is a load error: `type at r.k nests deeper than 100 levels, the limit for a type
-(each record and list is a level)`.
-Each typedef counts the same way, a chain of typedefs each naming the next holds at most
-100, and any type stays within 100 levels with its typedef names expanded (so `list(T)`
-over a 100-level `T` fails), all at load.
-An AGENT's `output:` nests at most 16 levels, counted the same way; deeper is a load
-error (``this AGENT's `output:` nests 17 levels, deeper than 16, ...``), so flatten it or
-build the deeper value in a CODE node.
-An expression nests at most 100 levels too (each call, list, unary operator, comparison,
-`|`/`:-`/`:?`, and operator chain is one, so `a + b + ...` is one level at any length);
-a deeper one is a load error, so split it into smaller bindings.
-A flow file's YAML nests at most 200 levels (each mapping and list is one); deeper is a
-located load error.
-Each YAML document (a flow file, each `uses:` file) expands to at most 100,000 nodes
-(`YIAN_MAX_YAML_NODES`): each mapping, list, and scalar counts once per place it
-appears, so an alias counts every node it names again and a `<<:` merge source counts
-in full; more is a load error at the first mapping or list, in post-order, past the
-limit, so don't build big values by stacking aliases.
-CALL, MAP, and LOOP bodies nest at most 50 levels too (each body is one, whether a
-`defs:` entry, an inline `nodes:` body, a `call(...)` directive, or a `uses:` flow); a
-deeper chain is a load error at the `call:` that crosses the limit, so move short
-bodies into their callers or split the work into separate steps.
-A chain of `uses:` files, each importing the next, is held to 50 files the same way,
-counted apart from call depth; a longer one fails at the alias that crosses it.
-These limits are the defaults of `YIAN_MAX_VALUE_NESTING` (which also sets expression
-nesting), `YIAN_MAX_YAML_NESTING`, `YIAN_MAX_CALL_NESTING`, and
-`YIAN_MAX_AGENT_OUTPUT_NESTING`; each can only be lowered. `YIAN_MAX_TYPE_NESTING`
-sets the type limit (at most 125), typedef chains included. `docs/defaults.md` lists
-every default and limit and its variable.
-
-Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
-string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.
-
-```yaml
-typedefs:
-  Basket: list(str)                    # alias (aliases compose)
-  Decision: Literal(go, no_go, wait)   # enum — one of these tags
-  Signal:                              # record — fields recurse
-    score: float
-    note: Optional(str)
-  Buy:                                 # union members: records with a tag field
-    action: Literal(buy)
-    qty: int
-  Sell:
-    action: Literal(sell)
-    price: float
-  Order: Union(Buy, Sell)              # one of the members
-```
-
-A type definition is written as a plain type, with no tag: typedefs and the
-`output:` declaration of a node (AGENT, CODE, TOOL) or of a compact flow.
-
-`Literal` tags and record field names are non-empty text. `Literal("", a)`, an empty
-field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same
-way wherever the type appears: in `typedefs:`, an input tag, or `output:`.
-
-Every typedef is checked at load, even one nothing uses; a bad field type, an unknown
-name, or a record that contains itself fails at that typedef field
-(`typedef 'Signal' field 'tags': unknown type constructor 'lst' ...`).
-
-A union's members must be told apart by the data: a **tag field** every member declares
-as a single-value `Literal` with distinct values (any name), or shapes that can't
-overlap. Otherwise the typedef fails with `members 'Buy' and 'Sell' can match the same
-value; add a tag field ...`. A `file` field overlaps an `object` or `Any` field or a
-record with `uri`, `mime`, `name`, so such an untagged union needs a tag field too.
-Write `Union(...)`, never `A | B` (load error with a hint);
-a nullable union is `Optional(Order)`, not `Union(A, None)`.
-A union fills a union or `object` input member by member, never a record input: narrow
-it in a `case` first, or with a tag (`buy: !Buy ${d.output}`), checked at runtime.
-
-## Typed slots — YAML tags
-
-One rule: a slot's type is a YAML tag on its value (`name: !T value`); a type
-definition is written as a type. `name: !T` with no value is an empty tagged scalar,
-not null. Full rules: [`docs/syntax.md`](../../../docs/syntax.md#typed-slots-yaml-tags).
-
-**Where.** Flow inputs (root, `defs:`, single-node defs, compact flows); node `input:`
-bindings, including LOOP seeds, `ask` inputs, and CALL/MAP/inline-body
-arguments; flow `output:` fields and a single `output: !T ${...}`; agent
-`variables:`; value entries in `nodes:`; and records or lists nested in any of these.
-
-**Flow inputs.** Every entry is a tag with an optional default:
-
-```yaml
-input:
-  qty: !int                          # required
-  history: !list(Message) []         # default []; Message is built in
-  model: !Optional(str)              # may be omitted; gives null
-  note: !Optional(str) null          # default null
-```
-
-A default is literal YAML checked against the type at load: `${...}` inside it is
-not evaluated, a null default needs an `Optional` type, and nothing is coerced
-(write `!int 30`, not `!int "30"`; quote a date string, `!date "2026-01-01"`). A
-compatible default keeps its authored value, so `!float 30` stays the integer `30`.
-Only values supplied at a flow boundary may be string-coerced. An inline record type
-(`cfg: {a: int}`) is a load error: name the record in `typedefs:` and tag the input
-(`cfg: !Cfg`). `!object` is an unstructured mapping (any JSON object); `!Any` takes
-any JSON value but null. An `--input` value for an `Any` input stays text; use
-`--inputs` for a structure. Agent variables always need a
-value (`num: !int(1..12) 4`).
-
-**Bindings and outputs.**
-
-```yaml
-quote:
-  kind: code
-  input:
-    size: !Size ${size.output}       # str producer into a Literal: checked at runtime
-    discount: !float 0               # YAML literal: checked at load
-    order: !Buy                      # a nested record, checked as a Buy
-      action: buy
-      qty: ${size_qty.output}
-  output: float
-  code: ...
+    prompt: Write a short, friendly reply to this ticket. ${ticket}
+  words:
+    kind: code
+    input:
+      text: ${route.output}           # the output of whichever branch ran
+    output: int
+    code: |
+      return inputs.text.split(/\s+/).filter(Boolean).length;
 output:
-  size: !Size ${size.output}
-  price: !float ${quote.output}
+  severity: ${severity.output}
+  action: ${route.output}
+  words: ${words.output}
 ```
 
-**Writing the tag.**
-- Inside a tag there are no commas. Name a multi-argument type (`Union`, a
-  multi-value `Literal`, `dict(K, V)`) in `typedefs:` and tag with its name
-  (`Decision: Union(Buy, Sell)`, then `!Decision`). One-argument forms and ranges are
-  fine inline: `!Optional(str)`, `!list(Buy)`, `!int(1..12)`.
-- A tag ends at the first space, so `!Union(A, B)` is a load error that says to name
-  it in `typedefs:`. `[ ] { } ,` in a tag are load errors (strict YAML 1.2 forbids
-  them, and flows stay valid for YAML 1.2 tools such as VS Code's).
-- Inside a `{...}` flow mapping, a comma splits an unquoted multi-argument type, so
-  quote it or use block style. After a tag inside `{...}`, put a space before
-  `,`/`}`/`]`, or use block style.
-- Tags anywhere else are load errors: on typedefs, node `output:` declarations, other
-  fields, keys, and `<<:` merge sources. Tags under `x-*` keys are ignored. YAML's own
-  `!!` tags keep their YAML meaning.
-
-**Tags check.** A tag never fills in anything and converts only how files are
-held (a file's mapping at a `file` slot becomes a file; a nested file at an `object`
-slot becomes its mapping). `n: !float ${i}` still delivers an `int`.
-- **Load:** the declared type is compared with the inferred one. Disjoint is a load
-  error (a `str` declared `int`; records are closed, so an extra required field
-  is disjoint). Narrower (non-Optional over Optional, a `Literal` or range subset, a
-  record over `object`, an `Any` value into another type (not `None` or `file`), a
-  union member over the union) loads and is checked at
-  runtime, as is a value with no inferred type (arithmetic, builtin calls, untyped
-  producers).
-- **Values:** YAML 1.2 core rules plus unquoted dates apply and quoted values stay
-  text: `!int "5"` is an error, `!str 30` and `!str 2026-01-01` fail with a hint to
-  quote (`!str "30"`), and `!bool yes` fails: `yes` is text, write `true`.
-- **Records:** a record missing a required single-value tag field (`action:
-  Literal(buy)`) fails, and the error names the field. Write the field.
-- **Runtime:** the value is validated before the consuming node runs, with no
-  conversion (an int bound as `float` stays an int; `"30"` is not an int). A miss
-  fails the consumer (END for a flow output) with code `binding.type`, located at
-  the binding. A committed output widens an int in any typed `float` slot (the
-  whole value, a list item, a record field); an untyped record field stays as given.
-- **Downstream sees the declared type** — this is how an opaque value becomes
-  typed. CALL/MAP/LOOP parents see a child's declared output type; a CALL or LOOP
-  checks a tagged argument or seed against the child's or body's parameter; an inline
-  body's parameter takes the declared type (so arithmetic or `[]` needs no `defs:`
-  body); a LOOP field the body omits keeps the seed's declared type, and a typed seed
-  checks the starting value.
-- **Optional:** an untyped nullable source into a strict child or LOOP body
-  parameter is still a load error (also a child output that is `Optional` because a
-  `case` may skip its node); `x: !int ${maybe.output}` accepts it with a runtime check.
-- **Replay:** declared types are in the flow fingerprint, so a run can't resume
-  after a type changes; recorded flow outputs are re-validated on resume.
-
-**Nested values.** `${...}` inside mapping and list values of a slot is evaluated,
-and each field keeps its type. `$$` is a literal `$` at any depth. A nested
-`call(...)` is a load error; hoist it to its own node or binding. Each nested
-`${...}` acts like its own input for skips: a node whose nested whole-value read's
-producer was skipped is skipped; a flow output gives null at that nested position. A
-literal list with `${` under MAP `over:` is a load error; write the
-list as an expression `${[a, b]}`.
-
-**Values in `nodes:`.** A tagged `nodes:` entry is a value, read like a typed binding;
-other nodes read it as `${<id>.output}`:
-
-```yaml
-nodes:
-  count: !int 3                              # scalars are tagged too
-  greeting: !str Hello, ${input.name}
-  total: !int ${a.output + b.output}
-  exit_result: !object {exited: true, reply: ""}
-  decision: !Buy                             # a block record, checked as a Buy
-    action: buy                              # the tag never fills this in
-    conviction: ${score.output}
-```
-
-A tagged entry is always a value, even with a `kind:` key inside. An untagged mapping
-without `kind:`, scalar, or list is a load error that says to add `kind:` or a tag. A
-span-free literal is checked at load; nested `${...}` and tags work, `$$` is a `$`, and
-a top-level unquoted `call(f, ...)` calls the flow (a quoted `!str "call(f)"` is text).
-A written-out `!object` mapping keeps its record, so reading a field it doesn't have is
-a load error; `!object ${x.output}` and a `!Any {...}` entry stay unchecked. The entry
-lowers to a CODE node with its id (in traces, failures, and the run log like any node)
-and runs like one: on its branch when a `case` routes to it, else when its inputs are
-ready. A runtime type miss fails it with `binding.type`. An entry that reads itself is
-a cycle.
-
-**Constructors.** Inside `${...}` there are no YAML tags, so a typedef name builds or
-checks a typed value: `${Buy(action="buy", qty=size.output)}` builds a record from
-exactly the given fields and checks it; `${Buy(x)}` checks and narrows `x`, exactly
-like `!Buy ${x}`. Only typedef names are constructors (`${int(x)}` is an unknown
-function: there are no conversion functions). They work where `isinstance` does, not in prompts.
-`isinstance(x, Buy)` stays the boolean check. See
-[`docs/expressions.md`](../../../docs/expressions.md#constructors-t).
-
-**Old forms are load errors that show the new spelling:** `qty: int = ${x}` (says
-`` `qty: !int ${x}` ``), `name: T = default` inputs, agent `T = default` variables,
-untagged input entries (`qty: int` -> `qty: !int`), inline record input types, and
-bracket types anywhere (`Optional[str]` -> `Optional(str)`, `int[1, 12]` ->
-`int(1..12)`). A value whose left side isn't a type (`note: a = b`) is plain text.
-
-## Node kinds (the closed set — you compose these, you don't define new ones)
-
-### `agent` — the LLM-backed AGENT node
-```yaml
-classify:
-  kind: agent                  # no tools: one model call; tools:/skills: run the tool loop
-  input:
-    text: ${input.text}        # bindings — these infer the data edges
-  output: Literal(positive, neutral, negative)
-  prompt: |-
-    Classify the sentiment of: ${text}
-    Answer with exactly one of: positive, neutral, negative.
-```
-**An AGENT node's `output:` may be any shape.** Only a bare, untagged `str` keeps the
-node a text producer. A `Literal(...)` enum, record, union, non-string scalar, or list
-switches it to **structured generation** — the engine derives a schema from
-`output:` and the model emits a conforming value (native structured output, or a
-JSON fallback for providers that lack it), validated at the write boundary and
-retried up to `retries:` times (default 2, `YIAN_AGENT_RETRIES`; a non-negative integer)
-on deviation, a NaN or infinity in the reply, a value nested deeper than 100 levels, or a
-reply that skips the structured-output tool call included. A root `Literal(...)` returns
-its bare tag to the flow. A union returns the matching member's record; each member's
-schema pins its tag and rejects unknown fields. An `object` or `Any` output is an open
-mapping or any JSON value; where structured output is strict (Azure, the OpenAI Responses
-API, Anthropic with `thinking` on) yian asks for that whole schema through a non-strict or
-unforced tool instead, and still validates and retries the reply. A range such as
-`int(0..10)` goes to Azure in the field's description rather than as `minimum`/`maximum`,
-and is still checked on the reply. Use a downstream `code`
-node only for deterministic post-processing.
-`prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
-otherwise it is a load error at the value. TS yian only: it may also be a list of messages
-(see the chat pattern under `loop`), so there an unquoted value starting with `[` is read as a
-list prompt, not text.
-An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
-call (text, or structured for a typed `output:`). `mode:` was removed; writing it is a
-load error.
-To give an AGENT node ordinary tools: `tools: [tool_id, ...]` (always a list, even for one).
-A `tools:` name may also be a host-filled tool group (see "Tool groups" below).
-To set who the model is: `system_prompt: "You are ${name}, ${title}."`. It
-**replaces** the framework's default system instruction (omit it to keep the default)
-and renders like `prompt:` — bare local inputs and the node's own `variables:`, with
-located load errors for unknown names. Granted skills, then recalled memory, append
-after it. Every model request of the node (one model call, tool rounds, structured generation)
-uses it; it is part of the flow fingerprint, and with `learnable=True` the rendered text
-is recorded for backward. Compact flows accept it at the top level; there is no
-flow-level default.
-To give it host-supplied Claude/Codex skills: `skills: [skill-name, ...]` or
-`skills: all`. The system message lists each
-granted skill's name and description; the model calls the built-in
-`load_skill(name, path=None)` to read `SKILL.md` or a bundled file. `load_skill` is
-reserved: never list it in `tools:`. When a flow grants skills, `yian run` supplies
-`~/.claude/skills`, `~/.agents/skills`, and the project's `.claude/skills`/`.agents/skills`
-(personal wins). A library host
-passes `skills=` (`{}` for none); without it, or with a listed skill missing, the run
-fails before it starts.
-To let a watching human steer or interrupt the agent, give it an inbox input:
-`steer_inbox: ${input.notes}` (the lone `${input.<name>}` of an `Inbox(...)` input, e.g.
-`notes: !Inbox(str)`; the mapping form with `from:` and a `render:` template over
-`${event}` renders each event). Before each model call the node reads everything the host
-`send`s to that inbox and sends it with the request as one user message; each read is recorded
-as a `steer` step, so a resumed run replays it. The host's `interrupt(run, "notes")` stops the
-node at its next safe point (a streamed reply is cut) and its output is **null**: declare
-`output: Optional(...)` to succeed and route on it (`${worker.output :- "(interrupted)"}`);
-any other output fails `agent.interrupted`. See [Steering a running
-agent](../../../docs/syntax.md#steering-a-running-agent-steer_inbox). Leave it off for checks
-and graders that must not be talked out of their job.
-Python yian instead uses `steerable: true` (requires `str` output or no `output:`) with
-`run_flow(..., steering=inbox)`; there an interrupted node **succeeds** with its text so far.
-`steerable:` is a load error in TS yian.
-A node may pin its model via `llm_config:`; otherwise the process defaults captured
-once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
-layers but still receives those provider/model defaults.
-Node, `defs:`, and flow `llm_config:` are all checked at load against the same
-fields; `inherit:` is node-only. A non-finite number (`openai: {temperature: .nan}`)
-is a load error.
-The top level holds only `provider`, `model`, and `inherit:`. Request settings go in a
-block named after the provider (`openai`, `azure`, `xai`, `deepseek`, `qwen`, `qwen-cn`,
-`glm`, `glm-cn`, `minimax`, `minimax-cn`, `openrouter`, `vllm`, `anthropic`, `google`,
-`ollama`), written exactly as that provider's API request body and sent as written:
-`openai` is the Responses API, `anthropic` the Messages API, `google` Gemini
-`generateContent` (camelCase, `thinkingLevel: HIGH`), `ollama` `/api/chat` (`think`,
-`options`, `keep_alive`, ...), the others their vendor's Chat Completions. A node uses
-the block of its resolved provider; the others are inert but still checked.
-
-```yaml
-llm_config:
-  provider: anthropic
-  model: claude-opus-4-8
-  anthropic: {max_tokens: 16000, thinking: {type: adaptive}, output_config: {effort: high}}
-  openai: {reasoning: {effort: high}}      # used only if a layer picks provider: openai
-```
-
-Fields yian builds (messages, system prompt, tools, tool choice, structured output,
-streaming, conversation state, `n`/`candidateCount`) are a load error in a block. A
-limit of one model is the provider's to enforce: `temperature` on newer Claude models
-fails with the provider's error, so prefer `max_tokens`, `output_config.effort`, and
-`thinking` there. A ChatGPT-subscription `openai` agent is re-checked at run start
-without `temperature`/`max_output_tokens`. Retired keys fail with their block form:
-`anthropic_effort` → `anthropic: {output_config: {effort: …}}`,
-`openai_reasoning_effort` → `openai: {reasoning: {effort: …}}`,
-`google_thinking_level` → `google: {generationConfig: {thinkingConfig: {thinkingLevel: …}}}`,
-`temperature` → `<provider>: {temperature: …}` (google `generationConfig.temperature`,
-ollama `options.temperature`).
-OpenAI subscription and API-key connections both use `provider: openai`;
-`yian auth openai` selects the method and saves the model.
-Never put `api_key` in a flow's `llm_config:`, nor `base_url` except beside
-`provider: azure` (there it is the resource endpoint, required, and `model` is
-the deployment name), nor the connection settings `organization`, `project`
-(OpenAI ids) and `headers` (e.g. a gateway token); loading fails. A
-Python host passes them in `run_flow(..., llm_config={"provider": ...,
-"api_key": key, "base_url": url, "headers": {...}})`, and the key and header
-values again to `resume_flow`/`result.backward` as `api_key=key, headers={...}`.
-They reach every AGENT of that provider, `inherit: false` ones included. A saved
-login brings the settings `yian auth` saved with it (`--organization`,
-`--project`, `--header NAME=VARIABLE`).
-Any `llm_config` field may come from a `${...}` value: a field
-(`model: ${input.model}`), a block field (`openai: {temperature: "${input.t}"}`), a
-whole block, or the whole record (`llm_config: ${input.cfg}`, typed `!Cfg` or
-`object`). It works at node, flow, `defs:`, and `adaptive_questions:` level. Strings
-there are templates (`$$` is a literal `$`). Each value needs a typed source or a tag
-(`model: !str ${pick.output}`); `provider`/`model` take `str`, a block field its API
-type. `api_key`, `base_url`, `organization`, `project`, and `headers` never come
-from a value (nor from a whole record or block type that declares them), `base_url`
-beside `provider: ${...}` is a load error, `inherit:` stays literal, and there is no
-`isinstance`, constructor, or `call(...)` in these values. A value that resolves to
-null leaves the field unset (an omitted `!Optional(str)` model means "use the
-default"); a null whole record is `{}`. A root-flow agent whose values read only
-`${input.*}` resolves at run start with every check, and a missing or mistyped input
-it reads raises before the log (`node 'chat' llm_config.model: input 'm' is required
-and was not given`). Any other agent resolves just before its model call, and a
-refused config fails the node with `contract.input` (`binding.type` for a broken
-tag), located at the field: `node 'chat' llm_config.provider: not a known provider;
-...`. A value reads the flow it is written in; node fields still override flow
-fields, and a value a higher layer always overrides adds no dependency or skip. A
-value reading a node that may be skipped skips the agent. A child flow's agents
-(`defs:` call, `uses:` import, inline or MAP/LOOP body) inherit only the flow's
-literal and root-input fields: inheriting any other value is a load error, so pass
-it as an input and write `model: ${input.model}` in the child agent's `llm_config:`.
-See [`templates/llm-config-cascade.yaml`](templates/llm-config-cascade.yaml).
-No provider or model is built in. Process defaults are `YIAN_DEFAULT_PROVIDER`/
-`YIAN_DEFAULT_MODEL`, then the login saved by `yian auth <provider>` (one per
-provider, each with its model); a default model applies only to its provider. An
-agent that no layer gives a provider and model fails the run before any node runs:
-`Agent 'write' has no provider or model; set llm_config.provider/model, pass
---provider/--model, or run 'yian auth <provider>'`. Grant ordinary Yian
-tools explicitly; retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools`
-settings are rejected.
-Tune a node's non-model behavior with a static `env:` block (flow-level default +
-per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
-AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATIONS`);
-reaching the cap fails the node with `agent.max_tool_iterations`.
-`env:` values are literals, checked at load against the 100-level value nesting limit,
-and must not contain themselves.
-`retries` bounds typed-output correction, not tool, transport, authentication, or stop
-failures. A TOOL node's `retries:` is different: it retries a failed tool call.
-In the tool loop, a tool that raises `ReportedToolError` (from `yian`) doesn't fail the
-node: the model reads the message as that call's result and carries on. Any other tool
-exception fails the AGENT.
-
-### Agent-owned variables — `variables:`
-
-Use tagged defaults for local prompt settings, alongside the AGENT node's inputs.
-A multi-value `Literal` is named in `typedefs:` (`Tone: Literal(concise, detailed,
-technical)`) and tagged by name:
-
-```yaml
-writer:
-  kind: agent
-  variables:
-    num_sentences: !int(1..12) 4
-    tone: !Tone concise
-  input:
-    topic: ${input.topic}
-  prompt: Write ${num_sentences} ${tone} sentences about ${topic}.
-  output: str
-```
-
-Every variable needs a tag and an explicit, valid default, including nullable
-variables (`note: !Optional(str) null`). Names cannot overlap inputs. Defaults are
-literal values; `${...}` inside a default string stays text. A default nested deeper
-than 100 levels is a load error; a NaN or infinity default fails the node when it
-runs. Each invocation receives a fresh copy and repeated prompt references read the
-same local value.
-Ownership follows the authored AGENT path plus name across MAP items and LOOP
-iterations. These declarations create no data edges. Model settings still belong in
-`llm_config:` even when a
-variable has the same name, such as `temperature`.
-
-### Agent memory — `long_term_memory:`
-
-`long_term_memory:` names one or more memories on a full flow (`nodes:` form, root
-file or `defs:` entry) or on an AGENT node. Each memory has a name and a type. YAML
-holds public behavior config only, never storage paths, credentials, or Python
-imports. Three forms:
-
-- `long_term_memory: episodic` — one memory named after its type;
-- `long_term_memory: {notes: episodic, lessons: reflective}` — one memory per `name: type`;
-- `long_term_memory: {notes: {type: episodic, config: {max_episodes: 50}}}` — long
-  form; only `type` and `config` are allowed.
-
-`null` is the same as leaving the key out. `{}` and the retired
-`{name: X, config: ...}` form are errors; `name`, `type`, and `config` cannot be
-memory names. Built-in types and their config keys: `episodic` (`max_episodes`,
-`recall_limit`), `reflective` (`max_items`, `recall_limit`), `profile` (`max_chars`,
-`input_budget_chars`), and, in Python yian only, `session` (`history_budget_chars`,
-`recent_turns`). Values are integers of at least 1 (`recent_turns` at least
-0); episodic and reflective limits may also be `null`. A bad key or value fails at
-load. Any other type is custom and needs a Python host. `storage`,
-`store`, `path`, and `api_key` are rejected in config.
-
-A memory's key is its name prefixed by the `uses:` aliases it was imported
-through: `notes` in the root file, `lib.notes` in a file imported as `lib`. The same
-key declared twice in one file is one memory, so type and config must agree; two
-libraries that both declare `notes` stay independent. Keys that differ only by case
-are an error. An AGENT recalls each enclosing flow's memories, outermost first,
-through CALL, MAP, and LOOP, then its own; a repeated key appears once. A child's
-declaration never binds to a parent's memory. Other node kinds and anonymous inline
-CALL/MAP/LOOP bodies cannot carry `long_term_memory:`; use a named `defs:` flow.
-Each declaration's form and config are checked for every def and import; the rules
-that compare declarations (one type and config per key, session placement, case
-collisions, alias names) apply only to declarations reachable from the root.
-
-**Conversation history.** TS yian has no session memory: a `session` memory, on a flow
-or an AGENT, is a load error ("session memory was removed; carry the history as a loop field"), and an
-AGENT's model reads only its own start's messages. Keep a chat's history in the flow instead:
-
-- **Within a run**, carry it as a LOOP field (`list(Message)`, or a record list like the
-  templates' `Msg`). Each turn outputs only its new messages and the body's output binding
-  appends them; a list `prompt:` sends the history as real turns; a CALL of
-  [`templates/compact_history.yaml`](templates/compact_history.yaml) folds older turns into a
-  rolling summary once the text passes a budget. See the chat pattern under `loop`
-  ([`templates/chat.yaml`](templates/chat.yaml)). The run log records the history as node
-  outputs, so a resumed run restores it.
-- **Across runs**, keep facts in a `profile` memory and experiences in `episodic`.
-- **Steers** a host sends while an AGENT runs reach it through `steer_inbox:` and are recorded
-  as `steer` steps (see "steer or interrupt" above).
-
-Python yian only: a `session` memory is declared on exactly one AGENT, never on a flow, and an
-AGENT declares at most one. It supplies a structured transcript shared by every call site of
-that AGENT (calls queue in admission order, so use non-session memory for independent MAP
-items); history updates automatically during forward, without learning, and
-`history_budget_chars` (default 32_000) and `recent_turns` (default 4) control API summaries
-of older context.
-
-`yian run` builds every built-in memory in RAM, or on disk with
-`--memory-root DIR` (key `lib.notes` lives at `DIR/<flow id>/lib/notes.sqlite`) and
-repeatable `--memory-storage KEY=PATH`. It cannot run a flow that declares a custom
-type, and it never runs backward learning. `yian chat` and its `run_flow` tool
-supply no long-term memory: declared memories stay off (session conversations are
-not kept). Supply the same storage on unfinished
-`--resume`; terminal inspection opens none. A storage file has one owner until its
-backend closes. From Python, pass
-`memory=build_memories(flow, root=..., storage=..., supplied=..., factories=...)` to
-`run_flow`; `memory=None` leaves declarations dormant.
-Independently, `learnable=True` retains
-execution for a later explicit `result.backward(feedback)` call; forward returns
-before memory learning or learned-mutation commits. `result.backward()` with no
-external feedback still gives every memory key one learn call, while unreached
-AGENT backward model calls are skipped. The separate outcome never changes forward
-values or updates local variables. Terminal `resume_flow` inspects without learning;
-it does not retry a backward attempt. See the [Python API](../../../docs/api.md#explicit-backward-feedback)
-for feedback shapes and repeated backward attempts.
-
-### `code` — deterministic Python
-`code:` is either a **`module:function`** reference (import + call) or **inline source** —
-a bare body that reads the `inputs` dict and `return`s a value (the engine wraps it as
-`def main(inputs)` and runs it in-process; same one-dict convention, so a body promotes to
-a reference by copy-paste). See [`templates/inline-code.yaml`](templates/inline-code.yaml).
-The fingerprint holds a reference's `module:function` text, not the function's source:
-keep a referenced function unchanged until a resumable run finishes.
-```yaml
-verdict:
-  kind: code
-  input:
-    s: ${score.output.signal}
-  output: Signal               # one typed value; an AGENT node supports this too
-  code: pkg.mod:fn             # a reference — OR an inline `code: |` body that returns
-```
-
-### `tool` — a registered tool (no LLM)
-```yaml
-typedefs:
-  Fact: {text: str, source: str}
-nodes:
-  news:
-    kind: tool
-    tool_id: get_facts         # a registered or per-run tool id
-    input:                     # the tool's own argument names; a ${...} ref or a literal
-      symbol: ${input.topic}
-      limit: 10
-    output: list(Fact)         # optional; every returned value is checked against it
-```
-Register the tool in Python so the id resolves:
-```python
-from typing_extensions import TypedDict   # typing.TypedDict fails in pydantic on 3.11
-from yian.tools import register_tool
-
-class Fact(TypedDict):
-    text: str
-    source: str
-
-@register_tool("get_facts")
-def get_facts(symbol: str, limit: int = 10) -> list[Fact]:
-    "Fetch recent facts for a symbol."   # docstring = the description the model sees
-    ...
-```
-Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
-That mapping is the run's whole tool set: registered tools are hidden. To keep
-them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
-The docstring's first text section is the description and its `Args:` entries
-describe the arguments. A first parameter `ctx: ToolContext[T]` (from `yian`) is
-hidden from the model and the TOOL node's `input:`; it carries `ctx.call_id`
-(`"<run_id>/<node>"` for a TOOL node, the same on resume, so use it as an
-idempotency key) and `ctx.context`, the object passed as
-`run_flow(..., context=obj)`; pass it again to `resume_flow`. Tools must be `def`,
-not `async def`. A `FunctionTool(name, description, params_json_schema, on_invoke)`
-covers a tool with no Python signature. See `docs/api.md` "Tool context".
-
-**TOOL retries.** `retries: N` on a TOOL node (default 0, `YIAN_TOOL_RETRIES`) calls the
-tool again after a failure, up to N more times, waiting a jittered backoff (at most 1, 2,
-4, … s, capped at 30 s). Every exception retries except `PermanentToolError` (from `yian`)
-and yian's own argument and `output:` checks; a `ReportedToolError` retries too unless it
-is also permanent (it only changes what an AGENT does). A tool raises
-`TransientToolError(msg, retry_after=s)` to set the wait (up to the cap). `ctx.call_id`
-stays the same across attempts and `ctx.attempt` counts them, so make side effects
-idempotent on `ctx.call_id`. Attempts are recorded, so a resumed run continues the count,
-and a failure after a retry lists every attempt's error.
-A waiting TOOL holds a worker.
-See `docs/api.md` "TOOL retries".
-
-**Typed TOOL nodes.** Every returned value must fit `output:`; model expected outcomes
-as union variants (`Union(Filled, Interrupted)`) and route them with `case`. At run
-start, unknown or missing inputs and input or output types that can never fit raise
-`ValueError`, with no coercion (`qty: "10"` into `int` fails). See `docs/syntax.md`.
-
-**Tool groups.** When the tools an AGENT may use change between runs (for example,
-tools a permission system grants), grant a group name and let the host fill it:
-`tools: [toolbox, workspace, ask_user]` in YAML, and
-`run_flow(..., tools={"toolbox": [t1, t2], "workspace": [], "ask_user": ask})` in Python
-(TS yian: `runFlow(flow, inputs, {tools: {toolbox: [t1, t2], workspace: [], ask}})`).
-A list value is a group; each item is a `BaseTool` (named by `.name`) or a def-defined
-function (named by `__name__`). The model sees and calls the group's tools by their
-own names. Groups may share the same tool object; the model sees it once. The run
-fails before it starts if a granted group is missing, two different tools share a
-name (or a group tool's name is a top-level key), or a group has a tool named
-`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry (TS yian:
-`ask`, which also reserves `take`, `sleep` and `ask`). Pass groups
-again to `resume_flow`; restarted nodes use the contents passed there.
-
-**MCP servers.** An MCP server's tools are a group named by its key: grant the key
-(`tools: [github]`) for every tool it lists, or single tools by name; a TOOL node's
-`tool_id:` names one tool, never the server. The YAML is unchanged and holds no
-credentials. In Python: `run_flow(..., tools={"github": mcp_server(url=..., headers=...)})`
-(`mcp_server` from `yian.tools`, extra `yian[mcp]`); the run opens and closes an unopened
-server, and one opened with `with server:` is the host's to share across runs. With
-`yian run`, list servers in `~/.yian/mcp.json` or `--mcp-config FILE` (`mcpServers`
-JSON); only the servers the flow needs start. These are the only groups `yian run`
-fills; any other group needs a Python host. Error results, JSON-RPC errors, timeouts
-and transport errors reach an AGENT's model as `ReportedToolError`s; a gone server or a
-stopped run fails the node. See `docs/api.md` "MCP servers" and `docs/cli.md`
-"MCP servers".
-Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. A `tool_id:` the
-run's tools lack fails at run start, even on a node that may never run. ML inference
-goes through a host tool (`kind: tool`); `kind: model` was removed.
-
-### `case` — branching (no `input:`)
-It takes one branch; the other targets skip, and so does every node that plainly
-reads (or `depends_on`) a skipped one. A searched `case` that reads a node only under
-a default that keeps a binding running (`(a.output :- 0)`) runs when that node is
-skipped, like the binding would; `(a.output :- b.output)` skips it only when both are. Read the taken branch's result
-with `${route.output}` (or `${route.output.field}`). A routing-only `case` (never read
-via `${route.output}`) may take none when no `when:` matches and there is no `else:`;
-over a `Literal` node output or flow input it still needs a `when:` for every tag.
-```yaml
-route:
-  kind: case
-  on: ${synth.output}          # simple form: match a Literal value
-  cases:
-    - when: go
-      then: go_brief
-    - when: no_go
-      then: no_go_brief
-  else: more_info_brief        # runs when no `when:` matches
-```
-Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`.
-Each outermost `:-`/`:?`/`|` reads like its binding: `(score.output :- 0) >= 0.5` routes
-when `score` is skipped, `(a.output :- b.output) >= 1` is skipped only when both are.
-`:-` binds loosest, so parenthesize it: `x.output and (a.output :- false)`.
-`cases:` is a list of `{when:, then:}` mappings; any other shape is a load error.
-Routing on a `Literal` node output or flow input (a LOOP body's carried field, a child
-flow's input) is **exhaustiveness-checked** — omitting a tag with no `else:` is a load
-error.
-
-**Matching.** Each `when:` is a typed value of the `on:` type (text, a number, or a bool;
-an unquoted date is its ISO text; quote a datetime). Ints and floats compare numerically,
-a bool never equals a number, and quoted values are text. Where the `on:` type is known, a
-`when:` it can't hold is a load error even with an `else:` (``case node 'route': `when: 1`
-is an int but `on: ${input.n}` is `str`; quote it: `when: "1"` ``). An untyped `on:` also
-compares exactly: `when: 1` doesn't match the text `"1"`. Two `when:`s with the same
-value (`when: 1` and `when: 1.0`; not `1`, `true` and `"1"`) are a load error at the
-later one.
-
-**Branches.** A `case` only routes. A `then:`/`else:` is a sibling node (an untagged
-unquoted word) or a child call (an unquoted `call(...)` as the whole value). Any node
-name works as a target, including `default` and a value entry. For a fixed or computed
-result, route to a value entry:
-```yaml
-exited: !Turn                  # a value entry: the exit record itself
-  transcript: ${input.transcript}
-  exited: true
-route:
-  kind: case
-  on: ${ask.output}
-  cases:
-    - when: /exit
-      then: exited
-  else: call(respond, transcript=${input.transcript}, message=${ask.output})
-```
-A value in a branch (a tagged value such as `!str reply`, quoted text, a number, a bool,
-`null` or an empty `else:`, a date, a mapping, a list, unquoted text with `${`) is a load
-error that shows the rewrite (``case node 'route' then: a branch names a node or calls a
-flow; put the value in its own entry in `nodes:` and name it:
-`route_then_0: !str approve` and `then: route_then_0` ``). An unquoted word that names
-no node suggests the nearest node and a value entry (``Did you mean `reply`? For the
-text, add a value entry and name it: `replyy_text: !str replyy` ``). A `case` has no
-`output:` (a load error: tag the result where you read it). `${route.output}` reads
-whichever branch ran; type it with a tag where you read it
-(`output: !Turn ${route.output}`). A CASE read through
-`${case.output}` (or routed to by one) needs `else:` or an `on:` Literal with every tag
-listed, or a non-nullable `bool` with `when: true` and `when: false`. `${case.output}`
-works as a whole binding or inside text, not in a coalesce, `:-` default, expression,
-`when:`/`on:`, or assert.
-
-**Skipped branches in a flow output.** An output field that reads only nodes a `case`
-may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- b.output}`)
-returns `null` when they were skipped, typed `Optional(T)`; the loader reads it as if
-`:- null` were written. This holds in `defs:` children and inline CALL/LOOP/MAP bodies.
-A join over an exhaustive `case` (`else:`, every tag of a non-nullable `Literal`, or a
-non-nullable `bool` with `when: true` and `when: false`) is never null. A tagged
-`x: !str ${order.output}` loads and fails with `binding.type` when skipped. Templates
-and comparisons are unchanged (embedded null renders as empty text). Arithmetic on such a
-value is a load error asking for `:-`.
-
-**Narrowing a union.** `on: ${d.output.action}` over a union's tag field narrows
-`d.output` in each branch: a `when: buy` target (and nodes chained to it by plain refs or
-`depends_on`) can read `Buy`-only fields; `else:` sees the unlisted members. A join
-`${b.output | s.output}` of `buy` and `sell` branches sees both. `on:` must be one direct
-ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``case node
-'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal(buy, sell)`);
-use one of: buy, sell``). A searched `case`
-narrows each branch by what its `when:` proves true (`isinstance`, tag and null checks
-through `and`/`or`/`not`; see "Narrowing inside a condition" above):
-`when: isinstance(d.output, Buy) and d.output.qty > 5`, `when: d.output.action == "buy"`;
-under `when: x.output != null` the branch may pass an `Optional(Item)` `${x.output}` to an
-`Item` input untagged.
-A union `T` in `isinstance(<ref>, T)` sharing some members narrows to just those members,
-unless another member could also pass the check. Its `else:` doesn't narrow.
-A searched `case` whose `when:` reads a node only under such a default doesn't pass
-that node's narrowing to its branches. Inline
-child bodies are typed before narrowing; read member fields in a branch node.
-
-### `ask` — ask a person (a TOOL built-in)
-A `tool` node with `tool_id: ask` **always** asks, through the run's ask handler, and the
-answer is the node's output, checked against `output:`. The host answers at once
-(`yian run` asks in the terminal), or its handler returns `pending()` and the host answers
-later with `complete`. A node waiting for an answer holds no worker; when nothing else can
-run, the run ends `waiting` and `advance` moves it on.
-```yaml
-approve:
-  kind: tool
-  tool_id: ask
-  input:
-    prompt: |-                        # a wiring template: it reads the pool
-      Here is the plan:
-
-      ${draft.output}
-
-      Approve as-is, or revise? (approve / revise)
-    timeout: 24h                      # optional: a duration
-  output: Optional(Approval)          # the answer type; null means nobody answered in time
-```
-Inputs: `prompt:` (text), `questions:` (a question list, below) and `timeout:` (a
-duration). An `ask` needs one of `prompt:`, `questions:` or `adaptive_questions:`. Its
-`input:` is wiring, so `prompt` and the question text read the pool (`${draft.output}`,
-`${input.proj}`), not local names. Any other input is a **host extra**, passed to the
-handler in the request (`to: lead` names who answers, for a host that routes asks). The
-host declares its extras (`tools: {ask: {handler, inputs: {to: {type: "string"}}}}`), and a
-flow passing one it doesn't declare fails before the run starts. `output:` is the answer's
-type and gives the request its answer schema; a questions ask without one answers an
-`object`, and a prompt-only one is free form. `node_name:` is the request's title.
-`asserts:` apply; `retries:` is a load error, since the host owns retries of a call it
-holds. `tool_id: ask_user` is the old name of `ask`.
-
-**Timeouts.** The deadline is fixed when the node asks and survives a restart. When it
-passes with no answer, the output is null: `output: Optional(T)` succeeds with null, and a
-`case` routes on it (the host's answer schema is `T`, so null always means nobody
-answered); any other declared output fails the node with `tool.timeout`. An `ask` that
-asks a lead, then a manager when the lead doesn't answer in a day:
-```yaml
-lead:
-  kind: tool
-  tool_id: ask
-  input:
-    to: lead                          # a host extra
-    prompt: "Approve this plan?\n\n${input.plan}"
-    timeout: 24h
-  output: Optional(Approval)
-escalate:
-  kind: case
-  cases:
-    - when: ${lead.output == null}
-      then: manager                   # another ask, to: manager
-```
-
-**Questions.** Instead of a typed `prompt:` and `output:`, an `ask` can present
-**questions** (1–4, `YIAN_MAX_QUESTIONS`; AskUserQuestion-shaped). The answer is a record
-keyed by each `header`, and `output:` then defaults to `object`. `prompt:` is optional;
-`questions:` and `adaptive_questions:` are mutually exclusive. The `ask` itself never
-calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a synthetic composer
-AGENT node (`<id>__compose`) wired into the ask's reserved `__questions` input (an author
-can't write it). The composer reads the ask's other inputs bare in its brief, carries the
-ask's `case` routes, `depends_on:` and `runs_after:`, and waits for its inputs, so it makes
-no LLM call when the ask can't run.
-```yaml
-ask:                                  # a literal questions list
-  kind: tool
-  tool_id: ask
-  input:
-    questions:
-      - question: "Which framework for ${input.proj}?"
-        header: Framework             # answer key -> {Framework: <label>}
-        options:
-          - label: React
-            description: a lib
-          - label: Vue
-            description: a fw
-      - question: "Any notes?"        # no options -> free text
-        header: Notes
-ask2:                                 # LLM-composed questions (desugared at load)
-  kind: tool
-  tool_id: ask
-  input:
-    ctx: ${research.output}           # the composer's context; a host extra
-  adaptive_questions:
-    prompt: "Design 1-3 questions for: ${ctx}"
-    retries: 3
-```
-The composer's context inputs (`ctx` above) also reach the handler as extras, so the host
-declares them. Questions may also come from an upstream node: `questions:
-${composer.output}`, a reference whose type can be a list of questions. A literal list is
-checked at load (``input 'questions': question[0] is invalid: missing key(s)
-["question"]``), and so is the adaptive brief (`node '<id>' adaptive_questions.prompt`).
-`adaptive_questions:` takes only `prompt`, `llm_config` and `retries`, and only on
-`tool_id: ask`.
-
-### `sleep` — wait until a UTC deadline (a TOOL built-in)
-```yaml
-settle:
-  kind: tool
-  tool_id: sleep
-  input:
-    until: ${input.as_of}             # or `for: 2h`: exactly one of the two
-  # order a downstream node after it with depends_on: [settle]
-```
-`until:` is a `date` (`2026-05-21`) or `datetime` (`2026-05-21T14:30[:00][Z|+07:00]`).
-Date and naive datetime values are UTC; aware values are normalized to UTC. `for:` is a
-duration. The deadline is fixed when the node starts and survives a restart; a past
-deadline returns at once. A sleeping node holds no worker: when nothing else can run, the
-run ends `waiting`, and `advance` after the deadline wakes it. The output is `None`.
-An `until:` that can never be a date or datetime fails at load: a literal that is not a
-date or datetime, or a reference typed `int`, `bool`, `list(...)`, etc. (a `str`
-reference loads and is parsed at run). `output:`, `asserts:` and `retries:` are load
-errors.
-
-**Durations** (`timeout:` on `ask` and `take`, `for:` on `sleep`): a positive integer and
-a unit, `s`, `m`, `h` or `d` (`90s`, `30m`, `24h`, `2d`). A plain number is a load error
-(`timeout: 86400` fails; write `86400s`). A duration from a reference must be typed `str`
-(`timeout: !str ${input.wait}`) and is read when the node runs; a literal takes no tag.
-
-### `take` and inboxes — messages a host sends
-An **inbox** is a flow input typed `Inbox(T)`, required, with no default. The run doesn't
-take it as an input:
-while the run is live, the host sends events to it by name (`send`), and closes it
-(`close`) when no more will come. A `tool` node with `tool_id: take` reads it:
-```yaml
-input:
-  messages: !Inbox(str)
-nodes:
-  heard:
-    kind: tool
-    tool_id: take
-    input:
-      from: ${input.messages}         # the inbox, read whole
-      take: all                       # one (the default) or all
-      timeout: 30m                    # optional: a duration
-```
-The output is inferred, `{events: list(T), closed: bool}`: `take: one` reads the oldest
-unread event, `take: all` every unread one, oldest first. With nothing unread the take
-waits (holding no worker) until an event arrives, the inbox closes, or its `timeout`
-passes. A timeout gives `events: []` and `closed: false`; `closed` is true only when the
-inbox is closed and nothing is left unread after this take. Each event is read once.
-`from:` must be an `Inbox` input of this flow, written `${input.<name>}`; `output:`,
-`asserts:` and `retries:` are load errors.
-
-An inbox is read only as a whole value: by a take's `from:`, by an AGENT's `steer_inbox:`,
-or passed to an `Inbox` input of a named `call` or `loop` child (a loop carries it into every iteration and leaves it out
-of its output). Any other read (text, a field, a CODE or AGENT input, a condition, a flow
-output) is a load error, and so is an inbox input that nothing reads. A flow a `map` calls
-can't declare one. See [`templates/chat.yaml`](templates/chat.yaml) for a chat that takes
-each turn's messages from an inbox.
-
-Python yian still has `human_input` and `wait`.
-
-### `call` / `map` — composition over child flows
-A child is itself a flow. `call` runs it once; `map` runs it per list element
-(`${item}` is the current element). Name a reusable child with `call:`:
-```yaml
-uses:
-  research-one: 03-research-one   # bind an external sibling flow to a local alias
-
-nodes:
-  each:
-    kind: map
-    over: ${input.topics}         # a list(T)
-    call: research-one            # node value is list(U)
-    input: { topic: "${item}" }   # per-element call args (sink-bind the child's params)
-```
-`call:` resolves **defs-first, else a `uses:` alias** (an external flow on the
-search path, by filename; `alias@v1` adds a version guard). A CALL's record fields
-are available as `${one.output.field}`; a MAP returns a list at `${each.output}`,
-so project element fields in a downstream CODE/MAP step. `parallel:` is accepted
-but currently inert; run-level `num_workers` controls MAP concurrency.
-`over:` must be a list: a non-list literal (quoted `call(...)` text included) or a
-reference whose type is not a list or `Any` (nullability aside) fails at load.
-
-Each argument must fit the child's input type at load: a reference by its type
-(`${item...}` through the `over:` element type, or each element of a literal `over:`
-by value), a YAML literal by its value (`"2026-01-01"` fits `date`; `9` for
-`int(1..3)` does not), `${x :- d}` by `x` without its null plus the fallback `d`, and
-`${a | b}` operand by operand. A `call`/`map` edge is not a flow boundary, so nothing
-is coerced across it: `"3"` does not fit `int` (write `3`), an unquoted `2026-01-01`
-(a YAML date) fits neither `date` nor `str` (quote it), and text from an untyped
-source into an `int` input fails at the child's start (`contract.input`). A `str`
-reference does not fit an `int` or `date` input: type the source (`list(date)`), or
-tag the binding (`t: !int ${input.n}`) for a value narrower than the input.
-A LOOP seed is checked the same way against its body's input.
-
-For a one-off child, replace `call:` with a non-empty `nodes:` body and add the
-required `output:` key:
-
-```yaml
-each:
-  kind: map
-  over: ${input.topics}
-  input:
-    topic: ${item}                # generates child parameter `topic`
-  nodes:
-    normalize:
-      kind: code
-      input:
-        topic: ${input.topic}
-      output: str
-      code: |
-        return inputs["topic"].strip()
-  output: ${normalize.output}
-```
-
-Use exactly one of `call:` or `nodes:`. The `output:` key is required; CALL may
-set it to null and return `None`, and `output: {...}` returns a record even with one
-field. MAP requires a non-empty `output:`; LOOP requires at least one carried field.
-The inline child cannot capture the parent pool: pass parent values and MAP's item
-through the outer `input:`, then read generated `${input.X}` parameters and
-child-node outputs inside. Run-global `${system.today}`,
-`${system.now}`, and `${system.run_id}` remain available. Types are inferred
-strictly from YAML null/bool/int/float/string values, structural containers, or
-direct typed refs; refs preserve structure/nullability, and only a lone
-whole-value `${item...}` lazily requires a proven `over:` element type. An
-optional element admits actual null list items; a specialized list keeps its
-storage kind and preserves `None` through lossless round-trips. Cross-flow
-bindings accept strict-to-nullable elements but reject nullable-to-strict. If
-inference cannot prove a type, declare it with a tag
-(`n: !int ${input.a + input.b}`) or write a named `defs:` child with an explicit
-signature. `${...}` nested in mapping and list arguments is evaluated, and each
-field keeps its type. Other
-fields keep their outer-node meaning (LOOP drivers, `env:`, and CALL/LOOP
-asserts; MAP asserts remain invalid); `parallel:` remains accepted but inert.
-Inline child flow configuration is not a separate surface, and `llm_config:`
-remains invalid on composite nodes. The enclosing flow's LLM cascade still
-reaches body AGENT nodes, with its literal and root-input fields only: a flow
-`llm_config` value a body agent would inherit is a load error. See
-[`templates/inline-composites.yaml`](templates/inline-composites.yaml).
-
-### `loop` — iterate a body until a predicate goes false (the engine's `while`)
-Threads ONE carried record from each turn into the next: the body reads the carried
-record and returns the fields that change (`'a -> 'a`), and the loop re-runs while
-`while:` holds.
-```yaml
-turn:
-  kind: loop
-  call: chat_turn              # the body (a def or a `uses:` file)
-  input:                       # the SEED carried record — defines 'a
-    messages: []
-    exited: false
-  while: not exited            # pre-check over the carried record
-```
-A LOOP's `input:` is a mapping of carried fields; `input: ${seed.output}` is a load
-error, so list each field (`n: ${seed.output.n}`).
-A tagged seed (`n: !int 0`) checks the starting value; a field the body omits
-keeps its declared type. Every seed must fit the body's input like a CALL argument
-(`n: "1"` into `int` fails; write `1`). Tag an `Optional` reference that is always set
-(`n: !int ${input.m}`). A `while:` null check guards a named body: `while: cursor !=
-null` runs before every iteration, so an `Optional(str)` seed, and a returned
-`Optional(str)`, fill a `cursor: !str` input (a null start runs zero iterations). The
-paths come from the `while:`'s `and` parts and `not (x == null)`, not from `or` parts;
-`page.next != null` guards `page` too. `until:`, `times:`, and `isinstance`/tag checks
-guard nothing. The seed must still fit the loop's zero-iteration output, so `cursor:
-null` into a body returning `cursor: str` fails, and a returned field must keep its
-carried type. An inline body's input stays typed from the seed: tag it inside
-(`!str ${input.cursor}`) where a strict value is needed. Its returned fields are
-relaxed the same way, so with the seed `cursor: p1` it may return `Optional(str)`.
-A named body's returned field must fit the body's own input (read as `Optional` where
-a `while:` null check guards it), since the next iteration
-binds it there: returning `Optional(int)` into `n: !int` is a load error that asks you to
-make the input `Optional(int)` or tag the seed (`n: !int ${input.m}`) to leave the
-null check to runtime; an `Any` field needs `isinstance` narrowing in a `case` or a typed
-producer, and any other mismatch (`float` into `int`) needs the body's input and output
-types to agree.
-`loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
-generated parameters are the carried `input:` fields, so the same `'a -> 'a`
-contract still applies. Those parameters are typed from the seeds, and each returned
-field must fit its seed's type, so type a `${null}` seed the body fills:
-`seen: !Optional(list(str)) ${null}`. A tagged `note: !str "start"` seed accepts an
-`Optional(str)` field and rejects a null at the next iteration (`contract.input`); an
-untyped `"start"` seed asks for `note: !Optional(str) "start"`.
-The body's `output:` returns a **subset** of the carried record (at least one field);
-each omitted field keeps its previous value, with nothing to declare. A body field
-that is not carried is a load error. The body reads only a **subset** of the carried
-names. Names are checked at build; each returned field must keep its carried type,
-compared at load for proven body/seed pairs and always enforced at runtime and replay.
-Returning null sets a nullable field to null, and so does a field that reads a node a
-`case` skipped (it does not keep the previous value). A literal `${null}` is typed
-`None`, so it does not fit an `Optional(str)` seed; return a nullable-typed producer
-instead. A body may return one field: `output: {done: ...}`. An empty `output: {}` returns no
-field and is rejected. A `while:`/`until:` that reads only fields the body never
-returns cannot change. Without `max:` it is a load error; with `max:` it fails if it
-reaches the cap. The node's value and the LOOP node's own `asserts:` see the merged
-carried record; a body def's own `asserts:` see the body's own output. A body that
-asks (an `ask` node) or takes from an inbox (a `take` node) makes the loop a chat: the
-same run threads each answered turn. Pick **exactly one**
-driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
-stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
-optional for `while:`/`until:` but **redundant and rejected** with `times:`. A
-`while:`/`until:` is an expression string; `while: true` or `until: 1` is a load error.
-
-#### Conversational REPL — the `loop` shape of `examples/chat.yaml`
-A chat is a `loop` that carries an `Inbox(Message)` input into every turn, with the record
-`{summary: str, history: list(list(Message)), closed: bool}` (one inner list per turn). Each
-turn runs two nodes side by side: `take: all` reads every message sent since the last one, and
-`compacted` CALLs [`templates/compact_history.yaml`](templates/compact_history.yaml) (a `uses:`
-sibling), which passes the history through under its character budget or folds the older turns
-into the summary with one model call. It runs after the reply, so the run ends `waiting` once
-any fold is done; in `yian chat` a fold delays the next prompt.
-A routing-only `case` sends a non-empty `events` to `answered`, a CALL of `respond`; a take
-that returns no events (the inbox closed with nothing left) skips it. `closed` comes from the
-take. Ending is the host's `close` (`/exit` in `yian chat`), so no text is special. See
-[`templates/chat.yaml`](templates/chat.yaml). This carried history is how a chat remembers in
-TS yian, which has no session memory.
-
-TS yian only. The pattern: take all, then an agent with `steer_inbox` and `Optional(str)`,
-then carry what was said plus its `new_messages`. Send the history as real turns with a list
-`prompt:` (see [A list prompt](../../../docs/syntax.md#a-list-prompt)), so a user can't forge an
-assistant turn and the provider can cache the prefix; tool calls and their results replay as
-sent. `respond` returns the one new turn, and the body's output binding appends it:
-```yaml
-defs:
-  respond:
-    input:
-      summary: !str
-      history: !list(Message)
-      said: !list(Message)            # the take's events, each its own user message
-      owner_messages: !Inbox(Message)
-    nodes:
-      reply:
-        kind: agent
-        input: {summary: "${input.summary}", history: "${input.history}", said: "${input.said}"}
-        steer_inbox: ${input.owner_messages}   # sends during the reply join its next model call
-        output: Optional(str)         # null only after a host interrupt
-        system_prompt: |-
-          You are a helpful conversational assistant.
-
-          Conversation so far: ${summary}
-        prompt:
-          - ${history}                # a message or a list of messages, spliced in order
-          - ${said}
-    output: !list(list(Message)) ${[input.said + reply.new_messages]}
-  turn:                               # in its nodes: compacted, heard, route, and
-    # answered: {kind: call, call: respond, input: {summary: "${compacted.output.summary}",
-    #   history: "${[m for t in compacted.output.history for m in t]}",
-    #   said: "${heard.output.events}", owner_messages: "${input.owner_messages}"}}
-    output: !State
-      summary: ${compacted.output.summary}
-      history: ${compacted.output.history + (answered.output :- [])}
-      closed: ${heard.output.closed}
-```
-- **Steers.** A message the host sends while `reply` runs joins its next model call as a user
-  message (a recorded `steer` step), and is in `${reply.new_messages}` where it joined.
-- **Interrupt contract.** `interrupt(run, inbox)` (Ctrl-C in `yian chat`) cuts the reply: its
-  output is null and its `new_messages` end with the user message `[interrupted by the user]`,
-  so the next turn's model sees the cut text. **Use `Optional(...)` on any agent a host may
-  interrupt**: with no `output:` (which means `str`) or any other type, the agent fails with
-  `agent.interrupted`.
-- `steer_inbox:` takes the lone `${input.<name>}` of an Inbox input, so pass the inbox into the
-  def that holds the agent (`owner_messages` above).
-
-A `system:` item, a last `assistant:` item, an empty list, or a spliced input whose type
-can't hold messages (`str`) fails at load; a spliced value that isn't messages, or a rendered
-list not ending with `user`, fails the node.
-This shape keeps the run log linear (see [`examples/chat.yaml`](../../../examples/chat.yaml)):
-the agent's new messages are one messages commit rebuilt from its steps, and the appended
-history is a derived value the log holds as `from` pointers. Flatten the turns in the CALL's
-binding (`answered`), not the AGENT's, so a learnable capture holds one route, not one per
-message. Don't have a node (or a value entry, which lowers to a CODE node) return the whole
-history every turn: that records it each turn and the log grows quadratically.
-
-`${reply.new_messages}` is everything the agent's call added (its prompt isn't in it), so a
-flat history grows with `${input.history + reply.new_messages}` too.
-It reads like `${reply.output}`: in node inputs, flow outputs and flow asserts, not in a
-prompt, a `case` or `llm_config:`; only an AGENT has it, and a maybe-skipped agent needs
-`${reply.new_messages :- []}`. See
-[An AGENT's new messages](../../../docs/syntax.md#an-agents-new-messages).
-
-## Run-ordering without data (`depends_on` / `runs_after`)
-Both gate a node on another **settling** even when no value flows. `depends_on:
-[x]` also **co-skips** the dependent if `x` skipped; `runs_after: [x]` orders only
-(the dependent still runs). Use these for `sleep`, side-effecting tools, etc.
-Each is a list of node ids: a bare `depends_on: x` is a load error.
-Naming a `case` itself in either is not a branch: the dependent runs whichever branch
-the `case` takes, and is skipped only when the `case` is.
-
-## The three expression contexts (one grammar)
-One `${...}` grammar; the context decides what happens to the result:
-- **Bindings** (`input:`/`output:` values): **evaluated** to a typed value — refs,
-  literals, arithmetic (`+ - * / % **`), list literals, comparisons, `:-`/`:?`,
-  `|`, and pure builtins. A child-flow call is the whole-value `call(...)`
-  directive, not a `${...}` span. A tag (`name: !T value`) declares the value's
-  type (see "Typed slots"); `${T(...)}` builds or checks a typedef value inside
-  an expression. A builtin called with arguments it doesn't take is a load error.
-- **`when:` / `asserts:`**: **tested** as a boolean — `== != < <= > >=`,
-  `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Bare, or one
-  whole `${...}`, are equivalent; braces on a ref inside (`${a} > 5`) are a load
-  error, as is calling a function other than a builtin, `isinstance`, or a `typedefs:`
-  constructor `T(...)`, or a builtin with arguments it doesn't take (even where
-  `and`/`or` would skip it). A flow-level
-  `asserts:` reads `input.X` (boundary, before any node) or `node.output` (post,
-  after the terminal). An exact unqualified flow-input name is shorthand (`age`
-  means `input.age`) and wins over a same-named node; keep fields explicit as
-  `input.profile.age`.
-  `${system.X}` is **not** allowed there (it is ambient; a `system` ref is a
-  LoadError — move the check into a body node).
-- **Prompts**: free text with embedded `${...}` spans (each stringified). A span may
-  call only a builtin; a builtin called with arguments it doesn't take is a load error.
-
-`isinstance(x, T)` and constructors `T(...)` work in bindings, `when:`, node/flow
-asserts, LOOP `while:`/`until:`, and flow outputs. They are load errors in prompts,
-MAP `over:`, and a `call`/`loop` node's own asserts.
-
-> Bindings wire, conditions test, nodes compute.
-
-## Inline `call(...)` — a flow call as a binding's whole value
-`call(f, arg=${ref}, k=lit)` written as a binding's **whole value** (or a `case`
-`then:`/`else:` target) desugars at load into an anonymous `call` node; the host
-becomes `${<synth>.output}`. Every authored node `input:` mapping participates,
-including `ask` inputs and LOOP carried-record seeds. Keyword args only, each at
-most once; a bare arg is one plain scalar under the YAML value rules above, and a quoted
-arg is text; nesting is allowed (`call(a, x=call(b, y=1))`). The synth node runs only when
-the node it is written in (its host) can: it carries the host's `case` routes,
-`depends_on:`, and `runs_after:` (a nested branch call's inner calls carry the branch), and
-waits for the host's other inputs, skipping whenever a skipped input skips the host (a
-`:-`-defaulted input only makes it wait). Calls in the same node don't wait on each other
-unless one reads the other, and a nested call also carries its outer call's other
-arguments (in `call(f, x=call(g), y=${a.output})`, `g` waits for `a` and is skipped with
-it). A call in
-the flow `output:`/`asserts:` has no host. An **unquoted** value whose trimmed text starts
-with `call(` must be **exactly one** well-formed directive, else a load
-error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare name
-/ missing comma, positional or repeated keyword, a keyword value that reads as two keywords
-like `a=1 b=2`, a bare value YAML can't build like `d=2026-13-45`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is
-text — the escape for literal `call(` text; a quoted call holding `${...}` is a load error.
-A `call(` mid-value or inside `${...}` is literal text. A flow `asserts:` item follows the
-rule quoted or not (an assert is an expression, never text). The old
-`${flow(args)}` form (a flow call *inside* braces) is a **load error**: hoist an
-embedded flow call to a named `call` node, and split a coalesce-of-calls
-(`${a() | b()}`) into per-node outputs. Pure builtins (`${upper(x)}`) stay legal
-inside `${}`.
-
-Do not confuse this with an inline child body: `call(f, ...)` invokes an already
-named child flow and synthesizes a CALL node; `kind: call` + `nodes:` defines a
-one-off child's body on that node.
-
-## Prompt names are local
-Inside a `prompt:` or an AGENT `system_prompt:` use names from the node's own `input:`
-block, written bare (`${name}`). An AGENT prompt also sees its own `variables:`. Pool references (`${input.x}`,
-`${other.output}`) go in the `input:` block — bind there, then use the local name
-in the prompt. The loader checks them, so an unknown name, a pool reference, an unknown
-function, a builtin called with arguments it doesn't take, or a span that doesn't parse is
-a load error at that text. An `ask` node's `prompt` and question text are the exception:
-they sit in its `input:`, so they are wiring templates that read the pool
-(`${draft.output}`), like any binding.
-
-## Effects from inside an AGENT node — `ask_user`
-An AGENT node granted `tools: [ask_user]` can synchronously ask the human
-**only if the model decides it needs to**. The tool blocks inside the same live
-model/tool loop and its returned answer becomes the ordinary tool result. The model
-may pass 2-4 short `options`, shown as choices; the human can still type an answer. For a
-*guaranteed* question use an `ask` node; for "ask only if needed" use `ask_user`.
-`ask_user` on an AGENT node returns its answer to the same live tool loop, and its handler
-must answer inline: a handler that returns `pending()` to an AGENT's call fails the agent.
-One handler serves both: the host passes it per run as the ask slot, `tools: {ask:
-handler}` in TS yian (`ask_user` is the slot's old name) and `run_flow(...,
-tools={"ask_user": handler})` in Python. `yian run` does this for you. Without a handler, a
-flow whose AGENT grants `ask_user` or that has an `ask` node fails before the run starts.
-There is no authored `entry:`/`controls:` field on an AGENT node.
-
-## Validate & run
-- **Quick validate** (loads + compiles, no model): `yian run <flow>.yaml` will load
-  first; or from Python `load_flow(text, search_paths=[flow_dir])`.
-- **Run:** `yian run <flow>.yaml [--inputs file.json] [--input k=v]...`. The
-  `--inputs` file must be UTF-8 text holding one JSON object; anything else fails
-  with exit code `2`. JSON inputs load first; repeatable `--input` flags override individual keys but remain a
-  string/scalar surface. With an interactive stdin (TTY), every declaration still
-  missing is prompted. Keep four outcomes distinct: a value, `Set null`,
-  omit/use-default, and cancellation. Nullable boolean and `Literal(...)` selects
-  include `Set null`. Null-capable open scalar/list/object inputs first show
-  omit/default when allowed, `Set null`, and `Enter value`; Enter opens the existing
-  scalar or typed-JSON editor. Optional blank there returns to the palette rather
-  than omitting, while a direct non-null-capable optional/defaulted editor still
-  blanks to omission. The null-only `None` type has `Set null` and no Enter action.
-  Treat text `null` for a string input or a `Literal` tag `null` as an ordinary
-  string. Keep root JSON `null` invalid in the structured editor—choose `Set null`
-  instead—while allowing nested null where the nested contract accepts it.
-  Cancellation cancels the run.
-  Without a TTY, missing optional/defaulted declarations stay absent. Missing
-  required declarations fail with exit code `2` before provider or run-log setup;
-  explicit null and native structures require `--inputs`, while ordinary scalars
-  may use the string-valued `--input` or `--inputs`.
-  `ask` nodes and `ask_user` are separate interactions, unchanged by the
-  initial-input omission policy: `yian run` answers them in the terminal while the
-  run is live. An inbox input is never prompted; its messages come from the host's
-  sends. A `sleep` doesn't prompt.
-- A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
-  needs a provider/model configured (see `docs/installation.md`).
-
-## Authoring checklist
-- [ ] Every `input:` entry is tagged (`name: !T` or `name: !T default`); every type used is a scalar/form or a `typedefs:` entry, spelled with parentheses.
-- [ ] Every data dependency uses `${...}` in `input:`; ordering-only dependencies use `depends_on:` or `runs_after:`. `input:` is always a mapping of names to bindings, never a whole `${node.output}`.
-- [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
-  `Literal(...)`/other supported shape for structured generation.
-- [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
-- [ ] Every variable has a tagged default (`n: !int 4`) and a name distinct from local inputs.
-- [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and declares no `session` memory in TS yian (carry chat history as a LOOP field, compacted by a CALL of `compact_history`); in Python yian each `session` is on exactly one AGENT.
-- [ ] Each `case` whose result is used has an `else:`, lists every tag of a non-nullable `Literal` `on:`, or is a non-nullable `bool` `on:` with `when: true` and `when: false`; its result is read with `${case.output}` and tagged where read; every branch names a node (a value entry for a fixed result) or calls a flow.
-- [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group or an MCP server's key); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
-- [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
-- [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
-- [ ] Every typed slot uses a tag (`name: !T value`), never `name: T = value`; multi-argument types in a tag are named in `typedefs:`.
-- [ ] No secret is written in the file: credentials come from flow inputs or the host.
-- [ ] It loads cleanly (`yian run` / `load_flow`) before you wire a model.
+| Kind | Use it for | Page |
+|---|---|---|
+| `agent` | A model call, with optional tools, skills, steering and memory | [Agents](https://yian.readthedocs.io/agents/) |
+| `code` | A TypeScript or JavaScript body, or a `./file.ts:fn` export | [Code and tools](https://yian.readthedocs.io/code-and-tools/) |
+| `tool` | A host tool, or the built-ins `ask`, `take` and `sleep` | [Code and tools](https://yian.readthedocs.io/code-and-tools/), [Inboxes and waiting](https://yian.readthedocs.io/inboxes/) |
+| `case` | Take one branch, skip the others | [Control flow](https://yian.readthedocs.io/control-flow/) |
+| `call`, `map`, `loop` | Run a child flow once, per list item, or repeatedly | [Control flow](https://yian.readthedocs.io/control-flow/) |
+| a tagged entry | A fixed or computed value, such as `count: !int 3` | [Flows and nodes](https://yian.readthedocs.io/flows/#values) |
+
+## Rules that most often go wrong
+
+### Types and tags
+
+- **Slots take a tag; type definitions don't.** A slot holds a value: a flow input
+  (`qty: !int`), a binding (`n: !int ${x.output}`), a value entry, a flow output
+  (`output: !Order ${x.output}`). A type definition is plain text: a `typedefs:` entry and the
+  `output:` of an `agent`, `code` or `tool` node. Mixing them up is a load error.
+- **Every flow input has a tag**, with an optional default: `lookback: !int 30`,
+  `note: !Optional(str)` (omitted is null).
+- **A tag ends at the first space and holds no `,`.** Name a type with several arguments in
+  `typedefs:` and tag with the name: `Order: Union(Buy, Sell)`, then `!Order`. One-argument
+  types work inline: `!Optional(list(str))`.
+- **Spellings:** parentheses, not brackets (`Optional(str)`, `int(1..12)`); `Any`, not `any`;
+  `Union(A, B)`, not `A | B`; `Optional(Order)`, not `Union(Order, None)`.
+- **Union members must differ by a tag field or by shape.** A tag field is the same field as a
+  one-value `Literal` in each member, such as `action: Literal(buy)`; shapes such as `{text: str}`
+  and `{num: int}` can't overlap. A field only some members have can be read only after narrowing:
+  on a `case` branch over the tag, or after `isinstance(x, Buy)` or `x.action == "buy"`. See
+  [Narrowing](https://yian.readthedocs.io/types/#narrowing).
+- **A tag checks; it never converts.** Unquoted YAML follows the core schema: `yes` is text
+  (write `true`), `!str 30` fails (quote it: `!str "30"`), `!int "5"` fails.
+- **Tag what can't be inferred**, such as an empty list: `seen: !list(str) []`.
+
+### Wiring and prompts
+
+- **Node ids are identifiers**: `fetch_data`, not `fetch-data`. `input`, `output`, `system`,
+  `item` and the expression keywords are taken.
+- **A node's `input:` is a mapping of names.** `input: ${other.output}` is a load error; bind
+  each name: `n: ${other.output.n}`.
+- **Prompts read local names only.** `prompt:` and `system_prompt:` see the node's own `input:`
+  names and `variables:`, bare: bind `topic: ${input.topic}`, then write `${topic}`. Writing
+  `${input.topic}` in a prompt is a load error. An `ask` node is the exception: its `prompt:` and
+  `questions:` sit in its `input:`, so they read `${draft.output}` directly.
+- **Order without data** with `depends_on: [a]` (skipped when `a` is skipped) or
+  `runs_after: [a]` (runs either way). Both take a list.
+- **Compact form** (the node's fields at the top level, no `nodes:`) is only for a flow whose
+  body is one `agent`, `code` or `tool` node. See
+  [Compact form](https://yian.readthedocs.io/flows/#compact-form).
+
+### Expressions and null
+
+- **A lone `${...}` is a typed value; inside text it is written as text.** Conditions
+  (`when:`, `asserts:`, `while:`, `until:`) are bare expressions: `when: score.output >= 0.5`.
+  A `${...}` inside an expression is a load error: write `${a :- b}`, not `${a :- ${b}}`.
+- **Quote text in an expression**: `${x :- "none"}`. A bare `none` is null, and other bare
+  words read a value by that name.
+- **A `.` read on a value that may be null is a load error**: an `Optional` value, or a node a
+  `case` may skip. Write `${x?.qty :- 0}`, or check first: `x != null and x.qty > 0`.
+- **A null in a prompt fails the node.** Give it a default: `${note :- "none"}`.
+- **Arithmetic is numeric.** `+` also joins two texts or two lists; `*` and `%` on text fail
+  (put the value in a template instead); `/` always gives a float.
+- **Prompts may call only `join`, `upper`, `lower` and `render_as_json`.** Compute `len(...)`,
+  `isinstance(...)` and constructors in a binding.
+- **Quote YAML that YAML would parse itself**: a slice or comprehension
+  (`names: "${[m.text for m in input.msgs]}"`), and any `${...}` inside a `{...}` flow mapping
+  (`input: {x: "${input.x}"}`). Block style avoids most of this.
+- **A child flow call is `call(f, k=v)` as a binding's whole value**, never `${f(...)}`. A
+  quoted `"call(f)"` is text. See [Expressions](https://yian.readthedocs.io/expressions/).
+
+### Branching with `case`
+
+- **A `case` only routes**: no `input:`, no `output:`. A `then:` or `else:` names a node, a
+  value entry (for a fixed result, such as `approve: !str approve`), or an unquoted `call(...)`.
+  A literal in a branch is a load error that shows the value entry to write.
+- **Read the result with `${route.output}`**, as a whole binding or inside text, not inside an
+  expression or condition. Tag it where one type is needed: `output: !Turn ${route.output}`.
+- **A `case` whose result is read must be exhaustive**: an `else:`, every tag of a `Literal`
+  `on:`, or `when: true` and `when: false` on a `bool`.
+- **`on:` holds a reference** (`on: ${input.kind}`), and each `when:` is a value of its type.
+  Without `on:`, each `when:` is a condition and the first true one wins.
+- **Skipped branches spread.** A node that reads a skipped node whole is skipped too; inside
+  text the value is empty; with `:-` it runs on the default; a flow output reads null. See
+  [When a node is skipped](https://yian.readthedocs.io/flows/#when-a-node-is-skipped).
+
+### Child flows: `call`, `map`, `loop`
+
+- **`call:` names a `defs:` entry first, then a `uses:` alias** (`uses: {summarize:
+  child-summarize}` loads `child-summarize.yaml` beside the flow).
+- **Write exactly one of `call:` and an inline body** (`nodes:` plus `output:`). An inline body
+  can't see its parent's inputs, nodes or `${item}`: pass them through the node's `input:`, and
+  read them inside as `${input.<name>}`.
+- **Each argument must fit the child's input type**, checked at load and never converted: a `str`
+  doesn't fill an `int`, and an `Optional` value doesn't fill a strict input. Tag a value you
+  know is set to check it at run time: `n: !int ${input.n}`.
+- **`map`** runs the child per item of `over:` (a list), with the item as `${item}`, and returns
+  a list in order. A `map` can't have `asserts:`.
+- **`loop`** takes exactly one driver: `while:` (checked before each run), `until:` (after each
+  run) or `times: N`. `max:` guards `while:` and `until:`, and is a load error with `times:`.
+  The body reads carried fields as `${input.<name>}`, and the condition reads them bare
+  (`while: not done`). The body returns only carried fields, at least one; a field it leaves out
+  keeps its value. See [Repeat with loop](https://yian.readthedocs.io/control-flow/#repeat-with-loop).
+
+### Code nodes
+
+- **Bodies are TypeScript or JavaScript**: the body of an async function that reads `inputs.x`
+  and ends with `return`. Return `null` for no value; `undefined` fails the node.
+- **A file reference starts with `./` or `../`**: `code: ./text.ts:countWords`, resolved against
+  the flow's folder. `module:function` without `./` fails at load.
+- **Only erasable TypeScript**: annotations, `as`, interfaces and type aliases; `enum` and
+  `namespace` fail at load. A body runs on a worker thread and is not a sandbox.
+
+### Agents
+
+- **`output:` defaults to `str`.** Any other type (a record, `Literal`, list, number) asks the
+  model for that type and checks the reply, retrying up to `retries:` (default 2). It can't
+  hold `file` or `None`.
+- **`tools:` is always a list** of tool or group names, such as an MCP server's name. `ask_user`
+  lets the model ask a person when it chooses; for a question that must be asked, use an `ask`
+  node.
+- **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
+  output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
+  to every agent with `steer_inbox:`.
+- **`llm_config:` holds `provider`, `model` and, on an agent, `inherit:`.** Set `provider` and
+  `model` together: an agent that sets only `provider:` keeps an outer `model:`, even one for
+  another provider. Request settings go in a block named after the provider, written as that API's
+  request body: `anthropic: {max_tokens: 8000}`, `openai: {reasoning: {effort: high}}`. See [Models
+  and providers](https://yian.readthedocs.io/models/).
+- **No `session` memory.** Carry a conversation as a `loop` field and compact it with a `call`;
+  see `templates/chat.yaml`. Long-term memory types are `episodic`, `reflective` and `profile`
+  ([Learning](https://yian.readthedocs.io/learning/)).
+
+### Waiting: `ask`, `take`, `sleep`
+
+- **An inbox is an input typed `!Inbox(T)`**, required, with no default. Read it only whole, as
+  `${input.notes}`: in a `take`'s `from:`, an agent's `steer_inbox:`, or an `Inbox` input of a
+  `call` or `loop` child. An inbox nothing reads is a load error.
+- **`take` and `sleep` have fixed outputs**, so `output:`, `asserts:` and `retries:` on them are
+  load errors. A `take` gives `{events: list(T), closed: bool}`.
+- **Durations need a unit**: `90s`, `30m`, `24h`, `2d`. `timeout: 86400` fails.
+- **An `ask` with a `timeout:`** gives null when nobody answers in time if its `output:` is
+  `Optional(...)`; otherwise it fails with `tool.timeout`.
+
+See [Inboxes and waiting](https://yian.readthedocs.io/inboxes/).
+
+### Secrets
+
+Never put a credential in a flow file or an input: the run log records both. Keep it in the
+environment: `yian auth` saves a provider login, an MCP server's config reads `${VAR}`, and a code
+node or host tool reads the variable itself. `api_key`, `headers`, `organization` and `project` in
+`llm_config:` are load errors, and so is `base_url` outside `provider: azure`.
+
+## Before you hand the flow over
+
+- `yian check` prints `ok`.
+- Every node reads what it needs through `${...}` in `input:`, and the flow `output:` names the
+  results the caller wants.
+- Every `case` whose result is read is exhaustive, and every interruptible agent has an
+  `Optional(...)` output.
+- No secret is in the file.

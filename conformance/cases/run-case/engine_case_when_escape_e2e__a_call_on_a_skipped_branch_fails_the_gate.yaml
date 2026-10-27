@@ -1,6 +1,5 @@
-# From tests/engine/test_case_when_escape_e2e.py::test_a_call_on_a_skipped_branch_under_a_default_fails_in_the_predicate.
-# A CASE `when:` calling `upper` on a skipped branch's null fails the gate. TS fails
-# condition.evaluate and Python node.execute.
+# A CASE `when:` calling `upper` on a skipped branch's null fails the gate. It fails
+# condition.evaluate.
 kind: run
 flow: |2
 

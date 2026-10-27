@@ -13,7 +13,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'Agent ''agent'': provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint (https://<resource>.openai.azure.com/); set llm_config.base_url beside provider: azure. AZURE_OPENAI_ENDPOINT is not read'
   trace: []
   events: []

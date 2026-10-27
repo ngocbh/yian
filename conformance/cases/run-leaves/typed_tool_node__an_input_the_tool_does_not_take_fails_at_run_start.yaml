@@ -30,7 +30,7 @@ host:
       results: []
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'TOOL node ''place'' input ''qtty'': tool ''place_order'' takes no such input; it takes ["qty","sym"]'
   trace: []
   events: []

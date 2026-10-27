@@ -1042,25 +1042,13 @@ export function compare(
 }
 
 /**
- * TS error class names that differ from the case names, mapped to the case names. A change that
- * introduces such a class adds its entry here and the matching row to the error-class table in
- * `conformance/SPEC.md`.
- */
-export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map([
-  // TS throws a RangeError wherever Python raises ValueError at a yian boundary.
-  ["RangeError", "ValueError"],
-  // A RangeError naming a run-log schema TS can't read; Python raises ValueError.
-  ["RunLogSchemaError", "ValueError"],
-]);
-
-/**
  * Return `error` in the case's `raises` form: `{class, message}`, plus `path` for a
- * `TypeCheckError`. The class is `error.name` read through `classes`, so every yian error class
- * sets `override name = "<Class>"`. A thrown non-`Error` is named by its `typeof`.
+ * `TypeCheckError`. The class is `error.name`, so every yian error class sets
+ * `override name = "<Class>"`. A thrown non-`Error` is named by its `typeof`.
  */
-export function raised(error: unknown, classes: ReadonlyMap<string, string> = ERROR_CLASSES): Case {
+export function raised(error: unknown): Case {
   if (!(error instanceof Error)) return { class: typeof error, message: String(error) };
-  const form: Case = { class: classes.get(error.name) ?? error.name, message: error.message };
+  const form: Case = { class: error.name, message: error.message };
   const path: unknown = (error as { path?: unknown }).path;
   if (error.name === "TypeCheckError" && Array.isArray(path)) {
     form["path"] = (path as unknown[]).map((step) =>
@@ -2187,15 +2175,6 @@ export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
       for (const time of STEP_TIMES) delete step[time];
       if ((get(step, "effective_llm_config") ?? null) !== null) {
         step["effective_llm_config"] = llm(step["effective_llm_config"] as Case);
-      }
-      // A failed step's error class goes through the error-class table: a TOOL attempt's `type`,
-      // a failed model call's `kind` (a provider error's kind is no class and stays).
-      const error = get(step, "error");
-      if (step["event"] === "failed" && isMapping(error) && typeof error["type"] === "string") {
-        error["type"] = ERROR_CLASSES.get(error["type"]) ?? error["type"];
-      }
-      if (step["kind"] === "model_call" && isMapping(error) && typeof error["kind"] === "string") {
-        error["kind"] = ERROR_CLASSES.get(error["kind"]) ?? error["kind"];
       }
     }
     if (kind === "backward_finished") {

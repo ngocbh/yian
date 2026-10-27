@@ -3,7 +3,7 @@
 # The header names Python's `run_flow`; the TS run entry point raises the same error.
 kind: run
 flow: |
-  # e23 — a TOOL node referencing an unknown tool id. RUN START: run_flow raises ValueError
+  # e23 — a TOOL node referencing an unknown tool id. RUN START: run_flow raises RangeError
   # before any log exists, since the run's tools have no such id.
   id: err-unknown-tool
   name: err_unknown_tool
@@ -20,7 +20,7 @@ inputs: {topic: X}
 run: {run_id: r1, num_workers: 0}
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     # The empty list reads `[]` in both languages, so the message needs no `messages` rule.
     message: "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools; known tools: []"
   trace: []

@@ -18,7 +18,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'unknown inputs "a", "b"; declared inputs: (none)'
   trace: []
   events: []

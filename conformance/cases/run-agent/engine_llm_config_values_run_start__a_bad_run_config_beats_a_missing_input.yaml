@@ -17,7 +17,7 @@ run:
     bogus: 1
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'llm_config has unknown field(s) ["bogus"] (allowed: anthropic, api_key, azure, base_url, deepseek, glm, glm-cn, google, headers, minimax, minimax-cn, model, ollama, openai, openrouter, organization, project, provider, qwen, qwen-cn, vllm, xai)'
   trace: []
   events: []

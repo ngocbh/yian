@@ -30,7 +30,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'AGENT node ''each/agent'' grants unknown tool or group ''toolbox''; tool groups in this run: []'
   trace: []
   events: []

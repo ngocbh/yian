@@ -32,7 +32,7 @@ host:
       results: []
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'TOOL node ''place'' input ''qty'': tool ''place_order'' takes int(..100), but the binding is int(101..)'
   trace: []
   events: []

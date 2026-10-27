@@ -587,7 +587,7 @@ expect:
           title: unchanged
   backward:
   - raises:
-      class: ValueError
+      class: RangeError
       message: feedback["payload"]["rows"][1] must have exactly 2 items; got 1
   - failure: null
     feedback:

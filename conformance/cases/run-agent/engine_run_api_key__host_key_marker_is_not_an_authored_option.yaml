@@ -13,7 +13,7 @@ run:
     _host_key: true
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: llm_config._host_key is internal to recorded runs
   trace: []
   events: []

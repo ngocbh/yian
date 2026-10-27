@@ -14,7 +14,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: effective LLM config for 'agent' has a base_url without a host key; only provider azure takes a base_url from a flow file
   trace: []
   events: []

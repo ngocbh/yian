@@ -16,6 +16,6 @@ inputs: {m: x}
 run: {run_id: r1, num_workers: 0}
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: "inbox `m` receives events through send(); it takes no run input"
   trace: []

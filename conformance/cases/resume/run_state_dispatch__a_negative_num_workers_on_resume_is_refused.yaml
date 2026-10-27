@@ -1,5 +1,5 @@
 # From tests/engine/test_run_state_dispatch.py::test_run_resumed_requires_an_exact_nonnegative_worker_count[-1].
-# A negative resume.num_workers is refused (ValueError) before run_resumed is appended. Only the raised error is
+# A negative resume.num_workers is refused (RangeError) before run_resumed is appended. Only the raised error is
 # compared: a resume with num_workers other than 0 is grouped as pooled, so its trace is not recorded.
 # Record 8 is n's node_started: the tool runs, its result is refused.
 kind: resume
@@ -34,7 +34,7 @@ host:
   crash_after_record: 8
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: num_workers must be a non-negative integer
 resume:
   num_workers: -1

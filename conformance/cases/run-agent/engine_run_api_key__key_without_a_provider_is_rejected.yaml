@@ -11,7 +11,7 @@ run:
     api_key: <key:1>
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: llm_config.api_key needs llm_config.provider, so the key goes only to that provider
   trace: []
   events: []

@@ -100,5 +100,5 @@ expect:
     - output: hello
   backward:
   - raises:
-      class: ValueError
+      class: RangeError
       message: feedback requires a recorded list

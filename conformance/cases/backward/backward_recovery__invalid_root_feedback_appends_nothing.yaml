@@ -189,7 +189,7 @@ expect:
         known: 1
   backward:
   - raises:
-      class: ValueError
+      class: RangeError
       message: feedback selects unknown field 'missing'
   - failure: null
     feedback:

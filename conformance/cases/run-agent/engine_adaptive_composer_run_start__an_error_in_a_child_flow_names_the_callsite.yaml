@@ -32,7 +32,7 @@ host:
   human: {}
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'node ''ask'' adaptive_questions.llm_config in ''sub'': provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint (https://<resource>.openai.azure.com/); set llm_config.base_url beside provider: azure. AZURE_OPENAI_ENDPOINT is not read'
   trace: []
   events: []

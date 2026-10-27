@@ -13,7 +13,7 @@ run:
     temperature: 0.734519
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: '`temperature` moved into the provider block: write `vllm: {temperature: <value>}`'
   trace: []
   events: []

@@ -61,6 +61,7 @@ import {
   type RunRecord,
   RunCancelledRecord,
   RunFailedRecord,
+  RunLogSchemaError,
   RunWaitingRecord,
   SCHEMA_VERSION,
 } from "../src/runtime/log.ts";
@@ -782,12 +783,9 @@ describe("raised", () => {
     expect(raised(new Foo("m"))).toEqual({ class: "Foo", message: "m" });
   });
 
-  test("names a RangeError ValueError", () => {
-    expect(raised(new RangeError("m"))).toEqual({ class: "ValueError", message: "m" });
-  });
-
-  test("reads the name through the error-class table", () => {
-    expect(raised(new Foo("m"), new Map([["Foo", "Bar"]]))).toEqual({ class: "Bar", message: "m" });
+  test("names a RangeError and a RunLogSchemaError by their own class", () => {
+    expect(raised(new RangeError("m"))).toEqual({ class: "RangeError", message: "m" });
+    expect(raised(new RunLogSchemaError("m", 9))).toEqual({ class: "RunLogSchemaError", message: "m" });
   });
 
   test("adds a TypeCheckError's path, list indexes as ints", () => {
@@ -828,7 +826,7 @@ describe("expectRaises and results", () => {
     };
     const failure = expectRaises(expected, call);
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
-    await expect(failure).rejects.toThrow("raises differs\n--- actual\nclass: ValueError\n");
+    await expect(failure).rejects.toThrow("raises differs\n--- actual\nclass: RangeError\n");
   });
 
   test("lets the case's own failure through", async () => {

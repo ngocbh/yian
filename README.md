@@ -158,11 +158,6 @@ built-in `load_skill` tool when it needs them. `yian run` supplies the skills in
 `~/.claude/skills`, `~/.agents/skills`, and the project's `.claude/skills` and
 `.agents/skills`; a library host passes its own. See [Skills](docs/api.md#skills).
 
-Each local SQLite file has one owning backend until `close()` or context exit.
-Idle run handles do not block closing; active work or queued turns do. Omit
-`storage` to keep memory process-local. See [durable memory](docs/api.md#optional-durable-memory)
-for ownership and recovery.
-
 `yian run` builds every declared built-in memory (`episodic`, `reflective`,
 `session`, `profile`). They stay in RAM unless a CLI option places them:
 
@@ -179,6 +174,11 @@ not run backward learning. A flow that declares a custom memory type runs from a
 library host with `buildMemories`; `yian run` exits 1 with a setup error for it.
 See [CLI memory](docs/cli.md#memory-and-storage) for lifetime and examples.
 
+Placed memories keep their state across restarts in SQLite files (a library host places them
+with `buildMemories(flow, {storage, root})`). Each local SQLite file has one owning backend until
+it is closed. Idle run handles do not block closing; active work or queued turns do. See
+[durable memory](docs/api.md#optional-durable-memory) for ownership and recovery.
+
 ## Documentation
 
 - [Agent](docs/agent.md) — what “agent,” node, flow, child flow, memory, and run
@@ -188,7 +188,8 @@ See [CLI memory](docs/cli.md#memory-and-storage) for lifetime and examples.
 - [Flow syntax](docs/syntax.md) — the complete authoring reference.
 - [Examples](docs/examples.md) — annotated flows from `examples/`.
 - [Compose](docs/compose.md) — parsing, lowering, validation, and source origins.
-- [The engine](docs/engine.md) — scheduling, records, recovery, and learning.
+- [The engine](docs/engine.md) — scheduling, records, recovery, and learning; the engine design
+  contributors keep.
 - [Runtime nodes](docs/nodes.md) — the `Node` / `NodeResult` contract.
 - [Defaults and limits](docs/defaults.md) — every built-in default and limit, and
   the `YIAN_<NAME>` environment variable that changes it.

@@ -1,28 +1,6 @@
 /**
- * A port of `tests/engine/test_backward_composition.py`: public backward through loaded flows
- * composing CALL, CASE, MAP and LOOP, owned memories, and a stale reflective snapshot.
- *
- * Ported: all 6 tests, the parametrized ones whole. Models are `ScriptedModel`s built by a model
- * access (`models`) whose `pick` a test reassigns where Python re-patches `model_from_config`; a
- * run that must build no model checks the access built none. Records are read from the run's
- * JSONL log; an AGENT backward prompt is its request's user message read as JSON.
- *
- * Changed:
- * - `test_concat_repeat_and_opaque_routes_cross_public_call_without_reevaluation`: list repetition
- *   is a type error (decision 7), so `input.values * 2` becomes two more concatenated copies. The
- *   opaque builtin is registered with `registerTemplateFn` and put back after the test. The run
- *   log records no expansion seed, so the live expansion's check and each replay (the backward's,
- *   the read-only resume's) rebuild the CALL's seed from its binding and call the builtin again.
- * - `test_owned_memories_learn_complete_history_and_reject_invalid_proposals`: the invalid learn
- *   result is `null` (Python's is a tuple where a list is required); learn-context feedback holds
- *   its ints as `bigint`s.
- * - `test_two_public_runs_reject_the_stale_reflective_snapshot_after_any_commit`: the reflector is
- *   given as `ReflectiveMemory`'s `createModel`; Python's one `with_structured_output` binding is
- *   the one request asking for structured output.
- * - Python's `ValueError` is a `RangeError`; CODE bodies are JavaScript (decision 11).
- *
- * TS-only: slice, `len` and comprehension routes cross a public CALL the same way (Python has
- * none of them); a MAP failed on an item binding is bound again from its items' sources too.
+ * Public backward through loaded flows composing CALL, CASE, MAP and LOOP, owned memories, and a
+ * stale reflective snapshot.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -80,7 +58,7 @@ const NO_MODEL: Pick = () => {
 
 /**
  * Model access over the file's env: each build records its config and serves `pick(config)`; a
- * test reassigns `pick` where Python re-patches `model_from_config`.
+ * test may reassign `pick`.
  */
 function models(pick: Pick = NO_MODEL): ModelAccess & { pick: Pick; configs: Readonly<Record<string, unknown>>[] } {
   const access = {
@@ -105,7 +83,7 @@ const run = (flow: ComposedFlow, inputs: Readonly<Record<string, unknown>>, opti
 /** `advance` in the file's env. */
 const resume = (flow: ComposedFlow, options: AdvanceOptions) => advance({ env, ...options });
 
-/** An AGENT backward reply: Python's `_reply`, empty channels unless `channels` sets them. */
+/** An AGENT backward reply: empty channels unless `channels` sets them. */
 function feedbackReply(channels: Record<string, unknown> = {}): Response {
   const text = JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {}, ...channels });
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
@@ -884,7 +862,7 @@ output: \${invoke.output | unused.output}
         return [new MemoryMutation(context.memory, { seen: context.episodes.length })];
       };
       for (const [key, backend] of backends) {
-        // TS learn results are arrays; Python's invalid result is a tuple, here `null`.
+        // The invalid learn result is `null`, not an array of proposals.
         backend.learnOutcomes.push(invalidProposal && key === "local" ? () => null : propose);
       }
       backwardChat = new ScriptedModel([
@@ -1022,7 +1000,7 @@ output: \${input.text}
       expect(committed["lessons"]).toHaveLength(action === "noop" ? 0 : 1);
       expect(learner.requests).toHaveLength(1);
       expect(configurations).toHaveLength(1);
-      // Python's one `with_structured_output` binding: the one call asks for structured output.
+      // The one call asks for structured output.
       expect(learner.requests[0]!.outputFormat).not.toBeNull();
 
       const forwardState = structuredClone([first.status, first.output, first.failure]);
@@ -1060,7 +1038,7 @@ output: \${input.text}
   }
 });
 
-test("a failed map's item routes rebind from their own sources (TS-only)", async () => {
+test("a failed map's item routes rebind from their own sources", async () => {
   const flow = await load(`id: map-item-sources
 name: map_item_sources
 nodes:

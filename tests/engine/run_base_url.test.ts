@@ -1,22 +1,7 @@
 /**
- * A port of `tests/engine/test_run_base_url.py`: a run-level `llm_config.base_url` goes only with
- * the host key, and the log records it.
- *
- * Ported: all 28 tests, the parametrized ones whole. The provider calls go through the real
- * `chatModelFromConfig` with a recording `send` (`recording`), where Python routes the OpenAI
- * client through `httpx.MockTransport`. Python's `_fake_clients` (the provider, model, endpoint and
- * key each client is built with) reads the same recording: the configs the builds receive, beside
- * the URL and key of each request; its replies, in call order, are Chat Completions streams, or
- * Responses streams on a `/responses` URL. Python's `_fake_models` reads the configs `serving`
- * receives. A profile memory's learner builds through the same model access. Each run's
- * environment is the file's (`hostEnv`) plus the variables a row sets.
- *
- * Stronger than Python: the secret scan (`expectHidden`) looks for this file's key, where Python's
- * imported `_assert_hidden` scans for `test_run_api_key.py`'s key, never sent here.
- *
- * Changed: refused configs are `RangeError`s and refused flow files `LoadError`s (Python's
- * `ValueError`s); `test_a_lower_layer_base_url_cannot_redirect_the_host_key` sets the layers on the
- * loaded flow's `CompiledFlow` and `AgentNode` (Python's `flow_llm_config` and `own_llm_config`).
+ * A run-level `llm_config.base_url` goes only with the host key, and the log records it. Provider
+ * calls go through the real `chatModelFromConfig` with a recording `send`; `expectHidden` scans for
+ * this file's key.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -103,7 +88,7 @@ function thrown(fn: () => unknown): Error {
   throw new Error("expected a throw");
 }
 
-/** A model access whose builds answer `ok` and record their configs (Python's `_fake_models`). */
+/** A model access whose builds answer `ok` and record their configs. */
 const fakeModels = (runEnv: Env = env) =>
   serving(new ScriptedModel(Array.from({ length: 8 }, () => textReply("ok"))), runEnv);
 
@@ -122,7 +107,7 @@ function answers(...texts: string[]): Replier {
   };
 }
 
-/** A model access building real clients over a recording `send` that answers `texts` (Python's `_fake_clients`). */
+/** A model access building real clients over a recording `send` that answers `texts`. */
 const fakeClients = (runEnv: Env, ...texts: string[]) => recording(runEnv, answers(...texts));
 
 /** Each build's provider, model, base_url and key, from the configs `models` received. */

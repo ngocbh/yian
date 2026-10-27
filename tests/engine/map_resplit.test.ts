@@ -1,15 +1,7 @@
 /**
- * CALL and MAP are distinct typed drivers, a port of `tests/engine/test_map_resplit.py`: the
- * retired ref kind and package stay absent; `CallNode` carries no `over` or `parallel`, while
- * `MapNode` has its own kind and keeps the `over` source in flow wiring.
- *
- * Ported: `test_retired_ref_kind_is_absent_and_call_map_are_distinct`,
- * `test_retired_ref_package_is_absent` and `test_call_node_excludes_map_fields`.
- *
- * Changed: `NodeKind` is a const object of strings, so a member is its value and has no
- * `.value`; `hasattr` is the `in` operator. In `test_retired_ref_package_is_absent` a package
- * import is a dynamic `import()` of the kind's `node.ts`; the missing module's specifier is
- * computed, because a literal one fails the typecheck.
+ * CALL and MAP are distinct typed drivers: the retired ref kind and package stay absent;
+ * `CallNode` carries no `over` or `parallel`, while `MapNode` has its own kind and keeps the
+ * `over` source in flow wiring.
  */
 
 import { expect, test } from "bun:test";

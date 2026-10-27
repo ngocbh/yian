@@ -1,26 +1,6 @@
 /**
- * `runAgent` without tools: one structured call for a constrained output type, the text for a
- * bare `str`; mirrors `tests/engine/test_no_tools_structured.py`, driving `runAgent` directly
- * with a hand-built `AgentRunContext`.
- *
- * Ported: `test_no_tools_uses_structured_output_for_record` and
- * `test_no_tools_bare_str_text_passthrough`.
- *
- * Changed: the model is a `ScriptedModel` rather than a LangChain chat model whose
- * `with_structured_output` is or isn't called; the call's purpose (`structured_native` or
- * `chat`) shows the path instead. `test_no_tools_uses_ollama_structured_output_for_literal`: a
- * protocol-less model takes the native `json_schema` plan whatever its provider, so the row
- * asserts the structured purpose and the value for an `ollama` `ScriptedModel`.
- *
- * TS-only: `systemPromptWithMemory` with no sections returns the base unchanged, and with sections
- * appends Python's text and canonical JSON; a steer inbox's steers join the loop's request after the prompt, and a
- * tool-free structured agent's one structured request too, which an interrupt before it skips; a
- * granted tool runs in the loop; a grant without a tool set reads the registry (`new ToolSet()`),
- * so an unregistered grant fails with `resolve`'s `RangeError` before the model call; a granted
- * skill binds `load_skill`; a reply with a parsed tool call and no grant fails at a cap of 1 with
- * `ToolIterationLimitError`, else with the ungranted `AgentLoopError`; an unparsed tool call is
- * ignored; a stop during the call wins over its text or tool-call reply; `ctx.sent()` returns the
- * built `RouteModel`'s route credentials; the memory sections follow the base system prompt.
+ * `runAgent` without tools: one structured call for a constrained output type, the text for a bare
+ * `str`; driving `runAgent` directly with a hand-built `AgentRunContext`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -118,7 +98,7 @@ const RECORD = new Type({
   required: new Set(["name", "score"]),
 });
 
-test("test_no_tools_uses_structured_output_for_record", async () => {
+test("no tools uses structured output for record", async () => {
   const model = new ScriptedModel([textReply('{"name": "Ada", "score": 9}')], NATIVE);
   const events: unknown[] = [];
   const ctx = context(model, { outputType: RECORD, emitEvent: (event) => void events.push(event) });
@@ -128,7 +108,7 @@ test("test_no_tools_uses_structured_output_for_record", async () => {
   expect(purposes(events)).toEqual(["structured_native"]);
 });
 
-test("test_no_tools_uses_ollama_structured_output_for_literal (Changed: the native plan)", async () => {
+test("no tools uses ollama structured output for a literal", async () => {
   const typ = new Type({ kind: ValueKind.STRING, tags: new Set(["positive", "neutral"]) });
   const model = new ScriptedModel([textReply('{"value": "neutral"}')], { provider: "ollama", model: "qwen2.5:72b" });
   const events: unknown[] = [];
@@ -144,7 +124,7 @@ test("test_no_tools_uses_ollama_structured_output_for_literal (Changed: the nati
   expect(model.requests[0]!.outputFormat).not.toBeNull();
 });
 
-test("test_no_tools_bare_str_text_passthrough", async () => {
+test("no tools bare str text passthrough", async () => {
   const model = new ScriptedModel([textReply("hello")]);
   const events: unknown[] = [];
   const ctx = context(model, { outputType: Type.scalar(ValueKind.STRING), emitEvent: (event) => void events.push(event) });
@@ -163,7 +143,7 @@ test("systemPromptWithMemory without sections returns the base unchanged", () =>
   expect(systemPromptWithMemory("base", [])).toBe("base");
 });
 
-test("systemPromptWithMemory appends Python's text and canonical JSON", () => {
+test("systemPromptWithMemory appends the memory context heading and canonical JSON", () => {
   const sections = [new MemorySection("outer", 'notes "é"\n'), new MemorySection("local", "")];
   expect(systemPromptWithMemory("base", sections)).toBe(
     "base\n\nMemory context (canonical JSON; sections are ordered from outer workflow to local agent):\n" +

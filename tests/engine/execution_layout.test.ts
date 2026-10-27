@@ -1,38 +1,7 @@
 /**
  * Memory-independent static execution paths and atomic scope application
- * (`compile/execution_layout.ts`): rows of `tests/engine/test_execution_layout.py`.
- *
- * Ported: `test_execution_scope_has_an_explicit_manifest_policy`,
- * `test_execution_layout_exists_without_memory_policies` (both flow classes),
- * `test_aliased_child_targets_are_rejected_before_any_scope_is_stamped`,
- * `test_stale_graph_is_rejected_without_stamping_any_target`,
- * `test_invalid_layout_is_rejected_without_stamping_any_target`,
- * `test_scope_validation_is_atomic_even_for_forged_frozen_values`,
- * `test_recursive_static_child_cycle_is_rejected_without_mutation`,
- * `test_static_children_are_discovered_through_the_node_owned_hook`,
- * `test_only_the_containing_flows_actual_boundaries_are_marked`,
- * `test_static_loop_scope_starts_at_driver_zero_and_reapplies_atomically` and
- * `test_static_loop_layout_rejects_nonbootstrap_positions_before_stamping`.
- *
- * Changed:
- * - Python's `ValueError` is a `RangeError`; layout `==` compares each target's locator and scope
- *   (the node isn't compared), here through `view`.
- * - The targets, layouts, scopes and positions are frozen in TS, where Python uses
- *   `object.__setattr__`: the rows forge them with `forge` (an object of the class's prototype
- *   that never ran the constructor), and a forged scope reaches the layout through a forged target
- *   inside a forged layout.
- * - The stale-graph row's replaced target is `copyGraph(node)` (Python's `copy.deepcopy`).
- * - The invalid-layout row's "mutable-targets" is a forged layout whose `targets` isn't an array.
- * - The atomic-scope row's string subclass is a path holding `new String("last")`.
- *
- * Ported through `loadFlow`, `applyEffectiveLlmMap` and the expansion builders:
- * `test_callsites_to_one_definition_have_distinct_paths`,
- * `test_agent_variable_owners_are_authored_callsites_and_survive_call_cloning`,
- * `test_map_items_and_loop_iterations_share_the_authored_agent_variable_owner` and
- * `test_execution_scope_agrees_with_existing_memory_ownership_paths`. Changed: a clone keeps the
- * template's frozen variable `Parameter` (`copyGraph` shares carriers), where Python's clone holds
- * a copy, so the CALL row checks the clone's variable is the template's and the MAP/LOOP row that
- * all four occurrences hold the one authored variable.
+ * (`compile/execution_layout.ts`): layouts with and without memory, rejected targets stamping
+ * nothing, static children and loops, and authored agent-variable owners.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -75,7 +44,7 @@ function code(id: string): CodeNode {
   return new CodeNode(id, { code: "return 1" });
 }
 
-/** Expect `fn` to throw a `TypeError` or `RangeError` (Python's `TypeError`/`ValueError`). */
+/** Expect `fn` to throw a `TypeError` or `RangeError`. */
 function expectRejected(fn: () => void): void {
   let caught: unknown = null;
   try {

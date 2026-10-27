@@ -1,16 +1,6 @@
 /**
  * External callables: the `uses:` ref grammar `[<scheme>:]<path>[@<version>]`, the `uses:` and
- * `system:` sections, and resolving a `uses:` alias at load: a port of
- * `tests/engine/test_uses.py`.
- *
- * Ported: the seven `test_parse_*` tests and `test_malformed_rejected`, each malformed value
- * pinned to its `compose.load` message; the messages of the harvested
- * `load-core/engine_uses__malformed_ref_{empty,without_a_flow_path,with_an_empty_version}`; the
- * `parse_file` section tests, the `system:` shape tests and the `load_flow` rows. A resolver
- * returns a promise or a flow. Changed: CODE references are TS's form
- * (`./fixtures/compose_codefns.ts:echo`), loaded with the conformance directory as `baseDir`
- * (`loadConformanceFlow`); a list in a message is in the text form (`["a"]`), where Python
- * prints `['a']`.
+ * `system:` sections, and resolving a `uses:` alias at load. A resolver returns a promise or a flow.
  */
 
 import { describe, expect, test } from "bun:test";

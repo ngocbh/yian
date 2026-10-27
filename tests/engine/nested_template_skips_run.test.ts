@@ -1,20 +1,10 @@
 /**
- * Skips through strings nested in a value template, end to end: a port of
- * `tests/engine/test_nested_template_skips_run.py`.
+ * Skips through strings nested in a value template, end to end.
  *
  * Each nested `${...}` string behaves as its own input: a whole-value read whose producers are all
  * skipped skips the reading node, an interpolation of a skipped node renders empty text and the
  * node runs, a flow output gets null at the nested position, and these groups survive runtime
  * growth.
- *
- * Ported: every row. The CODE bodies are Python's, which read the same in JS (decision 11), but
- * for the slow producer, which awaits a 50 ms timer where Python sleeps. Ints read as `bigint`s
- * (decision 4a). The `run-case/engine_nested_template_skips_run__*` cases pin one run of
- * `test_nested_whole_value_read_of_a_skipped_node_skips_the_reader`,
- * `test_nested_interpolation_of_a_skipped_node_renders_empty_text`,
- * `test_one_skipped_nested_string_skips_the_reader_even_beside_a_live_one`,
- * `test_flow_output_gets_null_at_a_skipped_nested_position` and
- * `test_nested_skips_hold_inside_a_called_child` each, where the rows make both.
  */
 
 import { afterAll, expect, test } from "bun:test";

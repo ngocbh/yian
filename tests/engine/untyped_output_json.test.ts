@@ -1,30 +1,7 @@
 /**
- * Untyped values that cross the run log's JSON boundary are checked as JSON values: the log half
- * of `tests/engine/test_untyped_output_json.py`.
- *
- * Ported: `test_canonical_typed_accepts_untyped_files` (field, item; the exact wire).
- *
- * Ported, the state module's output canonicalization: `test_a_partial_record_checks_its_opaque_field_as_json`,
- * with the value layer's wording (`<Set object> is not a JSON value`, no `output at g: ` prefix).
- *
- * Changed:
- * - `test_canonical_typed_rejects_untyped_non_json_values`: the `Date` and `Set` rows, with the
- *   value layer's wording (`<Date object> is not a JSON value`, no `output at <path>: ` prefix) at
- *   Python's paths.
- * - `test_canonical_typed_reports_the_type_check_for_typed_values`: the declared-`str` row (a
- *   record with key `"1"`) and the `Set` row, with the value layer's wording.
- * - `test_canonical_typed_still_rejects_lone_surrogates` (str, object, untyped): the value layer
- *   refuses the text before it reaches the writer, so each row throws its `TypeCheckError` `text
- *   holding a lone surrogate is not a yian value` (Python: the writer's `ValueError`).
- *
- * Not ported:
- * - the int-key rows of the two tests above (JS object keys are always text);
- * - `test_canonical_typed_records_a_text_subclass_key_as_plain_text` (a `str` subclass key);
- * - `test_canonical_typed_does_not_walk_a_built_value`: it spies on the module's
- *   `reject_non_json`, which an ESM export can't be replaced with;
- * - the flow and resume tests: they run flows, ported with the run module;
- * - the `reject_non_json`, `value_repr` and date-literal tests: they test the value layer and
- *   the flow loader, not the log.
+ * Untyped values that cross the run log's JSON boundary are checked as JSON values, with the value
+ * layer's wording (`<Set object> is not a JSON value`); text holding a lone surrogate is refused
+ * before it reaches the writer.
  */
 
 import { expect, test } from "bun:test";

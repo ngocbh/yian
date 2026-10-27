@@ -1,41 +1,9 @@
 /**
  * A TOOL node's optional `output:` contract is checked against every value the tool returns, and
- * a run checks each static TOOL node against its tool's declared types before the log exists: a
- * port of `tests/engine/test_typed_tool_node.py`.
- *
- * TS tools are `FunctionTool`s built with `tool()`: a Python parameter annotation is a property
- * of the argument JSON Schema (`int` is `{"type": "integer"}`, an unannotated parameter `{}`,
- * `Field(ge=0)` a `minimum`), a pydantic model parameter an object schema (a `extra="forbid"`
- * model sets `additionalProperties: false`), and a return annotation the `output` JSON Schema (a
- * `TypedDict` a closed object schema, a `Union` of them an `anyOf`); Python's `tool_types` read
- * through a `ToolSet` is `toolTypes(tool)`. A host stop is the tool aborting the run's signal and
- * throwing its reason, where Python raises `_HostStop`; the run rejects with that reason. A
- * run-start refusal is a `RangeError` where Python raises `ValueError`. Tools run on the main
- * thread, so a list the test's tools append to stands for Python's `_calls`. Every run sees only
- * the test's credential store in its environment.
- *
- * Ported: every row but those covered below. The inline CODE bodies are written in JS (decision
- * 11): `on_filled` concatenates where Python uses an f-string. Ints a host tool returns read as
- * `bigint`s in the run's output (decisions 4a, 9A). Changed: lists of names and quoted values in
- * messages are JSON style (`known tools: ["place_order"]`, `"bad" does not match`; decisions 7,
- * 43). `test_an_unread_return_type_skips_the_check_and_the_gate_still_applies`: a TS tool's return
- * type is read only from its output JSON Schema, so its rows are a tool with no output schema
- * (Python's unannotated function and `_run`-only `BaseTool`) and one whose output schema has no
- * yian type, `{}` (Python's model return).
- *
- * Covered by `run-leaves/typed_tool_node__the_gate_runs_on_every_call_inside_a_map`:
- * `test_the_gate_runs_on_every_call_inside_a_map`; by
- * `run-leaves/typed_tool_node__an_input_the_tool_does_not_take_fails_at_run_start`:
- * `test_an_input_the_tool_does_not_take_fails_at_run_start`; by
- * `run-leaves/typed_tool_node__every_missing_required_input_is_named`:
- * `test_every_missing_required_input_is_named`; by
- * `run-leaves/typed_tool_node__an_omitted_optional_input_runs`: `test_an_omitted_optional_input_runs`;
- * by `run-leaves/typed_tool_node__a_binding_disjoint_from_a_schema_maximum_fails_at_run_start`:
- * `test_a_tagged_binding_disjoint_from_a_json_schema_maximum_fails_at_run_start`.
- *
- * Not ported: `test_ask_user_with_string_options_runs`. In TS `tool_id: ask_user` is the `ask`
- * built-in, which takes no `options`; the agent surface's option cleanup is covered in
- * `run_tools.test.ts`.
+ * a run checks each static TOOL node against its tool's declared types before the log exists.
+ * A tool's input types come from its argument JSON Schema and its return type from its `output`
+ * JSON Schema (`toolTypes(tool)`); a tool with no output schema, or one with no yian type, skips
+ * the check.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";

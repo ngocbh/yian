@@ -1,73 +1,7 @@
 /**
- * The TOOL node: a port of `tests/engine/test_tool_retries.py`.
- *
- * TS has no `_sleep` or `_jitter` to patch: the node waits on `caps.scheduler` with `caps.signal`
- * and draws from `caps.random`. The direct rows run `node.run` on a virtual scheduler that records
- * each sleep, in milliseconds where Python records seconds, with a draw of 1 as Python's `delays`
- * fixture. JS has no `TimeoutError`, so the rows throw their own.
- *
- * Ported: `test_tool_node_rejects_a_bad_retries_count`; `test_a_huge_failure_count_gets_the_cap`
- * (`backoff` takes the draw as an argument, and a failure count of 10 ** 6 gets the cap too);
- * `test_forward_without_steps_retries_in_memory`,
- * `test_a_resumed_start_continues_the_numbering_and_rewaits` and
- * `test_validate_checks_arguments_without_calling_the_tool`.
- *
- * Ported (adapted), through `FlowEngine` (the `engine()` fixture, run id `run-123`) on START ->
- * TOOL `call` -> END in place of `run_flow`, reading the events and the log's `node_step` records:
- * `test_retries_zero_fails_as_before_and_records_no_step`,
- * `test_two_failures_then_success_records_each_attempt` (serial and two workers; Python's third
- * row, the run's default worker count, has no engine counterpart and is dropped),
- * `test_jitter_draws_from_half_to_the_full_delay`,
- * `test_backoff_stops_at_the_cap`, `test_retry_after_replaces_the_backoff_up_to_the_cap` (the
- * draw throws, so none is taken), `test_an_output_contract_failure_is_not_retried`,
- * `test_exhausted_retries_list_every_attempt` (its `run_flow` half: the failure's code, cause type
- * and message) and `test_a_stop_during_the_backoff_wait_stops_the_run` (serial and two workers,
- * Python's third row, the default worker count, dropped as above; the scheduler's `sleep` aborts
- * the host's controller, then delegates, so the sleep rejects at once; `run()` rejects with the
- * host's reason, the steps are exactly one `failed`, and no `NodeFailed` is emitted). TS-only
- * through the engine: a `Date` result fails `contract.output`.
- *
- * Ported (adapted), each through `node.run` with recorded steps in place of `run_flow`:
- * `test_permanent_error_on_the_first_attempt_fails_unchanged` (the error is the same object),
- * `test_permanent_error_on_the_second_attempt_stops_the_retries`,
- * `test_an_error_both_permanent_and_transient_is_not_retried` (an error carrying both brands),
- * `test_exhausted_retries_list_every_attempt` (the `cause` is the last error),
- * `test_a_failure_after_100_attempts_lists_every_attempt` and `test_ten_attempts_are_all_listed`
- * (one row), `test_odd_error_text_is_recorded_safely` and `test_a_long_error_type_name_is_capped`
- * (one row; `<BadStr object>` is an error whose `message` getter throws, and the long type name is
- * the error's `name`). `test_a_host_stop_from_the_tool_is_neither_retried_nor_recorded`: the tool
- * aborts the node's signal, then throws, and that error is rethrown as is.
- *
- * Changed: the `1.0` row is `1.5`, since `1.0` is the integer `1` in JS; a negative count
- * throws `RangeError` where Python raises `ValueError`; each row checks the whole message, not
- * just `'call'`. `test_an_invalid_argument_is_not_retried` runs through the engine and passes a
- * value whose type doesn't fit the schema: the failure is `node.execute` with cause type
- * `TypeCheckError` (Python's is pydantic's `ValidationError` for `gt=0`), and nothing is called;
- * `test_an_unknown_argument_is_not_retried` rejects with
- * `RangeError` where Python raises `ValueError`. `test_an_awaitable_from_a_function_tool_is_not_retried`
- * is "an execute returning a rejected promise is retried like any error": TS awaits every result.
- *
- * Changed: an attempt with no recorded outcome shows as `unfinished`, where Python says
- * `interrupted`.
- *
- * TS-only: `hostToolCall()` names the tool, the inputs, their proven types and the output type;
- * the node's kind, title and traits read on an instance (`needsTools`, `needsSteps`). `backoff`
- * directly: the doubling and the jitter's upper half, the cap, `retryAfter` taking no draw, and a
- * zero base giving 0, never `NaN`. `ToolAttemptsFailed` is an `Error` named `ToolAttemptsFailed`
- * with its `cause`. `backoff` ignores a `retryAfter` that isn't a finite number of seconds, at
- * least 0, that throws, or that sits on an unbranded error. The direct invalid-argument row:
- * `validate`'s `TypeCheckError` rejects `node.run` before any call. A `ToolCheckError` from
- * the tool is not retried, also when branded transient too (check wins). A tool throwing a
- * `CapabilityFault` is called once and records nothing (Python's `_CapabilityFault` shares the
- * host stop's `except`). A thrown non-`Error` reaches the node wrapped in an `Error` (by
- * `ToolSet.invoke`), so it is retried as transient and recorded with the type `Error`. A result
- * is taken in as a yian value (`5` is `5n`), and one that isn't (a `Date`) rejects with
- * `HostOutputError` after one call.
- *
- * Not ported: `test_the_real_sleep_raises_at_once_on_a_set_event`,
- * `test_the_real_sleep_waits_without_an_event`, `test_a_wait_longer_than_timeout_max_waits_in_chunks`
- * and `test_a_stop_between_timeout_max_chunks_ends_the_wait`: TS has no `_sleep`; the node sleeps on
- * its scheduler, whose abort and chunks `platform.test.ts` covers for `realScheduler`.
+ * The TOOL node: retries, backoff and jitter, permanent and transient errors, and the recorded
+ * attempts, directly through `node.run` on a virtual scheduler (`caps.scheduler`, `caps.random`)
+ * and through `FlowEngine`.
  */
 
 import { expect, test } from "bun:test";
@@ -95,7 +29,7 @@ import { typeFor } from "../../src/typesys/index.ts";
 import { TypeCheckError, type ValueRecord } from "../../src/typesys/values.ts";
 import { engine, graph, rejected } from "./run_state_fixtures.ts";
 
-/** JS has no built-in `TimeoutError`; the rows throw this one, as Python's throw its own. */
+/** JS has no built-in `TimeoutError`, so the rows throw this one. */
 class TimeoutError extends Error {
   override name = "TimeoutError";
 }

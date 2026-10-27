@@ -1,102 +1,6 @@
 /**
- * Memory learning projections: a port of `tests/engine/test_runtime_memory_learning.py`.
- * Ported: `test_commit_id_has_one_documented_canonical_encoding` (both pinned digests),
- * `test_causal_route_episode_retains_the_accepted_failure` (with the `_scope` helper) and `test_route_and_growth_projection_use_closed_source_neutral_envelopes`.
- *
- * Ported, the run-state tests (on the shared `startTraceNode`, Python's `_start_trace_node`; each
- * rejected row names its `RangeError` and full message, Python's `ValueError` matched in part):
- * the scope halves of `test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope`
- * and `test_empty_enabled_table_retains_scope_free_evidence_without_episodes` (TS records no
- * evidence, so the scope check applies to a node that recalls memory, `needsMemoryContext`, and
- * `test_evidence_is_rejected_when_learning_is_not_enabled` is not ported),
- * `test_learning_rejects_a_scope_without_a_recorded_stack`,
- * `test_learning_rejects_trace_scope_that_omits_a_recorded_memory` (2 rows),
- * `test_engine_episodes_use_the_physical_start_sequence_for_every_outcome` (4 rows; the growth
- * into the shared `fragment`; the `failure` row reads the owner contexts through a local
- * `contexts`, Python's `_contexts`), `test_failure_episode_uses_full_canonical_durable_failure_json`,
- * `test_owner_feedback_uses_recorded_execution_coordinates_independently_of_memory` (2 rows;
- * `backward` and `executionScope` assigned on the node; the run's recorded table and stacks stand
- * in for Python's equal `_table` and `_stacks`) and
- * `test_replay_rejects_an_eligible_node_scope_that_differs_from_its_recorded_stack` (through
- * `replayRecords` over `copyGraph` copies of the flow taken before the outcome).
- *
- * Ported: `test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow` and
- * `test_root_fallback_reaches_only_keys_owned_by_the_root_flow_site` (both on `computeBackward`).
- *
- * Ported, after rewrite: `test_owner_contexts_are_the_only_episode_projection` (the removed names
- * stay absent from `runtime/learning.ts`, and `learningState` from the state), on a local
- * `successfulTerminal`, Python's `_successful_terminal`.
- *
- * Changed:
- * - `test_commit_id_requires_a_positive_attempt_and_separates_attempts`: the invalid attempt ids
- *   are `null, 0, -1, true, "2", 2.5, 2n` (`2.0` is the valid `2` in TS), each a `RangeError`
- *   naming `attempt_id` (Python's `ValueError`); the rejected mutation container is a `Set`
- *   (Python passes a list), since a batch is an array.
- * - Payload and seed ints are `bigint`s (`1n`), and the growth seed's tuple is an array.
- * - `_episode_outcome` is the module export `episodeOutcome`; its `is` on the status becomes
- *   `toBe` on the status string.
- * - The root entry's `message_index` is `0n`; Python's tuples are arrays.
- * - `test_owner_contexts_are_the_only_episode_projection` checks the removed names in camelCase
- *   (`projectOutcomeEpisodes`, `occurrenceKey`, `learningState`).
- * - `test_runstarted_retains_defensive_memory_authority_and_projects_episodes`: the table's config
- *   and the snapshot are frozen, so their edits throw a `TypeError` (asserted) where Python's land
- *   on copies; `3` and `4` are `3n` and `4n`.
- * - `test_graph_outcome_uses_constant_memory_roots_and_indexed_scope`: Python counts the calls of
- *   the patched `_recorded_stack`, which an ES module can't patch; the test commits the outcome over
- *   1024 keys and stacks and asserts the memory roots and the occurrence's scope keep their
- *   identity.
- *
- * TS-only: the run id, memory and mutation-item messages of `memoryCommitId`; a float payload
- * digests its `logJson` text, and a `-0` payload digests as a float `0` payload (the run log
- * writes both as `0.0`); `failureJson` equals `toJSON()`, refuses a value that isn't exactly a
- * `Failure` and revalidates the failure's fields;
- * `episodeOutcome` projects a success's canonical value and a failed record's failure JSON, and
- * refuses a record of another class and a forged success without a canonical typed value.
- *
- * Changed, owner contexts over engine runs (`computeBackward`, then `projectOwnerContexts`; the
- * feedback entries' ints, `message_index` and `execution_seq` included, are `bigint`s):
- * - `test_owner_contexts_include_general_occurrences_and_empty_memories`: `engine` with the memory
- *   options; `declaredVariables` and `callback` are replaced on the node; the entries and episodes
- *   are frozen, so the tail's edits throw a `TypeError` (asserted) where Python's land on copies.
- * - On `ownerEngine` (the resolved layout of a root-owned memory, as Python's):
- *   `test_owner_feedback_retains_literals_and_opaque_local_stops` (2 rows; the template function
- *   registered with `registerTemplateFn` and restored in `afterEach`),
- *   `test_owner_contexts_keep_unavailable_inputs_and_causal_failures` (3 rows; the binding row
- *   empties `work`'s wiring, the route row patches `terminalSkipRouteFlow()`'s router on the
- *   instance, and the body's error is an `Error`, Python's `ValueError`),
- *   `test_owner_context_root_default_is_owned_once_by_accepted_start`,
- *   `test_owner_context_projection_from_replay_does_not_reinvoke_handlers` (the node methods
- *   assigned on a `copyGraph` copy, the replayed trace's `backwardHandlers` shadowed on the
- *   instance) and `test_owner_variable_batches_follow_captured_inventory_across_wire_round_trip`
- *   (2 rows; `declaredVariables` replaced on the node).
- * - `test_owner_context_root_fallback_uses_only_actual_source_zero_fields`: only the row where START
- *   is also the end, on a local `startOnlyRun`, its flow's readonly `endId` assigned through a
- *   cast. A run start commits only the system values and the START inputs, so END can't hold a
- *   preseeded result.
- * - `test_episode_outcome_projects_a_success_value`: the committed value is passed in, as the
- *   success names its `pool_commit`; `test_episode_refuses_a_success_without_a_typed_value` isn't
- *   ported, since the value no longer comes from the success record.
- * - `test_owner_context_authority_errors_are_not_context_construction_failures`: each refusal pins
- *   its class and message; a `Set` stands in for Python's list table and stacks; the trace's
- *   `lookupSource` is patched on the instance, and its `Error` (Python's `KeyError`) escapes
- *   unchanged. Not ported: the two forged-scope halves, since an occurrence and its scope are
- *   frozen.
- * - `test_owner_context_error_identifies_receiver_without_changing_forward_acceptance` (one test
- *   for Python's 2 rows): TS has no memory JSON nesting bound, so a spy on `LearnContext.fromFrozen`
- *   throws a `RangeError` on the call for `work`'s occurrence (the second) and passes the others
- *   to the original; the `OwnerContextError` names `memory`, `original` (the spy's error, also its
- *   `cause`) and `work`'s backward context, and the log and the terminal output stay unchanged. The
- *   spy is restored in `finally`.
- * - `test_root_feedback_context_failure_names_no_node` and
- *   `test_root_fallback_failure_names_no_node_end_to_end` (one test): `_freeze_feedback` can't be
- *   patched and TS has no memory JSON nesting bound, so on `startOnlyRun()` a spy on
- *   `LearnContext.fromFrozen` throws a `RangeError` on the root-fallback call (the second, after
- *   START's occurrence) and passes the others to the original; the driven failure names no node.
- *   The spy is restored in `finally`.
- * - `test_expanded_map_occurrence_projects_and_replays_from_live_node_scope`: the expansion and
- *   the replay grow through `buildGrow`; the dynamic scope's class is checked by its constructor.
- * - `test_owner_context_empty_map_retains_growth_and_unexecuted_child_memory`: `ownerEngine` with
- *   `growBuilder: buildGrow` (Python's `_engine` default).
+ * Memory learning projections: commit ids, episode outcomes, learning scope checks, and owner
+ * contexts over engine runs and replays.
  */
 
 import { createHash } from "node:crypto";
@@ -242,7 +146,7 @@ class TraceNode extends Node {
   }
 }
 
-/** A `TraceNode` that may grow the graph, Python's `_TraceNode` subclass `Spawner`. */
+/** A `TraceNode` that may grow the graph. */
 class TraceSpawner extends TraceNode {
   override readonly isSpawner = true;
 }
@@ -542,7 +446,7 @@ test("RunStarted retains a defensive memory authority and projects episodes", as
   expect(outerEpisode[0]!.inputs).toEqual({ question: "q" });
   expect(outerEpisode[0]!.interactions).toEqual([new ModelTextInteraction("answer")]);
 
-  // The config and snapshot are frozen, so the edits throw where Python's land on copies.
+  // The config and snapshot are frozen, so the edits throw.
   expect(() => {
     (state.memories![0]!.config as Record<string, unknown>).limit = 999n;
   }).toThrow(TypeError);
@@ -894,7 +798,7 @@ test("owner contexts include general occurrences and empty memories", async () =
   ]);
   expect((entries[2]!.contribution_context as { contributions: unknown }).contributions).toEqual([]);
   expect(entries.filter((entry) => entry.channel === "stopped")).toEqual([]);
-  // The entries and episodes are frozen, so the edits throw where Python's land on copies.
+  // The entries and episodes are frozen, so the edits throw.
   expect(() => {
     (entries[0] as Record<string, unknown>).value = "mutated";
   }).toThrow(TypeError);

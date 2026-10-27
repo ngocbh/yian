@@ -1,12 +1,7 @@
 /**
- * The engine passes in-loop observers to `onEvent` between a node's start and its outcome: a port
- * of `tests/engine/test_live_event_routing.py`. Serial and pooled runs deliver them in node order,
- * leave them out of the returned observers, and supply no sink when the host set no callback.
- *
- * Ported: `test_in_loop_observers_reach_on_event_between_start_and_outcome`,
- * `test_no_callbacks_means_no_sinks` and `test_event_callback_alone_supplies_only_the_event_sink`,
- * each serial and with two workers. The in-loop observers are stand-in arrays passed by cast, as
- * Python passes tuples.
+ * The engine passes in-loop observers to `onEvent` between a node's start and its outcome. Serial
+ * and pooled runs deliver them in node order, leave them out of the returned observers, and supply
+ * no sink when the host set no callback.
  */
 
 import { expect, test } from "bun:test";

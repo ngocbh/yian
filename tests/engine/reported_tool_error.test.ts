@@ -1,33 +1,6 @@
 /**
- * `ReportedToolError`: an AGENT's model reads it as the call's result; mirrors
- * `tests/engine/test_reported_tool_error.py`.
- *
- * Ported, the AGENT rows: `test_an_agent_model_reads_a_reported_error_and_the_loop_continues`,
- * `test_an_empty_reported_error_reads_as_its_type_name`,
- * `test_an_ordinary_tool_error_still_fails_the_agent_node` and the `session=False` row of
- * `test_a_pending_stop_wins_over_a_reported_error`. Not ported: its `session=True` row and
- * `test_a_session_records_the_reported_call_completed_with_its_message` (TS yian has no session
- * memory).
- *
- * Changed: the rows run an AGENT `worker` through `evalNode` (`drive`) with a `ScriptedModel`
- * from `models` and the tool in the run's `ToolSet`, where Python runs a loaded flow with
- * `run_flow`. The empty error's subclass sets its own `name` (a JS subclass inherits
- * `ReportedToolError`'s); the ordinary error is an `Error` (Python: `RuntimeError`). A pending stop
- * rejects with the signal's reason; TS errors have no implicit context chain, so the reported
- * error isn't checked on it.
- *
- * Ported through `runFlow`, the TOOL row
- * `test_tool_retries_stop_on_a_reported_error_that_is_also_permanent`. Changed: the permanent
- * reported error is a `ReportedToolError` built with `permanent: true` (Python: a subclass of both
- * error classes), and the zero retry delay is a `YIAN_TOOL_RETRY_DELAY_SECONDS` value in the run's
- * `env`.
- *
- * Covered by conformance cases whose headers name the Python test, the other TOOL rows:
- * `test_a_tool_node_fails_on_a_reported_error` by
- * `run-leaves/reported_tool_error__a_tool_node_fails_on_a_reported_error` and
- * `test_tool_retries_retry_a_reported_error` by
- * `run-leaves/reported_tool_error__tool_retries_retry_a_reported_error` (both pin the failure and
- * each tool call).
+ * `ReportedToolError`: an AGENT's model reads it as the call's result and the loop continues, and
+ * a TOOL node with retries stops on one built with `permanent: true`.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

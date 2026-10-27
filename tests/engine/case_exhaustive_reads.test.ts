@@ -1,33 +1,11 @@
 /**
- * A CASE whose result is read through `${case.output}` must be exhaustive, a port of
- * `tests/engine/test_case_exhaustive_reads.py`.
+ * A CASE whose result is read through `${case.output}` must be exhaustive.
  *
  * `${case.output}` reads a coalesce over the CASE's branch targets, so a CASE read that way (or
  * one such a CASE routes to) must take a branch on every run: it has an `else:`, or it is an `on:`
  * form whose `on:` type is a non-nullable `Literal` or `bool` listed in full, under the narrowing
  * of the CASE branches that reach it. A routing-only CASE may match nothing and run no branch. An
  * unquoted bare word names a node, even a YAML 1.1 boolean word.
- *
- * Ported: `test_read_case_over_a_str_without_else_is_rejected`,
- * `test_read_searched_case_without_else_is_rejected`,
- * `test_read_case_over_a_literal_node_output_missing_a_tag_is_rejected`,
- * `test_read_case_over_a_literal_input_missing_a_tag_is_rejected`,
- * `test_read_case_over_an_optional_literal_input_is_rejected`,
- * `test_routing_only_case_over_a_literal_input_missing_a_tag_is_a_load_error`,
- * `test_inner_case_of_a_value_producing_case_must_be_exhaustive`,
- * `test_case_read_inside_text_must_be_exhaustive`,
- * `test_narrowed_read_case_missing_its_reachable_tag_is_rejected`; and through `loadFlow` and
- * `runFlow`, `test_read_case_over_a_literal_node_output_listing_every_tag_runs`,
- * `test_read_case_over_a_literal_input_listing_every_tag_runs`,
- * `test_routing_only_case_over_a_str_without_else_still_skips_on_no_match`,
- * `test_narrowed_read_case_counts_only_the_tags_that_reach_it` and
- * `test_unquoted_yes_routes_to_a_node_named_yes`.
- *
- * Changed: the load-error flows assemble (`assembleText`), where Python loads them. An uncovered
- * tag list is written in the text form, `["b"]` (Python `['b']`). The CODE bodies are JavaScript
- * and the CODE references TS's (`./fixtures/compose_codefns.ts:echo`).
- *
- * The harvested cases are pinned at the end.
  */
 
 import { expect, test } from "bun:test";

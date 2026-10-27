@@ -1,7 +1,6 @@
 /**
- * `commitAs` on `Output` and on the `Node` base: a port of `tests/engine/test_commit_as.py`.
- *
- * `test_node_succeeded_commit_as_default_and_set` is in `events.test.ts`.
+ * `commitAs` on `Output` and on the `Node` base. `NodeSucceeded`'s commit target is tested in
+ * `events.test.ts`.
  */
 
 import { expect, test } from "bun:test";

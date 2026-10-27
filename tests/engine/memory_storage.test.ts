@@ -1,73 +1,4 @@
-/**
- * Single-owner SQLite storage for memory-backend state: a port of
- * `tests/engine/test_memory_storage.py`.
- *
- * Ported: `test_roundtrip_is_detached_and_survives_reopen`,
- * `test_invalid_candidate_is_rejected_without_poisoning`, `test_cycles_are_rejected_before_a_transaction`,
- * `test_only_file_paths_are_accepted`, `test_backend_kind_requires_a_nonempty_string`,
- * `test_missing_parent_and_directory_are_rejected_without_path_disclosure`,
- * `test_new_file_permissions_and_connection_settings`, `test_new_file_permissions_do_not_depend_on_umask`,
- * `test_path_io_errors_are_sanitized`, `test_zero_byte_file_initializes_without_changing_permissions`,
- * `test_invalid_store_rejected_without_overwriting_or_leaking_owner`, `test_unrelated_files_are_preserved`,
- * `test_lifetime_owner_survives_commits_and_failed_competitors`,
- * `test_failed_save_poisoning_retains_ownership_and_primary`,
- * `test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite`,
- * `test_failed_constructor_rolls_back_and_releases_connection`,
- * `test_rollback_failure_does_not_replace_save_failure_or_release_owner`,
- * `test_load_io_failure_poisoning_preserves_owner`, `test_process_crash_at_commit_is_atomic`,
- * `test_creation_crash_leaves_recoverable_empty_file`,
- * `test_process_death_releases_owner_and_preserves_commit`,
- * `test_check_storage_path_returns_an_absolute_path_without_io`,
- * `test_storage_path_follows_symlinks_before_parent_steps` and
- * `test_create_parent_makes_missing_directories`.
- *
- * TS-only: the value number rule in a stored state (`±Infinity` round-trips, `-0` reads `0`), an
- * int beyond 2^64, records shaped like the infinity tag or its escape; `checkStoragePath` keeping
- * `..` in a relative path and writing no `//` when the current directory is `/`; and
- * `realStoragePath`, Python's non-strict `os.path.realpath` ported line for line (a symlink
- * followed after a missing component and its `..`, a dangling link, a loop, a relative link target).
- * With `YIAN_TEST_NODE` set to a Node binary, the built store also runs under Node: a round trip
- * with `±Infinity` and a big int, a reopen and damaged stores, and an owner on each runtime
- * excluding a competitor on the other.
- *
- * Changed:
- * - The envelope is version 3 (Python's is 2): the `version` row writes 4, a `python_version` row
- *   writes Python's 2, and both fail `storage.version`, as the frame-era 1 does. Each damaged store
- *   is pinned with its code (Python pins only "not busy" and the version rows).
- * - `test_invalid_candidate_is_rejected_without_poisoning`: the infinity row round-trips (stored
- *   states follow the yian value number rule); the `object()`, int-key and tuple rows are a class
- *   instance, a `Map` and a symbol key (a JS key is always a string, and there is no tuple).
- * - `test_cycles_are_rejected_before_a_transaction`: a spy on the connection's `exec` sees no
- *   statement, where Python checks `in_transaction`.
- * - `test_only_file_paths_are_accepted`: bytes are a `Buffer`; a `URL`, a number and `FILE:` rows
- *   are added.
- * - `test_new_file_permissions_and_connection_settings`: the PRAGMAs are read through the store's
- *   private `connection`, as Python reads `store._connection`.
- * - `test_path_io_errors_are_sanitized`: the path's symlink can't be read (a spy on
- *   `fs.readlinkSync` throws a system error), where Python patches `os.path.realpath`.
- * - Child processes are `bun -e` scripts importing `src/memory/storage/sqlite.ts`, where Python
- *   spawns `multiprocessing` children; a crash is `process.exit(23)`, Python's `os._exit(23)`.
- * - Failures are injected by spies on the store's private connection (`exec` for `COMMIT` and
- *   `ROLLBACK`, `prepare` for `SELECT id`) or on `fs`, where Python subclasses
- *   `sqlite3.Connection`. `test_failed_save_poisoning_retains_ownership_and_primary`: the
- *   `sqlite3.OperationalError` and `OSError` rows are a SQLite driver-shaped error and a system
- *   error. `test_failed_constructor_rolls_back_and_releases_connection`: the failure is the size
- *   check's `fs.statSync` inside the opening transaction, where Python's is the commit; the
- *   rows are a plain `Error` and a system error, and the release shows as a reopen that isn't
- *   busy (Python executes on the closed connection).
- * - `test_close_is_idempotent_and_closed_methods_do_not_touch_os_or_sqlite`: spies on `fs` and on
- *   the old connection see no call, where Python forbids `os.getpid` and `sqlite3.connect`.
- * - `test_creation_crash_leaves_recoverable_empty_file`: the child exits from the constructor's
- *   `fs.statSync`, just before SQLite opens, where Python patches `sqlite3.connect`.
- *
- * Not ported: `test_envelope_depth_rejection_preserves_old_state_and_usable_handle` and
- * `test_maximum_valid_envelope_depth_roundtrips` (TS has no 128-level memory JSON limit; a
- * 100 000-level state round-trips instead);
- * `test_shared_connection_serializes_threads` (JS runs one thread, so there is no per-handle lock);
- * `test_postfork_guard_precedes_python_lock_and_sqlite` (JS can't fork a live process, so there is no
- * fork guard); Python's exception classes (the `KeyboardInterrupt` and `SystemExit` rows are a plain
- * `Error` and a thrown non-`Error` value, which propagate as the same value).
- */
+/** Single-owner SQLite storage for memory-backend state. */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
@@ -98,7 +29,7 @@ function expectStorageError(fn: () => unknown, code: string): MemoryOperationErr
   return error;
 }
 
-/** Return the store's private connection, as Python's tests read `store._connection`. */
+/** Return the store's private connection. */
 function connectionOf(store: SQLiteStorage): Sqlite {
   return store["connection"]!;
 }
@@ -440,7 +371,7 @@ test("a zero-byte file initializes without changing its permissions", () => {
 test.each([
   ["kind", "kind"],
   ["version", "version"],
-  ["python_version", "version"],
+  ["version_2", "version"],
   ["frame_era_version", "version"],
   ["boolean_version", "version"],
   ["extra_field", "corrupt"],
@@ -467,7 +398,7 @@ test.each([
     const envelope = JSON.parse(raw);
     if (damage === "kind") envelope.backend = "episodic";
     else if (damage === "version") envelope.version = 4;
-    else if (damage === "python_version") envelope.version = 2;
+    else if (damage === "version_2") envelope.version = 2;
     else if (damage === "frame_era_version") envelope.version = 1;
     else if (damage === "boolean_version") envelope.version = true;
     else if (damage === "extra_field") envelope.extra = true;
@@ -787,7 +718,7 @@ test("createParent makes missing directories", () => {
   expect(fs.statSync(file).isFile()).toBe(true);
 });
 
-test("realStoragePath resolves like Python's non-strict realpath", () => {
+test("realStoragePath resolves links and applies missing components lexically", () => {
   const real = fs.realpathSync(dir);
   fs.mkdirSync(path.join(dir, "target"));
   fs.mkdirSync(path.join(dir, "sub"));

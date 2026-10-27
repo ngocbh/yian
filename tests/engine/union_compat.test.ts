@@ -1,6 +1,5 @@
 /**
- * Load-time compatibility of `Union(...)` types in `typesCompatible`: a port of every test of
- * `tests/engine/test_union_compat.py`.
+ * Load-time compatibility of `Union(...)` types in `typesCompatible`.
  */
 
 import { expect, test } from "bun:test";

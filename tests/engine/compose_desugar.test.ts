@@ -1,14 +1,7 @@
 /**
- * The adaptive-questions desugar, end to end: a port of `tests/engine/test_compose_desugar.py`.
- *
- * Ported: `test_adaptive_questions_lowers_to_agent_plus_gate` and
- * `test_adaptive_questions_scope_is_validated_like_an_agent` (the reference validator's
- * prompt-scope check).
- *
- * Changed: the flow assembles with `assembleText`, where Python loads it. The gate is a TOOL
- * `ask`, whose `__questions` input the composer feeds.
- *
- * TS-only: the composer's `retries:` count and the composer id collision error.
+ * The adaptive-questions desugar, end to end: it lowers to an AGENT plus a TOOL `ask` gate fed
+ * through `__questions`, the composer's scope is validated like an agent's, and its `retries:`
+ * count and id collisions are checked.
  */
 
 import { expect, test } from "bun:test";

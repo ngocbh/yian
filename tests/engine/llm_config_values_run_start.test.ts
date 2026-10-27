@@ -1,46 +1,6 @@
 /**
- * A port of `tests/engine/test_llm_config_values_run_start.py`: run start checks the run's inputs,
- * then resolves and checks the `llm_config` values reading them.
- *
- * Ported: the other 28 tests (the parametrized groups whole). The model is a `ScriptedModel` given
- * through `serving` where Python patches `model_from_config`; Python's `fake_model` (the messages
- * of each model call) is the model's `requests`. The `run_started`, `node_succeeded` and
- * `node_failed` records are read from the run's JSONL log. Saved logins go to the run's own
- * credential store (`YIAN_AUTH_FILE` in its `env`). The adaptive gates are TOOL `ask` nodes where
- * Python's are HUMAN_INPUT nodes (TS yian has no HUMAN_INPUT kind), so their runs pass an ask
- * handler.
- *
- * Every run's environment holds Python's conftest default provider and model.
- *
- * Changed: run-start errors are `RangeError`s (a `LayerFieldError` for a field's) where Python
- * raises `ValueError`; ints have no digit limit (decisions 4a, 23), so in the uncoercible-input row
- * the 5000-digit `window` is accepted (a run with a good `llm_config` takes it whole) and the bad
- * `llm_config` is the reported error; names and null are written in the text form (`"nope"`,
- * `["bogus"]`, `null`; decisions 7, 43); the golden `run_started` record is TS's (schema 13, with
- * `defaults`, `call_time_llm` and a wall-clock `at`, masked; TS starts its own versioned logs,
- * decisions 8, 16), and its initial pool is the run start's `pool_commit` records after it.
- *
- * Covered by `run-agent/engine_llm_config_values_run_start__a_bad_run_config_beats_a_missing_input`:
- * `test_a_missing_required_input_does_not_preempt_a_bad_llm_config`;
- * `__an_input_record_with_an_unknown_field_fails`:
- * `test_an_unknown_field_in_a_whole_record_from_an_input_fails_at_run_start`;
- * `__an_input_record_may_not_set_the_connection`:
- * `test_a_whole_record_from_an_input_may_not_set_a_recorded_connection`;
- * `__an_unknown_input_provider_names_the_field`:
- * `test_an_unknown_provider_from_an_input_fails_naming_the_field`;
- * `__an_unknown_flow_provider_names_the_flow`:
- * `test_a_flow_level_unknown_provider_from_an_input_fails_at_the_flow_field`;
- * `__a_value_that_breaks_its_tag_names_the_field`: `test_a_node_value_that_breaks_its_tag_names_the_field`;
- * `__a_missing_input_the_config_reads_raises`:
- * `test_a_missing_required_input_the_config_reads_fails_before_the_log`;
- * `__an_input_block_with_an_unknown_key_fails`:
- * `test_a_whole_block_from_an_input_that_breaks_the_schema_fails_at_run_start`;
- * `__an_input_the_config_reads_is_type_checked`:
- * `test_an_input_the_config_reads_is_checked_against_its_contract`. Each pins the class, the whole
- * message, an empty trace (no log) and no events (so no model call).
- *
- * Already ported: `test_a_non_finite_value_names_the_block_field` in `run.test.ts` ("a non-finite
- * value names the block field").
+ * Run start checks the run's inputs, then resolves and checks the `llm_config` values reading
+ * them.
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -65,7 +25,7 @@ import { rejected, serving, textReply } from "./run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-llm-values-run-start-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-// Python's conftest: the default provider and model.
+// The default provider and model.
 const CONFTEST = { YIAN_DEFAULT_PROVIDER: "openai", YIAN_DEFAULT_MODEL: "gpt-5.5" };
 const env = hostEnv(dir, CONFTEST);
 
@@ -127,8 +87,8 @@ test("an unknown input is reported before a bad llm config", async () => {
 
 test("an uncoercible input is reported before a bad llm config", async () => {
   const log = fresh("run.jsonl");
-  // The name is Python's: there the 5000-digit text breaks its int limit. Here it is an int, so
-  // the bad llm_config is what's reported, and with a good one the run takes the whole value.
+  // The 5000-digit text coerces to an int, so the bad llm_config is what's reported, and with a
+  // good one the run takes the whole value.
   const error = await raised(run(FLOW, { topic: "a", window: "1".repeat(5000) }, { log, llmConfig: BAD_LLM }), RangeError);
   expect(error.message).toMatch(BAD_LLM_ERROR);
   expect(existsSync(log)).toBe(false);

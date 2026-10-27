@@ -1,22 +1,6 @@
 /**
- * The adaptive composer's LLM config label: a port of
- * `tests/engine/test_adaptive_composer_run_start.py`.
- *
- * Ported: `test_replayed_map_error_names_the_gate`, `test_resume_recorded_field_error_names_the_gate`
- * (the label `staticAgentLabels` gives, and the run module's resume check naming it) and
- * `test_composer_label_is_render_only`. Changed: the replayed-map and recorded-field errors are
- * `RangeError`s where Python raises `ValueError`.
- *
- * Ported through `runFlow`, with no `AZURE_OPENAI_ENDPOINT` in the run's `env`:
- * `test_run_start_error_names_the_gate` and `test_plain_agent_run_start_error_is_unchanged`; the
- * run-start errors are `RangeError`s too.
- *
- * Changed: the gate is a TOOL `ask` where Python's is a HUMAN_INPUT node (TS yian has no
- * HUMAN_INPUT kind), so a run passes an ask handler declaring the gate's `proj` input.
- *
- * Covered by `run-agent/engine_adaptive_composer_run_start__an_error_in_a_child_flow_names_the_callsite`,
- * the harvested `test_run_start_error_in_a_child_flow_names_the_gate_and_callsite` (the same
- * flow and input; it pins the whole message).
+ * The adaptive composer's LLM config label, which names the gate in replayed MAP errors, resume
+ * checks and run-start errors.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

@@ -1,46 +1,17 @@
 /**
  * `typeToSchema`: the JSON Schema an AGENT asks the model to fill for its declared `output:`, and
- * `checkReply`, the check of a reply against it; a port of `tests/engine/test_type_to_schema.py`
- * and of the schema half of
- * `test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema`
- * (`tests/engine/test_flow_identity.py`). Python reads a pydantic model's `__name__` and
- * `model_json_schema()`; TS reads the schema and its `title`.
+ * `checkReply`, the check of a reply against it (also through `generateStructured` and `runFlow`).
  *
- * Every schema Python yian emits (`model_json_schema()`, captured with pydantic 2.13.5) is
- * pinned exactly: the captured JSON text is read with `parseJson`, so its ints are
- * `bigint` as in TS's schema, and a float bound spelled as an int (`float(-0.5..1)`'s `1`) is a
- * `bigint` on both sides.
+ * Each schema is pinned exactly against a captured JSON text read with `parseJson`, so its ints
+ * are `bigint` as in the built schema, and a float bound spelled as an int (`float(-0.5..1)`'s
+ * `1`) is a `bigint` on both sides. Keys are sorted at every level, a `properties` map's own
+ * schema too; in `properties`, integer-like field names come first (JS key order), then the others
+ * in field order; fields starting with `_` are kept, `__proto__` too; a `.` in a `$defs` key
+ * becomes `_`, and a clashing key is `<key>__<n>`. A root `Optional(str)` gives `null`.
  *
- * Differences from pydantic, by design: keys are sorted at every level but a `properties` map
- * (pydantic leaves the schema of a field or definition named `properties` unsorted); in
- * `properties`, integer-like field names come first (JS key order), then the others in field
- * order; fields starting with `_` are kept, `__proto__` too (pydantic drops them); a `.` in a
- * `$defs` key becomes `_` (pydantic keeps the text after the last one), and a clashing key is
- * `<key>__<n>` (pydantic qualifies it with its module, `yian__nodes__agent__structured__a_b__1`).
- *
- * TS-only: a root `Optional(str)` gives `null`; titles follow Python's `str.title()` (the
- * expected titles are Python's); `_x` and `__proto__` fields; integer-like field names; a field
- * named `properties`; bounds on a non-numeric scalar; `file` and `None` throwing; `$defs` keys and
- * clashes.
- *
- * The validate and unwrap halves (`model_validate`, `_unwrap`) go through `checkReply`, yian's
- * value check of a parsed reply: each "(validate half)" row, the `model_validate` half of
- * `test_large_numeric_schema_bounds_match_resolved_type`,
- * `test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict` (members closed and
- * unwrapped to the member record), `test_records_nested_in_union_members_reject_unknown_fields`,
- * and, through `generateStructured`, `test_null_at_an_any_position_is_reported_at_that_position`
- * (the `OutputInvalidError`'s path) and `test_absent_optional_any_record_field_reads_none` (also in
- * declared field order). Changed: an int in a `float` slot stays an int (`float(-0.5..1)`'s
- * `1`); the error locations Python reads off
- * pydantic (`("items", 0, "scores", 0, 1)`) are the value check's paths, relative to the output
- * (`[0, "scores", 0, 1]`). TS-only: an open record drops unknown fields and comes back in declared
- * field order.
- *
- * Ported through `runFlow`, the model config as the run's `llmConfig` (the flow names none):
- * the `"hello"`, `3`, `True` and `[1, "a"]` rows of
- * `test_agent_with_any_output_loads_and_returns_the_value`; the int comes back as a `bigint`.
- * Covered by `run-agent/engine_type_to_schema__an_any_output_agent_returns_the_reply_value`, its
- * harvested `{"a": [1, None]}` row (the same flow and reply value).
+ * An int in a `float` slot stays an int; the value check's error paths are relative to the output
+ * (`[0, "scores", 0, 1]`); an open record drops unknown fields and comes back in declared field
+ * order.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -196,7 +167,7 @@ function expectSchema(typ: Type, expected: JsonValue): void {
   expectSortedKeys(schema);
 }
 
-// Python's `model_json_schema()` per type, as captured (compact JSON, pydantic's key order).
+// The expected schema per type, as captured (compact JSON, in its captured key order).
 const CAPTURES: [string, () => Type, string][] = [
   [
     "variant str",
@@ -437,7 +408,7 @@ const CAPTURES: [string, () => Type, string][] = [
     `{"$defs":{"meta":{"properties":{"due_date":{"title":"Due Date","type":"string"},"score":{"anyOf":[{"maximum":10,"minimum":0,"type":"integer"},{"type":"null"}],"default":null,"title":"Score"}},"required":["due_date"],"title":"meta","type":"object"},"meta_list_item":{"properties":{"due_date":{"title":"Due Date","type":"string"},"score":{"anyOf":[{"maximum":10,"minimum":0,"type":"integer"},{"type":"null"}],"default":null,"title":"Score"}},"required":["due_date"],"title":"meta_list_item","type":"object"}},"properties":{"lesson_id":{"title":"Lesson Id","type":"string"},"meta":{"$ref":"#/$defs/meta"},"meta_list":{"items":{"$ref":"#/$defs/meta_list_item"},"title":"Meta List","type":"array"}},"required":["lesson_id","meta","meta_list"],"title":"Record","type":"object"}`,
   ],
   [
-    // pydantic leaves the `properties` field's schema unsorted; TS sorts it (checked by key order).
+    // The `properties` field's schema is sorted too (checked by key order).
     "Odd (fields named like schema keywords)",
     () =>
       t(
@@ -454,7 +425,7 @@ const CAPTURES: [string, () => Type, string][] = [
     `{"properties":{"properties":{"type":"integer","maximum":3,"minimum":0,"title":"Properties"},"default":{"anyOf":[{"maximum":2,"minimum":1,"type":"integer"},{"type":"null"}],"default":null,"title":"Default"},"minimum":{"title":"Minimum","type":"string"},"title":{"enum":["a","z"],"title":"Title","type":"string"}},"required":["properties","minimum","title"],"title":"Record","type":"object"}`,
   ],
   [
-    // pydantic leaves the `properties` definition unsorted; TS sorts it (checked by key order).
+    // The `properties` definition is sorted too (checked by key order).
     "Odd2 (a record field named properties)",
     () => t("Odd2", readTypedefs({ P: { x: "int" }, Odd2: { properties: "P", n: "int" } })),
     `{"$defs":{"properties":{"type":"object","properties":{"x":{"title":"X","type":"integer"}},"required":["x"],"title":"properties"}},"properties":{"properties":{"$ref":"#/$defs/properties"},"n":{"title":"N","type":"integer"}},"required":["properties","n"],"title":"Record","type":"object"}`,
@@ -625,7 +596,7 @@ const CAPTURES: [string, () => Type, string][] = [
   ],
 ];
 
-describe("Python's captured schemas", () => {
+describe("captured schemas", () => {
   test.each(CAPTURES)("%s", (_label, build, json) => {
     expectSchema(build(), parseJson(json, "plain"));
   });
@@ -643,7 +614,7 @@ describe("Python's captured schemas", () => {
   });
 });
 
-test("test_bare_str_returns_none", () => {
+test("bare str returns none", () => {
   expect(typeToSchema(Type.scalar(ValueKind.STRING))).toBeNull();
 });
 
@@ -791,7 +762,7 @@ function actions(members: JsonObject[]): JsonValue[] {
   return members.map((member) => obj(obj(member.properties).action).const!);
 }
 
-test("test_tagged_union_schema_is_any_of_closed_members_with_const_tags", () => {
+test("tagged union schema is any of closed members with const tags", () => {
   const schema = schemaOf(t("Union(Buy, Sell)", TRADES));
   expect(schema.title).toBe("ScalarWrapper");
   const members = unionArms(schema, obj(schema.properties).value);
@@ -800,13 +771,13 @@ test("test_tagged_union_schema_is_any_of_closed_members_with_const_tags", () => 
   expect(members.map((member) => member.title)).toEqual(["buy", "sell"]);
 });
 
-test("test_union_members_with_non_identifier_tags_are_numbered", () => {
+test("union members with non identifier tags are numbered", () => {
   const schema = schemaOf(t("Union(Now, Later)", NOW_LATER));
   const members = unionArms(schema, obj(schema.properties).value);
   expect(members.map((member) => member.title)).toEqual(["Member1", "Member2"]);
 });
 
-test("test_union_nested_in_a_member_gets_position_named_defs", () => {
+test("union nested in a member gets position named defs", () => {
   const defs = obj(schemaOf(t("list(Union(Ticket, Skip))", TICKETS)).$defs);
   expect(Object.keys(defs).filter((key) => key.includes("__"))).toEqual([]);
   const titles = new Set(Object.values(defs).map((definition) => obj(definition).title));
@@ -824,7 +795,7 @@ test("test_union_nested_in_a_member_gets_position_named_defs", () => {
   );
 });
 
-test("test_untagged_union_schema_is_any_of_closed_members", () => {
+test("untagged union schema is any of closed members", () => {
   const schema = schemaOf(t("Union(Text, Call)", TRADES));
   const members = unionArms(schema, obj(schema.properties).value);
   expectMemberDefs(schema, members, 2);
@@ -832,14 +803,14 @@ test("test_untagged_union_schema_is_any_of_closed_members", () => {
   expect(names.sort()).toEqual([["input", "name"], ["text"]]);
 });
 
-test("test_record_field_of_union_type_gets_member_schemas", () => {
+test("record field of union type gets member schemas", () => {
   const schema = schemaOf(t("Order", ORDER));
   const members = unionArms(schema, obj(schema.properties).trade);
   expectMemberDefs(schema, members, 2);
   expect(actions(members)).toEqual(["buy", "sell"]);
 });
 
-test("test_list_of_union_schema_gets_member_schemas", () => {
+test("list of union schema gets member schemas", () => {
   const schema = schemaOf(t("list(Union(Buy, Sell))", TRADES));
   expect(schema.title).toBe("ListWrapper");
   const members = unionArms(schema, obj(obj(schema.properties).items).items);
@@ -1039,7 +1010,7 @@ describe("validate and unwrap halves, through checkReply", () => {
     expect(checkReply({ items: [{ x: 1n }, { x: 2n }] }, typ)).toEqual([{ x: 1n }, { x: 2n }]);
   });
 
-  test("test_union_members_reject_unknown_fields_and_unwrap_to_the_member_dict", () => {
+  test("union members reject unknown fields and unwrap to the member dict", () => {
     const union = t("Union(Buy, Sell)", TRADES);
     expect(checkReply({ value: { action: "sell", price: 1.5 } }, union)).toEqual({ action: "sell", price: 1.5 });
     refused(union, { value: { action: "buy", qty: 2n, zzz: 1n } });
@@ -1120,7 +1091,7 @@ describe("validate and unwrap halves, through checkReply", () => {
     },
   );
 
-  test("test_absent_optional_any_record_field_reads_none", async () => {
+  test("absent optional any record field reads none", async () => {
     const typ = t("Box", readTypedefs({ Box: { v: "Optional(Any)", n: "int" } }));
     const value = await generateStructured(native('{"n": 1}'), [], typ, { retries: 0 });
     expect(value).toEqual({ v: null, n: 1n });
@@ -1146,8 +1117,9 @@ describe("TS-only", () => {
     expect(schemaOf(t("Optional(Literal(a))")).title).toBe("ScalarWrapper");
   });
 
-  test("titles follow Python's str.title(), then _ to space, then strip", () => {
-    // Expected titles captured from Python: `name.title().replace("_", " ").strip()`.
+  test("titles title-case each word, then turn _ into a space, then strip", () => {
+    // Each run of cased letters starts in title case and goes on in lower case, with Unicode's
+    // full mappings (`ß` to `Ss`, a final sigma `ς`).
     const titles: [string, string][] = [
       ["ªb", "ªb"],
       ["ßa", "Ssa"],
@@ -1247,7 +1219,6 @@ describe("TS-only", () => {
       `{"properties":{"y":{"title":"Y","type":"string"}},"required":["y"],"title":"${title}","type":"object"}`;
 
     test("a key replaces each code point outside [A-Za-z0-9_-] with _; the title stays raw", () => {
-      // Python's capture.
       expectSchema(
         t("R", readTypedefs({ P, R: { "my key": "P", "a/b": "P", café: "P" } })),
         parseJson(
@@ -1255,18 +1226,17 @@ describe("TS-only", () => {
           "plain",
         ),
       );
-      // pydantic keeps the text after the last dot (`b`).
+      // A `.` becomes `_` in the key too.
       const dotted = schemaOf(t("R", readTypedefs({ P, R: { "a.b": "P" } })));
       expect(obj(dotted.properties)["a.b"]).toStrictEqual({ $ref: "#/$defs/a_b" });
       expect(obj(obj(dotted.$defs).a_b).title).toBe("a.b");
-      // As pydantic: one key for the code point, not one per UTF-16 half.
+      // One `_` for the code point, not one per UTF-16 half.
       const emoji = schemaOf(t("R", readTypedefs({ P, R: { "😀": "P" } })));
       expect(obj(emoji.properties)["😀"]).toStrictEqual({ $ref: "#/$defs/_" });
       expect(obj(obj(emoji.$defs)._).title).toBe("😀");
     });
 
     test("different records wanting one key are numbered in definition order", () => {
-      // Python's capture, where pydantic writes `yian__nodes__agent__structured__a_b__1`.
       expectSchema(
         t("C", readTypedefs({ P, Q, I: { b: "Q" }, C: { a_b: "P", a: "I" } })),
         parseJson(
@@ -1277,7 +1247,6 @@ describe("TS-only", () => {
     });
 
     test("identical records wanting one key share it", () => {
-      // Python's capture.
       expectSchema(
         t("C", readTypedefs({ P, I: { b: "P" }, C: { a_b: "P", a: "I" } })),
         parseJson(
@@ -1305,7 +1274,6 @@ describe("TS-only", () => {
     });
 
     test("a/b beside a_b clash after normalization, though only their titles differ", () => {
-      // Python's capture, where pydantic writes `yian__nodes__agent__structured__a_b__1`.
       expectSchema(
         t("C", readTypedefs({ P, C: { "a/b": "P", a_b: "P" } })),
         parseJson(
@@ -1316,7 +1284,6 @@ describe("TS-only", () => {
     });
 
     test("the root position's Record takes part in clashes", () => {
-      // Python's capture, where pydantic writes `yian__nodes__agent__structured__Record__1`.
       expectSchema(
         t("Optional(C)", readTypedefs({ P, C: { Record: "P" } })),
         parseJson(

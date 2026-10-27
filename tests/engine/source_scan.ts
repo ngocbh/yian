@@ -1,5 +1,5 @@
 /**
- * A small lexer for the source-scanning tests (Python used `ast`).
+ * A small lexer for the source-scanning tests.
  *
  * It understands comments, strings, templates and regex literals well enough to
  * blank them, not full TypeScript.

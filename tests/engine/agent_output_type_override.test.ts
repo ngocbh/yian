@@ -1,9 +1,7 @@
 /**
- * `AgentDescriptor.build` honors `outputContractOverride`: mirrors
- * `tests/engine/test_agent_output_type_override.py`.
- *
- * The `adaptive_questions` desugar synthesizes an AGENT whose structured output is a type built in
- * code, with no type text; the override lets that contract win over the declared `output:`.
+ * `AgentDescriptor.build` honors `outputContractOverride`. The `adaptive_questions` desugar
+ * synthesizes an AGENT whose structured output is a type built in code, with no type text; the
+ * override lets that contract win over the declared `output:`.
  */
 
 import { expect, test } from "bun:test";

@@ -1,27 +1,4 @@
-/**
- * A port of `tests/engine/test_openai_subscription_flow.py`: direct subscription responses use
- * yian's ordinary tools.
- *
- * Ported: `test_tool_loop_and_restored_memory_use_direct_model` (one run: TS yian has no session
- * memory to restore) and `test_partial_stream_fails_before_composer_executes_tool`, whole. Not
- * ported: `test_rich_responses_summary_keeps_shared_memory_working` (session memory and its history
- * summary). The model calls go through the real
- * `chatModelFromConfig` with a recording `send` (`recording`) that answers as Python's
- * `ResponsesServer` does (a reasoning item, then one tool call or the text `6`, as Responses
- * streams); the subscription is a saved login in the row's own credential store, where Python
- * builds `create_subscription_model` with a synthetic access source and patches
- * `model_from_config` to return it. Each run's environment is the row's (`hostEnv`). A stream counts as closed once it is
- * read to its end or cancelled (Python's `EventStream.close`).
- *
- * Changed: `test_partial_stream_fails_before_composer_executes_tool`: a stream cut short is
- * retried (decisions 19, 26), so with the default `YIAN_MODEL_RETRIES` (6) the `None` row's 7
- * attempts all break mid-stream, each published as a `ModelCallStarted` and a `ModelCallFinished`
- * naming its error; the `incomplete` row's `response.incomplete` is a whole reply saying it did not
- * finish, not a transport failure, so its one attempt fails the call. Both fail the run with
- * `provider.unavailable` before the tool runs; the backoff waits run on a virtual scheduler with
- * fixed jitter. The tool is a `FunctionTool` passed to the run (Python's `TOOL_REGISTRY` entry).
- * Python's patched `subprocess.Popen` has no counterpart: no TS OpenAI route starts a process.
- */
+/** Direct subscription responses use yian's ordinary tools. */
 
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,7 +42,7 @@ const connect = (env: Env) =>
     "gpt-5.5",
   );
 
-/** Python's `double` tool, recording each value it doubles. */
+/** The `double` tool, recording each value it doubles. */
 function doubler(): { tool: FunctionTool; calls: unknown[] } {
   const calls: unknown[] = [];
   const tool = new FunctionTool({
@@ -98,7 +75,7 @@ const ANSWER = {
 };
 
 /**
- * Python's `ResponsesServer`: each reply streams a reasoning item, then a call of `double` (the
+ * A Responses server: each reply streams a reasoning item, then a call of `double` (the
  * first request, with `toolFirst`) or the text `6`, then a `response.<terminal>` event (none when
  * `terminal` is `null`). `closed[i]` turns true once the `i`th stream is read to its end or cancelled.
  */

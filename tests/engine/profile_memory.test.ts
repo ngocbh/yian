@@ -1,73 +1,4 @@
-/**
- * Profile memory's backend, sessions, learning and commits: a port of
- * `tests/engine/test_profile_memory.py`.
- *
- * Ported: `test_constructor_validates_store_config_and_budgets`,
- * `test_host_read_and_write_use_the_store_without_a_budget`, `test_reset_is_refused`,
- * `test_closed_backend_rejects_later_use_without_touching_the_store`,
- * `test_closing_the_backend_invalidates_its_open_sessions`,
- * `test_closed_session_rejects_use_with_session_closed`, `test_snapshot_pins_version_and_hash_without_text`,
- * `test_restore_accepts_the_recorded_snapshot_after_later_edits`,
- * `test_restore_rejects_unknown_or_altered_snapshots`, `test_undecodable_document_is_a_permanent_open_failure`,
- * `test_recall_stays_pinned_after_a_later_write`, `test_restore_recalls_the_recorded_version_after_later_edits`,
- * `test_parse_reply_enforces_tags_content_and_budget`,
- * `test_parse_reply_joins_text_blocks_and_ends_with_one_newline`, `test_learn_without_feedback_calls_no_model`,
- * `test_learn_rewrites_the_current_document_from_feedback_and_episodes`,
- * `test_learner_sees_the_tool_calls_of_each_episode`,
- * `test_learn_keeps_only_the_newest_episodes_within_the_input_budget`,
- * `test_an_oversized_newest_episode_is_trimmed_not_dropped`,
- * `test_provider_failure_is_retryable_and_bad_replies_are_not`, `test_unchanged_document_proposes_nothing`,
- * `test_backend_satisfies_the_memory_protocols`, `test_commit_writes_with_compare_and_set_and_is_idempotent`,
- * `test_concurrent_write_after_learning_is_a_retryable_mismatch_without_a_model`,
- * `test_store_failure_during_commit_is_not_retryable`, `test_learner_errors_chain_a_cause_without_the_key`,
- * `test_learner_errors_scrub_the_key_variable_and_saved_login` and
- * `test_session_recalls_and_learns_the_whole_document`.
- *
- * TS-only: `bigint` budgets, a `0n` budget and the constructor's messages; a `bigint` budget above
- * 2^53 − 1 is refused (budgets are numbers); a bad `YIAN_PROFILE_MAX_CHARS` is read only for an
- * unset budget; an array subclass is not a mutation array; a frozen snapshot; a
- * snapshot whose `version` is the `number` 1 is refused; an async host store (methods returning
- * promises) works throughout; a store `read` throwing a plain `Error` escapes unchanged from both
- * open paths, and one throwing a system error is `profile.store_unavailable` (retryable), on open
- * and during learn; recall rejects a context that isn't a `RecallContext`; commit's batch
- * messages; two concurrent commits of one id write once; a failed commit (version mismatch) then a
- * good one in the same session, whose `2n` feedback is written as Python's int `2`; the reply
- * parser's messages; feedback holding `Infinity` is `profile.invalid_context` after the model call;
- * `onRetry` sees a retried `ProviderError`, scrubbed of the call's credentials; a commit id whose
- * write failed commits once the store is back; with `YIAN_TEST_NODE` set to a Node binary, the
- * built backend opens a document Bun seeded, learns with a scripted model and commits under Node,
- * and Bun reads the new document and its write log.
- *
- * Changed:
- * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
- *   variables, and each test starts from the built-in defaults.
- * - `installModel(replies)` stands in for Python's `_install`: the backend's `createModel` option
- *   records each config and returns a `ScriptedModel` answering with the next reply of a shared
- *   list, a text `Response` or an `Error`. Where Python patches `model_from_config` to fail after
- *   learning, the test checks that no further config was recorded; a `createModel` that throws
- *   stands in for patching it to fail.
- * - The TS-only commit tests commit a hand-built document mutation with the payload `learn`
- *   proposes (`base_version`, `text`, `seen_version`, `run_id`, `feedback`).
- * - `test_parse_reply_enforces_tags_content_and_budget`: the `object()` row is a reply with no
- *   text part, which reads as `""` and so fails on the tags.
- * - `test_parse_reply_joins_text_blocks_and_ends_with_one_newline`: the blocks are two text parts.
- * - `test_session_recalls_and_learns_the_whole_document`: `openFrame` and `frameRef` stand in for
- *   `open_frame` and `frame_ref`.
- * - `test_learner_errors_scrub_the_key_variable_and_saved_login`: an `env` map without defaults and
- *   a saved login through `AuthStore` stand in for the process environment.
- * - `LookupError` and `ValueError` from the store are `RangeError`; `OSError` is a Node system
- *   error (an `Error` with a string `code` and a `syscall`); the decode-error row of
- *   `test_store_failure_during_commit_is_not_retryable` is a `RangeError`.
- * - `test_constructor_validates_store_config_and_budgets`: budget errors are `RangeError`.
- * - `test_backend_satisfies_the_memory_protocols`: `isMemory`, and the session's methods are
- *   functions; the `implements` clauses are checked by the typecheck.
- * - `test_snapshot_pins_version_and_hash_without_text`: the snapshot's `version` is `1n`, and the
- *   hash is computed here, since `sha256` is private.
- * - `test_an_oversized_newest_episode_is_trimmed_not_dropped`: `_canonical_json`'s length is the
- *   code-point count of `writeAsJson`.
- * - JSON ints in feedback are `bigint`s; `read`, `write`, `openRun`, `learn` and `commit` are
- *   async; `with` blocks are `try`/`finally` around `close()`.
- */
+/** Profile memory's backend, sessions, learning and commits. */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -117,7 +48,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-/** Python's `conftest.py` environment: an empty private store and an explicit model default. */
+/** The test environment: an empty private store and an explicit model default. */
 function baseEnv(overrides: Record<string, string> = {}): Env {
   const vars = new Map([
     ["YIAN_AUTH_FILE", join(home, "auth.json")],
@@ -136,7 +67,7 @@ function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-/** A profile memory over `<home>/ada.md` seeded with `text` (Python's `_memory`). */
+/** A profile memory over `<home>/ada.md` seeded with `text`. */
 async function newMemory(
   text = "# Ada\n",
   options: ConstructorParameters<typeof ProfileMemory>[1] = {},
@@ -152,7 +83,7 @@ function textReply(text: string): Response {
 }
 
 /**
- * Python's `_install`: a `createModel` option that records each config and returns a new
+ * A `createModel` option that records each config and returns a new
  * `ScriptedModel` (named by the config) answering with the next reply of the shared list, given
  * as text or an `Error`.
  */
@@ -180,7 +111,7 @@ function installModel(replies: readonly (string | Error)[]) {
   };
 }
 
-/** Python's `_feedback`: one output feedback entry per value. */
+/** One output feedback entry per value. */
 function feedbackOf(...values: unknown[]): Record<string, unknown>[] {
   return values.map((value) => ({
     channel: "output",
@@ -191,7 +122,7 @@ function feedbackOf(...values: unknown[]): Record<string, unknown>[] {
   }));
 }
 
-/** One succeeded AGENT episode of `chat.reply` (Python's `_episode`). */
+/** One succeeded AGENT episode of `chat.reply`. */
 function episodeOf(prompt: string, output: string, interactions: readonly VisibleInteraction[] = []): MemoryEpisode {
   return new MemoryEpisode("run-1", [], ["chat", "reply"], MemoryEpisodeStatus.SUCCEEDED, { topic: prompt }, {
     output,
@@ -211,7 +142,7 @@ function requestMaterial(model: { requests: Request[] }, index = -1): Mutable {
   return JSON.parse(model.requests.at(index)!.messages[1]!.text());
 }
 
-/** The number of code points in `text` (Python's `len`). */
+/** The number of code points in `text`. */
 function codePoints(text: string): number {
   return Array.from(text).length;
 }
@@ -231,7 +162,7 @@ function documentMutation(
   });
 }
 
-/** Open a run, await `fn` with it and close it (Python's `with memory.open_run() as session`). */
+/** Open a run, await `fn` with it, and close it. */
 async function withRun<T>(
   memory: ProfileMemory,
   fn: (session: ProfileSession) => T | Promise<T>,
@@ -266,7 +197,7 @@ function systemError(message: string): Error {
   return Object.assign(new Error(message), { code: "EIO", syscall: "write" });
 }
 
-test("test_constructor_validates_store_config_and_budgets", () => {
+test("constructor validates store config and budgets", () => {
   const store = new FileMarkdownStore(join(home, "ada.md"));
   for (const bad of [{}, null, { read() {}, write: "x" }]) {
     expect(() => new ProfileMemory(bad as Mutable, { env: baseEnv() })).toThrow(
@@ -313,7 +244,7 @@ test("a bad defaults variable is read only for an unset budget", () => {
   }
 });
 
-test("test_host_read_and_write_use_the_store_without_a_budget", async () => {
+test("host read and write use the store without a budget", async () => {
   const memory = await newMemory("# Ada\n", { maxChars: 10 });
   const [text, version] = await memory.read();
   const longText = `# Ada\n${"x".repeat(100)}\n`;
@@ -322,13 +253,13 @@ test("test_host_read_and_write_use_the_store_without_a_budget", async () => {
   expect(await memory.read(version)).toEqual([text, version]);
 });
 
-test("test_reset_is_refused", async () => {
+test("reset is refused", async () => {
   const memory = await newMemory();
   const error = await failure(() => memory.reset());
   expect([error.stage, error.code, error.retryable]).toEqual(["reset", "profile.reset_unsupported", false]);
 });
 
-test("test_closed_backend_rejects_later_use_without_touching_the_store", async () => {
+test("closed backend rejects later use without touching the store", async () => {
   const memory = new ProfileMemory(new FileMarkdownStore(join(home, "ada.md")), { env: baseEnv() });
   memory.close();
   memory.close();
@@ -346,7 +277,7 @@ test("test_closed_backend_rejects_later_use_without_touching_the_store", async (
   expect(readdirSync(home)).toEqual([]);
 });
 
-test("test_closing_the_backend_invalidates_its_open_sessions", async () => {
+test("closing the backend invalidates its open sessions", async () => {
   const model = installModel(["<profile># Ada\nBrief.</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   const session = await memory.openRun();
@@ -363,7 +294,7 @@ test("test_closing_the_backend_invalidates_its_open_sessions", async () => {
   expect(readFileSync(join(home, "ada.md"), "utf8")).toBe("# Ada\n");
 });
 
-test("test_closed_session_rejects_use_with_session_closed", async () => {
+test("closed session rejects use with session closed", async () => {
   const memory = await newMemory();
   const session = await memory.openRun();
   session.close();
@@ -373,7 +304,7 @@ test("test_closed_session_rejects_use_with_session_closed", async () => {
   (await memory.openRun()).recall(RECALL);
 });
 
-test("test_snapshot_pins_version_and_hash_without_text", async () => {
+test("snapshot pins version and hash without text", async () => {
   const memory = await newMemory();
   const [text, version] = await memory.read();
   await withRun(memory, (session) => {
@@ -387,14 +318,14 @@ test("test_snapshot_pins_version_and_hash_without_text", async () => {
   });
 });
 
-test("test_restore_accepts_the_recorded_snapshot_after_later_edits", async () => {
+test("restore accepts the recorded snapshot after later edits", async () => {
   const memory = await newMemory();
   const recorded = await withRun(memory, (session) => session.snapshot);
   await memory.write("# Ada\nLater.\n", { baseVersion: (await memory.read())[1] });
   await withRun(memory, (restored) => expect(restored.snapshot).toEqual(recorded), recorded);
 });
 
-test("test_restore_rejects_unknown_or_altered_snapshots", async () => {
+test("restore rejects unknown or altered snapshots", async () => {
   const memory = await newMemory();
   const recorded = await withRun(memory, (session) => session.snapshot);
   const changes: Mutable[] = [
@@ -414,7 +345,7 @@ test("test_restore_rejects_unknown_or_altered_snapshots", async () => {
   }
 });
 
-test("test_undecodable_document_is_a_permanent_open_failure", async () => {
+test("undecodable document is a permanent open failure", async () => {
   const memory = await newMemory();
   writeFileSync(join(home, "ada.md"), Buffer.from("# Ada \xff\n", "latin1"));
   const error = await failure(() => memory.openRun());
@@ -422,7 +353,7 @@ test("test_undecodable_document_is_a_permanent_open_failure", async () => {
   expect(error.message).toBe("profile store returned an unreadable document");
 });
 
-test("test_recall_stays_pinned_after_a_later_write", async () => {
+test("recall stays pinned after a later write", async () => {
   const memory = await newMemory();
   await withRun(memory, async (session) => {
     await memory.write("# Ada\nChanged.\n", { baseVersion: (await memory.read())[1] });
@@ -430,14 +361,14 @@ test("test_recall_stays_pinned_after_a_later_write", async () => {
   });
 });
 
-test("test_restore_recalls_the_recorded_version_after_later_edits", async () => {
+test("restore recalls the recorded version after later edits", async () => {
   const memory = await newMemory();
   const recorded = await withRun(memory, (session) => session.snapshot);
   await memory.write("# Ada\nLater.\n", { baseVersion: (await memory.read())[1] });
   await withRun(memory, (restored) => expect(restored.recall(RECALL)).toBe("# Ada\n"), recorded);
 });
 
-test("test_parse_reply_enforces_tags_content_and_budget", () => {
+test("parse reply enforces tags content and budget", () => {
   const noText = new Response({ message: new Message({ role: "assistant", parts: [] }) });
   const noTags = "profile learner reply must wrap the document in <profile> tags";
   const rows: [Response, string, string][] = [
@@ -463,7 +394,7 @@ test("test_parse_reply_enforces_tags_content_and_budget", () => {
   }
 });
 
-test("test_parse_reply_joins_text_blocks_and_ends_with_one_newline", () => {
+test("parse reply joins text blocks and ends with one newline", () => {
   const reply = new Response({
     message: new Message({
       role: "assistant",
@@ -474,7 +405,7 @@ test("test_parse_reply_joins_text_blocks_and_ends_with_one_newline", () => {
   expect(parseReply(textReply("<profile></profile>"), "", 100)).toBe("");
 });
 
-test("test_learn_without_feedback_calls_no_model", async () => {
+test("learn without feedback calls no model", async () => {
   const createModel = (): never => {
     throw new Error("model constructed");
   };
@@ -484,7 +415,7 @@ test("test_learn_without_feedback_calls_no_model", async () => {
   });
 });
 
-test("test_learn_rewrites_the_current_document_from_feedback_and_episodes", async () => {
+test("learn rewrites the current document from feedback and episodes", async () => {
   const model = installModel(["<profile>\n# Ada\n- Prefers brief replies.\n</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   let seenVersion = "";
@@ -518,7 +449,7 @@ test("test_learn_rewrites_the_current_document_from_feedback_and_episodes", asyn
   });
 });
 
-test("test_learner_sees_the_tool_calls_of_each_episode", async () => {
+test("learner sees the tool calls of each episode", async () => {
   const model = installModel(["<profile># Ada\n- Check the calendar first.</profile>"]);
   const interactions = [
     new ModelTextInteraction("Let me look."),
@@ -540,7 +471,7 @@ test("test_learner_sees_the_tool_calls_of_each_episode", async () => {
   ]);
 });
 
-test("test_learn_keeps_only_the_newest_episodes_within_the_input_budget", async () => {
+test("learn keeps only the newest episodes within the input budget", async () => {
   const model = installModel(["<profile># Ada\nNew.</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel, inputBudgetChars: 700 });
   const episodes = [0, 1, 2, 3, 4].map((index) => episodeOf(`prompt ${index}`, "o".repeat(100)));
@@ -550,7 +481,7 @@ test("test_learn_keeps_only_the_newest_episodes_within_the_input_budget", async 
   expect(material.omitted_episodes).toBe(3);
 });
 
-test("test_an_oversized_newest_episode_is_trimmed_not_dropped", async () => {
+test("an oversized newest episode is trimmed not dropped", async () => {
   const model = installModel(["<profile># Ada\nRead less.</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   const big = [
@@ -570,7 +501,7 @@ test("test_an_oversized_newest_episode_is_trimmed_not_dropped", async () => {
   expect(codePoints(writeAsJson(newest as Value))).toBeLessThanOrEqual(memory.inputBudgetChars);
 });
 
-test("test_provider_failure_is_retryable_and_bad_replies_are_not", async () => {
+test("provider failure is retryable and bad replies are not", async () => {
   const model = installModel([new Error("provider down"), "no tags"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   await withRun(memory, async (session) => {
@@ -584,7 +515,7 @@ test("test_provider_failure_is_retryable_and_bad_replies_are_not", async () => {
   });
 });
 
-test("test_unchanged_document_proposes_nothing", async () => {
+test("unchanged document proposes nothing", async () => {
   const model = installModel(["<profile># Ada</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   await withRun(memory, async (session) => {
@@ -592,7 +523,7 @@ test("test_unchanged_document_proposes_nothing", async () => {
   });
 });
 
-test("test_backend_satisfies_the_memory_protocols", async () => {
+test("backend satisfies the memory protocols", async () => {
   const memory = await newMemory();
   await withRun(memory, (session) => {
     expect(isMemory(memory)).toBe(true);
@@ -615,7 +546,7 @@ test("recall rejects a context that isn't a RecallContext", async () => {
   });
 });
 
-test("test_commit_writes_with_compare_and_set_and_is_idempotent", async () => {
+test("commit writes with compare and set and is idempotent", async () => {
   const model = installModel(["<profile># Ada\nBrief.</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   await withRun(memory, async (session) => {
@@ -637,7 +568,7 @@ test("test_commit_writes_with_compare_and_set_and_is_idempotent", async () => {
   expect(provenance.feedback).toEqual(["Be brief."]);
 });
 
-test("test_concurrent_write_after_learning_is_a_retryable_mismatch_without_a_model", async () => {
+test("concurrent write after learning is a retryable mismatch without a model", async () => {
   const model = installModel(["<profile># Ada\nFrom model.</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   const error = await withRun(memory, async (session) => {
@@ -650,7 +581,7 @@ test("test_concurrent_write_after_learning_is_a_retryable_mismatch_without_a_mod
   expect((await memory.read())[0]).toBe("# Ada\nFrom human.\n");
 });
 
-test("test_store_failure_during_commit_is_not_retryable", async () => {
+test("store failure during commit is not retryable", async () => {
   const store = new FileMarkdownStore(join(home, "ada.md"));
   await store.write("# Ada\n", { baseVersion: (await store.read())[1] });
   const model = installModel(["<profile># Ada\nNew.</profile>"]);
@@ -684,7 +615,7 @@ test("test_store_failure_during_commit_is_not_retryable", async () => {
   expect((await memory.read())[0]).toBe("# Ada\nNew.\n");
 });
 
-test("test_learner_errors_chain_a_cause_without_the_key", async () => {
+test("learner errors chain a cause without the key", async () => {
   const key = "sk-sentinel-profile-zqxw";
   const echo = `Incorrect API key provided: ${key.slice(0, 8)}****${key.slice(-4)} (${key})`;
   const refuse = (): never => {
@@ -704,7 +635,7 @@ test("test_learner_errors_chain_a_cause_without_the_key", async () => {
   }
 });
 
-test("test_learner_errors_scrub_the_key_variable_and_saved_login", async () => {
+test("learner errors scrub the key variable and saved login", async () => {
   for (const [key, login] of [
     ["sk-variable-profile-hgtw", false],
     ["sk-login-profile-bmrc", true],
@@ -738,7 +669,7 @@ test("test_learner_errors_scrub_the_key_variable_and_saved_login", async () => {
   }
 });
 
-test("test_session_recalls_and_learns_the_whole_document", async () => {
+test("session recalls and learns the whole document", async () => {
   const model = installModel(["<profile>\n# Ada\nBrief.\n</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   await withRun(memory, async (session) => {

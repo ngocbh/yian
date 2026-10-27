@@ -1,7 +1,5 @@
 /**
- * `readTypedefs`, the `typedefs:` registry builder, a port of `tests/engine/test_typedefs.py`.
- * Not ported: the int field name row of `test_record_field_name_rejected` (object keys are
- * always strings).
+ * `readTypedefs`, the `typedefs:` registry builder.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -201,7 +199,7 @@ describe("rejected definitions", () => {
     ["true", true, "bool"],
     ["null", null, "NoneType"],
     ["a Map", new Map(), "Map"],
-  ])("a definition of another type names its Python type: %s", (_label, value, name) => {
+  ])("a definition of another type names its type: %s", (_label, value, name) => {
     expectRejected({ X: value }, `typedef 'X': unsupported definition of type ${name}`, ["X"]);
   });
 });
@@ -281,7 +279,7 @@ describe("record fields", () => {
     ["true", true, "bool"],
     ["null", null, "NoneType"],
     ["an array", ["int"], "list"],
-  ])("a field type of another type names its Python type: %s", (_label, value, name) => {
+  ])("a field type of another type names its type: %s", (_label, value, name) => {
     expectRejected(
       { R: { a: value } },
       `typedef 'R' field 'a': type must be a string expression (got ${name})`,

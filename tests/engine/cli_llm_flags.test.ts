@@ -1,15 +1,7 @@
 /**
- * `yian run --provider/--model` build the outermost cascade layer (`llmConfig`): a port of
- * `tests/engine/test_cli_llm_flags.py`, both tests under their names.
- *
- * Changed:
- * - Python captures the `llm_config` its patched run receives; here what the run was given is read
- *   from the run log's `RunStarted` record, the agent's effective `provider` and `model`.
- * - Python's patched run and key check are a fake `fetch` answering as xAI's chat endpoint, with
- *   the keys and the default provider and model (Python's conftest's) in the command's env; the
- *   flags select xAI, so the call they make reaches the fake.
- *
- * Added: a lone `--model` keeps the default provider, so only the given flags join the layer.
+ * `yian run --provider/--model` build the outermost cascade layer (`llmConfig`). What the run was
+ * given is read from the run log's `RunStarted` record, and a fake `fetch` answers as xAI's chat
+ * endpoint; a lone `--model` keeps the default provider.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -78,13 +70,13 @@ const CONFTEST = {
   OPENAI_API_KEY: "sk-test",
 };
 
-test("test_cli_builds_llm_config", async () => {
+test("the CLI flags build the LLM config", async () => {
   const { code, provider, model } = await runWith(["--provider", "xai", "--model", "grok-4.3"], CONFTEST);
   expect(code).toBe(0);
   expect({ provider, model }).toEqual({ provider: "xai", model: "grok-4.3" });
 });
 
-test("test_cli_no_flags_passes_none_or_empty", async () => {
+test("with no CLI flags the defaults decide", async () => {
   const defaults = { YIAN_DEFAULT_PROVIDER: "xai", YIAN_DEFAULT_MODEL: "grok-4.3" };
   const { code, provider, model } = await runWith([], defaults);
   expect(code).toBe(0);

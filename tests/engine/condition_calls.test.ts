@@ -1,31 +1,7 @@
 /**
- * A condition may call only a builtin, with arguments it takes, or a typedef constructor: a port of
- * `tests/engine/test_condition_calls.py`, and the builtin registry's argument binder
- * (`bindArguments`) and `registerTemplateFn`.
- *
- * Ported: the `parseCondition` tests; `test_unknown_function_in_a_condition_fails_to_load` and
- * `test_a_constructor_naming_no_typedef_in_a_condition_fails_to_load`, through `assembleText`
- * where Python loads the flow (the loop sites' `step` def a hand-built child, `handChild`);
- * `test_whole_span_unknown_call_in_an_assert_keeps_the_inline_call_message`; and
- * `test_builtin_with_the_wrong_arguments_in_a_condition_fails_to_load`. Ported through `loadFlow`
- * and `runFlow`: `test_a_typedef_constructor_in_a_condition_loads_and_runs` (the CASE's type
- * table, then the runs), `test_a_condition_calling_a_builtin_correctly_loads_and_runs`, and the
- * two `test_python_built_*` rows, which set a loaded node's `preAsserts` or `cases` in code, as
- * Python sets them on the compiled node, and expect the run to throw before its log is written.
- * `test_a_builtin_without_a_readable_signature_is_not_arity_checked` has no counterpart: every
- * registered function declares its `params`.
- *
- * Changed: the CODE references and code are TS's (`./fixtures/compose_codefns.ts:double`).
- *
- * The harvested cases are pinned at the end: `load-case/engine_condition_calls__wrong_builtin_arguments_in_a_case_when`
- * (`assemble`, whose CASE build raises it), `__wrong_builtin_arguments_in_a_loop_while`
- * (`assembledWith`, the `step` def built by hand; the LOOP build raises it),
- * `__whole_span_call_in_a_flow_assert` (`assemble`, whose inline-call desugar raises it),
- * `__whole_span_call_in_a_node_assert` and `__wrong_builtin_arguments_in_a_node_assert` (the
- * node-assert check raises them), `__wrong_builtin_arguments_in_a_flow_assert` (the flow-assert
- * lowering raises it), and
- * `__unknown_function_in_a_node_assert`, `__unknown_function_in_a_flow_assert` and
- * `__unknown_function_in_a_loop_while` (the type-table pass raises them).
+ * A condition may call only a builtin, with arguments it takes, or a typedef constructor; also the
+ * builtin registry's argument binder (`bindArguments`) and `registerTemplateFn`. Conditions set in
+ * code on a loaded node are checked at run start, before the log is written.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -59,8 +35,7 @@ import {
 } from "../compose/declarations.ts";
 import { expectFailsBeforeTheRun } from "./run_state_fixtures.ts";
 
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
+// Each registration's previous entry (or its absence), put back after the test.
 const saved: [string, TemplateFn | undefined][] = [];
 
 /** Register a stand-in `name` taking `params` for this test only. */
@@ -168,7 +143,7 @@ describe("bindArguments", () => {
   };
   const keywords = (entries: Record<string, string>) => new Map(Object.entries(entries));
 
-  test("Python's Signature.bind messages", () => {
+  test("the messages for too many, repeated, missing and unexpected arguments", () => {
     const cases: [string[], Record<string, string>, string][] = [
       [["a", "b", "c"], {}, "too many positional arguments"],
       [["a"], { value: "v" }, "multiple values for argument 'value'"],
@@ -192,7 +167,7 @@ describe("bindArguments", () => {
     expect(bindArguments(fn, ["a", "b"], new Map())).toEqual(["a", "b"]);
   });
 
-  test("a name is shown as Python's repr", () => {
+  test("an unexpected name is quoted with reprText", () => {
     expect(bindArguments(fn, [], keywords({ "it's": "x", value: "v" }))).toBe(
       'got an unexpected keyword argument "it\'s"',
     );

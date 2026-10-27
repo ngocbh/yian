@@ -1,18 +1,7 @@
 /**
- * The `date`/`datetime` string grammar, a port of the parse tests and the typed-value tests of
- * `tests/engine/test_date_grammar.py`. Python builds a `DateValue` to check its text; TS has one
- * `TypedValue` class with an unchecked constructor, so those rows decode with
- * `TypedValue.fromWire`, the checked path.
- *
- * The grammar is explicit rather than delegated to `Date.parse`, so these tests pass
- * identically on any runtime.
- *
- * `test_scalar_matches_uses_the_grammar` checks the private `_scalar_matches` through
- * `buildValueAs`.
- *
- * Covered by the `load-types` case
- * `engine_date_grammar__flow_default_outside_the_grammar_fails_at_load`, which loads the same flow
- * and pins the message and its location: `test_flow_default_outside_the_grammar_fails_at_load`.
+ * The `date`/`datetime` string grammar and its typed values, decoded with `TypedValue.fromWire`,
+ * the checked path. The grammar is explicit rather than delegated to `Date.parse`, so these tests
+ * pass identically on any runtime.
  */
 
 import { describe, expect, test } from "bun:test";

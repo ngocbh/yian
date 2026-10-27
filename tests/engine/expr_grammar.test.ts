@@ -1,15 +1,14 @@
 /**
- * Parse tests for the unified `${...}` expression grammar (`expr/grammar.ts`), a port of
- * `tests/engine/test_expr_grammar.py`: references, operators and their precedence, builtin
- * calls, keyword arguments, list literals, groups, coalesce/default/required, literals, token
- * positions, parse-error messages, the error classes, `iterSubtrees` and `iterSubtreesTopdown`
- * order, and the checks after the parse: reserved reference roots, the dotted callee, the nesting
- * limit, float overflow and the order the checks run in; and the `${...}` helpers: a nested
- * span's error and rewrite, `findSpanEnd` and `wholeSpanInterior`; and the `scanTemplate` halves
- * of the reserved-keyword tests.
+ * Parse tests for the unified `${...}` expression grammar (`expr/grammar.ts`): references,
+ * operators and their precedence, builtin calls, keyword arguments, list literals, groups,
+ * coalesce/default/required, literals, token positions, parse-error messages, the error classes,
+ * `iterSubtrees` and `iterSubtreesTopdown` order, and the checks after the parse: reserved
+ * reference roots, the dotted callee, the nesting limit, float overflow and the order the checks
+ * run in; and the `${...}` helpers: a nested span's error and rewrite, `findSpanEnd` and
+ * `wholeSpanInterior`; and the `scanTemplate` halves of the reserved-keyword tests.
  *
- * TS-only: subscripts (list slices), their tree, how tightly they bind, and the colon rule inside
- * a subscript's brackets; list comprehensions, their tree and clause order, and the scoping pass
+ * Also: subscripts (list slices), their tree, how tightly they bind, and the colon rule inside a
+ * subscript's brackets; list comprehensions, their tree and clause order, and the scoping pass
  * that turns comprehension-variable reads into `comp_var`.
  */
 

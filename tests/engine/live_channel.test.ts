@@ -1,8 +1,8 @@
 /**
- * TS-only: the live channel of a run. `LiveChannel` forwards each appended record and each AGENT
- * call's start, chunks and end as plain-JSON frames named by the step they become (`node` + `n`),
- * and its `snapshot()` lists the calls in flight with their chunks so far, one buffer per call, so a
- * late viewer rebuilds every call's text from the log, the snapshot and the frames after it.
+ * The live channel of a run. `LiveChannel` forwards each appended record and each AGENT call's
+ * start, chunks and end as plain-JSON frames named by the step they become (`node` + `n`), and
+ * its `snapshot()` lists the calls in flight with their chunks so far, so a late viewer rebuilds
+ * every call's text from the log, the snapshot and the frames after it.
  *
  * First on a bare channel, then through runs with a model that streams one chunk per gate the test
  * opens, so a test can look at the channel between any two chunks.

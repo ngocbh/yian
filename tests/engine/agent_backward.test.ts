@@ -1,58 +1,6 @@
 /**
- * The backward context a node's retained invocation material builds: a port of the node-neutral
- * rows of `tests/engine/test_agent_backward.py`.
- *
- * Ported: `test_backward_context_rejects_captured_reserved_evidence_collision` (the node's
- * `captureBackwardContext` replaced on the instance; the error is a `RangeError` with its full
- * message, where Python matches a part of a `ValueError`) and
- * `test_backward_context_allows_absent_node_data_without_changing_the_record`.
- *
- * Ported, through AGENT's forward in a learnable `FlowEngine` run with a `ScriptedModel` from
- * `models`: `test_backward_context_exposes_only_accepted_evidence_and_replays_without_agent_calls`.
- * The run records the agent's model map by hand (Python's run start derives it). Before the replay
- * the node's `forward` and `backward` (on the run's node and the replayed copy) are replaced with
- * functions that throw, and the model access must build no second model, where Python patches the
- * render, variable resolution, backward and the model factory to fail.
- *
- * Ported, with AGENT's backward (`node.backward` or `backwardAgent` called directly, the model a
- * `ScriptedModel` served by the `models` option where Python patches `model_from_config`; prompts
- * are compared as text, the text form of the material, never read with `JSON.parse`):
- * `test_agent_backward_uses_recorded_model_and_no_tools` (the whole prompt text pinned),
- * `test_agent_backward_keeps_visible_tool_evidence_inert_and_separate`,
- * `test_agent_backward_skips_empty_effective_feedback` (4 rows),
- * `test_agent_backward_empty_string_is_effective_and_nested_arrays_keep_their_shape` (the result is
- * frozen, so the reader's write throws a `TypeError` where Python's lands on a copy),
- * `test_agent_backward_rejects_missing_retained_material_without_fallback` (6 rows; the full
- * `RangeError` message pinned), `test_agent_backward_rejects_malformed_retained_capture` (13 rows)
- * and `test_agent_backward_uses_partial_failure_capture_without_inventing_locals`.
- * `test_agent_backward_validates_all_feedback_before_skipping_or_calling` (4 rows; the last, a
- * list where Python wants a tuple, becomes feedback that isn't an array, since an array is the
- * only list).
- *
- * Ported, through AGENT's forward in a learnable `FlowEngine` run, then `computeBackward` with the
- * backward model in its `models` option: `test_agent_backward_failure_is_attributed_without_forward_changes`
- * (13 rows; the duplicate-key row fails in `parseJson`, with its message, and the model error is an
- * `Error`, Python's `ValueError`) and `test_agent_backward_reads_no_live_render_model_or_variable_state`
- * (the node's `forward`, `declaredVariables`, `captureBackwardContext` and private
- * `resolveVariables` are replaced on the instance; ES modules can't patch the render, type label
- * and memory functions Python patches).
- *
- * Changed: `test_agent_backward_host_controls_preserve_original_identity`. There is no
- * host-control unwrapping (`computeBackward` attributes every handler throw), and TS has no
- * `MemoryError`, `_HostStop` or cancellation classes, so each row (an abort `DOMException`, a
- * nested `CapabilityFault`, an `Error` wrapping another as `cause`; thrown by `createModel` or by
- * the call) is a `BackwardComputeError` coded `backward.execute` whose `cause` is the thrown value
- * itself, scrubbed of the node's own `api_key`, with the log, result and trace unchanged.
- *
- * Ported from `tests/engine/test_openai_connection_recovery.py`:
- * `test_old_backward_config_gets_api_semantics_before_factory` (it builds its context with this
- * file's `context`; it calls `backwardAgent` directly).
- *
- * TS-only: `__llm_config` is left out of the prompt's inputs; a retried call publishes one
- * `ModelCallRetried` (consumer `backward`, the error scrubbed) through `onEvent`; `createModel`
- * receives the node id, consumer `backward` and a signal that isn't aborted, and each
- * `onReplayDegraded` reason is published once as `ReplayDegraded`; a model error is scrubbed of the
- * key the call sent; a context that isn't a `BackwardContext` is refused.
+ * The backward context a node's retained invocation material builds, and AGENT's backward: the
+ * recorded model and no tools, feedback checks, failure attribution, and secrets scrubbed.
  */
 
 import { expect, test } from "bun:test";
@@ -192,7 +140,7 @@ test("the backward context exposes only accepted evidence and replays without ag
   const forbidden = (): never => {
     throw new Error("replay invoked AGENT work");
   };
-  // On the run's node and on the copy the replay runs over, as Python patches the class.
+  // On the run's node and on the copy the replay runs over.
   for (const target of [node, original.nodes.get("writer")!]) {
     target.forward = forbidden;
     target.backward = forbidden;
@@ -211,7 +159,7 @@ type ContextFields = ConstructorParameters<typeof BackwardContext>[1] & {
   inputs?: Readonly<Record<string, unknown>> | null;
 };
 
-/** Python's `_context`: a recorded AGENT invocation, with `overrides` replacing its fields. */
+/** A recorded AGENT invocation, with `overrides` replacing its fields. */
 function context(overrides: ContextFields = {}): BackwardContext {
   const { inputs = { topic: "reefs", tags: ["a", "b"] }, ...fields } = overrides;
   return new BackwardContext(inputs, {
@@ -245,7 +193,7 @@ function text(reply: string): Response {
   return new Response({ message, finishReason: "stop" });
 }
 
-/** Python's `_reply`: the three channels, empty unless `overrides` fills them. */
+/** The three channels, empty unless `overrides` fills them. */
 function reply(overrides: Record<string, unknown> = {}): Response {
   return text(JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {}, ...overrides }));
 }
@@ -296,7 +244,7 @@ test("AGENT backward uses the recorded model and no tools", async () => {
   ]);
   const models = access(chat);
   const build = models.createModel;
-  // As Python's factory, mutate the config the model is built from; the record must not change.
+  // Mutate the config the model is built from; the record must not change.
   models.createModel = (config, given) => {
     const built = build(config, given);
     (config as Record<string, unknown>)["model"] = "factory mutation";
@@ -560,7 +508,7 @@ test("an old backward config gets API semantics before the factory", async () =>
   expect(connection["source"]).toBe("legacy_environment");
 });
 
-/** Python's `_retained_engine`: AGENT `writer` ran once in a learnable run, its model map recorded. */
+/** AGENT `writer` ran once in a learnable run, its model map recorded. */
 async function retainedEngine(llmConfig: Record<string, unknown> = { provider: "test", model: "recorded" }) {
   const recorded = { provider: "test", model: "recorded" };
   const registry = readTypedefs({ Tone: "Literal(concise, detailed)" });

@@ -2,7 +2,6 @@
  * The waits fold (`applyWaitsRecord`) over records alone, no reducer: sends, absorbing takes,
  * inline take commits, host calls, wakes, closes and settles; its queries; `decideWait`; and its
  * JSON form, which resumes the fold at any cut.
- * TS-only: Python yian has no inboxes or waits.
  */
 import { expect, test } from "bun:test";
 import { Failure } from "../../src/diagnostics.ts";

@@ -1,8 +1,8 @@
 /**
- * TS-only: reading `${x.new_messages}` at run time. A reader gets the AGENT's new messages from
- * its messages commit; a derived reader (a child END, a LOOP's carried value) names that commit in
- * its `from`, learnable or not, and replay rebuilds the same value. A LOOP builds a history from
- * each turn's new messages with a bounded pool, and a skipped agent's read takes its default.
+ * Reading `${x.new_messages}` at run time. A reader gets the AGENT's new messages from its
+ * messages commit; a derived reader (a child END, a LOOP's carried value) names that commit in its
+ * `from`, learnable or not, and replay rebuilds the same value. A LOOP builds a history from each
+ * turn's new messages with a bounded pool, and a skipped agent's read takes its default.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

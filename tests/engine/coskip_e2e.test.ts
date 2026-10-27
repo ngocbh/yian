@@ -1,17 +1,9 @@
 /**
- * Co-skip, a `:-null` escape and a reference-coalesce join through a real CASE route: a port of
- * `tests/engine/test_coskip_e2e.py`.
+ * Co-skip, a `:-null` escape and a reference-coalesce join through a real CASE route.
  *
  * `pro` and `con` are the two branches (only one runs); `pro_detail` reads a plain
  * `${pro.output}`, so it co-skips with `pro`; `assemble` joins `${pro.output | con.output}` and
  * `${pro_detail.output:-null}`, which binds null when `pro_detail` co-skips.
- *
- * Ported: `test_pro_route_runs_detail`. The CODE references are TS's
- * (`./fixtures/compose_codefns.ts:pick_pro`).
- *
- * Covered by `run-case/engine_coskip_e2e__con_route_co_skips_and_escape_binds_null`:
- * `test_con_route_co_skips_and_escape_binds_null` (TS expect: `assemble_join` writes a null
- * `detail` as `null`, where Python's f-string writes `None`).
  */
 
 import { afterAll, expect, test } from "bun:test";

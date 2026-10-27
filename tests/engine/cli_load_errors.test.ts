@@ -1,6 +1,6 @@
-// Ported from tests/engine/test_cli_load_errors.py: a load error's diagnostic is shown as a boxed
-// source frame titled `file:line`, the message below; through `yian run`, a broken flow is located
-// and exits 1 without an engine stack, which `--engine-trace` adds, and a cycle frames both nodes.
+// A load error's diagnostic is shown as a boxed source frame titled `file:line`, the message
+// below; through `yian run`, a broken flow is located and exits 1 without an engine stack, which
+// `--engine-trace` adds, and a cycle frames both nodes.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

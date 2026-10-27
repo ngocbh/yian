@@ -1,8 +1,8 @@
 /**
  * Golden scenarios for `src/llm/protocols/openai_responses.ts`, replayed from streamed cassettes
  * in `cassettes/openai_responses/` through `RouteModel` (and `callWithRetries` for the retry
- * scenarios). Each cassette records the request the adapter must send, as today's Python yian
- * sends it (#366), with every call streamed.
+ * scenarios). Each cassette records the request the adapter must send (#366), with every call
+ * streamed.
  */
 
 import { describe, expect, test } from "bun:test";

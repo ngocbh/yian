@@ -1,102 +1,6 @@
 /**
  * `LoopDescriptor.build`: the driver, the counts, the carried record's field-name contract, the
- * predicate's names, checks and field reads, and the never-ending check, a port of rows of
- * `tests/engine/test_loop_build.py`.
- *
- * Ported: `test_predicate_loop_without_max_builds_unlimited` (3),
- * `test_predicate_loop_with_max_keeps_its_limit`, `test_times_with_null_max_builds`,
- * `test_good_loop_bakes_loopnode`, `test_body_may_return_a_subset_of_carried_fields`,
- * `test_body_output_field_outside_carried_record_is_rejected`, `test_one_field_body_record_builds`,
- * the build halves of `test_one_field_body_record_returns_only_that_carried_field` and
- * `test_value_body_returns_the_referenced_record_beside_a_carried_result`,
- * `test_body_returning_no_carried_field_is_rejected` (2),
- * `test_total_loop_keeps_body_contract_and_no_returned_fields`, the contract half of
- * `test_merged_contract_types_omitted_field_from_its_seed`,
- * `test_merged_contract_keeps_literal_seed_opaque`, `test_partial_body_with_opaque_returned_field`,
- * the contract of `test_loop_accepts_proven_null_for_nullable_carried_field`,
- * `test_multi_segment_template_output_types_as_str`, `test_until_loop_builds`,
- * `test_times_loop_builds`, `test_exactly_one_predicate_required` (2),
- * `test_times_with_max_is_rejected`, `test_times_count_must_be_positive_int`,
- * `test_max_below_one_is_rejected`, `test_non_int_max_is_rejected` (3),
- * `test_while_predicate_unknown_name_is_rejected`, `test_while_predicate_all_spellings_build` (2),
- * `test_while_predicate_unknown_name_rejected_in_all_spellings` (2),
- * `test_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error`,
- * `test_while_loop_whose_condition_reads_only_unreturned_fields_is_a_load_error`,
- * `test_never_ending_error_names_every_unreturned_field_read`,
- * `test_never_ending_check_reads_every_condition_spelling` (4),
- * `test_null_max_still_gets_the_never_ending_error`, `test_dotted_condition_ref_names_the_carried_field`,
- * `test_never_ending_error_does_not_stack_on_other_loop_errors` (5),
- * `test_never_changing_condition_with_max_loads`, `test_condition_reading_one_returned_field_loads`,
- * `test_unknown_returned_fields_get_only_the_record_error`; the build halves of
- * `test_predicate_nested_field_read_builds` (2),
- * `test_predicate_tagged_member_field_error_points_at_isinstance` and
- * `test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type`;
- * `test_predicate_unknown_nested_field_is_rejected` (3),
- * `test_predicate_field_read_on_scalar_is_rejected`,
- * `test_predicate_unknown_field_on_omitted_typed_seed_is_rejected`,
- * `test_predicate_field_on_omitted_literal_seed_is_not_checked`,
- * `test_predicate_unguarded_member_field_read_is_rejected` (3),
- * `test_predicate_read_of_a_field_the_checked_member_lacks_is_rejected` (2),
- * `test_predicate_read_after_a_check_the_type_always_decides_is_checked_unnarrowed`,
- * `test_predicate_check_that_can_never_be_true_is_rejected`,
- * `test_predicate_read_after_a_reported_check_is_not_checked` (2),
- * `test_predicate_tag_comparison_with_a_value_that_is_no_tag_is_rejected`,
- * `test_predicate_reports_only_the_impossible_check` (4),
- * `test_predicate_read_past_a_check_the_checks_before_it_decide_is_checked_under_them`,
- * `test_predicate_read_after_a_value_that_is_no_tag_is_not_checked`,
- * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` (3),
- * `test_predicate_isinstance_of_a_partly_shared_union_rejects_a_member_only_field` and
- * `test_predicate_isinstance_check_with_an_unknown_type_reports_the_type`. Through
- * `assembleText`: `test_inline_loop_body_may_return_a_subset`,
- * `test_inline_body_loop_whose_condition_never_changes_is_a_load_error`,
- * `test_loop_seeded_from_partial_loop_sees_merged_type` and
- * `test_omitted_field_seed_cycle_is_located`. The carried types and the seed check (the loop type
- * contract and the cross-flow binding check on a LOOP seed), through `assembleText` with each def
- * built by hand: `test_returned_field_type_mismatch_still_rejected_in_partial_body`,
- * `test_body_output_types_must_equal_carried`,
- * `test_opaque_body_field_does_not_erase_proven_sibling_type_mismatch`,
- * `test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error` (7, and the date row below),
- * `test_seed_is_checked_even_when_a_while_loop_never_runs`,
- * `test_text_seed_into_int_input_of_a_full_loop_is_a_load_error`,
- * `test_reference_or_typed_seed_that_cannot_fill_the_body_input_is_a_load_error` (6),
- * `test_reference_seed_is_checked_even_when_a_while_loop_never_runs`, and the load halves of
- * `test_constant_seed_that_fits_the_body_input_loads_and_runs` (6),
- * `test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs` (8),
- * `test_carried_field_the_body_does_not_read_is_not_checked`,
- * `test_inline_body_constant_seed_fits_its_generated_parameter`,
- * `test_inline_body_reference_seed_fits_its_generated_parameter` and
- * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input` (2); both loads of
- * `test_loop_seed_reads_the_case_narrowed_type` (the CASE narrowing types the seed).
- *
- * Changed: a row whose Python flow calls a `defs:` body parses the loop node (`nodesOf`) and builds
- * it over a `BuildContext` whose resolver returns the body built by hand (`handChild`: the def's
- * parameters read from its `input:` text, its typed nodes as producers with their output
- * contracts), where Python loads the flow; these rows test the LOOP build on its own. Such a
- * context has no binding-contract reader: the merged-contract rows give it a test-local
- * `bindingContractReader` typing the omitted fields' seeds and recording what the LOOP asks;
- * without one an untagged seed stays opaque, as Python's literal seed does, so a `while:` reading
- * it gets no seed type: none of its checks is reported impossible and none narrows a read, and a
- * plain field read is walked on the carried record. `test_loop_seeded_from_partial_loop_sees_merged_type` and
- * `test_omitted_field_seed_cycle_is_located` assemble the flow (`assembleText`, the def built by
- * hand), so the loader's reader types the omitted seeds, building the seeding loop on demand. The
- * rows whose Python flow has an inline `nodes:` body assemble that flow, its inline CODE written in
- * TS as the harvested cases write it. The typed-seed rows of
- * `test_predicate_impossible_on_the_seed_and_the_body_is_rejected` assemble the flow
- * (`assembleText` with the def built by hand), since a tagged seed's declared type comes from
- * `assemble`; parsing alone drops the tag. The error rows pin the whole message, where Python
- * matches fragments; lists of names are JSON text (`["exited","n"]`) and values the text form
- * (`(got "5")`, `(got true)`, a tag comparison's `with "dnoe"` and `did you mean "done"?`). The
- * `("str", "2026-01-01")` row of `test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error`
- * loads (rule `dates`): an unquoted date is text in TS, so it fits a `str` input, where Python reads
- * a date and asks to quote it.
- *
- * TS-only: the counts are YAML ints (`bigint`) converted to numbers: `times: 3` gives `3`, a
- * `max:` or `times:` past `Number.MAX_SAFE_INTEGER` is refused with the at-most message (the
- * largest safe integer builds), and a float `max: 2.0` is refused as `(got 2)`; `times:` is
- * refused below 1 and as a float, a bool or text, as `max:` is; `times:` beside `while:` is a
- * second driver; a body input that isn't a carried field is refused; a count error and a
- * field-name error are joined at the node, as are a count error and a predicate that doesn't
- * parse; and a hand-constructed descriptor's `number` count is refused.
+ * predicate's names, checks and field reads, and the never-ending check.
  *
  * Pinned at the end (`assembled`, each case's `defs:` or inline body built by the loader's
  * callable scope): the `load-loop/engine_loop_build__*` cases whose error is a driver, count,
@@ -104,37 +8,6 @@
  * `load-loop/engine_loop_build__omitted_field_seed_cycle_is_located`,
  * `load-loop/engine_loop_build__date_seed_for_a_str_input_loads_as_text` (`ok`, rule `dates`) and
  * the reference check's `load-loop/engine_loop_build__partial_loop_output_rejects_an_unknown_field`.
- *
- * The reference rows assemble with `assembleText`, each def built by hand:
- * `test_partial_loop_contract_rejects_unknown_downstream_field_at_load` (its `body` def's `note`
- * output an untyped producer's, so the loop's contract is a partial record) and the downstream
- * half of `test_merged_contract_types_omitted_field_from_its_seed`.
- *
- * The runs, each loading the flow with the defs Python writes in it (`withDefs`, or the flow's own
- * inline body) and running it through `runFlow`: `test_predicate_nested_field_read_builds` (2),
- * `test_predicate_member_field_read_guarded_by_isinstance_builds` (4),
- * `test_predicate_while_read_guarded_through_or_and_not_builds` (2), the run halves of
- * `test_predicate_tagged_member_field_error_points_at_isinstance` and
- * `test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type`,
- * `test_predicate_tag_comparison_narrows_a_read` (2),
- * `test_predicate_while_is_checked_against_the_seed_too` (6),
- * `test_predicate_isinstance_of_a_partly_shared_union_reads_the_shared_fields`, the run halves of
- * `test_constant_seed_that_fits_the_body_input_loads_and_runs` (6),
- * `test_inline_body_constant_seed_fits_its_generated_parameter`,
- * `test_reference_or_typed_seed_that_fits_the_body_input_loads_and_runs` (8),
- * `test_carried_field_the_body_does_not_read_is_not_checked`,
- * `test_inline_body_reference_seed_fits_its_generated_parameter`,
- * `test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input` (both body inputs, both
- * runs each) and `test_loop_seed_reads_the_case_narrowed_type`. The CODE bodies are TS, ints
- * arriving as `number` (decision 45); the runs' ints are bigints (decision 4a). Changed: the float
- * rows of the two fitting-seed groups give an int (`("float", "5")` outputs `5n`, decision 38).
- *
- * Not ported: the run halves of `test_one_field_body_record_returns_only_that_carried_field`,
- * covered by `run-loop/engine_loop_build__one_field_body_record_returns_only_that_field`, and of
- * `test_value_body_returns_the_referenced_record_beside_a_carried_result`, covered by
- * `run-loop/engine_loop_build__value_body_returns_the_referenced_record`;
- * `test_predicate_field_on_omitted_typed_seed_builds`, covered by
- * `run-loop/engine_loop_build__while_reads_a_carried_over_field`.
  */
 
 import { expect, test } from "bun:test";
@@ -171,7 +44,7 @@ function swap(text: string, old: string, replacement: string): string {
 
 /**
  * `text` with `defs` (each entry indented under `defs:`) before its top-level `nodes:`: the runs
- * load the flow with the defs Python writes in it, where the build rows build each def by hand.
+ * load the flow with the defs written in it, where the build rows build each def by hand.
  */
 const withDefs = (text: string, defs: string) => swap(text, "\nnodes:\n", `\ndefs:\n${defs}nodes:\n`);
 
@@ -1429,7 +1302,7 @@ nodes:
 output: \${ask.output}
 `;
 
-// `SEEDED_BODY` with the `body` def Python writes and the `prev` node a seed may reference.
+// `SEEDED_BODY` with a `body` def and the `prev` node a seed may reference.
 const SEEDED_FLOW = swap(
   SEEDED_BODY,
   "\nnodes:\n",
@@ -1685,7 +1558,7 @@ test.each([
 });
 
 test("a date seed for a str input loads as text", () => {
-  // Changed: Python reads `2026-01-01` as a date and asks to quote it; TS reads it as text.
+  // `2026-01-01` reads as text, not a date.
   expect(loadSeeded(seeded("2026-01-01"), seededBody("str")).compiled.nodes.get("loop")).toBeInstanceOf(LoopNode);
 });
 
@@ -2055,7 +1928,7 @@ test.each<CaseRow>(
     "quoted_number_seed_for_an_int_input",
     "seed_default_null_for_an_int_input",
     "text_seed_for_an_int_input",
-    // Changed (rule `dates`): Python reads the seed as a date and errors; TS reads it as text.
+    // Rule `dates`: the seed reads as text, not a date.
     "date_seed_for_a_str_input_loads_as_text",
     "omitted_field_seed_cycle_is_located",
     "partial_loop_output_rejects_an_unknown_field",

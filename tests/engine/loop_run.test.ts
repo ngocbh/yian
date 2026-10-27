@@ -1,86 +1,10 @@
 /**
- * End-to-end `while:`/`until:`/`times:` loop runs over pure-CODE bodies: a port of
- * `tests/engine/test_loop_run.py`.
+ * End-to-end `while:`/`until:`/`times:` loop runs over pure-CODE bodies.
  *
  * Each iteration is a fresh `LoopNode` driver clone: `L` is the compiled loop (iteration 0),
  * `L~k` the driver clone for iteration `k >= 1`, and `L#k/…` the cloned body of iteration `k`. A
  * stopping driver commits the carried record under `L`; a continuing one grows `body_k` and the
  * next driver, pruning the previous body and (except the origin) itself.
- *
- * Ported: `test_while_loop_runs_until_predicate_false`, `test_while_loop_max_exceeded_fails_run`,
- * `test_until_loop_max_exceeded_fails_run`, `test_body_failure_in_bounded_loop_keeps_the_body_code`,
- * `test_while_loop_max_permits_exactly_max_body_runs` (both runs),
- * `test_nested_call_loop_respawn_failure_keeps_each_authored_origin_once`,
- * `test_loop_body_blocks_for_each_human_turn`,
- * `test_loop_body_can_compute_carried_boolean_in_its_output_binding`,
- * `test_loop_keeps_declared_record_shape_when_one_field_type_is_opaque`,
- * `test_partial_loop_contract_survives_nested_child_projection`,
- * `test_partial_loop_contract_survives_transparent_call_passthrough`,
- * `test_while_loop_predicate_runtime_error_fails_run`, `test_until_runs_body_at_least_once`,
- * `test_loop_budget_exceeded_in_step_fails_run`, `test_long_loop_stays_within_node_budget`,
- * `test_terminate_leaves_exactly_one_dead_final_body_and_driver`,
- * `test_until_loop_without_max_runs_until_predicate_ends_it`,
- * `test_one_field_body_keeps_the_other_carried_fields` (its run is also the harvested
- * `run-loop/engine_loop_run__one_field_body_keeps_the_other_carried_fields`; the case doesn't pin
- * `returnedFields`), `test_partial_body_explicit_null_sets_nullable_field` (both runs),
- * `test_partial_loop_asserts_see_the_merged_record` (all four runs),
- * `test_partial_loop_zero_iterations_commits_seed`, `test_partial_until_and_times_loops`,
- * `test_loop_with_nested_growth_keeps_one_iteration_resident` (all eight rows),
- * `test_loop_with_nested_growth_keeps_trace_indexes_bounded` (all four rows),
- * `test_loop_growth_record_keeps_only_the_requested_prune_ids`,
- * `test_self_pruning_spawner_hands_its_fragment_to_its_owner`,
- * `test_loop_keeps_a_nested_subtree_with_unfinished_work` (both rows),
- * `test_loop_keeps_an_unfinished_body_node_live` (all six rows),
- * `test_loop_retires_a_kept_body_node_once_settled` and
- * `test_loop_body_call_grows_after_its_iteration_was_pruned`. Integers are bigints (decision 4a);
- * the CODE references are the TS fixtures' (`./fixtures/compose_codefns.ts:<fn>`), and inline CODE
- * bodies are TS: a Python `assert` throws an `Error`, and a `time.sleep` is an awaited
- * `setTimeout` (the sleep rows' delays are milliseconds).
- *
- * Changed:
- * - `test_body_failure_in_bounded_loop_keeps_the_body_code`: `causeType` is `"CodeError"`, not
- *   `"ValueError"`: TS wraps whatever a CODE body throws (the TS `boom` throws an `Error`) in a
- *   `CodeError`, as `code_inline.test.ts` pins.
- * - `test_loop_body_blocks_for_each_human_turn`: TS has no `chat_fold` fixture; the body folds
- *   each message in an inline TS CODE body.
- * - `test_loop_body_blocks_for_each_human_turn` and
- *   `test_loop_body_can_compute_carried_boolean_in_its_output_binding`: each turn asks through a
- *   TOOL `ask` where Python's uses a HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind).
- * - `test_while_loop_predicate_runtime_error_fails_run`: a `while:` evaluation error is code
- *   `condition.evaluate` (decision 36), not `node.execute`.
- * - `test_loop_budget_exceeded_in_step_fails_run`: `set_defaults(MAX_TOTAL_NODES=6)` is an `env`
- *   that sets `YIAN_MAX_TOTAL_NODES` to `"6"`. A budget of 6 now trips the first growth (at
- *   `loop`), not a later iteration's (the harvested
- *   `run-loop/engine_loop_run__node_budget_exceeded_in_a_later_iteration` uses 7 for that); the
- *   test asserts only a failed run and "node budget".
- *
- * Not ported:
- * - `test_while_loop_zero_iterations_commits_seed`: covered by
- *   `run-loop/engine_loop_run__while_loop_zero_iterations_commits_seed`.
- * - `test_partial_loop_contract_rejects_invalid_turn_zero_seed`: covered by
- *   `run-loop/engine_loop_run__partial_loop_rejects_an_invalid_turn_zero_seed`.
- * - `test_loop_feeding_downstream_node_commits_and_advances`: covered by
- *   `run-loop/engine_loop_run__loop_output_feeds_a_downstream_node`.
- * - `test_until_does_not_evaluate_predicate_on_seed`: covered by
- *   `run-loop/engine_loop_run__until_does_not_evaluate_predicate_on_seed`.
- * - `test_times_runs_exactly_n`: covered by `run-loop/engine_loop_run__times_runs_exactly_n`.
- * - `test_until_stops_when_predicate_becomes_true`: covered by
- *   `run-loop/engine_loop_run__until_stops_when_predicate_becomes_true`.
- * - `test_while_loop_without_max_runs_until_predicate_ends_it`: covered by
- *   `run-loop/engine_loop_run__while_loop_without_max_runs_to_its_predicate`.
- * - `test_partial_body_keeps_omitted_fields_across_turns`: covered by
- *   `run-loop/engine_loop_run__partial_body_keeps_omitted_fields_across_turns`.
- * - `test_partial_loop_inside_call_body`: covered by
- *   `run-loop/engine_loop_run__partial_loop_inside_call_and_map_children`.
- *
- * - `test_loop_without_max_resumes_from_its_log`: covered by the hand-written
- *   `resume/loop_run__a_while_loop_cut_mid_run_resumes_to_the_same_output`, whose header names
- *   it (the same flow, cut mid-run, resumed to the same output).
- *
- * Ported through `runFlow`, a log cut to its first half, and `advance`:
- * `test_partial_loop_resumes_from_its_log`, `test_nested_growth_loop_resumes_from_a_cut_log` and
- * `test_loop_with_a_kept_body_node_resumes_from_a_cut_log`, the last two replaying the log with
- * `replayRunLog` (Python's `_replay_run_log`). The kept body node's sleep is 200 ms (Python: 0.2 s).
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -1354,7 +1278,7 @@ async function runCutAndResume(
   return path;
 }
 
-/** Replay the log at `path` over `source` (Python's `_replay_run_log`). */
+/** Replay the log at `path` over `source`. */
 async function replayed(source: string, path: string) {
   const log = JsonlRunLog.resume(path);
   try {

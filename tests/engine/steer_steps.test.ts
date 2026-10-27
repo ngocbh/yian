@@ -1,6 +1,6 @@
 /**
  * The `steer` node step: the reducer's refusals, the waits fold, the inbox store's lifetime, and
- * replay's attached values. TS-only: Python yian has no inboxes.
+ * replay's attached values.
  */
 import { expect, test } from "bun:test";
 

@@ -1,14 +1,10 @@
 /**
  * The run-start tool checks for the TOOL built-ins, through `runFlow`: `take` and `sleep` need no
- * tool in the run's tools, an `ask` node's inputs are checked against yian's base surface plus
- * the host's declared extras, and `ask` needs the run's handler. TS-only: Python yian has no
- * `take`, `sleep` or `ask` built-ins.
- *
- * Rows that pinned the same behaviour on HUMAN_INPUT and WAIT (`blocking_human_input.test.ts`,
- * `blocking_wait.test.ts`) run here on the built-ins: an ask sends its prompt, its answer schema's
- * enum and its title (`node_name:`); an inline null answer is an ordinary output; literal
- * questions render their templates, labels and descriptions included; a sleep until a past date,
- * datetime or offset datetime returns null at once.
+ * tool in the run's tools, an `ask` node's inputs are checked against yian's base surface plus the
+ * host's declared extras, and `ask` needs the run's handler. Also: an ask sends its prompt, its
+ * answer schema's enum and its title (`node_name:`); an inline null answer is an ordinary output;
+ * literal questions render their templates, labels and descriptions included; a sleep until a past
+ * date, datetime or offset datetime returns null at once.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -147,7 +143,7 @@ test("a YAML TOOL sleep passes the run-start checks with no tools and waits", as
   expect(readFileSync(path, "utf8")).toContain('"run_waiting"');
 });
 
-// Rows ported from the HUMAN_INPUT and WAIT tests (TS yian has neither kind).
+// The ask and sleep built-ins: prompts, answers and past deadlines.
 
 test("an ask sends its prompt, its answer schema's enum and its title, and returns the answer", async () => {
   const seen: AskRequest[] = [];

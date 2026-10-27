@@ -1,6 +1,5 @@
-// Ported from tests/cli/test_cli_name.py: `test_help_names_composer` and
-// `test_docs_and_sources_name_the_composer_command`, the scan over `src`, `tests` and
-// `README.md`. Added here: the help printed with no arguments and for a group alone.
+// The CLI names its command: the help with no arguments and for a group alone, and a scan of
+// `src`, `tests` and `README.md` for the old `ac` name.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";

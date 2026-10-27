@@ -1,23 +1,10 @@
 /**
- * Run-result and static edge-id goldens for CODE-only flows: a port of
- * `tests/engine/test_golden_run_results.py`.
+ * Run-result and static edge-id goldens for CODE-only flows.
  *
  * An `ask` answered by its host and a `sleep` until a past date finish in one run; a single
  * `${input.x}` reader has only its START data edge and its END edge; a defaulted input fills inside
  * START while `RunResult.input` keeps what the caller passed; and the three output shapes (no
  * `output:`, a bare `output:`, a name map) give null, the value, and a record.
- *
- * Ported: `test_golden_human_input_then_past_wait_completes_in_one_run`,
- * `test_golden_static_edge_ids_start_end`,
- * `test_golden_inputs_defaults_and_multi_output_surface`, `test_golden_output_arity_0`,
- * `test_golden_output_arity_1` and `test_golden_output_arity_2`. Ints read as `bigint`s (decision
- * 4a); the CODE references are TS's (`./fixtures/compose_codefns.ts:make_report`,
- * `./fixtures/seeds.ts:confirm_action`). Changed: the first row's gate is a TOOL `ask` and its
- * wait a TOOL `sleep`, where Python's are HUMAN_INPUT and WAIT nodes (TS yian has neither kind).
- *
- * Already ported: `test_golden_call_run_result`, `test_golden_map_run_result` and
- * `test_golden_static_edge_ids_case_and_call_and_map`, in `graph_growth_e2e.test.ts`'s
- * `f0 goldens hold`.
  */
 
 import { afterAll, expect, test } from "bun:test";

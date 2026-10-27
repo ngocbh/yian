@@ -1,28 +1,4 @@
-/**
- * Durable backends retain memory through the public run and recovery boundary: mirrors
- * `tests/engine/test_memory_storage_integration.py`.
- *
- * Ported: the episodic and reflective rows of `test_process_local_backends_never_open_sqlite`,
- * `test_snapshot_identity_survives_a_real_process_restart` and
- * `test_idle_run_does_not_keep_storage_owned_after_backend_close`; through `runFlow`,
- * `RunResult.backward` and `advance`: `test_explicit_learning_remains_saved_after_reopen`
- * (2 rows).
- *
- * Not ported: the session rows, `test_api_session_history_is_used_after_reopening_storage`,
- * `test_api_summary_cache_survives_reopen_under_current_budget`,
- * `test_more_recent_turns_on_reopen_restores_raw_context`,
- * `test_resume_reopens_latest_saved_history_instead_of_the_old_run_snapshot` and
- * `test_api_session_learned_notes_survive_storage_reopen` (TS yian has no session memory).
- *
- * Changed: Python's `with <backend>:` is `withBackend`, which closes the backend in `finally`.
- * `test_process_local_backends_never_open_sqlite`: spies on `SQLiteStorage.prototype.ensureOpen`,
- * `load` and `save` that throw stand in for Python forbidding `sqlite3.connect`.
- * `test_snapshot_identity_survives_a_real_process_restart`: the child is a `bun -e` script
- * importing the backend's module that prints the snapshot as `logJson`.
- * `test_explicit_learning_remains_saved_after_reopen`:
- * the reflector is a `ScriptedModel` from the backend's `createModel` option, answering with the
- * actions' JSON (Python patches `reflective.model_from_config` with a structured-output fake).
- */
+/** Durable backends retain memory through the public run and recovery boundary. */
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -68,13 +44,13 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** Python's `_backend`: the `policy` backend over `storage`; a reflective one learns with `createModel`. */
+/** The `policy` backend over `storage`; a reflective one learns with `createModel`. */
 function backend(policy: Policy, storage: string | null, createModel: (() => ScriptedModel) | null = null): Backend {
   if (policy === "reflective") return new ReflectiveMemory({ llmConfig: MODEL_CONFIG, storage, createModel });
   return new EpisodicMemory({ storage });
 }
 
-/** Await `fn` with `memory`, then close it (Python's `with <backend>:`). */
+/** Await `fn` with `memory`, then close it. */
 async function withBackend<M extends Backend, T>(memory: M, fn: (memory: M) => T | Promise<T>): Promise<T> {
   try {
     return await fn(memory);

@@ -1,75 +1,19 @@
 /**
- * The package-root run lifecycle over one authoritative append-only log: a port of
- * `tests/engine/test_run_lifecycle.py`.
+ * The package-root run lifecycle over one authoritative append-only log.
  *
  * Fresh runs own a process-local log or one durable path; a resume owns a durable writer from
  * the lock to the engine's drain. Recorded history is replayed silently; only records committed
  * in the current segment publish events. The flows use CODE through `./compose_codefns.ts:<fn>`
  * references (resolved from the conformance fixtures) or inline TS bodies, and every run sees only
- * the test's credential store in its environment.
+ * the test's credential store in its environment. A host stop is the run's `signal`, and the run
+ * rejects with its reason.
  *
- * Ported: `test_fresh_memory_success_returns_current_segment_and_canonical_input`,
- * `test_fresh_durable_success_returns_path_and_releases_the_lock`,
- * `test_nullable_specialized_list_survives_durable_run_and_terminal_resume`,
- * `test_fresh_memory_flow_failure_returns_durable_diagnostics`,
- * `test_fresh_flow_failure_is_a_result_and_releases_the_lock`,
- * `test_terminal_resume_preserves_source_free_failure`,
- * `test_nonterminal_resume_commits_exact_retries_and_selected_workers[serial-override]`,
- * `test_resume_hook_failure_leaves_the_log_unchanged` and `test_terminal_resume_never_calls_the_hook`.
- *
- * Changed:
- * - Python's `ValueError` is a `RangeError`; a CODE failure's message and traceback name the JS
- *   error, `Error: boom` (Python: the message `boom`, the traceback `ValueError: boom`).
- * - `test_final_run_boundary_signatures_and_result_fields_are_exact`: `advance(options)`
- *   takes an options record, so its keys are checked once, with `runFlow`'s and `RunResult`'s, in
- *   `retired_runtime_surface.test.ts` (the same check as that file's `resume_flow` row).
- * - `test_terminal_resume_is_read_only_silent_and_unlocks[succeeded]`,
- *   `test_nonterminal_resume_restores_recorded_llm_without_reading_defaults`: ESM bindings can't
- *   be patched, so the resume's environment fails any read of `YIAN_DEFAULT_PROVIDER` or the
- *   credential store instead of `connection_snapshot` being replaced; the AGENT's model comes from
- *   the `models` option (Python patches `model_from_config`).
- * - `test_terminal_resume_preserves_recorded_trace_across_origin_rebase`: the loaded flow's END
- *   output is set back to the source without `:-null`, and its edge to required, by the shared
- *   `requiredEndFlow` (Python patches `null_skipped_outputs` during the load).
- * - `test_run_started_append_failure_prevents_execution_observation_and_closes` and
- *   `test_outcome_append_failure_leaves_started_work_recoverable_and_closes`: `JsonlRunLog.create`
- *   is spied on to return the tracking log (which keeps no path: the run boundary never reads it
- *   back); the action's runs are counted by spying on `CodeNode.prototype.forward`.
- * - `test_resume_callback_exception_closes_and_unlocks_nonterminal_log`: a public `advance`
- *   (Python's `_resume_flow_controlled`); TS appends one `run_stopped` (reason `callback`) after
- *   the second start.
- * - `test_resume_hook_sees_recorded_configs_before_run_resumed`: the hook is the `checkLlmConfigs`
- *   option, called with `{callTimeHost}`.
- * - `test_callback_exception_drains_waiter_reraises_exactly_and_unlocks`,
- *   `test_callback_exception_drains_real_blocked_human_interaction_and_unlocks` and
- *   `test_host_interruption_drains_then_durable_resume_retries_to_terminal`: the trigger is a TOOL
- *   node whose tool waits for the blocked call to start. TS yian has no WAIT or HUMAN_INPUT kind,
- *   so Python's WAIT is a TOOL `waiter` whose call waits for its signal (Python's
- *   `_TrackingStopEvent`), and the human interaction is a TOOL `ask` whose handler does; a host
- *   stop is the run's `signal`, which the interrupting tool aborts, and the run rejects with its
- *   reason (Python: `_HostStop` raised by a CODE node); the recovered `waiter` returns `"done"`
- *   where Python's WAIT, past its deadline, returns null. TS records the stop as `run_stopped`, and
- *   nothing is named `RunAborted`.
- *
- * TS-only: a resume after a crash publishes `RunResumed` then one `NodeAttemptResumed` per retried
- * node with its crashed count (2 after a second crash), and the result holds the counts; a
- * TOOL cut between its `failed` and `started` steps resumes with the next attempt; a resume with
- * an aborted signal rejects with its reason before the lock is taken.
- *
- * TS-only, the SIGKILL platform sweep (design 4.2): three serial CODE-only flows (one with a CASE
- * route) run in a child process of the runtime running the test, a script written to a temp dir;
- * the child is killed with SIGKILL once the log holds k+1 lines, for each k that is a slow node's
- * `node_started` (the child's CODE bodies wait 1 s, so the kill lands while that node runs). The
- * records-only `inspectRun` then reads `crashed` with the killed node in flight, counted once,
- * and `advance` in the test process gives an uncut run's output and node outcomes
- * (`node_succeeded`, `node_routed`, `node_failed`, by node and value or handle).
- *
- * Covered by a case: `test_terminal_resume_is_read_only_silent_and_unlocks[failed]` and
- * `test_terminal_resume_preserves_compose_failure_and_diagnosis`
- * (`resume/run_lifecycle__a_finished_failed_run_resumes_read_only_with_its_failure`),
- * `test_nonterminal_resume_commits_exact_retries_and_selected_workers[recorded]`
- * (`resume/run_lifecycle__a_resume_retries_in_flight_work_ahead_of_ready_work`) and
- * `[pooled-override]` (`resume/run_lifecycle__a_resume_num_workers_overrides_the_recorded_one`).
+ * The SIGKILL platform sweep: three serial CODE-only flows (one with a CASE route) run in a child
+ * process of the runtime running the test, a script written to a temp dir; the child is killed
+ * with SIGKILL once the log holds k+1 lines, for each k that is a slow node's `node_started` (the
+ * child's CODE bodies wait 1 s, so the kill lands while that node runs). The records-only
+ * `inspectRun` then reads `crashed` with the killed node in flight, counted once, and `advance` in
+ * the test process gives an uncut run's output and node outcomes.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -520,7 +464,7 @@ function expectResumedSegment(events: readonly RunEvent[]): void {
   expect(events.some((event) => event instanceof NodeStarted && event.nodeId === START_ID)).toBe(false);
 }
 
-test("test_fresh_memory_success_returns_current_segment_and_canonical_input", async () => {
+test("fresh memory success returns current segment and canonical input", async () => {
   const seen: RunEvent[] = [];
 
   const result = await run(await load(SUCCESS_FLOW), { n: "4" }, { log: null, runId: RUN_ID, onEvent: (e) => seen.push(e) });
@@ -536,7 +480,7 @@ test("test_fresh_memory_success_returns_current_segment_and_canonical_input", as
   expect(result.events.at(-1)).toBeInstanceOf(RunSucceeded);
 });
 
-test("test_fresh_durable_success_returns_path_and_releases_the_lock", async () => {
+test("fresh durable success returns path and releases the lock", async () => {
   const path = join(dir, "success.jsonl");
 
   const result = await run(await load(SUCCESS_FLOW), { n: 5 }, { log: path, runId: RUN_ID });
@@ -550,7 +494,7 @@ test("test_fresh_durable_success_returns_path_and_releases_the_lock", async () =
   expect(records.at(-1)).toBeInstanceOf(NodeSucceededRecord);
 });
 
-test("test_nullable_specialized_list_survives_durable_run_and_terminal_resume", async () => {
+test("nullable specialized list survives durable run and terminal resume", async () => {
   const path = join(dir, "nullable-list.jsonl");
 
   const fresh = await run(await load(NULLABLE_LIST_FLOW), { items: [1, null, 3] }, { log: path, runId: RUN_ID });
@@ -594,13 +538,13 @@ function expectBoom(result: RunResult, log: string | null): void {
   expect((result.events.at(-1) as RunFailed).failure).toBe(result.failure!);
 }
 
-test("test_fresh_memory_flow_failure_returns_durable_diagnostics", async () => {
+test("fresh memory flow failure returns durable diagnostics", async () => {
   const result = await run(await load(FAILURE_FLOW), {}, { log: null, runId: RUN_ID });
 
   expectBoom(result, null);
 });
 
-test("test_fresh_flow_failure_is_a_result_and_releases_the_lock", async () => {
+test("fresh flow failure is a result and releases the lock", async () => {
   const path = join(dir, "failed.jsonl");
 
   const result = await run(await load(FAILURE_FLOW), {}, { log: path, runId: RUN_ID });
@@ -611,7 +555,7 @@ test("test_fresh_flow_failure_is_a_result_and_releases_the_lock", async () => {
   expect((durable as NodeFailedRecord).failure).toEqual(result.failure!);
 });
 
-test("test_terminal_resume_is_read_only_silent_and_unlocks[succeeded]", async () => {
+test("terminal resume is read only silent and unlocks (succeeded)", async () => {
   const path = join(dir, "terminal-succeeded.jsonl");
   const fresh = await run(await load(SUCCESS_FLOW), { n: 6 }, { log: path, runId: RUN_ID });
   const before = readFileSync(path);
@@ -648,7 +592,7 @@ test("a node failure whose text holds a lone surrogate is recorded with U+FFFD i
   expect(failed.map((record) => record.failure)).toEqual([fresh.failure!]);
 });
 
-test("test_terminal_resume_preserves_source_free_failure", async () => {
+test("terminal resume preserves source free failure", async () => {
   const path = join(dir, "terminal-source-free-failure.jsonl");
   const freshFlow = sourceFreeFailureFlow();
   const fresh = await run(freshFlow, {}, { log: path, runId: RUN_ID });
@@ -667,7 +611,7 @@ test("test_terminal_resume_preserves_source_free_failure", async () => {
   expect(readFileSync(path)).toEqual(before);
 });
 
-test("test_terminal_resume_preserves_recorded_trace_across_origin_rebase", async () => {
+test("terminal resume preserves recorded trace across origin rebase", async () => {
   const loaded = requiredEndFlow(await load(TERMINAL_SKIP_FLOW));
   const path = join(dir, "terminal-origin-rebase.jsonl");
   const fresh = await run(loaded, { score: 0.0 }, { log: path, runId: RUN_ID });
@@ -700,7 +644,7 @@ test("test_terminal_resume_preserves_recorded_trace_across_origin_rebase", async
   expect(readFileSync(path)).toEqual(before);
 });
 
-test("test_nonterminal_resume_commits_exact_retries_and_selected_workers[serial-override]", async () => {
+test("nonterminal resume commits exact retries and selected workers (serial-override)", async () => {
   const path = join(dir, "resume-0.jsonl");
   const loaded = await load(PARALLEL_FLOW);
   const prefixLength = writeNonterminalPrefix(path, loaded, { n: 7n }, { started: ["a", "b"], numWorkers: 2 });
@@ -718,7 +662,7 @@ test("test_nonterminal_resume_commits_exact_retries_and_selected_workers[serial-
   expect(durableRecords(path)[prefixLength]).toEqual(new RunResumedRecord(["a", "b"], 0));
 });
 
-test("test_nonterminal_resume_restores_recorded_llm_without_reading_defaults", async () => {
+test("nonterminal resume restores recorded llm without reading defaults", async () => {
   const path = join(dir, "agent-resume.jsonl");
   const effective = await agentResumePrefix(path);
   const built: Record<string, unknown>[] = [];
@@ -736,7 +680,7 @@ test("test_nonterminal_resume_restores_recorded_llm_without_reading_defaults", a
   expectResumedSegment(result.events);
 });
 
-test("test_run_started_append_failure_prevents_execution_observation_and_closes", async () => {
+test("run started append failure prevents execution observation and closes", async () => {
   const path = join(dir, "start-append-failure.jsonl");
   const expected = new Error("RunStarted fsync failed");
   const fake = new TrackingRunLog(RUN_ID, expected, (record) => record instanceof RunStartedRecord);
@@ -756,7 +700,7 @@ test("test_run_started_append_failure_prevents_execution_observation_and_closes"
   expect(fake.closeCalls).toBeGreaterThanOrEqual(1);
 });
 
-test("test_outcome_append_failure_leaves_started_work_recoverable_and_closes", async () => {
+test("outcome append failure leaves started work recoverable and closes", async () => {
   const path = join(dir, "outcome-append-failure.jsonl");
   const expected = new Error("NodeSucceeded fsync failed");
   const fake = new TrackingRunLog(
@@ -787,7 +731,7 @@ test("test_outcome_append_failure_leaves_started_work_recoverable_and_closes", a
   expect(fake.closeCalls).toBeGreaterThanOrEqual(1);
 });
 
-test("test_resume_callback_exception_closes_and_unlocks_nonterminal_log", async () => {
+test("resume callback exception closes and unlocks nonterminal log", async () => {
   const path = join(dir, "resume-callback-failure.jsonl");
   writeNonterminalPrefix(path, await load(ACTION_FLOW), {}, { started: ["work"], numWorkers: 0 });
   const expected = new Error("resume observer failed");
@@ -811,7 +755,7 @@ test("test_resume_callback_exception_closes_and_unlocks_nonterminal_log", async 
   expect(records.some((record) => record instanceof RunResumedRecord)).toBe(true);
 });
 
-test("test_resume_hook_sees_recorded_configs_before_run_resumed", async () => {
+test("resume hook sees recorded configs before run resumed", async () => {
   const path = join(dir, "hook.jsonl");
   const effective = await agentResumePrefix(path);
   const built: Record<string, unknown>[] = [];
@@ -839,7 +783,7 @@ test("test_resume_hook_sees_recorded_configs_before_run_resumed", async () => {
   expect(built.map((config) => config["model"])).toEqual(["recorded-model"]);
 });
 
-test("test_resume_hook_failure_leaves_the_log_unchanged", async () => {
+test("resume hook failure leaves the log unchanged", async () => {
   const path = join(dir, "hook-failure.jsonl");
   await agentResumePrefix(path);
   const before = readFileSync(path);
@@ -861,7 +805,7 @@ test("test_resume_hook_failure_leaves_the_log_unchanged", async () => {
   expect(result.status).toBe("succeeded");
 });
 
-test("test_terminal_resume_never_calls_the_hook", async () => {
+test("terminal resume never calls the hook", async () => {
   const path = join(dir, "hook-terminal.jsonl");
   await agentResumePrefix(path);
   const finished = await resume(await load(AGENT_FLOW), { log: path, models: scripted([]) });
@@ -882,7 +826,7 @@ test("test_terminal_resume_never_calls_the_hook", async () => {
   expect(readFileSync(path)).toEqual(before);
 });
 
-test("test_callback_exception_drains_waiter_reraises_exactly_and_unlocks", async () => {
+test("callback exception drains waiter reraises exactly and unlocks", async () => {
   const path = join(dir, "callback-interruption.jsonl");
   const { waiter, entered, released } = blockingWaiter();
   const expected = new Error("observer rejected a durable outcome");
@@ -913,7 +857,7 @@ test("test_callback_exception_drains_waiter_reraises_exactly_and_unlocks", async
   expect(records.at(-1)).toBeInstanceOf(RunStoppedRecord);
 });
 
-test("test_callback_exception_drains_real_blocked_human_interaction_and_unlocks", async () => {
+test("callback exception drains real blocked human interaction and unlocks", async () => {
   const path = join(dir, "human-callback-interruption.jsonl");
   const expected = new Error("observer rejected while ask was blocked");
   let enter!: () => void;
@@ -956,7 +900,7 @@ test("test_callback_exception_drains_real_blocked_human_interaction_and_unlocks"
   expect(records.at(-1)).toBeInstanceOf(RunStoppedRecord);
 });
 
-test("test_host_interruption_drains_then_durable_resume_retries_to_terminal", async () => {
+test("host interruption drains then durable resume retries to terminal", async () => {
   const path = join(dir, "host-interruption.jsonl");
   const { waiter, entered, released, disarm } = blockingWaiter();
   const host = new AbortController();

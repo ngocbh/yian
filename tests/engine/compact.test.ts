@@ -1,25 +1,10 @@
 /**
- * Compact (single-node) flows: a port of the parse rows of `tests/engine/test_compact.py`.
+ * Compact (single-node) flows.
  *
  * A compact flow carries a node `kind:` at the top level and no `nodes:` map. The parser
  * desugars it into the canonical one-node flow: the flow `id:` names the node, the flow `input:`
  * is the node signature auto-wired by name, the flow `output:` is the node's output type
  * re-exported as the flow output, and every other top-level key is the node body.
- *
- * Python reaches `test_compact_digit_id_rejected_without_parser_dump` and the full-form half of
- * `test_full_form_flow_id_may_keep_hyphens` through `load_flow`; TS calls `parseFile`. The
- * compiled-nodes check of `test_full_form_flow_id_may_keep_hyphens` loads the flow
- * (`loadConformanceFlow`, its CODE reference TS's `./fixtures/compose_codefns.ts:echo`).
- *
- * Ported through `runFlow`: `test_compact_record_output_runs` (its CODE reference TS's
- * `./fixtures/compose_codefns.ts:make_plan`).
- *
- * Covered by `run-core/engine_compact__compact_code_runs`, the harvested
- * `test_compact_code_runs` (the same flow and input, succeeding with `ACME`).
- *
- * The harvested cases whose error `parseFile` raises are pinned at the end, with
- * `load-types/compose_tagged_inputs__compact_input_list_shows_the_tagged_spelling` (from
- * `tests/compose/test_tagged_inputs.py`).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -239,6 +224,5 @@ test.each([
   "load-core/engine_compact__compact_digit_id_rejected_without_parser_dump",
   "load-core/engine_compact__compact_model_kind_is_removed",
   "load-core/engine_compact__compact_rejects_non_leaf_kind",
-  // tests/compose/test_tagged_inputs.py
   "load-types/compose_tagged_inputs__compact_input_list_shows_the_tagged_spelling",
 ])("parseFile: %s", (id) => runTextCase({ id, call: fileOf }));

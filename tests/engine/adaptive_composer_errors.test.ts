@@ -1,37 +1,6 @@
 /**
  * A load error in an adaptive gate's composer names the gate and points at the authored text: a
- * port of `tests/engine/test_adaptive_composer_errors.py`.
- *
- * Ported: `test_bad_llm_config_is_named_and_located_at_the_llm_config`,
- * `test_block_llm_config_error_is_located_at_its_first_key`, `test_valid_llm_config_loads`,
- * `test_typed_input_mismatch_names_the_gate`, `test_isinstance_unknown_type_names_the_gate`,
- * `test_literal_inputs_still_load`, `test_skipped_operand_arithmetic_names_the_gate`, the reference
- * validator's rows (`test_bad_input_is_reported_once_on_the_gate`,
- * `test_two_inputs_with_the_same_bad_source_are_both_reported`,
- * `test_bad_brief_and_bad_input_are_each_reported_once` and
- * `test_bad_input_is_listed_before_a_bad_gate_prompt`), and the cycle rows
- * (`test_self_reading_gate_cycle_names_only_the_gate`,
- * `test_cycle_through_a_gate_names_only_authored_nodes`,
- * `test_ordering_cycle_through_a_gate_names_only_authored_nodes`,
- * `test_cycle_through_a_direct_composer_reader_keeps_the_id`,
- * `test_composer_read_outside_the_cycle_still_names_only_the_gate`,
- * `test_two_self_reading_gates_each_name_only_the_gate` and
- * `test_gate_reading_its_own_composer_keeps_the_id`); the harvested
- * `load-agent/engine_adaptive_composer_errors__*` cases the composer's build, the reference
- * validator or the cycle check raises, pinned at the end, the cycle and reference cases with `full`
- * (every frame and the notes).
- *
- * Changed: the flows assemble with `assembleText`, where Python loads them. The gate is a TOOL
- * `ask`, so its prompt is the input `prompt:`, whose errors are a reference's. A text value reads
- * `"false"` where Python's repr writes `'false'`, and the unknown-key error carries the issue's
- * message ("Extra inputs are not permitted") where pydantic adds its `extra_forbidden` type. Each
- * bad-config row, the typed-input row, the unknown-type row and the skipped-arithmetic row pin the
- * whole message where Python matches fragments.
- * The cycle message writes its node list in the text form (`["ask","b"]`, rule `messages`), and
- * each cycle row pins the whole message where Python checks its start. The inline CODE body is TypeScript.
- *
- * Ported through `loadFlow`: `test_compact_flow_llm_config_error_names_the_flow_node`,
- * `test_defs_body_input_error_names_the_gate` and `test_defs_child_cycle_names_only_the_gate`.
+ * bad `llm_config`, typed inputs, references, and cycles through the gate.
  */
 
 import { expect, test } from "bun:test";

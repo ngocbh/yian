@@ -1,7 +1,7 @@
 /**
  * The host calls on a run log: `send`, `complete`, `close`, `cancel` and `pendingCalls`, live
  * through this process's engine or offline under the log's lock, with their typed refusals and
- * `RunBusyError`. TS-only: Python yian has no inboxes or pending calls.
+ * `RunBusyError`.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";

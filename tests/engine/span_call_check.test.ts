@@ -1,11 +1,9 @@
 /**
- * The span call check, a port of `tests/engine/test_span_call_check.py`: every call in a
- * `${...}` must name a builtin that takes its arguments (`checkTemplateCalls`), and a prompt gets
- * the same check through `promptRefs`.
- *
- * Added for TS: the unknown-prompt-function message in full, which pins the order of the builtin
- * names and that no test registration leaks into `TEMPLATE_FNS`; and that a prompt can't call
- * `len`, which computes rather than formats.
+ * The span call check: every call in a `${...}` must name a builtin that takes its arguments
+ * (`checkTemplateCalls`), and a prompt gets the same check through `promptRefs`. The
+ * unknown-prompt-function message is pinned in full, which pins the order of the builtin names and
+ * that no test registration leaks into `TEMPLATE_FNS`; a prompt can't call `len`, which computes
+ * rather than formats.
  */
 
 import { expect, test } from "bun:test";

@@ -1,49 +1,7 @@
 /**
- * Raw node evaluation for the append-only dispatcher: a port of
- * `tests/engine/test_eval_node_raw.py`.
- *
- * Ported: `test_raw_evaluation_returns_closed_success_route_and_grow_values`,
- * `test_raw_node_raise_and_invalid_grow_are_failures_not_observers` (cause type `Error` for
- * Python's `RuntimeError`), `test_raw_streaming_uses_only_the_injected_transient_callback`,
- * `test_raw_stream_callback_failure_propagates_unchanged`.
- *
- * Ported (adapted): `test_scoped_render_capture_requires_recorded_model_map_entry`, on the node
- * data learning rebuilds (`rebuildNodeData`), since TS records none: a missing map entry fails the
- * rebuild, and the rebuilt config is a copy.
- *
- * Ported (adapted): `test_public_evaluation_always_returns_frozen_slotted_wrapper` and
- * `test_raw_failure_is_frozen_slotted_and_preserves_diagnostics`: the field names are the own
- * keys, frozen means `Object.isFrozen` and a throwing write, and the traceback is the binder
- * error's stack. `test_stream_body_exception_and_invalid_return_use_distinct_stages`: a node
- * streams through `caps.emitStream` (it declares `needsLiveEvents`), so the stream body is the
- * node's `forward`; the body's `ValueError` is a `RangeError`, and the invalid return gets the
- * ordinary non-NodeResult message (TS has no generator to name).
- *
- * Not ported: `test_render_capture_is_opt_in_single_write_and_detached_until_close`,
- * `test_invalid_render_capture_is_a_host_fault` and
- * `test_render_capture_preserves_original_host_exception_and_closes`: an evaluation captures no
- * render; learning renders the occurrence again.
- *
- * Changed: the shared `drive` evaluates the node in a one-node `CompiledFlow` wired from a
- * `FuncNode`'s `reads`, as Python's stub flow derives it.
- * `test_raw_stream_callback_failure_closes_the_node_generator_before_returning` and
- * `test_raw_stream_cleanup_failure_does_not_replace_callback_failure`: a sink throws inside the
- * node, so there is no generator to close. In their place: the node's (async) `finally` has run
- * before `evalNode` settles, and a node that throws its own error from `finally`, or catches the
- * fault and returns, still rejects `evalNode` with the sink's error: the first capability fault
- * wins over whatever the node then did, a stop rejection included.
- *
- * Not ported: the `__slots__` (no `__dict__`) checks; a TS class has no slots.
- * `test_raw_host_stop_propagates_from_node_and_preset_event` and
- * `test_raw_generator_host_stop_propagates_by_identity`: TS has no `_HostStop`, since a stop is the
- * node's aborted signal. In their place: an aborted signal rejects with its reason before binding;
- * a node that rejects after its signal aborted (with its own error or the reason, from `forward`
- * or a custom `run`) rejects `evalNode` with the reason, not a failure; a node that returns after
- * the abort still resolves.
- *
- * TS-only: the `EvaluatedOutcome` constructor checks, a steer inbox fault the node catches still
- * rejecting `evalNode`, the first of two faults the node catches winning (and the only one `onFault` sees,
- * when it is raised).
+ * Raw node evaluation for the append-only dispatcher: closed success, route and grow values,
+ * failures, stream callbacks, frozen outcomes, and stops (an aborted signal rejects with its
+ * reason).
  */
 
 import { describe, expect, test } from "bun:test";

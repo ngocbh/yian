@@ -1,26 +1,9 @@
 /**
  * The `Type` vocabulary's shape checks, levels and labels, the type-text parser,
- * `formatTypeExpr`, the bracket-spelling error, typedef names, and `resolveType`/`typeFor`, a
- * port of those tests of `tests/engine/test_types.py`, with its write-boundary value tests
- * (`buildValueAs`): bounded numbers, an int in a float slot at any depth and the end-to-end check,
- * the bounded pool write that keeps the previous value, and the package's public exports.
- *
- * Also here: the build half of
- * `test_type_to_schema.py::test_large_numeric_schema_bounds_match_resolved_type` (its schema
- * half comes with `typeToSchema`).
- *
- * Also here: `test_bounded_type_defaults_preserve_compatible_integer_payloads`, its
- * `applyDefaults` half with a hand-built `Parameter` and its `LoadError` half reading the
- * declarations with `parametersFromYaml`.
- *
- * TS-only: the harvested-case table of the conformance cases whose typedefs `readTypedefs`
- * refuses, comparing its message, its path and the range the loader picks for that path; the
- * table adds the `bad typedefs: ` prefix as `loadFlow` does (the conformance runner's `load` kind
- * runs these cases whole).
- *
- * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
- * arguments) and `test_record_stores_a_tuple_field_as_a_list` (no tuples in TS);
- * `test_is_shadow_guard` checks the private guard through `readTypedefs`.
+ * `formatTypeExpr`, the bracket-spelling error, typedef names, and `resolveType`/`typeFor`, with
+ * the write-boundary value checks (`buildValueAs`): bounded numbers, an int in a float slot at any
+ * depth, the bounded pool write that keeps the previous value, and the package's public exports.
+ * Also the conformance cases whose typedefs `readTypedefs` refuses: message, path and range.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -223,7 +206,7 @@ describe("runtime type shape", () => {
     expect(shapeError(typ, RangeError).message).toMatch(/list storage kind/);
   });
 
-  test("names the list storage kinds in Python's quoting", () => {
+  test("names the list storage kinds as quoted list[...] texts", () => {
     const typ = new Type({ kind: ValueKind.LIST_INTEGER, element: STR });
     expect(() => typ.validateShape()).toThrow(
       "list storage kind 'list[int]' does not match element type; expected 'list[str]'",
@@ -377,7 +360,7 @@ describe("canonicalTypeLabel", () => {
     expect(canonicalTypeLabel(Type.scalar(ValueKind.LIST_ANY))).toBe("list(Optional(Any))");
   });
 
-  // Each label is the one Python's `canonical_type_label` gives.
+  // Each label spells a float end with a fraction digit or an exponent.
   test.each([
     [[0.0, 1.5], "float(0.0..1.5)"],
     [[-0.5, 1n], "float(-0.5..1)"],
@@ -386,12 +369,12 @@ describe("canonicalTypeLabel", () => {
     [[0.0001, 1234567890123456.0], "float(0.0001..1234567890123456.0)"],
     [[1.5e-7, 1e21], "float(1.5e-07..1e+21)"],
     [[0.1, 12.5], "float(0.1..12.5)"],
-  ] as const)("spells float ends %p as Python does", (bounds, label) => {
+  ] as const)("spells float ends %p with a fraction digit or an exponent", (bounds, label) => {
     expect(canonicalTypeLabel(new Type({ kind: ValueKind.NUMBER, bounds }))).toBe(label);
   });
 
   // An untagged union orders its members by the order key, the bracket spelling of each
-  // member (`{"a":float[0.0,1]}`), so these orders are the ones Python gives.
+  // member (`{"a":float[0.0,1]}`).
   test.each([
     // `null` (the key's open end) sorts after `0.0`; the label's empty end would sort first.
     [[0.0, 1n], [null, 1n], 'Union({"a":float(0.0..1)},{"a":float(..1)})'],
@@ -408,7 +391,8 @@ describe("canonicalTypeLabel", () => {
 });
 
 describe("boundText", () => {
-  // Each float spelling is Python's `repr` of the same float.
+  // Each float spelling is the shortest text that reads back as the same float, with a fraction
+  // digit or an exponent.
   test.each([
     [1n, "1"],
     [-(10n ** 30n), "-1000000000000000000000000000000"],
@@ -465,7 +449,7 @@ function parseError(text: string): string {
   throw new Error(`parseType(${JSON.stringify(text)}) did not throw`);
 }
 
-/** Return Python's `malformed type expression` message for `src` (no `'` or `\` in it). */
+/** Return the `malformed type expression` message for `src` (no `'` or `\` in it). */
 function malformed(src: string, detail?: string): string {
   return `malformed type expression '${src}'${detail === undefined ? "" : `: ${detail}`}`;
 }
@@ -552,7 +536,7 @@ describe("parseType", () => {
   });
 
   test("a -0 float end is stored as 0", () => {
-    // Python keeps -0.0; a -0 end never reaches a manifest or fingerprint here.
+    // A -0 end never reaches a manifest or fingerprint.
     expect(parseType("float(-0.0..1)")).toEqual(scalar("float", [0, 1n]));
     expect(formatTypeExpr(parseType("float(-0.0..1)"))).toBe("float(0.0..1)");
   });
@@ -742,7 +726,7 @@ describe("parseType", () => {
     ["int(0,)", "int(0..)"],
     ["int(,100)", "int(..100)"],
     ["int(,)", "int(1..12)"],
-    // float ends in Python's spelling
+    // float ends keep a fraction digit
     ["float(1.0, 2)", "float(1.0..2)"],
     ["float(1e-5, 0.5)", "float(1e-05..0.5)"],
   ])("the two-argument range hint suggests only a valid range: %p", (text, range) => {
@@ -755,9 +739,8 @@ describe("parseType: quoted Literal members", () => {
     [String.raw`Literal("a\tb", 'it\'s', "é")`, ["a\tb", "it's", "é"]],
     [String.raw`Literal("\"q\"", "\\")`, ['"q"', "\\"]],
     [String.raw`Literal("\b\f\n\r\té")`, ["\b\f\n\r\té"]],
-    // Python keeps the backslash: `a\/b`.
     [String.raw`Literal("a\/b")`, ["a/b"]],
-    // A JSON high-low pair is one character; Python refuses it as two surrogates.
+    // A JSON high-low pair is one character.
     [String.raw`Literal("\ud83d\ude00")`, ["😀"]],
     ['Literal("😀")', ["😀"]],
     // A raw TAB is part of the tag.
@@ -780,11 +763,11 @@ describe("parseType: quoted Literal members", () => {
     `invalid escape '\\${c}' in a quoted Literal member (use JSON escapes)`;
 
   test.each([
-    // Python decodes these three: `A`, `•`, and `\d` kept as written.
+    // `\x`, `\N{...}` and `\d` are not JSON escapes.
     [String.raw`Literal("\x41")`, String.raw`'Literal("\\x41")'`, invalid("x")],
     [String.raw`Literal("\N{BULLET}")`, String.raw`'Literal("\\N{BULLET}")'`, invalid("N")],
     [String.raw`Literal("\d")`, String.raw`'Literal("\\d")'`, invalid("d")],
-    // A backslash before U+2028 is an escape (Python keeps it as text).
+    // A backslash before U+2028 is an invalid escape.
     ['Literal("a\\\u2028b")', String.raw`'Literal("a\\\u2028b")'`, invalid("\u2028")],
     [
       String.raw`Literal("\u12")`,
@@ -801,8 +784,7 @@ describe("parseType: quoted Literal members", () => {
       String.raw`'Literal("a\rb")'`,
       "a quoted Literal member can't hold a line break",
     ],
-    // The line break is checked before escapes, so this ordering is TS-only; Python reports
-    // an empty Literal member.
+    // The line break is checked before escapes.
     [
       'Literal("\\\r")',
       String.raw`'Literal("\\\r")'`,
@@ -830,7 +812,7 @@ describe("formatTypeExpr", () => {
     expect(formatTypeExpr(parseType(text))).toBe(text);
   });
 
-  test("spells float ends as Python does and keeps an int end an int", () => {
+  test("spells float ends with a fraction digit or an exponent and keeps an int end an int", () => {
     expect(formatTypeExpr(parseType("float(1e-3..2)"))).toBe("float(0.001..2)");
     expect(formatTypeExpr(parseType("float(1e-5..1e16)"))).toBe("float(1e-05..1e+16)");
   });
@@ -865,15 +847,14 @@ describe("bracket spelling", () => {
     ["Union[A,]", "Union(A)"],
     ["float[1., .5e1]", "float(1.0..5.0)"],
     ["int[00, 2]", "int(0..2)"],
-    // Python keeps the sign: `float(-0.0..1)`.
     ["float[-0.0, 1]", "float(0.0..1)"],
-    // Python reads identifiers in NFKC form.
+    // Identifiers read in NFKC form.
     ["Optional[ｓｔｒ]", "Optional(str)"],
     ["Optional[℘]", "Optional(℘)"],
     // Keywords are matched before NFKC, so `Ｔｒｕｅ` is a name.
     ["Literal[Ｔｒｕｅ]", 'Literal("True")'],
     ["Optional[Ｔｒｕｅ]", "Optional(True)"],
-    // Python refuses a keyword as a name: `malformed type expression 'Literal[if, b]'`.
+    // A keyword reads as a name.
     ["Literal[if, b]", "Literal(if, b)"],
   ])("is an error showing the parenthesized spelling: %p", (text, spelled) => {
     expect(parseError(text)).toBe(`types use parentheses: \`${spelled}\``);
@@ -883,14 +864,12 @@ describe("bracket spelling", () => {
   // The bracket half of test_deep_nesting_is_a_type_error.
   test("bracket nesting is capped at 100 levels", () => {
     const deep = "Optional[".repeat(300) + "str" + "]".repeat(300);
-    // Python reports the `SyntaxError` of its parser's own limit.
     expect(parseError(deep)).toBe(
       bracketError(
         "type nested too deeply in 'Optional[Optional[Optional[Optional[Opti'... " +
           "(at most 100 levels)",
       ),
     );
-    // Python respells 150 levels.
     expect(parseError("Optional[".repeat(150) + "str" + "]".repeat(150))).toStartWith(
       "types use parentheses, not brackets (type nested too deeply in ",
     );
@@ -957,7 +936,6 @@ describe("bracket spelling", () => {
     // test_bracket_single_endpoint_hint_uses_the_range_spelling
     ["int[1]", malformed("int[1]", RANGE_NEEDS_DOTS)],
     ["int[1,]", malformed("int[1,]", RANGE_NEEDS_DOTS)],
-    // Python crashes here with an uncaught `UnicodeEncodeError` from `tokenize`.
     [
       "Optional[\ud800]",
       String.raw`type expression 'Optional[\ud800]' contains a Unicode surrogate ` +
@@ -968,25 +946,16 @@ describe("bracket spelling", () => {
   });
 
   test.each([
-    // test_bracket_text_that_is_no_type_still_says_types_use_parentheses. Python appends
-    // the `SyntaxError` detail to this row and the next three.
     "list[",
     "A[]",
     "int[01, 2]",
     "Optional[²]",
-    // Python reads `0x10` as 16 and respells `int(16..20)`.
     "int[0x10, 20]",
-    // Python: `invalid bounds in 'int[1_000, 2]': type bounds must be ordered ...`.
     "int[1_000, 2]",
-    // Python: `numeric bounds require literal endpoints in 'int[1j, 2]'`.
     "int[1j, 2]",
-    // Python respells `Literal(a)`.
     "Literal[r'a']",
-    // Python respells `Literal(ab)`.
     'Literal["a" "b"]',
-    // Python respells `object`.
     "dict[1:2]",
-    // Python respells `int(1..2)`.
     "int[(1), 2]",
   ])("text that fails the syntax pass is malformed: %p", (text) => {
     expect(parseError(text)).toBe(bracketError(`malformed type expression ${reprText(text)}`));
@@ -994,7 +963,6 @@ describe("bracket spelling", () => {
 
   test("an operand that is no type is printed as written", () => {
     const text = "Buy | A[b,] | -x | [a, 'q'] | --1 | -A[1] | None | True | 1e400";
-    // Python prints the overflowing float as `1e309`.
     expect(parseError(text)).toBe(
       bracketError(
         `malformed type expression "${text}": use Union(Buy, A[b,], -x, [a, 'q'], --1, ` +
@@ -1324,7 +1292,7 @@ describe("bounded numeric values", () => {
       const rejected = [{ value: 0.5 }, { value: 1.1 }];
       const error = typeCheckError(() => pool.set("scores", rejected, typ));
       expect(error.path).toEqual([1, "value"]);
-      // Python widens the stored 1 to 1.0; TS keeps the int (`int-in-float`).
+      // The stored 1 stays an int (`int-in-float`).
       const scores = pool.get("scores") as ValueRecord[];
       expect(scores).toEqual([{ value: 1n }]);
       expect(typeof scores[0]!.value).toBe("bigint");

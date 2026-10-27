@@ -1,48 +1,6 @@
 /**
- * AGENT local variables: mirrors `tests/engine/test_agent_variables.py`.
- *
- * Ported: `test_an_object_variable_default_holding_a_model_is_rejected`,
- * `test_declared_variable_inventory_preserves_canonical_declarations`, the retained render capture
- * tests through a learnable `FlowEngine` run (`test_retained_agent_captures_actual_render_locals_once`,
- * `test_retained_agent_distinguishes_partial_and_empty_render_locals`,
- * `test_retained_agent_canonicalizes_supported_file_variable_without_changing_default`),
- * `test_retained_agent_keeps_early_binding_unavailable_and_capture_off_dormant` through `evalNode`,
- * and the rendering tests through `forward`
- * (`test_agent_renders_inputs_and_variable_defaults_without_execution_or_memory_scope`,
- * `test_agent_resolves_and_renders_once_with_repeated_literal_default_references`,
- * `test_mutable_variable_defaults_are_detached_between_invocations`,
- * `test_nullable_variable_defaults_follow_existing_strict_prompt_rules`,
- * `test_direct_variable_input_overlap_is_rejected_before_render_or_run`).
- *
- * Changed: the object default holds a class instance where Python's holds a pydantic model; the
- * first tests build their declarations by hand where Python reads them from YAML; the base `Node`
- * is abstract, so a minimal concrete node stands in for `Node("ordinary")`. The node rows' model
- * echoes the rendered prompt, for Python's patched `run_agent`, and its environment sets the
- * default model Python's test configuration sets. TS can't replace a module function, so a
- * spy on the node's private `resolveVariables` stands in for the patched `apply_defaults` and
- * `_resolve_variables`: it counts resolutions and returns the resolved records (the render record's
- * values), and no row counts renders; "nothing rendered" reads as nothing resolved and no model
- * call. The learnable run records the node's `llmConfig` as its model map by hand, where Python's
- * run start derives it. The float variable's int default is a `bigint` (Python: `type is int`).
- * TS records no render locals: learning renders the occurrence again (`TraceOccurrence.nodeData`),
- * which the retained rows read, so a row counts one more resolution once it reads them.
- * `test_render_capture_preparation_faults_escape_with_original_host_identity`: the domain fault is
- * a declaration whose `contract` read throws (for Python's patched `canonical_type_label`), the
- * copy fault a resolved record whose field read throws (for Python's patched `deepcopy`); each is a
- * `CapabilityFault` from `renderCapture` carrying the original, since no evaluation captures.
- * Not ported: `test_retained_render_locals_are_detached_before_render_and_model_callbacks` (nothing
- * is captured to detach).
- * A variable colliding with an input is a `RangeError` with its full message.
- *
- * Ported through `loadFlow` and a `FlowEngine` run (`engine`), as Python's `_engine`:
- * `test_ordinary_run_keeps_variables_out_of_wiring_and_pool_and_backward_dormant` (the echoing
- * model stands in for the patched `run_agent`; `AgentNode.backward` throws until it is ported, so a
- * backward call would fail the run, for Python's patched `backward`).
- *
- * Ported through `loadFlow` and `runFlow`, in `hostEnv`, a `ScriptedModel` given as `models`:
- * `test_temperature_variable_renders_independently_of_effective_model_configuration` (a `spyOn` of
- * `AgentNode.prototype`'s private `resolveVariables` reads the scopes, since the run executes a
- * private copy of the flow).
+ * AGENT local variables: declarations, defaults, rendering, the retained render capture, and
+ * keeping variables out of wiring and the pool.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -84,7 +42,7 @@ beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
 
 const CONFIG = { provider: "openai", model: "gpt-5.5" };
-/** The default model Python's test configuration sets, for an agent without `llmConfig`. */
+/** The default model for an agent without `llmConfig`. */
 const DEFAULT_ENV: Readonly<Record<string, string>> = { YIAN_DEFAULT_PROVIDER: "openai", YIAN_DEFAULT_MODEL: "gpt-5.5" };
 
 /** Read an agent's `variables:` declarations from their YAML body. */
@@ -95,7 +53,7 @@ function variables(body: string, registry: TypeRegistry = new Map()): Parameter[
 
 /**
  * A model access whose model answers each request with the request's last message, the rendered
- * prompt, as Python's patched `run_agent` returns `ctx.prompt`; `prompts` holds each one and
+ * prompt; `prompts` holds each one and
  * `onCreate` runs when a model is built.
  */
 function echo(onCreate: (config: Readonly<Record<string, unknown>>) => void = () => {}) {
@@ -123,7 +81,7 @@ function echo(onCreate: (config: Readonly<Record<string, unknown>>) => void = ()
 }
 
 /**
- * Wrap the node's private `resolveVariables` (Python patches `_resolve_variables`): return the
+ * Wrap the node's private `resolveVariables`: return the
  * record each call resolved, or run `replace` in its place.
  */
 function spyResolve(node: AgentNode, replace?: () => ValueRecord): ValueRecord[] {
@@ -301,7 +259,7 @@ test.each(["domains", "copy"] as const)(
       variables: variables("settings: !object {items: [1]}\n"),
     });
     if (phase === "domains") {
-      // Reading the declaration's contract fails, for Python's patched `canonical_type_label`.
+      // Reading the declaration's contract fails.
       const settings = node.variables[0]!;
       node.variables = [
         Object.create(settings, {
@@ -313,7 +271,7 @@ test.each(["domains", "copy"] as const)(
         }) as Parameter,
       ];
     } else {
-      // The resolved record can't be copied, for Python's patched `deepcopy`.
+      // The resolved record can't be copied.
       spyResolve(node, () =>
         Object.defineProperty({}, "settings", {
           enumerable: true,

@@ -1,6 +1,6 @@
 /**
- * TS-only: the engine's half of `interrupt(run, inbox)`: steer inbox readers, their interrupt
- * signal, the delivery naming them, the live call view, and a waiting reader's wake.
+ * The engine's half of `interrupt(run, inbox)`: steer inbox readers, their interrupt signal, the
+ * delivery naming them, the live call view, and a waiting reader's wake.
  */
 import { expect, test } from "bun:test";
 

@@ -1,21 +1,6 @@
 /**
- * Stopping a run ends its waiting MCP calls and leaves nothing running: a port of
- * `tests/engine/test_mcp_stop.py`, over the fake server in `tests/fixtures/mcp/`.
- *
- * Ported, each for 0 and 8 workers: `test_a_stop_ends_a_run_owned_server_call_and_the_log_resumes`,
- * `test_ctrl_c_in_the_host_ends_a_run_owned_server_call`,
- * `test_a_stop_cancels_only_its_own_run_on_a_shared_host_server` and
- * `test_a_stop_ends_an_agent_tool_call`.
- *
- * Changed: a stop is the run's `signal`, and the run rejects with its reason (Python:
- * `_HostStop` from `_run_flow_controlled`). Ctrl-C is the host's to map onto the signal, so that
- * row aborts the signal with the reason a host's SIGINT handler would give, and needs no log
- * (Python: a real SIGINT and `KeyboardInterrupt`). The started node stays unfinished in the log,
- * which ends with the stop's `run_stopped` record.
- * A call in flight is read from the server's private connection (Python: `server._calls`).
- * Concurrent runs are concurrent promises (Python: threads). An AGENT's model is a
- * `ScriptedModel` from `models`, and every run sees only the test's credential store in its
- * environment. The resume's `slow` is a `FunctionTool` in the `fake` group.
+ * Stopping a run ends its waiting MCP calls and leaves nothing running, over the fake server in
+ * `tests/fixtures/mcp/`.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -114,7 +99,7 @@ async function stopAfterCall(server: McpServer, stop: AbortController): Promise<
 
 for (const numWorkers of [0, 8]) {
   test(
-    `test_a_stop_ends_a_run_owned_server_call_and_the_log_resumes (${numWorkers} workers)`,
+    `a stop ends a run owned server call and the log resumes (${numWorkers} workers)`,
     async () => {
       const log = join(dir, "run.jsonl");
       const [server, file] = fake();
@@ -160,7 +145,7 @@ for (const numWorkers of [0, 8]) {
   );
 
   test(
-    `test_ctrl_c_in_the_host_ends_a_run_owned_server_call (${numWorkers} workers)`,
+    `ctrl c in the host ends a run owned server call (${numWorkers} workers)`,
     async () => {
       const [server, file] = fake();
       const stop = new AbortController();
@@ -183,7 +168,7 @@ for (const numWorkers of [0, 8]) {
   );
 
   test(
-    `test_a_stop_cancels_only_its_own_run_on_a_shared_host_server (${numWorkers} workers)`,
+    `a stop cancels only its own run on a shared host server (${numWorkers} workers)`,
     async () => {
       const flow = await loadFlow(SLOW_FLOW);
       const stopA = new AbortController();
@@ -223,7 +208,7 @@ for (const numWorkers of [0, 8]) {
   );
 
   test(
-    `test_a_stop_ends_an_agent_tool_call (${numWorkers} workers)`,
+    `a stop ends an agent tool call (${numWorkers} workers)`,
     async () => {
       const call = new ToolCallPart({ id: "c0", name: "slow", arguments: { seconds: 30 } });
       const model = new ScriptedModel([

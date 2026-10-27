@@ -1,16 +1,7 @@
 /**
  * `generateStructured` on the prompt strategy, for a model with no native structured output (the
- * catalog's `vllm`/`no-structured-sentinel` pair, through the real capability check): mirrors
- * `tests/engine/test_structured_fallback.py`.
- *
- * Ported: `test_no_native_support_uses_prompt_injection` (the last message asks for JSON matching
- * the schema; the request carries no tools and no output format),
- * `test_fallback_tolerates_json_code_fence`, `test_fallback_tolerates_bare_code_fence`,
- * `test_fallback_accepts_null_for_a_nullable_root` and
- * `test_fallback_retries_on_unparseable_then_succeeds`.
- *
- * Changed: the model is a `ScriptedModel` rather than a LangChain chat model whose
- * `with_structured_output` must not be called; the strategy shows in the request instead.
+ * catalog's `vllm`/`no-structured-sentinel` pair, through the real capability check). The strategy
+ * shows in the request: no tools and no output format.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -36,7 +27,7 @@ function prompted(...replies: string[]): ScriptedModel {
   return new ScriptedModel(replies.map(text), PROMPTED);
 }
 
-test("test_no_native_support_uses_prompt_injection", async () => {
+test("no native support uses prompt injection", async () => {
   const model = prompted('{"value": 5}');
   expect(await generateStructured(model, [], INT)).toBe(5n);
   const request = model.requests[0]!;
@@ -48,26 +39,26 @@ test("test_no_native_support_uses_prompt_injection", async () => {
   expect(request.outputFormat).toBeNull();
 });
 
-test("test_fallback_tolerates_json_code_fence", async () => {
+test("fallback tolerates json code fence", async () => {
   const model = prompted('```json\n{"value": 5}\n```');
   expect(await generateStructured(model, [], INT)).toBe(5n);
   expect(model.requests).toHaveLength(1);
 });
 
-test("test_fallback_tolerates_bare_code_fence", async () => {
+test("fallback tolerates bare code fence", async () => {
   const model = prompted('```\n{"value": 9}\n```');
   expect(await generateStructured(model, [], INT)).toBe(9n);
   expect(model.requests).toHaveLength(1);
 });
 
-test("test_fallback_accepts_null_for_a_nullable_root", async () => {
+test("fallback accepts null for a nullable root", async () => {
   const model = prompted('{"value": null}');
   expect(await generateStructured(model, [], new Type({ kind: ValueKind.INTEGER, nullable: true }))).toBeNull();
   expect(model.requests[0]!.messages.at(-1)!.text()).toContain('"null"');
   expect(model.requests).toHaveLength(1);
 });
 
-test("test_fallback_retries_on_unparseable_then_succeeds", async () => {
+test("fallback retries on unparseable then succeeds", async () => {
   const model = prompted("not json", '{"value": 7}');
   expect(await generateStructured(model, [], INT, { retries: 2 })).toBe(7n);
   expect(model.requests).toHaveLength(2);

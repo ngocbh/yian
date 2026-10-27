@@ -1,8 +1,6 @@
 /**
- * The one spelling every message uses to print a `Literal` type, a port of
- * `tests/engine/test_literal_label.py`. `test_case_message_prints_the_parenthesized_literal`
- * assembles its flow (`assembleText`), where Python loads it; its harvested case is pinned at the
- * end.
+ * The one spelling every message uses to print a `Literal` type; the harvested case is pinned at
+ * the end.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -74,8 +72,8 @@ describe("literal labels", () => {
     expect(literalLabel(["go", "no go", "True"])).toBe('Literal(go, "no go", "True")');
   });
 
-  // A member prints bare only when it is both a NAME token (`[^\W\d]\w*`) and an identifier
-  // (`str.isidentifier()`); each spelling is the one Python's `literal_label` gives.
+  // A member prints bare only when it is both a NAME token (`[^\W\d]\w*`) and a Unicode
+  // identifier.
   test.each([
     // a non-ASCII name
     ["é", "Literal(é)"],
@@ -116,7 +114,7 @@ describe("literal labels", () => {
 
   test("the order key keeps the bracket spelling", () => {
     // By label `{"a":Literal("b c")}` sorts first (`"` < `a`); by the bracket key
-    // `{"a":Literal["a","z"]}` does, and Python orders the members that way.
+    // `{"a":Literal["a","z"]}` does, and the members are ordered by that key.
     const variants = [rec(lit("b c")), rec(lit("a", "z"))];
     const union = new Type({ kind: ValueKind.OBJECT, variants });
     expect(canonicalTypeLabel(union)).toBe('Union({"a":Literal(a, z)},{"a":Literal("b c")})');

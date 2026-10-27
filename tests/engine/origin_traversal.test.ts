@@ -1,65 +1,6 @@
 /**
  * Origin traversal, rewrite and rebase over compiled flows (`compile/origins.ts`) and the local
- * origin hooks of the nodes: rows of `tests/engine/test_origin_traversal.py`.
- *
- * Ported: `test_agent_variable_origins_rewrite_shared_carriers_once`,
- * `test_iter_flow_origins_reaches_every_slot_once_and_is_repeatable`,
- * `test_parameter_origins_follow_the_carriers_canonical_order`,
- * `test_partial_output_contract_origins_traverse_and_rewrite`,
- * `test_case_predicate_origins_traverse_and_rewrite_by_arm_identity`,
- * `test_source_free_memory_decl_adds_no_origin`,
- * `test_each_composite_exposes_its_signature_and_baked_child`,
- * `test_rewrite_flow_origins_is_a_pure_alias_preserving_graph_copy`,
- * `test_traversal_and_rewrite_terminate_on_a_deliberate_child_cycle`,
- * `test_source_free_python_graph_ignores_origin_refs_in_semantic_payloads`,
- * `test_generated_origin_context_is_not_local_authored_provenance`,
- * `test_invalid_mutable_node_origin_fails_before_iteration_or_mapping`,
- * `test_rewrite_flow_origins_rejects_invalid_mapper_results`,
- * `test_rewrite_flow_origins_propagates_mapper_exceptions`,
- * `test_rewriting_origins_preserves_manifest_and_stable_identity`,
- * `test_rebase_maps_equal_origins_once_and_routes_the_exact_old_identity`,
- * `test_rebase_is_chainable_and_preserves_graph_identity_and_manifests`,
- * `test_rebase_rejects_missing_resolution_and_distinct_origin_collisions`,
- * `test_rebase_rejects_invalid_mapper_results`,
- * `test_rebase_source_free_graph_returns_an_independent_copy_and_empty_table` and
- * `test_rebase_retains_a_deliberate_child_cycle`.
- *
- * Changed:
- * - Python's bare `Node` is a minimal subclass, `Flow(...)` is `new Flow(nodes, [], {wiring,
- *   startId, endId})` over `Map`s, and keyword arguments are option objects. Python's
- *   `ValueError` is a `RangeError`.
- * - The generated-context, invalid-origin, composite and CASE rows also keep a local half that
- *   calls the node's own `iterLocalOrigins` / `rewriteLocalOrigins` / `originChildren`, rewriting
- *   a shallow copy and checking the original is unchanged.
- * - `test_shared_memory_decl_origin_traverses_and_rewrites_once`: a rebuilt declaration keeps the
- *   mapper's origin object, so the row checks its `origin.key`, not that its class is exactly
- *   `OriginRef`.
- * - `test_invalid_child_is_rejected_before_deepcopying_payloads`: the invalid child is a plain
- *   object (a TS copy runs no user hook); both APIs throw "origin child must be a Flow" and the
- *   mapper is never called.
- * - The equal-origins rebase row's `DerivedOrigin` is a subclass of `OriginRef`, and
- *   `table.origins == {x}` reads `table.size === 1 && table.has(x)`.
- * - The manifest rows build Python's `_manifestable_flow` as `codeFlow()`, a hand-built CODE flow.
- * - `test_rebase_revalidates_origin_subclass_keys`: the invalid origin is forged with
- *   `Object.create(OriginRef.prototype)` and an empty `key`, since a subclass can't skip the base
- *   constructor's check.
- *
- * TS-only: the local traversal order with shared carriers yielded once; `rewriteLocalOrigins` on
- * a shallow node copy leaves the original unchanged and keeps shared carriers shared; a shallow
- * copy validates its assertions and runs; a payload is shared by identity between the original
- * and the rewritten copy; `rewriteFlowOrigins` on a `CompiledFlow` keeps `flowId` and
- * `flowLlmValueTypes` and rewrites a `Binding` `flowLlmConfig`'s origin; a compiled flow's slots
- * come in order (memories, `flowLlmConfig`, wiring, outputs, nodes); a `FlowOutput` or a node
- * shared by two flows is rewritten once and stays shared; and the flow APIs' argument checks
- * (`iterFlowOrigins` rejects a non-flow eagerly); an AGENT's local origins come in order (the
- * common ones, variables, memories, then a `ValueTemplate` or `Binding` `ownLlmConfig`), its
- * rewrite reassigns those fields on a shallow copy and leaves the original unchanged, and a
- * plain-record `ownLlmConfig` adds none.
- *
- * Not ported: `test_rewrite_preserves_payload_back_references_to_frozen_graph_objects` (payloads
- * holding carriers must be acyclic, and payloads are shared, not copied) and
- * `test_rewrite_rebuilds_payload_hash_containers_after_origin_changes` (there are no hash
- * containers keyed by carriers, and the rewrite makes no second copy).
+ * origin hooks of the nodes.
  */
 
 import { expect, test } from "bun:test";
@@ -952,12 +893,12 @@ test("source-free graph ignores origin refs in semantic payloads", () => {
   // Only declared provenance slots are visited; arbitrary values remain opaque.
   const payloadOrigin = origin("ordinary/value");
   const payload = { "origin-shaped": payloadOrigin };
-  const node = new BareNode("python");
+  const node = new BareNode("n");
   node.params = [new Parameter("value", { hasDefault: true, default: payload })];
   node.env = { ordinary: payloadOrigin };
-  const flow = CompiledFlow.fromParts(new Map([["python", node]]), [], {
+  const flow = CompiledFlow.fromParts(new Map([["n", node]]), [], {
     outputs: [new FlowOutput("result", payloadOrigin)],
-    wiring: new Map([["python", new Map([["value", payload]])]]),
+    wiring: new Map([["n", new Map([["value", payload]])]]),
   });
 
   expect([...iterFlowOrigins(flow)]).toEqual([]);
@@ -967,12 +908,12 @@ test("source-free graph ignores origin refs in semantic payloads", () => {
   });
 
   expect(rewritten).not.toBe(flow);
-  expect(rewritten.nodes.get("python")).not.toBe(node);
-  const source = rewritten.wiring.get("python")!.get("value")!.source as typeof payload;
+  expect(rewritten.nodes.get("n")).not.toBe(node);
+  const source = rewritten.wiring.get("n")!.get("value")!.source as typeof payload;
   expect(source["origin-shaped"]).toBe(payloadOrigin);
   expect(rewritten.outputs[0]!.binding.source).toBe(payloadOrigin);
-  expect((rewritten.nodes.get("python")!.params![0]!.default as typeof payload)["origin-shaped"]).toBe(payloadOrigin);
-  expect(rewritten.nodes.get("python")!.env["ordinary"]).toBe(payloadOrigin);
+  expect((rewritten.nodes.get("n")!.params![0]!.default as typeof payload)["origin-shaped"]).toBe(payloadOrigin);
+  expect(rewritten.nodes.get("n")!.env["ordinary"]).toBe(payloadOrigin);
 });
 
 test("generated origin context is not local authored provenance (flow half)", () => {
@@ -1242,7 +1183,7 @@ test("rebase revalidates origin subclass keys", () => {
 
 test("rebase source-free graph returns an independent copy and empty table", () => {
   // Hand-built graphs need no front-end resolver when no origins are present.
-  const node = new BareNode("python");
+  const node = new BareNode("n");
   const flow = soloFlow(node);
   const unexpected = (): OriginRef => {
     throw new Error("source-free graph called the namespace mapper");
@@ -1251,7 +1192,7 @@ test("rebase source-free graph returns an independent copy and empty table", () 
   const [rebased, table] = rebaseFlowOrigins(flow, unexpected, { resolver: null });
 
   expect(rebased).not.toBe(flow);
-  expect(rebased.nodes.get("python")).not.toBe(node);
+  expect(rebased.nodes.get("n")).not.toBe(node);
   expect([...iterFlowOrigins(rebased)]).toEqual([]);
   expect(table.size).toBe(0);
 

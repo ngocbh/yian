@@ -1,25 +1,6 @@
 /**
- * Runtime graph expansion: a port of `tests/engine/test_expand.py`.
- *
- * Ported: `test_rens_internal_input_and_output_heads` and
- * `test_rens_internal_computed_whole_span_renamespaces_all_leaves`.
- *
- * Ported, each for 0 and 4 workers, through `engine(..., { growBuilder: buildGrow })` (Python's
- * `_engine`, whose default builder is `build_grow`):
- * `test_call_grow_clones_namespaced_and_substitutes_spawner`,
- * `test_call_inside_map_expands_and_runs_uniformly`,
- * `test_deep_static_call_map_chain_loads_and_succeeds` and
- * `test_over_budget_expansion_trips_max_total_nodes`. The CALL rows build on the shared
- * `childFlow` and `parentWithSpawner` (Python's `_child_flow` and `_parent_with_spawner`).
- *
- * Changed:
- * - the CODE leaves' `tests.seeds.fns:confirm_action` and `tests.engine._compose_codefns:echo_x`
- *   references are inline bodies with the same behavior, since TS load refuses a Python reference;
- * - ints are `bigint`s (the child's value is `80n`), and the budget is `BUILTIN.maxTotalNodes`
- *   (Python's `Defaults()`).
- *
- * Ported, through `runFlow` and `advance` in an environment holding only a credential store
- * path in a fresh directory: `test_deep_static_call_map_chain_resumes_after_its_last_expansion`.
+ * Runtime graph expansion: renamespacing, CALL growth cloned and substituting its spawner, CALL
+ * inside MAP, a deep static CALL/MAP chain and its resume, and the `maxTotalNodes` budget.
  */
 
 import { expect, test } from "bun:test";

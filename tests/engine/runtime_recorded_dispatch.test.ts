@@ -1,81 +1,7 @@
 /**
- * Bounded dispatch over the append-only run-state reducer: a port of
- * `tests/engine/test_runtime_recorded_dispatch.py`. Real reducer and log transitions pin durability
- * order, unfinished starts, observer order and the drain.
- *
- * Python's `_capture_semantic_failures` spies on `FlowEngine._prepare_failure`; here each test reads
- * the failure from the run's `NodeFailedRecord`. Python's `ValueError` is a `RangeError` here, and
- * a contract's type mismatch the value layer's `TypeCheckError`; ints are `bigint`s.
- *
- * Ported: `test_started_record_is_durable_before_node_code_runs`,
- * `test_start_append_failure_prevents_node_execution_and_propagates_exactly`,
- * `test_outcome_append_failure_leaves_one_unfinished_durable_start`,
- * `test_serial_yields_and_callbacks_follow_post_durable_observer_order`,
- * `test_invalid_raw_output_constructs_contract_failure_with_operation_origin`,
- * `test_nested_output_failure_uses_the_exact_contract_origin`,
- * `test_partial_output_failure_uses_the_known_field_origin`,
- * `test_partial_output_shape_failure_falls_back_to_node_origin`,
- * `test_redirected_output_uses_effective_target_contract_origin` (2 rows),
- * `test_malformed_compiled_output_contract_remains_a_host_failure`,
- * `test_malformed_nested_output_type_remains_a_host_failure`,
- * `test_noncanonical_output_type_metadata_remains_a_host_failure`,
- * `test_excessively_nested_output_constructs_contract_failure`,
- * `test_invalid_output_metadata_constructs_contract_failure_with_node_origin` (the last four
- * serial and pooled), `test_route_raw_outcome_is_prepared_committed_and_reduced`,
- * `test_invalid_route_constructs_contract_failure_with_node_origin`,
- * `test_source_free_route_rejection_has_an_empty_trace`,
- * `test_grow_raw_outcome_uses_injected_builder_and_flat_record`,
- * `test_invalid_live_grow_depth_trait_remains_a_host_failure`,
- * `test_injected_grow_builder_fault_remains_exact_host_failure` (3 error classes, serial and
- * pooled), `test_invalid_grow_builder_return_remains_a_host_failure` (serial and pooled),
- * `test_parallel_outcomes_commit_in_completion_message_order`,
- * `test_started_observer_failure_prevents_submission_of_that_node`,
- * `test_node_failure_drains_sibling_and_discards_late_stream_chunks`,
- * `test_stream_callback_failure_is_host_error_not_durable_node_failure` (serial and pooled),
- * `test_authority_mismatch_is_rejected_before_any_node_executes` and
- * `test_dispatcher_borrows_and_never_closes_its_log`.
- *
- * Ported (adapted):
- * - `test_legal_kind_malformed_seed_constructs_contract_growth_failure` (2 rows): TS has no
- *   compile-owned CALL builder yet, so a test builder refuses the list seed with
- *   `GrowthRejected(TypeError)`, as Python's `build_grow` does.
- * - `test_grow_builder_fault_drains_pooled_sibling_and_preserves_identity`: the blocked sibling's
- *   gate never settles, so it rejects with the signal's reason once the fault aborts the run; the
- *   spawner waits until the sibling has entered.
- * - `test_event_callback_failure_signals_drains_and_reraises_same_exception`: the blocked sibling
- *   rejects with an error of its own during the drain, which never replaces the callback error.
- * - `test_primary_host_interruption_is_preserved_after_full_sibling_drain`: the primary stop is the
- *   host's signal, aborted from inside a node once its blocked sibling has entered; `run()` rejects
- *   with the signal's reason after the sibling stopped, and a `RunStopped` (`signal`) names both.
- * - `test_positive_worker_count_never_exceeds_the_submission_bound`: the bound is read as the
- *   in-flight count at each start, with no timing.
- * - `test_nonfinite_output_at_the_root_uses_the_contract_default_origin`: the message is the value
- *   layer's `NaN is not a yian value`.
- * - `test_non_type_output_failure_uses_the_contract_default_origin`: a lone surrogate is refused by
- *   the value layer, so the cause is a `TypeCheckError` (Python's canonical-JSON `ValueError`), still
- *   without a value path.
- *
- * Changed (the monkeypatch rows, which replace private engine or reducer functions):
- * - `test_reducer_programming_failure_is_not_rewritten_as_node_failure`: the log returns a
- *   mismatched envelope for the outcome, so `commitPrepared` throws; the run rejects with that
- *   error and no failure is recorded.
- * - `test_success_preparation_runtime_error_remains_exact_host_failure` and the 12 rows of
- *   `test_transition_preparation_data_shaped_programming_error_remains_exact_host_failure`: covered
- *   by the malformed contract rows (success preparation, serial and pooled) and the grow builder
- *   rows (growth preparation, serial and pooled); a route preparation host fault is the
- *   reducer's (`run_state_outcomes.test.ts`).
- * - `test_growth_digest_fault_remains_exact_host_failure` and
- *   `test_growth_materialization_fault_remains_exact_host_failure`: covered by the grow builder
- *   fault rows, a host fault inside growth preparation.
- * - `test_cleanup_failure_never_replaces_callback_error_and_drain_is_attempted`: TS has no executor
- *   whose shutdown could fail; replaced by the event callback row, where a worker rejecting during
- *   the drain never replaces the callback error.
- *
- * TS-only: each failing callback row also checks the `RunStopped` (`callback`) the stop records,
- * naming the nodes in flight when the callback failed.
- *
- * Not ported: `test_submit_failure_is_exact_and_leaves_the_started_node_recoverable`: TS has no
- * executor, so nothing can refuse a submission.
+ * Bounded dispatch over the append-only run-state reducer: real reducer and log transitions pin
+ * durability order, unfinished starts, observer order and the drain. Each test reads a failure from
+ * the run's `NodeFailedRecord`; ints are `bigint`s.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -116,7 +42,7 @@ import { aborted, BlockingNode, fragment, fragmentBuilder, noGrowth, rejected } 
 const RUN_ID = "recorded-dispatch";
 const FINGERPRINT = "d".repeat(64);
 
-/** Each worker mode Python parametrizes: serial and one pooled worker. */
+/** Each worker mode: serial and one pooled worker. */
 const MODES = [
   ["serial", 0],
   ["pooled", 1],

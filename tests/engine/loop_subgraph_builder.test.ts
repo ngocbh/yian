@@ -1,27 +1,10 @@
 /**
- * The pure LOOP continue builder `loopContinueSubgraph`, which pins the body and next-driver shape:
- * a port of `tests/engine/test_loop_subgraph_builder.py`.
+ * The pure LOOP continue builder `loopContinueSubgraph`, which pins the body and next-driver shape.
  *
  * `loopContinueSubgraph(child, origin, carried, k, driver)` splices body `k` (no `commitAs`: its
  * Output feeds the next driver by plain wiring), the fresh `L~(k+1)` driver and the producer edge
  * `body_k.END -> L~(k+1)`. Bodies are keyed on the origin, not the running driver id, so a live
  * run and durable reconstruction build the same `L#k/…` namespace.
- *
- * Ported: `test_continue_subgraph_body_keyed_on_origin_not_driver`,
- * `test_continue_body_end_has_no_commit_as`, `test_continue_splices_next_driver_and_edge`,
- * `test_continue_context_prefixes_body_but_not_driver_local_origin`,
- * `test_continue_seeds_only_fields_declared_by_the_body_start`,
- * `test_continue_wires_only_returned_fields_and_connects_passthrough`,
- * `test_continue_total_driver_wires_every_carried_field`,
- * `test_continue_orders_zero_field_body_before_next_driver`,
- * `test_continue_keys_body_on_origin_when_driver_id_differs`,
- * `test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence` and
- * `test_continue_revalidates_supplied_driver_memory_scope`.
- *
- * Changed:
- * - carried ints are `bigint`s (decision 4a);
- * - carriers are frozen, so the forged driver scope and its occurrence are objects of the carrier's
- *   prototype built without its constructor, where Python copies a scope and sets its fields.
  */
 
 import { expect, test } from "bun:test";

@@ -1,9 +1,5 @@
 /**
- * Every `FunctionTool` receives a `ToolContext` per call, a port of
- * `tests/engine/test_tool_context.py`, with rows for the call's abort signal. TS has no
- * signatures, so every tool gets a context. Not ported: the signature, docstring, bound-method,
- * partial and handler-detection rows, and `test_human_input_passes_its_node_id_to_the_ask_user_handler`
- * (TS yian has no HUMAN_INPUT kind; `run_tools.test.ts` shows a TOOL `ask` passing its node id).
+ * Every `FunctionTool` receives a `ToolContext` per call, including the call's abort signal.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -55,7 +51,7 @@ function place(name = "place"): FunctionTool {
 }
 
 describe("the context a tool receives", () => {
-  test("test_unbound_toolset_passes_a_fresh_context", async () => {
+  test("unbound toolset passes a fresh context", async () => {
     const tools = new ToolSet({ place: place() });
 
     expect(await tools.invoke("place", { symbol: "X" }, { node: "n" })).toBe("X:1");
@@ -73,7 +69,7 @@ describe("the context a tool receives", () => {
     expect(first.callId).not.toBe(second.callId);
   });
 
-  test("test_run_bound_toolset_passes_run_id_context_and_a_stable_call_id", async () => {
+  test("run bound toolset passes run id context and a stable call id", async () => {
     const db = new Db();
     const tools = new ToolSet({ place: place() }, { context: db }).forRun("run-1");
 
@@ -89,7 +85,7 @@ describe("the context a tool receives", () => {
     expect(explicit.attempt).toBe(2);
   });
 
-  test("test_trusted_invocation_passes_the_same_context", async () => {
+  test("trusted invocation passes the same context", async () => {
     const tools = new ToolSet({ place: place() }).forRun("run-1");
 
     await tools.invokeTrusted("place", { symbol: "X" }, { node: "n", attempt: 3 });
@@ -99,7 +95,7 @@ describe("the context a tool receives", () => {
     expect(ctx.attempt).toBe(3);
   });
 
-  test("test_for_run_returns_a_bound_copy_and_leaves_the_original_unbound", async () => {
+  test("for run returns a bound copy and leaves the original unbound", async () => {
     const db = new Db();
     const original = new ToolSet({ place: place() }, { context: db });
 
@@ -115,7 +111,7 @@ describe("the context a tool receives", () => {
     expect(seen[0]![0].callId).toMatch(HEX32);
   });
 
-  test("test_bound_copy_of_the_global_registry_still_reads_it", async () => {
+  test("bound copy of the global registry still reads it", async () => {
     const bound = new ToolSet().forRun("run-9");
     registerTool("ctx_probe", place("ctx_probe"));
 
@@ -124,7 +120,7 @@ describe("the context a tool receives", () => {
     expect(seen[0]![0].toolName).toBe("ctx_probe");
   });
 
-  test("test_group_items_receive_the_context", async () => {
+  test("group items receive the context", async () => {
     const tools = new ToolSet({ trading: [place()] }).forRun("r");
 
     await tools.invoke("place", { symbol: "X" }, { node: "n" });
@@ -133,7 +129,7 @@ describe("the context a tool receives", () => {
     expect(seen[0]![0].callId).toBe("r/n");
   });
 
-  test("test_registered_tools_receive_the_context", async () => {
+  test("registered tools receive the context", async () => {
     registerTool("ctx_registered", place("ctx_registered"));
 
     await new ToolSet().invoke("ctx_registered", { symbol: "X" }, { node: "n" });
@@ -141,7 +137,7 @@ describe("the context a tool receives", () => {
     expect(seen[0]![0].toolName).toBe("ctx_registered");
   });
 
-  test("test_module_level_invocation_passes_an_unbound_context", async () => {
+  test("module level invocation passes an unbound context", async () => {
     registerTool("ctx_module", place("ctx_module"));
 
     expect(await invokeTool("ctx_module", { symbol: "X" })).toBe("X:1");
@@ -183,7 +179,7 @@ describe("the context a tool receives", () => {
     expect(request.options).toEqual(["A"]);
   });
 
-  test("test_a_run_bound_call_without_a_node_gets_a_fresh_call_id", async () => {
+  test("a run bound call without a node gets a fresh call id", async () => {
     const tools = new ToolSet({ place: place() }).forRun("run-1");
 
     await tools.invoke("place", { symbol: "X" });

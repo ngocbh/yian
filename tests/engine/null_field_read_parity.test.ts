@@ -1,9 +1,7 @@
 /**
  * Null field reads agree across the ways a node binds (#1149, "Traced = untraced"): untraced,
  * traced (learnable), as a derived node (a CALL child's END), and on a resume that replays the
- * log (which rebuilds derived values and, when learnable, rebinds every traced capture).
- *
- * TS-only: Python yian keeps the silent miss.
+ * log.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,20 +1,6 @@
-// Ported from tests/cli/test_run_log_options.py: the run-log option checks (`--resume` against
-// the fresh-only options, an existing `--log`) and the private default log path, called directly;
-// the fresh-run rows through `yian run`: the default path named by the recorded run id, an exact
-// `--log`, and a default directory that can't be made; and the resume rows through `yian run`:
-// `test_resume_rejects_fresh_options_before_input_or_provider_side_effects` (5 rows),
-// `test_missing_resume_log_is_rejected_before_command_side_effects`,
-// `test_terminal_resume_is_read_only_and_skips_fresh_side_effects`,
-// `test_corrupt_resume_is_a_clean_cli_error` (2 rows),
-// `test_locked_resume_names_the_log_and_the_likely_cause`,
-// `test_unfinished_resume_preserves_or_overrides_only_future_workers` (3 rows) and
-// `test_keyboard_interrupt_leaves_a_reported_unlocked_recoverable_log`.
-//
-// Changed in the resume rows: Python's patched input gate and key checks that must not run are
-// not patched (TS has no seam); the flow declares a required input, so a run reaching the gate
-// would fail there, and it has no agent, so no key check could run. The interrupt is `io.stop`
-// aborting with a `HostStop` when the TTY progress draws `echo`'s spinner (Python: a patched
-// controller raising `KeyboardInterrupt` from `NodeStarted`). "Traceback" is the traceback box.
+// The run-log options: `--resume` against the fresh-only options, an existing `--log`, the
+// default log path named by the run id, and the resume rows (missing, finished, corrupt, locked or
+// interrupted logs) through `yian run`.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {

@@ -1,5 +1,5 @@
 /**
- * TS-only: derived commits hold `from` pointers, and the expansion commits the child STARTs.
+ * Derived commits hold `from` pointers, and the expansion commits the child STARTs.
  *
  * A derived commit (a non-top `__end__`, the stopping LOOP driver) holds `from`: each pool name its
  * binding read, to the seq of the `pool_commit` that wrote it. Before `node_expanded`, the spawner

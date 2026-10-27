@@ -1,45 +1,6 @@
 /**
- * Default and structural backward on nodes: a port of `tests/engine/test_backward_structural.py`.
- * Ported: `test_behavioral_backward_stops_with_empty_channels_and_static_capture` (Python's bare
- * `Node` is a minimal subclass), `test_case_backward_inventory_excludes_generated_control_inputs`,
- * `test_list_end_keeps_whole_list_text_unchanged_and_records_each_output_position`,
- * `test_failed_boundaries_forward_text_only_when_inputs_and_layout_were_captured`,
- * `test_successful_null_output_is_a_bare_contributor_but_zero_output_has_none`,
- * `test_stopped_loop_failure_does_not_route_an_unaccepted_carried_output`.
- *
- * Changed: `test_structural_output_paths_must_exist_in_the_available_accepted_output` builds an
- * END in Python; here a fake whose `backward` calls `projectStructuralFeedback`, as END, START and
- * LOOP do. `test_start_projects_named_delivered_inputs_including_defaults_but_not_absence` binds
- * the inputs with `applyDefaults` and builds the output with START's `forward` instead of
- * `eval_node`. `test_end_backward_uses_captured_layout_after_live_node_fields_change` changes END's
- * public `names`, `mode` and `n` (Python's private `_names`, `_mode`, `_n`).
- * `test_end_projects_its_zero_one_and_many_output_layouts` appends an END's extra assertion param
- * by replacing `params`, which TS types as read-only.
- * `test_stopping_loop_projects_all_carried_fields_without_reevaluating_predicate` swaps the
- * predicate for one that doesn't parse after `forward` stops, so backward would throw if it
- * evaluated it (Python's monkeypatch). The params are emptied by assigning `[]`.
- *
- * Ported (through `evalNode`): `test_input_inventory_capture_preserves_canonical_parameter_setup_faults`
- * (Python's `object()` entry is `{}`),
- * `test_early_binding_failure_keeps_inventories_without_usable_inputs_or_fabricated_layout`,
- * `test_static_capture_exception_escapes_unchanged_and_capture_off_calls_no_hook` (the hook throws
- * a `RangeError` for Python's `ValueError`),
- * `test_static_layout_is_captured_before_a_preassert_failure_after_defaults` (it empties END's
- * public `names` for Python's `_names.clear()`),
- * `test_custom_run_uses_its_existing_pre_run_capture_boundary` and
- * `test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs` (a `ScriptedModel`
- * from `models` replies the rendered prompt, for Python's patched `run_agent`).
- *
- * Changed: TS records no node data, so an evaluation calls no static capture hook and these rows
- * read the node data learning rebuilds (`rebuildNodeData`, the AGENT's `renderCapture`) instead of
- * a capture: the static capture faults are the rebuild's errors, not host faults before the body;
- * `test_static_backward_capture_and_names_are_detached_for_the_actual_invocation` checks the names
- * and scope only, and that the rebuild reads the node as it is then.
- * `test_static_capture_serialization_faults_are_host_faults_before_the_body` refuses NaN for
- * Python's infinity, which is a value here, and a class instance for Python's `object()`.
- *
- * TS-only: a stopping loop captures no output path for an `Inbox(T)` field, which its output
- * leaves out (Python yian has no inboxes).
+ * Default and structural backward on nodes: the input and output inventories START, END, CASE,
+ * LOOP and AGENT project feedback through, and the node data they read.
  */
 
 import { expect, test } from "bun:test";

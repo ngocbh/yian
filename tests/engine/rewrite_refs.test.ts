@@ -1,12 +1,5 @@
 /**
- * The position-splicing reference rewriters, the write-side analog of the `exprRefs` walk, a port
- * of `tests/engine/test_rewrite_refs.py`.
- *
- * `rewriteExprRefs(text, rename)` reparses one unified `${...}` expression and splices each
- * reference-leaf path through `rename(path)` (a new path, or `null` to keep), leaving every
- * operator, literal, builtin callee and whitespace verbatim. `rewriteConditionRefs` wraps it for
- * the two condition spellings (bare and whole-span); `rewriteTemplateRefs` wraps it for a
- * multi-span binding or template value.
+ * The position-splicing reference rewriters, the write-side analog of the `exprRefs` walk.
  */
 
 import { expect, test } from "bun:test";

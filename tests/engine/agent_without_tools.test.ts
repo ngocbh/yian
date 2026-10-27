@@ -1,24 +1,6 @@
 /**
- * An AGENT without tools or skills makes a single model call; one with tools runs the loop:
- * mirrors `tests/engine/test_agent_without_tools.py`.
- *
- * Ported: `test_skills_and_steerable_need_no_mode` (`steerable` is `steerInbox` here).
- *
- * Changed: `test_text_agent_without_tools_makes_one_unbound_call`,
- * `test_structured_agent_without_tools_makes_one_structured_call`,
- * `test_steer_joins_the_single_request_after_the_prompt` (the steer is a send to the agent's steer
- * inbox, from `onEvent(RunStarted)`) and
- * `test_interrupt_while_streaming_keeps_the_partial_text` (an `interrupt(log, inbox)` from
- * `onStream`; the `Optional(str)` agent ends null, its cut text in the step) load the flow and run it through
- * `runWith` (`runFlow` with a `ScriptedModel` served by `models`, where Python patches
- * `model_from_config`); the request sending no tools stands for Python's unbound and structured
- * calls, and the reply streams as listed text deltas.
- *
- * Ported through `evalNode` (`drive`), the tool in the run's `ToolSet`:
- * `test_python_built_agent_with_tools_runs_the_tool_loop` (the bound tools read from the request).
- *
- * TS-only (pins): an `Optional(str)` agent without tools makes one unbound call with no output
- * format and returns the text; an empty reply is `""`, not null.
+ * An AGENT without tools or skills makes a single model call; one with tools runs the loop. An
+ * `Optional(str)` agent without tools returns the reply text, and an empty reply is `""`, not null.
  */
 
 import { mkdtempSync } from "node:fs";
@@ -49,7 +31,7 @@ function reply(text: string): Response {
 /** The body line that gives `chat` the steer inbox `notes`. */
 const STEER = "steer_inbox: ${input.notes}";
 
-/** One `chat` agent with no tools, plus the given body lines (Python's `_flow`); `STEER` declares its inbox. */
+/** One `chat` agent with no tools, plus the given body lines; `STEER` declares its inbox. */
 function chatFlow(...lines: string[]): string {
   const body = lines.map((line) => `    ${line}\n`).join("");
   const input = lines.includes(STEER) ? "input:\n  notes: !Inbox(str)\n" : "";
@@ -90,7 +72,7 @@ test("skills and a steer inbox need no mode", () => {
   expect(new AgentNode("n", { prompt: "p", steerInbox: true }).steerInbox).toBe(true);
 });
 
-test("a Python-built agent with tools runs the tool loop", async () => {
+test("an agent built in code with tools runs the tool loop", async () => {
   const seen: unknown[] = [];
   const value = new FunctionTool({
     name: "value",

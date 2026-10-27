@@ -1,184 +1,8 @@
 /**
  * Stable authored-flow manifests and deterministic expansion-topology digests
- * (`compile/manifest.ts`): rows of `tests/engine/test_flow_identity.py`.
- *
- * Ported: `test_flow_manifest_emits_the_literal_node_kind`,
- * `test_flow_fingerprint_covers_each_included_common_node_field`,
- * `test_node_origin_does_not_affect_program_or_expansion_identity`,
- * `test_node_origin_context_does_not_affect_program_or_expansion_identity`,
- * `test_prompts_code_and_tool_ids_keep_uri_text`, `test_flow_fingerprint_covers_each_parameter_field`,
- * `test_flow_fingerprint_covers_parameter_default_independently`,
- * `test_flow_fingerprint_preserves_parameter_order`,
- * `test_parameter_origins_do_not_affect_program_or_expansion_identity`,
- * `test_output_contract_origins_do_not_affect_program_or_expansion_identity`,
- * `test_output_contract_cutover_preserves_manifest_shape_and_fingerprint`,
- * `test_numeric_bounds_are_part_of_type_identity_only_when_present`,
- * `test_numeric_bounds_remain_in_nested_parameter_contract_identity`,
- * `test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses`,
- * `test_parameter_manifest_rejects_unknown_fields_and_raw_bypass`,
- * `test_union_free_manifest_has_no_union_key_and_keeps_its_fingerprint`,
- * `test_union_manifest_orders_members_canonically`, `test_deep_untagged_union_manifests_quickly`,
- * `test_flow_fingerprint_covers_each_structural_type_field`,
- * `test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema` (the fingerprint
- * half), `test_start_manifest_uses_canonical_parameters`,
- * `test_flow_fingerprint_preserves_start_parameter_order`,
- * `test_flow_fingerprint_covers_each_end_field`, `test_value_end_manifest_keeps_the_record_encoding`,
- * `test_zero_and_one_name_record_end_manifests_are_keyed`,
- * `test_two_name_record_end_manifest_is_not_keyed`, `test_flow_fingerprint_covers_each_edge_field`,
- * `test_flow_fingerprint_covers_flow_boundary_ids`,
- * `test_expansion_digest_changes_for_every_builder_topology_component`,
- * `test_expansion_digest_is_stable_across_canonical_mapping_order`,
- * `test_flow_fingerprint_covers_each_included_kind_field`,
- * `test_flow_manifest_covers_remaining_kind_execution_fields` (its END row; its other five rows
- * repeat kind-field rows),
- * `test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel`,
- * `test_flow_manifest_allows_shared_child_aliases_but_rejects_child_cycles`,
- * `test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring`,
- * `test_case_predicate_origins_do_not_affect_program_or_expansion_identity`,
- * `test_case_manifest_rejects_a_mutated_non_origin_predicate_carrier`,
- * `test_memory_scope_is_not_authored_identity_but_is_expansion_topology`,
- * `test_memory_expansion_projection_covers_keys_and_occurrence_topology`,
- * `test_memory_expansion_projection_fields`,
- * `test_agent_variable_manifest_preserves_the_variable_free_fingerprint` (the same pin as Python's),
- * `test_agent_variable_identity_tracks_names_domains_defaults_and_order_only`,
- * `test_agent_variable_manifest_rejects_noncanonical_containers` and
- * `test_expansion_digest_excludes_effective_but_includes_authored_llm_config`.
- *
- * Rebased on hand-built flows (Python builds the baseline with the loader): `fragment()` mirrors
- * Python's `_fragment()`, and `compiled()` stands in for `_compiled()`'s loaded flow.
- * `test_flow_fingerprint_is_stable_across_reloads` (built twice),
- * `test_flow_fingerprint_preserves_semantic_edge_order`,
- * `test_flow_fingerprint_covers_flow_output_fields_and_order`,
- * `test_node_inputs_and_flow_outputs_keep_literals_alike`,
- * `test_flow_fingerprint_changes_with_wiring_types_asserts_and_env`,
- * `test_flow_manifest_sorts_mapping_keys_without_reordering_semantic_lists`,
- * `test_manifest_rejects_non_json_values_without_repr_fallback`,
- * `test_manifest_rejects_unknown_execution_fields_instead_of_omitting_them` (with the retired
- * node-range fields of `tests/engine/test_node_range.py::test_manifest_rejects_retired_node_range_fields`
- * as rows), `test_manifest_emits_a_node_type_table_only_when_non_empty`,
- * `test_manifest_rejects_a_malformed_type_table`,
- * `test_manifest_has_no_redaction_markers`,
- * `test_credential_named_parameter_without_default_has_the_null_default`, and three of Python's
- * parametrized rows each of `test_node_input_literals_are_identity`,
- * `test_declaration_default_literals_are_identity`, `test_env_literals_are_identity` (node scope;
- * the flow scope is a loader merge into the node's `env`),
- * `test_templates_under_any_name_keep_their_source_text` and
- * `test_env_values_under_credential_like_names_are_identity` (their other parametrized cases test
- * the same rule and aren't ported one by one), `test_total_loop_manifest_omits_returned_fields`,
- * `test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint` (built twice instead of
- * loaded twice), `test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys` (the
- * memory layout's `memoryScope` and the flow `memories` set by hand),
- * `test_expansion_digest_applies_topology_only_policy_to_recursive_children` (a CALL child
- * `CompiledFlow` with a `flowLlmConfig` layer), and
- * `tests/engine/test_call_subgraph_builder.py::test_growth_metadata_and_execution_topology_have_a_separate_digest_policy`
- * (a hand-grown `fragment()` instead of `call_subgraph`'s).
- * `test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_values`,
- * `test_manifest_records_blocks_as_nested_sorted_mappings`,
- * `test_flow_fingerprint_tracks_block_fields_but_not_key_order` and
- * `test_block_field_names_are_not_redacted_as_credentials` build `llmFlow()`, a CompiledFlow with
- * one AGENT step whose layers are the loaded flow's (the loader's `inherit: false` is
- * `llmInherit: false`); and
- * `tests/compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not`
- * and the manifest assertion of
- * `tests/compose/test_agent_mode_removed.py::test_agent_manifest_has_no_mode` use hand-built AGENT
- * nodes.
- * `test_flow_fingerprint_changes_with_node_kind_and_execution_source` and
- * `test_flow_fingerprint_recursively_includes_static_child_flows` are covered by the kind-literal
- * and kind-field rows.
- *
- * Changed:
- * - TS yian has no HUMAN_INPUT or WAIT kind, so their rows are the `ask` and `sleep` TOOL
- *   built-ins'. `test_flow_fingerprint_covers_each_included_kind_field` keeps HUMAN_INPUT's answer
- *   schema as an ask row; an ask's prompt and questions are inputs, identity through its wiring
- *   like the WAIT `until` row's (now a `sleep`'s). In
- *   `test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel` an ask's title
- *   (its `node_name:`) is identity, as Python's HUMAN_INPUT title is; another tool's is display
- *   metadata.
- * - Node, wiring and type tables are `Map`s, so "shuffle mapping order" rebuilds `Map`s and
- *   records in reverse insertion order. Carriers are frozen: Python's `replace(param, ...)` builds
- *   a new `Parameter`, and `object.__setattr__(carrier, "future_field", True)` is a forged carrier
- *   (`Object.assign(Object.create(Cls.prototype), carrier, {futureField: 1})`). Edges are frozen
- *   and a Flow's `startId`/`endId` are readonly, so the edge and boundary rows rebuild them.
- * - Ints in values are `bigint`s, since a `number` is a float; Python's pinned hex digests are TS
- *   pins (TS fingerprints are SHA-256 over RFC 8785 text of TS's own manifest). Numeric bounds are
- *   typed values (`{"type": "int", "value": "1"}`), not raw JSON numbers.
- * - Python's `ValueError` is a `RangeError`; error names are TS field names (`outputContract`,
- *   `futureField`) in text form (`["futureField"]`).
- * - `Case` is frozen, so the forged-origin row builds a forged `Case`; `_memory_scope_topology`
- *   isn't exported, so the projection-fields row compares the expansion digest with the SHA-256 of
- *   the expected manifest.
- * - `test_agent_variable_manifest_rejects_noncanonical_containers`: TS has no tuple, so its rows
- *   are `null` and a `Set`.
- * - The non-JSON row uses a `Map`, a `Uint8Array`, a class instance, a function and `undefined`.
- * - The malformed type-table rows are a record instead of a `Map`, a `Map` with a `bigint` key, and
- *   a `Map` whose value is the string `"int"`.
- * - The deep-union row has no call counter (an ES module can't be monkeypatched): a depth-30 union
- *   must manifest within the test's timeout, which an exponential encoding never does.
- * - The census is `Object.keys`, so the trait fields, which a kind fixes, are ignored fields
- *   (`kind` is emitted): an instance override of a trait goes unnoticed (Python would refuse
- *   `node.is_spawner = True` as unknown).
- * - A lone surrogate in a name or value is left to `canonicalJson`'s message, which carries no
- *   path (load refuses one first).
- *
- * TS-only: typed floats (`1.5`, `Infinity`, `-0`), NaN refused, `2n` vs `2`, a cyclic env record vs
- * a shared alias, a `FileRef` encoded as its mapping, `params`, `preAsserts` and `postAsserts` that
- * aren't arrays, a forged END count, a list END's `names`, seed-path indexes as counts, the pinned
- * fingerprint and expansion digest of `fragment()`, a missing node field, a node whose `kind` isn't
- * its class's, a CODE node whose `kind` is `"agent"` refused as not an `AgentNode`, a node value
- * that isn't a `Node`, labels and a CODE or TOOL title or base directory outside identity, the
- * CODE descriptors (`{"inline": ...}`, `{"ref": ...}`, `{"builtin": "identity", "field": ...}`) and
- * their refusals, and TOOL `retries` (absent at 0,
- * identity otherwise, a forged count refused), and the flow fields: a typed wiring binding's
- * `binding_types` and a typed output's `type`, a plain `Flow`'s missing CompiledFlow keys, the flow
- * `llm_config:` layer (literal values are identity and key order isn't; the `ValueTemplate` and
- * `Binding` arms), the LLM value types and adjacency index outside identity, the flow id and flow
- * memories (identity when present, never expansion topology, forged values refused in both modes),
- * the root outputs and LLM layer outside the expansion digest, and an unknown flow field, a `Flow`
- * subclass, a non-Flow, a wiring value that isn't a `Binding`, a node wiring that isn't a `Map`,
- * node and wiring tables that aren't `Map`s, a non-string node, wiring or parameter key, an edge
- * that isn't an `Edge`, a forged `Edge`, a `flowLlmConfig` that isn't a record, edges, outputs and
- * memories that aren't arrays and an output that isn't a `FlowOutput` refused; an ask's answer
- * schema as a typed value and its title left out, a CALL child that isn't a `Flow` refused, a literal in MAP wiring and a
- * CALL argument literal as identity, LOOP `times` as a typed int (`null` for a `while` loop),
- * forged LOOP counts, a CASE branch that isn't a `Case` and CASE `cases` that isn't an array
- * refused, forged memory scopes and segments and a non-`ExecutionScope` scope refused, and the
- * execution-scope projection; and for AGENT: unset optional keys left out, `retries` present at
- * zero and a forged count refused, the run-resolved and derived fields (`llmConfig`,
- * `llmConfigLabel`, `wiresLlmConfig`, `llmValueTypes`, `callTime`, `hostCredentials`) outside
- * identity, and an unknown field, `skills` or `tools` that aren't arrays and a skill that isn't a
- * string refused.
- *
- * Ported through `loadFlow` (at the end): `test_loaded_flow_stores_only_exact_parameter_carriers`,
- * `test_flow_fingerprint_ignores_comments_and_python_object_identity` (the two loads' `step` nodes
- * are distinct objects, for Python's `_code` objects),
- * `test_inline_identity_ignores_formatting_but_tracks_owner_and_child_semantics`,
- * `test_inline_manifest_canonicalizes_generated_structural_input_types`,
- * `test_reference_code_identity_is_the_token_not_the_callable_body` (a TS module in a temporary
- * `baseDir`, `./identity_refmod.ts:fn`, which the load checks exists but never imports),
- * `test_a_flow_file_cannot_put_api_key_in_a_manifest`,
- * `test_flow_without_formerly_redacted_values_keeps_its_fingerprint`,
- * `test_loaded_flow_output_forms_keep_their_fingerprints`,
- * `test_loaded_one_field_record_flow_has_its_pinned_fingerprint`,
- * `test_loaded_zero_and_one_field_records_differ_from_their_value_forms`,
- * `test_call_over_a_single_node_def_keeps_its_fingerprint`,
- * `test_loaded_value_output_and_single_node_def_use_a_value_end` and
- * `test_loop_with_max_keeps_its_fingerprint`; the pinned fingerprints are TS pins: the manifest
- * writes an inline CODE body as `{inline: <body>}` (design 6.7) where Python writes the bare text,
- * and the inline bodies are TS (`+ 1n`); with both put back, Python's pins reproduce.
- *
- * Ported through `loadFlow`, `runFlow` and `advance`:
- * `test_resume_rejects_a_flow_with_an_edited_literal`, the mismatch a `RangeError` where Python
- * raises a `ValueError`; resume compiles the flow the run recorded, so the literal is edited in
- * the recorded text (Python passes the edited flow).
- *
- * Not ported: `test_flow_fingerprint_distinguishes_yaml_literal_types`,
- * `test_flow_fingerprint_supports_binary_nonfinite_and_non_string_mapping_keys` and
- * `test_flow_fingerprint_tags_programmatic_container_types` (TS values have no date, set, tuple or
- * bytes, and record keys are always strings); `test_field_census_supports_declared_object_models`
- * and `test_field_census_detects_pydantic_extra_fields_without_internal_slots` (the census is
- * `Object.keys`; no dataclass, attrs, pydantic or slots); and
- * `test_parameter_manifest_rejects_noncanonical_containers` (TS has no tuple; the TS-only
- * non-array `params` row stands in).
+ * (`compile/manifest.ts`): what each node kind, parameter, type, edge and flow field contributes to
+ * the fingerprint, what stays outside it, and the manifest's refusals. Most rows build flows by
+ * hand (`fragment()`, `compiled()`, `llmFlow()`); the loaded rows are at the end.
  */
 
 import { expect, test } from "bun:test";
@@ -247,7 +71,7 @@ function strContract(): ValueContract {
   return new ValueContract(Type.scalar(ValueKind.STRING));
 }
 
-/** Build a small valid fragment with literal wiring and two ordered edges (Python's `_fragment()`). */
+/** Build a small valid fragment with literal wiring and two ordered edges. */
 function fragment(): Flow {
   const start = new StartNode("entry", { params: [] });
   const body = new CodeNode("body", { code: 'return inputs["x"]' });
@@ -276,7 +100,7 @@ function fragment(): Flow {
   );
 }
 
-/** The CompiledFlow Python's `_compiled()` loads: an int input, one asserted CODE step and env. */
+/** The baseline CompiledFlow: an int input, one asserted CODE step and env. */
 function compiled(): CompiledFlow {
   const start = new StartNode(START_ID, {
     params: [new Parameter("x", { contract: intContract(), hasDefault: true, default: 1n })],
@@ -407,7 +231,7 @@ class Opaque {}
 
 // ---- Stability, kind and mapping order --------------------------------------------------------
 
-test("test_flow_fingerprint_is_stable_across_reloads", () => {
+test("flow fingerprint is stable across reloads", () => {
   const first = compiled();
   const second = compiled();
 
@@ -446,7 +270,7 @@ test("a seed-path index is a count: -0 fingerprints like 0 and an unsafe int is 
   );
 });
 
-test("test_flow_manifest_emits_the_literal_node_kind", () => {
+test("flow manifest emits the literal node kind", () => {
   const codeManifest = nodeManifest(singleNodeFlow(new CodeNode("node", { code: 'return "ok"' })), "node");
   const toolManifest = nodeManifest(singleNodeFlow(new ToolNode("node", { toolId: "t", retries: 0 })), "node");
 
@@ -454,7 +278,7 @@ test("test_flow_manifest_emits_the_literal_node_kind", () => {
   expect(toolManifest.kind).toBe("tool");
 });
 
-test("test_flow_manifest_sorts_mapping_keys_without_reordering_semantic_lists", () => {
+test("flow manifest sorts mapping keys without reordering semantic lists", () => {
   const original = compiled();
   const shuffled = compiled();
   shuffled.nodes = new Map([...shuffled.nodes].reverse());
@@ -541,7 +365,7 @@ test.each([
   expect(flowFingerprint(changed)).not.toBe(flowFingerprint(original));
 });
 
-test("test_node_origin_does_not_affect_program_or_expansion_identity", () => {
+test("node origin does not affect program or expansion identity", () => {
   const first = fragment();
   const second = fragment();
   code(second, "body").origin = new OriginRef("root/node/body");
@@ -551,7 +375,7 @@ test("test_node_origin_does_not_affect_program_or_expansion_identity", () => {
   expect(expansionDigest(first)).toBe(expansionDigest(second));
 });
 
-test("test_node_origin_context_does_not_affect_program_or_expansion_identity", () => {
+test("node origin context does not affect program or expansion identity", () => {
   const first = fragment();
   const second = fragment();
   code(second, "body").originContext = [new OriginRef("root/nodes/invoke"), new OriginRef("child/nodes/map")];
@@ -561,7 +385,7 @@ test("test_node_origin_context_does_not_affect_program_or_expansion_identity", (
   expect(expansionDigest(first)).toBe(expansionDigest(second));
 });
 
-test("test_manifest_emits_a_node_type_table_only_when_non_empty", () => {
+test("manifest emits a node type table only when non-empty", () => {
   const tagged = (tag: string) => new Type({ kind: ValueKind.STRING, tags: new Set([tag]) });
   const withTypes = (types: Map<string, Type>) => {
     const flow = compiled();
@@ -671,7 +495,7 @@ test.each([
   expectError(() => flowManifest(singleNodeFlow(node)), cls, message);
 });
 
-test("test_prompts_code_and_tool_ids_keep_uri_text", () => {
+test("prompts code and tool ids keep uri text", () => {
   const firstUri = "https://first-user:first-secret@example.test/path?token=first-token";
   const secondUri = "https://second-user:second-secret@example.test/path?token=second-token";
   const pairs: [Node, Node][] = [
@@ -758,7 +582,7 @@ function plainMapping(canonical: JsonValue): unknown {
   return Object.fromEntries(entries.map((entry, index) => [keys[index], plainMapping(entry.value!)]));
 }
 
-test("test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_values", () => {
+test("flow fingerprint includes authored llm layers but not effective values", () => {
   const flowLayer = () => ({ provider: "openai", openai: { temperature: 0.2 } });
   const original = () => llmFlow(flowLayer(), { model: "gpt-5.5" }, false);
   const baseline = flowFingerprint(original());
@@ -775,7 +599,7 @@ test("test_flow_fingerprint_includes_authored_llm_layers_but_not_effective_value
   expect(flowFingerprint(effective)).toBe(baseline);
 });
 
-/** Python's `_BLOCK_FLOW`, with its layers' keys in authored or reversed order. */
+/** The block flow, with its layers' keys in authored or reversed order. */
 function blockFlow(options: { reordered?: boolean; effort?: string } = {}): CompiledFlow {
   const { reordered = false, effort = "low" } = options;
   const anthropic = reordered
@@ -789,7 +613,7 @@ function blockFlow(options: { reordered?: boolean; effort?: string } = {}): Comp
   return llmFlow(flowLayer, { anthropic: { max_tokens: 512n, thinking } });
 }
 
-test("test_manifest_records_blocks_as_nested_sorted_mappings", () => {
+test("manifest records blocks as nested sorted mappings", () => {
   const manifest = flowManifest(blockFlow());
 
   expect(plainMapping(manifest.flow_llm_config!)).toEqual({
@@ -802,7 +626,7 @@ test("test_manifest_records_blocks_as_nested_sorted_mappings", () => {
   });
 });
 
-test("test_flow_fingerprint_tracks_block_fields_but_not_key_order", () => {
+test("flow fingerprint tracks block fields but not key order", () => {
   const baseline = flowFingerprint(blockFlow());
   const raised = blockFlow({ effort: "high" });
   const reordered = blockFlow({ reordered: true });
@@ -814,7 +638,7 @@ test("test_flow_fingerprint_tracks_block_fields_but_not_key_order", () => {
   expect(flowFingerprint(reordered)).toBe(baseline);
 });
 
-test("test_block_field_names_are_not_redacted_as_credentials", () => {
+test("block field names are not redacted as credentials", () => {
   const flow = llmFlow({
     provider: "openai",
     openai: { max_output_tokens: 7771n, safety_identifier: "safety-id-value", prompt_cache_key: "cache-key-value" },
@@ -834,14 +658,14 @@ test("test_block_field_names_are_not_redacted_as_credentials", () => {
   expect(flowConfig.google).toEqual({ generationConfig: { thinkingConfig: { thinkingBudget: "7774" } } });
 });
 
-test("test_agent_variable_manifest_preserves_the_variable_free_fingerprint", () => {
+test("agent variable manifest preserves the variable-free fingerprint", () => {
   const flow = singleNodeFlow(new AgentNode("node", { prompt: "hi" }));
 
   expect("variables" in nodeManifest(flow, "node")).toBe(false);
   expect(flowFingerprint(flow)).toBe("4bf7361e46300e1e8c9250fbca0505b9ad985ce4159558c1528ac1bc29bf8bd4");
 });
 
-test("test_agent_variable_identity_tracks_names_domains_defaults_and_order_only", () => {
+test("agent variable identity tracks names domains defaults and order only", () => {
   const countType = (high: bigint) => new Type({ kind: ValueKind.INTEGER, bounds: [1n, high] });
   const count = new Parameter("count", { contract: new ValueContract(countType(12n)), hasDefault: true, default: 4n });
   const tone = new Parameter("tone", {
@@ -897,7 +721,7 @@ test.each([
   );
 });
 
-test("test_expansion_digest_excludes_effective_but_includes_authored_llm_config", () => {
+test("expansion digest excludes effective but includes authored llm config", () => {
   const first = new AgentNode("node", { prompt: "answer", llmConfig: { provider: "openai" } });
   const changedEffective = new AgentNode("node", { prompt: "answer", llmConfig: { provider: "openai" } });
   changedEffective.llmConfig = { provider: "anthropic" };
@@ -946,7 +770,7 @@ test("a steer render is identity, manifested only when set", () => {
   expect("steer_render" in nodeManifest(flow(null), "node")).toBe(false);
 });
 
-test("test_skills_are_identity_but_empty_and_order_are_not", () => {
+test("skills are identity but empty and order are not", () => {
   const skills = (granted: readonly string[] | "all") =>
     flowFingerprint(singleNodeFlow(new AgentNode("node", { prompt: "p", skills: granted })));
   const granted = (names: readonly string[] | "all") =>
@@ -1123,7 +947,7 @@ test.each([
   expect(flowFingerprint(flow)).not.toBe(flowFingerprint(original));
 });
 
-test("test_flow_fingerprint_covers_parameter_default_independently", () => {
+test("flow fingerprint covers parameter default independently", () => {
   const original = fragment();
   code(original, "body").params = [new Parameter("x", { contract: intContract(), hasDefault: true, default: 1n })];
   const changed = fragment();
@@ -1132,7 +956,7 @@ test("test_flow_fingerprint_covers_parameter_default_independently", () => {
   expect(flowFingerprint(changed)).not.toBe(flowFingerprint(original));
 });
 
-test("test_flow_fingerprint_preserves_parameter_order", () => {
+test("flow fingerprint preserves parameter order", () => {
   const original = fragment();
   const body = code(original, "body");
   body.params = [...body.params!, new Parameter("y")];
@@ -1142,7 +966,7 @@ test("test_flow_fingerprint_preserves_parameter_order", () => {
   expect(flowFingerprint(changed)).not.toBe(flowFingerprint(original));
 });
 
-test("test_parameter_origins_do_not_affect_program_or_expansion_identity", () => {
+test("parameter origins do not affect program or expansion identity", () => {
   const first = fragment();
   const second = fragment();
   code(first, "body").params = [new Parameter("x", { contract: intContract(), hasDefault: true, default: 1n })];
@@ -1167,7 +991,7 @@ test("test_parameter_origins_do_not_affect_program_or_expansion_identity", () =>
   expect(expansionDigest(first)).toBe(expansionDigest(second));
 });
 
-test("test_output_contract_origins_do_not_affect_program_or_expansion_identity", () => {
+test("output contract origins do not affect program or expansion identity", () => {
   const first = fragment();
   const second = fragment();
   code(second, "body").outputContract = new ValueContract(
@@ -1183,7 +1007,7 @@ test("test_output_contract_origins_do_not_affect_program_or_expansion_identity",
   expect(expansionDigest(first)).toBe(expansionDigest(second));
 });
 
-test("test_output_contract_cutover_preserves_manifest_shape_and_fingerprint", () => {
+test("output contract cutover preserves manifest shape and fingerprint", () => {
   const flow = fragment();
   const manifest = nodeManifest(flow, "body");
 
@@ -1200,7 +1024,7 @@ test("test_output_contract_cutover_preserves_manifest_shape_and_fingerprint", ()
   expect(expansionDigest(flow)).toBe(flowFingerprint(flow));
 });
 
-test("test_numeric_bounds_are_part_of_type_identity_only_when_present", () => {
+test("numeric bounds are part of type identity only when present", () => {
   const plain = fragment();
   expect("bounds" in (nodeManifest(plain, "body").output_type as JsonObject)).toBe(false);
   const fingerprints = new Set([flowFingerprint(plain)]);
@@ -1230,7 +1054,7 @@ test("test_numeric_bounds_are_part_of_type_identity_only_when_present", () => {
   expect(digests.size).toBe(6);
 });
 
-test("test_numeric_bounds_remain_in_nested_parameter_contract_identity", () => {
+test("numeric bounds remain in nested parameter contract identity", () => {
   const withScores = (text: string) => {
     const flow = fragment();
     code(flow, "body").params = [
@@ -1256,7 +1080,7 @@ test("test_numeric_bounds_remain_in_nested_parameter_contract_identity", () => {
   expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
 });
 
-test("test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses", () => {
+test("output contract manifest rejects unknown raw and subclass bypasses", () => {
   const unknown = fragment();
   const body = code(unknown, "body");
   body.outputContract = Object.assign(Object.create(ValueContract.prototype), body.outputContract, { futureField: 1 });
@@ -1283,7 +1107,7 @@ test("test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses", 
   );
 });
 
-test("test_parameter_manifest_rejects_unknown_fields_and_raw_bypass", () => {
+test("parameter manifest rejects unknown fields and raw bypass", () => {
   const withUnknown = fragment();
   const body = code(withUnknown, "body");
   body.params = [Object.assign(Object.create(Parameter.prototype), body.params![0], { futureField: true })];
@@ -1325,7 +1149,7 @@ test.each([
 
 // ---- Types -----------------------------------------------------------------------------------
 
-test("test_union_free_manifest_has_no_union_key_and_keeps_its_fingerprint", () => {
+test("union-free manifest has no union key and keeps its fingerprint", () => {
   const outputType = nodeManifest(fragmentWithOutput(member("buy", { qty: ValueKind.INTEGER })), "body")
     .output_type as JsonObject;
 
@@ -1334,7 +1158,7 @@ test("test_union_free_manifest_has_no_union_key_and_keeps_its_fingerprint", () =
   expect(flowFingerprint(fragment())).toBe(FRAGMENT_FINGERPRINT);
 });
 
-test("test_union_manifest_orders_members_canonically", () => {
+test("union manifest orders members canonically", () => {
   const buy = member("buy", { qty: ValueKind.INTEGER });
   const sell = member("sell", { price: ValueKind.NUMBER });
   const first = fragmentWithOutput(union(buy, sell));
@@ -1347,7 +1171,7 @@ test("test_union_manifest_orders_members_canonically", () => {
   expect(expansionDigest(first)).toBe(expansionDigest(second));
 });
 
-test("test_deep_untagged_union_manifests_quickly", () => {
+test("deep untagged union manifests quickly", () => {
   const record = (fields: Record<string, Type>) =>
     new Type({
       kind: ValueKind.OBJECT,
@@ -1406,7 +1230,7 @@ test.each([
   expect(flowFingerprint(fragmentWithOutput(firstType))).not.toBe(flowFingerprint(fragmentWithOutput(secondType)));
 });
 
-test("test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema", () => {
+test("flow fingerprint preserves structural field order used by agent schema", () => {
   const first = new Type({
     kind: ValueKind.OBJECT,
     fields: new Map([
@@ -1425,7 +1249,7 @@ test("test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schem
   expect(flowFingerprint(fragmentWithOutput(first))).not.toBe(flowFingerprint(fragmentWithOutput(second)));
 });
 
-test("test_start_manifest_uses_canonical_parameters", () => {
+test("start manifest uses canonical parameters", () => {
   const parameter = new Parameter("x", { contract: intContract(), required: true, coerceStrings: true });
   const start = new StartNode("node", { params: [parameter] });
 
@@ -1435,7 +1259,7 @@ test("test_start_manifest_uses_canonical_parameters", () => {
   expect(((params[0]!.contract as JsonObject).type as JsonObject).kind).toBe("int");
 });
 
-test("test_flow_fingerprint_preserves_start_parameter_order", () => {
+test("flow fingerprint preserves start parameter order", () => {
   const firstParameter = new Parameter("first");
   const secondParameter = new Parameter("second");
   const first = new StartNode("node", { params: [firstParameter, secondParameter] });
@@ -1462,7 +1286,7 @@ test.each([
   expect(flowFingerprint(singleNodeFlow(first))).not.toBe(flowFingerprint(singleNodeFlow(second)));
 });
 
-test("test_value_end_manifest_keeps_the_record_encoding", () => {
+test("value end manifest keeps the record encoding", () => {
   const manifest = nodeManifest(singleNodeFlow(EndNode.value("t", { outputName: "result" })), "t");
 
   expect(manifest.mode).toBe("record");
@@ -1484,7 +1308,7 @@ test.each([
   expect(recordManifest).toEqual({ ...valueManifest, keyed: true });
 });
 
-test("test_two_name_record_end_manifest_is_not_keyed", () => {
+test("two-name record end manifest is not keyed", () => {
   const end = EndNode.record("t", { outputNames: ["a", "b"] });
 
   expect("keyed" in nodeManifest(singleNodeFlow(end), "t")).toBe(false);
@@ -1507,7 +1331,7 @@ test("a forged END count is refused with its path", () => {
 
 // ---- No redaction ----------------------------------------------------------------------------
 
-test("test_flow_fingerprint_changes_with_wiring_types_asserts_and_env", () => {
+test("flow fingerprint changes with wiring types asserts and env", () => {
   const original = compiled();
   const literal = (value: bigint) => {
     const flow = compiled();
@@ -1541,7 +1365,7 @@ test("test_flow_fingerprint_changes_with_wiring_types_asserts_and_env", () => {
   expect(flowFingerprint(title)).toBe(baseline);
 });
 
-test("test_manifest_has_no_redaction_markers", () => {
+test("manifest has no redaction markers", () => {
   const str = (name: string, fallback?: string) =>
     new Parameter(name, {
       contract: strContract(),
@@ -1600,7 +1424,7 @@ test("test_manifest_has_no_redaction_markers", () => {
   expect(manifestText).not.toContain('"redacted"');
 });
 
-test("test_credential_named_parameter_without_default_has_the_null_default", () => {
+test("credential-named parameter without default has the null default", () => {
   const flow = oneStepFlow({
     inputs: [new Parameter("token", { contract: strContract() })],
     wiring: [["token", "${input.token}"]],
@@ -1620,7 +1444,7 @@ function expectLiteralIsIdentity(first: Flow, second: Flow, firstValue: string, 
   expect(JSON.stringify(flowManifest(second))).toContain(secondValue);
 }
 
-// Three of Python's `_FORMERLY_REDACTED_LITERALS` rows: a credential-like name, a URI's userinfo
+// Three formerly redacted literals: a credential-like name, a URI's userinfo
 // and a JDBC string.
 const FORMERLY_REDACTED: [string, string, string, string][] = [
   ["signature", "signature", "q -> a", "q -> s"],
@@ -1725,7 +1549,7 @@ function withBoundary(flow: Flow, ids: { startId?: string; endId?: string }): Fl
 // The manifest of an `int` scalar type.
 const INT_TYPE_MANIFEST = { element: null, fields: null, kind: "int", nullable: false, required: null, tags: null };
 
-test("test_flow_fingerprint_preserves_semantic_edge_order", () => {
+test("flow fingerprint preserves semantic edge order", () => {
   const original = compiled();
   const base = compiled();
   const reordered = CompiledFlow.fromParts(base.nodes, [...base.edges].reverse(), {
@@ -1777,7 +1601,7 @@ test.each([
   expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
 });
 
-test("test_node_inputs_and_flow_outputs_keep_literals_alike", () => {
+test("node inputs and flow outputs keep literals alike", () => {
   const flow = oneStepFlow({ wiring: [["api_token", "shared-literal"]] });
   flow.outputs = [new FlowOutput("step", "${step.output}"), new FlowOutput("api_token", "shared-literal")];
   const manifest = flowManifest(flow);
@@ -2168,15 +1992,15 @@ test.each([
   expect(flowFingerprint(singleNodeFlow(makeFirst()))).not.toBe(flowFingerprint(singleNodeFlow(makeSecond())));
 });
 
-test("test_flow_manifest_covers_remaining_kind_execution_fields", () => {
+test("flow manifest covers remaining kind execution fields", () => {
   const record = EndNode.record("node", { outputNames: ["result"] });
   const list = EndNode.list("node", { n: 1 });
 
   expect(flowFingerprint(singleNodeFlow(record))).not.toBe(flowFingerprint(singleNodeFlow(list)));
 });
 
-test("test_flow_manifest_includes_human_input_title_but_ignores_inert_map_parallel", () => {
-  // An ask sends its title (its `node_name:`) to the host, as HUMAN_INPUT did.
+test("flow manifest includes an ask's title but ignores inert map parallel", () => {
+  // An ask sends its title (its `node_name:`) to the host.
   const firstAsk = new ToolNode("node", { toolId: "ask", title: "First title" });
   const secondAsk = new ToolNode("node", { toolId: "ask", title: "Second title" });
   const serialMap = new MapNode("node", { flowId: "child", child: fragment(), parallel: false });
@@ -2210,7 +2034,7 @@ test("an ask TOOL node writes its answer schema as a value", () => {
   expect(nodeManifest(singleNodeFlow(plain), "node")).not.toHaveProperty("title");
 });
 
-test("test_flow_manifest_allows_shared_child_aliases_but_rejects_child_cycles", () => {
+test("flow manifest allows shared child aliases but rejects child cycles", () => {
   const shared = fragment();
   const aliased = new Flow(
     new Map<string, Node>([
@@ -2247,7 +2071,7 @@ test("a CALL child that isn't a Flow is refused", () => {
   );
 });
 
-test("test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring", () => {
+test("sleep fingerprint and expansion digest cover absolute until wiring", () => {
   const sleep = () => new ToolNode("node", { toolId: "sleep" });
   const first = wiredNodeFlow(sleep(), [["until", new Binding("2026-01-01T00:00:00+00:00")]]);
   const second = wiredNodeFlow(sleep(), [["until", new Binding("2026-01-02T00:00:00+00:00")]]);
@@ -2269,7 +2093,7 @@ test("a literal in MAP wiring and a CALL argument literal are identity", () => {
   });
 });
 
-test("test_total_loop_manifest_omits_returned_fields", () => {
+test("total loop manifest omits returned fields", () => {
   const total = nodeManifest(singleNodeFlow(loopNode()), "node");
   const partial = nodeManifest(singleNodeFlow(loopNode({ returnedFields: ["x"] })), "node");
 
@@ -2278,7 +2102,7 @@ test("test_total_loop_manifest_omits_returned_fields", () => {
   expect(partial.returned_fields).toEqual(["x"]);
 });
 
-test("test_loop_without_max_has_null_max_in_manifest_and_its_own_fingerprint", () => {
+test("loop without max has null max in manifest and its own fingerprint", () => {
   const withMax = singleNodeFlow(loopNode({ predicate: "n < 3", maxIters: 5 }));
   const without = singleNodeFlow(loopNode({ predicate: "n < 3" }));
 
@@ -2312,7 +2136,7 @@ test.each([
   );
 });
 
-test("test_case_predicate_origins_do_not_affect_program_or_expansion_identity", () => {
+test("case predicate origins do not affect program or expansion identity", () => {
   const first = singleNodeFlow(new CaseNode("case", [new Case("branch", { when: "true" })]));
   const second = singleNodeFlow(
     new CaseNode("case", [new Case("branch", { when: "true", origin: new OriginRef("case/0/when") })]),
@@ -2323,7 +2147,7 @@ test("test_case_predicate_origins_do_not_affect_program_or_expansion_identity", 
   expect(expansionDigest(first)).toBe(expansionDigest(second));
 });
 
-test("test_case_manifest_rejects_a_mutated_non_origin_predicate_carrier", () => {
+test("case manifest rejects a mutated non-origin predicate carrier", () => {
   const forged = Object.assign(Object.create(Case.prototype), new Case("branch", { when: "true" }), {
     origin: "flow.yaml:12",
   });
@@ -2347,7 +2171,7 @@ test("CASE cases that isn't an array is refused", () => {
 
 // ---- Expansion digests -----------------------------------------------------------------------
 
-/** Python's `_replace_body`: swap the fragment's body for one with a different CODE body. */
+/** Swap the fragment's body for one with a different CODE body. */
 function replaceBody(flow: Flow): Flow {
   const body = new CodeNode("body", { code: 'return inputs["x"] + 1' });
   body.params = [new Parameter("x", { contract: intContract() })];
@@ -2389,7 +2213,7 @@ test.each([
   expect(expansionDigest(original)).toMatch(HEX);
 });
 
-test("test_expansion_digest_is_stable_across_canonical_mapping_order", () => {
+test("expansion digest is stable across canonical mapping order", () => {
   const original = fragment();
   const shuffled = fragment();
   shuffled.nodes = new Map([...shuffled.nodes].reverse());
@@ -2406,7 +2230,7 @@ function sha256(manifest: JsonValue): string {
   return createHash("sha256").update(canonicalJson(manifest), "utf8").digest("hex");
 }
 
-test("test_memory_scope_is_not_authored_identity_but_is_expansion_topology", () => {
+test("memory scope is not authored identity but is expansion topology", () => {
   const plain = fragment();
   const stamped = fragment();
   code(stamped, "body").memoryScope = new MemoryScope(["body"]);
@@ -2416,7 +2240,7 @@ test("test_memory_scope_is_not_authored_identity_but_is_expansion_topology", () 
   expect(expansionDigest(stamped)).not.toBe(expansionDigest(plain));
 });
 
-test("test_memory_expansion_projection_covers_keys_and_occurrence_topology", () => {
+test("memory expansion projection covers keys and occurrence topology", () => {
   const scopePath = ["nested", "body"];
   const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 0);
   const baseline = fragment();
@@ -2437,7 +2261,7 @@ test("test_memory_expansion_projection_covers_keys_and_occurrence_topology", () 
   expect(new Set(variants.map(expansionDigest)).size).toBe(6);
 });
 
-test("test_memory_expansion_projection_fields", () => {
+test("memory expansion projection fields", () => {
   const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 1);
   const flow = fragment();
   code(flow, "body").memoryScope = new MemoryScope(["nested", "body"], {
@@ -2477,7 +2301,7 @@ test("a forged memory scope or occurrence segment is refused", () => {
   expect(flowFingerprint(scoped(forgedScope))).toBe(FRAGMENT_FINGERPRINT);
 });
 
-test("test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys", () => {
+test("memory expansion projection omits root id and config but hashes keys", () => {
   /** `compiled()` with flow id `rootId`, one `policy` memory of config `{limit}`, scoped on its step. */
   const withMemory = (rootId: string, policy: string, limit: bigint): CompiledFlow => {
     const flow = compiled();
@@ -2497,7 +2321,7 @@ test("test_memory_expansion_projection_omits_root_id_and_config_but_hashes_keys"
   expect(expansionDigest(first)).not.toBe(expansionDigest(otherKey));
 });
 
-test("test_expansion_digest_applies_topology_only_policy_to_recursive_children", () => {
+test("expansion digest applies topology-only policy to recursive children", () => {
   const parent = (child: CompiledFlow) => singleNodeFlow(new CallNode("invoke", { flowId: "child", child }));
   const original = parent(compiled());
   const changedChild = compiled();
@@ -2529,7 +2353,7 @@ function grown(
   });
 }
 
-test("test_growth_metadata_and_execution_topology_have_a_separate_digest_policy", () => {
+test("growth metadata and execution topology have a separate digest policy", () => {
   const scope = new ExecutionScope(["call", "entry"], { flowPath: ["call"], boundary: "start" });
   const steps = [
     grown(),
@@ -2623,12 +2447,12 @@ nodes:
 output: \${step.output}
 `;
 
-/** Load `source` and return its compiled flow (Python's `_compiled`). */
+/** Load `source` and return its compiled flow. */
 async function loaded(source: string = INLINE_FLOW): Promise<CompiledFlow> {
   return (await loadFlow(source)).compiled;
 }
 
-test("test_loaded_flow_stores_only_exact_parameter_carriers", async () => {
+test("loaded flow stores only exact parameter carriers", async () => {
   // Compose builders and synthesized boundaries share one compiled parameter shape.
   const flow = await loaded();
 
@@ -2661,7 +2485,7 @@ nodes:
 output: \${wrapper.output}
 `;
 
-test("test_flow_fingerprint_ignores_comments_and_python_object_identity", async () => {
+test("flow fingerprint ignores comments and object identity", async () => {
   const plain = await loaded();
   const moved = await loaded(INLINE_FLOW_WITH_COMMENTS);
 
@@ -2670,7 +2494,7 @@ test("test_flow_fingerprint_ignores_comments_and_python_object_identity", async 
   expect(flowFingerprint(plain)).toBe(flowFingerprint(moved));
 });
 
-test("test_inline_identity_ignores_formatting_but_tracks_owner_and_child_semantics", async () => {
+test("inline identity ignores formatting but tracks owner and child semantics", async () => {
   const baseline = await loaded(INLINE_COMPOSITE_IDENTITY);
   const formatted = await loaded(
     "# moves every authored range without changing the program\n\n" + INLINE_COMPOSITE_IDENTITY,
@@ -2694,7 +2518,7 @@ test("test_inline_identity_ignores_formatting_but_tracks_owner_and_child_semanti
   expect(flowFingerprint(renamedOwner)).not.toBe(flowFingerprint(baseline));
 });
 
-test("test_inline_manifest_canonicalizes_generated_structural_input_types", async () => {
+test("inline manifest canonicalizes generated structural input types", async () => {
   const flow = await loaded(`id: inline-manifest-structural-input
 name: inline_manifest_structural_input
 typedefs:
@@ -2728,7 +2552,7 @@ output: \${wrapper.output}
   expect(fields.map((field) => field.name)).toEqual(["a", "z"]);
 });
 
-test("test_reference_code_identity_is_the_token_not_the_callable_body", async () => {
+test("reference code identity is the token not the callable body", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-identity-"));
   try {
     const module = join(dir, "identity_refmod.ts");
@@ -2891,13 +2715,13 @@ output:
   mode: \${input.mode}
 `;
 
-test("test_flow_without_formerly_redacted_values_keeps_its_fingerprint", async () => {
+test("flow without formerly redacted values keeps its fingerprint", async () => {
   expect(flowFingerprint(await loaded(GOLDEN_FLOW))).toBe(
     "786dc8194fcfbd44f554e4151e29991b1faf373d4f6445bb5a387196a2a28314",
   );
 });
 
-/** The pin flow with `outputSection` (Python's `_PIN_FLOW % output_section`). */
+/** The pin flow with `outputSection`. */
 const pinFlow = (outputSection: string) => `
 id: pin
 name: pin
@@ -2939,13 +2763,13 @@ test.each([
   expect(flowFingerprint(await loaded(pinFlow(outputSection)))).toBe(expected);
 });
 
-test("test_loaded_one_field_record_flow_has_its_pinned_fingerprint", async () => {
+test("loaded one-field record flow has its pinned fingerprint", async () => {
   expect(flowFingerprint(await loaded(pinFlow("output:\n  order: ${step.output}\n")))).toBe(
     "f882c54e76f793a662ab6967970c58476d90ebfa771f51b006a72ccaa72f8073",
   );
 });
 
-test("test_loaded_zero_and_one_field_records_differ_from_their_value_forms", async () => {
+test("loaded zero and one field records differ from their value forms", async () => {
   const named = flowFingerprint(await loaded(pinFlow("output:\n  result: ${step.output}\n")));
   const value = flowFingerprint(await loaded(pinFlow("output: ${step.output}\n")));
   const empty = flowFingerprint(await loaded(pinFlow("output: {}\n")));
@@ -2955,13 +2779,13 @@ test("test_loaded_zero_and_one_field_records_differ_from_their_value_forms", asy
   expect(empty).not.toBe(absent);
 });
 
-test("test_call_over_a_single_node_def_keeps_its_fingerprint", async () => {
+test("call over a single-node def keeps its fingerprint", async () => {
   expect(flowFingerprint(await loaded(PIN_DEF_FLOW))).toBe(
     "90a5fb6b7cf746fd492fb240d500d5b5b3f04bb045aaac1faac21d56ae5e7a0f",
   );
 });
 
-test("test_loaded_value_output_and_single_node_def_use_a_value_end", async () => {
+test("loaded value output and single-node def use a value end", async () => {
   const flow = await loaded(pinFlow("output: ${step.output}\n"));
   expect((flow.nodes.get(flow.endId) as EndNode).returnsRecord).toBe(false);
 
@@ -2970,7 +2794,7 @@ test("test_loaded_value_output_and_single_node_def_use_a_value_end", async () =>
   expect((child.nodes.get(child.endId) as EndNode).returnsRecord).toBe(false);
 });
 
-/** The loop flow with `predicate` and `max: 5` (Python's `_LOOP_IDENTITY % predicate`). */
+/** The loop flow with `predicate` and `max: 5`. */
 const loopIdentity = (predicate: string) => `
 id: count
 name: count

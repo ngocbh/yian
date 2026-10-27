@@ -1,26 +1,6 @@
 /**
- * Converting one Compose type declaration into a `Type`, a port of
- * `tests/engine/test_read_type.py`, through `readType`.
- *
- * TS-only: a record nesting past a configured type nesting limit, the level check that runs
- * before a record's entries are read (an alias-built record), the empty and surrogate field
- * names refused at their key, the origins `readValueContract` registers, a list of fields
- * holding a map that isn't single-key, and the harvested conformance cases a node's or compact
- * flow's `output:` declaration raises through `readValueContract`. Also TS-only: the declared
- * types of the conformance cases a load validator rejects by comparing two types, each read as
- * the loader reads it (a flow input with `readSourceFlowInputs`, a node output with
- * `readValueContract`, a tagged binding with `readTaggedValue`) and found, labelled with
- * `canonicalTypeLabel`, in the expected message; the messages themselves come from the load
- * validators `src/compose/validate/call_types.ts` and `typed_bindings.ts` (the open-range
- * typed-binding case is pinned with its message in `tests/compose/typed_bindings_check.test.ts`,
- * the call one in `tests/compose/call_binding_types.test.ts`) and `case_exhaustive.ts`, whose
- * open-range case is also pinned whole here, assembled (its Python test,
- * `tests/compose/test_open_range_flows.py`, is mirrored in `compose/open_range_flows.test.ts`).
- * And one `ok` case whose union typedef reads and whose `input:` declarations then read through
- * `readSourceFlowInputs`.
- *
- * Changed: an empty or surrogate field name is refused without a source too, as an unranged
- * `LoadError`, where Python's `read_type({"": "int"}, {})` returns a type.
+ * Reading one Compose type declaration into a `Type` through `readType`, and the declared types
+ * of the conformance cases that the type readers and load validators reject.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

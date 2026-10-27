@@ -1,168 +1,7 @@
 /**
- * Backward proposal and record contracts: a port of `tests/engine/test_backward_records.py`.
- * Ported: `test_memory_proposal_owns_detached_mutations_in_supplied_order`,
- * `test_backward_record_constructors_detach_values_without_reducer_inference`,
- * `test_commit_attempt_ids_are_required_keyword_only_positive_integers`,
- * `test_backward_records_reject_subclasses_of_exact_nested_carriers` (the 4 record rows; the
- * `MutationSubclass` row is its own test) and
- * `test_backward_started_rejects_nonordinary_feedback_before_recording` (3 rows). Messages and
- * classes are pinned where Python accepts either class.
- *
- * Changed: a `MemoryProposal` keeps the frozen mutations it was given, where Python copies them:
- * the test asserts the same mutation (`is not` becomes `toBe`), and a reader's payload edit throws
- * `TypeError` where Python changes a private copy. A mutation batch is an array, so the rejected
- * container is a `Set` (Python passes a list); assigning a field throws `TypeError` where Python
- * raises `FrozenInstanceError`, and Python's `ValueError` is `RangeError`.
- * - The backward records hold their frozen carriers by reference (`toBe`), where Python copies
- *   them; the started record's feedback is a deep-frozen copy read without copying, so a reader's
- *   edit throws `TypeError`. Array arguments are copied and frozen; the rejected containers are
- *   `Set`s.
- * - Attempt ids are safe-integer `number`s: the invalid ids are `0, -1, true, "1", 1n` (`1n`
- *   replaces Python's `1.0`); the commit records take `attemptId` as their last positional
- *   argument (TS has no keyword-only arguments), so a missing one throws `TypeError` and
- *   Python's positional row is dropped; the invalid commit ids are `null, 0, -1, true, "2", 2n`.
- * - The non-ordinary feedback rows are `1n`, `true` and `[0n]`; `{"field": ()}` and
- *   `{1: "Review."}` have no TS counterpart (no tuples; object keys are always text).
- *
- * Not ported: the rows that forge carriers with `object.__setattr__`
- * (`test_backward_codec_revalidates_nested_carriers_forged_after_construction`,
- * `test_backward_codec_rejects_forged_dictionary_subclasses_before_copying`): frozen TS carriers
- * refuse the forgery.
- *
- * Ported, the wire codec: `test_backward_record_wire_round_trip_preserves_all_channels`,
- * `test_commit_wire_preserves_supplied_attempt_ids`,
- * `test_failed_backward_wire_keeps_causes_completed_feedback_and_policy_dispositions` (12 rows),
- * `test_wire_preserves_transfer_coordinates_unreached_inventory_and_empty_defaults`,
- * `test_backward_record_feedback_keeps_the_existing_wider_depth_boundary` (140 levels),
- * `test_memory_and_mutation_proposal_order_survives_wire_round_trip`,
- * `test_backward_wire_nested_records_have_closed_required_fields` (42 rows),
- * `test_backward_wire_rejects_malformed_nested_values` (17 rows),
- * `test_forward_cause_wire_rejects_hybrid_and_extra_origin_fields`,
- * `test_backward_failure_cause_round_trips_optional_execution_attribution` (3 rows),
- * `test_backward_failure_cause_wire_rejects_nonstring_execution_attribution` (4 rows) and
- * `test_node_failure_wire_keeps_required_execution_attribution` (4 rows). Each rejection is
- * pinned with its class and message where Python accepts either class or asserts only
- * `ValueError`: a field of the wrong JSON type is a `TypeError`, a missing or extra field, an
- * empty string or a value a carrier refuses is a `RangeError`, and a carrier's own message
- * applies.
- *
- * Changed (wire): a wire int is a `bigint`, so the malformed rows write `1n` where Python writes
- * `1`; `true` isn't an int, as in Python. A cause `node_id` that isn't text (`1n`, `true`, `[]`,
- * `{}`) and a node failure's `null` `node_id` are `TypeError`s where Python raises `ValueError`.
- *
- * Changed (log): `test_backward_records_isolate_payload_views_before_and_after_log_round_trip`
- * with the memory run log: the records, the envelope's payload and the replayed record are
- * frozen, so each edit throws `TypeError` where Python edits a private copy.
- *
- * TS-only: `sameBackwardAttribution`, `sameAttributedBackwardResult`, `sameBackwardFailure` and
- * `sameBackwardOutcome` are true for separately built equal carriers (including two backward
- * failures built from one `Failure` cause, whose retained causes are different objects) and false
- * for each differing field, with a both-null and a one-null row for each nullable field (an
- * attribution's nullable fields are null together, on a root seed; an outcome's failure is null
- * exactly on success).
- *
- * Ported, the trace delta:
- * `test_postterminal_trace_delta_validation_covers_the_closed_field_inventory`. Changed: it reads
- * the own keys of a constructed `TraceDelta`, in camelCase, where Python reads the dataclass
- * fields.
- *
- * Ported, after rewrite: `test_backward_state_revalidates_exact_memory_order` builds
- * `RuntimeBackwardState` directly (Python replaces an engine's state): the unsorted order is a
- * `RangeError`, and the `list_order` row refuses a memory order that isn't an array (a `Set`),
- * since the order is an array in TS. Not ported: the `string_subclass` row (TS text has no
- * subclasses).
- *
- * Ported, the run state's backward records, on a local `retainedTerminal()` (Python's
- * `_retained_backward` without `compute_backward`: `learnableStarted`, with its `topic` and
- * memory `keys` options, and reducer-direct successes of START, `work` and END):
- * `test_backward_started_requires_initialized_learned_terminal_authority` (4 rows),
- * `test_backward_prepared_plans_reject_stale_forged_or_mutated_authority_before_append` (6 rows),
- * `test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_append` (9 of 16
- * rows: `initialized`, `started`, `occurrence`, `writer`, `root_start_source`, `root_writer`,
- * `causal_route_source`, `terminal`, `handler`),
- * `test_backward_append_failure_does_not_install_attempt_or_irreversible_request` (the `started`
- * row), `test_interrupted_attempt_requires_explicit_finish_before_a_fresh_start` (the
- * `ready=False` row),
- * `test_failed_backward_computation_has_no_completed_feedback_and_keeps_unrequested_learning`,
- * `test_failed_computation_finished_rejects_foreign_context_or_fabricated_results` (the `source`,
- * `node`, `scope` and `run` rows) and
- * `test_computation_failure_requires_effective_feedback_and_a_driver_failure_code` (3 rows).
- *
- * Changed (run state): each refusal pins its `RangeError` and message where Python accepts
- * `TypeError` or `ValueError`. The gate test's `learn_false` terminal is a non-learnable
- * `initializedAndStarted` run driven to END, and `missing_terminal` clears the trace's terminal
- * on a reducer-built terminal. A forged plan is a frozen copy in a new `PreparedTransition`, and
- * the `payload` row pairs a changed record with the original plan (the record is frozen, so it
- * can't be changed in place). The log's `append` is patched on the instance, its error an
- * `Error`, Python's `OSError`.
- *
- * TS-only (run state): `retainedTerminal()` reaches a succeeded result and a succeeded trace
- * terminal at sequence 7; attempt state replaced after preparation (trace and sequence unchanged)
- * reaches the commit's `prepared backward transition has stale attempt authority`, which prepare
- * and commit alone can't reach, and the log is unchanged.
- *
- * Not ported (TS types): 7 rows of the post-terminal delta test, as forward_trace's frontier rows:
- * `sequence` (a `float`), `resumed` (`0`), `prune_ids`, `connections` and `boundaries` (tuple
- * subclasses), `consumed_connection` and `boundary_update` (`__eq__` aliases of `None`).
- *
- * Ported, the run state's backward records through `computeBackward`, on a local async
- * `retainedBackward()` (Python's `_retained_backward`: the engine runs `START -> work -> END`, `work`
- * a `RecordingBackwardNode` that sends its feedback back to `x`, then `computeBackward`) and
- * `proposalTable()` (Python's `_proposal_table`):
- * `test_backward_attempt_records_prepare_append_then_reduce_without_forward_effects`,
- * `test_backward_policy_batches_and_unfinished_prefixes_follow_accepted_layout_order`, the
- * `ready=True` row of `test_interrupted_attempt_requires_explicit_finish_before_a_fresh_start`,
- * `test_ready_rejects_inventory_local_contract_transfer_and_root_disagreement_before_append` (14
- * rows), `test_ready_proposals_require_the_complete_table_in_order` (4 rows),
- * `test_mutation_ids_may_repeat_across_different_recorded_memories`,
- * `test_learner_failed_finished_keeps_completed_feedback_and_all_unrequested_policies` (4 rows),
- * `test_known_commit_failure_stops_later_requests_and_admits_a_later_attempt` (4 rows),
- * `test_any_finished_attempt_admits_a_later_start_with_fresh_proposals` (3 rows),
- * `test_every_committing_attempt_uses_its_own_attempt_in_the_commit_id`,
- * `test_first_committing_attempt_uses_its_own_attempt_id_after_precommit_attempts`,
- * `test_started_feedback_shape_and_attempt_identity_validate_before_acceptance`,
- * `test_backward_commit_request_rejects_wrong_order_batch_identity_and_attempt` (5 rows),
- * `test_backward_commit_observation_requires_the_current_pending_request` (6 rows), the `ready`,
- * `request` and `finished` rows of
- * `test_backward_append_failure_does_not_install_attempt_or_irreversible_request`, the `feedback`
- * and `partial_inventory` rows of
- * `test_failed_computation_finished_rejects_foreign_context_or_fabricated_results`,
- * `test_successful_finished_requires_ready_and_every_enabled_policy_confirmation` (4 rows),
- * `test_explicit_interruption_keeps_unknown_request_and_ready_attribution_without_resuming` and
- * `test_disabled_memory_ready_and_finished_reject_fabricated_memory_material`.
- *
- * Changed (computeBackward): each refusal pins its `RangeError` and message, as above. The run
- * state keeps the log's canonical copy of each accepted record, so accepted records, outcomes and
- * results compare with `toEqual` (Python's `==`). A `topic` of `[1, 2]` is `[1n, 2n]`. The log's
- * `append` is patched on the instance, as above.
- * - `test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_materialization`
- *   drops the `_materialize_context` and `_output_context` patches (TS can't patch a module's
- *   functions) and shadows the trace's `backwardHandlers` getter on the instance with one that
- *   throws.
- * - `test_finished_must_preserve_ready_results_and_exact_confirmed_policy_inventory` (6 rows): the
- *   `commit_id` row rebuilds the first policy outcome with its constructor, where Python uses
- *   `dataclasses.replace`.
- * - `test_interrupted_finished_must_exactly_project_the_prefix` (4 rows) rebuilds the outcome and,
- *   for the `message` row, its failure with their constructors, where Python uses
- *   `dataclasses.replace`; that failure is no longer the interruption, so, as in Python, the
- *   commit-failure rule refuses it.
- * - `test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting`
- *   drops the module patches, as above; `forward` and `backward` throw on the nodes of a
- *   `copyGraph` copy of the run's flow (not `captureBackwardContext`, which rebuilds the node data
- *   learning reads), each prefix replays over a fresh
- *   `copyGraph` of that copy with `noGrowth`, and the backward states compare with `toEqual`.
- *
- * The reducer's own rules are tested TS-only in `runtime_backward.test.ts`.
- *
- * Ported, through `run.ts`: `test_historical_backward_prepares_recorded_schema_bytes` (7 rows).
- * Changed: Python reads recorded schema-9 lines; schema 13 is the only TS schema, so a live
- * learnable `runFlow` of the source test's flow (memory `test` served by `FakeMemory`) and its
- * `RunResult.backward` write the lines (the failed rows' commit throws a `MemoryOperationError`);
- * each prefix replays through `replayRunLog` from a `MemoryRunLog`, and the next line is prepared
- * and committed through the internal `HistoricalLogCursor`.
- *
- * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
- * `backward.interrupted`.
+ * Backward proposal and record contracts: `MemoryProposal`, the backward records and their wire
+ * codec, trace deltas, and the run state's backward records through the reducer and
+ * `computeBackward`. The reducer's own rules are in `runtime_backward.test.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -285,7 +124,6 @@ test("memory proposal owns detached mutations in supplied order", () => {
   expect(new MemoryProposal("agent", []).mutations).toEqual([]);
 });
 
-// test_backward_records_reject_subclasses_of_exact_nested_carriers (the MutationSubclass row)
 test("a memory proposal rejects a MemoryMutation subclass", () => {
   class MutationSubclass extends MemoryMutation {}
   expect(() => new MemoryProposal("agent", [new MutationSubclass("m1", {})])).toThrow(TypeError);
@@ -399,7 +237,6 @@ class AttributionSubclass extends AttributedBackwardResult {}
 class ProposalSubclass extends MemoryProposal {}
 class OutcomeSubclass extends BackwardOutcome {}
 
-// test_backward_records_reject_subclasses_of_exact_nested_carriers (the record rows)
 test.each<[string, () => unknown, string]>([
   [
     "a BackwardResult subclass",
@@ -1107,8 +944,7 @@ function succeedEach(state: RunState, log: MemoryRunLog, outcomes: [string, unkn
 
 /**
  * Return a learnable state and log after `START -> work -> END` succeeded, `work` reading
- * `${input.topic}` and END's `answer` reading `work`, with a root-owned memory per key in `keys`
- * (Python's `_retained_backward`, without `compute_backward`).
+ * `${input.topic}` and END's `answer` reading `work`, with a root-owned memory per key in `keys`.
  */
 function retainedTerminal(
   options: { topic?: unknown; keys?: readonly string[] | null } = {},
@@ -1131,12 +967,12 @@ function retainedTerminal(
   return { state, log };
 }
 
-/** Prepare and commit `record` (Python's `_accept_backward`). */
+/** Prepare and commit `record`. */
 function acceptBackward(state: RunState, log: RunLog, record: RunRecord): void {
   commitPrepared(log, state, prepareRecord(state, record));
 }
 
-/** Return `prepared` with its plan's `changes`, for Python's `dataclasses.replace`. */
+/** Return `prepared` with its plan's `changes`. */
 function changedPlan(prepared: PreparedTransition, changes: Record<string, unknown>): PreparedTransition {
   const plan = Object.freeze({ ...prepared._plan, ...changes });
   return new PreparedTransition(prepared.record, prepared.expectedRunId, prepared.expectedSequence, plan as never, []);
@@ -1396,8 +1232,8 @@ test.each<[FeedbackValue, string]>([
 
 /**
  * Run `START -> work -> END`, `work` reading `${input.topic}` and sending its feedback back to
- * `x`, with a root-owned memory per key in `keys`, then compute backward for `feedback` (Python's
- * `_retained_backward`). Returns the engine's state and log, and the root and attributed results.
+ * `x`, with a root-owned memory per key in `keys`, then compute backward for `feedback`.
+ * Returns the engine's state and log, and the root and attributed results.
  */
 async function retainedBackward(
   options: { keys?: readonly string[] | null; feedback?: FeedbackValue; topic?: unknown } = {},
@@ -1423,7 +1259,7 @@ async function retainedBackward(
   return { state: built.state, log: built.log, root: rootResult, attributed: attributedResults };
 }
 
-/** The recorded memory keys and their complete proposal table (Python's `_proposal_table`). */
+/** The recorded memory keys and their complete proposal table. */
 function proposalTable(): [string[], MemoryProposal[]] {
   const proposals = [
     new MemoryProposal("alpha", [

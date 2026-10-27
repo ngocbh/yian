@@ -1,40 +1,7 @@
 /**
- * A `${...}` marks an expression inside a YAML string; it can't appear inside one: the
- * `parseExpr` and condition tests of `tests/engine/test_nested_span_rejected.py`, which check
- * that a whole-span condition reads as its bare spelling, and the error a `${...}` nested inside
- * an expression raises and the rewrite it shows, plus the template-span tests (`scanTemplate`).
- *
- * The harvested `load-core/engine_nested_span_rejected__case_condition_shows_the_rewrite`, from
- * `test_case_condition_with_a_nested_span_fails_to_load_with_the_rewrite`, is pinned at the end
- * (`assemble`, whose CASE build raises it), and so is
- * `load-core/engine_nested_span_rejected__loop_predicate_shows_the_rewrite` (`assembledWith`, the
- * `step` def built by hand; the LOOP build raises it), and
- * `load-core/engine_nested_span_rejected__binding_shows_the_rewrite` (the load half of
- * `test_binding_with_a_nested_span_fails_to_load_with_the_rewrite`; `assemble`, whose inline-call
- * desugar raises it).
- *
- * The load rows `test_binding_with_a_nested_span_fails_to_load_with_the_rewrite`,
- * `test_case_condition_with_a_nested_span_fails_to_load_with_the_rewrite`,
- * `test_flow_assert_with_a_nested_span_fails_to_load_with_the_rewrite`,
- * `test_node_assert_with_a_nested_span_fails_to_load_with_the_rewrite`,
- * `test_loop_predicate_with_a_nested_span_fails_to_load_with_the_rewrite` (its `step` def built by
- * hand, `stepBody`) and `test_prompt_with_a_nested_span_fails_to_load_with_the_rewrite` load with
- * `assembleText` (`assemble` as the loader calls it) where Python calls `load_flow`, each checking
- * that its error has a range, as Python's `_load_error` does, the assert rows pinning the whole
- * message; their cases `load-core/engine_nested_span_rejected__{flow,node}_assert_shows_the_rewrite`
- * (`assemble`, whose flow-assert lowering and node-assert check raise them) and
- * `load-core/engine_nested_span_rejected__prompt_shows_the_rewrite` (the reference validator) are
- * pinned at the end.
- *
- * Ported through `loadFlow` and `runFlow`: the `|` row of
- * `test_parentheses_and_coalesce_cover_a_default_chain`, the rows of
- * `test_documented_case_conditions_route` but `n: 50`, `test_case_on_a_whole_span_routes` and
- * `test_loop_predicate_in_the_bare_spelling_runs` (the int `n` read as `3n`, ints being `bigint`).
- * Covered by `run-core` cases running the same flows: the `:-` row of
- * `test_parentheses_and_coalesce_cover_a_default_chain`
- * (`engine_nested_span_rejected__a_default_chain`) and the `n: 50` row of
- * `test_documented_case_conditions_route`
- * (`engine_nested_span_rejected__documented_case_condition_routes`).
+ * A `${...}` marks an expression inside a YAML string; it can't appear inside one. A whole-span
+ * condition reads as its bare spelling; a `${...}` nested inside an expression raises an error
+ * showing the rewrite; and template spans (`scanTemplate`).
  */
 
 import { expect, test } from "bun:test";

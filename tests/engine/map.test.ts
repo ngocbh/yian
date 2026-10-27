@@ -1,21 +1,9 @@
 /**
- * The MAP child-run seam, end to end over CODE-only children: a port of
- * `tests/engine/test_map.py`.
+ * The MAP child-run seam, end to end over CODE-only children.
  *
  * A `map` node runs its baked child once per element of `over:`, binding `${item}` per element,
  * and collects each child's single value into `list(U)`. `parallel` overlaps the element runs
  * but keeps their order.
- *
- * Ported: `test_map_runs_child_per_element_collecting_results`,
- * `test_map_distinguishes_declared_opaque_output_from_no_output` (its run is also the harvested
- * `run-map-call/engine_map__map_over_a_value_only_def`; the case doesn't pin the output contract),
- * `test_map_empty_over_yields_empty_list`, `test_map_parallel_preserves_element_order`,
- * `test_map_child_failure_fails_the_run`, `test_map_over_with_coalesce_resolves_at_run` (both
- * runs), `test_map_run_returns_grow`, `test_map_empty_over_returns_grow_with_lone_list_end`,
- * `test_map_parallel_via_num_workers_preserves_order`,
- * `test_map_n_zero_synthesizes_end_list_emitting_empty` and
- * `test_map_synthesizes_one_end_list_node` (each for 0 and 4 workers). The CODE references are
- * the TS fixtures' (`./fixtures/compose_codefns.ts:<fn>`); integers are bigints (decision 4a).
  */
 
 import { expect, test } from "bun:test";

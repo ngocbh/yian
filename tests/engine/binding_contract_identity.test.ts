@@ -1,26 +1,7 @@
 /**
- * A binding's declared contract: the four carrier tests of
- * `tests/engine/test_binding_contract_identity.py` (the contract is the third, optional field;
- * only an exact `ValueContract` is accepted; `mapOrigins` rebases the contract and keeps its type;
- * `iterOrigins` yields the binding's origin before its contract's).
- *
- * Also ported: the identity tests `test_typed_wiring_binding_changes_flow_identity_only_when_typed`,
- * `test_binding_contract_origins_stay_outside_identity`, `test_typed_value_output_changes_fingerprint`
- * and `test_typed_record_output_field_changes_fingerprint`.
- *
- * Changed:
- * - `fields()` order is the own-key order of an instance.
- * - The identity tests are hand-built instead of `load_flow`: `twoStep()` and `recordOutput()`
- *   build the `_TWO_STEP` and `_RECORD_OUTPUT` flows with `CompiledFlow.fromParts`. Python's
- *   `_typed` deep-copies a loaded flow; the TS helpers type a fresh build, and "a deep copy keeps
- *   the fingerprint" is "a rebuild has the same fingerprint".
- *
- * Ported through `loadFlow` and `buildGrow`: `test_renamespacing_keeps_the_binding_contract`
- * (`rensInternal`), `test_flow_origin_traversal_reaches_the_binding_contract`,
- * `test_call_expansion_keeps_a_typed_child_binding` and `test_record_typed_binding_is_never_hashed`
- * (Python's hashability has no TS counterpart, "a deep copy keeps the fingerprint" is "a second
- * load, typed the same, has the same fingerprint", and its run is a `runFlow` in `hostEnv`). The
- * parent's `child` is served by a `childResolver` over the loaded `_CHILD`.
+ * A binding's declared contract (the third, optional field; only an exact `ValueContract`;
+ * rebased by `mapOrigins`; after the binding's origin in `iterOrigins`) and its part in flow
+ * identity: typed bindings and outputs change the fingerprint, contract origins don't.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -52,7 +33,7 @@ function intContract(origin: OriginRef | null = null): ValueContract {
   return new ValueContract(typeFor("int", new Map()), new ContractOrigins({ default: origin }));
 }
 
-/** Return a record contract (Python's is unhashable, as its fields are a dict). */
+/** Return a record contract. */
 function recordContract(): ValueContract {
   return new ValueContract(typeFor("Payload", readTypedefs({ Payload: { value: "int" } })));
 }

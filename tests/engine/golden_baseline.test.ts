@@ -1,5 +1,5 @@
 /**
- * Golden baselines (a characterization test): a port of `tests/engine/test_golden_baseline.py`.
+ * Golden baselines (a characterization test) for the edge ids of representative flows.
  *
  * Pins the edge ids, and the ordered `[id, inputGroup, optional]` projection, of representative
  * flows, so a change to the wiring or the edge inference proves no drift against a recorded
@@ -9,18 +9,6 @@
  * Coverage across the three seeds: data edges, CASE control edges and skip-flood targets, the
  * `START_ID` input-producer edges, terminal (`->__end__#0`) edges, the ordering separator (`~>`),
  * and a mapped `call` (MAP) node.
- *
- * Ported: `test_edge_ids_match_baseline` and `test_edge_tuples_match_baseline`.
- *
- * Changed: the seeds are their harvested cases (`load-case/seed_02_case`,
- * `load-map-call/seed_05_call_map`, `load-leaves/seed_17_effects_human_wait`), assembled as the
- * loader calls `assemble`, where Python calls `load_flow` on `tests/seeds/`. Seed 05's
- * `research-one` is a hand-built child shaped like its def, where Python resolves the sibling
- * file on the search path.
- *
- * Pinned in `eval_node.test.ts`: `MAP_OVER_NOT_LIST_FMT`, the MAP `over`-not-a-list message, which
- * Python defines here for `test_eval_node.py`; the "map over not a list message is byte
- * identical" rows there pin the whole message where Python formats this constant.
  */
 
 import { expect, test } from "bun:test";

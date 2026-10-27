@@ -1,6 +1,6 @@
 /**
- * TS-only: an AGENT's success writes its output commit, its messages commit, then `node_succeeded`
- * naming both; the reducer checks the steps and rebuilds `<node>.new_messages`.
+ * An AGENT's success writes its output commit, its messages commit, then `node_succeeded` naming
+ * both; the reducer checks the steps and rebuilds `<node>.new_messages`.
  *
  * The messages commit holds no value but `steps`: the seqs of the agent's steps its new messages
  * are made of (each chat reply that arrived, every tool result, and a structured agent's accepted

@@ -1,43 +1,4 @@
-/**
- * A port of `tests/engine/test_backward_recovery.py`: public backward failures, durable attempt
- * prefixes, and whole-pass retries.
- *
- * Ported: all 11 tests, the parametrized ones whole but for the cancellation pair (below). Models
- * are `ScriptedModel`s built by a model access (`models`) whose `pick` a test reassigns where
- * Python re-patches `model_from_config`; Python's `JsonlRunLog.append` and
- * `CodeNode.forward`/`backward` patches replace the prototype methods while the calls run.
- * Records are read from the run's JSONL log; an AGENT backward prompt is its request's user
- * message read as JSON.
- *
- * Changed:
- * - `test_recorded_terminal_inspection_is_inert` (2 rows) and
- *   `test_recorded_backward_history_admits_a_later_attempt_at_every_boundary` (7 rows): Python's
- *   recorded schema-9 bytes become logs this runtime writes for the same flow (its forward run,
- *   its failing forward, or one whole attempt whose commit succeeds or is declined), checked to
- *   hold the same record kinds and cut at the same records (decision 8).
- * - `test_invalid_root_shapes_preserve_the_public_forward_result_and_unopened_attempt`: the CODE
- *   bodies are JavaScript (decision 11).
- * - `test_unmaterializable_owner_context_is_a_complete_known_failure_on_each_explicit_retry`: a
- *   learn context has no nesting bound of its own (decision 4b; Python's `memory_json_nesting`),
- *   so a spy on `LearnContext.fromFrozen` refuses START's context with a `RangeError` on its first
- *   call in each attempt, where Python lowers the bound to 10 levels under the 21-level payload.
- * - `test_reverse_cancellation_retains_started_only_and_resume_recomputes_the_entire_pass`: one
- *   row. Python's two rows differ only in the error the second reverse call raises
- *   (`asyncio.CancelledError`, `concurrent.futures.CancelledError`), and both propagate out of
- *   `backward` unchanged. Here `computeBackward` records any handler error as `backward.execute`
- *   and `RunResult.backward` takes no signal, so no error a model throws leaves the call; the
- *   interruption is the process lost while the second reverse call fails (`CrashAt` and
- *   `crashes`: no later record is accepted).
- * - `test_public_append_rejection_keeps_exact_authority_and_retries_after_every_phase`: the
- *   rejection is an `Error` (Python's `OSError`), and the partial write is `fs.writeSync` writing
- *   half the line before it throws (Python's `_FileProxy`).
- * - `test_public_replay_rejects_complete_record_corruption_before_any_new_effects`: the line is
- *   rewritten in the log's codec (`parseJson`, `logJson`).
- * - Python's `ValueError` is a `RangeError`.
- *
- * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
- * `backward.interrupted`.
- */
+/** Public backward failures, durable attempt prefixes, and whole-pass retries. */
 
 import fs, { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -90,7 +51,7 @@ const NO_MODEL: Pick = () => {
 
 /**
  * Model access over the file's env: each build records its config and serves `pick(config)`; a
- * test reassigns `pick` where Python re-patches `model_from_config`.
+ * test may reassign `pick`.
  */
 function models(pick: Pick = NO_MODEL): ModelAccess & { pick: Pick; configs: Readonly<Record<string, unknown>>[] } {
   const access = {
@@ -118,7 +79,7 @@ const resume = (flow: ComposedFlow, options: AdvanceOptions) => advance({ env, .
 /** A `Map` serving the memory key `test` with `backend`. */
 const testMemory = (backend: unknown) => new Map([["test", backend as FakeMemory]]);
 
-/** An AGENT backward reply: Python's `_reply`, empty channels unless `channels` sets them. */
+/** An AGENT backward reply: empty channels unless `channels` sets them. */
 function feedbackReply(channels: Record<string, unknown> = {}): Response {
   const text = JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {}, ...channels });
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
@@ -129,7 +90,7 @@ function material(model: ScriptedModel, index = 0): Record<string, any> {
   return JSON.parse(model.requests[index]!.messages[1]!.text());
 }
 
-/** The records of the closed durable log at `path` (Python's `_records`). */
+/** The records of the closed durable log at `path`. */
 function records(path: string): RunRecord[] {
   const log = JsonlRunLog.resume(path);
   try {
@@ -150,7 +111,7 @@ const linesOf = (path: string) => readFileSync(path, "utf8").split(/(?<=\n)/);
 /** The wire kind of one log line. */
 const kindOf = (line: string) => (JSON.parse(line) as { kind: string }).kind;
 
-/** The forward fields Python compares before and after each call. */
+/** The forward fields compared before and after each call. */
 const forwardOf = (result: RunResult): unknown[] => [
   result.input,
   result.status,
@@ -159,7 +120,7 @@ const forwardOf = (result: RunResult): unknown[] => [
   [...result.events],
 ];
 
-/** Python's `(len(open_snapshots), close_count, len(learn_contexts), len(commit_calls))`. */
+/** The backend's open snapshots, closes, learn contexts and commit calls, counted. */
 const counters = (backend: FakeMemory) => [
   backend.openSnapshots.length,
   backend.closeCount,
@@ -227,7 +188,7 @@ output: \${work.output}
 `;
 
 /**
- * The record kinds of Python's recorded logs, which the TS-written logs are cut at. Schema 13 adds
+ * The record kinds each historical log is cut at. Schema 13 adds
  * the run start's four commits after `run_started` and a `pool_commit` before each success.
  */
 const RUN_START_KINDS = ["run_started", "pool_commit", "pool_commit", "pool_commit", "pool_commit"];
@@ -239,7 +200,7 @@ const RECORDED_BACKWARD_FAILED_KINDS = [...BACKWARD_KINDS, "memory_commit_failed
 const RECORDED_FAILURE_KINDS = [...RUN_START_KINDS, ...SUCCESS_KINDS, "node_started", "node_failed"];
 
 /**
- * The lines of a TS-written log of the historical flow, standing in for Python's recorded bytes:
+ * The lines of a log of the historical flow:
  * its forward run (`"failure"`: the CODE body returns text for its int), and for `"backward"` and
  * `"backward_failed"` one whole attempt whose commit succeeds or is declined.
  */
@@ -329,7 +290,7 @@ describe("recorded terminal inspection is inert", () => {
 
 describe("recorded backward history admits a later attempt at every boundary", () => {
   for (const [failedCommit, boundary, disposition] of [
-    // Python's boundaries 7-11, past the run start's four commits and three success commits.
+    // Boundaries past the run start's four commits and three success commits.
     [false, 14, "unrequested"],
     [false, 15, "unrequested"],
     [false, 16, "unknown"],

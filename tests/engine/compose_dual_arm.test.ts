@@ -1,11 +1,7 @@
 /**
- * The parser rejects the retired `inputs:`/`outputs:` section keys: a port of
- * `tests/engine/test_compose_dual_arm.py`.
- *
- * `inputs:`/`outputs:` at the top level, in a node body or in a `defs:` entry is a located load
- * error naming the retirement; `input:`/`output:` is the only spelling. Python reaches the node
- * and def rows through `load_flow`; the error comes from the parse step, so TS calls `parseFile`.
- * The harvested cases are pinned at the end.
+ * The parser rejects the retired `inputs:`/`outputs:` section keys. `inputs:`/`outputs:` at the
+ * top level, in a node body or in a `defs:` entry is a located load error naming the retirement;
+ * `input:`/`output:` is the only spelling.
  */
 
 import { afterEach, expect, test } from "bun:test";

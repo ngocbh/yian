@@ -9,8 +9,8 @@
  * engine's structured drain. It also owns the compile/runtime inversion seam by injecting
  * `compile/expand.ts`'s `buildGrow` into the kind-blind engine.
  *
- * This is the `yian/run` module, as Python's `yian.run`: it exports `runFlow`, `advance` (Python's
- * `resume_flow`) and `RunResult`, and re-exports `BackwardOutcome` (`runtime/contracts.ts`). Hosts
+ * This is the `yian/run` module: it exports `runFlow`, `advance` and `RunResult`, and re-exports
+ * `BackwardOutcome` (`runtime/contracts.ts`). Hosts
  * reach a run by its log through `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel`
  * and `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
@@ -3422,7 +3422,7 @@ export function replayCompiledRunLog(
   for (const [expectedSequence, suppliedEnvelope] of supplied.entries()) {
     const line = encodeRecord(suppliedEnvelope);
     const envelope = decodeRecord(line);
-    // Envelopes are frozen and compared by their canonical lines, as Python compares values.
+    // Envelopes are frozen and compared by their canonical lines.
     if (encodeRecord(envelope) !== line) {
       throw new RangeError(`run log envelope ${expectedSequence} is not in canonical wire form`);
     }
@@ -3869,8 +3869,7 @@ async function openRunServers(
 /**
  * Close the run's servers in order.
  *
- * Python's `_close_run_servers` also guards each close and notes its error on the run's; here
- * `McpServer.close()` never rejects, so there is nothing to note.
+ * `McpServer.close()` never rejects, so there is no close error to note on the run's.
  */
 async function closeRunServers(servers: readonly McpServer[]): Promise<void> {
   for (const server of servers) await server.close();

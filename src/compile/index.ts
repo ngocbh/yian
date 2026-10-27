@@ -1,6 +1,5 @@
 /**
- * Compiled flow IR, validation, origin traversal/rebasing, growth, and stable identity, as
- * Python's `yian.compile`.
+ * Compiled flow IR, validation, origin traversal/rebasing, growth, and stable identity.
  *
  * This package turns pure node-owned growth seeds into deterministic `Flow` fragments through
  * `expand.buildGrow`. It also owns canonical manifests and fingerprints, identity-safe
@@ -17,8 +16,8 @@
  * the static memory key table and scopes, `expand.ts` the growth builders and `buildGrow`,
  * `validation.ts` the cycle, path and type checks, `manifest.ts` the manifests, fingerprints
  * and expansion digests, and `llm_cascade.ts` the static-path LLM configuration map (run-start
- * resolution, replay, host credentials). This index re-exports Python's `__all__` and nothing
- * else; callers of any other name import the module that defines it.
+ * resolution, replay, host credentials). This index re-exports the package's public names and
+ * nothing else; callers of any other name import the module that defines it.
  *
  * Knows about: diagnostics, expr, nodes (with the LLM-client config the AGENT node reads), memory
  * contracts, typesys, and LLM configuration validation, merge and connection selection.

@@ -209,7 +209,7 @@ export function writeAsText(value: Value): string {
 }
 
 /**
- * Return a value as JSON, laid out as Python's `json.dumps(value, indent=indent)`.
+ * Return a value as JSON text, compact or indented by `indent`.
  *
  * With no `indent` the JSON is compact (`,` and `:`, no spaces). With an int `indent` of 0 or
  * more, each item sits on its own line indented by `indent` spaces per level, items end with
@@ -1407,8 +1407,8 @@ export function joinedType(types: readonly Type[]): Type | null {
 }
 
 /**
- * Return whether two types are structurally equal, as Python's dataclass `==` compares
- * them: maps and sets by content (a record's field order doesn't count), bounds by
+ * Return whether two types are structurally equal:
+ * maps and sets by content (a record's field order doesn't count), bounds by
  * numeric value (`1n` equals `1`), union members in order.
  */
 export function typeEquals(a: Type, b: Type): boolean {
@@ -1564,8 +1564,8 @@ function kindLabel(kind: ValueKind): string {
 }
 
 /**
- * Spell one numeric range end as type text: a `bigint` as its digits, a `number` as
- * Python's `repr` of the float (`1.0`, `1e-05`), and an open end as `""`.
+ * Spell one numeric range end as type text: a `bigint` as its digits, a `number` in
+ * its shortest form with a fraction digit or exponent (`1.0`, `1e-05`), and an open end as `""`.
  *
  * Example: `boundText(1n)` is `1`, `boundText(1e16)` is `1e+16`.
  */
@@ -1597,12 +1597,12 @@ export function floatText(x: number): string {
 }
 
 /**
- * The type tokenizer's NAME token, Python's `[^\W\d]\w*` in Unicode properties; a
+ * The type tokenizer's NAME token, in Unicode properties; a
  * `Literal` member printed bare must match it. Use it with the `u` flag.
  */
 export const NAME_PATTERN = "[\\p{L}\\p{Nl}\\p{No}_][\\p{L}\\p{N}_]*";
 const NAME_TOKEN = new RegExp(`^(?:${NAME_PATTERN})$`, "u");
-/** Python's identifier, as `str.isidentifier()` checks it. Use it with the `u` flag. */
+/** An identifier: an XID_Start character or `_`, then XID_Continue characters; use the `u` flag. */
 export const IDENTIFIER_PATTERN = "[\\p{XID_Start}_]\\p{XID_Continue}*";
 const IDENTIFIER = new RegExp(`^(?:${IDENTIFIER_PATTERN})$`, "u");
 
@@ -2540,7 +2540,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
       if (element === ValueKind.OBJECT) item = jsonPart(item, [...path, index], "mapping");
       items.push(item);
     }
-    // Converting in a second pass keeps Python's error order: every item is checked first.
+    // Converting in a second pass checks every item first.
     const coerced = items.map((item, index) => coerceScalar(element, item, [...path, index]));
     return new TypedValue(kind, coerced as Value[]);
   }

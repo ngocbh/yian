@@ -44,13 +44,13 @@ import {
   validateUniqueTargets,
 } from "./model.ts";
 
-/** Return a key no two unequal sites share (Python hashes a `DeclSite` by value); never shown. */
+/** Return a key no two unequal sites share; never shown. */
 function siteKey(site: DeclSite): string {
   return JSON.stringify([site.scope, site.owner, site.node]);
 }
 
 /**
- * Encode one JSON value for exact comparison, so `1n`, `1` (Python's `1.0`) and `true` differ.
+ * Encode one JSON value for exact comparison, so `1n`, `1` (a float) and `true` differ.
  * Log JSON marks a float with `.0` and writes any float, where the JCS writer spells `1n` and `1`
  * alike and refuses a fraction.
  */
@@ -245,7 +245,7 @@ export class ResolvedMemoryLayout {
 }
 
 /**
- * Whether two layouts are equal by value: Python's dataclass equality, which leaves out each
+ * Whether two layouts are equal by value, leaving out each
  * target's node and each memory's origins.
  */
 function sameLayout(a: ResolvedMemoryLayout, b: ResolvedMemoryLayout): boolean {
@@ -501,7 +501,7 @@ function checkScopeSegments(declared: readonly MemoryDecl[]): void {
 
 /** Reject keys that differ only by case. */
 function checkKeyCase(memories: readonly ResolvedMemory[]): void {
-  // `toLowerCase` is Python's `casefold` here: key segments match the ASCII-only identifier grammar.
+  // `toLowerCase` folds case fully here: key segments match the ASCII-only identifier grammar.
   const folded = new Map<string, ResolvedMemory>();
   for (const memory of memories) {
     const fold = memory.key.toLowerCase();

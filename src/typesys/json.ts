@@ -1,6 +1,6 @@
 /**
  * yian's lossless JSON reader: an int token reads as a `bigint` of any size, any other
- * number as a `number`, and errors carry Python 3.12 `json.loads`'s reasons and positions.
+ * number as a `number`, and errors carry a reason and its position.
  * It refuses what yian refuses on top of that: the NaN and Infinity tokens, a float token
  * that overflows, a duplicate object key and a lone surrogate. A float token that is zero
  * reads as `0`, never `-0`. It reads with an explicit stack, so any depth reads.
@@ -10,7 +10,7 @@
  * marked by `.0`. Both write infinity as yian's tag, escape records shaped like the tag, and
  * write any depth. Like `JSON.stringify` they write only an object's own enumerable string keys
  * and an array's indices, but an object with symbol keys is refused; they refuse what isn't
- * canonical JSON, with Python yian's wording where Python has the rule.
+ * canonical JSON.
  *
  * It imports nothing from yian, so the `llm/` leaf can use it.
  */
@@ -67,7 +67,7 @@ interface Frame {
   recordRaw?: JsonValue;
 }
 
-// Python's `NUMBER_RE`; the fraction and exponent are optional, so `1.` matches `1`.
+// A JSON number; the fraction and exponent are optional, so `1.` matches `1`.
 const NUMBER = /-?(?:0|[1-9][0-9]*)(\.[0-9]+)?([eE][-+]?[0-9]+)?/y;
 const CONSTANTS = ["NaN", "Infinity", "-Infinity"];
 const ESCAPES = new Map([
@@ -160,7 +160,7 @@ function scanNumber(text: string, pos: number): [bigint | number, number] {
   }
   const value = Number(token);
   if (!Number.isFinite(value)) throw new JSONDecodeError("number is too large for a float", text, pos);
-  // yian has no negative zero: `-0.0` reads as `0` (Python keeps `-0.0`).
+  // yian has no negative zero: `-0.0` reads as `0`.
   return [value === 0 ? 0 : value, end];
 }
 

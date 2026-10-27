@@ -239,8 +239,7 @@ function rejectNestedLegacyKeys(cursor: SourceCursor, diagnostics: LoadDiagnosti
  *
  * @param active The records on the current path; a recursive alias back to one of them is kept
  *   as it is, so the walk ends. A tagged `nodes:` entry can alias back to itself, since
- *   `rejectNestedLegacyKeys` skips it and so never fails at the alias; Python recursed here until
- *   its generic `except` turned the overflow into an unlocated error, and TS has no such `except`.
+ *   `rejectNestedLegacyKeys` skips it and so never fails at the alias.
  */
 function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Value {
   if (!isRecord(body) || active.has(body)) return body;
@@ -450,8 +449,8 @@ function readComposeFile(
   const get = (key: string): Value | undefined =>
     Object.hasOwn(fields, key) ? fields[key]! : undefined;
 
-  // Python's schema collects every failure and locates the first one that replays; a missing
-  // key never replays, so a later located failure wins over it.
+  // The first failure that can be located is reported; a missing key can't be located, so a
+  // later located failure wins over it.
   let missing: string | null = null;
   const required = (key: string): Value | undefined => {
     const value = get(key);
@@ -535,7 +534,7 @@ function nonTextKeyMessage(key: Value, text: string): string {
     );
   }
   // A JSON string is a valid YAML double-quoted scalar for any text; escaping every code unit
-  // past `~` spells it as Python's `json.dumps` does.
+  // past `~` as `\uXXXX` keeps it ASCII.
   const quoted = JSON.stringify(text).replace(
     /[\u007f-\uffff]/g,
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,

@@ -59,7 +59,7 @@ export class Case {
 
 /**
  * The `Case` whose `when` threw each predicate evaluation error, so the error itself stays
- * unchanged. Python reads the active `Case` off the traceback's `forward` frame; JS has no frames.
+ * unchanged; an error carries no frames to read the active `Case` from.
  */
 const failedCases = new WeakMap<object, Case>();
 

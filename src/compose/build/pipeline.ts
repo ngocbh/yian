@@ -1076,7 +1076,7 @@ export function attachInputContracts(
  * as a `Binding` carrier rather than a record. Recognition and locations follow the retained
  * cursor exactly as for node inputs.
  *
- * Unlike Python's, an untyped output needs no check that its literals are JSON values: the YAML
+ * An untyped output needs no check that its literals are JSON values: the YAML
  * reader keeps a date as text and refuses `.nan`, a float too large to read, `!!set`, `!!binary`,
  * `!!omap` and `!!pairs`, and the source layer refuses a non-text record key.
  *
@@ -1396,8 +1396,8 @@ function fillTypeTables(
    * have.
    *
    * Only for condition sites: `validateReferences` already checked every binding's constructor
-   * calls and builtin field reads, with the references typed. Python's `condition` flag is dropped:
-   * every caller parses its source as a condition.
+   * calls and builtin field reads, with the references typed. Every
+   * caller parses its source as a condition.
    */
   const checked = (names: TypeNames, source: unknown, where: string, range: SourceRange | null): Map<string, Type> => {
     const resolvedNames = table(names, where, range);
@@ -1533,7 +1533,7 @@ function valueCases(descriptors: ReadonlyMap<string, NodeDescriptor>, read: Read
   return found;
 }
 
-/** Python's `_assemble` keyword arguments: the parsed sections and the scope one assembly reads. */
+/** The options of one assembly: the parsed sections and the scope it reads. */
 export interface AssembleOptions {
   /** The authored `input:` mapping that still needs parsing; exclusive with `inputParameters`. */
   inputsSection?: Readonly<Record<string, unknown>> | null;

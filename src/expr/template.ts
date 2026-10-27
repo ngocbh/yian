@@ -373,7 +373,7 @@ export function evalTemplate(
   }
   if (!trace) return text;
   if (routes.length === 0) return { value: text, route: ValueRoute.literal(text) };
-  // `JSON.stringify`, as Python's `json.dumps`: literal text holding a lone surrogate then fails at
+  // `JSON.stringify`: literal text holding a lone surrogate then fails at
   // the slot's write check, traced or not, rather than here.
   const valueJson = JSON.stringify(text);
   return { value: text, route: new ValueRoute("interpolation", { valueJson, children: routes, expression, spans }) };

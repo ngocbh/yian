@@ -68,8 +68,7 @@ export type ScalarValue = string | bigint | number | boolean | null;
 /** A node an alias can name. */
 export type AnchoredNode = Scalar.Parsed | YAMLMap.Parsed | YAMLSeq.Parsed;
 
-// No `m` flag on any pattern, so `$` is the end of the text: a trailing newline fails,
-// where Python's `$` would match before it.
+// No `m` flag on any pattern, so `$` is the end of the text: a trailing newline fails.
 const BOOL = /^(?:true|True|TRUE|false|False|FALSE)$/;
 const INT = /^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$/;
 const FLOAT = new RegExp(
@@ -79,22 +78,21 @@ const FLOAT = new RegExp(
 );
 const NULL = /^(?:~|null|Null|NULL|)$/;
 const MERGE = /^<<$/;
-// PyYAML's timestamp patterns share the time and offset after the date.
+// The YAML 1.1 timestamp patterns share the time and offset after the date.
 const TIME =
   "(?:[Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]*)?" +
   "(?:[ \\t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?";
-// PyYAML's implicit resolver pattern for unquoted timestamps; a date alone needs a 2-digit
+// The YAML 1.1 implicit pattern for unquoted timestamps; a date alone needs a 2-digit
 // month and day.
 const TIMESTAMP = new RegExp(
   "^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}" +
     "|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}" + TIME + ")$",
 );
-// PyYAML's timestamp constructor pattern, where the month and day take 1 or 2 digits; the
+// The timestamp parts pattern, where the month and day take 1 or 2 digits; the
 // group captures the time, if any.
 const TIMESTAMP_PARTS = new RegExp("^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(" + TIME + ")?$");
 
-// Each pattern's first characters are exactly its PyYAML first-character bucket, so this
-// ordered list is the same table; int precedes float because the float pattern also
+// The patterns are tried in this order; int precedes float because the float pattern also
 // matches integers.
 const IMPLICIT: readonly (readonly [RegExp, string])[] = [
   [BOOL, BOOL_TAG],
@@ -356,8 +354,7 @@ export function resolvePlain(text: string): string {
  * Explicit `!!int`, `!!float` and `!!bool` tags accept only the forms the table resolves.
  * A timestamp is checked with yian's date grammar and kept as its text. `plain` means the
  * scalar was written unquoted, so a refused value says to quote it. Under an explicit tag the
- * quoting hint is kept for parity with Python, whose node doesn't record an explicit tag,
- * although quoting doesn't remove the tag.
+ * quoting hint is still given, although quoting doesn't remove the tag.
  *
  * Example: `constructScalar(INT_TAG, "017", true)` is `17n`.
  *

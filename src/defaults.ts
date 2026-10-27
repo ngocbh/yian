@@ -14,7 +14,8 @@
  * instead, for `fn` and the async work it starts. The environment is injected as an `Env`
  * function (`processEnv` reads `process.env`), and an empty variable counts as unset. A run
  * records the values that differ from the built-in ones, and resuming it with different
- * values is refused. `docs/defaults.md` lists every entry.
+ * values is refused. The Reference page
+ * (`docs/src/content/docs/reference.md`) lists every entry.
  *
  * This module imports only `node:` builtins and the event cap's built-in value
  * (`typesys/event_limit.ts`, which imports nothing), so any layer may import it.
@@ -69,7 +70,8 @@ function entry<N extends string>(
 // stacks differ: under a 1 MiB stack the `yaml` package composes 793 levels on Node and
 // 818 on Bun, 3975 in a Bun Worker. Each limit's measured maximum is the deepest input that
 // loads, runs, replays and resumes with every limit lifted; the AGENT output limit's builds
-// the reply schema and reads a reply, with no run (docs/defaults.md has the method).
+// the reply schema and reads a reply, with no run (the method is on the Reference page,
+// `docs/src/content/docs/reference.md`).
 export const ENTRIES = Object.freeze([
   // Language safety limits.
   // yian's JSON writer and reader are iterative; the other value walkers recurse per

@@ -1,6 +1,5 @@
 /**
- * A fake MCP server with one tool per behaviour the MCP client tests need, a port of yian's
- * `tests/fixtures/mcp/fake_server.py`, `paged_server.py` and `bad_output_server.py`.
+ * A fake MCP server with one tool per behaviour the MCP client tests need.
  *
  * Import `buildServer` to serve it in-process, `startHttpServer` to serve it over streamable HTTP
  * in-process, or run this file as a script to serve it over stdio (`bun --no-install
@@ -55,7 +54,7 @@ const RESULT = z.object({ result: z.int() });
 /**
  * The tools that answer with a JSON-RPC error, by name: `[code, message]`. `McpServer` turns
  * anything a tool throws into an error result, so `buildServer` throws these from around its
- * `tools/call` handler, as Python's `MCPError` does.
+ * `tools/call` handler, so the client sees a JSON-RPC error.
  */
 const RPC_ERRORS: Record<string, [number, string]> = {
   bad_request: [-32602, "bad params"],
@@ -90,7 +89,7 @@ function sleep(seconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
-/** Append `line` to `file`; a file holding a single line holds it bare, as Python's fixture writes. */
+/** Append `line` to `file`; a file holding a single line holds it bare. */
 function appendLine(file: string, line: string): void {
   appendFileSync(file, (existsSync(file) && statSync(file).size > 0 ? "\n" : "") + line);
 }
@@ -246,7 +245,7 @@ export function buildServer({ name = "fake", only, marker, flood }: FakeServerOp
     ({ region }) => text(region),
   );
 
-  // Python's `_CountingServer.call_tool`: count every call but `calls`, and answer the error tools.
+  // Count every call but `calls`, and answer the error tools.
   const inner = toolsCallHandler(srv);
   if (inner !== undefined) {
     srv.server.setRequestHandler("tools/call", (request, ctx) => {

@@ -1479,10 +1479,9 @@ export function prepareTrace(
     let terminalSource: SourceRef | null;
     if (terminalSucceeded) {
       const acceptedWriter = rootWriter ?? trace.rootWriter;
-      // Python compares decoded typed values with `==`, which treats 1, 1.0 and True as equal
-      // inside a value; equal canonical text is stricter, but a real terminal and its writer are
-      // encoded by the same canonical encoder, so this never refuses one.
-      // A missing output fails here, where Python fails inside pydantic.
+      // Equal canonical text is strict (1, 1.0 and true differ inside a value), but a real
+      // terminal and its writer are encoded by the same canonical encoder, so this never refuses
+      // one. A missing output fails here.
       if (
         acceptedWriter === null ||
         terminalOutputJson === null ||

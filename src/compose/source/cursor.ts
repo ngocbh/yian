@@ -916,7 +916,7 @@ export class SourceCursor {
     let current = sequence;
     let local = ordinal;
     while (current.parts.length > 0) {
-      // The last part starting at or before `local`, as Python's `bisect_right` minus one.
+      // The last part starting at or before `local`, by binary search.
       const offsets = current.partOffsets;
       let low = 0;
       let high = offsets.length;
@@ -1036,8 +1036,8 @@ function missingField(key: string | number): string {
 }
 
 /**
- * Return the error for a field `key` whose `value` isn't `expected`, naming the value's type as
- * Python does (`int`, `NoneType`).
+ * Return the error for a field `key` whose `value` isn't `expected`, naming the value's type by
+ * its type name (`int`, `NoneType`).
  */
 function fieldTypeError(
   key: string,

@@ -715,7 +715,7 @@ export class AgentNode extends Node {
    */
   override validatePrompts(options: { path?: string | null } = {}): void {
     const { path = null } = options;
-    // `||`, as Python's `or`: an empty path names the node by its id.
+    // `||`, not `??`: an empty path names the node by its id.
     const subject = `node ${reprText(path || this.id)}`;
     if (typeof this.prompt === "string") {
       checkNamedPrompt(this.prompt, `${subject} prompt`);

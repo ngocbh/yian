@@ -215,7 +215,7 @@ export function callableDisplay(flowId: string, childLabel: string | null = null
 }
 
 // Calls being resolved around the current one in the file being loaded. A module-level number
-// stands in for Python's ContextVar because assembly is synchronous.
+// is enough because assembly is synchronous.
 let activeCalls = 0;
 
 /**

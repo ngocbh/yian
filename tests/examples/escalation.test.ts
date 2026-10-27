@@ -1,5 +1,5 @@
 /**
- * TS-only: `examples/approve-plan.yaml`, the escalation example, end to end. Its `ask` nodes go
+ * `examples/approve-plan.yaml`, the escalation example, end to end. Its `ask` nodes go
  * to a host that declares the `to:` extension and answers later with `complete`; a timeout
  * closes an unanswered ask with `null` (or fails a strict one with `tool.timeout`), and the
  * flow then asks the manager.

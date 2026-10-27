@@ -308,7 +308,7 @@ export class BackwardResult {
     for (const name of Object.keys(variables)) {
       validateTextFeedback(variables[name], `variable_feedback[${writeAsJson(name)}]`);
     }
-    // Only this channel copies with a memo: Python deep-copies it, so its shared subtrees stay shared.
+    // Only this channel copies with a memo, so its shared subtrees stay shared.
     this.inputFeedback = copyBackwardValue(inputs, "input_feedback", new Map()) as typeof this.inputFeedback;
     this.selfFeedback = copyBackwardValue(selfFeedback, "self_feedback") as readonly string[];
     this.variableFeedback = copyBackwardValue(variables, "variable_feedback") as typeof this.variableFeedback;
@@ -428,7 +428,7 @@ export function parseNamedCondition(
   types: ReadonlyMap<string, Type> | null = null,
 ): void {
   try {
-    // An omitted table is an empty one, so every constructor is refused, as Python's `types or {}`.
+    // An omitted table is an empty one, so every constructor is refused.
     parseCondition(expression, types ?? new Map());
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
@@ -486,7 +486,7 @@ export function validateInputOutputPaths(data: Readonly<Record<string, unknown>>
  *   isn't an array of `OriginRef`s.
  */
 export function retainFailure(failure: Failure): Failure {
-  // Rebuilt once to check the trace with Failure's own errors, as Python's `__post_init__`,
+  // Rebuilt once to check the trace with Failure's own errors,
   // before its items are copied without subclass state.
   const checked = new Failure(failure);
   const trace = checked.trace.map((origin) => Object.freeze(new OriginRef(origin.key)));
@@ -685,7 +685,7 @@ export interface MaterialCaps {
 export function validateBackwardResult(result: BackwardResult, context: BackwardContext): void {
   if (!isExactly(result, BackwardResult)) throw new TypeError("result must be a BackwardResult");
   if (!isExactly(context, BackwardContext)) throw new TypeError("context must be a BackwardContext");
-  // Python rebuilds the result here. `isExactly` refuses a subclass, and a result built by the
+  // Not rebuilt: `isExactly` refuses a subclass, and a result built by the
   // constructor was validated and frozen then; an object forged with `Object.create` isn't
   // defended against.
   const inputs = context.inputs;
@@ -818,7 +818,7 @@ export function markerMessage(original: unknown): string {
 
 /**
  * @internal Return an `Error`'s stack followed by its string `notes`, one per line, else `null`;
- * Python's traceback text prints `__notes__` the same way, so a cleanup note stays durable. Used
+ * the notes in the text keep a cleanup note durable. Used
  * for a failure's traceback.
  */
 export function tracebackText(error: unknown): string | null {
@@ -1416,7 +1416,7 @@ export abstract class Node {
 
   /** Parse one assertion's expression, naming the node and the assertion when it doesn't parse. */
   private parseAssertion(label: string, assertion: Assertion, where: string | null = null): void {
-    // `||`, as Python's `or`: an empty path names the node by its id.
+    // `||`, not `??`: an empty path names the node by its id.
     parseNamedCondition(
       assertion.expression,
       `node ${reprText(where || this.id)} ${label} ${this.shownAssertion(assertion)}`,

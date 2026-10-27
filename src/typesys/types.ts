@@ -267,8 +267,8 @@ function hasUnquotedBracket(src: string): boolean {
   return false;
 }
 
-// An escape is a backslash and any character but LF, as Python's `\\.`; JavaScript's `.`
-// would also refuse CR, U+2028 and U+2029.
+// An escape is a backslash and any character but LF; a regex `.` would
+// also refuse CR, U+2028 and U+2029.
 const QUOTED = String.raw`"(?:[^"\\]|\\[^\n])*"|'(?:[^'\\]|\\[^\n])*'`;
 
 // NUMBER needs a digit after a dot, so `0..1` reads as `0`, `..`, `1`. Its digits are
@@ -669,7 +669,7 @@ function checkLiteralTag(value: string, src: string): void {
   }
 }
 
-// Python's decimal literals (`1.` and `.5` are floats) and identifiers. Signs are separate
+// Decimal literals (`1.` and `.5` are floats) and identifiers. Signs are separate
 // tokens, since the bracket spelling reads them as unary operators.
 const LEGACY_TOKEN = new RegExp(
   String.raw`\s*(?:(?<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)` +
@@ -678,7 +678,7 @@ const LEGACY_TOKEN = new RegExp(
   "uy",
 );
 
-/** A node of bracket-spelled type text, as Python's `ast` would parse it. */
+/** A node of bracket-spelled type text. */
 type LegacyNode =
   | { readonly kind: "name"; readonly id: string }
   | { readonly kind: "constant"; readonly value: string }
@@ -737,7 +737,7 @@ function legacySyntax(src: string): LegacyNode {
   const atom = (): LegacyNode => {
     const { kind, text } = next();
     if (kind === "name") {
-      // Python matches keywords before it reads identifiers in NFKC form, so `ｓｔｒ` is
+      // Keywords match before identifiers are read in NFKC form, so `ｓｔｒ` is
       // `str` but `Ｔｒｕｅ` is a name, not the constant.
       if (BUILTIN_CONSTANTS.has(text)) return { kind: "constant", value: text };
       return { kind, id: text.normalize("NFKC") };
@@ -745,7 +745,7 @@ function legacySyntax(src: string): LegacyNode {
     if (kind === "string") return { kind, value: decodeQuoted(text, src) };
     if (kind === "number") {
       if (!/^[0-9]+$/.test(text)) return { kind, value: Number(text) };
-      // Python refuses a leading zero in a decimal int other than zero itself.
+      // A decimal int other than zero itself can't have a leading zero.
       if (/^0+[1-9]/.test(text)) malformed();
       return { kind, value: BigInt(text) };
     }
@@ -836,7 +836,7 @@ function legacyLabel(node: LegacyNode, src: string): string {
   }
 }
 
-/** Spell a node as written, as Python's `ast.unparse` does. */
+/** Spell a node as written. */
 function unparse(node: LegacyNode): string {
   switch (node.kind) {
     case "name":
@@ -1189,9 +1189,9 @@ function unionParts(t: TypeExpr, registry: TypeRegistry, seen: ReadonlySet<strin
 /**
  * Render a parsed type in the parenthesized spelling `parseType` reads back.
  *
- * A float range end prints as Python's `repr` of the float (`1.0`, `1e-05`) and an int
- * end as its digits, as labels spell them. A `dict(K, V)` renders as `dict`, since its
- * key and value types are not kept.
+ * A float range end prints in its shortest form with a fraction digit or exponent (`1.0`,
+ * `1e-05`) and an int end as its digits, as labels spell them. A `dict(K, V)` renders as
+ * `dict`, since its key and value types are not kept.
  *
  * Example: `formatTypeExpr(parseType("Optional(Union(Buy,Sell))"))` gives
  * `"Optional(Union(Buy, Sell))"`.
@@ -1628,7 +1628,7 @@ export function typeName(value: unknown): string {
 }
 
 /**
- * Build a `TypeRegistry` from a raw `typedefs:` mapping (Python-typing surface).
+ * Build a `TypeRegistry` from a raw `typedefs:` mapping.
  *
  * A plain-object value is a RECORD (`RecordDef`; field type texts kept raw, in property
  * order). A `Literal(...)` string is an ENUM (`VariantDef`, tag-only). Any other string is

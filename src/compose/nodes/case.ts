@@ -171,7 +171,7 @@ export class CaseDescriptor extends NodeDescriptor {
     this.elseTag = fields.elseTag ?? null;
     const whenOrigins: unknown = fields.whenOrigins ?? [];
     if (!Array.isArray(whenOrigins)) throw new TypeError("CASE predicate origins must be an array");
-    // A frozen copy, so the origins can't change after the alignment check (Python takes a tuple).
+    // A frozen copy, so the origins can't change after the alignment check.
     this.whenOrigins = Object.freeze([...whenOrigins]);
     this._validateOriginAlignment();
     for (const origin of this.whenOrigins) {
@@ -456,7 +456,7 @@ function matchCondition(
   range: SourceRange | null,
 ): string {
   if (typeof value === "string") return `__on == ${quote(value, diagnostics, range)}`;
-  // Python's == has True == 1; the isinstance guard keeps a bool from equalling a number.
+  // `==` counts a bool as 0 or 1; the isinstance guard keeps a bool from equalling a number.
   if (typeof value === "boolean") return `__on == ${value} and isinstance(__on, bool)`;
   if (typeof value === "bigint" || typeof value === "number") {
     return `__on == ${numberText(value)} and not isinstance(__on, bool)`;
@@ -540,7 +540,7 @@ function desugarOn(desc: CaseDescriptor, on: string, diagnostics: LoadDiagnostic
         { range: missingRange ?? desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range },
       );
     }
-    // The branch check runs before the build in the pipeline (as in Python) and has made each
+    // The branch check runs before the build in the pipeline and has made each
     // `then:` and the `else:` a node name, so this cast and the `else_` one below hold.
     const handle = then as string;
     cases.push(

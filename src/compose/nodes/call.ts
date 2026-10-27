@@ -95,7 +95,7 @@ export class CallDescriptor extends NodeDescriptor {
     this.childLabel = fields.childLabel ?? null;
     this.callSite = fields.callSite ?? null;
     this.over = fields.over ?? null;
-    // Not `?? false`: an authored `parallel: null` stays null, as Python passes it through.
+    // Not `?? false`: an authored `parallel: null` stays null.
     this.parallel = fields.parallel === undefined ? false : fields.parallel;
     this.asserts = fields.asserts ?? [];
   }

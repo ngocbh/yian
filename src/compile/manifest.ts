@@ -73,7 +73,7 @@ const COMMON_NODE_FIELDS = [
   "env",
   "types",
 ];
-// The traits are fixed by the kind (Python's are class variables, outside its census), so they are
+// The traits are fixed by the kind, so they are
 // never identity of their own.
 const IGNORED_NODE_FIELDS = [
   "origin",
@@ -229,7 +229,7 @@ class ManifestContext {
   readonly types = new Set<object>();
 }
 
-/** Name `value`'s type for a message, `null` for `null` (Python's `NoneType`). */
+/** Name `value`'s type for a message, `null` for `null`. */
 function typeName(value: unknown): string {
   return value === null ? "null" : jsTypeName(value);
 }
@@ -443,7 +443,7 @@ function count(value: unknown, path: string, nullable: boolean): number | null {
   return value + 0;
 }
 
-/** Return `value`'s IEEE-754 binary64 bits, big-endian, as 16 hex digits (Python's `struct.pack("!d")`). */
+/** Return `value`'s IEEE-754 binary64 bits, big-endian, as 16 hex digits. */
 function floatHex(value: number): string {
   const view = new DataView(new ArrayBuffer(8));
   view.setFloat64(0, value);
@@ -774,7 +774,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
   };
 
   // Emitted only when non-empty, so a node without `isinstance` or a `T(...)` constructor doesn't
-  // carry the key (the shape follows Python's manifest).
+  // carry the key.
   const types: unknown = node.types;
   if (!isExactly(types, Map)) throw new TypeError(`${path}.types: expected Map, got ${typeName(types)}`);
   const typeEntries = sortedStringKeys(types, `${path}.types`).map((name) => {
@@ -790,7 +790,7 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     case NodeKind.END: {
       const end = node as EndNode;
       const list = end.mode === "list";
-      // A value terminal encodes as a record END, as Python's manifest does.
+      // A value terminal encodes as a record END.
       manifest.mode = list ? "list" : "record";
       manifest.names = list ? null : canonicalSequence(end.names, ctx, `${path}.names`);
       if (end.mode === "record" && end.names.length <= 1) {
@@ -849,8 +849,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       const tool = node as ToolNode;
       manifest.tool_id = tool.toolId;
       const retries = count(tool.retries, `${path}.retries`, false);
-      // Left out at zero, so retries don't change the identity of flows that don't set them (the
-      // shape follows Python's manifest).
+      // Left out at zero, so retries don't change the identity of flows that don't set
+      // them.
       if (retries !== 0) manifest.retries = retries;
       // Left out when empty, as for every tool but an ask with an `output:`.
       if (tool.answerSchema.length > 0) {
@@ -880,12 +880,12 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         manifest.max_iters = count(spawner.maxIters, `${path}.maxIters`, true);
         manifest.predicate = canonicalValue(spawner.predicate, ctx, `${path}.predicate`);
         manifest.predicate_kind = spawner.predicateKind;
-        // `times` is a typed value, as in Python's manifest; it passes `count` first, so a forged
+        // `times` is a typed value; it passes `count` first, so a forged
         // float is refused rather than written as a float.
         const times = spawner.times === null ? null : BigInt(count(spawner.times, `${path}.times`, false));
         manifest.times = canonicalValue(times, ctx, `${path}.times`);
         // Left out for a total loop so the feature doesn't change the identity of flows that don't
-        // use it (the shape follows Python's manifest).
+        // use it.
         if (spawner.returnedFields !== null) manifest.returned_fields = [...spawner.returnedFields];
       }
       break;
@@ -1002,7 +1002,7 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
       wiring: Object.fromEntries(wiringEntries),
     };
     // Declared binding types live beside the wiring rather than inside it, and only when present,
-    // so typing doesn't change the identity of untyped flows (the shape follows Python's manifest).
+    // so typing doesn't change the identity of untyped flows.
     if (bindingTypes.length > 0) manifest.binding_types = Object.fromEntries(bindingTypes);
     if (topologyOnly && flow.inputConnections.length > 0) {
       manifest.input_connections = flow.inputConnections

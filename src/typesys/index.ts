@@ -1,14 +1,12 @@
 /**
- * The type system's public surface, as Python's `yian.typesys`: typed values, the type
- * language and the variable pool.
+ * The type system's public surface: typed values, the type language and the variable pool.
  *
- * Python's `AnyValue`, `DateValue` and `DateTimeValue` carriers are all `TypedValue` here.
- * `StorageKind`, `Value`, `ValueRecord` and `PoolWire` name shapes Python leaves untyped;
- * `TypedValue` and `VariablePool` use them in their public signatures. `isRecord` and
- * `isList` are the plain-object and plain-array tests `buildValueAs` uses, so callers read a
- * record or list exactly as the type system does (Python checks `isinstance(value, dict)`
- * inline), and `jsTypeName` names a rejected value's type the same way; `typeName` names
- * it as Python's `type(x).__name__` would, for messages that keep Python's wording.
+ * Every typed value, a date or datetime included, is a `TypedValue`. `StorageKind`, `Value`,
+ * `ValueRecord` and `PoolWire` name the shapes `TypedValue` and `VariablePool` use in their
+ * public signatures. `isRecord` and `isList` are the plain-object and plain-array tests
+ * `buildValueAs` uses, so callers read a record or list exactly as the type system does, and
+ * `jsTypeName` names a rejected value's type the same way; `typeName` names it as messages
+ * spell types (`int`, `str`, `NoneType`).
  */
 
 export type { PoolWire } from "./pool.ts";

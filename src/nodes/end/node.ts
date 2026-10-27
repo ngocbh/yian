@@ -39,7 +39,7 @@ import { Parameter } from "../contracts.ts";
 /**
  * Return the input `name` from `inputs`, reading only an own property.
  *
- * @throws RangeError when `inputs` has no own property `name` (Python's `KeyError`).
+ * @throws RangeError when `inputs` has no own property `name`.
  */
 function inputOf(inputs: Record<string, unknown>, name: string): unknown {
   if (Object.hasOwn(inputs, name)) return inputs[name];

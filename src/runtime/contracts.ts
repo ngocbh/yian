@@ -248,7 +248,7 @@ export class BackwardCapture {
     const { inputNames = [], variableNames = [], scope = null } = options;
     validateDeclaredNames(inputNames, "input_names");
     validateDeclaredNames(variableNames, "variable_names");
-    // A scope is frozen by its constructor, so it is held without rebuilding, unlike Python.
+    // A scope is frozen by its constructor, so it is held without rebuilding.
     if (scope !== null && !isExactly(scope, ExecutionScope)) {
       throw new TypeError("scope must be an ExecutionScope or null");
     }

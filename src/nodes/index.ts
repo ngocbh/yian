@@ -1,5 +1,5 @@
 /**
- * The pure node contract, as Python's `yian.nodes`.
+ * The pure node contract.
  *
  * Nodes consume bound input records and return the closed `Output | Route | Grow` result sum.
  * Spawners return only a canonical `Grow` seed (plus ids to prune); they never build compiled graph
@@ -11,8 +11,8 @@
  *
  * `base.ts` owns the `Node` base class and its results, `contracts.ts` the semantic carriers,
  * `binding.ts` the binder, and `ids.ts` the deterministic child ids. This index re-exports
- * Python's `__all__` and nothing else: no node kind, none of the binder and none of the ids; their
- * callers import the module that defines them.
+ * the contract's public names and nothing else: no node kind, none of the binder and none of
+ * the ids; their callers import the module that defines them.
  *
  * Knows about: diagnostics, expr, memory contracts, typesys, and peer node modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.

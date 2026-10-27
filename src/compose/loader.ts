@@ -105,7 +105,7 @@ export type ChildResolver = (path: string, version: string | null) => ComposedFl
 const UNLOCATED_DIAGNOSTICS = new LoadDiagnostics();
 
 // The fatal decoder refuses a file that isn't UTF-8; a BOM stays in the text, and the reader
-// turns `\r\n` and a lone `\r` into `\n`, as Python's `Path.read_text()` reads it.
+// turns `\r\n` and a lone `\r` into `\n`.
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Say whether a file-system error means the path doesn't exist. */

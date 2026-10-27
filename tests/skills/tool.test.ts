@@ -1,4 +1,4 @@
-/** The load_skill tool schema, dispatch, and system-message listing; a port of `tests/skills/test_tool.py`. */
+/** The load_skill tool schema, dispatch, and system-message listing. */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -52,7 +52,7 @@ test("listing is sorted, one line per skill, and empty is identity", () => {
 test("listing truncates long descriptions", () => {
   const long = new Skill({ name: "long", description: "x".repeat(2000), instructions: "" });
   expect(systemPromptWithSkills("B", [long]).split("\n").at(-1)).toBe("- long: " + "x".repeat(1023) + "…");
-  // TS-only: the cap counts code points, so a surrogate pair is never split.
+  // The cap counts code points, so a surrogate pair is never split.
   const emoji = new Skill({ name: "long", description: "😀".repeat(2000), instructions: "" });
   expect(systemPromptWithSkills("B", [emoji]).split("\n").at(-1)).toBe("- long: " + "😀".repeat(1023) + "…");
 });
@@ -104,7 +104,7 @@ test("invoke rejects bad arguments", () => {
     () => invokeLoadSkill(granted, { name: "other" }),
     "load_skill: skill 'other' is not granted to this node",
   );
-  // TS-only: only own keys are arguments; an inherited `name` is not one, an own `__proto__` is.
+  // Only own keys are arguments; an inherited `name` is not one, an own `__proto__` is.
   expectSkillError(() => invokeLoadSkill(granted, Object.create({ name: "notes" })), "needs a string `name`");
   expectSkillError(
     () => invokeLoadSkill(granted, JSON.parse('{"name": "notes", "__proto__": 1}')),

@@ -3,9 +3,7 @@
  * reads for a tool result, a reported tool error, a skipped call, or a call a crash, a deadline or
  * an interrupt closed.
  *
- * Python's `nodes/agent/memory.py` also records model and tool effects into a session memory's
- * transcript and projects that history for the model; TS yian has no session memory, so an
- * AGENT's model reads only this start's messages.
+ * yian has no session memory, so an AGENT's model reads only this start's messages.
  *
  * Knows about:   diagnostics, memory contracts, typesys, and the peer AGENT module `live`.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
@@ -30,7 +28,7 @@ export function systemPromptWithMemory(base: string, sections: readonly MemorySe
     order: "outer-to-local",
     sections: sections.map((section, index) => ({ index: index + 1, memory: section.memory, text: section.text })),
   };
-  // The keys are ASCII, so canonical JSON's key order is Python's `sort_keys` order.
+  // The keys are ASCII, so canonical JSON's key order is plain sorted order.
   return (
     base +
     "\n\nMemory context (canonical JSON; sections are ordered from outer " +

@@ -613,7 +613,7 @@ function itemReferenceContract(source: unknown, item: ValueContract | null): Out
 
 /**
  * Render a literal as its text form: compact JSON (`true`, `null`, `"text"`, `[1,"a"]`,
- * `{"k":2}`), the form messages use for values; Python's `shown_literal` spaced its separators.
+ * `{"k":2}`), the form messages use for values.
  *
  * @param value The literal to render.
  * @returns `writeAsJson`'s text; `valueRepr` for anything it can't write.

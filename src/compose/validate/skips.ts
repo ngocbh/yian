@@ -602,7 +602,7 @@ function nullGroups(operand: ExprNode, known: ReadonlySet<string>): Set<string>[
     let combined: Set<string>[] = [new Set()];
     for (const child of operand.children) {
       const groups = nullGroups(child, known);
-      // Keep the first of equal sets, in order, as Python's `dict.fromkeys` over frozensets does.
+      // Keep the first of equal sets, in order.
       const unique = new Map<string, Set<string>>();
       for (const a of combined) {
         for (const b of groups) {

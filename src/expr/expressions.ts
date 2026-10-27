@@ -623,7 +623,7 @@ const EXACT_LIMIT = 2n ** 53n;
 /** Return the float nearest `x / y` (ties to even); `0n / -5n` is `-0`. */
 function trueDivide(x: bigint, y: bigint): number {
   // Both convert exactly, so the float division is correctly rounded. Beyond 2^53,
-  // `Number(x) / Number(y)` would round twice, while Python's int / int is correctly rounded.
+  // `Number(x) / Number(y)` would round twice, so the quotient is rounded once here.
   if (-EXACT_LIMIT <= x && x <= EXACT_LIMIT && -EXACT_LIMIT <= y && y <= EXACT_LIMIT) return Number(x) / Number(y);
   const quotient = roundQuotient(x < 0n ? -x : x, y < 0n ? -y : y);
   return x < 0n !== y < 0n ? -quotient : quotient;
@@ -1141,7 +1141,7 @@ class EvalExpr {
   }
 
   /**
-   * `base[lower:upper]` on a list, as Python's `slice.indices` with step 1: an omitted lower is 0
+   * `base[lower:upper]` on a list: an omitted lower is 0
    * and an omitted upper the length, a negative bound counts from the end, and both clamp to
    * `[0, n]`. A null or missing base is a miss (a slice of null misses, where a `.field` of
    * null raises), so `${xs[1:] :- []}` falls back, and its bounds aren't read; a null base's
@@ -1183,7 +1183,7 @@ class EvalExpr {
   }
 
   /**
-   * A list comprehension, as Python's nested loops: the first iterable in the enclosing scope,
+   * A list comprehension, as nested loops: the first iterable in the enclosing scope,
    * each later clause once per binding of the clauses before it, an `if` keeping a binding when
    * its condition is truthy, and the elem appended after the last clause. The clauses run depth
    * first without recursion, so a long comprehension can't overflow the stack. When tracing, the
@@ -1275,7 +1275,7 @@ class EvalExpr {
     // Only a hand-built tree can read a variable outside its comprehension.
     if (binding === undefined) throw new ExpressionError(`comprehension variable ${reprText(name)} read outside its comprehension`);
     const { steps } = splitReference(node);
-    // A null item is returned as is, as in Python; a `.field` on it follows the step table.
+    // A null item is returned as is; a `.field` on it follows the step table.
     const [value, complete] = this.walkSteps(binding.value, () => declaredOf(binding.type), steps, name, null);
     if (this.#trace && binding.route !== null && complete && value !== null) {
       this.#frames.at(-1)!.route = binding.route.project(steps.map((step) => step.name));
@@ -1590,8 +1590,8 @@ export interface TraceOptions extends Omit<EvalOptions, "item"> {
  *
  * The one evaluator for every `${...}` construct: references (bare, dotted with `.` and `?.`,
  * `item`-scoped), arithmetic and comparisons over values (so text + text and list + list
- * concatenate), boolean combinators, list literals, list slices (`xs[a:b]`, as Python's with step
- * 1; a slice of a miss or `null` is a miss), list comprehensions (as Python's; a `null` item is
+ * concatenate), boolean combinators, list literals, list slices (`xs[a:b]`; a slice of a miss or
+ * `null` is a miss), list comprehensions (a `null` item is
  * returned as is), and coalesce / default / required. The operators follow the TS
  * number model: an int is a `bigint` at any size, a bool counts as 0 or 1, `/` always gives a
  * float, and a float result is IEEE's (`Infinity` is a value, NaN an error).

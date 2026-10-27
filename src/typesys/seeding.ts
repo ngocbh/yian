@@ -7,7 +7,7 @@ import { buildValueAs, ValueKind } from "./values.ts";
 
 /**
  * Return the clock time `epochMs` (epoch milliseconds, whose fraction carries microseconds) as
- * an ISO-8601 datetime in UTC, spelled as Python's `isoformat()`: a `T` separator, a fraction
+ * an ISO-8601 datetime in UTC: a `T` separator, a fraction
  * of 6 digits only when the microseconds are non-zero, and the offset `+00:00`. The real clock
  * (`Date.now()`) has millisecond resolution, so its fraction ends in `000`.
  *

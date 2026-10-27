@@ -237,7 +237,7 @@ export class MemoryRuntime {
    * Close every opened session in reverse key order exactly once.
    *
    * A later call, even while the first is still closing, waits for the first to finish and then
-   * resolves; it never rejects and adds no notes (Python's returns at once).
+   * resolves; it never rejects and adds no notes.
    *
    * @throws the first session close failure, after every session was closed; later failures are
    *   noted on it.
@@ -247,8 +247,8 @@ export class MemoryRuntime {
   }
 
   /**
-   * @internal Close keeping `primary.error` as the initiating failure (Python's
-   * `_close_preserving`): every close failure is noted on it instead of thrown. `null` is `close()`.
+   * @internal Close keeping `primary.error` as the initiating failure:
+   * every close failure is noted on it instead of thrown. `null` is `close()`.
    * A later call waits for the first close, never rejects and adds no notes; a session's `close`
    * must not await it.
    */

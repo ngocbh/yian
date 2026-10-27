@@ -252,7 +252,7 @@ class RunInputs {
     const wiring = new Map<string, unknown>(present ? [[name, `\${input.${name}}`]] : []);
     let record: ValueRecord;
     try {
-      // The pool checks values as they go in, where Python's binding checks them.
+      // The pool checks values as they go in.
       const pool = new VariablePool(this.startId);
       pool.set(this.startId, present ? { [name]: this.supplied.get(name) } : {});
       record = bindParams([parameter], wiring, pool);

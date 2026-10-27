@@ -9,7 +9,6 @@
 # rebuilt, never recorded), and the AGENT binds plain references. Prompts call only
 # formatting builtins (join, lower, render_as_json, upper), so `len` stays in bindings.
 # The budget and the summarizer read the messages' text parts only.
-# Comprehensions, len(), slices and the built-in Message are TS-only.
 
 id: compact_history
 name: compact_history

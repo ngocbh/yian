@@ -1,27 +1,29 @@
 # Tool use — a TOOL node (deterministic, no LLM) feeds an AGENT node.
 # A `tool` uses `tool_id:` + `input:` (the tool's argument names), and may declare
-# `output:`; every value the tool returns is checked against it. The id must be
-# registered in Python before the flow runs:
+# `output:`; every value the tool returns is checked against it. The host passes the tool
+# to the run:
 #
-#   from typing_extensions import TypedDict
-#   from yian.tools import register_tool
+#   import { runFlow, tool } from "@ngocbh/yian";
 #
-#   class Fact(TypedDict):
-#       text: str
-#       source: str
+#   const getFacts = tool({
+#     name: "get_facts",
+#     description: "Fetch recent facts for a subject.",   // what the model sees
+#     parameters: {
+#       type: "object",
+#       properties: { query: { type: "string" }, limit: { type: "integer" } },
+#       required: ["query"],
+#     },
+#     execute: async ({ query, limit }) => fetchFacts(String(query), Number(limit ?? 5)),
+#   });
 #
-#   @register_tool("get_facts")
-#   def get_facts(query: str, limit: int = 5) -> list[Fact]:
-#       "Fetch recent facts for a subject."   # docstring = what the model sees
-#       ...
+#   await runFlow(flow, { subject }, { tools: { get_facts: getFacts } });
 #
-# or passed to one run only: run_flow(flow, inputs, tools={"get_facts": get_facts}).
-# When the run starts, the node's inputs and output: are checked against
-# get_facts's argument and return types.
+# When the run starts, the node's inputs and output: are checked against get_facts's
+# parameters and output schema; a missing tool fails the run before it starts.
 
 id: tool-use
 name: tool_use
-description: Call a registered tool, then have an AGENT node write from the result.
+description: Call a host tool, then have an AGENT node write from the result.
 
 typedefs:
   Fact: {text: str, source: str}
@@ -32,7 +34,7 @@ input:
 nodes:
   facts:
     kind: tool
-    tool_id: get_facts             # a registered or per-run tool id
+    tool_id: get_facts             # a tool the host passes to the run
     input:                         # each value is a ${...} ref or a literal
       query: ${input.subject}
       limit: 5

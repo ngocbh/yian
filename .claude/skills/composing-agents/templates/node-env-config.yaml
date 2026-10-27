@@ -2,10 +2,10 @@
 #
 # `env:` is a static mapping of config keys a node's own implementation reads (the engine
 # never interprets it). A flow-level `env:` is the default for every node; each node overrides
-# individual keys. Merge is static at build time ({**flow_env, **node_env}, node wins),
-# flow-local (a called child flow does NOT inherit this flow's env), literals only.
+# individual keys (the node wins). The merge happens at load, stays in this flow (a called
+# child flow does NOT inherit this flow's env), and takes literals only.
 #
-# Keys in use today:
+# Keys yian reads:
 #   max_tool_iterations (AGENT node) — tool-loop turns before the node fails with
 #                                 agent.max_tool_iterations (default -1 = no cap; set a
 #                                 positive int to bound it).

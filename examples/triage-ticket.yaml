@@ -5,14 +5,14 @@
 #      (category + priority + one-line summary + sentiment) — not free text. With a
 #      declared record `output:`, the engine constrains the model to that shape
 #      (native structured output where the provider supports it, JSON otherwise) and
-#      enforces it at the write boundary.
+#      checks the reply against it.
 #   2. `reply` reads individual FIELDS of that record (`${triage.output.priority}`, …)
 #      and drafts a short, tone-aware response.
 #
 # Exercises (the structured-output contract): a record `output:` with a nested
 # `Literal(...)` enum field, and downstream field-access references into the record.
-# Both agents are tool-free AGENT nodes, so it runs against any provider/model — including a
-# local Ollama model — with no extra Python.
+# Both agents are tool-free AGENT nodes, so it runs against any provider and model, including a
+# local Ollama model.
 #
 # Run it with:
 #   yian run examples/triage-ticket.yaml --input \

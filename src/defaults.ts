@@ -70,8 +70,7 @@ function entry<N extends string>(
 // stacks differ: under a 1 MiB stack the `yaml` package composes 793 levels on Node and
 // 818 on Bun, 3975 in a Bun Worker. Each limit's measured maximum is the deepest input that
 // loads, runs, replays and resumes with every limit lifted; the AGENT output limit's builds
-// the reply schema and reads a reply, with no run (the method is on the Reference page,
-// `docs/src/content/docs/reference.md`).
+// the reply schema and reads a reply, with no run.
 export const ENTRIES = Object.freeze([
   // Language safety limits.
   // yian's JSON writer and reader are iterative; the other value walkers recurse per

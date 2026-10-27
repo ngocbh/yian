@@ -94,9 +94,9 @@ $ yian run greet.yaml --input name=Ada --input times=2
 Hi Ada! Hi Ada!
 ```
 
-The prompt for each input shows its type and whether it is required or has a default, such as
-`topic (str) *` or `window (int) [default: 30]`. A list or record input opens a JSON editor; an
-input that may be null offers `Set null`. Ctrl-C or the end of input cancels the run.
+Each input prompt shows the type and whether it is required or has a default, such as
+`topic (str) *` or `window (int) [default: 30]`. A list or record opens a JSON editor; a nullable
+input offers `Set null`. Ctrl-C or the end of input cancels: `run cancelled`, exit 1.
 
 ### Run logs and resuming
 
@@ -116,8 +116,8 @@ with, not the files on disk now, so an edited flow needs a new run. It takes no 
 - An unfinished run retries the nodes that started but never finished. A model call or tool call
   that was cut off may run twice.
 - Before it appends anything, the resume checks each provider key or saved login the run
-  recorded. A missing key prompts in a terminal; a changed key or a replaced login stops the
-  resume with exit 1 and leaves the log as it was.
+  recorded. A missing key prompts in a terminal; a changed key, a replaced login, or a key that
+  came from a host stops the resume with exit 1 and leaves the log as it was.
 - The `YIAN_*` values must match the ones the run started with. Each one that differs is named,
   with the setting to use (see [Defaults and limits](/reference/#defaults-and-limits)).
 - Without `-w`, a resume keeps the recorded worker count.
@@ -183,8 +183,8 @@ debug yian itself.
 
 ### Stopping a run
 
-Ctrl-C, SIGTERM or SIGHUP stops a run at any point, prints `cancelled by user` and exits 130. Once
-the log exists, `yian run --resume` continues the run. A second signal ends the process at once.
+A signal (SIGINT, SIGTERM, SIGHUP) or Ctrl-C at an `ask` prompt stops a run: `cancelled by user`,
+exit 130. Once the log exists, `yian run --resume` continues it. A second signal ends at once.
 
 ## yian chat
 
@@ -202,7 +202,7 @@ $ yian chat support.yaml --inbox questions --input team=billing
 | `--inbox` | name | The inbox input to send lines to, when the flow has several |
 | `-i`, `--input` | `k=v` | Another input. Repeat it for more |
 | `--inputs` | file | A JSON file of the other inputs |
-| `--log` | path | Write the run log here instead of the default location |
+| `--log` | path | Write the run log here instead of the default location. The path must not exist |
 | `-w`, `--num-workers` | int | How many nodes may run at once (default 8; `0` for one at a time) |
 | `--provider` | name | Provider for agents that set none |
 | `--model` | name | Model for agents that set none |
@@ -211,18 +211,19 @@ $ yian chat support.yaml --inbox questions --input team=billing
 - Each time the run waits, a `> You:` prompt shows on stderr. Your line goes to the inbox and the
   run moves on. The output of every node named `reply` prints on stdout as it finishes.
 - An `Inbox(Message)` gets your line as a user message with one text part.
-- `/exit`, `/quit` or Ctrl-D closes the inbox. The flow finishes, `session ended` prints, and the
-  chat exits 0.
+- `/exit`, `/quit` or Ctrl-D closes the inbox; once the flow finishes: `session ended`, exit 0.
 - Ctrl-C while a reply runs interrupts it, and the prompt comes back. A second Ctrl-C within 2
   seconds, or Ctrl-C at the prompt, cancels the run: `chat cancelled`, exit 130.
-- On a terminal, Esc takes back the lines the run hasn't read yet, puts them back in the prompt, and stops the
+- SIGTERM, SIGHUP, or Ctrl-C at an `ask` prompt stops the run: `chat stopped; the run is in LOG`,
+  exit 130.
+- On a terminal, Esc takes back the lines the run hasn't read yet into the prompt and stops the
   reply. It never cancels the run.
+- A line the inbox refuses prints `not sent: REASON`, and the chat goes on.
 - While the prompt is up, the chat wakes the run when a `sleep` or a timeout is due.
-- A failed run prints its error and exits 1. The log stays; `yian status LOG` shows where it
-  stands.
+- A failed run prints its error and exits 1; `yian status LOG` shows where it stands.
 
-`yian chat` opens no MCP servers, loads no skills and builds no memories. Use `yian run` for flows
-that need them. See [Inboxes and waiting](/inboxes/) for how a flow reads its inbox.
+`yian chat` opens no MCP servers, loads no skills and builds no memories. See
+[Inboxes and waiting](/inboxes/) for how a flow reads its inbox.
 
 ## yian check
 
@@ -359,8 +360,8 @@ $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
 | `--json` | | Print one JSON document |
 
 Give exactly one of `--auth-file` and `--provider`. The key comes from stdin, never from the
-command line or the environment; an empty stdin sends none. Azure has no model listing. A failed
-listing exits 1.
+command line or the environment; an empty stdin, or a terminal, sends none. Azure has no model
+listing. A failed listing exits 1.
 
 ## yian config check
 
@@ -430,9 +431,9 @@ instead. `error.code` is one of the [CLI error codes](/reference/#cli-error-code
 | Code | Meaning |
 |---|---|
 | `0` | Success. Also a run that ends waiting, and `yian status` whatever the status |
-| `1` | A reported problem: a failed run, a flow that doesn't load, a setup error, a bad `YIAN_*` value, a failed check, login or listing. With `--json`, its document is on stdout |
+| `1` | A reported problem: a failed run, a flow that doesn't load, a setup error, a bad `YIAN_*` value, a cancelled input prompt, a failed check, login or listing. With `--json`, its document is on stdout |
 | `2` | A usage error: an unknown flag, a missing argument, an undeclared input, missing required inputs off a terminal, or flags that don't go together. The message is on stderr and there is no document |
-| `130` | Stopped by Ctrl-C or a signal. There is no document |
+| `130` | Stopped by a signal, or by Ctrl-C during the run. There is no document |
 
 Any other exit, a crash included, prints no document; treat it as an internal error.
 

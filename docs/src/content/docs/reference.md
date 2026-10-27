@@ -25,7 +25,7 @@ Each entry is in one of three groups:
 
 ### Setting a value
 
-- A value is a plain decimal integer: `0`, or digits with no leading zero and an optional `-`.
+- A value is a plain decimal integer: `0`, or digits with no leading zero and an optional leading `-`.
   Spaces, `_`, `+`, leading zeros, `-0` and exponents are refused.
 - An empty variable counts as unset.
 - An entry with no maximum takes values up to 9,007,199,254,740,991.
@@ -108,9 +108,6 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_QUESTION_OPTION_CHARS` | input cap | 80 | 2 or more | Longest question option shown to the user |
 | `YIAN_MAX_KEY_PROMPTS` | input cap | 3 | 1 or more | Times the CLI asks for an API key before giving up |
 
-- The value nesting limit also bounds how deep an expression may nest.
-- The nesting limits keep the deepest input yian accepts the same on Node and Bun. Each maximum
-  sits well below the deepest input shown to load, run, replay and resume under a 1 MiB stack.
 - TOOL retries wait `YIAN_TOOL_RETRY_DELAY_SECONDS`, then twice that, and so on, up to
   `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS`. Each wait is picked at random between half and all of its
   step.
@@ -125,7 +122,7 @@ yian reads these variables:
 |---|---|
 | `YIAN_<NAME>` | Changes one default or limit; there is one per row of the [table above](#all-defaults-and-limits) |
 | `YIAN_DEFAULT_PROVIDER` | The provider for agents that set none, ahead of the saved default login |
-| `YIAN_DEFAULT_MODEL` | The model for agents that set none, ahead of the saved login's model |
+| `YIAN_DEFAULT_MODEL` | The model for agents that set none, ahead of the saved login's model. Ignored unless a default provider is set |
 | `YIAN_AUTH_FILE` | The saved-logins file to use (see [Files and folders](#files-and-folders)) |
 | `HOME` | Your home folder, for `~/.yian`, `~/.config` and the skill folders. When unset or empty, yian asks the system |
 | `XDG_CONFIG_HOME` | The folder that holds `yian/auth.json`, in place of `~/.config` |
@@ -145,7 +142,7 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 | `~/.yian/runs/<run_id>/log.jsonl.lock` | The lock the process writing the log holds |
 | `~/.yian/runs/<run_id>/media/` | Media files the run keeps, named by their SHA-256 |
 | `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it |
-| `DIR/<flow id>/<key>.sqlite` | A memory kept with `--memory-root DIR`. A profile memory is a `.md` file |
+| `DIR/<flow id>/<key>.sqlite` | A memory kept with `--memory-root DIR`, or at `PATH` with `--memory-storage KEY=PATH`. A profile memory is a `.md` file with hidden `.<file>.lock`, `.versions` and `.writes.jsonl` files beside it. Without either flag, memory stays in RAM for one run |
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |
 
@@ -203,6 +200,42 @@ A `--json` command that fails without its own result prints an error document wh
 | `models.timeout` | The listing took longer than `--timeout`. `error.status` is `null` |
 | `skill.invalid` | `yian skills check`: a directory holds no valid `SKILL.md` |
 
+## Memory and learning codes
+
+A [learning pass](/learning/) that fails, and a `memory_commit_failed` record, carry one of these
+codes. `X` is `episodic` or `reflective`. The failure's `retryable` says whether a retry may help.
+
+| Code | When |
+|---|---|
+| `backward.execute` | The learning pass threw while it computed its result |
+| `backward.result` | The learning pass returned an invalid result |
+| `backward.unfinished` | An earlier attempt stopped before it finished |
+| `memory.invalid_context` | The material a memory learns from couldn't be built for a node |
+| `memory.invalid_result`, `memory.unexpected` | A memory returned a malformed result, or threw an error with no code |
+| `storage.busy` | Another run owns the `.sqlite` file. Retryable |
+| `storage.corrupt`, `storage.io` | The file isn't a valid memory database, or reading or writing it failed |
+| `storage.version`, `storage.kind`, `storage.schema` | The file is from another version or memory type, or has an unsupported format |
+| `storage.path` | The path isn't a local regular file |
+| `storage.closed`, `storage.poisoned`, `storage.backend`, `storage.invalid_state` | The store was used after it closed or failed, or was given a bad value |
+| `X.config_conflict` | The memory's limits differ from the ones its store recorded |
+| `X.stale_generation` | Something was saved to the memory after the run started |
+| `X.invalid_snapshot`, `X.invalid_storage` | The recorded snapshot or the stored state is invalid |
+| `X.invalid_batch`, `X.invalid_commit_id`, `X.commit_collision` | A save's changes or id are invalid, or its id was used for other changes |
+| `X.invalid_context`, `X.closed`, `X.session_closed`, `X.busy` | The memory was called with a bad context, after it closed, or closed while in use |
+| `episodic.invalid_query`, `reflective.query` | Rewriting the recall query failed |
+| `reflective.invalid_mutation` | A lesson change adds a lesson that exists, or changes one that doesn't |
+| `reflective.max_items` | The lessons would exceed the memory's `max_items` |
+| `reflective.config` | The reflection model's configuration is invalid |
+| `reflective.model_construction`, `reflective.provider` | Building or calling the reflection model failed |
+| `reflective.structured_output`, `reflective.contract` | The reflection model can't give structured output, or its reply is invalid |
+| `profile.over_budget` | The learner's document is longer than `YIAN_PROFILE_MAX_CHARS` |
+| `profile.contract` | The learner's reply is empty or not wrapped in the document tags |
+| `profile.version_mismatch` | The document was edited after the learner read it. Retryable |
+| `profile.store_unavailable`, `profile.store_invalid` | The `.md` file couldn't be read or written, or holds an unreadable document |
+| `profile.snapshot_unavailable` | The document version the run recorded can't be restored |
+| `profile.model_construction`, `profile.provider` | Building or calling the learner model failed |
+| `profile.invalid_batch`, `profile.invalid_context`, `profile.closed`, `profile.session_closed`, `profile.reset_unsupported` | The memory was called with a bad save or context, after it closed, or asked to reset |
+
 ## Run log records
 
 A run log is a JSON Lines file: one record per line, appended and never rewritten. Each line is
@@ -214,7 +247,7 @@ compact JSON with its keys sorted:
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `23`. yian reads only this one; an older log reads as `run log schema N predates schema 23 and is not supported` |
+| `schema` | The record format, `23`. yian reads only this one. A log of schema 10 to 22 reads as `run log schema N predates schema 23 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |

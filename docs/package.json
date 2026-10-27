@@ -5,7 +5,7 @@
   "engines": { "node": ">=22.23.4" },
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node scripts/check-build.mjs",
     "preview": "astro preview"
   },
   "devDependencies": {

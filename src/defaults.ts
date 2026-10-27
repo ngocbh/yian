@@ -370,7 +370,7 @@ export const ENTRIES = Object.freeze([
   }),
   entry("MAX_QUESTIONS", {
     default: 4,
-    description: "Most questions a HUMAN_INPUT node may ask at once",
+    description: "Most questions an `ask` may put to the user at once",
     group: "input cap",
     minimum: 1,
   }),

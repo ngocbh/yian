@@ -4,6 +4,7 @@ scratch/
 # Distribution / packaging
 dist/
 node_modules/
+.astro/
 /bin/
 
 # Local env / secrets

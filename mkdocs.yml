@@ -44,21 +44,6 @@ extra_css:
 
 plugins:
   - search
-  - mkdocstrings:
-      handlers:
-        python:
-          paths: [src]
-          options:
-            show_root_heading: true
-            show_symbol_type_heading: true
-            show_symbol_type_toc: true
-            show_source: false
-            separate_signature: true
-            show_signature_annotations: true
-            signature_crossrefs: true
-            members_order: source
-            docstring_section_style: table
-            filters: ["!^_"]
 
 markdown_extensions:
   - admonition
@@ -97,4 +82,3 @@ nav:
     - Expressions: expressions.md
   - Python API: api.md
   - Defaults and limits: defaults.md
-  - API Reference: reference.md

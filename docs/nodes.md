@@ -206,4 +206,4 @@ OR-join/multi-writer contract.
 - **The engine stays kind-blind** — all that varies is the `NodeResult` a `run` returns.
 
 For the authoring surface of each kind (`kind:`, its fields, examples), see
-[Flow syntax](syntax.md). For each node class, see the [API reference](reference.md).
+[Flow syntax](syntax.md).

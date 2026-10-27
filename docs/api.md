@@ -2449,8 +2449,7 @@ The run log does not rebuild SessionMemory.
 without changing state if **any** turn is active or queued. When idle, it clears
 the conversation and advances the generation. Older run
 handles then fail as stale. Reset does not delete
-external provider history or files. See the [rendered contracts](reference.md#session-memory-foundation)
-for the lower-level signatures.
+external provider history or files.
 
 ## Diagnosing a failed run
 

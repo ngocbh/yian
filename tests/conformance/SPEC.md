@@ -1,16 +1,18 @@
 # The conformance case format
 
 The format of the cases under `cases/`, and the contract of their runner,
-`tests/conformance.ts`. A case states its expectations as data: load diagnostics, the run's
+`tests/conformance/runner.ts`. A case states its expectations as data: load diagnostics, the run's
 output, its run log projected to a *trace*, observer events, and so on. The runner turns a case
 into calls on yian and compares the results.
 
 ## Layout
 
 ```
-conformance/
+tests/conformance/
   README.md                       # what the suite is and how to run it
   SPEC.md                         # this file: the case format and the runner contract
+  runner.ts                       # the runner
+  runner.test.ts                  # the runner's own tests
   cases/<group>/<name>.yaml       # one case per file; its id is <group>/<name>
   cases/<group>/<name>.log.jsonl  # optional golden run log (see Running the suite)
   fixtures/                       # files cases share: CODE helpers, golden profiles, stub data
@@ -61,7 +63,7 @@ pass.
 Every case runs in a new temporary directory, the *case directory*:
 
 - `flow` is written to `flow.yaml`, and each `files` entry to
-  its relative path with mode 0600; `fixtures/` is a copy of `conformance/fixtures/`. The case
+  its relative path with mode 0600; `fixtures/` is a copy of `tests/conformance/fixtures/`. The case
   directory, and every directory the runner makes for `files`, is 0700 (yian's auth store refuses
   anything others can read; its own checks are pinned by unit tests, not by cases). A CODE
   reference resolves relative to the file that holds it, so `flow.yaml`, or a
@@ -206,7 +208,7 @@ generated path (`yian run` names its new run log on stderr) is checked without `
 given the path (`--log`).
 
 A `json` document, and each `json_lines` line, is checked as parsed (before the codec decoding)
-against `conformance/schema/cli.schema.json` before it is compared; a document that doesn't
+against `tests/conformance/schema/cli.schema.json` before it is compared; a document that doesn't
 match fails the case. The runner validates with `tests/schema.ts`, a small JSON Schema 2020-12
 validator that implements the keywords these schemas use.
 

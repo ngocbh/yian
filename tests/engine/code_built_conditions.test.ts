@@ -16,7 +16,7 @@ import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 
-const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 
 /** Return the error `promise` rejects with; fail when it resolves. */
 async function rejection(promise: Promise<unknown>): Promise<unknown> {

@@ -1462,7 +1462,7 @@ describe("status", () => {
       expect(await main(["status", "--json"], json.io)).toBe(0);
       const document = JSON.parse(json.stdout());
       expect(document.format).toBe("yian.cli.v1");
-      const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
+      const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
       const runsDocument = (schema["$defs"] as Record<string, Schema>)["runs_document"]!;
       expect(validate(schema, runsDocument, parseJson(json.stdout(), "plain"))).toEqual([]);
       expect(document.runs.map((run: { run_id: string }) => run.run_id)).toEqual([...rows.map((row) => row.runId), "held"]);

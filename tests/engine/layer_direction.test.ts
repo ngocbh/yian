@@ -635,8 +635,8 @@ describe("lints", () => {
 
 describe("runner lints", () => {
   // The conformance runner also runs on Node, so it holds to src's Bun rules.
-  const path = fileURLToPath(new URL("../conformance.ts", import.meta.url));
-  const runner = { path: "../tests/conformance.ts", text: readFileSync(path, "utf8") };
+  const path = fileURLToPath(new URL("../conformance/runner.ts", import.meta.url));
+  const runner = { path: "../tests/conformance/runner.ts", text: readFileSync(path, "utf8") };
   for (const lint of [BUN_GLOBAL, BUN_IMPORT]) {
     test(lint.name, () => {
       expect(report(lint.fix, lintViolations(lint, [runner]))).toBe("");

@@ -20,8 +20,8 @@ published.
 
 ## The code is the source of truth
 
-Check each statement against `src/`, `tests/` and `conformance/`. When the old page you are
-replacing and the code disagree, follow the code and say so in your PR description.
+Check each statement against `src/` and `tests/`. When the old page you are replacing and the
+code disagree, follow the code and say so in your PR description.
 
 ## Pages and links
 

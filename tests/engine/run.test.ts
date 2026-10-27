@@ -77,7 +77,7 @@ import {
   thrownBy,
 } from "./run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 
 /** Load inline Compose YAML whose CODE references resolve from the conformance fixtures. */
 function load(text: string): Promise<ComposedFlow> {

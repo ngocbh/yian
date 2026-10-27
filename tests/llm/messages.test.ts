@@ -1,8 +1,8 @@
 /**
  * Messages, requests and replies: the stable JSON shape, strict decoding and construction checks;
  * replay records; plus JavaScript's own values: ints of any size, `-0`, a `"__proto__"` key,
- * non-plain objects, `undefined` and array holes; and `conformance/schema/message.schema.json`,
- * which describes the JSON shape.
+ * non-plain objects, `undefined` and array holes; and
+ * `tests/conformance/schema/message.schema.json`, which describes the JSON shape.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -36,7 +36,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { FileRef } from "../../src/typesys/values.ts";
-import { type Case, decode, readCase, type Value } from "../conformance.ts";
+import { type Case, decode, readCase, type Value } from "../conformance/runner.ts";
 import { lintSchema, loadSchema, type Schema, validate } from "../schema.ts";
 
 /** JSON data a test edits freely. */
@@ -1197,7 +1197,7 @@ describe("message schema", () => {
   // It reads every case file, as checkCase's test does: under 1 s alone on a fast host, several
   // seconds on a slow or busy one, past bun's 5 s default.
   test("every scripted reply and request message in the conformance cases validates", () => {
-    const root = fileURLToPath(new URL("../../conformance/cases", import.meta.url));
+    const root = fileURLToPath(new URL("../conformance/cases", import.meta.url));
     const files = { reply: new Set<string>(), messages: new Set<string>() };
     const counts = { reply: 0, messages: 0 };
     const check = (kind: "reply" | "messages", file: string, value: Value) => {

@@ -27,16 +27,16 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { isRecord } from "../../src/typesys/values.ts";
-import { type Case, prepare, readCase } from "../conformance.ts";
+import { type Case, prepare, readCase } from "../conformance/runner.ts";
 import { withKinds } from "./stand_ins.ts";
 
-const CASES = fileURLToPath(new URL("../../conformance/cases/", import.meta.url));
+const CASES = fileURLToPath(new URL("../conformance/cases/", import.meta.url));
 
 /**
- * The repository's `conformance/` directory: the `baseDir` of a flow loaded through `loadFlow`
- * whose CODE nodes name `./fixtures/compose_codefns.ts:*`.
+ * The repository's `tests/conformance/` directory: the `baseDir` of a flow loaded through
+ * `loadFlow` whose CODE nodes name `./fixtures/compose_codefns.ts:*`.
  */
-export const CONFORMANCE_DIR = fileURLToPath(new URL("../../conformance", import.meta.url));
+export const CONFORMANCE_DIR = fileURLToPath(new URL("../conformance", import.meta.url));
 
 /** Load `text` with `CONFORMANCE_DIR` as its default `baseDir`, so the fixture CODE references resolve. */
 export const loadConformanceFlow = (text: string, options: Parameters<typeof loadFlow>[1] = {}) =>

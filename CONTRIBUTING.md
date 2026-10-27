@@ -17,12 +17,12 @@ Run focused tests while you work, then the full checks before you open a pull re
 
 ```bash
 bun run typecheck
-bun test ./tests/engine/kind_census.test.ts             # one file
-bun run build                                           # some tests run the built dist/ on Node
-bun run test                                            # every test, on Bun
-bun run test:node                                       # the same tests, on Node
-bun tests/conformance.ts                                # every conformance case
-bun tests/conformance.ts --case run-core/code_greeting  # one case
+bun test ./tests/engine/kind_census.test.ts                    # one file
+bun run build                                                  # some tests run the built dist/ on Node
+bun run test                                                   # every test, on Bun
+bun run test:node                                              # the same tests, on Node
+bun tests/conformance/runner.ts                                # every conformance case
+bun tests/conformance/runner.ts --case run-core/code_greeting  # one case
 ```
 
 When you change the docs site (`docs/`), also run:
@@ -33,7 +33,7 @@ bun test ./tests/docs
 ```
 
 [`docs/STYLE.md`](docs/STYLE.md) says how to write a docs page, and
-[`conformance/README.md`](conformance/README.md) how to add a conformance case.
+[`tests/conformance/README.md`](tests/conformance/README.md) how to add a conformance case.
 
 ## Pull requests
 

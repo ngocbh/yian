@@ -1,6 +1,6 @@
 /**
- * A small JSON Schema 2020-12 validator for the schemas in `conformance/schema/`: it implements
- * only the keywords those schemas use, and `lintSchema` keeps a schema to them.
+ * A small JSON Schema 2020-12 validator for the schemas in `tests/conformance/schema/`: it
+ * implements only the keywords those schemas use, and `lintSchema` keeps a schema to them.
  */
 
 import { readFileSync } from "node:fs";
@@ -43,9 +43,9 @@ export const KEYWORDS = new Set([
 export const ANNOTATIONS = new Set(["$schema", "title", "description", "$defs"]);
 export const TYPES = new Set(["null", "boolean", "integer", "number", "string", "array", "object"]);
 
-/** Return the schema `conformance/schema/<name>`, parsed. */
+/** Return the schema `tests/conformance/schema/<name>`, parsed. */
 export function loadSchema(name: string): Schema {
-  const path = fileURLToPath(new URL(`../conformance/schema/${name}`, import.meta.url));
+  const path = fileURLToPath(new URL(`./conformance/schema/${name}`, import.meta.url));
   return JSON.parse(readFileSync(path, "utf8")) as Schema;
 }
 

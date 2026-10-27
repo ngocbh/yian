@@ -94,9 +94,9 @@ page. A code is never renamed or reused.
 | `tests/compose/` | The loader |
 | `tests/llm/` | Messages, protocols and transport, with recorded provider replies (`cassettes/`) |
 | `tests/cli/`, `tests/skills/` | The CLI and skills |
-| `tests/*.test.ts` | Model config, providers, defaults, packaging and the conformance runner |
+| `tests/*.test.ts` | Model config, providers, defaults and packaging |
 | `tests/docs/`, `tests/examples/` | Every code block on the docs site and in the README, and `examples/` |
-| `conformance/cases/` | 2,000-odd cases written as data, run by `tests/conformance.ts` (see [`conformance/README.md`](conformance/README.md)) |
+| `tests/conformance/` | 2,000-odd cases written as data (`cases/`) and their runner, `runner.ts` (see [`tests/conformance/README.md`](tests/conformance/README.md)) |
 
 `tests/conftest.ts` is the preload: each test starts with built-in defaults, an empty auth store
 and an empty home. `tests/node_runner.ts` runs the same `bun:test` files on Node.

@@ -90,7 +90,7 @@ import {
   textReply,
 } from "./run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 const RUN_ID = "lifecycle-run";
 let dir: string;
 

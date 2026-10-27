@@ -17,5 +17,5 @@ Fixes #<!-- issue number -->
 <!-- The exact commands you ran and their results. -->
 
 ```bash
-bun run typecheck && bun run test && bun tests/conformance.ts
+bun run typecheck && bun run test && bun tests/conformance/runner.ts
 ```

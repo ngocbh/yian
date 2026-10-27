@@ -20,7 +20,7 @@ import { advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "./mcp_helpers.ts";
 import { rejected, textReply } from "./run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 let dir: string;
 
 beforeEach(() => {

@@ -105,22 +105,27 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: aware
   - - NodeSucceeded
     - node_id: aware
+      interrupted: false
   - - NodeStarted
     - node_id: naive
   - - NodeSucceeded
     - node_id: naive
+      interrupted: false
   - - NodeStarted
     - node_id: spaced
   - - NodeSucceeded
     - node_id: spaced
+      interrupted: false
   - - NodeStarted
     - node_id: zulu
   - - NodeSucceeded
     - node_id: zulu
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -130,6 +135,7 @@ expect:
         naive: null
         spaced: null
         zulu: null
+      interrupted: false
   - - RunSucceeded
     - output:
         aware: null

@@ -118,6 +118,7 @@ expect:
     - node_id: __start__
       output:
         s: sell
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -127,6 +128,7 @@ expect:
         note: n
         price: 1.5
         qty: 2
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -139,10 +141,12 @@ expect:
   - - NodeSucceeded
     - node_id: e
       output: else
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: else
+      interrupted: false
   - - RunSucceeded
     - output: else

@@ -100,6 +100,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: invoke
   - - NodeExpanded
@@ -113,12 +114,14 @@ expect:
   - - NodeSucceeded
     - node_id: invoke/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: invoke#0/__start__
   - - NodeSucceeded
     - node_id: invoke#0/__start__
       output:
         maybe: null
+      interrupted: false
   - - NodeStarted
     - node_id: invoke#0/leaf
   - - NodeFailed

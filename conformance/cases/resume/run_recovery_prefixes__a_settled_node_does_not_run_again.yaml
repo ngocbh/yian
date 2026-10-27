@@ -86,6 +86,7 @@ expect:
   - - NodeSucceeded
     - node_id: __end__
       output: Ada
+      interrupted: false
   - - RunSucceeded
     - output: Ada
   tool_calls:

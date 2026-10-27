@@ -101,9 +101,9 @@ expect:
     - [NodeStarted, {node_id: write}]
     - [ModelCallStarted, {model: gpt-5.5, node_id: write, provider: openai, purpose: chat, n: 2}]
     - [ModelCallFinished, {model: gpt-5.5, node_id: write, provider: openai, purpose: chat, n: 2}]
-    - [NodeSucceeded, {node_id: write, output: A line.}]
+    - [NodeSucceeded, {node_id: write, output: A line., interrupted: false}]
     - [NodeStarted, {node_id: __end__}]
-    - [NodeSucceeded, {node_id: __end__, output: A line.}]
+    - [NodeSucceeded, {node_id: __end__, output: A line., interrupted: false}]
     - [RunSucceeded, {output: A line.}]
   stream:
     - {chunk: A line., final: false, key: text, node_id: write, n: 2, index: 0}

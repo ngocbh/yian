@@ -69,15 +69,18 @@ expect:
       output:
         a: null
         b: null
+      interrupted: false
   - - NodeStarted
     - node_id: n
   - - NodeSucceeded
     - node_id: n
       output: lit
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: lit
+      interrupted: false
   - - RunSucceeded
     - output: lit

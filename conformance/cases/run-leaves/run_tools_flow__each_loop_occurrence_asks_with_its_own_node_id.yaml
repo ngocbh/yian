@@ -143,6 +143,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -160,11 +161,13 @@ expect:
       output:
         count: 0
         last: ''
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/ask
   - - NodeSucceeded
     - node_id: loop#0/ask
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
@@ -172,6 +175,7 @@ expect:
       output:
         count: 1
         last: ok
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
@@ -189,11 +193,13 @@ expect:
       output:
         count: 1
         last: ok
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/ask
   - - NodeSucceeded
     - node_id: loop#1/ask
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/__end__
   - - NodeSucceeded
@@ -201,6 +207,7 @@ expect:
       output:
         count: 2
         last: ok
+      interrupted: false
   - - NodeStarted
     - node_id: loop~2
   - - NodeSucceeded
@@ -209,6 +216,7 @@ expect:
         count: 2
         last: ok
       commit_as: loop
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -216,6 +224,7 @@ expect:
       output:
         count: 2
         last: ok
+      interrupted: false
   - - RunSucceeded
     - output:
         count: 2

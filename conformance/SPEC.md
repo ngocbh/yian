@@ -486,33 +486,23 @@ the failing node: `{code, message, node, frames, notes}`, with `node` null for a
 failure.
 
 **Raises**: `{class, message}`, plus `path` for a `TypeCheckError` (a list of field names and
-list indexes, `[]` at the root). `class` is the error's class name, read through the error-class
-table.
+list indexes, `[]` at the root). `class` is the error's class name.
 
-**Error-class table.** Class names are compared through one table, used for `raises` and for the
-error type in TOOL steps. It maps a class name to the case name. The case names are the TS
-names, except that the runner maps two classes to `ValueError`:
-
-- `RangeError` is the case's `ValueError`. A JS-internal `RangeError`, such as a stack overflow,
-  reads as `ValueError` too.
-- `RunLogSchemaError`, the `RangeError` a run log of a schema yian can't read throws, is the
-  case's `ValueError`.
-- Any other class compares by its name as given, a stub's declared class included.
-- A row mapping a TS class to a different case name is added by the change that introduces that
-  TS class; rows are only added.
+**Error classes.** A case names an error by its TS class as thrown (`error.name`), in `raises`
+and in the error type of TOOL steps: `RangeError`, `TypeError`, `RunLogSchemaError` and the
+like, a stub's declared class included. There is no mapping table.
 
 **Data form** of an event, stream chunk or `ask_user` request: a mapping of its fields by their
 snake_case names, at every depth of yian's own structures (never inside a value the flow
 produced, such as an output or an answer); fields that are null are left out at the top level
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
-The `started_at` of `ModelCallStarted` is left out (a time), and so is a `NodeSucceeded`'s
-`interrupted` when it is false. A model call event and an AGENT's
+The `started_at` of `ModelCallStarted` is left out (a time). A model call event and an AGENT's
 stream chunk name the step their record becomes by `n` (with `node_id`), and a chunk's `index`
 counts that step's chunks from 0.
 
 - An **event** is `[<EventName>]` or `[<EventName>, <data form>]`, for example
-  `[NodeSucceeded, {node_id: hello, output: hi Ada}]` and `[RunStarted]`.
+  `[NodeSucceeded, {node_id: hello, output: hi Ada, interrupted: false}]` and `[RunStarted]`.
 - A **stream chunk** is its data form.
 
 ## The trace

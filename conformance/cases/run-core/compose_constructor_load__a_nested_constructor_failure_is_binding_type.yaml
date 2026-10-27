@@ -98,6 +98,7 @@ expect:
         order:
           action: sell
           price: 1.5
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -105,6 +106,7 @@ expect:
       output:
         action: sell
         price: 1.5
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeFailed

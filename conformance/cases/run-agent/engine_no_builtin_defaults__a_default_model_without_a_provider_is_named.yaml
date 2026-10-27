@@ -12,7 +12,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: Agent 'write' has no provider or model; set llm_config.provider/model, pass --provider/--model, or run 'yian auth <provider>'; YIAN_DEFAULT_MODEL is set but names no provider; set YIAN_DEFAULT_PROVIDER or run 'yian auth <provider>'
   trace: []
   events: []

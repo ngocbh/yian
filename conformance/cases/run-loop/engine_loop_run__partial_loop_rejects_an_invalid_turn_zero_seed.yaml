@@ -81,6 +81,7 @@ expect:
     - node_id: __start__
       output:
         initial_n: not-an-int
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeFailed

@@ -69,12 +69,14 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: deep
   - - NodeSucceeded
     - node_id: deep
       output:
       - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - [leaf]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeFailed

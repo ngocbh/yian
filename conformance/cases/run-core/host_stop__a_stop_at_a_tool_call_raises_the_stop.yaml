@@ -34,7 +34,7 @@ expect:
   events:
   - [RunStarted]
   - [NodeStarted, {node_id: __start__}]
-  - [NodeSucceeded, {node_id: __start__, output: {}}]
+  - [NodeSucceeded, {node_id: __start__, output: {}, interrupted: false}]
   - [NodeStarted, {node_id: fetch}]
   tool_calls:
     lookup:

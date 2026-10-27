@@ -109,6 +109,7 @@ expect:
     - node_id: __start__
       output:
         kind: buy
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -116,6 +117,7 @@ expect:
       output:
         action: buy
         qty: 3
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -133,10 +135,12 @@ expect:
   - - NodeSucceeded
     - node_id: bought
       output: bought 3
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: bought 3
+      interrupted: false
   - - RunSucceeded
     - output: bought 3

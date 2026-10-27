@@ -54,7 +54,7 @@ expect:
   events:
     - [RunStarted]
     - [NodeStarted, {node_id: __start__}]
-    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}}]
+    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}, interrupted: false}]
     - [NodeStarted, {node_id: score}]
     - - ModelCallStarted
       - node_id: score
@@ -75,8 +75,8 @@ expect:
           cache_creation_tokens: null
           reasoning_tokens: null
         n: 1
-    - [NodeSucceeded, {node_id: score, output: {name: Ada, score: 3}}]
+    - [NodeSucceeded, {node_id: score, output: {name: Ada, score: 3}, interrupted: false}]
     - [NodeStarted, {node_id: __end__}]
-    - [NodeSucceeded, {node_id: __end__, output: {name: Ada, score: 3}}]
+    - [NodeSucceeded, {node_id: __end__, output: {name: Ada, score: 3}, interrupted: false}]
     - [RunSucceeded, {output: {name: Ada, score: 3}}]
   stream: []

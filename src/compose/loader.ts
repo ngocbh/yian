@@ -61,7 +61,7 @@ import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
 import { isMaxToolIterations } from "../nodes/agent/node.ts";
 import type { Node } from "../nodes/base.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
-import { pythonTypeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
+import { typeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
 import {
   isList,
   isRecord,
@@ -1705,7 +1705,7 @@ function loadDef(
   const diagnostics = scope.diagnostics;
   const where = `defs entry ${reprText(name)}`;
   if (!isRecord(body)) {
-    throw diagnostics.error(`${where}: body must be a mapping, got ${pythonTypeName(body)}`, {
+    throw diagnostics.error(`${where}: body must be a mapping, got ${typeName(body)}`, {
       range: defCursor?.range ?? null,
     });
   }

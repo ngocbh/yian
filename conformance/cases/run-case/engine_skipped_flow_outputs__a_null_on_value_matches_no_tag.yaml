@@ -89,10 +89,12 @@ expect:
     - node_id: __start__
       output:
         approve: true
+      interrupted: false
   - - NodeStarted
     - node_id: cls
   - - NodeSucceeded
     - node_id: cls
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -108,6 +110,7 @@ expect:
     - node_id: __end__
       output:
         v: null
+      interrupted: false
   - - RunSucceeded
     - output:
         v: null

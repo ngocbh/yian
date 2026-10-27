@@ -1362,6 +1362,7 @@ expect:
     - node_id: __start__
       output:
         values: [ten, twenty]
+      interrupted: false
   - - NodeStarted
     - node_id: many
   - - NodeExpanded
@@ -1376,18 +1377,21 @@ expect:
   - - NodeSucceeded
     - node_id: many/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/__start__
   - - NodeSucceeded
     - node_id: many#0/__start__
       output:
         n: ten
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/__start__
   - - NodeSucceeded
     - node_id: many#1/__start__
       output:
         n: twenty
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop
   - - NodeExpanded
@@ -1412,12 +1416,14 @@ expect:
     - node_id: many#0/loop#0/__start__
       output:
         n: ten
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#0/__start__
   - - NodeSucceeded
     - node_id: many#1/loop#0/__start__
       output:
         n: twenty
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#0/invoke
   - - NodeExpanded
@@ -1440,12 +1446,14 @@ expect:
     - node_id: many#0/loop#0/invoke/__start__
       output:
         n: ten
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#0/invoke/__start__
   - - NodeSucceeded
     - node_id: many#1/loop#0/invoke/__start__
       output:
         n: twenty
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#0/invoke/author
   - - ModelCallStarted
@@ -1463,6 +1471,7 @@ expect:
   - - NodeSucceeded
     - node_id: many#0/loop#0/invoke/author
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#0/invoke/author
   - - ModelCallStarted
@@ -1480,30 +1489,35 @@ expect:
   - - NodeSucceeded
     - node_id: many#1/loop#0/invoke/author
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#0/invoke/__end__
   - - NodeSucceeded
     - commit_as: many#0/loop#0/invoke
       node_id: many#0/loop#0/invoke/__end__
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#0/invoke/__end__
   - - NodeSucceeded
     - commit_as: many#1/loop#0/invoke
       node_id: many#1/loop#0/invoke/__end__
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#0/__end__
   - - NodeSucceeded
     - node_id: many#0/loop#0/__end__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#0/__end__
   - - NodeSucceeded
     - node_id: many#1/loop#0/__end__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop~1
   - - NodeExpanded
@@ -1536,12 +1550,14 @@ expect:
     - node_id: many#0/loop#1/__start__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#1/__start__
   - - NodeSucceeded
     - node_id: many#1/loop#1/__start__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#1/invoke
   - - NodeExpanded
@@ -1564,12 +1580,14 @@ expect:
     - node_id: many#0/loop#1/invoke/__start__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#1/invoke/__start__
   - - NodeSucceeded
     - node_id: many#1/loop#1/invoke/__start__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#1/invoke/author
   - - ModelCallStarted
@@ -1587,6 +1605,7 @@ expect:
   - - NodeSucceeded
     - node_id: many#0/loop#1/invoke/author
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#1/invoke/author
   - - ModelCallStarted
@@ -1604,30 +1623,35 @@ expect:
   - - NodeSucceeded
     - node_id: many#1/loop#1/invoke/author
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#1/invoke/__end__
   - - NodeSucceeded
     - commit_as: many#0/loop#1/invoke
       node_id: many#0/loop#1/invoke/__end__
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#1/invoke/__end__
   - - NodeSucceeded
     - commit_as: many#1/loop#1/invoke
       node_id: many#1/loop#1/invoke/__end__
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop#1/__end__
   - - NodeSucceeded
     - node_id: many#0/loop#1/__end__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop#1/__end__
   - - NodeSucceeded
     - node_id: many#1/loop#1/__end__
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/loop~2
   - - NodeSucceeded
@@ -1635,6 +1659,7 @@ expect:
       node_id: many#0/loop~2
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/loop~2
   - - NodeSucceeded
@@ -1642,27 +1667,32 @@ expect:
       node_id: many#1/loop~2
       output:
         n: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#0/__end__
   - - NodeSucceeded
     - node_id: many#0/__end__
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many#1/__end__
   - - NodeSucceeded
     - node_id: many#1/__end__
       output: one
+      interrupted: false
   - - NodeStarted
     - node_id: many/__end__
   - - NodeSucceeded
     - commit_as: many
       node_id: many/__end__
       output: [one, one]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [one, one]
+      interrupted: false
   - - RunSucceeded
     - output: [one, one]
   stream:

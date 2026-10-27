@@ -145,6 +145,7 @@ expect:
     - node_id: __start__
       output:
         note0: seed
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -161,6 +162,7 @@ expect:
     - node_id: loop#0/__start__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/step
   - - NodeSucceeded
@@ -168,6 +170,7 @@ expect:
       output:
         n: 1
         note: null
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
@@ -175,6 +178,7 @@ expect:
       output:
         n: 1
         note: null
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
@@ -191,6 +195,7 @@ expect:
     - node_id: loop#1/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/step
   - - NodeSucceeded
@@ -198,6 +203,7 @@ expect:
       output:
         n: 2
         note: null
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/__end__
   - - NodeSucceeded
@@ -205,6 +211,7 @@ expect:
       output:
         n: 2
         note: null
+      interrupted: false
   - - NodeStarted
     - node_id: loop~2
   - - NodeSucceeded
@@ -213,6 +220,7 @@ expect:
       output:
         n: 2
         note: null
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -220,6 +228,7 @@ expect:
       output:
         n: 2
         note: null
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 2

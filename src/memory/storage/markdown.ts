@@ -14,7 +14,7 @@ import { basename, dirname, join } from "node:path";
 import { reprText } from "../../diagnostics.ts";
 import { type FileLock, FileLockError, sqliteErrorCode, waitForLock } from "../../platform.ts";
 import type { JsonObject } from "../../typesys/json.ts";
-import { pythonFloatRepr } from "../../typesys/values.ts";
+import { floatText } from "../../typesys/values.ts";
 import { freezeJsonObject } from "../contracts.ts";
 import { checkStoragePath, isSystemError, realStoragePath } from "./sqlite.ts";
 
@@ -111,22 +111,23 @@ function compareCodePoints(a: string, b: string): number {
 }
 
 /**
- * Return `value` as Python's `json.dumps(value, sort_keys=True, allow_nan=False)` writes it: `", "`
- * and `": "` separators, keys in code-point order, non-ASCII and DEL as lowercase `\uXXXX`, a
- * `number` as a Python float and a `bigint` as an int. `value` is already a checked JSON copy.
+ * Return `value` as JSON with `", "` and `": "` separators, keys in code-point order, non-ASCII and
+ * DEL as lowercase `\uXXXX`, a `number` as `floatText` spells it (keeping a fraction digit) and a
+ * `bigint` as an integer. Users' saved files use this format, so it doesn't change. `value` is
+ * already a checked JSON copy.
  */
-function pythonJson(value: unknown): string {
+function spacedJson(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "bigint") return value.toString();
-  if (typeof value === "number") return pythonFloatRepr(value);
+  if (typeof value === "number") return floatText(value);
   if (typeof value === "string") {
     return JSON.stringify(value).replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   }
-  if (Array.isArray(value)) return `[${value.map(pythonJson).join(", ")}]`;
+  if (Array.isArray(value)) return `[${value.map(spacedJson).join(", ")}]`;
   const object = value as Record<string, unknown>;
   const keys = Object.keys(object).sort(compareCodePoints);
-  return `{${keys.map((key) => `${pythonJson(key)}: ${pythonJson(object[key])}`).join(", ")}}`;
+  return `{${keys.map((key) => `${spacedJson(key)}: ${spacedJson(object[key])}`).join(", ")}}`;
 }
 
 /** Return the UTF-8 text of `source` exactly: line endings and a BOM kept. */
@@ -251,7 +252,7 @@ export class FileMarkdownStore implements MarkdownStore {
     const newVersion = markdownVersion(text);
     // Encode the log line before touching the document so a bad value can't leave a replaced
     // document without its log entry.
-    const line = `${pythonJson({ base_version: baseVersion, version: newVersion, provenance: copy })}\n`;
+    const line = `${spacedJson({ base_version: baseVersion, version: newVersion, provenance: copy })}\n`;
     return this.#locked(() => {
       const current = markdownVersion(this.#current());
       if (current !== baseVersion) throw new MarkdownVersionMismatch(baseVersion, current);

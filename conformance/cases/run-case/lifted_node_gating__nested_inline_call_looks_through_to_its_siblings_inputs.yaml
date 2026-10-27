@@ -104,6 +104,7 @@ expect:
     - node_id: __start__
       output:
         other: false
+      interrupted: false
   - - NodeStarted
     - node_id: pick
   - - NodeRouted
@@ -123,6 +124,7 @@ expect:
     - node_id: __end__
       output:
         r: null
+      interrupted: false
   - - RunSucceeded
     - output:
         r: null

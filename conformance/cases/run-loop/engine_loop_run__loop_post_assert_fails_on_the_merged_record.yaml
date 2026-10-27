@@ -193,6 +193,7 @@ expect:
         person:
           name: Ada
         talking_to: Bob
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -215,6 +216,7 @@ expect:
         person:
           name: Ada
         talking_to: Bob
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/step
   - - NodeSucceeded
@@ -222,6 +224,7 @@ expect:
       output:
         done: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
@@ -229,6 +232,7 @@ expect:
       output:
         done: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
@@ -251,6 +255,7 @@ expect:
         person:
           name: Ada
         talking_to: Bob
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/step
   - - NodeSucceeded
@@ -258,6 +263,7 @@ expect:
       output:
         done: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/__end__
   - - NodeSucceeded
@@ -265,6 +271,7 @@ expect:
       output:
         done: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop~2
   - - NodeExpanded
@@ -287,6 +294,7 @@ expect:
         person:
           name: Ada
         talking_to: Bob
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/step
   - - NodeSucceeded
@@ -294,6 +302,7 @@ expect:
       output:
         done: true
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/__end__
   - - NodeSucceeded
@@ -301,6 +310,7 @@ expect:
       output:
         done: true
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop~3
   - - NodeFailed

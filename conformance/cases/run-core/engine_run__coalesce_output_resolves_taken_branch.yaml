@@ -102,11 +102,13 @@ expect:
       output:
         seed: 0.2
         topic: BETA
+      interrupted: false
   - - NodeStarted
     - node_id: score
   - - NodeSucceeded
     - node_id: score
       output: 0.2
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -119,10 +121,12 @@ expect:
   - - NodeSucceeded
     - node_id: cautious
       output: cautious note for BETA
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: cautious note for BETA
+      interrupted: false
   - - RunSucceeded
     - output: cautious note for BETA

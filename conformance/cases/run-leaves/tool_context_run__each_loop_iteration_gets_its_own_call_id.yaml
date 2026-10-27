@@ -166,6 +166,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -181,17 +182,20 @@ expect:
     - node_id: loop#0/__start__
       output:
         count: 0
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
     - node_id: loop#0/__end__
       output:
         count: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/place
   - - NodeSucceeded
     - node_id: loop#0/place
       output: p0
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
@@ -207,17 +211,20 @@ expect:
     - node_id: loop#1/__start__
       output:
         count: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/__end__
   - - NodeSucceeded
     - node_id: loop#1/__end__
       output:
         count: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/place
   - - NodeSucceeded
     - node_id: loop#1/place
       output: p1
+      interrupted: false
   - - NodeStarted
     - node_id: loop~2
   - - NodeExpanded
@@ -233,17 +240,20 @@ expect:
     - node_id: loop#2/__start__
       output:
         count: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/__end__
   - - NodeSucceeded
     - node_id: loop#2/__end__
       output:
         count: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/place
   - - NodeSucceeded
     - node_id: loop#2/place
       output: p2
+      interrupted: false
   - - NodeStarted
     - node_id: loop~3
   - - NodeSucceeded
@@ -251,12 +261,14 @@ expect:
       output:
         count: 3
       commit_as: loop
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         count: 3
+      interrupted: false
   - - RunSucceeded
     - output:
         count: 3

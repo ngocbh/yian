@@ -107,6 +107,7 @@ expect:
     - node_id: __start__
       output:
         seed: 5
+      interrupted: false
   - - NodeStarted
     - node_id: callee
   - - NodeExpanded
@@ -121,12 +122,14 @@ expect:
     - node_id: callee/__start__
       output:
         seed: 5
+      interrupted: false
   - - NodeStarted
     - node_id: callee/emit
   - - NodeSucceeded
     - node_id: callee/emit
       output:
         n: 6
+      interrupted: false
   - - NodeStarted
     - node_id: callee/__end__
   - - NodeSucceeded
@@ -134,12 +137,14 @@ expect:
       node_id: callee/__end__
       output:
         n: 6
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         n: 6
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 6

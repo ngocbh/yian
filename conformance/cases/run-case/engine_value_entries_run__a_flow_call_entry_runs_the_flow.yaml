@@ -126,6 +126,7 @@ expect:
     - node_id: __start__
       output:
         name: Ada
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0
   - - NodeExpanded
@@ -139,37 +140,44 @@ expect:
   - - NodeSucceeded
     - node_id: a
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: b
   - - NodeSucceeded
     - node_id: b
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/__start__
   - - NodeSucceeded
     - node_id: __call_0/__start__
       output:
         x: Ada
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/up
   - - NodeSucceeded
     - node_id: __call_0/up
       output: ADA
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/__end__
   - - NodeSucceeded
     - commit_as: __call_0
       node_id: __call_0/__end__
       output: ADA
+      interrupted: false
   - - NodeStarted
     - node_id: x
   - - NodeSucceeded
     - node_id: x
       output: ADA
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ADA
+      interrupted: false
   - - RunSucceeded
     - output: ADA

@@ -16,7 +16,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'node ''chat'' llm_config.openai.temperature: input ''t'': "warm" does not match declared type float'
   trace: []
   events: []

@@ -39,7 +39,7 @@ import {
   validateOptionalOrigin,
   ValueContract,
 } from "../../nodes/contracts.ts";
-import { pythonTypeName, type TypeRegistry } from "../../typesys/types.ts";
+import { typeName, type TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, valueRepr, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { directReferencePath } from "../../compile/output_contracts.ts";
@@ -746,7 +746,7 @@ export class NodeDescriptor {
     if (Array.isArray(value)) got = "a list with a non-string item";
     else if (isRecord(value)) got = "a mapping";
     else if (value === null) got = "null";
-    else got = `${pythonTypeName(value)} ${valueRepr(value)}`;
+    else got = `${typeName(value)} ${valueRepr(value)}`;
     let message =
       `node ${reprText(nodeId)} (kind=${this.kind}): \`${key}:\` must be a list of node ids ` +
       `(got ${got})`;

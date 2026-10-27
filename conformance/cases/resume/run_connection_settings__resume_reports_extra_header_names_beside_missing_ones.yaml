@@ -31,7 +31,7 @@ host:
   crash_after_record: 8
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'headers must have the header names this run recorded for its host key: missing X-Trace; not recorded X-Other'
   trace:
   - - run_started

@@ -106,11 +106,13 @@ expect:
     - node_id: __start__
       output:
         s: x
+      interrupted: false
   - - NodeStarted
     - node_id: mk
   - - NodeSucceeded
     - node_id: mk
       output: [1, two]
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeExpanded
@@ -125,21 +127,25 @@ expect:
     - node_id: c/__start__
       output:
         xs: [1, two]
+      interrupted: false
   - - NodeStarted
     - node_id: c/inner
   - - NodeSucceeded
     - node_id: c/inner
       output: [1, two]
+      interrupted: false
   - - NodeStarted
     - node_id: c/__end__
   - - NodeSucceeded
     - commit_as: c
       node_id: c/__end__
       output: [1, two]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [1, two]
+      interrupted: false
   - - RunSucceeded
     - output: [1, two]

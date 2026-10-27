@@ -117,6 +117,7 @@ expect:
         note: null
         qty: 3
         s: ${x}
+      interrupted: false
   - - NodeStarted
     - node_id: worker
   - - NodeSucceeded
@@ -130,6 +131,7 @@ expect:
         note: null
         qty: 3
         s: ${x}
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -143,6 +145,7 @@ expect:
         note: null
         qty: 3
         s: ${x}
+      interrupted: false
   - - RunSucceeded
     - output:
         cfg:

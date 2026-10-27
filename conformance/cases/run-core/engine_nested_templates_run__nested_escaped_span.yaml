@@ -81,11 +81,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: n
   - - NodeSucceeded
     - node_id: n
       output: hi
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeSucceeded
@@ -93,6 +95,7 @@ expect:
       output:
         q: ${x}
         r: hi
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -100,6 +103,7 @@ expect:
       output:
         q: ${x}
         r: hi
+      interrupted: false
   - - RunSucceeded
     - output:
         q: ${x}

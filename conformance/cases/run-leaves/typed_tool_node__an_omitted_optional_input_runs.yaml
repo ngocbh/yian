@@ -76,16 +76,19 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: place
   - - NodeSucceeded
     - node_id: place
       output: 5 AAPL
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: 5 AAPL
+      interrupted: false
   - - RunSucceeded
     - output: 5 AAPL
   tool_calls:

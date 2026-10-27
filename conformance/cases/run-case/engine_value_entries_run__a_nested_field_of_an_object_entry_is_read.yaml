@@ -90,16 +90,19 @@ expect:
     - node_id: __start__
       output:
         name: Ada
+      interrupted: false
   - - NodeStarted
     - node_id: a
   - - NodeSucceeded
     - node_id: a
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: b
   - - NodeSucceeded
     - node_id: b
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: r
   - - NodeSucceeded
@@ -107,10 +110,12 @@ expect:
       output:
         p:
           q: [1, 2]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [1, 2]
+      interrupted: false
   - - RunSucceeded
     - output: [1, 2]

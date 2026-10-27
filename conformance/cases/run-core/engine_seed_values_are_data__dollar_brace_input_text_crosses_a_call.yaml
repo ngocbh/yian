@@ -107,6 +107,7 @@ expect:
     - node_id: __start__
       output:
         text: ${input.text}
+      interrupted: false
   - - NodeStarted
     - node_id: echo
   - - NodeExpanded
@@ -120,27 +121,32 @@ expect:
   - - NodeSucceeded
     - node_id: probe
       output: SECRET
+      interrupted: false
   - - NodeStarted
     - node_id: echo/__start__
   - - NodeSucceeded
     - node_id: echo/__start__
       output:
         text: ${input.text}
+      interrupted: false
   - - NodeStarted
     - node_id: echo/inner
   - - NodeSucceeded
     - node_id: echo/inner
       output: ${input.text}
+      interrupted: false
   - - NodeStarted
     - node_id: echo/__end__
   - - NodeSucceeded
     - commit_as: echo
       node_id: echo/__end__
       output: ${input.text}
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ${input.text}
+      interrupted: false
   - - RunSucceeded
     - output: ${input.text}

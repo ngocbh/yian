@@ -141,6 +141,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: repeat
   - - NodeExpanded
@@ -158,6 +159,7 @@ expect:
       output:
         n: 0
         seen: null
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/bump
   - - NodeSucceeded
@@ -165,6 +167,7 @@ expect:
       output:
         n: 1
         seen: [a]
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/__end__
   - - NodeSucceeded
@@ -172,6 +175,7 @@ expect:
       output:
         n: 1
         seen: [a]
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~1
   - - NodeExpanded
@@ -189,6 +193,7 @@ expect:
       output:
         n: 1
         seen: [a]
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#1/bump
   - - NodeSucceeded
@@ -196,6 +201,7 @@ expect:
       output:
         n: 2
         seen: [a, b]
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#1/__end__
   - - NodeSucceeded
@@ -203,6 +209,7 @@ expect:
       output:
         n: 2
         seen: [a, b]
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~2
   - - NodeSucceeded
@@ -211,6 +218,7 @@ expect:
       output:
         n: 2
         seen: [a, b]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -218,6 +226,7 @@ expect:
       output:
         n: 2
         seen: [a, b]
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 2

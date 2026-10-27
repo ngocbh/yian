@@ -108,11 +108,13 @@ expect:
       output:
         score: 0.9
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: note
   - - NodeSucceeded
     - node_id: note
       output: cautious note for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -125,6 +127,7 @@ expect:
   - - NodeSucceeded
     - node_id: pro
       output: 'pro: ACME'
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -132,6 +135,7 @@ expect:
       output:
         note: cautious note for ACME
         pick: 'pro: ACME'
+      interrupted: false
   - - RunSucceeded
     - output:
         note: cautious note for ACME

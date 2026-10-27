@@ -161,6 +161,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: repeat
   - - NodeExpanded
@@ -178,6 +179,7 @@ expect:
       output:
         state:
           count: 0
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/bump
   - - NodeSucceeded
@@ -185,6 +187,7 @@ expect:
       output:
         state:
           count: 1
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/__end__
   - - NodeSucceeded
@@ -192,6 +195,7 @@ expect:
       output:
         state:
           count: 1
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~1
   - - NodeExpanded
@@ -209,6 +213,7 @@ expect:
       output:
         state:
           count: 1
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#1/bump
   - - NodeSucceeded
@@ -216,6 +221,7 @@ expect:
       output:
         state:
           count: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#1/__end__
   - - NodeSucceeded
@@ -223,6 +229,7 @@ expect:
       output:
         state:
           count: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~2
   - - NodeExpanded
@@ -240,6 +247,7 @@ expect:
       output:
         state:
           count: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#2/bump
   - - NodeSucceeded
@@ -247,6 +255,7 @@ expect:
       output:
         state:
           count: 3
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#2/__end__
   - - NodeSucceeded
@@ -254,6 +263,7 @@ expect:
       output:
         state:
           count: 3
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~3
   - - NodeSucceeded
@@ -262,6 +272,7 @@ expect:
       output:
         state:
           count: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -269,6 +280,7 @@ expect:
       output:
         state:
           count: 3
+      interrupted: false
   - - RunSucceeded
     - output:
         state:

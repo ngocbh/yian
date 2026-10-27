@@ -251,6 +251,7 @@ expect:
     - node_id: __start__
       output:
         question: q2
+      interrupted: false
   - - NodeStarted
     - node_id: ask
   - - ModelCallStarted
@@ -268,6 +269,7 @@ expect:
   - - NodeSucceeded
     - node_id: ask
       output: users=1 memories=notes
+      interrupted: false
   - - NodeStarted
     - node_id: lib_step
   - - NodeExpanded
@@ -282,6 +284,7 @@ expect:
     - node_id: lib_step/__start__
       output:
         topic: q2
+      interrupted: false
   - - NodeStarted
     - node_id: lib_step/summarize
   - - ModelCallStarted
@@ -299,12 +302,14 @@ expect:
   - - NodeSucceeded
     - node_id: lib_step/summarize
       output: users=1 memories=notes,lib.notes
+      interrupted: false
   - - NodeStarted
     - node_id: lib_step/__end__
   - - NodeSucceeded
     - commit_as: lib_step
       node_id: lib_step/__end__
       output: users=1 memories=notes,lib.notes
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -312,6 +317,7 @@ expect:
       output:
         answer: users=1 memories=notes
         summary: users=1 memories=notes,lib.notes
+      interrupted: false
   - - RunSucceeded
     - output:
         answer: users=1 memories=notes

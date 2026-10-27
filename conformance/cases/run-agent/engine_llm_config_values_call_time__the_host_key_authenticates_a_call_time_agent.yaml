@@ -134,11 +134,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: pick
   - - NodeSucceeded
     - node_id: pick
       output: gpt-picked
+      interrupted: false
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
@@ -156,11 +158,13 @@ expect:
   - - NodeSucceeded
     - node_id: chat
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ok
+      interrupted: false
   - - RunSucceeded
     - output: ok
   stream:

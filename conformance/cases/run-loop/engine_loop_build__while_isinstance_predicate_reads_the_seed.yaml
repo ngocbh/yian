@@ -118,6 +118,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: ask
   - - NodeExpanded
@@ -134,6 +135,7 @@ expect:
     - node_id: ask#0/__start__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: ask#0/step
   - - NodeSucceeded
@@ -142,6 +144,7 @@ expect:
         n: 1
         r:
           answer: ok
+      interrupted: false
   - - NodeStarted
     - node_id: ask#0/__end__
   - - NodeSucceeded
@@ -150,6 +153,7 @@ expect:
         n: 1
         r:
           answer: ok
+      interrupted: false
   - - NodeStarted
     - node_id: ask~1
   - - NodeSucceeded
@@ -159,6 +163,7 @@ expect:
         n: 1
         r:
           answer: ok
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -167,6 +172,7 @@ expect:
         n: 1
         r:
           answer: ok
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 1

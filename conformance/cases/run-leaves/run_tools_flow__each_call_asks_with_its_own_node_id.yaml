@@ -126,6 +126,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: c1
   - - NodeExpanded
@@ -138,17 +139,20 @@ expect:
   - - NodeSucceeded
     - node_id: c1/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: c1/ask
   - - NodeSucceeded
     - node_id: c1/ask
       output: first
+      interrupted: false
   - - NodeStarted
     - node_id: c1/__end__
   - - NodeSucceeded
     - node_id: c1/__end__
       output: first
       commit_as: c1
+      interrupted: false
   - - NodeStarted
     - node_id: c2
   - - NodeExpanded
@@ -161,22 +165,26 @@ expect:
   - - NodeSucceeded
     - node_id: c2/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: c2/ask
   - - NodeSucceeded
     - node_id: c2/ask
       output: second
+      interrupted: false
   - - NodeStarted
     - node_id: c2/__end__
   - - NodeSucceeded
     - node_id: c2/__end__
       output: second
       commit_as: c2
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: second
+      interrupted: false
   - - RunSucceeded
     - output: second
   tool_calls:

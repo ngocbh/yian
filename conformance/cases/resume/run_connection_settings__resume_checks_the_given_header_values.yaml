@@ -31,7 +31,7 @@ host:
   crash_after_record: 8
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: header X-Trace value must be non-empty visible ASCII, with spaces or tabs only between characters
   trace:
   - - run_started

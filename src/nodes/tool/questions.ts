@@ -12,7 +12,7 @@
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
-import { pythonTypeName } from "../../typesys/types.ts";
+import { typeName } from "../../typesys/types.ts";
 import { isList, isRecord, Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
 
 /** One selectable choice within a question. */
@@ -66,7 +66,7 @@ const OPTION_KEYS: readonly string[] = ["label", "description"];
  */
 export function parseQuestions(raw: unknown): QuestionSpec[] {
   if (!isList(raw)) {
-    throw new QuestionSpecError(`questions must be a list, got ${pythonTypeName(raw)}`);
+    throw new QuestionSpecError(`questions must be a list, got ${typeName(raw)}`);
   }
   const most = current().maxQuestions;
   if (raw.length < 1 || raw.length > most) {

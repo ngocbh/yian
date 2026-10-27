@@ -80,11 +80,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: s
   - - NodeSucceeded
     - node_id: s
       output: 0.5
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -92,6 +94,7 @@ expect:
       output:
         action: buy
         conviction: 0.5
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -99,6 +102,7 @@ expect:
       output:
         action: buy
         conviction: 0.5
+      interrupted: false
   - - RunSucceeded
     - output:
         action: buy

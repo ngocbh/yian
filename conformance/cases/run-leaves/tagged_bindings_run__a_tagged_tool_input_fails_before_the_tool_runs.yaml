@@ -82,6 +82,7 @@ expect:
     - node_id: __start__
       output:
         n: '5'
+      interrupted: false
   - - NodeStarted
     - node_id: place
   - - NodeFailed

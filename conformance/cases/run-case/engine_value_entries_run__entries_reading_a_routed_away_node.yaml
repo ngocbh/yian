@@ -97,11 +97,13 @@ expect:
     - node_id: __start__
       output:
         cmd: stop
+      interrupted: false
   - - NodeStarted
     - node_id: lone
   - - NodeSucceeded
     - node_id: lone
       output: 7
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -116,6 +118,7 @@ expect:
   - - NodeSucceeded
     - node_id: embedded
       output: 'got '
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -124,6 +127,7 @@ expect:
         embedded: 'got '
         lone: 7
         whole: null
+      interrupted: false
   - - RunSucceeded
     - output:
         embedded: 'got '

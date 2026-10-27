@@ -126,6 +126,7 @@ expect:
     - node_id: __start__
       output:
         flip: false
+      interrupted: false
   - - NodeStarted
     - node_id: repeat
   - - NodeExpanded
@@ -145,11 +146,13 @@ expect:
         flip: false
         n: 0
         note: start
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/bump
   - - NodeSucceeded
     - node_id: repeat#0/bump
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/gate
   - - NodeRouted
@@ -164,6 +167,7 @@ expect:
       output:
         n: 1
         note: null
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~1
   - - NodeSucceeded
@@ -173,6 +177,7 @@ expect:
         flip: false
         n: 1
         note: null
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -181,6 +186,7 @@ expect:
         flip: false
         n: 1
         note: null
+      interrupted: false
   - - RunSucceeded
     - output:
         flip: false

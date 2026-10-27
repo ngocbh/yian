@@ -124,6 +124,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: each
   - - NodeExpanded
@@ -138,23 +139,27 @@ expect:
   - - NodeSucceeded
     - node_id: each/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__start__
   - - NodeSucceeded
     - node_id: each#0/__start__
       output:
         x: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__start__
   - - NodeSucceeded
     - node_id: each#1/__start__
       output:
         x: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/place
   - - NodeSucceeded
     - node_id: each#0/place
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/place
   - - NodeFailed

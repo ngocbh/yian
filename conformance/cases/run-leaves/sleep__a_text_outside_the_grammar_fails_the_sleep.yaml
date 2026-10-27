@@ -74,6 +74,7 @@ expect:
     - node_id: __start__
       output:
         t: '20260102'
+      interrupted: false
   - - NodeStarted
     - node_id: settle
   - - NodeFailed

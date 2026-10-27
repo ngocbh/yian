@@ -177,6 +177,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: ask
   - - NodeExpanded
@@ -198,6 +199,7 @@ expect:
         r:
           hint: start
           kind: more
+      interrupted: false
   - - NodeStarted
     - node_id: ask#0/step
   - - NodeSucceeded
@@ -207,6 +209,7 @@ expect:
         r:
           hint: again
           kind: more
+      interrupted: false
   - - NodeStarted
     - node_id: ask#0/__end__
   - - NodeSucceeded
@@ -216,6 +219,7 @@ expect:
         r:
           hint: again
           kind: more
+      interrupted: false
   - - NodeStarted
     - node_id: ask~1
   - - NodeExpanded
@@ -237,6 +241,7 @@ expect:
         r:
           hint: again
           kind: more
+      interrupted: false
   - - NodeStarted
     - node_id: ask#1/step
   - - NodeSucceeded
@@ -246,6 +251,7 @@ expect:
         r:
           hint: again
           kind: more
+      interrupted: false
   - - NodeStarted
     - node_id: ask#1/__end__
   - - NodeSucceeded
@@ -255,6 +261,7 @@ expect:
         r:
           hint: again
           kind: more
+      interrupted: false
   - - NodeStarted
     - node_id: ask~2
   - - NodeExpanded
@@ -276,6 +283,7 @@ expect:
         r:
           hint: again
           kind: more
+      interrupted: false
   - - NodeStarted
     - node_id: ask#2/step
   - - NodeSucceeded
@@ -285,6 +293,7 @@ expect:
         r:
           answer: ok
           kind: done
+      interrupted: false
   - - NodeStarted
     - node_id: ask#2/__end__
   - - NodeSucceeded
@@ -294,6 +303,7 @@ expect:
         r:
           answer: ok
           kind: done
+      interrupted: false
   - - NodeStarted
     - node_id: ask~3
   - - NodeSucceeded
@@ -304,6 +314,7 @@ expect:
         r:
           answer: ok
           kind: done
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -313,6 +324,7 @@ expect:
         r:
           answer: ok
           kind: done
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 3

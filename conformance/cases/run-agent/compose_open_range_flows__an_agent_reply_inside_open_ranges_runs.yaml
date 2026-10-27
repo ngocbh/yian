@@ -133,6 +133,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: writer
   - - ModelCallStarted
@@ -152,6 +153,7 @@ expect:
       output:
         price: 9.5
         qty: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -159,6 +161,7 @@ expect:
       output:
         price: 9.5
         qty: 3
+      interrupted: false
   - - RunSucceeded
     - output:
         price: 9.5

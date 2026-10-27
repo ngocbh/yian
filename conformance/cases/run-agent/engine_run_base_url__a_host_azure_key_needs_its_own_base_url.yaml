@@ -17,7 +17,7 @@ run:
     api_key: <key:2>
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: llm_config.api_key for provider azure needs llm_config.base_url in the same config, since it decides where that key is sent
   trace: []
   events: []

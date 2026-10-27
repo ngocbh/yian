@@ -135,6 +135,7 @@ expect:
     - node_id: __start__
       output:
         start: p1
+      interrupted: false
   - - NodeStarted
     - node_id: pages
   - - NodeExpanded
@@ -150,17 +151,20 @@ expect:
     - node_id: pages#0/__start__
       output:
         cursor: p1
+      interrupted: false
   - - NodeStarted
     - node_id: pages#0/get
   - - NodeSucceeded
     - node_id: pages#0/get
       output: p2
+      interrupted: false
   - - NodeStarted
     - node_id: pages#0/__end__
   - - NodeSucceeded
     - node_id: pages#0/__end__
       output:
         cursor: p2
+      interrupted: false
   - - NodeStarted
     - node_id: pages~1
   - - NodeExpanded
@@ -176,16 +180,19 @@ expect:
     - node_id: pages#1/__start__
       output:
         cursor: p2
+      interrupted: false
   - - NodeStarted
     - node_id: pages#1/get
   - - NodeSucceeded
     - node_id: pages#1/get
+      interrupted: false
   - - NodeStarted
     - node_id: pages#1/__end__
   - - NodeSucceeded
     - node_id: pages#1/__end__
       output:
         cursor: null
+      interrupted: false
   - - NodeStarted
     - node_id: pages~2
   - - NodeSucceeded
@@ -193,12 +200,14 @@ expect:
       node_id: pages~2
       output:
         cursor: null
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         cursor: null
+      interrupted: false
   - - RunSucceeded
     - output:
         cursor: null

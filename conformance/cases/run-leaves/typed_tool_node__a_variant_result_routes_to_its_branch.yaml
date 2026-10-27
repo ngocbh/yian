@@ -107,6 +107,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: place
   - - NodeSucceeded
@@ -115,6 +116,7 @@ expect:
         by: owner
         partial: 2
         type: interrupted
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -127,11 +129,13 @@ expect:
   - - NodeSucceeded
     - node_id: on_interrupted
       output: stopped by owner
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: stopped by owner
+      interrupted: false
   - - RunSucceeded
     - output: stopped by owner
   tool_calls:

@@ -14,7 +14,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'node ''chat'' llm_config.model: input ''m'' is required and was not given'
   trace: []
   events: []

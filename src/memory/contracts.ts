@@ -308,7 +308,9 @@ const PRIVATE_CREDENTIAL_SUFFIXES = withHighConfidencePlurals([
   "webhook_url",
 ]);
 const PRIVATE_TENANT_KEYS: ReadonlySet<string> = new Set(["tenant_id"]);
-const PRIVATE_PYTHON_KEYS: ReadonlySet<string> = new Set([
+// Keys that look like code import paths (a module, class or path to load) are private, so a memory
+// never learns them.
+const CODE_IMPORT_KEYS: ReadonlySet<string> = new Set([
   "class",
   "class_path",
   "import",
@@ -321,7 +323,7 @@ const PRIVATE_PYTHON_KEYS: ReadonlySet<string> = new Set([
   "python_module",
   "python_path",
 ]);
-const PRIVATE_PYTHON_SUFFIXES = withHighConfidencePlurals([
+const CODE_IMPORT_SUFFIXES = withHighConfidencePlurals([
   "class_path",
   "import_path",
   "imports",
@@ -344,7 +346,7 @@ const PRIVATE_LOCATION_FIELDS = withHighConfidencePlurals([
 ]);
 const PRIVATE_INDIRECTION_FIELDS = withHighConfidencePlurals(["dir", "directory", "file", "path"]);
 const PRIVATE_WEBHOOK_FIELDS: ReadonlySet<string> = new Set(["signature", "url"]);
-const PRIVATE_PYTHON_FIELDS = withHighConfidencePlurals(["class", "import", "module", "path"]);
+const CODE_IMPORT_FIELDS = withHighConfidencePlurals(["class", "import", "module", "path"]);
 
 // Single code points tested the way Python's `str.isalnum`, `isupper`, `islower` and `isdigit` do.
 const ALNUM = /^[\p{L}\p{N}]$/u;
@@ -443,12 +445,12 @@ function rejectPrivateMemoryKeys(
   value: JsonValue,
   name: string,
   locationContext = false,
-  pythonContext = false,
+  codeImportContext = false,
   webhookContext = false,
 ): void {
   if (Array.isArray(value)) {
     value.forEach((item: JsonValue, i) =>
-      rejectPrivateMemoryKeys(item, `${name}[${i}]`, locationContext, pythonContext, webhookContext),
+      rejectPrivateMemoryKeys(item, `${name}[${i}]`, locationContext, codeImportContext, webhookContext),
     );
     return;
   }
@@ -459,20 +461,20 @@ function rejectPrivateMemoryKeys(
     const normalized = normalizeConfigKey(key);
     const tokens = normalized.split("_");
     const privateLocation = locationContext || tokens.some((token) => PRIVATE_LOCATION_ROOTS.has(token));
-    const privatePython = pythonContext || tokens.includes("python");
+    const privateCodeImport = codeImportContext || tokens.includes("python");
     const privateWebhook = webhookContext || tokens.includes("webhook");
     const forbidden =
       matchesExactPrivateKey(normalized, PRIVATE_CREDENTIAL_KEYS) ||
       matchesPrivateSuffix(normalized, PRIVATE_CREDENTIAL_SUFFIXES) ||
       matchesPrivateSuffix(normalized, PRIVATE_TENANT_KEYS) ||
-      matchesExactPrivateKey(normalized, PRIVATE_PYTHON_KEYS) ||
-      matchesPrivateSuffix(normalized, PRIVATE_PYTHON_SUFFIXES) ||
+      matchesExactPrivateKey(normalized, CODE_IMPORT_KEYS) ||
+      matchesPrivateSuffix(normalized, CODE_IMPORT_SUFFIXES) ||
       matchesPrivateCredentialIndirection(normalized) ||
       (privateLocation && matchesPrivateSuffix(normalized, PRIVATE_LOCATION_FIELDS)) ||
-      (privatePython && matchesPrivateSuffix(normalized, PRIVATE_PYTHON_FIELDS)) ||
+      (privateCodeImport && matchesPrivateSuffix(normalized, CODE_IMPORT_FIELDS)) ||
       (privateWebhook && matchesPrivateSuffix(normalized, PRIVATE_WEBHOOK_FIELDS));
     if (forbidden) throw new RangeError(`${name} contains forbidden private key ${reprText(key)}`);
-    rejectPrivateMemoryKeys(object[key]!, `${name}.${key}`, privateLocation, privatePython, privateWebhook);
+    rejectPrivateMemoryKeys(object[key]!, `${name}.${key}`, privateLocation, privateCodeImport, privateWebhook);
   }
 }
 

@@ -149,6 +149,7 @@ expect:
     - node_id: __start__
       output:
         start: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0
   - - NodeExpanded
@@ -163,17 +164,20 @@ expect:
     - node_id: __call_0/__start__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/echo
   - - NodeSucceeded
     - node_id: __call_0/echo
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/__end__
   - - NodeSucceeded
     - commit_as: __call_0
       node_id: __call_0/__end__
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: repeat
   - - NodeExpanded
@@ -189,18 +193,21 @@ expect:
     - node_id: repeat#0/__start__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/step
   - - NodeSucceeded
     - node_id: repeat#0/step
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/__end__
   - - NodeSucceeded
     - node_id: repeat#0/__end__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~1
   - - NodeSucceeded
@@ -208,12 +215,14 @@ expect:
       node_id: repeat~1
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         n: 2
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 2

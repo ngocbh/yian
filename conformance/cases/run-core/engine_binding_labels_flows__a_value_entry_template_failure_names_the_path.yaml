@@ -69,6 +69,7 @@ expect:
       output:
         x: 1
         z: 0
+      interrupted: false
   - - NodeStarted
     - node_id: v
   - - NodeFailed

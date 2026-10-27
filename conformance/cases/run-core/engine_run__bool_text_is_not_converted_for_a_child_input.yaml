@@ -102,11 +102,13 @@ expect:
     - node_id: __start__
       output:
         answer: yes
+      interrupted: false
   - - NodeStarted
     - node_id: src
   - - NodeSucceeded
     - node_id: src
       output: yes
+      interrupted: false
   - - NodeStarted
     - node_id: g
   - - NodeExpanded

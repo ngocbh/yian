@@ -112,6 +112,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: invoke
   - - NodeExpanded
@@ -124,6 +125,7 @@ expect:
   - - NodeSucceeded
     - node_id: invoke/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: invoke/wrapper
   - - NodeExpanded
@@ -136,27 +138,32 @@ expect:
   - - NodeSucceeded
     - node_id: invoke/wrapper/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: invoke/wrapper/constant
   - - NodeSucceeded
     - node_id: invoke/wrapper/constant
       output: inline-ok
+      interrupted: false
   - - NodeStarted
     - node_id: invoke/wrapper/__end__
   - - NodeSucceeded
     - commit_as: invoke/wrapper
       node_id: invoke/wrapper/__end__
       output: inline-ok
+      interrupted: false
   - - NodeStarted
     - node_id: invoke/__end__
   - - NodeSucceeded
     - commit_as: invoke
       node_id: invoke/__end__
       output: inline-ok
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: inline-ok
+      interrupted: false
   - - RunSucceeded
     - output: inline-ok

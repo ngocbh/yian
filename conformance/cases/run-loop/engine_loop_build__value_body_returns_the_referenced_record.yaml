@@ -140,6 +140,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: chat_loop
   - - NodeExpanded
@@ -156,18 +157,21 @@ expect:
     - node_id: chat_loop#0/__start__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: chat_loop#0/step
   - - NodeSucceeded
     - node_id: chat_loop#0/step
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: chat_loop#0/__end__
   - - NodeSucceeded
     - node_id: chat_loop#0/__end__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: chat_loop~1
   - - NodeExpanded
@@ -188,18 +192,21 @@ expect:
     - node_id: chat_loop#1/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: chat_loop#1/step
   - - NodeSucceeded
     - node_id: chat_loop#1/step
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: chat_loop#1/__end__
   - - NodeSucceeded
     - node_id: chat_loop#1/__end__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: chat_loop~2
   - - NodeSucceeded
@@ -208,6 +215,7 @@ expect:
       output:
         n: 2
         result: start
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -215,6 +223,7 @@ expect:
       output:
         n: 2
         result: start
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 2

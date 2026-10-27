@@ -76,6 +76,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: rate
   - - NodeSucceeded
@@ -83,6 +84,7 @@ expect:
       output:
         note: null
         rating: 4.5
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -90,6 +92,7 @@ expect:
       output:
         note: null
         rating: 4.5
+      interrupted: false
   - - RunSucceeded
     - output:
         note: null

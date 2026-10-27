@@ -12,7 +12,7 @@
  * Changed: YAML ints are `bigint`s (`7n` infers `int`; a `number` infers `float`). TS values have
  * no tuples or arbitrary objects, so `test_unproven_or_unsupported_literal_is_rejected` replaces
  * its `(1, 2)` and `object()` params with one `undefined` param, whose message names the type with
- * `pythonTypeName`; `test_non_string_mapping_key_is_rejected` is dropped, as a record key is
+ * `typeName`; `test_non_string_mapping_key_is_rejected` is dropped, as a record key is
  * always text. Lists print as JSON (`["absent"]`), and so does a record key in a literal's path
  * (`c.input.payload["items"]`, rule `messages`). The no-mutation checks compare a type with a
  * second one built the same way, where Python compares with a pickled copy.

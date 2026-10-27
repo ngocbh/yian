@@ -91,6 +91,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: composite
   - - NodeExpanded
@@ -103,11 +104,13 @@ expect:
   - - NodeSucceeded
     - node_id: composite/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: composite/inner
   - - NodeSucceeded
     - node_id: composite/inner
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: composite/__end__
   - - NodeFailed

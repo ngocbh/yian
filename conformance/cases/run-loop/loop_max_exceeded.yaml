@@ -73,15 +73,15 @@ expect:
   events:
     - [RunStarted]
     - [NodeStarted, {node_id: __start__}]
-    - [NodeSucceeded, {node_id: __start__, output: {}}]
+    - [NodeSucceeded, {node_id: __start__, output: {}, interrupted: false}]
     - [NodeStarted, {node_id: repeat}]
     - [NodeExpanded, {node_id: repeat, grow: {seed: [{n: 0}, 0], prune: []}}]
     - [NodeStarted, {node_id: "repeat#0/__start__"}]
-    - [NodeSucceeded, {node_id: "repeat#0/__start__", output: {n: 0}}]
+    - [NodeSucceeded, {node_id: "repeat#0/__start__", output: {n: 0}, interrupted: false}]
     - [NodeStarted, {node_id: "repeat#0/bump"}]
-    - [NodeSucceeded, {node_id: "repeat#0/bump", output: {n: 1}}]
+    - [NodeSucceeded, {node_id: "repeat#0/bump", output: {n: 1}, interrupted: false}]
     - [NodeStarted, {node_id: "repeat#0/__end__"}]
-    - [NodeSucceeded, {node_id: "repeat#0/__end__", output: {n: 1}}]
+    - [NodeSucceeded, {node_id: "repeat#0/__end__", output: {n: 1}, interrupted: false}]
     - [NodeStarted, {node_id: repeat~1}]
     - - NodeExpanded
       - node_id: repeat~1
@@ -89,11 +89,11 @@ expect:
           seed: [{n: 1}, 1]
           prune: ["repeat#0/__end__", "repeat#0/__start__", "repeat#0/bump", repeat~1]
     - [NodeStarted, {node_id: "repeat#1/__start__"}]
-    - [NodeSucceeded, {node_id: "repeat#1/__start__", output: {n: 1}}]
+    - [NodeSucceeded, {node_id: "repeat#1/__start__", output: {n: 1}, interrupted: false}]
     - [NodeStarted, {node_id: "repeat#1/bump"}]
-    - [NodeSucceeded, {node_id: "repeat#1/bump", output: {n: 2}}]
+    - [NodeSucceeded, {node_id: "repeat#1/bump", output: {n: 2}, interrupted: false}]
     - [NodeStarted, {node_id: "repeat#1/__end__"}]
-    - [NodeSucceeded, {node_id: "repeat#1/__end__", output: {n: 2}}]
+    - [NodeSucceeded, {node_id: "repeat#1/__end__", output: {n: 2}, interrupted: false}]
     - [NodeStarted, {node_id: repeat~2}]
     - - NodeFailed
       - failure:

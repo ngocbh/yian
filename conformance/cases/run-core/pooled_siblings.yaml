@@ -56,13 +56,13 @@ expect:
     - [RunStarted]
     - [RunSucceeded, {output: {a: A, b: B}}]
     - [NodeStarted, {node_id: __end__}]
-    - [NodeSucceeded, {node_id: __end__, output: {a: A, b: B}}]
+    - [NodeSucceeded, {node_id: __end__, output: {a: A, b: B}, interrupted: false}]
     - [NodeStarted, {node_id: __start__}]
-    - [NodeSucceeded, {node_id: __start__, output: {q: x}}]
+    - [NodeSucceeded, {node_id: __start__, output: {q: x}, interrupted: false}]
     - [NodeStarted, {node_id: a}]
-    - [NodeSucceeded, {node_id: a, output: A}]
+    - [NodeSucceeded, {node_id: a, output: A, interrupted: false}]
     - [NodeStarted, {node_id: b}]
-    - [NodeSucceeded, {node_id: b, output: B}]
+    - [NodeSucceeded, {node_id: b, output: B, interrupted: false}]
   tool_calls:
     lookup:
       - {args: {q: x}, call_id: r1/a, attempt: 1, node: a}

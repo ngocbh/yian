@@ -147,6 +147,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {notes: {inbox: notes}}
+      interrupted: false
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
@@ -164,6 +165,7 @@ expect:
   - - NodeSucceeded
     - node_id: chat
       output: done
+      interrupted: false
   - - NodeStarted
     - {node_id: heard}
   - - NodeSucceeded
@@ -171,6 +173,7 @@ expect:
       output:
         closed: false
         events: [for the take]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -178,6 +181,7 @@ expect:
       output:
         answer: done
         heard: [for the take]
+      interrupted: false
   - - RunSucceeded
     - output:
         answer: done

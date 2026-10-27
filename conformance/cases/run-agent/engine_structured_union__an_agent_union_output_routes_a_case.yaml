@@ -217,6 +217,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: a
   - - ModelCallStarted
@@ -236,6 +237,7 @@ expect:
       output:
         action: buy
         qty: 3
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -250,6 +252,7 @@ expect:
   - - NodeSucceeded
     - node_id: place_buy
       output: buy 3
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -259,6 +262,7 @@ expect:
           action: buy
           qty: 3
         trade: buy 3
+      interrupted: false
   - - RunSucceeded
     - output:
         decision:

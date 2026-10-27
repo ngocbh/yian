@@ -47,7 +47,7 @@ expect:
   events:
     - [RunStarted]
     - [NodeStarted, {node_id: __start__}]
-    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}}]
+    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}, interrupted: false}]
     - [NodeStarted, {node_id: write}]
     - - ModelCallStarted
       - {node_id: write, purpose: chat, provider: openai, model: gpt-5.5, n: 1}
@@ -64,9 +64,9 @@ expect:
           cache_creation_tokens: null
           reasoning_tokens: null
         n: 1
-    - [NodeSucceeded, {node_id: write, output: Hello Ada}]
+    - [NodeSucceeded, {node_id: write, output: Hello Ada, interrupted: false}]
     - [NodeStarted, {node_id: __end__}]
-    - [NodeSucceeded, {node_id: __end__, output: Hello Ada}]
+    - [NodeSucceeded, {node_id: __end__, output: Hello Ada, interrupted: false}]
     - [RunSucceeded, {output: Hello Ada}]
   # A reply served to a streamed call streams as one chunk, then the final chunk.
   stream:

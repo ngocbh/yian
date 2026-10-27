@@ -171,12 +171,14 @@ expect:
       output:
         text:
           items: [1, 2]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         items: [1, 2]
+      interrupted: false
   - - RunSucceeded
     - output:
         items: [1, 2]

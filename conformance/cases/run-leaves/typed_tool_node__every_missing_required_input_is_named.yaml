@@ -30,7 +30,7 @@ host:
       results: []
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: TOOL node 'place' is missing inputs ["side","sym"] that tool 'place_order' requires
   trace: []
   events: []

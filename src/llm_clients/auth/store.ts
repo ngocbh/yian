@@ -179,11 +179,11 @@ function dumpCredentials(credentials: Credentials | null): Record<string, unknow
 }
 
 /**
- * Serialize `value` (objects, strings, numbers and `null`) as Python's
- * `json.dumps(value, sort_keys=True)` does, so both write the same bytes. A float is spelled as
- * JS spells it (`1e-7`, Python `1e-07`; an integral float is `9000`, Python `9000.0`).
+ * Serialize `value` (objects, strings, numbers and `null`) as JSON with `", "` and `": "`
+ * separators, keys in code-unit order and non-ASCII as lowercase `\uXXXX`. Saved login stores use
+ * this format, so it doesn't change. A number is spelled as JS spells it (`1e-7`, `9000`).
  */
-function pythonJson(value: unknown): string {
+function spacedJson(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "number") return String(value);
   if (typeof value === "string") {
@@ -194,7 +194,7 @@ function pythonJson(value: unknown): string {
     );
   }
   const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => compareCodeUnits(a, b));
-  return `{${entries.map(([key, item]) => `${pythonJson(key)}: ${pythonJson(item)}`).join(", ")}}`;
+  return `{${entries.map(([key, item]) => `${spacedJson(key)}: ${spacedJson(item)}`).join(", ")}}`;
 }
 
 /** Return the provider choice and saved logins `text` holds; throw if it is not a v1 store. */
@@ -418,7 +418,7 @@ export class AuthStore {
         }),
       ),
     };
-    const raw = new TextEncoder().encode(`${pythonJson(value)}\n`);
+    const raw = new TextEncoder().encode(`${spacedJson(value)}\n`);
     if (raw.length > current().maxAuthStoreBytes) throw new AuthError(OVERSIZED);
     // Checked before the temporary file exists, so a swapped-in directory never receives it.
     this.#checkSameDirectory(directory);

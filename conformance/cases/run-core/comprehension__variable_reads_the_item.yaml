@@ -85,6 +85,7 @@ expect:
     - node_id: __start__
       output:
         xs: [1, 2]
+      interrupted: false
   - - NodeStarted
     - {node_id: use}
   - - NodeSucceeded
@@ -92,10 +93,11 @@ expect:
       output:
       - [1, 10, 11, 2]
       - [2, 20, 21, 2]
+      interrupted: false
   - - NodeStarted
     - {node_id: step}
   - - NodeSucceeded
-    - {node_id: step, output: 99}
+    - {node_id: step, output: 99, interrupted: false}
   - - NodeStarted
     - {node_id: __end__}
   - - NodeSucceeded
@@ -103,6 +105,7 @@ expect:
       output:
       - [1, 10, 11, 2]
       - [2, 20, 21, 2]
+      interrupted: false
   - - RunSucceeded
     - output:
       - [1, 10, 11, 2]

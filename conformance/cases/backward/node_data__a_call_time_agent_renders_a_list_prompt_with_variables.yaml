@@ -324,10 +324,11 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {topic: reefs}
+      interrupted: false
   - - NodeStarted
     - {node_id: pick}
   - - NodeSucceeded
-    - {node_id: pick, output: gpt-picked}
+    - {node_id: pick, output: gpt-picked, interrupted: false}
   - - NodeStarted
     - {node_id: writer}
   - - ModelCallStarted
@@ -335,11 +336,11 @@ expect:
   - - ModelCallFinished
     - {node_id: writer, n: 2, purpose: chat, provider: openai, model: gpt-picked}
   - - NodeSucceeded
-    - {node_id: writer, output: Reefs glow.}
+    - {node_id: writer, output: Reefs glow., interrupted: false}
   - - NodeStarted
     - {node_id: __end__}
   - - NodeSucceeded
-    - {node_id: __end__, output: Reefs glow.}
+    - {node_id: __end__, output: Reefs glow., interrupted: false}
   - - RunSucceeded
     - {output: Reefs glow.}
   backward:

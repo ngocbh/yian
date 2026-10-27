@@ -111,6 +111,7 @@ expect:
           question: q3
         - header: H4
           question: q4
+      interrupted: false
   - - NodeStarted
     - node_id: ask
   - - NodeFailed

@@ -372,6 +372,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: mapped
   - - NodeExpanded
@@ -394,24 +395,28 @@ expect:
   - - NodeSucceeded
     - node_id: mapped/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: outer/__start__
   - - NodeSucceeded
     - node_id: outer/__start__
       output:
         tag: kept
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/__start__
   - - NodeSucceeded
     - node_id: mapped#0/__start__
       output:
         tag: a
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/__start__
   - - NodeSucceeded
     - node_id: mapped#1/__start__
       output:
         tag: b
+      interrupted: false
   - - NodeStarted
     - node_id: outer/loop
   - - NodeExpanded
@@ -448,54 +453,63 @@ expect:
     - node_id: outer/loop#0/__start__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/loop#0/__start__
   - - NodeSucceeded
     - node_id: mapped#0/loop#0/__start__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/loop#0/__start__
   - - NodeSucceeded
     - node_id: mapped#1/loop#0/__start__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: outer/loop#0/step
   - - NodeSucceeded
     - node_id: outer/loop#0/step
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/loop#0/step
   - - NodeSucceeded
     - node_id: mapped#0/loop#0/step
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/loop#0/step
   - - NodeSucceeded
     - node_id: mapped#1/loop#0/step
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer/loop#0/__end__
   - - NodeSucceeded
     - node_id: outer/loop#0/__end__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/loop#0/__end__
   - - NodeSucceeded
     - node_id: mapped#0/loop#0/__end__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/loop#0/__end__
   - - NodeSucceeded
     - node_id: mapped#1/loop#0/__end__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer/loop~1
   - - NodeExpanded
@@ -544,54 +558,63 @@ expect:
     - node_id: outer/loop#1/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/loop#1/__start__
   - - NodeSucceeded
     - node_id: mapped#0/loop#1/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/loop#1/__start__
   - - NodeSucceeded
     - node_id: mapped#1/loop#1/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer/loop#1/step
   - - NodeSucceeded
     - node_id: outer/loop#1/step
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/loop#1/step
   - - NodeSucceeded
     - node_id: mapped#0/loop#1/step
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/loop#1/step
   - - NodeSucceeded
     - node_id: mapped#1/loop#1/step
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer/loop#1/__end__
   - - NodeSucceeded
     - node_id: outer/loop#1/__end__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/loop#1/__end__
   - - NodeSucceeded
     - node_id: mapped#0/loop#1/__end__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/loop#1/__end__
   - - NodeSucceeded
     - node_id: mapped#1/loop#1/__end__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer/loop~2
   - - NodeSucceeded
@@ -600,6 +623,7 @@ expect:
       output:
         n: 2
         tag: kept
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/loop~2
   - - NodeSucceeded
@@ -608,6 +632,7 @@ expect:
       output:
         n: 2
         tag: a
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/loop~2
   - - NodeSucceeded
@@ -616,6 +641,7 @@ expect:
       output:
         n: 2
         tag: b
+      interrupted: false
   - - NodeStarted
     - node_id: outer/__end__
   - - NodeSucceeded
@@ -624,6 +650,7 @@ expect:
       output:
         n: 2
         tag: kept
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#0/__end__
   - - NodeSucceeded
@@ -631,6 +658,7 @@ expect:
       output:
         n: 2
         tag: a
+      interrupted: false
   - - NodeStarted
     - node_id: mapped#1/__end__
   - - NodeSucceeded
@@ -638,6 +666,7 @@ expect:
       output:
         n: 2
         tag: b
+      interrupted: false
   - - NodeStarted
     - node_id: mapped/__end__
   - - NodeSucceeded
@@ -648,6 +677,7 @@ expect:
         tag: a
       - n: 2
         tag: b
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -661,6 +691,7 @@ expect:
         outer:
           n: 2
           tag: kept
+      interrupted: false
   - - RunSucceeded
     - output:
         mapped:

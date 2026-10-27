@@ -117,6 +117,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -134,6 +135,7 @@ expect:
       output:
         exited: false
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/step
   - - NodeSucceeded
@@ -141,6 +143,7 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
@@ -148,6 +151,7 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeFailed

@@ -173,6 +173,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: inline_call
   - - NodeExpanded
@@ -195,34 +196,40 @@ expect:
     - node_id: inline_call/__start__
       output:
         x: 5
+      interrupted: false
   - - NodeStarted
     - node_id: named_call/__start__
   - - NodeSucceeded
     - node_id: named_call/__start__
       output:
         x: 5
+      interrupted: false
   - - NodeStarted
     - node_id: inline_call/echo
   - - NodeSucceeded
     - node_id: inline_call/echo
       output: 5
+      interrupted: false
   - - NodeStarted
     - node_id: named_call/echo
   - - NodeSucceeded
     - node_id: named_call/echo
       output: 5
+      interrupted: false
   - - NodeStarted
     - node_id: inline_call/pack
   - - NodeSucceeded
     - node_id: inline_call/pack
       output:
         value: 5
+      interrupted: false
   - - NodeStarted
     - node_id: named_call/pack
   - - NodeSucceeded
     - node_id: named_call/pack
       output:
         value: 5
+      interrupted: false
   - - NodeStarted
     - node_id: inline_call/__end__
   - - NodeSucceeded
@@ -230,6 +237,7 @@ expect:
       node_id: inline_call/__end__
       output:
         value: 5
+      interrupted: false
   - - NodeStarted
     - node_id: named_call/__end__
   - - NodeSucceeded
@@ -237,6 +245,7 @@ expect:
       node_id: named_call/__end__
       output:
         value: 5
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -246,6 +255,7 @@ expect:
           value: 5
         named:
           value: 5
+      interrupted: false
   - - RunSucceeded
     - output:
         inline:

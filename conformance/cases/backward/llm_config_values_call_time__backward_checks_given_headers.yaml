@@ -99,6 +99,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: pick
   - - NodeFailed
@@ -119,5 +120,5 @@ expect:
         node: pick
   backward:
   - raises:
-      class: ValueError
+      class: RangeError
       message: 'headers must have the header names this run recorded for its host key: missing X-Tenant; not recorded X-Other'

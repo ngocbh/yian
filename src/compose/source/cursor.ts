@@ -4,7 +4,7 @@ import { reprText, type SourceRange } from "../../diagnostics.ts";
 import {
   isList,
   isRecord,
-  pythonTypeName,
+  typeName,
   type Value,
   type ValueRecord,
 } from "../../typesys/index.ts";
@@ -1046,7 +1046,7 @@ function fieldTypeError(
   range: SourceRange | null,
 ): SourceAccessError {
   return new SourceAccessError(
-    `field ${reprText(key)} must be ${expected}, got ${pythonTypeName(value)}`,
+    `field ${reprText(key)} must be ${expected}, got ${typeName(value)}`,
     range,
   );
 }

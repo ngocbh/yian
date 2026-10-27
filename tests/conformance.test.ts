@@ -61,6 +61,7 @@ import {
   type RunRecord,
   RunCancelledRecord,
   RunFailedRecord,
+  RunLogSchemaError,
   RunWaitingRecord,
   SCHEMA_VERSION,
 } from "../src/runtime/log.ts";
@@ -782,12 +783,9 @@ describe("raised", () => {
     expect(raised(new Foo("m"))).toEqual({ class: "Foo", message: "m" });
   });
 
-  test("names a RangeError ValueError", () => {
-    expect(raised(new RangeError("m"))).toEqual({ class: "ValueError", message: "m" });
-  });
-
-  test("reads the name through the error-class table", () => {
-    expect(raised(new Foo("m"), new Map([["Foo", "Bar"]]))).toEqual({ class: "Bar", message: "m" });
+  test("names a RangeError and a RunLogSchemaError by their own class", () => {
+    expect(raised(new RangeError("m"))).toEqual({ class: "RangeError", message: "m" });
+    expect(raised(new RunLogSchemaError("m", 9))).toEqual({ class: "RunLogSchemaError", message: "m" });
   });
 
   test("adds a TypeCheckError's path, list indexes as ints", () => {
@@ -828,7 +826,7 @@ describe("expectRaises and results", () => {
     };
     const failure = expectRaises(expected, call);
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
-    await expect(failure).rejects.toThrow("raises differs\n--- actual\nclass: ValueError\n");
+    await expect(failure).rejects.toThrow("raises differs\n--- actual\nclass: RangeError\n");
   });
 
   test("lets the case's own failure through", async () => {
@@ -1602,7 +1600,7 @@ describe("main", () => {
     expect(readFileSync(join(roots.at(-1)!, "cases", "a", "cut.yaml"), "utf8")).toBe(cut);
   });
 
-  test("--write-expect quotes a `?` in a flow collection, which Python's YAML reader won't take bare", async () => {
+  test("--write-expect leaves a `?` in a flow collection bare, as YAML 1.2 allows", async () => {
     const asked = FORMS.replace('big: "${input.big}"}', 'big: "${input.big}", q: "why?"}')
       .replace("output: {id: <id:1>, f: 2.0, big: 9007199254740993}", "output: {id: <id:1>, f: 2.0, big: 9007199254740993, q: \"why?\"}")
       .replace("{value: {big: 9007199254740993, f: 2.0, id: <id:1>}}", "{value: {big: 1}}");
@@ -1610,8 +1608,8 @@ describe("main", () => {
     const written = await run(["--write-expect"], { "a/forms.yaml": asked }, {}, { run: RUNNERS.run! });
     expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
     const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
-    expect(text).toContain('q: "why?"}}]');
-    expect(text).not.toContain("q: why?");
+    expect(text).toContain("q: why?}}]");
+    expect(text).not.toContain('q: "why?"}}]');
   });
 
   test("--write-expect changes a block entry in place, keeping its comment and style", async () => {

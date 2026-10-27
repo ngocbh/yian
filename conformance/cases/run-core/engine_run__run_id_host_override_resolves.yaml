@@ -69,15 +69,18 @@ expect:
     - node_id: __start__
       output:
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: echo
   - - NodeSucceeded
     - node_id: echo
       output: rid-123
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: rid-123
+      interrupted: false
   - - RunSucceeded
     - output: rid-123

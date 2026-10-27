@@ -92,9 +92,9 @@ import {
 // name. Anchoring plus a whitespace-free path keep multi-token bodies out.
 const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-// Python's own reference shape (`pkg.mod:fn`). Read as TS it is a labeled statement, so the load
-// check refuses it rather than run it as a body.
-const PYTHON_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
+// A module reference (`pkg.mod:fn`), which yian doesn't run. Read as TS it is a labeled
+// statement, so the load check refuses it rather than run it as a body.
+const MODULE_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
 
 // Mirrors the CLI's `leavesRoot` in `cli/run.ts`; nodes may not import the CLI.
 /**
@@ -586,7 +586,7 @@ export class CodeNode extends Node {
       }
       return;
     }
-    if (PYTHON_REFERENCE_RE.test(code)) {
+    if (MODULE_REFERENCE_RE.test(code)) {
       throw new RangeError(
         `\`code:\` value ${reprText(code)} looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
       );

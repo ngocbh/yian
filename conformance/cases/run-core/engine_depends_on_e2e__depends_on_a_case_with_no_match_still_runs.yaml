@@ -107,11 +107,13 @@ expect:
       output:
         score: 0.2
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: con
   - - NodeSucceeded
     - node_id: con
       output: 'con: ACME'
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -124,6 +126,7 @@ expect:
   - - NodeSucceeded
     - node_id: note
       output: cautious note for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -131,6 +134,7 @@ expect:
       output:
         note: cautious note for ACME
         pick: null
+      interrupted: false
   - - RunSucceeded
     - output:
         note: cautious note for ACME

@@ -30,7 +30,7 @@ run:
   num_workers: 0
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     message: 'YIAN_DEFAULT_PROVIDER=''claude'' is not a supported provider; set it to one of: openai, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, vllm, ollama, anthropic, google, azure'
   trace: []
   events: []

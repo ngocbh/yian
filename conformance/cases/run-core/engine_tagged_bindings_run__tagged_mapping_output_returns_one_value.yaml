@@ -68,18 +68,21 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: size
   - - NodeSucceeded
     - node_id: size
       output:
         qty: 1
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         a: 1
+      interrupted: false
   - - RunSucceeded
     - output:
         a: 1

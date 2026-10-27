@@ -79,6 +79,7 @@ expect:
     - node_id: __start__
       output:
         s: c
+      interrupted: false
   - - NodeStarted
     - node_id: go
   - - NodeFailed

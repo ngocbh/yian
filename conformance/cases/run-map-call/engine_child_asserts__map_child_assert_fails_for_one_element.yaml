@@ -120,6 +120,7 @@ expect:
     - node_id: __start__
       output:
         vs: [1, -1, 3]
+      interrupted: false
   - - NodeStarted
     - node_id: map_it
   - - NodeExpanded
@@ -135,12 +136,14 @@ expect:
   - - NodeSucceeded
     - node_id: map_it/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: map_it#0/__start__
   - - NodeSucceeded
     - node_id: map_it#0/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: map_it#1/__start__
   - - NodeFailed

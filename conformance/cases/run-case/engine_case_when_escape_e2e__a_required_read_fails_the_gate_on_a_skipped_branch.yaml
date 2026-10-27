@@ -111,6 +111,7 @@ expect:
       output:
         score: 0.2
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted

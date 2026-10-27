@@ -263,6 +263,7 @@ expect:
     - node_id: __start__
       output:
         values: [v]
+      interrupted: false
   - - NodeStarted
     - node_id: outer
   - - NodeExpanded
@@ -277,17 +278,20 @@ expect:
     - node_id: outer/__start__
       output:
         values: [v, v, v]
+      interrupted: false
   - - NodeStarted
     - node_id: outer/__end__
   - - NodeSucceeded
     - node_id: outer/__end__
       output: [v, v, v]
       commit_as: outer
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [v, v, v]
+      interrupted: false
   - - RunSucceeded
     - output: [v, v, v]
   backward:

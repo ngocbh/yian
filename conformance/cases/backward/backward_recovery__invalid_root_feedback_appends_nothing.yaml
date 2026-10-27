@@ -178,18 +178,20 @@ expect:
       output:
         value:
           known: 1
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         known: 1
+      interrupted: false
   - - RunSucceeded
     - output:
         known: 1
   backward:
   - raises:
-      class: ValueError
+      class: RangeError
       message: feedback selects unknown field 'missing'
   - failure: null
     feedback:

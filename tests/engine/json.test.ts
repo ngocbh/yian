@@ -36,7 +36,7 @@ function depth(value: JsonValue): number {
 
 // Python 3.12's `json.loads` errors, as [text, reason, position]; each text is ASCII on one line,
 // so line is 1 and column is position + 1.
-const PYTHON_ERRORS: [string, string, number][] = [
+const JSON_SYNTAX_ERRORS: [string, string, number][] = [
   ["", "Expecting value", 0],
   ["   ", "Expecting value", 3],
   ["-", "Expecting value", 0],
@@ -143,7 +143,7 @@ describe("parseJson", () => {
     expect(v.toString).toBe(2n);
   });
 
-  test.each(PYTHON_ERRORS)("reports Python's syntax errors: %j", (text, reason, position) => {
+  test.each(JSON_SYNTAX_ERRORS)("reports Python's syntax errors: %j", (text, reason, position) => {
     expectError(text, reason, position);
   });
 

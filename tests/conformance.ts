@@ -756,7 +756,7 @@ function checkHttp(value: Value | undefined): void {
       throw new Error(`\`${where}.response.status\` must be an int from 100 to 599`);
     }
     const delay = get(response, "delay", 0n);
-    // Finite, as Python's runner needs: a wait can't take an infinite timeout.
+    // Finite: `setTimeout` runs an infinite delay after 1 ms, so the case would not wait.
     const finite = typeof delay === "number" && delay >= 0 && delay < Infinity;
     if (!finite && !(typeof delay === "bigint" && delay >= 0n)) {
       throw new Error(`\`${where}.response.delay\` must be a finite non-negative number`);
@@ -1042,25 +1042,13 @@ export function compare(
 }
 
 /**
- * TS error class names that differ from the case names, mapped to the case names. A change that
- * introduces such a class adds its entry here and the matching row to the error-class table in
- * `conformance/SPEC.md`.
- */
-export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map([
-  // TS throws a RangeError wherever Python raises ValueError at a yian boundary.
-  ["RangeError", "ValueError"],
-  // A RangeError naming a run-log schema TS can't read; Python raises ValueError.
-  ["RunLogSchemaError", "ValueError"],
-]);
-
-/**
  * Return `error` in the case's `raises` form: `{class, message}`, plus `path` for a
- * `TypeCheckError`. The class is `error.name` read through `classes`, so every yian error class
- * sets `override name = "<Class>"`. A thrown non-`Error` is named by its `typeof`.
+ * `TypeCheckError`. The class is `error.name`, so every yian error class sets
+ * `override name = "<Class>"`. A thrown non-`Error` is named by its `typeof`.
  */
-export function raised(error: unknown, classes: ReadonlyMap<string, string> = ERROR_CLASSES): Case {
+export function raised(error: unknown): Case {
   if (!(error instanceof Error)) return { class: typeof error, message: String(error) };
-  const form: Case = { class: classes.get(error.name) ?? error.name, message: error.message };
+  const form: Case = { class: error.name, message: error.message };
   const path: unknown = (error as { path?: unknown }).path;
   if (error.name === "TypeCheckError" && Array.isArray(path)) {
     form["path"] = (path as unknown[]).map((step) =>
@@ -1981,16 +1969,14 @@ function failureForm(failure: Failure, flow: ComposedFlow): Case {
 }
 
 /**
- * Return the data form of an event or stream chunk, without its null fields, without a model
- * call's `started_at` (a time) and without a `NodeSucceeded`'s `interrupted` when false (TS-only;
- * Python has no such field): its `toJSON()`, with a failure in failure form and every file as
+ * Return the data form of an event or stream chunk, without its null fields and a model call's
+ * `started_at` (a time): its `toJSON()`, with a failure in failure form and every file as
  * `{uri, mime, name}`.
  */
 function fields(event: RunEvent, flow: ComposedFlow): Case {
   const data: Case = {};
   for (const [key, item] of Object.entries(event.toJSON())) {
     if (item === null || key === "started_at") continue;
-    if (event.type === "NodeSucceeded" && key === "interrupted" && item === false) continue;
     const failure = key === "failure" ? (event as { failure: Failure }).failure : null;
     data[key] = failure !== null ? failureForm(failure, flow) : dataForm(item as YianValue);
   }
@@ -2187,15 +2173,6 @@ export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
       for (const time of STEP_TIMES) delete step[time];
       if ((get(step, "effective_llm_config") ?? null) !== null) {
         step["effective_llm_config"] = llm(step["effective_llm_config"] as Case);
-      }
-      // A failed step's error class goes through the error-class table: a TOOL attempt's `type`,
-      // a failed model call's `kind` (a provider error's kind is no class and stays).
-      const error = get(step, "error");
-      if (step["event"] === "failed" && isMapping(error) && typeof error["type"] === "string") {
-        error["type"] = ERROR_CLASSES.get(error["type"]) ?? error["type"];
-      }
-      if (step["kind"] === "model_call" && isMapping(error) && typeof error["kind"] === "string") {
-        error["kind"] = ERROR_CLASSES.get(error["kind"]) ?? error["kind"];
       }
     }
     if (kind === "backward_finished") {
@@ -3246,26 +3223,6 @@ function section(text: string, key: string): [number, number] | undefined {
 }
 
 /**
- * Quote each text in a flow collection under `node` that holds a `?`. The writer leaves it bare,
- * as YAML 1.2 allows, but PyYAML ends the text there, so the Python runner couldn't read the case.
- */
-function quoteQuestionMarks(node: unknown): void {
-  visit(node as Parameters<typeof visit>[0], {
-    Collection(_, collection) {
-      if (!collection.flow) return;
-      const parts = isMap(collection)
-        ? collection.items.flatMap((pair) => [pair.key, pair.value])
-        : collection.items;
-      for (const part of parts) {
-        if (isScalar(part) && typeof part.value === "string" && part.value.includes("?")) {
-          part.type = "QUOTE_DOUBLE";
-        }
-      }
-    },
-  });
-}
-
-/**
  * Return the case file `text` with each result in `results` written into `expect` in case form
  * (as `updated` changes it). Only the lines of `expect` change: they are cut from the whole file
  * written again and put in place of the old ones, because the writer spells some other text (block
@@ -3290,7 +3247,6 @@ function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): strin
     const value = results.get(name) as Value | undefined;
     if (value !== undefined) pair.value = updated(doc, pair.value, value, { byValue: BY_VALUE.has(name) });
   }
-  quoteQuestionMarks(doc.get("expect"));
   const written = doc.toString(options(indentSeq));
   const [start, end] = section(text, "expect")!;
   const result = text.slice(0, start) + cut(written, "expect") + text.slice(end);

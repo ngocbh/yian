@@ -137,6 +137,7 @@ expect:
     - node_id: __start__
       output:
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: go
   - - NodeExpanded
@@ -151,6 +152,7 @@ expect:
     - node_id: go/__start__
       output:
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: go/__call_0
   - - NodeExpanded
@@ -165,32 +167,38 @@ expect:
     - node_id: go/__call_0/__start__
       output:
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: go/__call_0/x
   - - NodeSucceeded
     - node_id: go/__call_0/x
       output: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: go/__call_0/__end__
   - - NodeSucceeded
     - commit_as: go/__call_0
       node_id: go/__call_0/__end__
       output: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: go/y
   - - NodeSucceeded
     - node_id: go/y
       output: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: go/__end__
   - - NodeSucceeded
     - commit_as: go
       node_id: go/__end__
       output: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ACME
+      interrupted: false
   - - RunSucceeded
     - output: ACME

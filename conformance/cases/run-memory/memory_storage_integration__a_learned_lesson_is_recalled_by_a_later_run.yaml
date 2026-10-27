@@ -163,6 +163,7 @@ expect:
     - node_id: __start__
       output:
         q: RED berry
+      interrupted: false
   - - NodeStarted
     - node_id: answer
   - - ModelCallStarted
@@ -180,11 +181,13 @@ expect:
   - - NodeSucceeded
     - node_id: answer
       output: a2
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: a2
+      interrupted: false
   - - RunSucceeded
     - output: a2
   stream:

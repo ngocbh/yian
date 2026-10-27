@@ -62,14 +62,17 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: optional
   - - NodeSucceeded
     - node_id: optional
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
+      interrupted: false
   - [RunSucceeded]
   tool_calls:
     ask:

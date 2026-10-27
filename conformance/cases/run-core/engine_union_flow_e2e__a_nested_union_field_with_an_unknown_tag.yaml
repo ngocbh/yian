@@ -96,6 +96,7 @@ expect:
             action: bid
             qty: 1
           notes: []
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeFailed

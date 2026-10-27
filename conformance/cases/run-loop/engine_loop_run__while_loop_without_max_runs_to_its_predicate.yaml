@@ -168,6 +168,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -185,6 +186,7 @@ expect:
       output:
         exited: false
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/step
   - - NodeSucceeded
@@ -192,6 +194,7 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
@@ -199,6 +202,7 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
@@ -216,6 +220,7 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/step
   - - NodeSucceeded
@@ -223,6 +228,7 @@ expect:
       output:
         exited: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/__end__
   - - NodeSucceeded
@@ -230,6 +236,7 @@ expect:
       output:
         exited: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop~2
   - - NodeExpanded
@@ -247,6 +254,7 @@ expect:
       output:
         exited: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/step
   - - NodeSucceeded
@@ -254,6 +262,7 @@ expect:
       output:
         exited: true
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/__end__
   - - NodeSucceeded
@@ -261,6 +270,7 @@ expect:
       output:
         exited: true
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop~3
   - - NodeSucceeded
@@ -269,6 +279,7 @@ expect:
       output:
         exited: true
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -276,6 +287,7 @@ expect:
       output:
         exited: true
         n: 3
+      interrupted: false
   - - RunSucceeded
     - output:
         exited: true

@@ -9,7 +9,7 @@ flow: |
   #
   # NOT a duplicate of e23: that pins a TOOL node's `tool_id:`. This is an AGENT node's `tools:`
   # list. Both survive compile and fail at run start: before any log exists, `run_flow` checks
-  # every static AGENT grant and TOOL `tool_id:` against the run's tools and raises `ValueError`
+  # every static AGENT grant and TOOL `tool_id:` against the run's tools and raises `RangeError`
   # naming the node and the unknown id. That is the run-start shape in `errors/`, which e23 uses.
   # This seed stays here because what it asks for is a load-time check, which does not exist.
   #
@@ -17,7 +17,7 @@ flow: |
   # semantic origin carrier for an AGENT `tools:` entry. Only the host knows which names it will
   # supply (a name may be a host-filled tool group), so a load-time check needs the run's tools.
   #
-  #   CURRENT:  loads OK. At run start: `ValueError` naming node `note` and the first grant the
+  #   CURRENT:  loads OK. At run start: `RangeError` naming node `note` and the first grant the
   #             run's tools lack; no log is created.
   #   EXPECTED: a load-time check naming the unknown id, located at its own `tools:` entry.
   id: fut-agent-tools-no-load-check
@@ -40,7 +40,7 @@ inputs: {topic: X}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 expect:
   raises:
-    class: ValueError
+    class: RangeError
     # The empty list reads `[]` in both languages, so the message needs no `messages` rule.
     message: "AGENT node 'note' grants unknown tool or group 'web_search'; tool groups in this run: []"
   trace: []

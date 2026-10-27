@@ -1603,11 +1603,11 @@ function isPlainMapping(value: unknown): value is Readonly<Record<string, unknow
 }
 
 /**
- * The name Python's `type(x).__name__` gives the host value `value`: `dict` for a plain
+ * The type name diagnostics show for the host value `value`: `dict` for a plain
  * object, `list` for an array, `str`, `int` for a bigint, `float` for a number, `bool`,
  * `NoneType` for `null`, else its constructor's name (or `typeof`).
  */
-export function pythonTypeName(value: unknown): string {
+export function typeName(value: unknown): string {
   if (isPlainMapping(value)) return "dict";
   if (Array.isArray(value)) return "list";
   switch (typeof value) {
@@ -1694,7 +1694,7 @@ export function readTypedefs(
         if (typeof ftype !== "string") {
           throw new TypeCheckError(
             `typedef ${reprText(name)} field ${reprText(fname)}: type must be a string ` +
-              `expression (got ${pythonTypeName(ftype)})`,
+              `expression (got ${typeName(ftype)})`,
             { path: [name, fname] },
           );
         }
@@ -1732,7 +1732,7 @@ export function readTypedefs(
       );
     } else {
       throw new TypeCheckError(
-        `typedef ${reprText(name)}: unsupported definition of type ${pythonTypeName(value)}`,
+        `typedef ${reprText(name)}: unsupported definition of type ${typeName(value)}`,
         { path: [name] },
       );
     }

@@ -90,6 +90,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeExpanded
@@ -102,11 +103,13 @@ expect:
   - - NodeSucceeded
     - node_id: c/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: c/step
   - - NodeSucceeded
     - node_id: c/step
       output: filled
+      interrupted: false
   - - NodeStarted
     - node_id: c/__end__
   - - NodeSucceeded
@@ -114,12 +117,14 @@ expect:
       node_id: c/__end__
       output:
         order: filled
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         order: filled
+      interrupted: false
   - - RunSucceeded
     - output:
         order: filled

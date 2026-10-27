@@ -34,7 +34,7 @@ import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import {
   isRecord,
-  pythonTypeName,
+  typeName,
   type Type,
   unionField,
   type Value,
@@ -792,7 +792,7 @@ function resolvedLayer(value: unknown, carriedPart: unknown, label: string | nul
   if (value === null) return {};
   if (isRecord(value)) return value;
   const where = label ?? `binding ${reprText(LLM_CONFIG_KEY)}`;
-  throw new BindingError(`${where}: llm_config must resolve to a mapping or null, got ${pythonTypeName(value)}`, {
+  throw new BindingError(`${where}: llm_config must resolve to a mapping or null, got ${typeName(value)}`, {
     failureCode: "contract.input",
     origin: carriedPart instanceof Binding ? carriedPart.origin : null,
   });

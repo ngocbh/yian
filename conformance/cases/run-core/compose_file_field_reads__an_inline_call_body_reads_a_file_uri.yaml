@@ -98,6 +98,7 @@ expect:
           mime: text/plain
           name: null
           uri: f
+      interrupted: false
   - - NodeStarted
     - node_id: b
   - - NodeExpanded
@@ -112,21 +113,25 @@ expect:
     - node_id: b/__start__
       output:
         s: f
+      interrupted: false
   - - NodeStarted
     - node_id: b/k
   - - NodeSucceeded
     - node_id: b/k
       output: f
+      interrupted: false
   - - NodeStarted
     - node_id: b/__end__
   - - NodeSucceeded
     - commit_as: b
       node_id: b/__end__
       output: f
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: f
+      interrupted: false
   - - RunSucceeded
     - output: f

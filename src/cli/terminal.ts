@@ -968,8 +968,8 @@ const OMIT_INPUT = Symbol("omit input");
 const NULL_INPUT = Symbol("set null");
 const ENTER_INPUT = Symbol("enter value");
 
-// Python's `str.isspace()` set: a text of only these is blank to `str.strip()`.
-const PY_BLANK = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u;
+// Unicode whitespace: a text of only these characters is blank.
+const BLANK_TEXT = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u;
 
 /** One select choice: its title and the value choosing it gives. */
 interface Choice {
@@ -1038,7 +1038,7 @@ async function promptOpenValue(
   type: Type | undefined,
   label: string,
 ): Promise<unknown> {
-  const blankOmits = (text: string): boolean => !decl.required && PY_BLANK.test(text);
+  const blankOmits = (text: string): boolean => !decl.required && BLANK_TEXT.test(text);
   if (type !== undefined && (isListKind(type.kind) || type.kind === ValueKind.OBJECT)) {
     const value = await run(
       textWidget({

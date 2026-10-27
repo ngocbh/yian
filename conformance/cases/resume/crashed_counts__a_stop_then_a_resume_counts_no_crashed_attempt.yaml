@@ -44,9 +44,9 @@ expect:
   - [RunResumed]
   - [NodeAttemptResumed, {node_id: fetch, crashed: 0}]
   - [NodeStarted, {node_id: fetch}]
-  - [NodeSucceeded, {node_id: fetch, output: F1}]
+  - [NodeSucceeded, {node_id: fetch, output: F1, interrupted: false}]
   - [NodeStarted, {node_id: __end__}]
-  - [NodeSucceeded, {node_id: __end__, output: F1}]
+  - [NodeSucceeded, {node_id: __end__, output: F1, interrupted: false}]
   - [RunSucceeded, {output: F1}]
   tool_calls:
     lookup:

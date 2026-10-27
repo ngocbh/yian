@@ -24,7 +24,8 @@ or `bunx @ngocbh/yian`. Plain `npx yian` fetches an unrelated package.
 
 ## Set up a model
 
-yian has no built-in model. Save a login for a provider; the docs cover the others:
+yian has no built-in model. Save a login for a provider; [the docs](https://yian.readthedocs.io/models/)
+cover the others:
 
 ```console
 $ yian auth anthropic
@@ -51,5 +52,5 @@ Hello, Ada!
 
 ## Documentation and license
 
-Read the docs at [yian.readthedocs.io](https://yian.readthedocs.io/). yian is licensed under
-Apache-2.0.
+Read the docs at [yian.readthedocs.io](https://yian.readthedocs.io/), starting with
+[Get started](https://yian.readthedocs.io/get-started/). yian is licensed under Apache-2.0.

@@ -1,7 +1,5 @@
 /**
- * The resolver case table for `src/llm_clients/factory.ts`'s `chatModelFromConfig`: the planned
- * case table of #366's resolver stages (`tests/llm/resolver_cases.py` and `test_resolver*.py` in
- * Python, never built), so it is a new file rather than a port of one.
+ * The resolver case table for `src/llm_clients/factory.ts`'s `chatModelFromConfig`.
  *
  * Each case gives a config, an optional saved login and an environment, and replays one golden
  * cassette from `cassettes/<protocol>/`, deep-copied and edited only where the case differs (the
@@ -14,29 +12,8 @@
  * config, so the scrub knows every credential on the wire.
  *
  * Below the table: reserved block keys refused at build; no Anthropic block field reaching the
- * beta endpoint (Python's `every_block_field_is_a_messages_keyword_or_a_relocated_sampling_field`);
- * and lite ports of `tests/test_llm_client_env_headers.py`, where the environment holds every SDK
- * header and credential variable and only the configured credential reaches the wire:
- * `openai_responses_send_only_the_explicit_key`, `openai_callable_key_sends_only_its_value`,
- * `openai_compatible_provider_sends_only_the_explicit_key`, `subscription_sends_only_its_own_headers`,
- * `azure_sends_only_the_explicit_key`, `azure_without_a_key_keeps_the_sdk_order`,
- * `anthropic_sends_only_the_explicit_key`, `anthropic_with_a_base_url_sends_only_the_explicit_key`,
- * `google_sends_only_the_explicit_key`, `google_without_any_key_fails_on_the_developer_api`,
- * `ollama_does_not_send_the_environment_key` and `ollama_keeps_userinfo_auth_from_its_base_url`;
- * `wire_credentials_are_tracked` is the superset check. Left out, since TS has no SDK to read the
- * environment, build a client or warn about dropped variables (design 7.4): the SDK client
- * internals (`explicit_default_headers_survive`, `openai_default_clients_drop_env_headers`,
- * `azure_user_agent_from_env_does_not_win`, `anthropic_default_client_drops_env_headers`,
- * `anthropic_hook_clears_an_env_auth_token`, `host_http_client_headers_are_sent`,
- * `google_never_writes_the_key_to_the_environment`, `google_rebuilt_client_keeps_base_url_key_and_no_redirects`,
- * `google_rebuild_without_a_cleanup_object`, `google_client_does_not_import_the_cleanup_class`) and
- * the dropped-variable warnings (`openai_warns_when_it_drops_env_headers`,
- * `openai_names_openai_organization`, `drop_warning_shows_once_across_builds_and_tool_binding`,
- * `drop_warning_points_at_the_sdk_adapter`, `anthropic_warns_when_it_drops_env_headers`,
- * `anthropic_without_env_headers_does_not_warn`, `openai_without_env_headers_does_not_warn`,
- * `google_warns_once_about_the_vertex_switch`, `google_without_the_vertex_switch_does_not_warn`,
- * `ollama_warns_once_about_the_environment_key`). `google_ignores_the_vertex_switch` and its
- * `base_url` twin are the environment table's never-read check in `provider_connections.test.ts`.
+ * beta endpoint; and, with every SDK header and credential variable in the environment, only the
+ * configured credential reaching the wire.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -932,7 +909,7 @@ const CASES: Case[] = [
     expect: blockOnResponses("openrouter", "openai/gpt-5-codex"),
   },
   {
-    // A missing key fails at build, as Python's `get_llm()` does, before the block check.
+    // A missing key fails at build, before the block check.
     name: "openrouter name-routed model with a block and no key",
     config: { provider: "openrouter", model: "openai/gpt-5-codex", openrouter: { max_tokens: 64n } },
     env: {},
@@ -1060,7 +1037,7 @@ const CASES: Case[] = [
     config: { ...GOOGLE, model: "models/gemini-2.5-flash" },
     env: { GOOGLE_API_KEY: ENV_KEY },
     golden: "gemini/plain",
-    // The config's model as written is not a catalog id, so it warns, as in Python.
+    // The config's model as written is not a catalog id, so it warns.
     expect: {
       ...sends("google", "gemini-2.5-flash", googKey(ENV_KEY)),
       warnings: [unknownModel("google", "models/gemini-2.5-flash")],
@@ -1422,8 +1399,7 @@ describe("never beta", () => {
 });
 
 describe("environment values never reach the wire", () => {
-  // `test_llm_client_env_headers.py`'s `ENV` and `_GOOGLE_ENV`: every SDK header and credential
-  // variable, each value holding `env-`.
+  // Every SDK header and credential variable, each value holding `env-`.
   const POISONED: Record<string, string> = {
     OPENAI_CUSTOM_HEADERS:
       "X-Env-Injected: from-env\nAuthorization: Bearer env-custom-auth\napi-key: env-custom-api-key\n" +
@@ -1480,7 +1456,7 @@ describe("environment values never reach the wire", () => {
   });
 
   test("openai_callable_key_sends_only_its_value", async () => {
-    // A saved key is read per request, the shape Python passes as a callable.
+    // A saved key is read per request.
     const saved = { credentials: new ApiKeyCredentials("sk-explicit"), model: "gpt-5.5" };
     const headers = await sent({}, "openai_responses/plain", { saved });
     expect(headers.get("authorization")).toBe("Bearer sk-explicit");
@@ -1617,7 +1593,7 @@ describe("unknown-model warning", () => {
     return warnings;
   }
 
-  test("an unknown xai model gets Python's text", async () => {
+  test("an unknown xai model warns that it isn't in the known model list", async () => {
     const warnings = await warningsFor({ provider: "xai", model: "grok-resolver-unknown" }, { XAI_API_KEY: ENV_KEY });
     expect(warnings).toEqual([
       "Model 'grok-resolver-unknown' is not in the known model list for provider 'xai'. Continuing anyway.",

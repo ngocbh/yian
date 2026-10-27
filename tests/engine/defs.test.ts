@@ -1,40 +1,6 @@
 /**
- * In-file `defs:` callables and defs-first `call` resolution: a port of
- * `tests/engine/test_defs.py`.
- *
- * Ported: every row that only loads. Changed: CODE references are TS's form
- * (`./fixtures/compose_codefns.ts:echo`), loaded with the conformance directory as `baseDir`
- * (`loadConformanceFlow`).
- * `test_callable_scope_eagerly_builds_defs_and_memoizes_resolution` builds a real def where
- * Python patches `_load_def` (a module-internal call a Bun test can't replace), and resolves the
- * alias through `resolveAlias`, since the synchronous `resolve` only reads the alias memo.
- * `test_multiple_defs_share_one_parent_document_parse` counts `SourceDocument.parse` calls where
- * Python counts its document loader. `test_omitted_child_input_applies_explicit_null_default`
- * keeps its load half.
- *
- * TS-only: the synchronous `resolve` refuses a `uses:` alias that wasn't resolved first, without
- * calling the resolver; a single-node def's parameter named `inf` is refused at its key, as a
- * compact flow's is; defs built without a source cursor, from their normalized bodies; the awaited CODE check of
- * defs (an uncalled def, a def calling a bad def, written order), whose messages and frames match
- * Python's, which checks CODE while building each def.
- *
- * Ported through `runFlow` (CODE references TS's, inline bodies JavaScript):
- * `test_defs_callable_runs_end_to_end_without_external_resolver`,
- * `test_defs_shadow_external_of_same_name` (the external served by `childResolver`),
- * `test_single_node_def_runs`, `test_def_asserts_are_enforced_at_the_child_seam`,
- * `test_tag_subset_or_literal_binding_fills_literal_child_input`,
- * `test_isinstance_guard_lets_str_fill_literal_child_input`,
- * `test_nullable_source_with_literal_escape_ok` and `test_def_yaml_merge_uses_local_nodes_override`.
- *
- * Covered by the harvested run cases (the same flows, inputs and results):
- * `run-map-call/engine_defs__def_as_a_mapped_call` (`test_defs_callable_as_mapped_call`),
- * `run-map-call/engine_defs__def_calls_another_def` (`test_def_calls_another_def`),
- * `run-map-call/engine_defs__typed_call_argument_checks_a_literal_tag`
- * (`test_typed_binding_from_str_checks_the_tag_at_run_time`: `binding.type` at `go`),
- * `run-map-call/engine_defs__parent_null_shadows_child_default`
- * (`test_parent_null_shadows_child_default`) and
- * `run-map-call/engine_defs__omitted_child_input_takes_its_null_default` (the run half of
- * `test_omitted_child_input_applies_explicit_null_default`).
+ * In-file `defs:` callables and defs-first `call` resolution: loading, alias resolution, the
+ * awaited CODE check of defs, and runs.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -870,7 +836,7 @@ output: \${go.output}
   expect(await runOutput(text, { topic: "ACME" })).toBe("ACME");
 });
 
-/** Python's `_STR_TO_LITERAL_CHILD`, with the input type `source` and the call binding `binding`. */
+/** The str-to-literal child, with the input type `source` and the call binding `binding`. */
 const strToLiteralChild = (source: string, binding: string) => `
 id: str-to-literal
 name: str_to_literal

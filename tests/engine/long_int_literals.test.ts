@@ -1,29 +1,4 @@
-/**
- * A port of `tests/engine/test_long_int_literals.py`: int literals with more than 4300 digits in
- * a flow file.
- *
- * Ported: `test_a_long_int_literal_is_a_located_load_error`, `test_leading_zeros_do_not_count`,
- * `test_a_long_range_end_is_a_load_error`,
- * `test_a_long_end_in_the_bracket_spelling_names_the_limit` and
- * `test_a_long_int_in_an_expression_is_a_load_error`.
- *
- * Changed: ints are `bigint`s with no digit limit (decisions 4a, 4b), so a long literal loads
- * and reads whole where Python refuses it with a located load error. The YAML literal rows run
- * and output the whole int: the `use` node echoes `topic` with no declared output (Python's
- * `output: str` never ran), and the input-default rows bind `topic` to `${input.n}`. The
- * long-form `input-default-long-form` row still fails to load, on the untagged record
- * declaration, the message Python gives that form whatever its default. A long `int` range end
- * is whole: the end itself is accepted and one past it refused; a long `float` range end stays a
- * load error, since it is beyond the float range (`float bounds require finite endpoints`). The
- * bracket spelling stays a `TypeCheckError` for the brackets, showing the parenthesized spelling
- * with the whole end; a hex end is no range end there. The expression rows load, and those that
- * run without a model output the whole value. Messages show the whole literal where Python's
- * hide it.
- *
- * Not ported: `test_the_limit_holds_with_pythons_own_limit_off` (Python's
- * `sys.set_int_max_str_digits`) and `test_a_long_int_literal_in_inline_code_names_the_limit`
- * (Python inline CODE; CODE bodies are TS, decisions 6, 11).
- */
+/** Int literals with more than 4300 digits in a flow file. */
 
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

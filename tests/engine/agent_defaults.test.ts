@@ -1,21 +1,6 @@
 /**
- * AGENT `retries` and tool-loop defaults come from `defaults` when the node sets none: mirrors
- * `tests/engine/test_agent_defaults.py`.
- *
- * Ported: `test_the_manifest_holds_two_retries_by_default` and
- * `test_the_manifest_holds_the_agent_retries_default` (through `loadFlow` of `_STRUCTURED`).
- *
- * Ported, each flow loaded and run (`loadFlow`, then `runWith`: `runFlow` with a `ScriptedModel`
- * served by `models`): `test_agent_retries_default_of_zero_fails_on_the_first_bad_reply`,
- * `test_authored_retries_win_over_the_default`,
- * `test_agent_max_tool_iterations_default_caps_the_loop` and
- * `test_authored_max_tool_iterations_wins_over_the_default` (the `lookup` tool in the run's
- * `tools`).
- *
- * Changed: Python's `set_defaults` fixture sets `YIAN_AGENT_RETRIES=0` or
- * `YIAN_AGENT_MAX_TOOL_ITERATIONS=1`; the manifest rows set it with `reload`, the run rows give it
- * as the `env` of `loadFlow` and `runFlow`. The exhausted bad reply fails with code
- * `agent.output_invalid` (Python: `node.execute`; decision 36's failure codes).
+ * AGENT `retries` and tool-loop defaults come from `defaults` when the node sets none, and an
+ * authored value wins over the default.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -70,7 +55,7 @@ test("the manifest holds the agent retries default", async () => {
   expect(new AgentNode("n", { retries: 3 }).retries).toBe(3);
 });
 
-/** An environment setting `name` to `value` over `NO_ENV`, as Python's `set_defaults` does. */
+/** An environment setting `name` to `value` over `NO_ENV`. */
 function setting(name: string, value: string): Env {
   return (each) => (each === name ? value : NO_ENV(each));
 }

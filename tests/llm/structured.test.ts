@@ -4,8 +4,7 @@
  * table, first match wins), `forcesTool` and `sendsJsonSchemaAsTool`; a plan's `apply` to a
  * request, its `instruction` and `correction` texts, and `parse` of tool and text replies; and
  * `StructuredOutputError` and `MissingToolCallError`; and that `typeToSchema` emits the schema
- * copies used here. Ported from Python yian's Anthropic, Azure, open-schema and structured-node
- * tests.
+ * copies used here.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -59,7 +58,7 @@ import { typeToSchema } from "../../src/nodes/agent/structured.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 
-/** Python's `type_to_schema(...).model_json_schema()` for the cases below: ints are `bigint`s. */
+/** The schemas `typeToSchema` emits for the cases below: ints are `bigint`s. */
 const SCHEMAS: Record<string, JsonObject> = {
   "corpus:Rec": {
     properties: { answer: { title: "Answer", type: "string" }, score: { title: "Score", type: "integer" } },
@@ -690,7 +689,7 @@ describe("StructuredPlan: apply, instruction and correction", () => {
   });
 
   test.each(native)("the %s correction asks for valid data", (_strategy, plan) => {
-    // The retry text Python sends after a reply that did not call the tool.
+    // The retry text sent after a reply that did not call the tool.
     expect(plan.correction("the reply did not call the Record tool; call it with the answer")).toBe(
       "Your previous output was invalid: the reply did not call the Record tool; call it with the answer. " +
         "Respond with valid data matching the schema.",

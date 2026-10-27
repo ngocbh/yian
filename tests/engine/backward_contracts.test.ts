@@ -1,58 +1,7 @@
 /**
- * Backward contracts: a port of `tests/engine/test_backward_contracts.py`. Ported: the feedback
- * value checks, `BackwardResult`, `validateBackwardResult`, the `ExecutionScope` and
- * `ExecutionPosition` tests,
- * `test_declared_variables_supply_local_backward_targets_without_activating_hooks` (2 rows),
- * `test_attributed_backward_result_detaches_messages_and_keeps_reference_coordinates`,
- * `test_backward_attribution_rejects_malformed_root_coordinates`,
- * `test_backward_outcome_does_not_normalize_its_caller_owned_failure`,
- * `test_backward_outcome_can_succeed_without_memory`,
- * `test_backward_value_copy_refuses_a_value_that_contains_itself`,
- * `test_backward_outcome_copy_preserves_ordered_policy_dispositions`,
- * `test_backward_context_and_outcome_do_not_expose_mutable_authority`,
- * `test_retained_failure_origins_drop_mutable_subclass_state` and
- * `test_backward_contracts_reject_invalid_snapshots_and_outcomes`.
- *
- * TS-only: `copyBackwardValue` keeps a `__proto__` key as data, writes `-0` as `0`, keeps a
- * shared subtree shared, names the nested value it refuses, and with a reused memo names a failing
- * container by its own path in each call; `validateInputOutputPaths` checks each path; a `null`
- * channel is an empty one;
- * `projectStructuralFeedback` selects through `input_output_paths`; record membership reads own
- * keys only (`constructor`, `toString`); an `ExecutionScope` rebuilds each occurrence position, so
- * a forged one is refused; `sameExecutionPosition` and `sameExecutionScope` compare by value, field
- * by field; `sameOptional`'s three cases (both null, one null, both present); `sameBackwardResult`
- * is true for separately built equal results and false for each differing channel. One row per
- * check, with its class and message, for the transfer half of `BackwardAttribution`,
- * `AttributedBackwardResult`, `MemoryProposal`'s memory key,
- * `BackwardFailure` (stage before code) and `BackwardOutcome`; a `MemoryOperationFailure` cause is
- * kept by identity; a transfer attribution keeps a frozen copy of its parents and a root seed is
- * valid; an unreached occurrence with no material is valid; a backward failure keeps each field it
- * was given; parents with their own `Symbol.iterator` are read by index, so the stored parents are
- * the checked elements; the ported invalid-snapshot table also checks the message of its outcome
- * and failure rows.
- *
- * Changed:
- * - Infinity is a backward JSON value (decision 34), so the `output=float("inf")` row is accepted;
- *   an `output: NaN` row is refused instead.
- * - `BackwardResult`, `BackwardContext` and `AttributedBackwardResult` hold frozen copies, with no
- *   copy on read: a reader's edit throws a `TypeError` where Python changes a private copy.
- *   `FrozenInstanceError` is the `TypeError` an assignment to a frozen object throws in a module.
- * - `BackwardOutcome` keeps the frozen feedback, failure and learning result it was given, where
- *   Python copies them: where Python asserts `is not`, the test asserts the same frozen value.
- *   With no `replace`, the outcome copy is a second outcome built from the first's fields.
- * - Message batches, declared names and parents are arrays, not tuples. Dataclass `!=` is
- *   `not.toEqual`; each rejected row names its one error class, where Python accepts either
- *   `TypeError` or `ValueError` (`RangeError`).
- * - Changed (rule `messages`, decision 43): a quoted key in a value path is spelled in the text
- *   form, `value["a"][0]`, `input_feedback["text"]`, never Python's `value['a'][0]`.
- * - The declared-variables row builds the AGENT's `tone` variable by hand where Python reads it
- *   from YAML.
- *
- * Not ported: the rows that pass a list where Python wants a tuple (`static_path=["node"]`,
- * `occurrence_path=[]`, `input_names=["text"]`, a list batch, `{"path": (1,)}`) and the tuple
- * type checks: TS has only arrays. The non-text-key rows (`({1: "Bad."}, {1: "text"})`,
- * `inputs={1: "text"}`): a record key is always text. The feedback row `(("Bad.",), ["text"])` is
- * a valid positional message in TS.
+ * Backward contracts: feedback value checks, `BackwardResult` and its validation,
+ * `ExecutionScope` and `ExecutionPosition`, attribution, `copyBackwardValue`, and the `same*`
+ * comparisons.
  */
 
 import { expect, test } from "bun:test";
@@ -946,7 +895,7 @@ test("backward outcome does not normalize its caller-owned failure", () => {
   expect(cause.trace).toBe(trace);
   expect(cause.trace[0]).toBe(origin!);
   expect(Object.isFrozen(cause)).toBe(false);
-  // Changed: the outcome keeps the same frozen failure, where Python copies it.
+  // The outcome keeps the frozen failure it was given, not a copy.
   expect(outcome.failure).toBe(failure);
   expect(Object.isFrozen(outcome.failure)).toBe(true);
 });
@@ -978,7 +927,7 @@ test("backward outcome copy preserves ordered policy dispositions", () => {
   });
   expect(copied).toEqual(outcome);
   expect(copied.feedback).toBe(feedback);
-  // Changed: the copy shares the frozen learning result and its policies, where Python copies them.
+  // The copy shares the frozen learning result and its policies.
   expect(copied.learning).toBe(learning);
   expect(copied.learning!.policies).toEqual(policies);
   expect(copied.learning!.policies[0]).toBe(policies[0]!);

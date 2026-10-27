@@ -1,41 +1,4 @@
-/**
- * MCP call failures map to yian's error kinds, and stops and `close()` end waiting calls, a port
- * of `tests/engine/test_mcp_errors.py` over stdio:
- * `test_an_error_result_is_a_reported_but_not_permanent_tool_error`,
- * `test_an_invalid_params_answer_is_reported_and_permanent`,
- * `test_a_busy_answer_is_a_request_error_and_the_server_still_works`,
- * `test_an_internal_error_answer_is_a_request_error`,
- * `test_a_call_past_its_timeout_is_a_transient_timeout_error`,
- * `test_a_server_that_exits_is_closed_and_later_calls_fail_at_once`,
- * `test_a_run_stop_cancels_a_waiting_call_and_the_server_still_works`,
- * `test_a_stop_cancels_only_the_call_of_its_own_run`, `test_close_from_another_thread_ends_a_waiting_call`
- * (a `close()` not awaited), `test_a_late_failure_from_an_earlier_connection_leaves_the_reopened_server_alive`
- * (a real close and re-open) and `test_a_call_with_the_stop_already_set_is_cancelled_before_it_is_sent`;
- * plus the message cap through a server, a failed open, and the scrubbing of the server's secrets.
- *
- * Over HTTP: `test_a_stopped_http_server_is_a_transport_error_and_a_restart_recovers`,
- * `test_a_restarted_session_http_server_is_closed` (404 for the old session, and 400 before any
- * client initialized the restarted server), a redirect mid-session (Python's
- * `test_an_sdk_redirect_answer_hides_the_location`, through a real server), the DELETE that
- * closing a session server sends, a JSON answer cut mid-body (a tool error) and an SSE answer cut
- * mid-stream (a timeout), and the scrubbing of a header's value and bare token (a value shorter
- * than 8 characters is left in the text). Over stdio, a server whose answer comes after its exit.
- *
- * Elsewhere: `test_structured_content_failing_the_output_schema_is_a_tool_error` is in
- * `mcp_calls.test.ts`. Not ported: `test_a_raw_timeout_is_a_transport_error` (a failed request is
- * recognized by the error `safeFetch` rejects with, which the stopped-server row covers). The TOOL and AGENT rows
- * (`test_tool_node_retries_follow_the_error_class`, both cases, and
- * `test_an_agent_model_reads_an_mcp_error_result_and_the_node_succeeds`) run the flow through
- * `runFlow` in an environment holding only the test's credential store (the retry delay as
- * `YIAN_TOOL_RETRY_DELAY_SECONDS`); the AGENT's model is a `ScriptedModel` from `models`, and it
- * reads the error as a `ToolResultPart`. Not ported: `test_a_request_error_survives_a_pickle_round_trip`
- * (Python-only); `test_a_call_that_never_resolves_times_out_on_its_own_deadline` (no grace
- * deadline: the SDK's own timer bounds a call); `test_a_closed_stream_after_a_transport_failure_is_a_transport_error`
- * (no ping probe: the v2 client reports a closed connection as its own error, distinct from a
- * server's -32000); `test_all_proxy_is_the_fallback_proxy` (proxies are the runtime's); and the
- * `auto` halves of the parametrized rows, since stdio servers always connect with the legacy
- * handshake.
- */
+/** MCP call failures map to yian's error kinds, and stops and `close()` end waiting calls. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -140,7 +103,7 @@ describe("errors from a running server", () => {
     await server?.close();
   }, SLOW);
 
-  test("test_an_error_result_is_a_reported_but_not_permanent_tool_error", async () => {
+  test("an error result is a reported but not permanent tool error", async () => {
     const error = await rejection(tools(server).invoke("fail", { message: "no luck" }));
     expect(error).toBeInstanceOf(McpToolError);
     expect(error.message).toContain("no luck");
@@ -148,7 +111,7 @@ describe("errors from a running server", () => {
     expect(isPermanentToolError(error)).toBe(false);
   });
 
-  test("test_an_invalid_params_answer_is_reported_and_permanent", async () => {
+  test("an invalid params answer is reported and permanent", async () => {
     const error = await rejection(tools(server).invoke("bad_request", {}));
     expect(error).toBeInstanceOf(McpInvalidRequestError);
     expect(error).toBeInstanceOf(McpRequestError);
@@ -158,7 +121,7 @@ describe("errors from a running server", () => {
     expect(error.message).toBe(`MCP server '${server.label}' tool 'bad_request': bad params (code -32602)`);
   });
 
-  test("test_a_busy_answer_is_a_request_error_and_the_server_still_works", async () => {
+  test("a busy answer is a request error and the server still works", async () => {
     const error = await rejection(tools(server).invoke("busy", {}));
     expect(error).toBeInstanceOf(McpRequestError);
     expect(error.message).toContain("busy");
@@ -169,7 +132,7 @@ describe("errors from a running server", () => {
     expect(await tools(server).invoke("echo", { text: "still here" })).toBe("still here");
   });
 
-  test("test_an_internal_error_answer_is_a_request_error", async () => {
+  test("an internal error answer is a request error", async () => {
     const error = await rejection(tools(server).invoke("crash", {}));
     expect(error).toBeInstanceOf(McpRequestError);
     expect(error.message).toContain("internal");
@@ -179,7 +142,7 @@ describe("errors from a running server", () => {
   });
 
   test(
-    "test_a_run_stop_cancels_a_waiting_call_and_the_server_still_works",
+    "a run stop cancels a waiting call and the server still works",
     async () => {
       const stop = new AbortController();
       const bound = tools(server).forRun("r", { signal: stop.signal });
@@ -197,7 +160,7 @@ describe("errors from a running server", () => {
   );
 
   test(
-    "test_a_stop_cancels_only_the_call_of_its_own_run",
+    "a stop cancels only the call of its own run",
     async () => {
       const firstStop = new AbortController();
       const secondStop = new AbortController();
@@ -215,7 +178,7 @@ describe("errors from a running server", () => {
     SLOW,
   );
 
-  test("test_a_call_with_the_stop_already_set_is_cancelled_before_it_is_sent", async () => {
+  test("a call with the stop already set is cancelled before it is sent", async () => {
     const before = ((await tools(server).invoke("calls", {})) as { result: number }).result;
     const stop = new AbortController();
     stop.abort();
@@ -227,7 +190,7 @@ describe("errors from a running server", () => {
 
 describe("errors that end a call", () => {
   test(
-    "test_a_call_past_its_timeout_is_a_transient_timeout_error",
+    "a call past its timeout is a transient timeout error",
     async () => {
       const server = await fake([], { timeout: 0.5, label: "slowpoke" }).open();
       const set = tools(server);
@@ -243,7 +206,7 @@ describe("errors that end a call", () => {
   );
 
   test(
-    "test_a_server_that_exits_is_closed_and_later_calls_fail_at_once",
+    "a server that exits is closed and later calls fail at once",
     async () => {
       const server = await fake([], { label: "quitter" }).open();
       const set = tools(server);
@@ -273,7 +236,7 @@ describe("errors that end a call", () => {
   );
 
   test(
-    "test_close_from_another_thread_ends_a_waiting_call",
+    "a close ends a waiting call",
     async () => {
       const server = await fake([], { label: "closing" }).open();
       const set = tools(server);
@@ -290,7 +253,7 @@ describe("errors that end a call", () => {
   );
 
   test(
-    "test_a_late_failure_from_an_earlier_connection_leaves_the_reopened_server_alive",
+    "a late failure from an earlier connection leaves the reopened server alive",
     async () => {
       const server = await fake(["--only", "slow,echo"]).open();
       const stale = tools(server).invoke("slow", { seconds: 30 });
@@ -464,7 +427,7 @@ describe("errors over HTTP", () => {
     }, SLOW);
   }
 
-  test("test_a_stopped_http_server_is_a_transport_error_and_a_restart_recovers", async () => {
+  test("a stopped http server is a transport error and a restart recovers", async () => {
     const http = await serveHttp();
     const server = await httpServer({ url: `${http.url}?token=SECRET`, label: "remote" }).open();
     const set = tools(server);
@@ -484,7 +447,7 @@ describe("errors over HTTP", () => {
   }, SLOW);
 
   test(
-    "test_a_restarted_session_http_server_is_closed",
+    "a restarted session http server is closed",
     async () => {
       const http = await serveHttp({ stateful: true });
       const server = await httpServer({ url: http.url, label: "restarted" }, "legacy").open();
@@ -548,7 +511,7 @@ output: \${call.output}
     ["bad_request", "{}", 1],
   ] as const) {
     test(
-      `test_tool_node_retries_follow_the_error_class (${tool})`,
+      `tool node retries follow the error class (${tool})`,
       async () => {
         const server = await fake().open();
         const calls = async () => ((await tools(server).invoke("calls", {})) as { result: number }).result;
@@ -566,7 +529,7 @@ output: \${call.output}
   }
 
   test(
-    "test_an_agent_model_reads_an_mcp_error_result_and_the_node_succeeds",
+    "an agent model reads an mcp error result and the node succeeds",
     async () => {
       const call = new ToolCallPart({ id: "c0", name: "fail", arguments: { message: "no luck" } });
       const model = new ScriptedModel([

@@ -1,38 +1,6 @@
 /**
- * Public fresh and resume orchestration for host-injected memory policies: mirrors
- * `tests/engine/test_run_memory.py`.
- *
- * Ported, through `runFlow` and `advance`:
- * `test_memory_context_opener_uses_same_runtime_on_fresh_and_resume` (fresh and resume ×
- * `num_workers` 0 and 2 × `learnable` false and true; the AGENT recalls notes from a `FakeMemory`,
- * since TS yian has no session memory to open a turn in),
- * `test_authored_policy_is_dormant_when_memory_is_none`,
- * `test_recall_only_records_snapshot_without_evidence_or_learning`,
- * `test_unfinished_primary_resume_uses_static_layout_after_map_growth`,
- * `test_unfinished_primary_requires_recorded_memory_mapping_on_resume`,
- * `test_run_started_records_the_resolved_memory_table_and_stacks` and
- * `test_replay_rejects_a_recorded_key_table_or_stacks_that_differ_from_the_flow` (2 rows); with
- * `RunResult.backward` too: `test_learnable_true_retains_without_enabling_an_authored_policy`,
- * `test_learning_success_is_separate_from_the_primary_result`,
- * `test_learning_failure_does_not_replace_primary_success`,
- * `test_primary_failure_still_learns_without_changing_its_failure`,
- * `test_precommit_failure_requires_an_explicit_whole_pass_retry`,
- * `test_explicit_retry_uses_static_layout_after_map_growth`,
- * `test_code_node_occurrences_are_episodes_of_the_flow_key` and
- * `test_backward_rejects_a_tampered_recorded_stack_set_before_learning` (2 rows).
- *
- * Changed: `AgentNode.prototype.forward` is spied on, where Python patches `AgentNode.forward`.
- * `runFlow` builds its `FlowEngine` itself, so the
- * runtimes `MemoryRuntime.open` returns (spied on) stand in for the openers Python's patched
- * `FlowEngine` receives, and TS has no `memory_recall` option to refuse. The flow's int output is
- * `7n`. A tampered `RunStartedRecord` is rebuilt from its fields (Python's `dataclasses.replace`);
- * the mismatch is a `RangeError` (Python's `ValueError`). The failing CODE body is
- * TypeScript throwing an `Error` (Python raises `RuntimeError`). The settled resume of
- * `test_precommit_failure_requires_an_explicit_whole_pass_retry` passes an empty object as the
- * ignored memory (Python's `object()`).
- *
- * Not ported: `test_conversation_completes_before_dispatcher_output_contract_acceptance` (TS yian
- * has no session memory).
+ * Fresh runs and resumes with host-injected memory policies, through `runFlow`, `advance` and
+ * `RunResult.backward`.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

@@ -1,78 +1,10 @@
 /**
- * End-to-end fresh runs through `runFlow`: a port of `tests/engine/test_run.py`.
+ * End-to-end fresh runs through `runFlow`, and `inspectRun`, `staticNodes` and `runLogPath`.
  *
  * The flows use CODE, through `./compose_codefns.ts:<fn>` references (resolved from the
  * conformance fixtures as `baseDir`) or inline TS bodies; an AGENT's model is a `ScriptedModel`.
  * A flow failure, a false assert included, comes back as a `RunResult` whose `status` is
  * `"failed"`. Every run sees only the test's credential store in its environment.
- *
- * Ported: `test_code_flow_runs_to_declared_output`, `test_leaf_binds_from_flow_wiring`,
- * `test_coalesce_output_resolves_taken_branch_positive`, `test_case_gate_binds_from_flow_wiring`,
- * `test_coalesce_output_resolves_taken_branch_cautious`, `test_coalesce_skips_untaken_branch`,
- * `test_input_type_mismatch_fails_at_boundary`, `test_coercible_string_input_passes_boundary`,
- * `test_bool_spelling_coerces_at_boundary` (both spellings),
- * `test_unrecognized_bool_spelling_fails_at_boundary`,
- * `test_bool_text_is_not_converted_for_a_child_input` (a CALL, both answers; the `yes` run is also
- * the harvested `run-core/engine_run__bool_text_is_not_converted_for_a_child_input`; Changed: the
- * message quotes the text JSON style, `"yes"`, where Python shows `'yes'` (decision 7)),
- * `test_boundary_assert_false_fails_before_any_node_runs`,
- * `test_post_terminal_assert_false_flips_succeeded_to_failed`, `test_all_asserts_true_succeeds`,
- * `test_run_id_host_override_resolves` and `test_run_id_minted_when_omitted`.
- *
- * TS-only: an already-aborted signal rejects with its reason before the log exists, as does a bad
- * `scheduler`, `random` or `models`; an existing log path is refused (`EEXIST`) and left
- * unchanged; `result.log` is the path as given (`null` without one); `crashedAttempts` is an empty map; host intake of inputs (`{n: 3}` for an
- * `int` is `3n`, NaN refused where it sits, an accessor or a Proxy inputs record refused,
- * `Infinity` kept for a `float`, a too-deep value refused); the run's `env` scopes the `YIAN_*`
- * values it reads and records, and a bad one rejects before the log exists.
- *
- * TS-only, one row for each run-start check's message (Python pins them in
- * `test_typed_tool_node.py`, `test_run_tools_flow.py`, `test_run_skills.py` and
- * `test_span_calls.py`): an unknown tool id with a close match, an unknown tool group, `ask_user`
- * without a handler, an input the tool doesn't take, a missing required input, a disjoint input
- * type (a literal shown by its value, a long one cut), a disjoint output, skills without a map, a
- * missing skill, a skill keyed by another name, and a bad template span named by its subject; a
- * boundary callback whose promise rejects stops the run, and one that throws rejects the run with
- * no stop record; an `llmConfig` that isn't a record is refused. `run_skills.test.ts` ports
- * `test_run_skills.py` itself.
- *
- * The run-start LLM chain, where an AGENT's model is a `ScriptedModel` from `models`. TS rows
- * this file owns, not ports of their Python files: an AGENT with no provider fails before the log
- * exists (the same checks as `test_no_model_anywhere_fails_before_any_node`, so
- * `no_builtin_defaults.test.ts` points here); `llm_config.api_key` without `provider` is refused
- * without echoing the key (the check of `test_run_api_key.py`'s
- * `test_key_without_a_provider_is_rejected`, which stays with that file's mirror); of
- * `test_a_key_that_marks_no_agent_does_not_block_replay`, the fresh run (no agent gets the key and
- * the log holds no marker); an integral number in a host `llm_config` is recorded as an int.
- *
- * Ported: `test_a_non_finite_value_names_the_block_field` of `test_llm_config_values_run_start.py`
- * and of `test_llm_config_values_call_time.py`. Changed: TS keeps Infinity, so the provider block
- * refuses it ("Input should be a finite number", a `contract.input` failure when the agent runs)
- * where Python refuses `non-finite number inf`.
- *
- * TS-only, `inspectRun` (each row without the flow, and with it where the two agree): a succeeded
- * and a failed run; a crash mid-node counts the in-flight node once (a crash is a log that refuses
- * appends past a record); a `RunStopped` covers its in-flight nodes; resumed then crashed again
- * counts 2, and the count stays after the node finishes; a locked log (a `JsonlRunLog` held open)
- * is `running` with the recorded counts only; END succeeded with another node ready but unstarted
- * reads `succeeded` without the flow and `crashed` with it; a finished pooled failure has
- * nothing in flight and adds nothing; a missing log throws `ENOENT`, and an empty log no writer
- * holds is refused; a route that proved END unreachable reads `failed`; the replay with the flow
- * checks the recorded `YIAN_*` values against the given `env` (the records alone don't); the run
- * id, schema, fingerprint, learnable flag, last seq and start and end times; a failed run's failure
- * (a node's, and an unreachable END's); a running log with no record; a log that doesn't start
- * with `RunStarted`, and one of schema 9 or 10; a locked log a writer's rollback shrinks under the
- * read reads `running`; on a virtual clock, a run's start and end times and a node's duration (its
- * outcome's time less its start's: a `sleep` the run waits on, advanced once due), and a crashed run with no end time that a resume on a later
- * clock finishes, keeping the recorded times and stamping its own records with the resume's.
- * `staticNodes` of a flow with CALL and MAP children, and the paths a run's effective model map
- * uses; `staticPathOf` on MAP, LOOP and nested ids, and every node id of a MAP run and a LOOP run
- * mapped onto a `staticNodes` path.
- *
- * TS-only, `runLogPath`: a run's log is `log.jsonl` in its own folder below the runs folder, made
- * 0700 (the runs folder is made when missing), the file not created; an existing folder, file or
- * symlink at the run folder's path is refused (`EEXIST`), the symlink's target left unchanged; a
- * run id that isn't one folder name is refused, and `a..b` is one.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -481,7 +413,7 @@ test("run id minted when omitted", async () => {
   expect(result.runId).toBe(result.output as string);
 });
 
-// ---- TS-only: the boundary ----
+// ---- the boundary ----
 
 test("an aborted signal rejects with its reason before the log exists", async () => {
   const controller = new AbortController();
@@ -530,7 +462,7 @@ test("crashedAttempts is an empty map for a fresh run", async () => {
   expect(result.backwardOutcome).toBeNull();
 });
 
-// ---- TS-only: host intake of inputs ----
+// ---- host intake of inputs ----
 
 test("an integral number for an int input is the int 3n", async () => {
   const result = await run(await load(echoFlow("int")), { x: 3 });
@@ -598,7 +530,7 @@ test("a bad YIAN_* value in the run's env rejects before the log exists", async 
   expect(existsSync(path)).toBe(false);
 });
 
-// ---- TS-only: the run-start checks ----
+// ---- the run-start checks ----
 
 /** A flow whose one TOOL node `place` calls `toolId` with `inputBlock`'s inputs. */
 function toolFlow(inputBlock: string, toolId = "place_order"): string {
@@ -972,9 +904,8 @@ test("an integral number in a host llm_config is recorded as an int", async () =
   expect(built[0]!["anthropic"]).toEqual({ max_tokens: 1000n });
 });
 
-// Ported from `test_llm_config_values_run_start.py` and `test_llm_config_values_call_time.py`.
-// Changed: `t * 10` overflows to Infinity, which TS keeps as a float (Python refuses it as
-// `non-finite number inf`), so the provider block's check is what refuses it.
+// `t * 10` overflows to Infinity, which a float keeps, so the provider block's check is what
+// refuses it.
 
 const TAGGED = `
 id: f
@@ -1598,7 +1529,7 @@ test("inspectRun reads a locked log as running when a writer's rollback shrinks 
   }
 });
 
-// ---- TS-only: runLogPath ----
+// ---- runLogPath ----
 
 test("runLogPath is log.jsonl in the run's own 0700 folder, and creates no file", () => {
   const runs = join(dir, "runs");

@@ -1,16 +1,6 @@
 /**
  * `yian run` never prints or logs a key from the environment or a saved login a provider echoes,
- * and its key check covers the providers the run will call: a port of
- * `tests/cli/test_run_resolved_keys.py`, every test under its name.
- *
- * Changed:
- * - Python's routed OpenAI client and patched `model_from_config` are a fake `fetch`: a 401 that
- *   echoes the key masked, or a one-word chat-completions stream recording each request's URL.
- * - Python's environment fixture is the command's env, holding only `HOME`, `YIAN_AUTH_FILE` and
- *   `XDG_CONFIG_HOME` under a temp directory; logins are saved through that env.
- * - The rows whose agent picks its provider at call time pick `xai`, not `openai`, whose
- *   Responses stream the fake doesn't speak, with `XAI_API_KEY` set since the real client needs
- *   it; the agent's call is checked by its URL, not by the config Python's patched factory saw.
+ * and its key check covers the providers the run will call. The model is a fake `fetch`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -112,7 +102,7 @@ function flowFile(text: string): { flow: string; log: string } {
   return { flow, log: join(tmp, "run.jsonl") };
 }
 
-describe("test_a_rejected_key_is_neither_printed_nor_logged", () => {
+describe("a rejected key is neither printed nor logged", () => {
   for (const source of ["environment", "saved login"]) {
     for (const [id, options] of [["plain", []], ["engine-trace", ["--engine-trace"]]] as const) {
       test(`${source}, ${id}`, async () => {
@@ -142,7 +132,7 @@ output: \${agent.output}
 llm_config: {provider: '\${input.provider}', model: chosen-model}
 `;
 
-test("test_the_key_check_asks_for_the_provider_an_input_selects", async () => {
+test("the key check asks for the provider an input selects", async () => {
   const { flow, log } = flowFile(INPUT_PROVIDER_FLOW);
   const result = await invoke([flow, "--input", "provider=anthropic", "--log", log]);
   const output = compact(result.output);
@@ -152,7 +142,7 @@ test("test_the_key_check_asks_for_the_provider_an_input_selects", async () => {
   expect(existsSync(log)).toBe(false);
 });
 
-test("test_a_bad_provider_input_fails_before_the_log_exists", async () => {
+test("a bad provider input fails before the log exists", async () => {
   const { flow, log } = flowFile(INPUT_PROVIDER_FLOW);
   const result = await invoke([flow, "--input", "provider=nope", "--log", log]);
   expect(result.code).toBe(1);
@@ -175,7 +165,7 @@ llm_config: {provider: anthropic}
 `;
 }
 
-test("test_the_key_check_covers_a_call_time_agent_with_a_known_provider", async () => {
+test("the key check covers a call time agent with a known provider", async () => {
   const { flow, log } = flowFile(callTimeFlow("{model: '${pick.output}'}"));
   const result = await invoke([flow, "--log", log]);
   expect(result.code, result.output).toBe(1);
@@ -184,7 +174,7 @@ test("test_the_key_check_covers_a_call_time_agent_with_a_known_provider", async 
   expect(calls).toEqual([]);
 });
 
-test("test_the_key_check_sends_a_known_azure_agent_to_its_literal_base_url", async () => {
+test("the key check sends a known azure agent to its literal base url", async () => {
   await new AuthStore(null, { env }).save("azure", new ApiKeyCredentials("az"), "dep", {
     endpoint: "https://r.openai.azure.com/",
     makeDefault: false,
@@ -202,7 +192,7 @@ test("test_the_key_check_sends_a_known_azure_agent_to_its_literal_base_url", asy
   expect(calls).toEqual([]);
 });
 
-describe("test_a_provider_a_value_may_still_set_is_not_checked_up_front", () => {
+describe("a provider a value may still set is not checked up front", () => {
   const cases: [string, string][] = [
     [
       "nullable provider",

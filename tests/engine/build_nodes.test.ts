@@ -1,22 +1,6 @@
 /**
- * Per-kind descriptor builds: rows of `tests/engine/test_build_nodes.py`.
- *
- * Ported: the leaf-build rows (`test_agent_node_built_with_type_and_bindings`,
- * `test_agent_node_object_output`, `test_agent_invalid_llm_config_uses_the_config_field_range`,
- * `test_agent_non_mapping_llm_config_is_a_ranged_load_error`, `test_agent_node_knobs`,
- * `test_node_name_becomes_title`, `test_code_node_built`, `test_tool_node_built_with_args_bindings`
- * and `test_output_contract_resolves_registry_name`), and
- * `test_call_loop_descriptors_need_a_resolver` (CALL, MAP and LOOP; the LOOP count is `3n`, as
- * YAML reads it).
- *
- * Changed: the seeds are read from their harvested cases (`load-core/seed_00_hello_agent`,
- * `load-agent/seed_01_structured_agent`, `load-leaves/seed_08_tool_news`,
- * `load-agent/seed_14_agent_tools`); seed 01's CODE reference is the TS
- * `./fixtures/seeds.ts:one_line_summary`, which the node keeps as its `code` (Python's `ref`), and
- * YAML ints are `bigint`s. Python's `None` resolver fails as CPython's `'NoneType' object is not
- * callable`; TS's `resolveChild` refuses a `null` resolver with its own text, so the rows pin the
- * message's prefix. The classes come from `compose/nodes/*.ts`, where Python imports them from
- * `compose.parse.file`.
+ * Per-kind descriptor builds: AGENT, CODE and TOOL leaves from the seed cases, and CALL, MAP and
+ * LOOP descriptors, which need a resolver.
  */
 
 import { afterEach, expect, test } from "bun:test";

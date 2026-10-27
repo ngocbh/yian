@@ -1,45 +1,14 @@
 /**
- * Runtime binding errors name a desugared param the way load errors name it: a port of
- * `tests/engine/test_binding_labels_flows.py`.
+ * Runtime binding errors name a desugared param the way load errors name it.
  *
  * A CASE `on:` reads as `node '<id>' on:`, a value entry's one input reads as `value entry '<id>'`,
  * and a flow output reads as `flow output` (a record field as `flow output '<name>'`); template
  * paths add `at <path>`. An inline call's argument reads as `<site> call(<callee>) argument '<p>'`.
  * An ordinary node input keeps `input '<p>'`.
  *
- * Ported: every row but those covered below. The CODE bodies are Python's, which read the same in
- * JS (decision 11), but for the `check` def's `return true`.
- *
- * Changed: the rows whose binding computed `${input.x * 10}` with `1e308` relied on infinity
- * failing the value check every labeled binding makes; infinity is a float value (decision 34),
- * and an expression error such as division by zero (decision 35) fails a whole binding without
- * its label, as in Python. So each of these rows fails the same value check with a value nested
- * too deep instead: the runs see `YIAN_MAX_VALUE_NESTING=3`, `x` is an `!Any` input nested three
- * lists deep, and the binding is `${[[v] for v in input.x]}`, which nests it one level deeper and
- * is untyped at load (an `Any` list's items are), so it reaches the run time; the message ends
- * `at [0][0][0]: value nests deeper than 3 levels, ...` where Python's ends
- * `: non-finite number inf is not a yian value`:
- * `test_a_case_on_failure_names_the_on_field`,
- * `test_a_case_on_failure_in_a_called_def_names_the_on_field`,
- * `test_a_value_entry_failure_names_the_entry`,
- * `test_a_routed_value_entry_failure_points_at_the_entry`,
- * `test_a_code_node_input_failure_keeps_the_input_name`,
- * `test_a_single_flow_output_failure_names_the_flow_output`,
- * `test_a_record_flow_output_failure_names_the_field`,
- * `test_an_inline_call_argument_failure_names_the_argument`, and the ten call-argument rows from
- * `test_a_node_input_call_argument_failure_points_at_the_input` to
- * `test_a_map_over_call_argument_failure_points_at_the_over_field`.
- *
- * Covered by `run-core/engine_binding_labels_flows__a_value_entry_template_failure_names_the_path`:
- * `test_a_value_entry_template_failure_names_the_entry_and_path`; by
- * `run-core/engine_binding_labels_flows__a_single_flow_output_type_failure`:
- * `test_a_single_flow_output_type_failure_names_the_flow_output`; by
- * `run-core/engine_binding_labels_flows__a_record_flow_output_type_failure`:
- * `test_a_record_flow_output_type_failure_names_the_field`; by
- * `run-core/engine_binding_labels_flows__a_templated_flow_output_failure_names_the_path`:
- * `test_a_templated_flow_output_failure_names_the_path`; by
- * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output` (pinned in
- * `validate.test.ts`): `test_an_unknown_type_in_a_single_flow_output_names_the_flow_output`.
+ * Most rows fail the value check every labeled binding makes with a value nested too deep: the runs
+ * see `YIAN_MAX_VALUE_NESTING=3`, `x` is an `!Any` input nested three lists deep, and the binding
+ * `${[[v] for v in input.x]}` nests it one level deeper while staying untyped at load.
  */
 
 import { afterAll, expect, test } from "bun:test";

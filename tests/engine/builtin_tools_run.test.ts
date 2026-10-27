@@ -1,7 +1,7 @@
 /**
  * YAML `take`, `sleep` and `ask` flows, loaded and run through the engine: a run ends waiting, a
  * send, a complete or a passed deadline is recorded, and a fresh engine over the log (as `advance`
- * builds one) wakes the node to its result. TS-only: Python yian has no built-in tools.
+ * builds one) wakes the node to its result.
  */
 
 import { expect, test } from "bun:test";

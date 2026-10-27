@@ -1,16 +1,5 @@
 /**
- * Typed bindings that narrow a union, checked when a run binds the value: a port of
- * `tests/engine/test_typed_bindings_unions_run.py`.
- *
- * Ported: `test_a_member_value_passes_and_the_consumer_reads_its_fields` and
- * `test_a_narrowed_child_output_reaches_a_union_typed_parent_input`. The CODE bodies are Python's,
- * which read the same in JS (decision 11), but for `String(...)` in place of `str(...)`, as the
- * harvested cases write it. The int output reads as a `bigint` (decision 4a).
- *
- * Covered by `run-core/engine_typed_bindings_unions_run__another_member_fails_the_consumer`:
- * `test_another_member_fails_the_consumer_on_its_binding`; by
- * `run-core/engine_typed_bindings_unions_run__another_member_fails_the_childs_output`:
- * `test_another_member_fails_the_childs_narrowed_output`.
+ * Typed bindings that narrow a union, checked when a run binds the value.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,6 +1,5 @@
 /**
- * `case` `then:/else: call(...)` inline-call branch targets: a port of
- * `tests/engine/test_case_call.py`.
+ * `case` `then:/else: call(...)` inline-call branch targets.
  *
  * A branch target may be an inline call (a fresh owned call) instead of a placed node id; it
  * desugars to a synth `__call_<n>` node and the then:/else: is rewritten to that synth id, so the
@@ -9,31 +8,6 @@
  * branch, or one holding `${...}`, is a value, a LoadError that shows the value entry to write; a
  * flow call inside its `${...}` is a LoadError that says to call the flow as the branch
  * (`then: call(take, ...)`).
- *
- * Changed: the load rows assemble their flows with `assembleText`, each `defs:` callee built by hand
- * (`handChild`) with the signature the row reads, where Python loads them.
- * `test_private_callee_in_case_target_is_rejected_at_branch_before_resolution` pins the whole
- * message; the scope's resolver throws a plain `Error` for any callee, so a private callee that
- * reached resolution would fail the row without a monkeypatch.
- * `test_non_bare_then_call_directive_is_rejected` pins the whole message where Python matches its
- * start.
- *
- * Merged: `test_inline_binding_and_then_call_directive_share_minter_no_collision` into
- * `test_inline_binding_and_then_call_share_minter_no_collision`; both assemble the same flow.
- *
- * TS-only: the harvested `load-case/engine_case_call__*` cases, pinned at the end (their `take`
- * def built by hand).
- *
- * The runs, each loading the flow with its real `take` def (`loadConformanceFlow`) and running it
- * through `runFlow`: `test_then_call_directive_branch_runs_taken_value`,
- * `test_case_output_over_call_directive_then_taken`,
- * `test_case_output_over_call_directive_else_taken` and
- * `test_the_call_directive_a_span_flow_call_points_at_loads`.
- *
- * Not ported: `test_else_call_directive_branch_runs_taken_value`, covered by
- * `run-case/engine_case_call__an_else_call_branch_runs_the_taken_value`, and
- * `test_nested_then_call_directive_branch_runs_taken_value`, covered by
- * `run-case/engine_case_call__a_nested_then_call_branch_runs_the_taken_value`.
  */
 
 import { expect, test } from "bun:test";

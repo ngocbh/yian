@@ -1,43 +1,7 @@
 /**
- * The descriptor build cache and the assembly helpers of the post-parse pipeline: a port of
- * `tests/engine/test_assemble.py` (the descriptor build cache tests). A cycle's error is a
- * `LoadError`; Python also asserts it isn't a `RecursionError`, which in TS would be a stack
- * overflow `RangeError` before any `LoadError` is made.
- *
- * TS-only: direct rows for `assertionCursors`, `registerAssertionOrigin`, `stampBindingLabels`,
- * `stampNodeWiringOrigins`, `splitTypedInputs`, `attachInputContracts`, `flowOutputs`,
- * `stampFlowOutputOrigins`, `ComposedFlow.input` and `ComposedFlow.diagnose`, which Python tests
- * only through `load_flow`; nodes parse with stand-in kinds. The pinned cases run
- * `parseFile`, `parseNodes` and `splitTypedInputs` as `assemble` calls them.
- *
- * The conductor: the input representation guards
- * (`test_resolved_parameters_reject_both_input_representations`,
- * `test_resolved_parameters_reject_missing_input_representation`) and the resolved parameter
- * boundary (`test_resolved_parameters_preserve_structural_contract_identity`,
- * `test_resolved_parameters_accept_zero_args_and_wire_empty_start`). TS-only conductor rows: a
- * cursor with resolved parameters, the memory declaration check, the errors `parseNodes` and the
- * `uses:` alias check raise through `assemble`, one happy path over stand-in nodes (its data and
- * boundary edges), END's binding labels, a value entry loaded as a built-in identity CODE node,
- * and the value-entry rows of `stampNodeWiringOrigins` (a value entry's input owns its parameter
- * and binding at the entry itself) and `splitTypedInputs` (a value entry is returned unchanged).
- *
- * The wiring parity rows (`test_wiring_parity_*`) call `checkWiringParity` on built CODE
- * descriptors; the WAIT reserved-key row isn't ported, as TS yian has no WAIT kind. Changed: the
- * parity message spells its key lists in the text form (`["orphan","x"]`), where Python prints
- * `['orphan', 'x']`.
- *
- * The seed edge and boundary rows: `test_seed01_*`, `test_seed02_case_targets_not_bare_roots`,
- * `test_seed02_branch_target_has_control_edge`, `test_seed02_coalesce_both_producers_terminal`,
- * `test_seed05_*`, `test_seed06_*`, `test_seed18_*`, `test_terminal_edge_ids_unique`,
- * `test_assembled_edges_have_start_and_end` and `test_boundary_end_record_flag_picks_the_mode`.
- * Python's `_all_edges`, `_end_edges` and `_bare_roots` are local helpers over the seed cases
- * (`load-agent/seed_01_structured_agent`, `load-case/seed_02_case`,
- * `load-map-call/seed_05_call_map`, `load-case/seed_06_case_on`,
- * `load-core/seed_18_research_pipeline`); they call
- * `synthesizeBoundaryGraph` over the parsed nodes, so seed 05's MAP child needn't resolve.
- * `test_seed02_branch_target_has_control_edge` reads the edges of seed 02's built `gate`, where
- * Python's `_all_edges` also infers the data edges, which hold no control edge. Python's
- * `ValueError` for two outputs of a value-mode END is a `RangeError`.
+ * The descriptor build cache and the assembly helpers of the post-parse pipeline: assertion
+ * cursors, origin stamping, typed inputs, the resolved-parameter conductor, wiring parity, and the
+ * seed flows' edges and boundaries. A cycle's error is a `LoadError`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -1135,7 +1099,6 @@ test("the boundary's record flag picks END's mode", () => {
 });
 
 test("END's binding labels name a record field by its quoted name, a single output as the flow output", () => {
-  // TS-only: Python checks the labels only through a binding failure at run time.
   expect(endOf([new FlowOutput("it's", "${x.output}")], true).bindingLabels).toStrictEqual(
     new Map([["it's", `flow output "it's"`]]),
   );

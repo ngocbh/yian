@@ -1,63 +1,8 @@
 /**
- * What a learner sees of an AGENT invocation: a port of
- * `tests/engine/test_memory_evaluation_evidence.py`.
- *
- * TS records no evidence: learning reads the steps an AGENT recorded, rebuilds its prompt from the
- * recorded flow and recalls against the recorded snapshots (`learningMaterials`). Each ported test
- * runs a learnable, logged run, replays its log and reads the rebuilt material, or what AGENT
- * backward reads of it (`evaluationEvidence`). Interactions follow step order: a reply's text when
- * it calls no tool, else its calls, then their results in call order.
- *
- * Ported as material, through `runFlow` with a `ScriptedModel` from `models` (the scripted model's
- * provider and model pick the structured strategy):
- * `test_scope_free_model_evidence_is_accepted_with_forward_capture`,
- * `test_plain_agent_records_only_visible_prompt_and_text` (the private material is a reasoning
- * part and the reply's usage, checked absent from the evidence's JSON),
- * `test_fallback_structured_parses_only_visible_text_blocks` (the private material is a reasoning
- * part, the text part's provider payload and the message's),
- * `test_tool_loop_records_valid_ungranted_call_before_failure` (with no grant the call never
- * reaches a tool loop), `test_tool_loop_records_calls_results_and_final_text_in_visible_order`,
- * `test_tool_trace_uses_the_same_effective_arguments_as_invocation` (the falsy arguments are a
- * streamed call with empty arguments text, which the assembler reads as `{}`, where Python's are
- * `[]`) and `test_tool_structured_output_retains_discovery_and_generation_order` (2 rows; the
- * native row runs OpenAI's `json_schema` plan, where Python's runs Anthropic's).
- *
- * Ported as material, through a learnable `FlowEngine` run, which records the node's model map by
- * hand (Python's run start derives it):
- * `test_actual_render_capture_survives_later_failures_without_fabricating_evidence` (4 rows).
- * Learning recalls through the run's own opener; an invocation that never called its model shows
- * no prompt. A model failure is a scripted `Error`; "the model ran" reads as the model receiving a
- * request.
- *
- * Kept without their evidence half, through `evalNode`:
- * `test_invalid_unicode_recall_prompt_fails_identically_with_or_without_capture` (no model call),
- * `test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture` (the 2000-deep
- * arguments arrive unparsed, since a parsed `ToolCallPart` refuses them; the reply's argument
- * check fails the node on their depth before the grant check) and
- * `test_invalid_unicode_tool_result_is_ignored_by_observational_capture` (a lone surrogate is not a
- * yian value, design 3.2.1, so the tool result fails the node after the call ran, where Python's
- * loop goes on).
- *
- * Not ported, since TS records no evidence (learning reads the steps):
- * `test_state_validates_evidence_scope_and_trait_for_live_and_replay`,
- * `test_evaluation_trace_protocol_is_runtime_checkable_and_write_only`,
- * `test_capture_gate_requires_exact_flag_and_trait`,
- * `test_capture_snapshots_canonical_inputs_before_node_mutation`,
- * `test_input_snapshot_canonicalization_fault_propagates_before_node_run`,
- * `test_binding_failure_captures_scope_with_absent_inputs_and_no_prompt`,
- * `test_dispatcher_contract_failures_retain_the_same_evidence`,
- * `test_pooled_dispatch_discards_late_sibling_evidence_with_its_outcome` and the TS-only trace
- * tests (one prompt per trace, no write after the evaluation settled).
- * `test_native_structured_agent_records_only_parsed_value` and
- * `test_fallback_structured_records_every_raw_retry_without_parsed_duplicate` are covered by
- * `learning_from_steps.test.ts`. `test_visible_string_subclass_has_capture_off_on_behavioral_parity`
- * and `test_tool_name_subclass_has_capture_off_on_behavioral_parity` (TS has no string subclasses);
- * `test_invalid_unicode_text_is_ignored_by_observational_capture` and
- * `test_invalid_unicode_fallback_trace_does_not_consume_a_retry` (a reply's `TextPart` refuses an
- * unpaired surrogate, so no model reply carries one);
- * `test_oversized_recall_inputs_fail_identically_with_or_without_capture` (TS has no
- * `memory_json_nesting` bound: a `RecallContext` takes inputs of any depth, and the binder's value
- * nesting limit bounds them).
+ * What a learner sees of an AGENT invocation. Learning reads the steps an AGENT recorded, rebuilds
+ * its prompt from the recorded flow and recalls against the recorded snapshots
+ * (`learningMaterials`); each test runs a learnable, logged run, replays its log and reads the
+ * rebuilt material, or what AGENT backward reads of it (`evaluationEvidence`).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

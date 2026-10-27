@@ -1,54 +1,7 @@
 /**
- * TOOL `retries:` across crashes, resume and replay: a port of
- * `tests/engine/test_tool_retries_resume.py`.
- *
- * TS has no `_sleep` or `_jitter` to patch: each run and resume gets a virtual scheduler that
- * records every wait, in milliseconds where Python records seconds, and a draw of 1. A crash is
- * `crashAfter`'s log refusing an append, so a crash "inside attempt k" is the refused outcome of
- * that attempt (the tool itself returns), and a crash "during the backoff wait" is the refused
- * `started` step after the wait. JS has no `TimeoutError`, so the rows throw their own. Every run
- * sees only the test's credential store in its environment.
- *
- * Ported through `runFlow` and `advance`:
- * `test_a_crash_inside_attempt_two_resumes_at_attempt_three_with_one_retry_used`,
- * `test_a_crash_inside_attempt_two_with_no_retry_left_fails_on_resume`,
- * `test_a_retries_zero_crash_resumes_at_attempt_two_without_steps`,
- * `test_a_crash_during_the_backoff_wait_rewaits_and_resumes_at_attempt_two`,
- * `test_a_crash_during_the_second_backoff_rewaits_the_last_recorded_delay`,
- * `test_two_crashes_rewait_the_recorded_delay_each_resume`,
- * `test_a_crash_mid_retry_resumes_across_worker_modes` (both rows),
- * `test_an_interrupted_first_attempt_shows_in_the_final_message`,
- * `test_a_learnable_run_with_a_retried_tool_replays_and_runs_backward` and
- * `test_two_tools_retrying_at_once_in_a_pooled_map_resume_with_their_own_steps` (the crash refuses
- * each child TOOL's outcome once both have recorded their retry's start; a promise barrier holds
- * both attempts together, Python's `threading.Barrier`).
- *
- * Ported (adapted) through `FlowEngine` over a capturing memory log, since TS can't patch
- * `commit_prepared`: the log snapshots the state's node starts, node steps and in-flight ids at
- * every append, which is the state after the commit before it (the last one taken when `run()`
- * settles). Each prefix replays through `replayRunLog`. The live half of
- * `test_a_finished_log_with_retries_replays_to_the_live_steps`, and
- * `test_a_long_loop_keeps_no_steps_for_finished_iterations` (50 iterations, Python's flow).
- *
- * The two backoff rows also have the cases
- * `resume/tool_retries_resume__a_crash_in_the_backoff_resumes_at_attempt_two` and
- * `resume/tool_retries_resume__a_crash_during_the_second_backoff_rewaits_the_last_delay`, which pin
- * the trace and the tool calls but not the waits.
- *
- * Covered by `resume/tool_retries_resume__a_finished_run_with_retries_resumes_read_only`: the resume half of
- * `test_a_finished_log_with_retries_replays_to_the_live_steps` (two read-only resumes, the log
- * unchanged, the tool not called again).
- *
- * Changed: `test_an_old_tool_crash_log_resumes_at_attempt_two` and
- * `test_an_old_loop_tool_crash_log_resumes_with_its_growth` resume Python's committed schema-9
- * logs; TS reads only its own schema, so each resume rejects with a `RangeError` naming schema 9,
- * calls no tool and leaves the log unchanged.
- *
- * Changed (vocabulary): a TS resume also publishes `NodeAttemptResumed` for each retried node; no
- * row here reads the events.
- *
- * Changed: an attempt with no recorded outcome shows as `unfinished`, where Python says
- * `interrupted`.
+ * TOOL `retries:` across crashes, resume and replay. Each run gets a virtual scheduler that records
+ * every wait in milliseconds and draws 1; a crash is `crashAfter`'s log refusing an append, so a
+ * crash "inside attempt k" is that attempt's refused outcome (the tool itself returns).
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -92,7 +45,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const SCHEMA9_FIXTURES = fileURLToPath(new URL("../fixtures/schema9", import.meta.url));
 
-/** JS has no built-in `TimeoutError`; the rows throw this one, as Python's throw its own. */
+/** JS has no built-in `TimeoutError`, so the rows throw this one. */
 class TimeoutError extends Error {
   override name = "TimeoutError";
 }
@@ -534,7 +487,7 @@ class CapturingLog extends MemoryRunLog {
 
 /**
  * Run `loaded` serially through `FlowEngine` over a capturing log with `tools`; return the log's
- * records and the live state after each commit past `RunStarted` (Python's `_capture_live`).
+ * records and the live state after each commit past `RunStarted`.
  */
 async function liveRun(
   loaded: ComposedFlow,

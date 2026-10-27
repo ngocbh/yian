@@ -1,6 +1,6 @@
 /**
- * Deterministic graph-expansion ids, a port of `tests/engine/test_expand_ids.py`: `ns` namespaces
- * a child id under its callsite and `mapCallsite` mints the per-element callsite of a MAP.
+ * Deterministic graph-expansion ids: `ns` namespaces a child id under its callsite and
+ * `mapCallsite` mints the per-element callsite of a MAP.
  */
 
 import { expect, test } from "bun:test";

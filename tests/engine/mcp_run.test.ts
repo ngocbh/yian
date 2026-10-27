@@ -1,30 +1,6 @@
 /**
- * `runFlow` opens the MCP servers passed to it unopened and closes them when the run ends: a port
- * of `tests/engine/test_mcp_run.py`, over the fake server in `tests/fixtures/mcp/`.
- *
- * Ported: `test_a_tool_node_calls_an_unopened_server_which_the_run_closes`,
- * `test_an_agent_gets_the_server_tools_and_calls_one`, `test_an_agent_calls_an_unopened_http_server`,
- * `test_an_agent_reads_a_tool_error_and_carries_on`, `test_a_failed_run_start_check_closes_the_server`,
- * `test_a_host_opened_server_stays_open_across_runs`, `test_one_server_under_two_keys_starts_once`,
- * `test_a_server_another_run_opened_is_rejected`,
- * `test_two_runs_racing_for_one_unopened_server_start_it_once`,
- * `test_a_server_under_a_bad_key_fails_before_it_starts` (both cases),
- * `test_a_check_that_needs_no_tools_fails_before_any_server_starts`,
- * `test_a_server_that_fails_to_open_closes_the_ones_already_open`,
- * `test_a_bad_entry_fails_before_any_server_starts`, `test_a_failing_node_still_closes_the_server`,
- * `test_a_stop_before_the_servers_open_starts_none` and
- * `test_a_stop_while_the_servers_open_closes_the_opened_one_and_opens_no_more`.
- *
- * Changed: an AGENT's model is a `ScriptedModel` from `models`, and every run sees only the test's
- * credential store in its environment. The bound tools are the first request's `tools`, and the
- * model reads a call's result as a `ToolResultPart`; `add`'s structured result reads as JSON text
- * (Python: its `repr`). The other-run error is a `RangeError` whose message quotes the key as JSON
- * and names `await server.open()` (Python: a `ValueError`, `with server:`). Concurrent runs are
- * concurrent promises (Python: threads). The non-string key is the empty key, the TS key
- * `ToolSet` refuses; the bad group entry is a plain function. A stop is the run's `signal`: an
- * already-aborted one rejects with its reason before anything starts, and the stop during opening
- * aborts it from a patched `McpServer.prototype.openForRun` (Python: `_HostStop` from
- * `_run_flow_controlled`).
+ * `runFlow` opens the MCP servers passed to it unopened and closes them when the run ends, over
+ * the fake server in `tests/fixtures/mcp/`.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -144,7 +120,7 @@ function otherRun(key: string): string {
 }
 
 test(
-  "test_a_tool_node_calls_an_unopened_server_which_the_run_closes",
+  "a tool node calls an unopened server which the run closes",
   async () => {
     const file = marker();
     const server = fake("--marker", file);
@@ -158,7 +134,7 @@ test(
 );
 
 test(
-  "test_an_agent_gets_the_server_tools_and_calls_one",
+  "an agent gets the server tools and calls one",
   async () => {
     const model = callThenAnswer("add", { a: 2, b: 3 });
     const server = fake();
@@ -176,7 +152,7 @@ test(
 );
 
 test(
-  "test_an_agent_calls_an_unopened_http_server",
+  "an agent calls an unopened http server",
   async () => {
     const model = callThenAnswer("echo", { text: "over http" });
     const http = await startHttpServer();
@@ -196,7 +172,7 @@ test(
 );
 
 test(
-  "test_an_agent_reads_a_tool_error_and_carries_on",
+  "an agent reads a tool error and carries on",
   async () => {
     const model = callThenAnswer("fail", { message: "boom" });
     const server = fake();
@@ -211,7 +187,7 @@ test(
 );
 
 test(
-  "test_a_failed_run_start_check_closes_the_server",
+  "a failed run start check closes the server",
   async () => {
     const file = marker();
     const log = join(dir, "run.jsonl");
@@ -226,7 +202,7 @@ test(
 );
 
 test(
-  "test_a_host_opened_server_stays_open_across_runs",
+  "a host opened server stays open across runs",
   async () => {
     const flow = await toolFlow("echo", '{text: "hi"}');
     const server = fake();
@@ -248,7 +224,7 @@ test(
 );
 
 test(
-  "test_one_server_under_two_keys_starts_once",
+  "one server under two keys starts once",
   async () => {
     const file = marker();
     const server = fake("--marker", file);
@@ -262,7 +238,7 @@ test(
 );
 
 test(
-  "test_a_server_another_run_opened_is_rejected",
+  "a server another run opened is rejected",
   async () => {
     const server = fake();
     const flow = await toolFlow("slow", "{seconds: 2}");
@@ -283,7 +259,7 @@ test(
 );
 
 test(
-  "test_two_runs_racing_for_one_unopened_server_start_it_once",
+  "two runs racing for one unopened server start it once",
   async () => {
     const file = marker();
     const server = fake("--marker", file);
@@ -314,7 +290,7 @@ for (const [key, kind, message] of [
   ["", TypeError, "tool ids in tools must be non-empty strings"],
 ] as const) {
   test(
-    `test_a_server_under_a_bad_key_fails_before_it_starts (${JSON.stringify(key)})`,
+    `a server under a bad key fails before it starts (${JSON.stringify(key)})`,
     async () => {
       const file = marker();
       const server = fake("--marker", file);
@@ -329,7 +305,7 @@ for (const [key, kind, message] of [
 }
 
 test(
-  "test_a_check_that_needs_no_tools_fails_before_any_server_starts",
+  "a check that needs no tools fails before any server starts",
   async () => {
     const file = marker();
     const server = fake("--marker", file);
@@ -344,7 +320,7 @@ test(
 );
 
 test(
-  "test_a_server_that_fails_to_open_closes_the_ones_already_open",
+  "a server that fails to open closes the ones already open",
   async () => {
     const file = marker();
     const log = join(dir, "run.jsonl");
@@ -361,7 +337,7 @@ test(
 );
 
 test(
-  "test_a_bad_entry_fails_before_any_server_starts",
+  "a bad entry fails before any server starts",
   async () => {
     const file = marker();
     const server = fake("--marker", file);
@@ -376,7 +352,7 @@ test(
 );
 
 test(
-  "test_a_failing_node_still_closes_the_server",
+  "a failing node still closes the server",
   async () => {
     const file = marker();
     const server = fake("--marker", file);
@@ -388,7 +364,7 @@ test(
 );
 
 test(
-  "test_a_stop_before_the_servers_open_starts_none",
+  "a stop before the servers open starts none",
   async () => {
     const files = [marker("a.pid"), marker("b.pid")];
     const servers = files.map((file) => fake("--marker", file));
@@ -405,7 +381,7 @@ test(
 );
 
 test(
-  "test_a_stop_while_the_servers_open_closes_the_opened_one_and_opens_no_more",
+  "a stop while the servers open closes the opened one and opens no more",
   async () => {
     const files = [marker("a.pid"), marker("b.pid")];
     const [first, second] = files.map((file) => fake("--marker", file)) as [McpServer, McpServer];

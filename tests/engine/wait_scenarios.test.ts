@@ -2,8 +2,7 @@
  * The wait scenarios (`scenarioLogs`): each log replays to the live state on every prefix; the
  * records-only fold agrees with the reducer's; `inspectRun` without a flow agrees with a replay on
  * every cut; and each scenario's own rules hold at the records that matter. `foldRunLog` yields a
- * send's value at its commit and a take's at its commit once its success rebuilds it. TS-only:
- * Python yian has no inboxes or waits.
+ * send's value at its commit and a take's at its commit once its success rebuilds it.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

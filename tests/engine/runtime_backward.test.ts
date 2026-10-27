@@ -1,140 +1,6 @@
 /**
- * The accepted reverse walk: a port of `tests/engine/test_runtime_backward.py`. Ported:
- * `test_explicitly_synthetic_source_free_failure_keeps_direct_root_text` (it also refuses another
- * root result).
- *
- * Changed: Python's `ValueError` is a `RangeError`; the results are an array, not a tuple.
- *
- * TS-only, over `chainTrace()` (START, `p` and END driven through `prepareTrace` and `apply`):
- * `validateAttributedBackward` accepts the exact transfers END → p → START → source 0, and merges
- * the root inputs when START is reached and `p` also routes to source 0; one refusal per rule
- * (inventory order, feedback, attribution, a reached occurrence's result that isn't invoked (the
- * feedback check refuses it, since a result that isn't invoked has no feedback), a local contract
- * violation, the root, feedback to an unavailable occurrence, a non-terminal trace); refusals pin
- * the error's exact class and message; empty feedback seeds nothing; a node-data
- * path absent from the accepted output; an int-headed path's output context and its materialized
- * form; `materializeContext`'s shape and `bigint` integers; `ContextCache.lookup` looking a source
- * up once and not caching a failure; `takeMessages` order.
- *
- * TS-only, backward attempt state: one refusal per `BackwardAttempt` and `RuntimeBackwardState`
- * rule; the getters on empty, unfinished and finished histories; the unfinished outcome an
- * unfinished attempt derives, with `prefixLearning`'s statuses and failure order;
- * and `proposalBatches`' table order.
- *
- * TS-only, the reducer over `chainTrace()` with memory key `notes` and ids from `memoryCommitId`:
- * a full attempt Started → Ready → Requested → Succeeded → Finished, then a second start; the
- * accepted Finished of each branch (unfinished before and after Ready, commit failure, learner
- * failure with and without an attributed context failure, computation failure); and one refusal
- * per reducer, Finished and context-owner rule, the last record class refused through a forged
- * record of another class.
- *
- * TS-only, owner learn contexts over `chainTrace()` (`p` sends `v`, `w`, self and variable
- * feedback): the producer's episode (inputs without the hidden `w`, output, coordinates) and
- * `notes` feedback entries (output, input with contributions, self and variable channels) with
- * `bigint` integers; the coordinates every entry carries when `p` has an execution scope with an
- * indexed position; an empty context for a key with no occurrences; the root fallback for a
- * root-owned key; one refusal per table, stack and scope check; the two `OwnerContextError`
- * constructor checks; context failures: a lone surrogate in `p`'s self feedback, which
- * `freezeFeedback` refuses (the TS message doesn't name `feedback[i]`), names `p`'s backward
- * context, and a synthetic source-free trace with run id `""` fails the root fallback's context
- * with `context === null`.
- *
- * Ported, after rewrite (the start is built with `prepareRunStarted` on the shared
- * `learnableStarted`, not the engine; the trace compares through the shared `traceSnapshot`):
- * `test_root_inventory_is_retained_without_running_capture_or_defaults` (START's params are
- * replaced with an empty array, which is readonly, where Python clears the list),
- * `test_terminal_trace_append_rejection_leaves_all_indexes_unchanged` and
- * `test_causal_route_trace_latch_is_installed_only_after_append` (the log's `append` patched on
- * the instance, its error an `Error`, Python's `OSError`).
- *
- * Ported, through the engine: `test_terminal_trace_keeps_actual_root_writer_until_quiescence`
- * (2 rows), `test_diamond_calls_shared_producer_once_with_two_ordered_messages` (the delivered
- * messages are frozen),
- * `test_entire_callback_result_is_validated_before_routing_any_input` (3 rows; each pins the
- * failure's message and cause class),
- * `test_empty_feedback_keeps_complete_history_without_invoking_callbacks` (2 rows; the `[null]`
- * refusal's full message is pinned), `test_root_default_feedback_survives_its_literal_route`,
- * `test_accepted_failure_uses_recorded_inputs_and_diagnostics` (2 rows; the missing parameter is
- * added by replacing `params`, the body's error is an `Error`, Python's `RuntimeError`) and
- * `test_failed_end_routes_text_without_fabricating_output_context`.
- *
- * `test_callback_failures_are_attributed_without_swallowing_host_faults`: `callback` and
- * `infrastructure` (the trace's `lookupSource` patched on the instance) are ported; the callback
- * row also pins the whole `BackwardFailure` and `BackwardComputeError`'s name, message and `cause`.
- * Changed: `host`: there is no host-control unwrapping, so a `CapabilityFault` a callback throws is
- * `backward.execute`, its `cause` the fault. Not ported: `cancel` and `memory`; TS has no
- * `_HostStop` or `MemoryError`.
- *
- * Changed: `test_callback_message_mutation_does_not_change_root_or_recorded_feedback`: the
- * callback's feedback is a deep-frozen copy, so its write throws a `TypeError` (asserted), and the
- * caller's message and the recorded feedback stay unchanged.
- *
- * TS-only, `computeBackward`: a result of another class is `backward.result` with a `TypeError`
- * cause; an async callback is awaited; a rejected promise is `backward.execute`; a thrown `"x"` or
- * `undefined` gives its text as the message, its type name as `causeType` and a `null` traceback;
- * an `Error` subclass's `name` is the `causeType` and its string `notes` follow the stack in the
- * traceback; a missing handler (the trace's handler map shadowed on the instance) rejects with its
- * own `Error`, not `backward.execute`; an error from result validation that is neither a
- * `TypeError` nor a `RangeError` (a forged result's throwing getter) escapes unchanged.
- *
- * Ported, through the engine, with routes, replay and template stops:
- * `test_terminal_trace_latches_causal_route_and_later_failure_wins` (2 rows; `router` and
- * `unrelated` patched on the instance, every prefix replayed over a fresh `copyGraph` of the
- * started flow with `noGrowth`) and
- * `test_opaque_expression_stops_are_recoverable_without_rerunning_functions` (the template function
- * registered with `registerTemplateFn` and restored in `afterEach`).
- *
- * Changed:
- * - `test_structural_ancestry_requires_exact_metadata_prescribed_transfer` (2 rows) and
- *   `test_canonical_file_input_feedback_keeps_literal_and_opaque_stops` (2 rows) run on
- *   `ownerEngine`'s hand-built root-only memory layout, not Python's resolved one; `middle`'s
- *   `captureBackwardContext` is patched on the instance.
- * - `test_preseeded_root_output_does_not_invent_an_executed_producer`: only the row where END is
- *   START, whose output is the run inputs' commit (source 0); a run start commits only the
- *   system values and the START inputs, so END can't be preseeded. The flow's readonly `endId` is
- *   assigned through a cast, and the engine grows with `noGrowth`.
- * - `test_backward_context_is_trace_owned_detached_and_survives_replay`: the context is frozen, so
- *   writing to its inputs throws a `TypeError` (asserted) where Python's write lands on a detached
- *   copy; the replay's recapture guard spies on `Node.prototype.captureBackwardContext`.
- *
- * TS-only: a backward context the trace can't build rejects with its own error before the callback
- * runs.
- *
- * Not ported: `test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence`. The Python test
- * blocks a template function on a thread event until the peer commits; a TS template function
- * binds synchronously at dispatch, so a consumer that started first can't block until a peer
- * commits and then bind its output.
- *
- * Ported, through CASE and AGENT: `test_case_control_and_unselected_branch_do_not_receive_feedback`
- * and `test_agent_inventory_is_recorded_and_empty_feedback_does_no_backward_work` (AGENT's
- * `forward` and `backward` are `spyOn` replacements on the prototype, restored in `finally`; the
- * variables are read with `parametersFromYaml` over an empty `readTypedefs({})`; the params and
- * variables are cleared by assigning empty arrays; the engine records no effective LLM map, as the
- * replaced `forward` calls no model).
- *
- * Ported, through CALL, MAP and LOOP growth (`engine` or `ownerEngine` with `growBuilder:
- * buildGrow`, Python's `_engine` default; `loadFlow` where Python loads YAML; Python's class-level
- * `CodeNode` patches are `spyOn` replacements on the prototype, restored in `finally`):
- * `test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_projection`,
- * `test_loop_carried_routes_use_the_same_fold_after_live_pruning`,
- * `test_map_canonical_item_shape_preserves_its_projected_seed_stop` (2 rows; the template function
- * registered with `registerTemplateFn`) and `test_loop_passthrough_field_routes_feedback_to_its_seed`
- * (12 rows, shape × times 1, 2, 3, 6). The inline CODE bodies keep Python's text, which is also
- * valid TS; the feedback entries' integers are `bigint`s.
- *
- * Changed:
- * - `test_map_whole_list_context_and_item_order_survive_reversed_completion`: Python's thread
- *   event is a promise the `onEvent` observer resolves when `map#1`'s END succeeds; item 0's
- *   `forward` waits on it for at most 2 s (Python's 5 s, under Bun's 5 s test timeout), then
- *   rejects, so the run ends and the spies are restored.
- * - `test_empty_map_retains_synthetics_without_inventing_item_contributors`: the child body that
- *   must not run throws an `Error`, Python's `AssertionError`.
- * - `test_map_bounded_projected_file_lists_compose_before_stopping` (2 rows): `+ []` is ported;
- *   Python's `* 2` is list repetition, a type error in TS, so the second row adds the same 40-deep
- *   list to itself, with the same two-element feedback and the same single stop.
- *
- * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
- * `backward.interrupted`.
+ * The accepted reverse walk: backward checks, attempt state and its reducer, owner learn contexts,
+ * `computeBackward`, and backward runs through the engine, CASE, AGENT, and CALL, MAP and LOOP growth.
  */
 
 import { afterEach, expect, spyOn, test } from "bun:test";
@@ -386,7 +252,7 @@ test("a causal route's trace latch is installed only after append", () => {
   expect(state.trace!.terminal!.source).toEqual(causal);
 });
 
-// TS-only: the chain fixture.
+// The chain fixture.
 
 const RUN = "run";
 
@@ -891,7 +757,7 @@ test("takeMessages pops one source's messages sorted by order", () => {
   expect(Object.isFrozen(message([0]))).toBe(true);
 });
 
-// TS-only: backward attempt state.
+// Backward attempt state.
 
 const MUTATIONS = [new MemoryMutation("m", { note: "Raise v." })];
 const OPERATION_FAILURE = new MemoryOperationFailure("commit", "memory.unavailable", "Down.", true);
@@ -1247,7 +1113,7 @@ test("proposalBatches returns each memory's batch in table order and refuses ano
   }
 });
 
-// TS-only: the backward attempt reducer, over `chainTrace()` with memory key `notes`.
+// The backward attempt reducer, over `chainTrace()` with memory key `notes`.
 
 const NOTES = [new MemoryMutation("n1", { note: "Raise v." })];
 const COMMIT_ID = memoryCommitId(RUN, "notes", NOTES, 1);
@@ -1775,7 +1641,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
   expectError(() => call(chainTrace().trace), cls, message);
 });
 
-// TS-only: owner learn contexts, over `chainTrace()` with memory key `notes` on `p`.
+// Owner learn contexts, over `chainTrace()` with memory key `notes` on `p`.
 
 const EMPTY_SPEC = new MemorySpec("empty", "empty", {}, [new DeclSite([], ["def", "unused"])]);
 const NOTES_SPEC = new MemorySpec("notes", "notes", {}, [new DeclSite([], ["def", "p"])]);
@@ -2220,7 +2086,7 @@ test.each<[string, () => unknown, ErrorClass, string]>([
     RangeError,
     'feedback["x"] must have exactly 2 items; got 1',
   ],
-  ["another class (TS-only)", () => ({}), TypeError, "result must be a BackwardResult"],
+  ["another class", () => ({}), TypeError, "result must be a BackwardResult"],
 ])("the entire callback result is validated before routing any input: %s", async (_, bad, cls, message) => {
   const producer = new RecordingBackwardNode("producer", () => [1n, 2n], unreachable("routed partial result"));
   const consumer = new RecordingBackwardNode("consumer", (inputs) => inputs.x, () => bad() as BackwardResult, {
@@ -2388,7 +2254,7 @@ test("a failed END routes text without fabricating an output context", async () 
 });
 
 test("a callback's message mutation changes neither the root feedback nor the recorded feedback", async () => {
-  // The callback gets deep-frozen copies, so its write throws where Python's lands on a copy.
+  // The callback gets deep-frozen copies, so its write throws.
   let caught: unknown = null;
   const end = new RecordingBackwardNode(END_ID, () => [1n, 2n], (_context, feedback) => {
     try {
@@ -2409,7 +2275,7 @@ test("a callback's message mutation changes neither the root feedback nor the re
   expect(results.find((item) => item.invoked)!.feedback).toEqual([[null, "review second"]]);
 });
 
-// TS-only: promises, thrown values and the handler lookup.
+// Promises, thrown values and the handler lookup.
 
 test("an async callback is awaited", async () => {
   const node = new RecordingBackwardNode("work", (inputs) => inputs.x, async (_context, feedback) => {
@@ -2674,7 +2540,7 @@ test("a backward context is trace-owned, detached and survives replay", async ()
   const occurrence = trace.occurrences.find((item) => item.nodeId === "work")!;
   const context = trace.backwardContext(occurrence.source);
 
-  // The context is frozen, so the write throws where Python's lands on a detached copy.
+  // The context is frozen, so the write throws.
   expect(() => (context.inputs!.x as unknown[]).push(3n)).toThrow(TypeError);
   expect(trace.backwardContext(occurrence.source).inputs).toEqual({ x: [1n, 2n] });
   const before = built.log.records();
@@ -2737,7 +2603,7 @@ test.each([false, true])(
   },
 );
 
-test("a backward context the trace can't build escapes unchanged before the callback (TS-only)", async () => {
+test("a backward context the trace can't build escapes unchanged before the callback", async () => {
   // Context building sits outside the callback's `try`, so its fault isn't the callback's.
   const original = new Error("context broke");
   const node = new RecordingBackwardNode("work", () => "value", unreachable("callback"));

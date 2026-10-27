@@ -1,6 +1,6 @@
 /**
  * The pure MAP builder `mapSubgraph`, which pins its output to the MAP growth's clone and fan-in
- * shape: a port of `tests/engine/test_map_subgraph_builder.py`.
+ * shape.
  *
  * `mapSubgraph(child, spawnerId, records)` clones the child once per element (namespaced under
  * `mapCallsite(spawnerId, i)`), synthesizes a `<spawner>/__start__` StartNode that fans out to every
@@ -8,18 +8,6 @@
  * `commitAs = spawnerId`, fed one `e<i>` group per element), and returns a `Flow`. With no records
  * the only body node is the list-END, and the synthetic START wires straight to it, so it
  * schedules and emits `[]`.
- *
- * Ported: `test_map_subgraph_matches_grow_map_type`,
- * `test_map_subgraph_n_ge_2_start_fans_out_to_all_element_starts`,
- * `test_map_subgraph_shares_context_across_distinct_clones_and_boundaries`,
- * `test_map_subgraph_n0_wires_start_to_collector`,
- * `test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes` and
- * `test_map_subgraph_revalidates_supplied_memory_scope`.
- *
- * Changed:
- * - record ints are `bigint`s (decision 4a);
- * - carriers are frozen, so the forged occurrence is an object of the carrier's prototype built
- *   without its constructor, before its scope, where Python sets the index on a built carrier.
  */
 
 import { expect, test } from "bun:test";

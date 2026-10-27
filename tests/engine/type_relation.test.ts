@@ -1,9 +1,6 @@
 /**
- * Classification of an inferred type against a declared type: a port of every test of
- * `tests/engine/test_type_relation.py`.
- *
- * Changed: Python's `10**400` end is `10n ** 400n`; record fields are a `Map` and `required` a
- * `Set`.
+ * Classification of an inferred type against a declared type. Record fields are a `Map` and
+ * `required` a `Set`.
  */
 
 import { expect, test } from "bun:test";

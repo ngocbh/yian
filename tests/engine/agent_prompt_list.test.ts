@@ -1,7 +1,6 @@
 /**
- * An AGENT list prompt renders into the request's messages, after the system message.
- *
- * TS-only: Python yian has no list prompt. Driven through `forward` with a `ScriptedModel`.
+ * An AGENT list prompt renders into the request's messages, after the system message. Driven
+ * through `forward` with a `ScriptedModel`.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

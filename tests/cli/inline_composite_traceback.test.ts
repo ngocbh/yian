@@ -1,6 +1,5 @@
-// Ported from tests/cli/test_inline_composite_traceback.py: a failure inside an inline CALL body
-// is framed at the authored wrapper and at the failing line, never under the synthesized flow's
-// id. Changed: the CODE body is TS's (`throw`).
+// A failure inside an inline CALL body is framed at the authored wrapper and at the failing line,
+// never under the synthesized flow's id.
 
 import { expect, test } from "bun:test";
 

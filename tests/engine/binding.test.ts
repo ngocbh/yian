@@ -1,45 +1,9 @@
 /**
- * The bind grammar, resolving each declared param's source into a typed record: a port of
- * `tests/engine/test_binding.py`. The local `InputBinding`/`bindInputs` adapter phrases each case
- * as a `Parameter` plus a wiring entry, so the grammar (coalesce, `:-` default, `:?` required,
- * escapes, type checks, deep copies, the `${item}` scope) is tested through `bindParams`, the
- * engine's read boundary.
- *
- * Changed (rule `int-in-float`): in `test_bind_ref_and_literal` the literal `90` bound into a
- * `float` parameter stays the int `90n` (Python widens it to `90.0`), and in
- * `test_binding_capture_matches_the_value_actually_delivered` the `count` read as `12n` into a
- * `float` parameter stays `12n`. That test registers its `observe` builtin with
- * `registerTemplateFn` and puts back the previous entry (or its absence) after, as Python's
- * `monkeypatch.setitem` does. Changed (values in messages use the text form):
- * `test_bind_never_converts_a_supplied_string` reads `"30" does not match declared type int`.
- *
- * TS-only: a `Set` as `params` is refused as not an exact list; the copy a bind delivers
- * writes `-0` as `0`, keeps a container shared inside the value shared, keeps a `FileRef` by
- * identity, and keeps an own `__proto__` key as data; and `BindingCollector` refuses a negative,
- * non-integer or repeated item index, keeps partial routes without usable inputs after
- * `invalidate` (its items invalidated too), refuses a second `freeze`, and its capture's
- * `boundInputs` and `evaluatedKeys` give a fresh copy on each read; a capture built directly
- * freezes its item pairs and copies its evaluated keys.
- *
- * Ported: `test_capture_includes_materialized_reserved_values_from_node_hooks` and
- * `test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts` (both with no flow, as
- * Python passes no override).
- *
- * Ported: `test_map_wrapper_capture_includes_valid_defaults_and_item_routes` (with no flow and
- * Python's `wiring_override`).
- *
- * Ported (adapted): the four rows of
- * `test_binding_failure_keeps_partial_context_without_usable_inputs` pass Python's
- * `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a JSON
- * record and the `reserved` row's `at` source holds a `Binding`; the other rows use the same
- * fixture for uniformity. In the `ordinary` row, Python's bare `Node` is a minimal subclass. The
- * `reserved` row's node is a test-local one reserving `at`, where Python uses a WAIT (TS yian has
- * no WAIT kind).
- * `test_evaluator_capture_preserves_typed_values_before_node_mutation` also binds through
- * `nodeFlow`, and binds a list where Python binds a tuple, so it doesn't check the tuple type.
- *
- * Not ported: `test_bind_params_rejects_noncanonical_containers` has no counterpart: both of
- * its rows are tuples, and TS has only arrays.
+ * The bind grammar, resolving each declared param's source into a typed record. The local
+ * `InputBinding`/`bindInputs` adapter phrases each case as a `Parameter` plus a wiring entry, so
+ * the grammar (coalesce, `:-` default, `:?` required, escapes, type checks, deep copies, the
+ * `${item}` scope) is tested through `bindParams`, the engine's read boundary; also the binding
+ * capture and `BindingCollector`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -883,8 +847,6 @@ test("bindInputs still reads a non-item ref from the pool with an item present",
   pool.set(START_ID, { as_of: "2026-01-01" });
   expect(bindInputs([{ name: "d", source: "${input.as_of}" }], pool, { item: "X" })).toEqual({ d: "2026-01-01" });
 });
-
-// --- TS-only rows --- //
 
 test("bindParams refuses a Set as params", () => {
   const error = errorOf(() => bindParams(new Set() as never, new Map(), poolOf()));

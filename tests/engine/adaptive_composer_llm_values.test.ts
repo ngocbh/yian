@@ -1,20 +1,7 @@
 /**
- * A port of `tests/engine/test_adaptive_composer_llm_values.py`: `llm_config` values on an
- * adaptive gate's composer, end to end (run start, call time, errors).
- *
- * Ported: all 9 tests. The composer's model is a `ScriptedModel` given through `serving`, which
- * records the config of each model built, where Python patches `model_from_config`; it answers the
- * composer's `list(Question)` output as the `{"items": [...]}` wrapper. The `node_step` records
- * are read from the run's JSONL log. The CODE bodies are inline JavaScript.
- *
- * Changed: the run-start error is a `RangeError` where Python raises `ValueError`; a run with no
- * call-time agent writes `call_time_llm: null` in its `run_started` record, where Python leaves
- * the key out (TS starts its own versioned logs, decisions 8, 16). The gate is a TOOL `ask` where
- * Python's is a HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind); its handler declares `proj`.
- *
- * `engine_adaptive_composer_llm_values__a_composer_call_time_error_names_the_gate` and
- * `__an_error_in_a_call_names_the_callsite` don't cover their tests: neither pins that no model
- * was built.
+ * `llm_config` values on an adaptive gate's composer, end to end: run start, call time and errors.
+ * The composer's model is a `ScriptedModel` given through `serving`, which records the config of
+ * each model built.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -104,7 +91,7 @@ async function run(text: string, inputs: Record<string, unknown>, models: Return
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JSON.parse(line));
-  // Python's fixture refuses a plain call: every composer call takes the structured path.
+  // Every composer call takes the structured path.
   for (const request of models.model.requests) expect(request.outputFormat?.name).toBe("ListWrapper");
   return { result, records, requests };
 }

@@ -1,26 +1,7 @@
 /**
- * `advance` opens the MCP servers passed to it unopened only for an unfinished run: a port of
- * `tests/engine/test_mcp_resume.py`, over the fake server in `tests/fixtures/mcp/`.
- *
- * Ported: `test_a_resumed_tool_node_calls_an_unopened_server_which_the_resume_closes`,
- * `test_resuming_a_finished_run_starts_no_server`, `test_a_bad_entry_fails_before_the_log_is_touched`,
- * `test_a_server_that_fails_to_open_on_resume_closes_the_log`,
- * `test_a_check_that_needs_no_tools_fails_before_the_server_starts` and
- * `test_resuming_without_the_runs_memory_fails_before_any_server_starts`.
- *
- * Changed:
- * - A crash is a frozen log: the local `whoami` tool freezes every durable log, whose next append
- *   throws a `Crash` the run rejects with (Python: the tool raises `_SimulatedCrash`).
- * - The bad group entry is an arrow function, refused as `tools["g"][0] must be a FunctionTool`
- *   (Python: "is a lambda"); the bad skills map is a `Map` holding a plain object.
- * - Memory is a `Map` of the shared `FakeMemory`.
- * - `test_a_stop_before_the_servers_open_on_resume_starts_none`: the stop is the `signal`, and an
- *   aborted one rejects with its reason before the log is locked (Python raises `_HostStop` after
- *   replay, from the server opening).
- *
- * Every run sees only the test's credential store in its environment.
- *
- * Covered by a case: none.
+ * `advance` opens the MCP servers passed to it unopened only for an unfinished run, over the fake
+ * server in `tests/fixtures/mcp/`. Every run sees only the test's credential store in its
+ * environment.
  */
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
@@ -128,7 +109,7 @@ async function crashedRun(log: string): Promise<ToolContext> {
 }
 
 test(
-  "test_a_resumed_tool_node_calls_an_unopened_server_which_the_resume_closes",
+  "a resumed tool node calls an unopened server which the resume closes",
   async () => {
     const log = join(dir, "run.jsonl");
     const first = await crashedRun(log);
@@ -146,7 +127,7 @@ test(
 );
 
 test(
-  "test_resuming_a_finished_run_starts_no_server",
+  "resuming a finished run starts no server",
   async () => {
     const log = join(dir, "run.jsonl");
     const flow = await loadFlow(WHOAMI_FLOW);
@@ -171,7 +152,7 @@ test(
 );
 
 test(
-  "test_a_bad_entry_fails_before_the_log_is_touched",
+  "a bad entry fails before the log is touched",
   async () => {
     const log = join(dir, "run.jsonl");
     const flow = await loadFlow(WHOAMI_FLOW);
@@ -195,7 +176,7 @@ test(
 );
 
 test(
-  "test_a_server_that_fails_to_open_on_resume_closes_the_log",
+  "a server that fails to open on resume closes the log",
   async () => {
     const log = join(dir, "run.jsonl");
     const flow = await loadFlow(WHOAMI_FLOW);
@@ -214,7 +195,7 @@ test(
 );
 
 test(
-  "test_a_check_that_needs_no_tools_fails_before_the_server_starts",
+  "a check that needs no tools fails before the server starts",
   async () => {
     const log = join(dir, "run.jsonl");
     const flow = await loadFlow(WHOAMI_FLOW);
@@ -234,7 +215,7 @@ test(
 );
 
 test(
-  "test_resuming_without_the_runs_memory_fails_before_any_server_starts",
+  "resuming without the runs memory fails before any server starts",
   async () => {
     const log = join(dir, "run.jsonl");
     const flow = await loadFlow(MEMORY_FLOW);
@@ -258,7 +239,7 @@ test(
 );
 
 test(
-  "test_a_stop_before_the_servers_open_on_resume_starts_none",
+  "a stop before the servers open on resume starts none",
   async () => {
     const log = join(dir, "run.jsonl");
     const flow = await loadFlow(WHOAMI_FLOW);

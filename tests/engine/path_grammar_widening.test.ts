@@ -1,10 +1,4 @@
-/**
- * References with the graph-expansion separators `#` and `/`, a port of
- * `tests/engine/test_path_grammar_widening.py`.
- *
- * `test_case_output_interior_accepts_separators` checks the private case-output pattern through
- * `expandCaseOutputs`: a read matching it expands to the case's branch targets.
- */
+/** References with the graph-expansion separators `#` and `/`. */
 
 import { expect, test } from "bun:test";
 

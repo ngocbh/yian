@@ -1,66 +1,6 @@
 /**
- * A port of `tests/engine/test_memory_runtime.py`.
- *
- * Ported: `test_open_validates_the_memory_table_and_its_origins`,
- * `test_open_uses_key_order_and_captures_snapshots`,
- * `test_open_restores_exact_recorded_snapshot_per_key`,
- * `test_restore_rejects_noncanonical_snapshot_order_before_opening`,
- * `test_restore_rejects_a_session_that_changes_the_recorded_snapshot`,
- * `test_registry_rejects_aliases_and_attributes_missing_key_origin`,
- * `test_later_open_failure_closes_prior_session_and_preserves_origin`,
- * `test_frame_era_session_is_closed_before_setup_failure`,
- * `test_context_recalls_every_key_in_stack_order_and_opens_the_eligible_transcript` (no
- * transcript), `test_context_validates_scope_request_and_full_opened_coverage` (a recall context
- * in place of the request), `test_recall_returns_nonempty_outer_to_local_sections_with_exact_context`,
- * `test_recall_wraps_typed_failure_with_the_key_origin`,
- * `test_recall_wraps_noncanonical_text_without_exposing_it`,
- * `test_propose_learning_returns_one_proposal_per_key_in_table_order`,
- * `test_propose_learning_attributes_a_failure_to_its_key` and
- * `test_commit_learning_commits_on_the_named_key_session`, with the `_Session`, `_Memory`,
- * `_table`, `_origins`, `_open`, `_scope`, `_context` and `_recall_sections` (`recallSections`)
- * helpers.
- *
- * Changed: Python's tuples are arrays and its dictionaries are `Map`s; each refusal pins its class
- * and full message (Python's `ValueError` is a `RangeError`, matched in part there); every origin
- * checked, the missing key's included, is the very `OriginRef` passed in (`toBe`); the restore
- * test also checks the captured snapshots; `open` and `close` return promises; a wrapped setup
- * failure's `cause` is the backend's error (Python's `raise ... from`). `openContext` returns a
- * promise of the context instead of a context manager, takes the `RecallContext` itself and
- * `{ signal }` instead of `check_stopped`; Python's `str` subclass is a `String` object. The
- * context validation test tries four non-signal options (`undefined`, `{}`, `{ signal: null }`, a
- * fake signal) where Python tries one `check_stopped=None`, and checks nothing was recalled; the
- * recall context is the very `RecallContext` (`toBe`, where Python uses `==`); an invalid-content
- * error's `cause` is a `TypeError` (Python checks no cause). `proposeLearning` and `commitLearning`
- * return promises; the proposals are also checked frozen; the proposal failure's whole
- * `MemoryOperationFailure` and its `cause` (the backend's error) are checked; the missing
- * `frame_ref` is a missing `frameRef` property; the commit receives the record's own frozen batch
- * (`toBe`); the local fake's `commit` returns its `commitValue`, as Python's does.
- *
- * TS-only: a plain-object table item; a sparse table; origins as a plain object, with a numeric
- * key, or with a key emptied after construction (`OriginRef`'s own `RangeError`); each registry
- * name message (a numeric key, `""`, a lone surrogate); a value without the `Memory` methods; a
- * registry that isn't a `Map` (a plain object, `null`, an array); each snapshot message (a plain
- * object, an item that isn't an envelope, a repeated key, and a repeated key before a non-envelope
- * item); every refusal opens nothing; async `openRun` and `close` are awaited; a snapshot getter
- * throwing a `MemoryOperationError`; a snapshot that is a `Promise` or holds a `Map`; a session
- * lacking `close` isn't closed; close failures without a primary (the first is thrown, later ones
- * noted on it), with an error primary (all noted on it) and with a primitive primary (notes lost);
- * a concurrent or later `close()` waits for the first, never throws and adds no notes; a reentrant
- * close from inside a session's close doesn't close again; the caller's array and `Map`s edited
- * during `open` change nothing; a subclass's `open` returns the subclass; `openContext` is a
- * `MemoryContextOpener`; an async `recall` is awaited; a number from `recall` is invalid content;
- * an already-aborted signal still recalls, then rejects with the reason;
- * `proposeLearning` and `commitLearning` refuse on a closed runtime; a `Set` of contexts, a plain
- * object shaped like a `LearnContext` and sparse contexts (`[alpha, <hole>]`, `[<hole>]`) are
- * refused before any learner; a learn result of `{}`, two mutations with one id, or a non-mutation
- * item is `memory.invalid_result`; a `MemoryOperationError` whose `code` was redefined to a number
- * is `memory.unexpected`; a learn throwing a plain `Error`, a `RangeError` or a `CapabilityFault`
- * rejects with that very error and no later key learns; a `MemoryOperationError` whose `cause` is
- * an `AbortError` `DOMException` or a `CapabilityFault` is still a `LearningProposalError` (no host
- * control is unwrapped); a commit returning `null` succeeds, one returning `"ok"` is
- * `memory.invalid_result`, and a `MemoryOperationError` (also one with a `CapabilityFault` cause)
- * returns its failure; a plain object request is refused before any commit; async `learn` and
- * `commit` are awaited.
+ * Opening, restoring and recalling a run's memories: the memory table, its origins, snapshots and
+ * recall order.
  */
 
 import { expect, test } from "bun:test";

@@ -1,11 +1,7 @@
 /**
- * Operator chains are flat nodes that evaluate and trace like the old binary trees, at any
- * length: a port of `tests/engine/test_expr_chains.py`.
- *
- * Not ported: the repeat tests and the repeats mixed into the traced concat chains, since
- * repetition is a type error in TS. `test_the_grammar_has_no_lalr_conflict` has no counterpart,
- * since the TS parser has no grammar table. The generated chains come from a small seeded PRNG
- * here instead of Python's `random`, and values compare kind-strictly (`1n` is not `1`).
+ * Operator chains are flat nodes that evaluate and trace like binary trees, at any length. The
+ * generated chains come from a small seeded PRNG, and values compare kind-strictly (`1n` is not
+ * `1`).
  */
 
 import { expect, test } from "bun:test";
@@ -191,7 +187,7 @@ function size(node: Node): number {
   return bound;
 }
 
-/** A small seeded PRNG with the parts of Python's `random.Random` the generator uses. */
+/** A small seeded PRNG for the chain generator. */
 class Rng {
   #state: number;
 

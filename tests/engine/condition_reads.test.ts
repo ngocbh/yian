@@ -1,12 +1,11 @@
 /**
- * `conditionReads` and `rewriteConditionReads`, a port of `tests/engine/test_condition_reads.py`.
+ * `conditionReads` and `rewriteConditionReads`.
  *
  * `conditionReads` lists each reference occurrence of a parsed condition with the outermost
  * `:-` / `:?` / `|` sub-expression around it and whether that sub-expression co-skips as a
  * binding would. `rewriteConditionReads` renames reference leaves by occurrence, so the same path
- * read plainly and inside an escape can get different names.
- *
- * TS-only: a comprehension's variables are neither reads nor renamed; its iterables are.
+ * read plainly and inside an escape can get different names. A comprehension's variables are
+ * neither reads nor renamed; its iterables are.
  */
 
 import { expect, test } from "bun:test";

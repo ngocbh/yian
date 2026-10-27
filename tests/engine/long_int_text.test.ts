@@ -1,28 +1,6 @@
 /**
- * A port of `tests/engine/test_long_int_text.py`: an expression that writes an int over 4300
- * digits as text. Each run is resumed from its log, which must end the same.
- *
- * Ported: `test_a_long_int_in_a_text_binding_fails_at_the_binding`,
- * `test_a_long_int_in_an_agent_prompt_fails_the_node`,
- * `test_a_long_int_in_a_human_input_question_fails_the_node`,
- * `test_formatting_a_long_int_with_percent_fails`, `test_a_builtin_writing_a_long_int_as_text_fails`
- * and the `default` row of `test_a_learnable_run_with_a_long_intermediate_succeeds_and_resumes`.
- *
- * Changed: ints are `bigint`s with no digit limit (decisions 4a, 4b), so a 5000-digit int is
- * written as text whole where Python fails with its digit-limit message: the text binding, `join`
- * and `render_as_json` rows succeed with the whole digits (the CODE node returns its input where
- * Python's returns `1`, so the result shows the text), the AGENT's model receives the whole
- * prompt (a scripted model, where Python patches `model_from_config`), and the `ask` handler
- * receives the whole question (the question is a TOOL `ask`'s prompt: TS yian has no HUMAN_INPUT
- * kind). `%` text formatting was removed (decision 7), so the `%` rows fail at the
- * binding with that message. `render_as_json` writes indented JSON.
- *
- * Not ported: `test_a_long_int_in_a_text_binding_fails_with_pythons_limit_off`,
- * `test_writing_a_long_int_as_text_fails_with_pythons_limit_off`, the `off` row of
- * `test_a_learnable_run_with_a_long_intermediate_succeeds_and_resumes`,
- * `test_an_int_under_yians_limit_that_python_refuses_fails_the_run` and
- * `test_an_int_over_yians_limit_fails_with_yians_message_under_a_lowered_limit` (Python's
- * `sys.set_int_max_str_digits`).
+ * An expression that writes an int over 4300 digits as text. Each run is resumed from its log,
+ * which must end the same.
  */
 
 import { afterAll, expect, test } from "bun:test";

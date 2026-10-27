@@ -1,32 +1,6 @@
 /**
- * Retired authoring fields stay rejected: a port of `tests/engine/test_retired_runtime_surface.py`'s
- * load rows, through `assembleText` where Python loads the flow.
- *
- * Changed: `test_retired_agent_authoring_fields_are_rejected` keeps its load half; its
- * `AgentNode(...)` half is not ported, since the TS options type has no such keys.
- *
- * Not ported: `test_checkpoint_and_suspension_modules_are_gone` and the module and attribute rows
- * of `test_agent_continuation_packages_and_builders_are_gone` (Python modules and attributes; the
- * descriptor-field half is the load row here), `test_shipped_blocking_node_packages_cannot_construct_pause`
- * (an AST scan of Python packages) and `test_shipped_blocking_node_bodies_are_typed_to_output`
- * (Python type hints; TS checks this statically), and `test_retired_wait_authoring_fields_are_rejected`
- * (TS yian has no `wait` kind). `test_effect_nodes_drop_scratch_keys` and
- * `test_wait_event_mode_and_the_watchdog_are_gone` are recorded in `resolve_until.test.ts`.
- *
- * Ported: the `build_grow` row of `test_agent_continuation_packages_and_builders_are_gone`
- * (`buildGrow` refuses an AGENT), pinning the whole message where Python matches a fragment.
- * Ported (adapted): `test_final_log_only_runtime_and_public_surface`: the retired events, `Pause`,
- * engine methods and `resumeCommand` are absent; `FlowEngine` isn't on the package root; the
- * `run_flow` and `resume_flow` parameter rows check `RunFlowOptions`'s and `AdvanceOptions`'s
- * keys (TS-only: `signal`, `env`, `scheduler`, `random`, `models`, and the `@internal`
- * `checkLlmConfigs` of Python's `_resume_flow_controlled`) and the `RunResult` row its own fields
- * and getters (TS-only: `crashedAttempts`; `_backward_handle` is a private field). The
- * `AdvanceOptions` keys also stand for `test_run_lifecycle.py`'s
- * `test_final_run_boundary_signatures_and_result_fields_are_exact`.
- *
- * TS-only: the package root (`index.ts`) exports exactly its documented root list plus the memory
- * storage names, `ProfileMemory` and `ToolAttemptsFailed`, each the owning module's export, and
- * `yian/run` (`run.ts`) re-exports `BackwardOutcome` and `Steering`.
+ * Retired authoring fields stay rejected at load, retired events and engine methods stay absent,
+ * and the package root and `yian/run` export exactly their documented names.
  */
 
 import { expect, test } from "bun:test";
@@ -89,7 +63,6 @@ test("buildGrow refuses an AGENT: agent continuations are gone", () => {
   );
 });
 
-// test_final_log_only_runtime_and_public_surface
 test("only the final log-only runtime and run API remain", () => {
   for (const name of ["PauseRequested", "RunPaused", "RunAborted", "NodeStreamEvent"]) {
     expect(name in events).toBe(false);

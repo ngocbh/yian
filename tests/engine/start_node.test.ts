@@ -1,22 +1,6 @@
 /**
- * The START boundary node of `nodes/start/node.ts`: a port of `tests/engine/test_start_node.py`.
- * Ported: `test_start_kind_and_params_are_input_names`, `test_start_through_eval_node_binds_from_wiring`,
- * `test_start_through_eval_node_required_unbound_fails` and
- * `test_start_e08_type_mismatch_returns_generic_input_failure`.
- *
- * Ported (adapted): `test_start_through_eval_node_defaults_into_a_record_without_converting_text`:
- * integers are bigints, and the message quotes the text as `"7"` (Python's `'7'`).
- *
- * Changed: `test_start_through_eval_node_fills_omitted_default` runs the node's own `run`, whose
- * template fills the omitted default through `applyDefaults`, instead of `eval_node` with a
- * wiring that leaves the input unbound.
- *
- * TS-only: omitted params are an empty list, the constructor's two `TypeError`s (params not an
- * exact array, an item not an exact `Parameter`) and the `commitsInputRecord` trait read on an
- * instance.
- *
- * Not ported: `tests/engine/test_node_range.py::test_node_has_no_compose_range_metadata`, which
- * guards against Python-era range fields TS nodes never had.
+ * The START boundary node of `nodes/start/node.ts`: its kind and params, binding and defaults
+ * through `evalNode` and `run`, and its constructor's checks.
  */
 
 import { expect, test } from "bun:test";

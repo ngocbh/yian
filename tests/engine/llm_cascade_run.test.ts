@@ -1,9 +1,6 @@
 /**
- * A port of `tests/engine/test_llm_cascade_run.py`.
- *
- * Ported: `test_run_flow_applies_cli_llm_config`, with a scripted model from `serving` where
- * Python patches `model_from_config`; the config `createModel` gets is compared with
- * `resolveModelConfig` under the same environment.
+ * `runFlow` applies a host `llmConfig`: the config `createModel` gets equals `resolveModelConfig`
+ * under the same environment.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

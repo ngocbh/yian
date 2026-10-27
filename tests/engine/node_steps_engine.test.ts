@@ -1,41 +1,4 @@
-/**
- * The durable steps a node records: a port of `tests/engine/test_node_steps_engine.py`.
- *
- * Ported: `test_node_steps_checks_its_fields` (`NodeSteps` checks `starts`, `prior` and `record`),
- * `test_steps_are_durable_before_record_returns`, `test_a_node_without_the_trait_receives_no_steps`,
- * `test_a_kept_recorder_is_closed_after_its_evaluation` (each serial and with two workers) and
- * `test_pooled_nodes_interleave_their_own_steps` (the turns are promises).
- *
- * Ported (adapted): `test_eval_node_passes_steps_only_to_opted_in_nodes_and_checks_the_type`: the
- * nodes are evaluated with no flow (empty wiring), the check's message is pinned, and the opted-in
- * node receives the evaluator's own `NodeSteps` over the same `starts` and `prior`, whose `record`
- * calls the given one (so a recorder fault is the evaluation's capability fault).
- * `test_a_recorder_log_fault_escapes_as_a_host_error` (the log's `append` is replaced on the
- * instance) and `test_an_invalid_step_is_a_host_error` (a `Date` for Python's `object()`, so the
- * rows are `RangeError`, `RangeError` and `TypeError`), each serial and with two workers.
- * `test_resume_hands_detached_prior_steps` and `test_resume_sees_the_second_start_and_the_prior_steps`
- * (serial and with two workers, each resumed on the live state and on a state replayed with
- * `replayRecords`): the crash is a throwing `onStream`, a recorded callback stop that rejects the
- * first run.
- * `test_serial_skips_a_step_once_stop_is_set`: the stop is an `onEvent` promise for the node's
- * start that rejects, and `record` throws the node signal's reason, the stop's error.
- *
- * Changed: `ValueError` is `RangeError`; `True` for `starts` is `true`.
- * `test_pooled_workers_never_read_the_step_authority` checks a thread name; in its place `prior` is
- * a snapshot taken at the start: a step the node records doesn't change it.
- * `test_a_sibling_failure_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its
- * step, since `record` is synchronous; in its place, after a sibling's failure aborts the run,
- * `record` throws the node signal's reason and appends nothing.
- *
- * TS-only: a node that catches the recorder's fault and returns still rejects `evalNode`, and the
- * run, with the fault's original. A node's kept `NodeSteps` is closed once `evalNode` resolves.
- * `record` returns what its recorder returns: through the engine, the committed record's `n`, which
- * continues across the node's starts. A step without a `kind` is a host error.
- *
- * Not ported: the `prior=[{}]` row, a list where Python wants a tuple: TS has only arrays.
- * `test_stop_releases_a_pooled_worker_waiting_for_its_step`: no worker waits for its step either;
- * `test_serial_skips_a_step_once_stop_is_set` covers a step after a stop.
- */
+/** The durable steps a node records. */
 
 import { describe, expect, test } from "bun:test";
 
@@ -181,7 +144,7 @@ function pair(first: Node, second: Node, options: Parameters<typeof engine>[1] =
   ]), options);
 }
 
-/** Each worker count Python parametrizes: serial and two workers. */
+/** Each worker count: serial and two workers. */
 const WORKERS = [0, 2];
 
 /** Return the records about `nodeId`, in log order. */

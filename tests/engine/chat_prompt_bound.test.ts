@@ -1,6 +1,6 @@
 /**
- * TS-only: a long `examples/chat.yaml` conversation keeps every reply request bounded, learnable
- * or not, and its run log stays linear while compact_history folds older turns into a summary.
+ * A long `examples/chat.yaml` conversation keeps every reply request bounded, learnable or not,
+ * and its run log stays linear while compact_history folds older turns into a summary.
  *
  * 80 turns of 2,000-character messages and 2,000-character replies (4,000 characters a turn),
  * with the chat's defaults (a 32,000-character budget, 4 turns kept). The `compacted` beside turn

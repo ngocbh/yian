@@ -1,17 +1,11 @@
 /**
- * Data-edge inference and its input groups (`compose/edges/data.ts`): a port of
- * `tests/engine/test_infer.py`.
+ * Data-edge inference and its input groups (`compose/edges/data.ts`).
  *
  * A flow-level pass: for every sink binding in the flow wiring, each `${<id>.output[.…]}`
  * reference becomes a data `Edge(<id>, <consumer>, {inputGroup: <sink key>})`. A `case` node is
  * skipped (its build emits its own `__rN`/`__on` edges). A coalesce `${a | b}` sink yields two
  * edges sharing one input group. An `${input.X}` read mints a `START_ID -> reader` edge;
  * `${system.X}`/`${item}` mint none; boundary assembly, not this pass, makes the `END_ID` edges.
- *
- * Changed: the seed rows read seeds 01, 02, 06 and 10 through the conformance cases
- * `load-agent/seed_01_structured_agent`, `load-case/seed_02_case`, `load-case/seed_06_case_on` and
- * `load-leaves/seed_10_asserts_arithmetic`, where Python reads the seed files; leaf wiring comes
- * from `build` with the case's typedefs. The CODE reference is TS's (`./m.ts:f`).
  */
 
 import { expect, test } from "bun:test";

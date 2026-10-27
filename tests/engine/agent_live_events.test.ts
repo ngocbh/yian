@@ -1,59 +1,6 @@
 /**
- * AGENT in-loop observers, model call brackets with token usage: mirrors
- * `tests/engine/test_agent_live_events.py`.
- *
- * Ported at the `callModel` level and through the node (`evalNode` with a `ScriptedModel` from
- * `models`): `test_event_sink_alone_reports_usage_without_streaming` (a started/finished pair
- * with usage and `n: 1`), `test_provider_without_usage_reports_none`,
- * `test_model_error_is_reported_by_type_then_fails_the_node` (reported by its `name`, rethrown and
- * marked), `test_refused_credentials_with_an_event_sink_fail_provider_auth` (the error is reported
- * by its `name` and coded `provider.auth`) and `test_event_sink_failure_escapes_as_a_host_fault`
- * (at the `callModel` level the sink throws a `CapabilityFault`, as the evaluator's sink does;
- * through the node the host's own error escapes).
- *
- * Ported through the node: `test_agent_without_sinks_invokes_exactly_as_before`,
- * `test_structured_fallback_reports_usage_and_streams_nothing`, and in the tool loop (the tool in
- * the run's `ToolSet`) `test_agent_with_tools_orders_model_and_tool_observers`,
- * `test_tool_error_is_reported_by_type_then_fails_the_node` (a `RangeError`, Python's
- * `ValueError`) and `test_two_tool_calls_in_one_reply_get_their_own_indexed_brackets`.
- *
- * Changed: a `ScriptedModel` stands in for Python's scripted LangChain chat; every call streams on
- * the wire, so there is no invoke/stream mode to check.
- * `test_agent_run_context_receives_only_supplied_sinks` can't replace `runAgent` (an ESM export),
- * so it runs the node with each sink combination and checks that only the supplied sinks receive
- * anything. `test_structured_native_retries_the_same_with_or_without_an_event_sink` uses the
- * native `json_schema` plan, so its replies are text that doesn't parse, a value that fails the
- * check, then a valid value; the check runs after the call, so no finished event names an error
- * (Python's second reads `ValidationError`).
- *
- * Ported through `FlowEngine` (`runAgentFlow`), without session memory:
- * `test_structured_native_turn_reports_usage_and_retains_the_raw_reply` (one valid reply of the
- * native `json_schema` plan; TS yian has no memory turn to retain it in). Not ported:
- * `test_history_summary_call_is_observed_through_the_wrapper` and
- * `test_history_summary_calls_publish_their_own_observers` (TS yian has no session memory and no
- * history summary).
- *
- * TS-only: `liveSinks` (`null` without sinks; provider and model only when strings); `usageOf`
- * with every count; a call without sinks still marks its error; a retryable `ProviderError` then a
- * reply gives one started/finished pair per attempt, each under its own `n`; a stop emits nothing more and rethrows the reason unmarked; `modelFailureCode` for every kind of the
- * mapping, an `AuthError`, a 401 status, a marked non-provider error and an unmarked error;
- * `observeToolCall` emits `ToolCallStarted` (its `arguments` a copy) then `ToolCallFinished` with
- * the result's text and the call's identity, reports a rejecting call by its `name` and rethrows,
- * lets a `CapabilityFault` through with no finished event, emits no finished event once the given
- * signal has aborted (success or failure), and without an event sink emits nothing and returns the
- * result; `observeSkippedToolCall` emits started, then finished with `error: "interrupted"`; a
- * call a host interrupt cut reports `ModelCallFinished` with the usage received before the cut
- * and no error, and isn't marked. `model_call` steps, through the node with steps, one model
- * retry, a recording scheduler and a draw of 1: a retried call writes a failed step before the
- * failed attempt's `ModelCallFinished{error}` (the error's kind and message, `output` `null`,
- * `retry_in` the wait the scheduler got, from the backoff the draw gave), and the reply's step
- * before its own `ModelCallFinished`; a failed step holds the partial reply's JSON; a tool loop
- * writes its calls and results in order, and so does the final structured pass after a chat
- * reply; a key echoed in the error is scrubbed; without steps nothing is recorded and the call
- * still retries; a `steps.record` fault ends the call as a host fault, unretried, with no finished
- * event after it.
- * `ReplayDegraded`: the reasons a built model signals over a two-turn tool loop reach the event
- * sink once per reason.
+ * AGENT in-loop observers: model call brackets with token usage, tool call brackets, `model_call`
+ * steps and `ReplayDegraded`, at the `callModel` level and through the node.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

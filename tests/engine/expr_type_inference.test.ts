@@ -1,7 +1,4 @@
-/**
- * Conservative static type inference over unified expression trees, a port of
- * `tests/engine/test_expr_type_inference.py`, plus `inf`, which is a float.
- */
+/** Conservative static type inference over unified expression trees; `inf` is a float. */
 
 import { expect, test } from "bun:test";
 

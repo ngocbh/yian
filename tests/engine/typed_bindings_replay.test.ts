@@ -1,26 +1,11 @@
 /**
- * Typed bindings across a durable run log: replay, resume, fingerprint, and recovery: a port of
- * `tests/engine/test_typed_bindings_replay.py`.
+ * Typed bindings across a durable run log: replay, resume, fingerprint, and recovery.
  *
  * Replay folds recorded node results without binding completed nodes again; a node that runs after
  * resume binds (and type-checks) its inputs then. A declared binding type is part of the flow
  * fingerprint, and END's recorded value is re-validated against the declared output types when the
- * log is recovered.
- *
- * Ported: every row. The CODE functions Python patches onto its codefns module to count calls are
- * inline JS CODE here, and the rows read which CODE nodes ran from the result's `NodeStarted`
- * events (a finished log publishes none on resume), where Python counts the calls. A host stop is
- * the `ask` handler aborting the run's signal and throwing its reason, where Python raises
- * `_HostStop`; the run rejects with that reason. The gate is a TOOL `ask` where Python's is a
- * HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind). A refused resume is a `RangeError` (a
- * `TypeCheckError` for the recovered END value), where Python raises `ValueError`. Ints read as
- * `bigint`s (decision 4a). Resume compiles the flow the run recorded, so a changed binding type
- * is an edit of the recorded text (Python passes the changed flow).
- *
- * The `resume/typed_bindings_replay__*` cases crash the log after `ask` starts and give the
- * answer to the retried gate, and their consumer returns its input undoubled, so they don't cover
- * `test_typed_consumer_after_resume_rejects_a_mistyped_answer` or
- * `test_typed_consumer_after_resume_accepts_a_matching_answer`.
+ * log is recovered. Resume compiles the flow the run recorded, so a changed binding type is an edit
+ * of the recorded text.
  */
 
 import { afterAll, expect, test } from "bun:test";

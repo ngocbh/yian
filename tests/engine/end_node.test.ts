@@ -1,23 +1,6 @@
 /**
- * The END boundary node of `nodes/end/node.ts`: a port of `tests/engine/test_end_node.py`.
- * Ported: `test_end_kind`, `test_end_record_zero_outputs_returns_empty_record`,
- * `test_end_record_one_output_returns_record`, `test_end_record_one_output_captures_a_keyed_path`,
- * `test_end_record_two_outputs_returns_keyed_object`, `test_end_record_params_are_output_names`,
- * `test_end_value_returns_the_bare_value`,
- * `test_end_value_without_a_name_has_no_params_and_returns_none`,
- * `test_end_value_captures_the_whole_output_path`, `test_end_record_returns_record`,
- * `test_end_list_joins_in_over_order`, `test_end_list_n_zero_returns_empty_list`,
- * `test_end_list_params_are_e0_to_en`, `test_end_post_asserts_fire_record_scoped_through_eval_node`
- * and `test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param` (integers are
- * bigints).
- *
- * Changed: `test_end_value_rejects_more_than_one_name` passes the constructor an options object
- * and expects a `RangeError` (Python's `ValueError`); the factories take an options object, and
- * Python's `list_` is `EndNode.list`.
- *
- * TS-only: the constructor's "exactly one of outputNames or n" `RangeError`, with neither and with
- * both; a record missing a declared input rejects with a `RangeError` (Python's `KeyError`); an
- * output named `constructor` reads its own value, not `Object.prototype`'s.
+ * The END boundary node of `nodes/end/node.ts`: its record, value and list modes, their params and
+ * captured output paths, the constructor's checks, and post asserts through `evalNode`.
  */
 
 import { expect, test } from "bun:test";

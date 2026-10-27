@@ -1,20 +1,10 @@
 /**
- * Condition evaluation against a variable pool and a node's input record: the expression tests
- * of `tests/engine/test_expr_case.py` (`resolve_reference`, `evaluate_when`,
- * `evaluate_when_record`, and conditions with arithmetic, strings, lists and builtins), the
- * `eval_binding` half of `test_builtins_evaluate_in_conditions_and_bindings`, and the
- * record-scoped strict prompt rendering (`renderTemplateRecord`).
+ * Condition evaluation against a variable pool and a node's input record: references, `when:`
+ * conditions with arithmetic, strings, lists and builtins, builtins in bindings, record-scoped
+ * strict prompt rendering (`renderTemplateRecord`), and CASE routing through the engine.
  *
  * The values follow the TS number model: pool ints are `bigint`s, and a membership test against
  * `null` fails with the operand-kinds message. An embedded `false` is written `false`.
- * `first_failing_assert` has no TS counterpart: nothing called it.
- *
- * The CASE node tests run through `graph` and `engine` (Python's `_branch_graph`):
- * `test_case_when_routes_high`, `test_case_when_routes_default`, `test_case_string_equality_routes`
- * and `test_case_case_without_when_errors` (the run rejects with the node's `RangeError`).
- *
- * TS-only: a predicate that fails to evaluate fails the run's `NodeFailed` with
- * `condition.evaluate` at its `when:` origin.
  */
 
 import { expect, test } from "bun:test";

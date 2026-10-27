@@ -1,27 +1,15 @@
 /**
- * Value templates, an authored container whose nested strings are templates: a port of
- * `tests/engine/test_value_template_bind.py`. `ValueTemplate`'s checks, `iterSourceStrings`,
- * `mapSourceStrings` and `bindingInputGroups` walk and rebuild template trees (including nested
- * typed bindings), and the origin walkers (`iterOrigins`, `mapOrigins`, `rewriteOriginCarrier`)
- * reach the template's origins and every nested binding, while a plain record or list binding
- * source stays opaque to iteration. The binder (`bindParams`) evaluates each nested string of a
- * template and checks each nested typed binding, while a plain record or list source stays a
- * literal.
+ * Value templates, an authored container whose nested strings are templates. `ValueTemplate`'s
+ * checks, `iterSourceStrings`, `mapSourceStrings` and `bindingInputGroups` walk and rebuild
+ * template trees (including nested typed bindings), and the origin walkers (`iterOrigins`,
+ * `mapOrigins`, `rewriteOriginCarrier`) reach the template's origins and every nested binding,
+ * while a plain record or list binding source stays opaque to iteration. The binder
+ * (`bindParams`) evaluates each nested string of a template and checks each nested typed binding,
+ * while a plain record or list source stays a literal.
  *
- * Changed: Python's rewrite mutates a `copy.deepcopy` in place; `rewriteOriginCarrier` returns the
- * rebuilt carrier instead, so the "private copy" is its return value. Dataclass `==` is
- * `toEqual`.
- *
- * TS-only: a `Parameter` and a `Binding` sharing one contract, rewritten with one `seen`, share
- * one rebuilt contract; a binding whose record source holds a binding, rewritten first at the top
- * level and then inside a `ValueTemplate` with one `seen`, is rebuilt once, and every origin the
- * rebuilt template yields is mapped; a record holding a binding and shared by two bindings' sources
- * comes back as one shared record, as Python's `copy.deepcopy` keeps it.
- *
- * Not ported: the rows that differ from a good one only by a tuple where Python wants a list or
- * the reverse (a tuple template, a list of origins, a list path): TS has only arrays; and
- * `test_value_template_keys_must_be_strings_throughout`, which has no counterpart, since a
- * record key is always a string.
+ * `rewriteOriginCarrier` returns the rebuilt carrier. Shared parts stay
+ * shared: a contract shared by a `Parameter` and a `Binding`, a binding rewritten twice with one
+ * `seen`, and a record shared by two bindings' sources each come back as one rebuilt object.
  */
 
 import { expect, test } from "bun:test";

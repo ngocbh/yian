@@ -1,26 +1,4 @@
-/**
- * Memory defaults come from `defaults.ts`: a port of `tests/engine/test_memory_defaults.py`.
- *
- * Ported: `test_episodic_limits_default_from_the_environment`,
- * `test_reflective_limits_default_from_the_environment`,
- * `test_reflection_lesson_material_follows_its_budget`,
- * `test_reflection_episode_material_follows_its_budget` and
- * `test_profile_memory_budgets_default_from_the_environment`.
- *
- * TS-only: none.
- *
- * Changed:
- * - `reload(env)` with a map stands in for `set_defaults`; reflective backends also get `baseEnv()`,
- *   an environment map standing in for Python's `conftest.py` variables.
- * - The reflection rows' `createModel` returns a `ScriptedModel` answering a no-op, and the prompt
- *   is read off its recorded request, where Python patches `model_from_config`.
- *
- * Not ported: `test_memory_nesting_bound_follows_the_value_nesting_limit` (TS has no memory nesting
- * limit); `test_reflection_limit_material_follows_its_budget` (the `{"max_items": N}` material can't
- * reach the 256 floor, and an ESM call can't be spied on; `reflective_memory.test.ts`'s
- * `boundedJsonMaterial` test checks the cut at the floor);
- * `test_session_memory_settings_default_from_the_environment` (TS yian has no session memory).
- */
+/** Memory defaults come from `defaults.ts`. */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -56,7 +34,7 @@ afterEach(() => {
 
 const CONFIG = { provider: "ollama", model: "qwen" };
 
-/** Python's `conftest.py` environment: an empty private store and an explicit model default. */
+/** The test environment: an empty private store and an explicit model default. */
 function baseEnv(): Env {
   const vars = new Map([
     ["YIAN_AUTH_FILE", path.join(home, "auth.json")],

@@ -1,7 +1,5 @@
 /**
- * Concurrent tool calls within one AGENT turn (D29, design 6.9); TS-only, no Python counterpart.
- *
- * Python runs a reply's calls one at a time. TS forms groups in call order: consecutive calls
+ * Concurrent tool calls within one AGENT turn. Calls form groups in call order: consecutive calls
  * whose tools say `isConcurrencySafe` (and `load_skill`) run together, an unsafe call runs alone,
  * and a failed check (an ungranted name, invalid arguments) ends the calls before it as their own
  * group, which runs and commits before the node fails. Results commit in call order whatever order

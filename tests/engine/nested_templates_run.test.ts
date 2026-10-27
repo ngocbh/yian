@@ -1,24 +1,9 @@
 /**
- * Nested `${...}` in input and output values is evaluated, end to end: a port of
- * `tests/engine/test_nested_templates_run.py`.
+ * Nested `${...}` in input and output values is evaluated, end to end.
  *
  * A mapping or list binding value is a template at every depth: a nested whole `${...}` keeps its
  * value, a nested interpolation renders text, `$$` unescapes, and a nested tag checks the value at
  * its position without filling anything in.
- *
- * Ported: every row but those covered below. The CODE bodies are Python's, which read the same in
- * JS (decision 11). Ints read as `bigint`s (decision 4a).
- *
- * Covered by `run-core/engine_nested_templates_run__nested_reference_in_a_flow_output_field`:
- * `test_nested_reference_in_a_flow_output_field_is_evaluated`; by
- * `run-core/engine_nested_templates_run__nested_escaped_span`:
- * `test_nested_escaped_span_unescapes_to_text`; by
- * `run-core/engine_nested_templates_run__nested_escape_without_a_span`:
- * `test_nested_escape_without_a_span_unescapes_to_text`; by
- * `run-core/engine_nested_templates_run__nested_interpolation_renders_text`:
- * `test_nested_interpolation_renders_text`; by
- * `run-core/engine_nested_templates_run__nested_tag_inside_a_list`:
- * `test_nested_tag_inside_a_list_checks_its_item`.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,40 +1,11 @@
 /**
- * A searched CASE whose `when:` reads a skipped branch under `:-`, `|` and `:?`: a port of
- * `tests/engine/test_case_when_escape_e2e.py`.
+ * A searched CASE whose `when:` reads a skipped branch under `:-`, `|` and `:?`.
  *
  * `gate` routes on `input.score` to `pro` or `con` (only one runs). `gate2` is a searched CASE
  * whose `when:` reads `pro.output`, routing to `hot` or `cold`. With `score: 0.2`, `pro` is
  * skipped: a plain read skips `gate2` with it, while a read under an escape runs `gate2` and lets
  * the escape supply the value, as a binding of that escape would. The `when:` stays lazy: a later
  * case's `:?` or call never runs when an earlier case matches.
- *
- * Ported: `test_a_literal_coalesce_runs_the_gate_on_a_skipped_branch`,
- * `test_a_required_read_fails_the_gate_on_a_skipped_branch`,
- * `test_a_coalesce_of_two_branches_reads_the_one_that_ran`,
- * `test_a_call_on_a_skipped_branch_in_a_later_case_is_not_evaluated`,
- * `test_a_default_reads_the_branch_when_it_ran` and both rows of
- * `test_an_unknown_namespace_inside_a_co_skipping_escape_is_reported_once`. The CODE references
- * are TS's (`./fixtures/compose_codefns.ts:pick_pro`).
- *
- * Changed: the failed `when:` of `test_a_required_read_fails_the_gate_on_a_skipped_branch` fails
- * with code `condition.evaluate`, where Python's is `node.execute` (decision 36).
- *
- * Covered by `run-case/engine_case_when_escape_e2e__a_default_runs_the_gate_on_a_skipped_branch`:
- * `test_a_default_runs_the_gate_on_a_skipped_branch`; by
- * `run-case/engine_case_when_escape_e2e__a_plain_read_skips_the_gate_with_the_branch`:
- * `test_a_plain_read_skips_the_gate_with_the_branch`; by
- * `run-case/engine_case_when_escape_e2e__a_later_required_read_is_lazy`:
- * `test_a_later_case_required_read_is_not_evaluated_when_an_earlier_case_matches`; by
- * `run-case/engine_case_when_escape_e2e__a_call_on_a_skipped_branch_fails_the_gate` (TS expect,
- * code `condition.evaluate`, decision 36):
- * `test_a_call_on_a_skipped_branch_under_a_default_fails_in_the_predicate`; by
- * `run-case/engine_case_when_escape_e2e__a_co_skipping_default_skips_the_gate`:
- * `test_a_co_skipping_default_skips_the_gate_when_its_producers_skip`; by
- * `load-case/engine_case_when_escape_e2e__an_unknown_field_inside_an_escape` (pinned in
- * `validate.test.ts`; its whole message holds neither `__r` nor `:- null`):
- * `test_an_unknown_field_inside_an_escape_names_the_authored_reference`; by
- * `load-case/engine_case_when_escape_e2e__an_on_case_with_no_cases_still_checks_its_on_value`
- * (pinned in `validate.test.ts`): `test_an_on_case_with_no_cases_still_checks_its_on_value`.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,26 +1,6 @@
 /**
- * The singular surface vocabulary at run time: the run rows of
- * `tests/engine/test_surface_vocab_golden.py`.
- *
- * Ported through `loadFlow` and `runFlow` (inline JS CODE bodies for Python's
- * `tests.engine._fakes` references): `test_section_keywords_load` and
- * `test_case_value_shorthand_node_first`. Ported through `FlowEngine` (the `engine()` fixture
- * over `graph()`, Python's `_engine`): `test_end_post_assert_reads_output`. Integers are bigints.
- *
- * Changed (vocabulary): TS adds the observers `NodeAttemptResumed` (one per node a resume
- * retries, after `RunResumed`) and `RunStopped` (a host stop, also a record); Python has neither.
- * No row here reads them.
- *
- * Covered elsewhere: `test_legacy_shape_loud_after_alias_delete` by
- * `load-core/engine_surface_vocab_golden__legacy_inputs_section` (run from `parser.test.ts`);
- * `test_pool_heads_singular` by `node_asserts.test.ts`.
- *
- * Not run rows, so not here: `test_resolver_node_first_ref`, `test_resolver_singular_input`,
- * `test_namespace_ref_node_first`, `test_constructors_emit_new_shape`,
- * `test_all_seeds_use_new_shape`, `test_all_test_fixtures_use_new_shape`,
- * `test_python_carriers_singular`, `test_no_spec_or_common_package`,
- * `test_llm_config_dict_carrier` and `test_llm_config_extra_forbid` read the pool, the loader or
- * Python's module layout.
+ * The singular surface vocabulary at run time: section keywords, the node-first CASE value
+ * shorthand, and an END post-assert reading `output`. Integers are bigints.
  */
 
 import { afterAll, expect, test } from "bun:test";

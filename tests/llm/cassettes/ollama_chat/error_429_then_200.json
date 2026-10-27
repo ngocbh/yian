@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "error_429_then_200: HTTP 429, then a 200: rate_limit, retried once (Python made one attempt).",
+  "description": "error_429_then_200: HTTP 429, then a 200: rate_limit, retried once.",
   "interactions": [
     {
       "request": {

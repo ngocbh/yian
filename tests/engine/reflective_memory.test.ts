@@ -1,114 +1,7 @@
 /**
- * Process-local reflective-memory behavior: a port of `tests/engine/test_reflective_memory.py`.
- *
- * Ported: `test_reflective_episode_material_retains_the_physical_execution_sequence`,
- * `test_constructor_and_protocol_are_exact`,
- * `test_snapshot_contains_only_public_pinned_model_configuration`,
- * `test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them`,
- * `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned`,
- * `test_snapshot_is_defensive_and_foreign_restore_is_conservative`,
- * `test_pristine_restore_keeps_recorded_limits`,
- * `test_unset_limits_adopt_recorded_ones_and_explicit_ones_must_match`,
- * `test_same_object_restore_accepts_recorded_snapshot`, `test_populated_memory_rejects_foreign_snapshot`,
- * `test_snapshot_rejects_noncanonical_scalars_and_circular_json`,
- * `test_reflective_json_rejects_non_utf8_model_and_snapshot_strings`,
- * `test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot`,
- * `test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources`,
- * `test_session_idempotency_and_closed_session_operations`,
- * `test_sessions_of_one_instance_share_one_lesson_list_and_limit`,
- * `test_recall_all_and_context_ranking_are_deterministic`, `test_subclass_controls_query_rewriting`,
- * `test_query_rewriting_failure_is_sanitized`,
- * `test_learn_uses_pinned_config_and_returns_deterministic_proposals`,
- * `test_learn_rejects_malformed_or_conflicting_actions`,
- * `test_model_construction_failure_is_final_and_sanitized`,
- * `test_structured_binding_failure_is_final_and_sanitized`,
- * `test_learn_provider_failure_is_retryable_and_sanitized`,
- * `test_learn_errors_scrub_the_key_variable_and_saved_login`,
- * `test_structured_output_parser_failure_is_a_final_contract_error`,
- * `test_parsed_response_validation_failure_is_final_and_sanitized`,
- * `test_episode_material_is_capped_in_one_model_call`,
- * `test_huge_current_lessons_cannot_displace_new_episode_evidence`,
- * `test_learning_is_propose_only_and_rejects_a_stale_generation`,
- * `test_commit_is_atomic_idempotent_and_empty_batches_advance_revision`,
- * `test_revise_and_remove_are_learned_and_committed`, `test_learn_and_commit_enforce_final_max_items`,
- * `test_multi_mutation_commit_failure_has_no_partial_effect`,
- * `test_concurrent_same_generation_commits_have_one_winner`,
- * `test_reset_preserves_commit_ledger_ordering_and_old_recall`,
- * `test_reflective_memory_implements_protocol_and_imports_only_lower_layers`,
- * `test_old_reflective_snapshot_rejects_active_retired_options` and
- * `test_session_reflects_under_the_memory_key`. Also ported: the `organization`, `project` and
- * `headers` rows of `tests/engine/test_run_connection_settings.py::
- * test_reflective_memory_refuses_connection_settings`, in the constructor test.
- *
- * TS-only: `bigint` limits, `null` limits as unset, a limit one past 2^53 − 1 refused, a `number` int
- * in a host `llm_config` block accepted (host intake gives a `bigint`); in the constructor, a blank
- * `model`, the exact `api_key` message, a non-object `llmConfig` (`TypeError`) and `createParent: 1`
- * (`TypeError`); a snapshot whose `revision` is `2n ** 60n` (beyond 2^53 − 1, with its cause
- * message), whose `epoch` is `-1n` or whose `version` is `1n` is `reflective.invalid_snapshot`; one
- * row for each of commit's batch, commit-id and mutation messages; "recall rejects an invalid
- * context and a non-string query"; an async `rewriteQuery` override is awaited (in
- * `test_subclass_controls_query_rewriting`); a re-entrant `memory.close()` from inside it is
- * `reflective.busy`; a host mutation whose payload holds `-0` is `reflective.invalid_batch`
- * "mutation batch cannot be encoded canonically", with a `TypeError` cause; the closing
- * `memory.close()` in `test_session_idempotency_and_closed_session_operations` (a failed recall or
- * learn releases its operation); in `test_learn_rejects_malformed_or_conflicting_actions`, one row
- * for each of learn's other action messages, and every row's code and message; in
- * `test_learn_uses_pinned_config_and_returns_deterministic_proposals`, the request's roles, system
- * text and output format, and the mutation id's digest; in
- * `test_parsed_response_validation_failure_is_final_and_sanitized`, one row for each other reply
- * defect, and a reply with absent `lesson_id`/`text` accepted; `close()` while `learn` awaits
- * the model is `reflective.busy`, and the learn then fails `reflective.session_closed` when the
- * session closed meanwhile; an episode holding `Infinity` reaches the prompt as `Infinity`;
- * `onRetry` sees a retried `ProviderError`, scrubbed of the call's credentials;
- * `REFLECTION_SCHEMA` is frozen; `boundedJsonMaterial` counts code points;
- * `visibleInteractionJson` writes sorted keys.
- *
- * Changed:
- * - Every backend gets `baseEnv()`, an environment map standing in for Python's `conftest.py`
- *   variables, and each test starts from the built-in defaults.
- * - `installModel(replies)` stands in for Python's `_install_model`: the backend's `createModel`
- *   option records each config and returns a `ScriptedModel` answering with the next scripted
- *   reply, a `Response` whose text is the JSON of `{actions}`, or an `Error`. Python's one fixed
- *   result becomes one reply per learn, and the prompt is read off the recorded requests.
- * - `test_constructor_and_protocol_are_exact`: `1.0` is the int 1 in JS, so `true`, `1.5` and `"1"`
- *   stand in for the non-int rows; `isMemory` replaces the protocol check.
- * - `test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them`: an `env` counting reads
- *   of `YIAN_DEFAULT_PROVIDER` stands in for patching `resolve_model_config`.
- * - `test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned`: `fail_default` is an
- *   `env` that throws a sentinel on `YIAN_DEFAULT_PROVIDER`, so the cause is the sentinel; the learn
- *   half's `env` throws on a reread of it.
- * - `test_snapshot_is_defensive_and_foreign_restore_is_conservative`: a snapshot is deep-frozen, so
- *   the assignment throws `TypeError` and the next snapshot is unchanged.
- * - `test_snapshot_rejects_noncanonical_scalars_and_circular_json`: the snapshot rows edit a
- *   `structuredClone`.
- * - `test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot`: TS has no memory nesting
- *   limit, so the 1 500-level `extra` field fails only as an extra field.
- * - `test_old_reflective_snapshot_rejects_active_retired_options`: TS reads no Python-era snapshot,
- *   so every row fails on the `sandbox: null`/`cwd: null` keys before its own field; each row is
- *   still `reflective.invalid_snapshot`.
- * - `test_concurrent_same_generation_commits_have_one_winner`: JS commits are synchronous, so two
- *   sessions of one generation commit in turn and the second is stale.
- * - `test_structured_binding_failure_is_final_and_sanitized`: the model is the catalog's one model
- *   without native structured output (`no-structured-sentinel`), whose plan is the prompt strategy;
- *   the cause is a `TypeError`.
- * - `test_structured_output_parser_failure_is_a_final_contract_error`: the reply's text is not
- *   JSON, so the cause is the `StructuredOutputError` `plan.parse` throws.
- * - `test_parsed_response_validation_failure_is_final_and_sanitized`: the cause is the hand-written
- *   check's `TypeError`, which holds none of the reply's text.
- * - `test_learn_errors_scrub_the_key_variable_and_saved_login`: an `env` map without defaults and a
- *   saved login through `AuthStore` stand in for the process environment.
- * - `test_reflective_episode_material_retains_the_physical_execution_sequence`: the episode material
- *   is read from the learner's prompt, since it is private.
- * - `test_reflective_memory_implements_protocol_and_imports_only_lower_layers`: `isMemory`; the
- *   module's import specifiers have no path segment in Python's forbidden list; `logJson` encodes
- *   the snapshot.
- * - Recall's messages say "context must be a RecallContext or null" and "rewriteQuery() must return
- *   a string" where Python's say `None` and `rewrite_query()`.
- * - JSON ints written into snapshots are `bigint`s; `recall` and `learn` are async; `with` blocks
- *   are `try`/`finally` around `close()`.
- *
- * Not ported: `test_old_api_snapshot_keeps_digest_and_api_semantics` (TS reads no Python-era
- * snapshot, so there is no retired-key branch).
+ * Process-local reflective memory: snapshots and restore, sessions, recall, learning through a
+ * scripted model, and commits. `baseEnv()` is each backend's environment, and `installModel(replies)`
+ * makes the backend's `createModel` answer with one scripted reply per learn.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -165,7 +58,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-/** Python's `conftest.py` environment: an empty private store and an explicit model default. */
+/** The test environment: an empty private store and an explicit model default. */
 function baseEnv(overrides: Record<string, string> = {}): Env {
   const vars = new Map([
     ["YIAN_AUTH_FILE", join(home, "auth.json")],
@@ -191,7 +84,7 @@ function snapshotOf(memory: ReflectiveMemory, snapshot?: JsonObject): JsonObject
   }
 }
 
-/** Open a run, await `fn` with it and close it (Python's `with memory.open_run() as session`). */
+/** Open a run, await `fn` with it, and close it. */
 async function withRun<T>(
   memory: ReflectiveMemory,
   fn: (session: ReflectiveSession) => T | Promise<T>,
@@ -255,7 +148,7 @@ function reply(actions: readonly Action[]): Response {
 }
 
 /**
- * Python's `_install_model`: a `createModel` option that records each config and returns a new
+ * A `createModel` option that records each config and returns a new
  * `ScriptedModel` (named by the config) answering with the next reply of the shared list.
  */
 function installModel(replies: readonly (Response | Error)[]) {
@@ -287,7 +180,7 @@ function promptOf(request: Request): string {
   return request.messages.at(-1)!.text();
 }
 
-/** The number of code points in `text` (Python's `len`). */
+/** The number of code points in `text`. */
 function codePoints(text: string): number {
   return Array.from(text).length;
 }
@@ -317,7 +210,7 @@ function promptBudget(memory = "reflective"): number {
   );
 }
 
-/** Learn `context()` in a fresh run of `memory` (Python's `_learn_actions` after installing). */
+/** Learn `context()` in a fresh run of `memory`. */
 function learnOnce(memory: ReflectiveMemory): Promise<MemoryMutation[]> {
   return withRun(memory, (session) => session.learn(context()));
 }
@@ -654,7 +547,7 @@ test("recall all and context ranking are deterministic", async () => {
 });
 
 test("subclass controls query rewriting", async () => {
-  // TS-only: the async override is awaited.
+  // The async override is awaited.
   class AppleMemory extends ReflectiveMemory {
     override rewriteQuery(): string {
       return "apple";
@@ -843,7 +736,7 @@ test("reset preserves commit ledger ordering and old recall", async () => {
   old.close();
 });
 
-test("commit rejects invalid batches, commit ids and mutations with Python's messages", async () => {
+test("commit rejects invalid batches, commit ids and mutations with their messages", async () => {
   const memory = newMemory({ llmConfig: OLLAMA });
   await withRun(memory, (session) => session.commit("seed", [mutation("seed", "add", "kept", "kept lesson")]));
   const source = { run_id: "run-1" };
@@ -1019,7 +912,7 @@ test("learn rejects malformed or conflicting actions", async () => {
       "reflective.contract",
       "actions cannot target one lesson more than once",
     ],
-    // TS-only: learn's other action messages.
+    // Learn's other action messages.
     [
       [{ action: "noop", lesson_id: "kept", text: null }],
       "reflective.contract",
@@ -1169,7 +1062,7 @@ test("structured output parser failure is a final contract error", async () => {
 test("parsed response validation failure is final and sanitized", async () => {
   const replies = [
     { actions: [{ action: "add", lesson_id: "one", text: "text-secret", unexpected: "response-secret" }] },
-    // TS-only: the other reply defects.
+    // The other reply defects.
     {},
     { actions: [{ action: "noop" }], extra: "response-secret" },
     { actions: "response-secret" },
@@ -1195,7 +1088,7 @@ test("parsed response validation failure is final and sanitized", async () => {
     expect(cause).not.toContain("text-secret");
   }
 
-  // TS-only: absent `lesson_id` and `text` are `null`.
+  // Absent `lesson_id` and `text` are `null`.
   const absent = installModel([reply([{ action: "noop" }])]);
   expect(await learnOnce(newMemory({ llmConfig: OLLAMA, createModel: absent.createModel }))).toEqual([]);
 });

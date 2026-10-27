@@ -1,27 +1,7 @@
 /**
  * The typed value system: inference (`buildValue`), the declared-type write boundary
- * (`buildValueAs`) and the wire form, a port of `tests/engine/test_segments.py`. A round trip
- * goes through `toWire`, the run log's encoder and lossless reader, and `TypedValue.fromWire`.
- *
- * Also here: the wire half of
- * `test_run_records.py::test_recorded_object_past_the_nesting_limit_still_replays`, and from
- * `test_untyped_output_json.py`, `test_reject_non_json_accepts_files_only_when_asked` and
- * `test_reject_non_json_accepts_json_values` through `buildValue` (which walks its value, as
- * Python's `canonical_typed` did with `reject_non_json(files=True)`) and `buildValueAs(ANY, …)`.
- *
- * TS-only: the `fromWire` refusal table and its messages (Python's strict decode is
- * `runtime/log.py::_decode_typed` with `ANY_VALUE_ADAPTER`'s strict check, tested there through
- * the log reader), "fromWire accepts a list[float] holding an int", "toWire writes a nested
- * FileRef as its mapping", the frozen-carrier row, "unwraps a TypedValue", "a record keeps the
- * value's key order", "a record stores a __proto__ field as data", and the rows for `-0`, NaN,
- * lone surrogates and other non-JSON parts at the build boundary.
- *
- * Not ported: checks of Python's carrier subclasses (`type(back) is IntegerValue`); TS has one
- * `TypedValue` class, so a round trip checks the kind and the JS type of the value.
- * `test_type_check_error_adds_only_a_valid_keyword_path` (`types.test.ts` has TS's
- * `TypeCheckError` rows), `test_record_non_string_key_keeps_the_record_path` and
- * `test_record_uses_the_declared_name_for_equal_string_subclass_keys` (a record key is always
- * an exact string), and the tuple rows of `test_untyped_output_json.py` (no tuples in TS).
+ * (`buildValueAs`) and the wire form. A round trip goes through `toWire`, the run log's encoder and
+ * lossless reader, and `TypedValue.fromWire`, and checks the kind and the JS type of the value.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -578,8 +558,8 @@ describe("TypedValue.fromWire refuses", () => {
     ["a non-text kind", { kind: 1n, value: 1n }],
     ["None holding a value", { kind: "None", value: 0n }],
     ["int holding a float", { kind: "int", value: 1 }],
-    // A deliberate difference: Python's strict adapter accepts the int 1 for float; nothing
-    // writes a scalar `float` holding an int (such a slot stores kind `int`), so TS refuses it.
+    // Nothing writes a scalar `float` holding an int (such a slot stores kind `int`), so it is
+    // refused.
     ["float holding an int", { kind: "float", value: 1n }],
     ["float holding NaN", { kind: "float", value: NaN }],
     ["bool holding an int", { kind: "bool", value: 1n }],

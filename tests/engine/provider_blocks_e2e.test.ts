@@ -1,13 +1,4 @@
-/**
- * A port of `tests/engine/test_provider_blocks_e2e.py`: provider blocks cascade through a real run
- * into each node's request body.
- *
- * Ported: its one test. The provider calls go through the real `chatModelFromConfig` with a
- * recording `send` (`recording`) that answers each node with its name, an Anthropic Messages or
- * OpenAI Responses stream by URL, where Python routes both SDK clients to one
- * `httpx.MockTransport` server per provider. The run's environment is the file's (`hostEnv`) plus
- * the two provider keys.
- */
+/** Provider blocks cascade through a real run into each node's request body. */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -71,7 +62,7 @@ test("blocks merge per field and reach each request body", async () => {
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("a");
 
-  // Python's two servers, one per SDK client, are the two hosts here.
+  // Each node's request goes to its provider's host.
   const urls = Object.fromEntries(models.requests.map((sent) => [nodeOf(sent), sent.url]));
   const bodies = Object.fromEntries(models.requests.map((sent) => [nodeOf(sent), sent.body]));
   expect(urls).toEqual({

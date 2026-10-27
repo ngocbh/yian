@@ -1,26 +1,6 @@
 /**
- * A port of `tests/engine/test_long_int_boundaries.py`: an int over 4300 digits at each binding
- * and output boundary a run crosses. Each run is resumed from its log, which must end the same.
- *
- * Ported: every row but the one already ported below.
- *
- * Changed: ints are `bigint`s with no digit limit (decisions 4a, 4b, 23), so a 5000-digit int
- * crosses every boundary whole where Python fails at the first one with its digit-limit message.
- * The binding, node output, flow output, value entry, MAP `over` and LOOP seed rows succeed with
- * the whole value; the CODE nodes that returned `1` return their input instead (and the MAP body
- * binds `y`), so the result shows the value that crossed, and a resumed run must give the same
- * output. A long int bound or returned where `str` is declared is a type mismatch
- * (`binding.type`, `contract.output`), whose message shows the int's digits cut at the
- * shown-value cap; so is the partial-record field typed `str`, and the `str` default of
- * `test_a_long_int_default_is_rejected_before_its_contract`, whose `BindingError` keeps the code
- * `binding.evaluate`. The other two partial-record fields accept the int, and the constructor
- * mismatch shows the digits cut at the cap where Python shows `<int with 5000 digits>`. CODE
- * bodies are JS (`10n ** 4999n`). `test_a_long_int_in_a_partial_record_output_names_the_limit` is
- * ported whole here: `run_state_outcomes.test.ts` accepts a long int in a declared and an opaque
- * field, but has no mistyped-field row.
- *
- * Already ported: `test_a_long_int_default_is_rejected` in `flow_inputs.test.ts` (`applyDefaults
- * accepts a long int default`).
+ * An int over 4300 digits at each binding and output boundary a run crosses. Each run is resumed
+ * from its log, which must end the same.
  */
 
 import { afterAll, expect, test } from "bun:test";

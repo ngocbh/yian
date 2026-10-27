@@ -1,8 +1,8 @@
 /**
  * Tests for the structured-output schema transforms in `src/llm/json_schema.ts`: `hasOpenSchema`,
- * `functionTool`, `constAsEnum`, `strictJsonSchema`, `moveAzureKeywords` and `anthropicOutputSchema`,
- * checked against Python yian's (and LangChain's, openai's and anthropic's) results for the schemas
- * `typeToSchema` emits, and on hand-written schemas.
+ * `functionTool`, `constAsEnum`, `strictJsonSchema`, `moveAzureKeywords` and
+ * `anthropicOutputSchema`, checked against recorded results (LangChain's, openai's and
+ * anthropic's among them) for the schemas `typeToSchema` emits, and on hand-written schemas.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -19,16 +19,16 @@ import {
 } from "../../src/llm/json_schema.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 
-/** A schema Python's `type_to_schema(...).model_json_schema()` emits, and its `has_open_schema`. */
+/** A schema `typeToSchema` emits, and whether it is open. */
 interface Fixture {
   open: boolean;
   schema: JsonObject;
 }
 
 /**
- * Python's schemas for the open-schema test's types (`open_schema_test:*`), the Azure keyword test's
- * types (`azure_test:*`) and the record, bounded, open, union, reflection and other schemas Python's
- * `type_to_schema` builds (`corpus:*`): ints are `bigint`s, floats numbers.
+ * The schemas for the open-schema test's types (`open_schema_test:*`), the Azure keyword test's
+ * types (`azure_test:*`) and the record, bounded, open, union, reflection and other schemas
+ * `typeToSchema` builds (`corpus:*`): ints are `bigint`s, floats numbers.
  */
 const FIXTURES: Record<string, Fixture> = {
   "open_schema_test:object": {
@@ -791,7 +791,7 @@ const FIXTURES: Record<string, Fixture> = {
   },
 };
 
-/** Python's `convert_to_openai_tool(...)["function"]` for the `corpus:*` fixtures. */
+/** The OpenAI function tool (`functionTool`) for each `corpus:*` fixture. */
 const FUNCTION_TOOLS: Record<string, { name: string; description: string; parameters: JsonObject }> = {
   "corpus:Rec": {
     name: "Record",
@@ -937,7 +937,7 @@ const FUNCTION_TOOLS: Record<string, { name: string; description: string; parame
   },
 };
 
-/** Python's `_const_as_enum` of `corpus:Union`: each `kind` const becomes a one-value enum, appended last. */
+/** `constAsEnum` of `corpus:Union`: each `kind` const becomes a one-value enum, appended last. */
 const G_UNION: JsonObject = {
   $defs: {
     buy: {
@@ -1445,7 +1445,7 @@ describe("functionTool", () => {
 });
 
 describe("constAsEnum", () => {
-  // Python's `_const_as_enum` table; each row is named by its encoded input (`%j` can't write a `bigint`).
+  // Each row is named by its encoded input (`%j` can't write a `bigint`).
   const rows: [JsonObject, JsonObject][] = [
     [{ const: "a", enum: ["a", "b"] }, { enum: ["a"] }],
     [{ const: "a", enum: ["b"] }, { const: "a", enum: ["b"] }],
@@ -1589,7 +1589,7 @@ describe("strictJsonSchema", () => {
 });
 
 describe("moveAzureKeywords", () => {
-  test("lists Azure's rejected keywords in Python's order", () => {
+  test("lists Azure's rejected keywords in a fixed order", () => {
     expect(AZURE_STRICT_UNSUPPORTED).toEqual([
       "minLength",
       "maxLength",

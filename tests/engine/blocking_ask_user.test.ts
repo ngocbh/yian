@@ -1,34 +1,7 @@
 /**
- * An AGENT keeps blocking human interaction inside one live model/tool loop: a port of
- * `tests/engine/test_blocking_ask_user.py`.
- *
- * The rows evaluate an AGENT through `evalNode` (`drive`) or `node.run`, its model a
- * `ScriptedModel` from `models` where Python patches `model_from_config`, and the `ask_user`
- * handler in the run's `ToolSet`. A host stop is the node's aborted signal: a stopped node rejects
- * with the signal's reason where Python raises `_HostStop`. The `ask_user` request is camelCase.
- *
- * Ported: `test_ask_user_answer_is_a_tool_message_in_the_same_loop`,
- * `test_model_options_reach_the_handler_and_the_answer_returns`,
- * `test_two_blocking_questions_keep_one_conversation`,
- * `test_model_tool_calls_run_in_exact_returned_order`,
- * `test_ask_user_requires_an_explicit_authored_grant`,
- * `test_ask_user_exception_propagates_from_the_live_node` and
- * `test_post_assert_fires_after_blocking_ask`.
- *
- * Changed: `test_agent_resolves_model_factory_at_call_time` checks that the node builds its model
- * through `models` when it runs, not before (the node has an `llmConfig`: TS refuses an AGENT
- * with no provider). `test_stop_during_model_call_prevents_returned_tool_side_effect`: the model
- * aborts the signal during its call, then returns the tool call. `test_stop_during_tool_resolution_prevents_model_binding`:
- * the `ToolSet`'s `resolve` aborts the signal (patched on the instance), and no request reaches
- * the model.
- * `test_stop_during_structured_attempt_prevents_retry`: the prompted structured plan (`vllm`)
- * with retries, the model aborting the signal and answering text that doesn't parse.
- * `test_structured_output_succeeds_after_blocking_ask`: the structured call after the loop (the
- * native `json_schema` plan) answers the value's JSON text, where Python's LangChain carrier
- * returns the validated model.
- *
- * Not ported: `test_agent_has_no_continuation_or_engine_llm_cap_surface` reads Python's module
- * attributes and signatures.
+ * An AGENT keeps blocking human interaction inside one live model/tool loop: an `ask_user` answer
+ * returns as a tool message in the same conversation, and a stop during a model or tool call
+ * prevents its side effects.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

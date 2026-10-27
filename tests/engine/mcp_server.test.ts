@@ -1,26 +1,4 @@
-/**
- * `McpServer` opens a server, lists its tools once, and closes, a port of
- * `tests/engine/test_mcp_server.py`: `test_bad_arguments_raise_naming_the_field_and_start_nothing`,
- * `test_label_option_names_the_thread_and_url_label_is_the_host`,
- * `test_with_block_opens_lists_tools_and_closes`, `test_open_for_run_records_the_run_token`,
- * `test_paging_lists_every_page`, `test_more_than_100_pages_fails_to_open`,
- * `test_tool_list_is_a_snapshot`, `test_a_tool_listed_twice_fails_to_open_naming_it`,
- * `test_a_tool_whose_schema_is_not_an_object_is_rejected`,
- * `test_missing_command_fails_to_open_with_the_os_error`, `test_server_stderr_is_in_the_connect_error`,
- * `test_hung_server_times_out_and_is_killed`,
- * `test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent`,
- * `test_keyboard_interrupt_during_open_closes_the_server` (as an aborted `signal`),
- * `test_close_from_another_thread_during_open_fails_the_open` and
- * `test_a_close_leaves_alone_a_connection_opened_while_it_waited`,
- * `test_http_server_lists_tools_and_sends_headers` and
- * `test_http_server_that_is_down_fails_without_leaking_the_url` (each HTTP row in the `auto` and
- * `legacy` modes), and the refusal of a redirect at open; the MCP error classes; and yian's stdio
- * transport driven by a bare SDK client, as `tests/engine/test_mcp_fake_server.py` drives the fake
- * server. With `YIAN_TEST_NODE` set to a Node binary, the built code on Node: the stdio and redirect
- * scenarios, the close in a host with nothing else to do, and `test_yian_tools_imports_without_the_sdk`
- * and `test_open_without_the_sdk_names_the_extra` (the SDK hidden by a resolve hook). Tool calls are
- * in `mcp_calls.test.ts`, call errors in `mcp_errors.test.ts`.
- */
+/** `McpServer` opens a server, lists its tools once, and closes. */
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -136,7 +114,7 @@ describe("mcpServer arguments", () => {
     });
   }
 
-  test("the messages follow Python's wording", () => {
+  test("the messages name the option and the value's type", () => {
     expect(() => build({})).toThrow("mcpServer needs exactly one of command or url");
     expect(() => build({ command: 3 })).toThrow("mcpServer command must be a string, got number");
     expect(() => build({ command: "" })).toThrow("mcpServer command must not be empty");
@@ -176,7 +154,7 @@ describe("mcpServer arguments", () => {
     );
   });
 
-  test("a null option counts as absent, as Python's None", () => {
+  test("a null option counts as absent", () => {
     const server = build({
       command: "x",
       url: null,
@@ -640,7 +618,7 @@ describe("McpServer open and close", () => {
     throw new Error("expected a rejection");
   };
 
-  /** A stand-in lister serving `tools` as one listing, as Python's stand-in client does. */
+  /** A stand-in lister serving `tools` as one listing. */
   const standIn = (tools: unknown[], capabilities: Record<string, unknown> = { tools: {} }) => {
     const calls: unknown[] = [];
     return {
@@ -672,7 +650,7 @@ describe("McpServer open and close", () => {
   });
 
   test(
-    "test_with_block_opens_lists_tools_and_closes",
+    "open lists the tools and close stops the server",
     async () => {
       const listed = await bareListing();
       const file = marker();
@@ -710,7 +688,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_label_option_names_the_thread_and_url_label_is_the_host",
+    "the label option names the server and a url's label is its host",
     async () => {
       const s = server(["--only", "echo"], { label: "tools" });
       await s.open();
@@ -721,7 +699,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_open_for_run_records_the_run_token",
+    "open for run records the run token",
     async () => {
       const s = server(["--only", "echo"]);
       try {
@@ -737,7 +715,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_paging_lists_every_page",
+    "paging lists every page",
     async () => {
       const two = await server(["--pages", "2"]).open();
       expect(two.tools.map((tool) => tool.name)).toEqual(["page1", "page2"]);
@@ -748,7 +726,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_more_than_100_pages_fails_to_open",
+    "more than 100 pages fails to open",
     async () => {
       const s = server(["--pages", "101"], { label: "paged" });
       const error = await rejection(s.open());
@@ -762,7 +740,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_tool_list_is_a_snapshot",
+    "tool list is a snapshot",
     async () => {
       const s = await server().open();
       const names = s.tools.map((tool) => tool.name);
@@ -775,7 +753,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_a_tool_listed_twice_fails_to_open_naming_it",
+    "a tool listed twice fails to open naming it",
     async () => {
       const s = server(["--twins"], { label: "listing" });
       const error = await rejection(s.open());
@@ -786,7 +764,7 @@ describe("McpServer open and close", () => {
     SLOW,
   );
 
-  test("test_a_tool_whose_schema_is_not_an_object_is_rejected", async () => {
+  test("a tool whose schema is not an object is rejected", async () => {
     // The SDK refuses such a listing on both ends, so a stand-in lister serves it.
     const lister = standIn([{ name: "loose", inputSchema: { properties: {} } }]);
     const error = await rejection(listAll(lister, listing("listing")));
@@ -844,7 +822,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_missing_command_fails_to_open_with_the_os_error",
+    "missing command fails to open with the os error",
     async () => {
       const s = tracker.track(mcpServer({ command: "/nonexistent/yian-no-such-server" }));
       const error = await rejection(s.open());
@@ -859,7 +837,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_server_stderr_is_in_the_connect_error",
+    "server stderr is in the connect error",
     async () => {
       const error = await rejection(server(["--stderr", "boom"], { label: "noisy" }).open());
       expect(error).toBeInstanceOf(McpConnectError);
@@ -872,7 +850,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_hung_server_times_out_and_is_killed",
+    "hung server times out and is killed",
     async () => {
       const file = marker();
       const s = server(["--hang", "--marker", file], { connectTimeout: 1, label: "hung" });
@@ -888,7 +866,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "a connect timeout too small for fixed notation prints as Python's :g does",
+    "a connect timeout too small for fixed notation prints in exponent form",
     async () => {
       const s = server(["--hang", "--marker", marker()], { connectTimeout: 0.00001, label: "hung" });
       const error = await rejection(s.open());
@@ -908,7 +886,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_open_twice_and_tools_when_closed_raise_and_close_is_idempotent",
+    "open twice and tools when closed raise and close is idempotent",
     async () => {
       const s = server(["--only", "echo"], { label: "twice" });
       await s.close();
@@ -934,7 +912,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_close_from_another_thread_during_open_fails_the_open",
+    "a close during open fails the open",
     async () => {
       const file = marker();
       const s = server(["--hang", "--marker", file], { connectTimeout: 20, label: "starting" });
@@ -969,7 +947,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_keyboard_interrupt_during_open_closes_the_server",
+    "an abort during open closes the server",
     async () => {
       const file = marker();
       const s = server(["--hang", "--marker", file], { connectTimeout: 20 });
@@ -986,7 +964,7 @@ describe("McpServer open and close", () => {
   );
 
   test(
-    "test_a_close_leaves_alone_a_connection_opened_while_it_waited",
+    "a close leaves alone a connection opened while it waited",
     async () => {
       const file = marker();
       const s = server(["--only", "echo", "--marker", file]);
@@ -1049,7 +1027,7 @@ describe("McpServer open and close", () => {
   };
 
   for (const mode of MODES) {
-    test(`test_http_server_lists_tools_and_sends_headers (${mode})`, async () => {
+    test(`http server lists tools and sends headers (${mode})`, async () => {
       const http = await serveHttp();
       const s = httpServer({ url: http.url, headers: { "x-test": "v" } }, mode);
       await s.open();
@@ -1077,7 +1055,7 @@ describe("McpServer open and close", () => {
     }, SLOW);
   }
 
-  test("test_http_server_that_is_down_fails_without_leaking_the_url", async () => {
+  test("http server that is down fails without leaking the url", async () => {
     const port = await freePort();
     const messages: string[] = [];
     for (const mode of MODES) {
@@ -1206,7 +1184,7 @@ describe("McpServer on Node, built", () => {
   );
 
   test.skipIf(!NODE)(
-    "test_yian_tools_imports_without_the_sdk",
+    "yian/tools imports without the sdk",
     () => {
       const script = `
         import assert from "node:assert/strict";
@@ -1226,7 +1204,7 @@ describe("McpServer on Node, built", () => {
   );
 
   test.skipIf(!NODE)(
-    "test_open_without_the_sdk_names_the_extra",
+    "open without the sdk names the package to install",
     () => {
       const script = `
         import assert from "node:assert/strict";

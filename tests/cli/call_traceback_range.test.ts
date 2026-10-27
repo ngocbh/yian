@@ -1,7 +1,5 @@
-// Ported from tests/cli/test_call_traceback_range.py: a runtime failure in a nested CALL, MAP or
-// LOOP is framed outermost first at each authored site, against the source the flow was loaded
-// from. Changed: the CODE bodies are TS's, written inline on the line Python's module reference
-// held, and the `e24` seed is inlined.
+// A runtime failure in a nested CALL, MAP or LOOP is framed outermost first at each authored
+// site, against the source the flow was loaded from.
 
 import { expect, test } from "bun:test";
 

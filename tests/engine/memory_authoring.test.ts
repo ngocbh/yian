@@ -1,49 +1,4 @@
-/**
- * Authored flow memory identity in the manifest (`compile/manifest.ts`): rows of
- * `tests/engine/test_memory_authoring.py`.
- *
- * Ported: `test_python_constructors_default_and_validate_authored_memory_fields` (the
- * `CompiledFlow` half), `test_authored_identity_includes_flow_id_and_policy_but_excludes_origin`,
- * `test_decl_config_rejects_host_private_fields`,
- * `test_policy_config_keeps_public_behavior_options`,
- * `test_manifest_keeps_every_value_of_a_forged_policy_config` and
- * `test_expansion_digest_excludes_flow_id_and_agent_memory`.
- *
- * Changed:
- * - `CompiledFlow({}, [])` is `new CompiledFlow(new Map(), [])`, Python's `copy.deepcopy` is
- *   `copyGraph`, and ints in memory configs are `bigint` (`4n`), since a built-in key refuses a
- *   `number`.
- * - `test_python_constructors_default_and_validate_authored_memory_fields`: Python's str subclass
- *   is `new String("flow")`, and its list-for-tuple case has no TS form, since TS only has arrays.
- * - `test_decl_config_rejects_host_private_fields` pins the class and the exact message, with each
- *   config's key path stored next to it, where Python matches "forbidden private key".
- * - `test_manifest_keeps_every_value_of_a_forged_policy_config`: a `MemoryDecl` is frozen and keeps
- *   no private `_config`, so the row forges a `MemoryDecl` (its prototype plus own fields) whose
- *   `config` holds `api_token`, a key the constructor refuses, then swaps that config.
- *
- * Also ported: the AGENT half of `test_python_constructors_default_and_validate_authored_memory_fields`
- * (`memories` is an array where Python's is a tuple).
- *
- * The harvested `load-agent/engine_memory_authoring__retired_memory_policy_on_an_agent` (the
- * `ordinary-agent` row of `test_retired_memory_policy_is_a_located_migration_error`) is pinned,
- * as `parseNodes` reads it; so is the ok case
- * `load-agent/engine_memory_authoring__inline_body_agent_memory_loads`, through `assembled`.
- *
- * Ported through `loadFlow` (a CODE reference is `./fixtures/compose_codefns.ts:echo`, loaded
- * against the conformance dir): `test_full_root_retains_flow_owned_policy_with_one_origin` (2),
- * `test_full_nested_definition_retains_flow_owned_policy_and_semantic_id`,
- * `test_compact_root_projects_policy_to_its_agent`,
- * `test_flat_agent_definition_projects_policy_to_its_agent`,
- * `test_compose_stamps_decl_sites_for_root_def_and_inline_owners`,
- * `test_non_agent_node_rejects_long_term_memory_at_the_authored_value` (2),
- * `test_malformed_flow_declaration_is_located_at_its_authored_occurrence` (7), the other six rows
- * of `test_retired_memory_policy_is_a_located_migration_error`,
- * `test_inline_body_rejects_flow_policy_but_allows_child_agent_policy`,
- * `test_authored_policy_config_rejects_host_private_fields` (each config's path and key as in
- * the decl rows) and `test_compose_loaded_flow_id_changes_the_previous_memoryless_identity`. The
- * error rows pin the whole message, where Python matches a pattern; config ints are `bigint`; a
- * node without memories has no own `memories` field, as Python's `__dict__` check reads it.
- */
+/** Authored flow memory identity in the manifest (`compile/manifest.ts`). */
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -70,7 +25,7 @@ afterEach(() => forget());
 
 const ROOT = new DeclSite([], ["root"], null);
 
-/** Python's private-key configs, each with the path and key the refusal names. */
+/** Private-key configs, each with the path and key the refusal names. */
 const PRIVATE_CONFIG_CASES: [string, string, Record<string, unknown>][] = [
   ["config.nested", "clientSecret", { nested: { clientSecret: "private" } }],
   ["config.nested", "secretKey", { nested: { secretKey: "private" } }],

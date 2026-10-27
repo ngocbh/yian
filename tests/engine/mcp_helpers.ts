@@ -1,6 +1,6 @@
 /**
- * Helpers for tests that run the fake MCP server in `tests/fixtures/mcp/`, a port of yian's
- * `tests/engine/mcp_helpers.py`. They import no `bun:test`, so they also run built on Node.
+ * Helpers for tests that run the fake MCP server in `tests/fixtures/mcp/`. They import no
+ * `bun:test`, so they also run built on Node.
  */
 
 import assert from "node:assert/strict";

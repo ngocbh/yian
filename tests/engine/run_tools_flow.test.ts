@@ -1,45 +1,11 @@
 /**
- * `runFlow` and `advance` give each run its own tools and ask handler: a port of
- * `tests/engine/test_run_tools_flow.py`.
+ * `runFlow` and `advance` give each run its own tools and ask handler.
  *
- * An AGENT's model is the test's `ChatModel` given as `models` (a fresh one per build, as
- * Python's fixture patches `model_from_config`); it calls the first tool the request offers, then
- * answers with the tool's result and the offered names, the names as JSON text where Python
- * prints a list repr. A host stop is the handler or tool aborting the run's signal and throwing
- * its reason, where Python raises `_HostStop`; the run rejects with that reason. Two concurrent
- * runs meet at a promise barrier, Python's `threading.Barrier`. Every run sees only the test's
- * credential store in its environment.
- *
- * Ported: `test_run_flow_uses_per_run_tools_and_ask_user_handler`,
- * `test_a_tools_mapping_hides_the_global_registry`,
- * `test_concurrent_runs_never_see_each_others_tools_or_handler`,
- * `test_resume_flow_asks_through_the_handler_passed_to_resume`, the `map` row of
- * `test_each_map_item_and_call_asks_with_its_own_node_id`,
- * `test_agent_sees_the_union_of_three_host_filled_groups`,
- * `test_concurrent_runs_with_different_toolboxes_never_cross`, `test_bad_groups_fail_at_run_start`
- * (all three rows), `test_resume_uses_the_group_contents_passed_to_resume`, the `call` and `loop`
- * rows of `test_a_missing_group_in_a_child_flow_fails_at_run_start` and
- * `test_an_unresolvable_plain_grant_fails_at_run_start` (both rows). A run-start refusal is a
- * `RangeError` where Python raises `ValueError`, and the missing-group message lists the run's
- * groups as JSON text (`["toolbox","workspace"]`, decision 7).
- *
- * Changed: the asks are TOOL `ask` nodes, answered by the `ask` handler, where Python's are
- * HUMAN_INPUT nodes answered by `ask_user` (TS yian has no HUMAN_INPUT kind). So
- * `test_human_input_without_a_run_handler_fails_the_node` is refused at run start, before the log
- * exists, where Python fails the node. `test_resume_uses_the_group_contents_passed_to_resume`: the run records the specs of
- * the tools its AGENTs grant, so a resume whose group holds another tool is refused, and the
- * resume uses a tool of the same spec that acts differently (Python resumes with another tool).
- * `test_bad_tools_fail_before_the_log_is_created`: TS tools are `FunctionTool`s, tool
- * groups (arrays of them) and the `ask_user` handler (a function), so a list, a non-function
- * `ask_user` entry and an empty key are each refused with a `TypeError` before the log exists, as
- * in Python, and a bare function under any other key is refused too.
- *
- * Covered by `run-leaves/run_tools_flow__each_loop_occurrence_asks_with_its_own_node_id`:
- * `test_each_loop_occurrence_asks_with_its_own_node_id`; by
- * `run-leaves/run_tools_flow__each_call_asks_with_its_own_node_id`: the `call` row of
- * `test_each_map_item_and_call_asks_with_its_own_node_id`; by
- * `run-leaves/engine_run_tools_flow__a_missing_group_in_a_mapped_child_fails_at_run_start`: the
- * `map` row of `test_a_missing_group_in_a_child_flow_fails_at_run_start`.
+ * An AGENT's model is the test's `ChatModel` given as `models` (a fresh one per build); it calls
+ * the first tool the request offers, then answers with the tool's result and the offered names as
+ * JSON text. A host stop is the handler or tool aborting the run's signal and throwing its reason;
+ * the run rejects with that reason. Two concurrent runs meet at a promise barrier. Every run sees
+ * only the test's credential store in its environment.
  */
 
 import { afterAll, afterEach, expect, test } from "bun:test";

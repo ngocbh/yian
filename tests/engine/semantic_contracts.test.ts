@@ -1,30 +1,7 @@
 /**
- * The provenance-bearing semantic IR vocabulary of `nodes/contracts.ts`, a port of
- * `tests/engine/test_semantic_contracts.py`: the carriers' fields and freezing, the one-layer
- * `asBinding`/`bindingSource` helpers, the `ContractOrigins` index (canonical order, rejected
- * entries, nearest-ancestor lookup), `Parameter` default states, `ValueContract`'s fresh origin
- * index, `PartialRecordContract`'s rejected shapes, and origin mapping on every carrier.
- *
- * Changed: `fields()` order is the own-key order of an instance, with camelCase names; a frozen
- * dataclass is a frozen object, and `FrozenInstanceError` is the `TypeError` an assignment to a
- * frozen object throws in a module; dataclass `==` is `toEqual`; `ValueError` is `RangeError`.
- *
- * It also ports the output contract rows: a partial record's closed shape and known fields, and
- * field reads on fieldless types. A `FileRef` stands in for Python's `object()` in an opaque
- * field.
- *
- * TS-only: `SeedConnection` (a name, an index and name, a negative index, an empty name, a
- * three-part path), `ChildFlowBoundary` (equal or empty ids), a frozen `HostToolCall` and
- * `Parameter.replace`, which no Python unit test covers; `outputContractType` (each arm and a non-contract),
- * `outputContractFileType` and `fileFieldsType`, `fileFieldError`'s text, `outputContractOrigin`
- * (a partial record field, a non-string head), and `validateOutputContract` keeping an int in a
- * `float` field, a `__proto__` field as data, its missing and unknown field messages, and a
- * `TypedValue`'s plain value under a null contract; and `sameOutputContract`, the TS form of the
- * contracts' dataclass `==` (types, origins by key in order, partial record fields, `null`).
- *
- * Not ported: the rows that differ from a good one only by a list where Python wants a tuple
- * (`ContractOrigins(entries=[])`, a list path, `PartialRecordContract(fields=[])`): TS has only
- * arrays.
+ * The provenance-bearing semantic IR vocabulary of `nodes/contracts.ts`: the carriers' fields and
+ * freezing, the one-layer `asBinding`/`bindingSource` helpers, the `ContractOrigins` index, `Parameter`
+ * default states, the output contracts, and origin mapping on every carrier.
  */
 
 import { expect, test } from "bun:test";
@@ -236,7 +213,6 @@ test.each<[string, ConstructorParameters<typeof Parameter>[1], RegExp]>([
   expect(() => new Parameter("value", options)).toThrow(message);
 });
 
-// TS-only: `Parameter.replace` stands in for Python's `dataclasses.replace`.
 test("parameter replace keeps every field it isn't given and rechecks the result", () => {
   const contract = new ValueContract(Type.scalar(ValueKind.STRING));
   const parameter = new Parameter("value", {

@@ -1,28 +1,6 @@
 /**
- * AGENT skill grants: mirrors `tests/engine/test_agent_skills.py`.
- *
- * Ported: `test_agent_rejects_invalid_skill_grants` (5 rows) and
- * `test_agent_skill_grants_default_to_none`; `test_missing_grant_fails_the_node` and
- * `test_grant_without_a_skills_mapping_fails_the_node`, each as its `grantedSkills` half and its
- * node-failure half through `evalNode` (`drive`), which also checks that no model is built;
- * `test_no_grant_or_no_supply_keeps_the_system_prompt_byte_for_byte`,
- * `test_load_skill_is_not_callable_without_a_grant`, `test_all_grants_every_supplied_skill`,
- * `test_granted_skills_are_listed_and_loaded_on_demand` and `test_escape_attempt_fails_the_node`
- * through `evalNode`, with a `ScriptedModel` from `models` and the `review` skill's directory in a
- * temp dir; `test_memory_context_gets_the_system_prompt_without_the_listing` through `forward`.
- *
- * Ported (adapted): `test_only_nodes_with_the_skills_trait_receive_skills`, on a local probe that
- * records its capabilities where Python's `FuncNode` would refuse an unexpected keyword: a node
- * without `needsSkills` gets no `skills`, and one with it gets the host's map itself.
- *
- * Changed: the grant checks are called directly where Python runs the node through `eval_node`;
- * a list of names in a message is written in the text form (`["absent"]`, Python
- * `['absent']`). `test_skills_with_structured_output_still_run_the_tool_loop` runs the real
- * structured call, where Python patches `generate_structured`: the loop's two requests, then a
- * third, structured one that reads the loaded instructions.
- *
- * TS-only: `grantedSkills` returns no skills without a grant, and the granted ones sorted by
- * name.
+ * AGENT skill grants: the grant checks, the skills listing in the system prompt, `load_skill` on
+ * demand, and only nodes with the skills trait receiving skills.
  */
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";

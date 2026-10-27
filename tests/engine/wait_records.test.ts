@@ -3,7 +3,7 @@
  * `inbox_withdrawn`, `interrupted`, `run_cancelled`, `run_failed`), the take form of `pool_commit`, and the record-time exports:
  * their constructors' checks and their canonical wire; the waits fold's empty state on a fresh
  * `RunState`, the reducer refusing the new kinds until it applies them, and `eventBytes`, an
- * event's size. TS-only: Python yian has no inbox or suspension records.
+ * event's size.
  */
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

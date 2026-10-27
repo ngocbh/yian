@@ -1,21 +1,17 @@
 /**
- * The one unified expression evaluator (`evalExpr`), a port of `tests/engine/test_expr_eval.py`.
+ * The one unified expression evaluator (`evalExpr`).
  *
  * These drive `evalExpr(tree, resolve, {item, mode})`, the single evaluator that walks a tree
  * from `parseExpr` against a `resolve` callable. They check computed values, the three
  * missing-reference behaviors by mode, and the semantics a CASE's `else:` routing depends on
  * (a miss is `null`, arithmetic over it raises, an ordered comparison with it is `false`), then
- * the TS-era rules: the number model (an int is a `bigint` at any size, `/` always gives a
- * correctly rounded float), the operator table, and the messages.
+ * the number model (an int is a `bigint` at any size, `/` always gives a correctly rounded float),
+ * the operator table, and the messages.
  *
- * The shipped builtins (`upper`, `lower`, `join`, `render_as_json`) run as themselves, with TS-era
- * rows for the text form `join` writes and the layout `render_as_json` writes; calls to any other
- * name run through stand-ins registered for one test each. `test_binding_default_ref` and
- * `test_nested_default_span_rejected` run through `evalBinding` and `scanTemplate`. Python's `%`
- * formatting, repetition, overflow and digit-limit tests become the TS-era tables below;
- * `_Boom` (a value whose negation raises) has no counterpart, since a value is plain data.
- *
- * TS-only: a long list comprehension evaluates without recursion.
+ * The shipped builtins (`upper`, `lower`, `join`, `render_as_json`) run as themselves, with rows
+ * for the text form `join` writes and the layout `render_as_json` writes; calls to any other name
+ * run through stand-ins registered for one test each. A long list comprehension evaluates without
+ * recursion.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -75,8 +71,7 @@ function expectMessage(text: string, message: string, resolve?: RootResolver): v
   expect(error.message).toBe(message);
 }
 
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
+// Each registration's previous entry (or its absence), put back after the test.
 const saved: [string, TemplateFn | undefined][] = [];
 
 /** Register a stand-in builtin `name` taking `params` and running `call`, for this test only. */
@@ -228,7 +223,7 @@ test("strict-raise: a slice of null names the slice, not a miss an operator hand
   expect(strict("[x[1:] for x in xs]")).toBe("unresolved reference ${x[...]} in expression");
 });
 
-test("ResolveMode holds Python's values and is frozen", () => {
+test("ResolveMode's values, frozen", () => {
   expect({ ...ResolveMode }).toEqual({
     STRICT_RAISE: "strict-raise",
     BINDING_NONE: "binding-none",
@@ -376,8 +371,7 @@ describe("the shipped builtins' TS-era rules", () => {
     expect(evaluate("render_as_json(s)", fromRecord({ s: 'a"b' }))).toBe('"a\\"b"');
   });
 
-  test("render_as_json with indent 4 escapes as Python's json.dumps does", () => {
-    // json.dumps({"s": "a\nb\\c\x01"}, indent=4, ensure_ascii=False)
+  test("render_as_json with indent 4 escapes newlines, backslashes and control characters", () => {
     expect(evaluate("render_as_json(d, 4)", fromRecord({ d: { s: "a\nb\\c\u0001" } }))).toBe(
       '{\n    "s": "a\\nb\\\\c\\u0001"\n}',
     );
@@ -714,7 +708,7 @@ describe("/ gives a correctly rounded float", () => {
     ["8 / 2", 4],
     ["7 / 2", 3.5],
     ["0 / -5", -0],
-    // Beyond 2^53; the expected doubles are Python's `a / b`.
+    // Beyond 2^53; the expected doubles are the correctly rounded quotients.
     ["(2 ** 53 + 1) / 1", 9007199254740992],
     ["(2 ** 54 + 2) / 2", 9007199254740992],
     ["(2 ** 54 + 3) / 2", 9007199254740994],
@@ -726,7 +720,7 @@ describe("/ gives a correctly rounded float", () => {
     ["(10 ** 30 + 7) / 3", 3.333333333333333e29],
     ["-(10 ** 25) / (10 ** 24 + 1)", -10],
     ["(2 ** 1024 - 2 ** 970 - 1) / 1", 1.7976931348623157e308],
-    // Python raises an overflow here; TS gives Infinity.
+    // A quotient beyond the float range is infinity.
     ["10 ** 309 / 1", Infinity],
     ["-(10 ** 400) / 7", -Infinity],
     ["(2 ** 1024 - 2 ** 970) / 1", Infinity],
@@ -766,7 +760,6 @@ describe("% takes the sign of the left", () => {
 });
 
 describe("**", () => {
-  // The expected doubles are Python's.
   test.each([
     ["2 ** -1", 0.5],
     ["10 ** -4", 0.0001],

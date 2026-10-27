@@ -1,13 +1,6 @@
 /**
- * CASE `when:` words that YAML 1.1 read as booleans are text under YAML 1.2 rules, a port of
- * `tests/engine/test_case_yaml12_words.py`.
- *
- * Ported: `test_when_yes_on_a_bool_is_a_load_error`, assembling the flow (`assembleText`) where
- * Python loads it; through `loadFlow` and `runFlow`,
- * `test_yes_and_no_cover_a_literal_input_without_else`. Changed: the CODE references are TS's
- * (`./fixtures/compose_codefns.ts:echo`).
- *
- * The harvested case is pinned at the end.
+ * CASE `when:` words that YAML 1.1 read as booleans are text under YAML 1.2 rules: `when: yes` on a
+ * bool is a load error, and `yes` and `no` cover a literal input without `else:`.
  */
 
 import { expect, test } from "bun:test";

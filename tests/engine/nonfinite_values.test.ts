@@ -1,20 +1,7 @@
 /**
- * Which numbers are yian values, a port of `tests/engine/test_nonfinite_values.py`. In TS yian
- * `±Infinity` is a float and NaN is the only number that isn't a value; host intake
- * (`fromHost`) refuses it with Python's located message form, so the `reject_nonfinite` rows
- * run through `fromHost` with NaN as the number (the rule: infinity and minus infinity are
- * float values, NaN is not a yian value). Also here: how intake reads a `number` as an int or
- * a float, and a huge int in a float slot at the write boundary, which stays an int.
- *
- * Also here: `test_long_ints.py::test_reject_nonfinite_still_reports_nan`.
- *
- * Not ported: `test_an_inferred_float_list_with_a_huge_int_fails_at_its_index` (no int
- * converts to a float in TS, `int-in-float`); the complex-number rows (no complex numbers in
- * TS); the `ObjectValue`, pydantic extras and dataclass rows (a `TypedValue`, a class instance
- * and a dataclass are refused by intake as non-plain objects, see `plain_containers.test.ts`);
- * the cycle half of `test_reject_nonfinite_accepts_finite_values_and_cycles` (intake refuses a
- * cycle); and
- * `test_a_str_subclass_key_becomes_an_exact_str_segment` (a record key is always a string).
+ * Which numbers are yian values: `±Infinity` is a float and NaN is the only number that isn't a
+ * value, refused by host intake (`fromHost`) with a located message. Also how intake reads a
+ * `number` as an int or a float, and a huge int in a float slot at the write boundary.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -75,7 +62,6 @@ describe("NaN at intake", () => {
     expect(error.path).toEqual(path);
   });
 
-  // From test_long_ints.py::test_reject_nonfinite_still_reports_nan.
   test("still reports NaN", () => {
     expect(typeCheckError(() => fromHost(NaN, "input 'n'")).message).toBe(
       "input 'n': NaN is not a yian value",

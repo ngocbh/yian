@@ -1,19 +1,6 @@
 /**
- * Mirrors `tests/engine/test_no_builtin_defaults.py`.
- *
- * Ported: `test_each_layer_wins_over_lower_layers` (over `resolveLlmCascade`) and
- * `test_python_api_resolve_model_config_without_model`.
- *
- * In `run.test.ts` ("an AGENT with no provider fails before the log exists"), with the same
- * checks: `test_no_model_anywhere_fails_before_any_node`.
- *
- * Ported through `runFlow` in the test's environment, a model builder that fails the test
- * (`forbidden`) or serves a `ScriptedModel` given as `models`: `test_provider_without_model_names_that_provider`,
- * `test_synthesized_agent_without_model_names_its_llm_config` (2),
- * `test_run_records_the_layer_that_wins` and
- * `test_default_model_without_provider_is_named_only_when_needed`. Changed: the refusals are
- * `RangeError`s (Python's `ValueError`); the adaptive gate is a TOOL `ask` where Python's is a
- * HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind), so its run passes an ask handler.
+ * No built-in provider or model: each layer wins over lower ones, and a run without a model fails
+ * naming what is missing.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -37,7 +24,7 @@ import { NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
 const FIXES = ["llm_config.provider/model", "--provider/--model", "yian auth <provider>"];
 
 // Each test's environment: a private store in a fresh directory and no default provider or
-// model, as Python's `no_environment_defaults` leaves it.
+// model.
 let home: string;
 let vars: Map<string, string>;
 const env: Env = (name) => vars.get(name);
@@ -95,7 +82,7 @@ test.each<[Record<string, string>, Record<string, unknown>, string | null, [stri
   expect([config["provider"], config["model"]]).toEqual(expected);
 });
 
-test("python api resolve model config without model", () => {
+test("resolveModelConfig without a model names the fixes", () => {
   let error: unknown;
   try {
     resolveModelConfig({}, { env });

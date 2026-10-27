@@ -1,40 +1,10 @@
 /**
- * The pure CALL builder `callSubgraph`, which pins its output to the CALL residual's clone shape: a
- * port of `tests/engine/test_call_subgraph_builder.py`.
+ * The pure CALL builder `callSubgraph`, which pins its output to the CALL residual's clone shape.
  *
  * `callSubgraph(child, callsite, record)` wraps `cloneChild`, bakes `commitAs = callsite` on the
  * cloned child END, and returns a `Flow` (the self-describing fragment a CALL spawner grows into).
  * Its `startId` is the namespaced child START, its `endId` the namespaced child END carrying
  * `commitAs === callsite`, and every node id is `ns`-prefixed under the callsite.
- *
- * Ported: `test_call_subgraph_matches_grow_call_type`,
- * `test_growth_metadata_revalidates_exact_targets_and_nested_fields` (13 of its 17 rows),
- * `test_growth_metadata_accepts_unwired_defaulted_target`,
- * `test_growth_metadata_rejects_invalid_non_start_target`,
- * `test_clone_preserves_nested_recipes_without_reusing_runtime_target_ids`,
- * `test_map_clone_rejects_a_preserved_recipe_that_would_need_two_item_indices`,
- * `test_call_subgraph_prefixes_every_cloned_node_including_boundaries`,
- * `test_call_subgraph_inherits_occurrence_and_keeps_child_keys` and
- * `test_call_subgraph_revalidates_supplied_memory_scope`.
- *
- * Changed:
- * - ints are `bigint`s (decision 4a), and Python's `ValueError` is a `RangeError`; where Python
- *   accepts `(TypeError, ValueError)`, each row pins the one class TS throws;
- * - carriers are frozen, so a forged seed connection or memory occurrence is an object of the
- *   carrier's prototype built without its constructor, where Python sets a field on a built
- *   carrier, and the forged occurrence is built before its scope; a fragment's readonly recipe
- *   lists are reassigned through `setRecipes`;
- * - the `invalid-parameters` row gives START an empty array-like object, where Python gives an
- *   empty tuple: JS has no tuple, and an empty array is just "no parameters", so a non-array
- *   stands in for Python's non-`list` and hits the same "not an array" check;
- * - the nested recipes are snapshotted by copying the arrays of frozen carriers, not `deepcopy`.
- *
- * Not ported:
- * - the `mutable-connections`, `mutable-boundaries`, `mutable-path` and `forged-position` rows of
- *   `test_growth_metadata_revalidates_exact_targets_and_nested_fields`: they pin Python's
- *   tuple-versus-list checks, and a JS array has no such distinction;
- * - `test_growth_metadata_and_execution_topology_have_a_separate_digest_policy`: ported in
- *   `flow_identity.test.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -52,7 +22,7 @@ function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T
   return Object.assign(Object.create(cls.prototype) as object, fields) as T;
 }
 
-/** Reassign `flow`'s readonly growth recipes, as Python assigns them on the fragment. */
+/** Reassign `flow`'s readonly growth recipes. */
 function setRecipes(flow: Flow, recipes: Partial<Pick<Flow, "inputConnections" | "childBoundaries">>): void {
   Object.assign(flow, recipes);
 }

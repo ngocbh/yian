@@ -1,15 +1,8 @@
 /**
- * Running a CASE that routes on a null check: a set value takes the branch, null the `else:`: a
- * port of `tests/engine/test_null_narrowing_run.py`.
+ * Running a CASE that routes on a null check: a set value takes the branch, null the `else:`.
  *
  * The branch passes the value, narrowed to not null, to a def's strict input (a CALL) or as a MAP's
  * per-item argument; these runs show the narrowing matches what the value does at run.
- *
- * Ported: both tests, every row. The CODE nodes name the conformance fixture
- * `./fixtures/compose_codefns.ts:echo`, Python's `tests.engine._compose_codefns:echo`. Ints read
- * as `bigint`s (decision 4a). The cases `run-core/engine_null_narrowing_run__a_null_checked_producer_output_takes_its_branch`
- * and `run-core/engine_null_narrowing_run__a_null_checked_input_takes_its_branch` each run one
- * row of a group, so neither covers a whole test.
  */
 
 import { afterAll, expect, test } from "bun:test";

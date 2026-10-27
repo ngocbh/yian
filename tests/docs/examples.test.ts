@@ -6,7 +6,7 @@
  */
 
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,6 +68,17 @@ test("the pages have YAML examples and yian lines", () => {
 test("the README has a YAML example and yian lines", () => {
   expect(README_BLOCKS.filter((block) => block.lang === "yaml").length).toBeGreaterThan(0);
   expect(yianLines(README_BLOCKS).length).toBeGreaterThan(0);
+});
+
+test("the Examples page shows every flow in examples/", () => {
+  const shown = YAML_BLOCKS.filter((block) => block.file === "examples.md")
+    .flatMap((block) => block.meta["source"] ?? [])
+    .sort();
+  const flows = readdirSync(EXAMPLES)
+    .filter((name) => name.endsWith(".yaml"))
+    .map((name) => `examples/${name}`)
+    .sort();
+  expect(shown).toEqual(flows);
 });
 
 test("YAML blocks are tagged yaml, not yml", () => {

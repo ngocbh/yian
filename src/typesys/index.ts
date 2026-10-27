@@ -7,7 +7,7 @@
  * `TypedValue` and `VariablePool` use them in their public signatures. `isRecord` and
  * `isList` are the plain-object and plain-array tests `buildValueAs` uses, so callers read a
  * record or list exactly as the type system does (Python checks `isinstance(value, dict)`
- * inline), and `jsTypeName` names a rejected value's type the same way; `pythonTypeName` names
+ * inline), and `jsTypeName` names a rejected value's type the same way; `typeName` names
  * it as Python's `type(x).__name__` would, for messages that keep Python's wording.
  */
 
@@ -17,7 +17,7 @@ export type { RecordDef, TypeRegistry, VariantDef } from "./types.ts";
 export {
   BUILTIN_TYPE_NAMES,
   parseType,
-  pythonTypeName,
+  typeName,
   resolveType,
   typeFor,
 } from "./types.ts";

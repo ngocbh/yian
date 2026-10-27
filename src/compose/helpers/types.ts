@@ -32,7 +32,7 @@ import {
 import {
   BUILTIN_TYPE_NAMES,
   encodesAsUtf8,
-  pythonTypeName,
+  typeName,
   type TypeRegistry,
   typeFor,
 } from "../../typesys/types.ts";
@@ -208,7 +208,7 @@ function readTypeAndSites(
     );
   }
 
-  throw diagnostics.error(`cannot read type from ${valueRepr(node)} (type ${pythonTypeName(node)})`, {
+  throw diagnostics.error(`cannot read type from ${valueRepr(node)} (type ${typeName(node)})`, {
     range,
   });
 }
@@ -284,7 +284,7 @@ function readTypeOnly(
   const { diagnostics } = options;
   if (typeof value !== "string") {
     throw diagnostics.error(
-      `input ${reprText(name)}: a source-free declaration is type text, got ${pythonTypeName(value)}`,
+      `input ${reprText(name)}: a source-free declaration is type text, got ${typeName(value)}`,
     );
   }
   let typ: Type;
@@ -582,7 +582,7 @@ export function readSourceParameters(
   const mapping = cursor.value;
   const sectionLabel = fieldName === "input" ? "flow input" : fieldName;
   if (!isRecord(mapping)) {
-    throw diagnostics.error(`${sectionLabel} must be a mapping, got ${pythonTypeName(mapping)}`, {
+    throw diagnostics.error(`${sectionLabel} must be a mapping, got ${typeName(mapping)}`, {
       range: cursor.range,
     });
   }

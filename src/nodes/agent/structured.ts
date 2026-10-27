@@ -702,10 +702,10 @@ const TITLE_LETTERS: ReadonlyMap<string, string> = new Map(
 // Georgian Mkhedruli letters are their own title case, though they upper-case to Mtavruli.
 const GEORGIAN_LOWER = /^[\u10D0-\u10FA\u10FD-\u10FF]$/u;
 
-// The characters Python's `str.strip()` removes (`str.isspace()`).
-const PY_SPACE =
+// Unicode whitespace: the characters this strips from both ends of a title.
+const STRIP_SPACE =
   "\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
-const PY_STRIP = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, "gu");
+const STRIP_RE = new RegExp(`^[${STRIP_SPACE}]+|[${STRIP_SPACE}]+$`, "gu");
 
 /**
  * Return the title of field `name`, as pydantic derives it: Python's `str.title()`, then `_` to
@@ -720,7 +720,7 @@ function fieldTitle(name: string): string {
     previousCased = CASED.test(ch);
     index += ch.length;
   }
-  return title.replaceAll("_", " ").replace(PY_STRIP, "");
+  return title.replaceAll("_", " ").replace(STRIP_RE, "");
 }
 
 /** Return the full title case of the character `ch`, as Python's `str.title()` maps it. */

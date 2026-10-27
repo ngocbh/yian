@@ -53,7 +53,7 @@ import {
   validateOptionalOrigin,
 } from "../../nodes/contracts.ts";
 import { poolRootLength } from "../../typesys/pool.ts";
-import { pythonTypeName } from "../../typesys/types.ts";
+import { typeName } from "../../typesys/types.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { hasSpan } from "../helpers/tags.ts";
@@ -461,7 +461,7 @@ function matchCondition(
   if (typeof value === "bigint" || typeof value === "number") {
     return `__on == ${numberText(value)} and not isinstance(__on, bool)`;
   }
-  const kind = Array.isArray(value) ? "a list" : isRecord(value) ? "a record" : pythonTypeName(value);
+  const kind = Array.isArray(value) ? "a list" : isRecord(value) ? "a record" : typeName(value);
   throw diagnostics.error(
     `case node ${reprText(nodeId)}: an on: case's when: takes text, a number, or a bool, got ${kind}`,
     { range },

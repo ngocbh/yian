@@ -28,7 +28,7 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
-import { pythonTypeName } from "../../typesys/types.ts";
+import { typeName } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
   fileFieldType,
@@ -451,7 +451,7 @@ function inferLiteral(value: unknown, path: string, activeContainers: Set<object
   throw inferenceError(
     walk.bindingLabel,
     walk.bindingRange,
-    `literal at ${path} has unsupported type ${reprText(pythonTypeName(value))}`,
+    `literal at ${path} has unsupported type ${reprText(typeName(value))}`,
     walk.diagnostics,
   );
 }

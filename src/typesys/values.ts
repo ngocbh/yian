@@ -1571,15 +1571,15 @@ function kindLabel(kind: ValueKind): string {
  */
 export function boundText(end: Bound): string {
   if (end === null) return "";
-  return typeof end === "bigint" ? end.toString() : pythonFloatRepr(end);
+  return typeof end === "bigint" ? end.toString() : floatText(end);
 }
 
 /**
- * Return Python's `repr` of a float: the shortest round-trip digits, positional when
- * the decimal exponent is in `-4..15`, else exponent form with at least two exponent
- * digits (`1e-05`, `1.5e+16`). A non-finite value prints as JavaScript spells it.
+ * Return the shortest text that reads back as the float `x`, keeping `.0` on whole numbers:
+ * positional when the decimal exponent is in `-4..15`, else exponent form with at least two
+ * exponent digits (`1e-05`, `1.5e+16`). A non-finite value prints as JavaScript spells it.
  */
-export function pythonFloatRepr(x: number): string {
+export function floatText(x: number): string {
   if (!Number.isFinite(x)) return String(x);
   if (x === 0) return Object.is(x, -0) ? "-0.0" : "0.0";
   // `toExponential()` with no argument gives the shortest digits that round-trip.

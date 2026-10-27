@@ -1576,7 +1576,7 @@ async function ctrlQInterruptsASelectButNotATextEditor(): Promise<void> {
 }
 
 // Python's `str.strip()` blank set: U+0085 is blank, U+FEFF is not.
-async function anOptionalStringBlankIsPythonsWhitespace(): Promise<void> {
+async function anOptionalStringBlankIsUnicodeWhitespace(): Promise<void> {
   const { input, terminal } = setup();
   const answer = terminal.promptInputs([decl("kept", STR), decl("omitted", STR)], {});
   input.write("\uFEFF" + ENTER + "\x85 " + ENTER);
@@ -2405,7 +2405,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "Ctrl-D in a confirm is the end of input": ctrlDInAConfirmIsTheEndOfInput,
   "Ctrl-Q interrupts a confirm": ctrlQInterruptsAConfirm,
   "Ctrl-Q interrupts a select but not a text editor": ctrlQInterruptsASelectButNotATextEditor,
-  "an optional string's blank is Python's whitespace": anOptionalStringBlankIsPythonsWhitespace,
+  "an optional string's blank is Unicode whitespace": anOptionalStringBlankIsUnicodeWhitespace,
   "a closed terminal prompts nothing": aClosedTerminalPromptsNothing,
   "a failing output fails the call": aFailingOutputFailsTheCall,
   "a question set shows the panel and a rule per question": aQuestionSetShowsThePanelAndARulePerQuestion,

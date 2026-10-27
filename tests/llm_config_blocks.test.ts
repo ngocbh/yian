@@ -87,8 +87,8 @@ test.each([
   ["qwen_cn", "qwen-cn"],
   ["glm_cn", "glm-cn"],
   ["minimax_cn", "minimax-cn"],
-])("python spelling %s of a dash block is rejected", (pythonName, authored) => {
-  expect(error({ [pythonName]: {} })).toContain(`write \`${authored}\``);
+])("python spelling %s of a dash block is rejected", (underscoreName, authored) => {
+  expect(error({ [underscoreName]: {} })).toContain(`write \`${authored}\``);
 });
 
 test("keyword construction still works", () => {

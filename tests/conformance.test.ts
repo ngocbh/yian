@@ -49,6 +49,7 @@ import {
   encodeRecord,
   InboxClosedRecord,
   InboxWithdrawnRecord,
+  JsonlRunLog,
   NodeStepRecord,
   NodeWaitingRecord,
   NodeWokenRecord,
@@ -63,6 +64,9 @@ import {
 } from "../src/runtime/log.ts";
 
 const CASES = fileURLToPath(new URL("../conformance/cases/", import.meta.url));
+// A crash sweep runs its case about once per record: under 1 s alone on a fast host, several
+// times that on a slow or busy one, past bun's 5 s default.
+const SWEEP = 30_000;
 
 describe("readCase", () => {
   test("reads YAML 1.2 core scalars, ints as bigint", () => {
@@ -1850,7 +1854,27 @@ expect:
     const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow("output (crash sweep, cut after record 10) differs");
-  });
+  }, SWEEP);
+
+  test("a sweep still going refuses no other run's appends, and leaves append as it was when it ends", async () => {
+    const append = JsonlRunLog.prototype.append;
+    const [case_, ctx] = twoNodes();
+    // Not awaited yet, as when its test timed out: other runs go on while it cuts.
+    let done = false;
+    const sweep = crashSweep(case_, ctx).finally(() => {
+      done = true;
+    });
+    let during = 0;
+    while (!done) {
+      if (JsonlRunLog.prototype.append !== append) during += 1;
+      const [other, otherCtx] = twoNodes();
+      await RUNNERS.run!(other, otherCtx);
+    }
+    await sweep;
+    // Some run went while a cut was in flight, so the sweep's refusals were live.
+    expect(during).toBeGreaterThan(0);
+    expect(JsonlRunLog.prototype.append).toBe(append);
+  }, SWEEP);
 });
 
 describe("runCli", () => {

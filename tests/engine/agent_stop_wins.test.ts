@@ -1,31 +1,6 @@
 /**
- * A stop pending when a model call fails stops the node cleanly: mirrors
- * `tests/engine/test_agent_stop_wins.py`.
- *
- * Changed: the rows run an AGENT through `evalNode` (`drive`) with a model from `models`, the tool
- * in the run's `ToolSet`, and a stop signal, where Python runs `_run_flow_controlled` with a stop
- * event; the stop is the signal, so a stopped node rejects with the signal's reason. Ported this
- * way, the rows without session memory: `test_a_stop_during_a_failing_model_call_stops_the_run`,
- * `test_a_stop_during_a_failing_tool_call_stops_the_run`,
- * `test_a_stop_during_a_failing_structured_call_stops_the_run` and
- * `test_a_host_callback_fault_escapes_a_pending_stop`.
- * `test_a_stop_raised_while_observing_a_failure_wins` (3 rows): TS has no memory turn observing
- * the call, so the observer is the event sink, which aborts the stop when it sees the call's
- * finished event: the failed model call's `ModelCallFinished`, the failed tool call's
- * `ToolCallFinished`, or (the representation row) the `ToolCallFinished` of a call whose result
- * can't be written as text (a `Date`, reported with `result: null`); the stop wins over the
- * failure. `test_a_stop_failing_a_call_yields_to_an_observed_stop_only_if_derived` (the model and
- * tool rows): TS has one stop, the signal's reason, with no initiating or derived kind; a call the
- * stop fails emits no finished event and the node rejects with the reason.
- *
- * TS-only: a stop that cuts a tool's argument check short (its validator aborts the stop, then
- * throws) is the node's rejection, with no tool brackets and no recorded tool call.
- *
- * Not ported: `test_a_stop_wins_over_a_malformed_native_carrier` (TS has no LangChain structured
- * carrier); the session rows of `test_a_stop_during_a_failing_model_call_stops_the_run`,
- * `test_a_stop_during_a_failing_tool_call_stops_the_run`,
- * `test_a_stop_during_a_failing_structured_call_stops_the_run` and
- * `test_a_host_callback_fault_escapes_a_pending_stop` (TS yian has no session memory).
+ * A stop pending when a model, tool or structured call fails stops the node cleanly: the stop wins
+ * over the failure, and a host callback fault escapes.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

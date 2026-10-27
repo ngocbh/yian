@@ -1,22 +1,9 @@
 /**
- * The CALL child-run seam, end to end over CODE-only children: a port of
- * `tests/engine/test_call_run.py`.
+ * The CALL child-run seam, end to end over CODE-only children.
  *
  * A plain `call` binds its declared args against the parent pool, seeds a child pool (plus the
  * child's own declared defaults for omitted args), runs the grown child and re-exports the
  * child's single value.
- *
- * Ported: `test_call_runs_child_and_reexports_value`,
- * `test_call_output_projection_preserves_nullable_parent_path` (its run is also the harvested
- * `run-map-call/engine_call_run__call_output_reads_through_a_null_parent`; the case doesn't pin
- * the output contract), `test_call_child_failure_fails_the_run`,
- * `test_call_child_applies_its_own_default`, `test_call_boundary_assert_sees_omitted_default`,
- * `test_call_arg_text_is_not_converted_for_a_typed_child_input` and
- * `test_call_run_expands_not_child_engine`. Integers are bigints (decision 4a); the CODE
- * references are the TS fixtures' (`./fixtures/compose_codefns.ts:<fn>`).
- *
- * Not ported: `test_call_accepts_none_elements_for_nullable_list_sink`: covered by
- * `run-map-call/engine_call_run__call_accepts_null_elements_for_a_nullable_list`.
  */
 
 import { expect, test } from "bun:test";

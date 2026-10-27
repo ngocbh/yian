@@ -1,91 +1,9 @@
 /**
- * The CASE `on:` form's typed `when:` values: the lowering and `when:` value rows of
- * `tests/engine/test_case_on_typed.py`. Each `when:` value lowers to a condition that compares it
- * exactly with the `on:` value: text as text, a number numerically and never with a bool, a bool
- * only with a bool. Where the `on:` type is known, a `when:` value that can never be a member of
- * it is a located load error naming the value, the type and the fix, and a `when:` value equal to
- * an earlier one is a load error at the later one.
- *
- * Ported: `test_lowered_conditions`, `test_large_and_small_floats_lower_exactly`,
- * `test_non_finite_when_is_a_load_error` (flipped), `test_list_or_record_when_is_a_load_error`
- * and `test_on_match_key` (adapted); the `when:` value rows `test_int_when_on_str_is_a_migration_error`,
- * `test_text_when_on_int_is_an_error`, `test_bool_when_on_int_is_an_error`,
- * `test_int_when_on_bool_is_an_error`, `test_float_when_on_int_is_an_error`,
- * `test_out_of_bounds_int_when`, `test_typo_next_to_else_on_a_literal_node_output`,
- * `test_typo_on_a_literal_flow_input`, `test_int_when_on_a_literal_is_an_error`,
- * `test_quote_fix_on_a_literal_with_a_numeric_tag`,
- * `test_tags_that_read_as_other_values_are_listed_quoted`, `test_map_child_input`,
- * `test_unknown_on_type_is_not_checked`, `test_object_on_type_is_not_checked`,
- * `test_optional_on_type_checks_the_non_null_part`,
- * `test_bool_when_on_str_quote_fix_keeps_spelling`, `test_integral_float_when_on_int`,
- * `test_no_drop_quotes_hint_for_text_yaml_reads_as_text`, `test_former_boolean_word_on_a_bool`,
- * `test_invalid_date_text_hint_does_not_crash`, `test_no_drop_quotes_for_null_or_nonfinite_text`,
- * `test_unquoted_date_on_int_is_called_a_date`, `test_expression_on_is_typed`,
- * `test_quote_fix_skips_an_anchor_or_tag`, `test_drop_quotes_fix_needs_quotes_and_strips_the_text`,
- * `test_malformed_date_text_on_a_date_is_not_a_value`, `test_repeated_int_when_is_a_load_error`,
- * `test_int_and_float_when_are_duplicates`,
- * `test_int_and_float_duplicate_reported_before_the_int_fix`,
- * `test_float_then_int_duplicate_reported_before_the_int_fix`, `test_duplicate_on_an_untyped_on`,
- * `test_duplicate_text_when`, `test_date_and_its_iso_text_are_duplicates`,
- * `test_bool_number_and_text_are_distinct`, `test_duplicate_next_to_else_and_same_target`,
- * `test_duplicate_message_without_a_source_range`,
- * `test_duplicate_through_an_alias_shows_the_spelling` and `test_loop_body_carried_field`; and the
- * exhaustiveness rows `test_routing_only_literal_flow_input_missing_a_tag`,
- * `test_routing_only_literal_flow_input_with_else_loads`,
- * `test_routing_only_literal_flow_input_listing_every_tag_loads`,
- * `test_bool_value_case_missing_false_is_not_exhaustive`, `test_optional_bool_is_not_exhaustive`,
- * `test_int_value_case_reason_names_literal_or_bool`,
- * `test_routing_only_loop_carried_literal_missing_a_tag` and
- * `test_routing_only_map_child_literal_input_missing_a_tag`.
- *
- * Changed: the flow rows assemble the flow (`assembleText`), where Python loads it.
- * `test_large_and_small_floats_lower_exactly` builds an `on:` case holding the value, where Python
- * calls `_match_condition`, which stays module-private; its values are those TS YAML can read too,
- * but YAML reads `-0.0` as the float `0` (lowered `0.0`; yian has no negative zero), so the `-0.0`
- * value is a constructed one. `.inf` and `-.inf` are float values (decision 34): a `when: .inf`
- * lowers to `__on == inf ...` and routes, where Python refuses it; `.nan` is refused by the YAML
- * layer ("NaN is not a yian value"), not by the CASE build. `onMatchKey` returns a string, and
- * the date half of `test_on_match_key` is dropped (TS YAML reads an unquoted date as text); a
- * bigint keeps its digits, so `2n ** 53n + 1n` and the float `2 ** 53` keep distinct keys.
- * The `".inf"` row of `test_no_drop_quotes_for_null_or_nonfinite_text` gets "drop the quotes:
- * `when: .inf`", since `.inf` is a float value. `test_unquoted_date_on_int_is_called_a_date` reads
- * "`when: 2026-01-02` is text": TS YAML reads an unquoted date as text, so
- * `test_date_and_its_iso_text_are_duplicates` holds two equal texts (the message is Python's). The
- * tagged half of `test_quote_fix_skips_an_anchor_or_tag` suggests `when: "1"`: `!!float 1` is the
- * float `1`, spelled `1` as JSON spells it, where Python spells `1.0`.
- * `test_duplicate_message_without_a_source_range` calls the exported `duplicateWhenMessage` (Python's
- * `_duplicate_when_message`). An uncovered tag list is written in the text form, `["b"]` (Python
- * `['b']`).
- *
- * TS-only: the exact spellings of the float lowering (positional, no exponent, `.0` when
- * integral, `inf`), a YAML `when: -0` (the int `0n`) lowering to `0`, and an unquoted datetime
- * `when:` lowering to its text.
- *
- * Dropped: `test_unquoted_datetime_when_is_a_load_error` (TS YAML reads an unquoted datetime as
- * text, so it matches that text).
- *
- * Ported through `loadFlow` and `runFlow`, the run rows: `test_int_on_matches_int_when`,
- * `test_negative_int_when`, `test_float_on_matches_numerically`, `test_bool_on_matches_bool_when`,
- * `test_quoted_when_is_text`, `test_no_else_int_on_routes_at_runtime`,
- * `test_bool_never_equals_a_number_on_an_untyped_on`, `test_date_when_is_iso_text`,
- * `test_untyped_on_compares_exactly`, `test_date_when_on_a_date_input`,
- * `test_unquoted_1e3_when_is_a_float`, `test_bool_value_case_with_true_and_false_needs_no_else`,
- * `test_routing_only_bool_join_is_exhaustive`,
- * `test_literal_value_case_listing_every_tag_needs_no_else` and
- * `test_unquoted_date_when_narrows_a_date_shaped_union_tag`. Changed: the CODE bodies are
- * JavaScript; a flow's int output is a `bigint` (`2n`, `5n`). The `floats` half of
- * `test_bool_never_equals_a_number_on_an_untyped_on` reads `on: ${src.output / 2}` over a `src`
- * returning the int 2, where Python's `src` returns `1.0`: a whole host number reads as an int
- * (decisions 9A and 45), and `/` always gives a float (decision 7), so the int `when: 1` still
- * meets the float 1.0 and matches numerically. The float inputs `2.0`, `3.0` and `1000.0` are
- * ints in a `float` slot (decision 38) and match numerically as Python's floats do.
- *
- * Ported through `loadFlow`: `test_routing_only_call_child_literal_input_missing_a_tag`, which
- * composes a `defs:` entry; its harvested case is pinned at the end with `full` (the definition
- * frame and the loader's `defs entry 'child': ` prefix included).
- *
- * The harvested cases the CASE build, the `when:` value check and the exhaustiveness check decide
- * are pinned at the end.
+ * The CASE `on:` form's typed `when:` values. Each `when:` value lowers to a condition that
+ * compares it exactly with the `on:` value: text as text, a number numerically and never with a
+ * bool, a bool only with a bool. Where the `on:` type is known, a `when:` value that can never be a
+ * member of it is a located load error naming the value, the type and the fix, and a `when:` value
+ * equal to an earlier one is a load error at the later one.
  */
 
 import { expect, test } from "bun:test";

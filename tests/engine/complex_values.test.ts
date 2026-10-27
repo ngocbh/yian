@@ -1,29 +1,7 @@
 /**
- * A number with no real value fails at the first boundary that sees it: the run rows of
- * `tests/engine/test_complex_values.py`.
- *
- * JS has no complex numbers. In an expression, `(0 - 8) ** 0.5` is an expression error ("** on
- * -8 and 0.5 has no numeric result"), so the binding fails with that message where Python makes a
- * complex value and fails it as "complex number ... is not a yian value". In a JS CODE body,
- * `(-8) ** 0.5` is NaN, which fails the output contract as "NaN is not a yian value".
- *
- * Changed (ported with the TS message): `test_a_binding_that_evaluates_to_a_complex_fails_its_node`
- * (the learnable row; the trace key is Python's), `test_a_call_binding_that_evaluates_to_a_complex_fails_the_call`
- * (both rows; only START and the CALL start), `test_a_complex_flow_output_binding_fails_the_end_binding`
- * and `test_a_complex_map_over_item_fails_the_map` (the message names neither `over` nor the
- * item's index; the trace key is Python's). `test_a_complex_temporary_inside_a_template_is_allowed`
- * fails: the expression error fails the binding inside a template too, where Python renders the
- * complex value. `test_a_complex_object_output_fails_the_node_at_the_field` and
- * `test_a_complex_undeclared_output_fails_the_node` return NaN (`output at a[0]: NaN is not a yian
- * value`, `output: NaN is not a yian value`), and the reader never runs.
- *
- * Covered by `run-core/engine_complex_values__a_complex_binding_fails_its_node`: the non-learnable
- * row of `test_a_binding_that_evaluates_to_a_complex_fails_its_node` (TS's message, Python's in
- * `python_expect`).
- *
- * Not ported: `test_a_complex_run_input_is_rejected_before_the_run_starts` and
- * `test_a_complex_tool_output_fails_the_node`: a host has no complex value to pass. Their NaN
- * counterparts are in `nonfinite_boundaries.test.ts`.
+ * A number with no real value fails at the first boundary that sees it. In an expression,
+ * `(0 - 8) ** 0.5` is an expression error ("** on -8 and 0.5 has no numeric result"); in a JS CODE
+ * body, `(-8) ** 0.5` is NaN, which fails the output contract as "NaN is not a yian value".
  */
 
 import { afterAll, expect, test } from "bun:test";

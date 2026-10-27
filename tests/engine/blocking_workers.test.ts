@@ -1,18 +1,7 @@
 /**
- * Blocking nodes take exactly the configured worker capacity: a port of
- * `tests/engine/test_blocking_workers.py`.
- *
- * Ported (adapted), each with `BlockingNode` (a node awaiting a promise the test settles) in place
- * of HUMAN_INPUT and its `ask_user` tool, and promises in place of thread events and polling:
- * - `test_independent_node_completes_while_one_worker_waits_for_human`: the sibling's success is
- *   committed, and seen by `onEvent`, while the blocked node is still in flight.
- * - `test_ready_work_waits_while_every_worker_is_blocked`: once both workers block, the third node
- *   is still in the ready queue, not started.
- * - `test_failure_reaches_on_event_while_a_sibling_prompt_is_pending`: the run's failure aborts its
- *   signal, which stands in for the host withdrawing the prompt; `NodeFailed` and `RunFailed` reach
- *   `onEvent` while the sibling still blocks, and `run()` returns only after it stopped.
- *
- * The WAIT rows are `blocking_wait.test.ts`, the port of `test_blocking_wait.py`.
+ * Blocking nodes take exactly the configured worker capacity. `BlockingNode` awaits a promise the
+ * test settles: a sibling completes while one worker blocks, ready work waits while every worker
+ * blocks, and a failure reaches `onEvent` while a sibling still blocks.
  */
 
 import { expect, test } from "bun:test";

@@ -1,85 +1,6 @@
 /**
- * The AGENT node and its helpers: mirrors `tests/engine/test_agent.py`.
- *
- * Ported: `test_direct_agent_rejects_invalid_variable_declarations` (9 of its 10 rows; the tuple
- * row is not ported, an array is the only list),
- * `test_direct_agent_rejects_duplicate_variables_and_preserves_valid_default_payloads`,
- * `test_direct_agent_rejects_forged_variable_default_presence`,
- * `test_direct_agent_requires_an_exact_variable_contract`,
- * `test_env_max_tool_iterations_minus_one_accepted`, `test_env_max_tool_iterations_rejects_bad_value`
- * (the `maxToolIterations()` half and the `evalNode` half), `test_no_tools_returns_plain_text`,
- * the structured-origin tests (`test_structured_failure_selects_exact_or_ancestor_output_origin`,
- * `test_structured_scalar_failure_selects_contract_root`,
- * `test_non_validation_structured_failure_keeps_node_origin`,
- * `test_source_free_structured_failure_keeps_empty_trace`), and the `provider.auth` tests
- * (`test_model_auth_failure_is_provider_auth`, `test_permission_denied_is_provider_auth`,
- * `test_credential_resolution_auth_error_is_provider_auth`,
- * `test_structured_call_auth_failure_is_provider_auth`,
- * `test_fallback_structured_auth_failure_is_not_retried`,
- * `test_a_stop_during_a_refused_structured_call_stops_the_node` and
- * `test_provider_auth_failure_message_is_scrubbed`).
- *
- * Ported, the tool loop, through `evalNode` (`drive`) with the tools in the run's `ToolSet` where
- * Python patches `TOOL_REGISTRY`: `test_tool_loop_round_trip`,
- * `test_tool_loop_executes_model_calls_in_returned_order`,
- * `test_agent_rejects_globally_registered_but_ungranted_tool` (registered with `registerTool`),
- * `test_tool_loop_rejects_model_injected_arguments`,
- * `test_tool_loop_propagates_tool_exception_as_node_failure`,
- * `test_tool_validation_error_does_not_claim_scalar_output_origin`, the cap tests
- * (`test_tool_loop_cap_trips_when_bounded`, `test_default_no_cap_runs_unbounded`,
- * `test_env_max_tool_iterations_overrides_cap`, `test_tool_loop_cap_does_not_run_the_last_replys_tools`,
- * `test_ungranted_tool_stays_node_execute`, `test_tool_loop_cap_of_one_still_answers_without_tools`)
- * and `test_tool_auth_failure_stays_node_execute`.
- *
- * Changed: each row pins its error class; a tool's thrown `Error` reads `causeType` `Error`
- * (Python: `RuntimeError`), and a tool argument of the wrong type is a `TypeCheckError` (Python:
- * Pydantic's `ValidationError`); ints are `bigint`s; a forged `hasDefault`/`required` is
- * set with `Object.defineProperty` on a copy, since a `Parameter` is frozen. The node rows run
- * through `evalNode` (`drive`) with a `ScriptedModel` served by `caps.models` where Python patches
- * `model_from_config`; Python's SDK error stand-ins are `ProviderError`s, so their `causeType` reads
- * `ProviderError`. A structured reply that fails the value check once `retries:` are spent is an
- * `OutputInvalidError` coded `agent.output_invalid` (Python: a `ValidationError`,
- * `node.execute`). `test_rate_limit_stays_node_execute`: a marked rate limit is
- * `provider.rate_limit` (with `modelRetries: 0`). `test_provider_auth_failure_message_is_scrubbed`
- * runs the flow through `runWith` (`runFlow` with the model served by `models`).
- *
- * TS-only: `textOf` of a string, of a message with text, reasoning, tool-call and refusal parts
- * (only the text, joined with `"\n"`), and of a message without text; `ReplyInterrupted`'s message,
- * `reply`, `usage` (default `null`) and that it is an `Error`; `pushVisible` (an interaction
- * appended, a carrier construction error ignored, another error thrown); `toolText` of a string, a record, a
- * list, `null`, `Infinity`, a big int and a `Date` (a `TypeCheckError` naming the tool's result);
- * `reportedText` (the message, else the error's `name`; a branded non-`Error` by `String()`, else
- * its `typeof`); the `SKIPPED_TOOL_ERROR` text; the `DEFAULT_SYSTEM` text and the loop errors'
- * names; `isMaxToolIterations`; the
- * default `maxToolIterations()`; `grantedTools()`; an `LLMConfig` given as `llmConfig`; `backward`'s host
- * secrets (a static agent's own `api_key` and `headers`, a marked call-time agent's host key and
- * headers, an unmarked one's none) joined to the recorded config; the load-time hooks
- * (`reservedWiringKeys`, `modelHiddenInputs`, `reservedKeyLabel`, `llmNullable`,
- * `recordedLlmConfig`, `boundLlmConfig`, `backwardInputNames`, `bindReserved`, `validatePrompts`,
- * `validateExecutionSetup`); `needsSteps` on every agent, call-time or not, also on a shallow copy,
- * which carries `callTime`; `needsModels`; each `provider.*` code through the node (a
- * `ProviderError` of the kind `kindForStatus` reads from a status and message, the message kept);
- * in the tool loop: a call with invalid arguments gets `ToolCallStarted` then
- * `ToolCallFinished{error: "RangeError"}` before the node fails, an ungranted call gets no
- * brackets, the request carries the bound `ToolSpec`s in grant order (`load_skill` last when skills
- * are granted) with no `toolChoice` and `parallelToolCalls: null`, a call's id is
- * `<run>/<node>/<exchange>/<index>` on a run-bound tool set and a fresh id on an unbound one, with
- * the node and `attempt: 1` in its `ToolContext`, and a tool result `fromHost` refuses fails the
- * node after the call ran; a call-time agent records a copy of its bound config and calls the model
- * with the host key joined, and a bound config that differs from the recorded one is a host fault
- * before any model is built; a reply calling a tool at a cap of one model turn fails with
- * `agent.max_tool_iterations`; without `models` the node builds through `defaultModelAccess` (an
- * unknown provider's `ValidationError`, no network); a failing credentials read doesn't replace the
- * error being scrubbed. Through `FlowEngine` with a run log: a retried model call's failed and
- * successful `model_call` steps come before the node's outcome; a resumed call-time agent (state
- * replayed from the log, a fresh engine) restarts after its steps, records its `llm_config` step
- * again, and numbers its new steps after the first start's.
- *
- * Not ported: `test_agent_run_has_no_scratch_kwarg` (signature introspection);
- * `test_agent_ctx_type.py` and `test_agent_runcontext.py` (they introspect a Python dataclass; the
- * TS `AgentRunContext` is an interface checked statically); and
- * `compose/test_agent_mode_removed.py`'s `test_python_agent_node_has_no_mode` (Python's `MODES`,
- * `register_mode` and `mode=` keyword have no TS counterpart).
+ * The AGENT node and its helpers: variable declarations, the tool loop and its cap, structured
+ * output origins, `provider.*` failure codes, the load-time hooks, and model call steps.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -242,11 +163,11 @@ test("reportedText gives the message, else the error's name", () => {
   expect([reportedText("x", branded), reportedText("x", { ...branded, toString: () => "" })]).toEqual(["branded", "object"]);
 });
 
-test("the skipped tool text keeps Python's wording", () => {
+test("the skipped tool text is interrupted", () => {
   expect(SKIPPED_TOOL_ERROR).toBe("interrupted");
 });
 
-test("DEFAULT_SYSTEM keeps Python's text and the loop errors are named", () => {
+test("the DEFAULT_SYSTEM text and the loop errors' names", () => {
   expect(DEFAULT_SYSTEM).toBe(
     "You are an analysis agent inside a larger workflow. Follow the instructions " +
       "precisely, use the available tools to gather any facts you need, and return " +
@@ -643,7 +564,7 @@ describe("forward", () => {
     return new AgentNode("n", { prompt: "hi", llmConfig: config, ...options });
   }
 
-  /** An AGENT with an integer `output:` and no tools, over `config` (Python's `_structured_node`). */
+  /** An AGENT with an integer `output:` and no tools, over `config`. */
   function structuredAgent(config: Record<string, unknown>): AgentNode {
     const node = agent(config, { retries: 2 });
     node.outputContract = new ValueContract(INT);
@@ -859,7 +780,7 @@ describe("forward", () => {
     return new Response({ message: new Message({ role: "assistant", parts: calls }), finishReason: "tool_calls" });
   }
 
-  /** A model call of tool `name` with `args` and call id `id` (Python's `_ai_tool_call`). */
+  /** A model call of tool `name` with `args` and call id `id`. */
   function toolCall(name: string, args: JsonObject, id = "1"): ToolCallPart {
     return new ToolCallPart({ id, name, arguments: args });
   }
@@ -1063,7 +984,7 @@ describe("forward", () => {
     );
   }
 
-  test("a call with invalid arguments gets Python's brackets, then fails the node", async () => {
+  test("a call with invalid arguments gets its tool brackets, then fails the node", async () => {
     const seen: Record<string, unknown>[] = [];
     const lookup = fakeTool("lookup", () => "unused", { q: { type: "string" } }, seen);
     const events: unknown[] = [];

@@ -1,9 +1,6 @@
 /**
- * The flow boundary ids owned by the START and END node classes: a port of
- * `tests/engine/test_boundary_ids.py`. Ported: `test_start_end_ids_are_owned_by_the_node_classes`,
- * `test_pool_start_id_default_mirrors_startnode_id` and `test_compiledflow_start_end_id_accessors`.
- *
- * Changed: `test_compiledflow_start_end_id_accessors` builds its CODE node from an inline body.
+ * The flow boundary ids owned by the START and END node classes, and the pool's and
+ * `CompiledFlow`'s accessors for them.
  */
 
 import { expect, test } from "bun:test";

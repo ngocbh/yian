@@ -1,10 +1,9 @@
-// Ported from tests/engine/test_cli_progress.py (the reporter tests): per-node progress, `✓` on
-// success, `✗` and the error on failure, the output when verbose. They run on a non-TTY writer,
-// the path the CLI takes off a terminal: no spinner, only each node's final line. Added here: the
-// spinner a TTY writer gets, `pause`/`resume`, and `warn`'s line above the spinners, held while
-// paused. The CLI-run tests drive a CODE-only flow
-// through `yian run` instead of a faked runner: `--verbose` prints the output, `--quiet` streams no
-// events, and the worker count is read from the run log's `RunStarted` record.
+// The progress reporter: per-node progress, `✓` on success, `✗` and the error on failure, the
+// output when verbose. Most rows run on a non-TTY writer, the path the CLI takes off a terminal: no
+// spinner, only each node's final line. Also: the spinner a TTY writer gets, `pause`/`resume`, and
+// `warn`'s line above the spinners, held while paused. The CLI-run tests drive a CODE-only flow
+// through `yian run`: `--verbose` prints the output, `--quiet` streams no events, and the worker
+// count is read from the run log's `RunStarted` record.
 
 import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

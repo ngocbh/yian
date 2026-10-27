@@ -1,10 +1,7 @@
 /**
- * Contracts for the transient observer events, a port of
- * `tests/engine/test_in_loop_event_types.py` and `tests/engine/test_run_resumed_event.py`,
- * plus each event's `type` discriminant, its snake_case JSON data form, and
- * `conformance/schema/events.schema.json`, which describes that form. TS-only: `ReplayDegraded`,
- * an in-loop observer, `ModelCallRetried`, a retry outside a forward node, and the wait observers
- * `NodeWaiting`, `NodeWoken`, `RunWaiting`, `RunCancelled` and `CallClosed`.
+ * Contracts for the transient observer events: each event's `type` discriminant, its snake_case
+ * JSON data form, and `conformance/schema/events.schema.json`, which describes that form; the
+ * in-loop, retry, resume and wait observers included.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -701,7 +698,7 @@ describe("events schema", () => {
     }
   });
 
-  test("every object form requires each key it lists, but NodeSucceeded's interrupted, which Python doesn't send", () => {
+  test("every object form requires each key it lists, but NodeSucceeded's optional interrupted", () => {
     const trace = (def("failure").properties as Record<string, Schema>).trace!;
     const retryError = (def("ModelCallRetried").properties as Record<string, Schema>).error!;
     const defs = Object.values(SCHEMA.$defs as Record<string, Schema>);

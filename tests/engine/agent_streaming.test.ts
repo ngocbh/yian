@@ -1,49 +1,6 @@
 /**
- * AGENT reply streaming, visible chat text reaching `emitStream` as it arrives: mirrors
- * `tests/engine/test_agent_streaming.py`.
- *
- * Changed: `test_stream_chunk_exchange_id_defaults_to_none` checks `n` and `index`, which replace
- * the exchange id.
- *
- * Ported at the `callModel` level and through the node (`evalNode` with a `ScriptedModel` from
- * `models`): `test_plain_agent_streams_text_chunks_then_one_final_chunk` (each chunk also carries
- * its step's `n` and its `index`), `test_stream_sink_alone_streams_without_observers`,
- * `test_stream_sink_failure_escapes_as_a_host_fault` (at the `callModel` level the sink throws a
- * `CapabilityFault`, as the evaluator's sink does; through the node the host's own error escapes)
- * and `test_mid_stream_failure_sends_no_final_chunk_and_fails_the_node`.
- *
- * Changed: in `test_mid_stream_failure_sends_no_final_chunk_and_fails_the_node` the dropped
- * connection is a `ProviderError` of kind `connection`, so `ModelCallFinished.error` reads
- * `ProviderError` where Python's reads `ConnectionError`.
- * `test_reply_that_fails_normalization_sends_no_final_chunk` (at the `callModel` level and through
- * the node) is a reply the assembler refuses (a stream without its `Finish`, a `ProviderError` of
- * kind `incomplete`); a `ScriptedModel` stands in for Python's scripted LangChain chat.
- * `test_refused_credentials_with_both_sinks_fail_provider_auth` runs `PLAIN_FLOW` through `loadFlow`
- * and `runFlow` (`runWith`), without session memory, for the before-any-text and mid-stream refusals
- * (a `ProviderError` of kind `auth`, reported as `ProviderError` where Python's reads
- * `AuthenticationError`); its client-without-stream row is not ported (every `ChatModel`
- * streams).
- *
- * Ported through the node's tool loop, the tool in the run's `ToolSet` and each call streamed as two
- * `ToolCallDelta`s sharing its index, as Python's scripted chat streams it:
- * `test_tool_calling_agent_streams_each_exchange_between_its_observers` and
- * `test_two_streamed_tool_calls_aggregate_by_index`.
- *
- * Ported through `FlowEngine` (`runAgentFlow`), without the session memory TS yian doesn't have, so
- * only the streams and events are checked: `test_streamed_tool_exchange_is_retained_and_restored_like_an_invoked_one`
- * (every call streams, so there is no stream/invoke mode to check; one run's chunks are checked) and
- * `test_mid_stream_failure_in_a_session_turn_retains_a_failed_model_effect` (the dropped connection a
- * `ProviderError`, reported as such).
- *
- * Not ported: `test_duck_typed_client_without_stream_emits_one_chunk` (every `ChatModel` streams;
- * there is no duck-typed client or LangChain normalization).
- *
- * TS-only: chunks and call events name the step their record becomes (`n`, the `model_call`
- * step's number, counting the steps the start recorded before the call; tool events carry their
- * reply's), and `index` counts each step's chunks from 0; structured purposes stream nothing; a
- * retried attempt streams under the next `n`;
- * empty text deltas send no chunk; a host interrupt cuts a chat call before its next non-empty
- * text delta, ending its stream with the final chunk, and the cut reply holds the text shown.
+ * AGENT reply streaming: visible chat text reaches `emitStream` as it arrives, each chunk names its
+ * step (`n`) and `index`, and a failed or refused reply sends no final chunk.
  */
 
 import { mkdtempSync, readFileSync } from "node:fs";

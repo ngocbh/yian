@@ -1,23 +1,10 @@
 /**
- * A `call` node's node-level post `asserts:` fire on the cloned child END: a port of
- * `tests/engine/test_call_postasserts.py`.
+ * A `call` node's node-level post `asserts:` fire on the cloned child END.
  *
  * A `call` is a spawner: its `run` resolves to a `Grow`, and its `${output}` is committed when the
  * cloned child END finishes (`commitAs` the callsite). `callSubgraph` lowers the call's post
  * asserts onto that END, so a false assertion fails the child END (e.g. `research/__end__`), which
  * owns the committed call output and its postconditions.
- *
- * Ported: `test_call_post_assert_true_passes`, `test_call_post_assert_false_fails_loudly`,
- * `test_call_post_assert_reads_input_and_output_true`,
- * `test_call_post_assert_reads_input_and_output_false` and `test_call_post_assert_reads_input_true`.
- * Integers are bigints (decision 4a); the CODE reference is the TS fixture's
- * (`./fixtures/compose_codefns.ts:make_report`).
- *
- * Ported through `runFlow` and `advance`, in `hostEnv`: `test_call_post_assert_survives_recovery_true`
- * and `test_call_post_assert_survives_recovery_false`. Changed: the interruption before the human
- * answer is the run's `signal`, which the `ask` handler aborts (Python: the handler raises
- * `_HostStop`); the child's gate is a TOOL `ask` where Python's is a HUMAN_INPUT node (TS yian has
- * no HUMAN_INPUT kind).
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

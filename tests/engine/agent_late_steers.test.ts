@@ -1,7 +1,7 @@
 /**
  * Late steers: a steer queued when the model gives its final answer gets one more model call;
  * every reply counts toward max_tool_iterations, and at the cap the answer stands and the steers
- * stay queued. TS-only: Python yian has no steer inbox.
+ * stay queued.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

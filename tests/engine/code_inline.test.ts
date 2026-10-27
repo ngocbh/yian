@@ -1,81 +1,8 @@
 /**
- * The CODE node's source classification, its inline line-origin selector and its inline and
- * built-in bodies: a port of `tests/engine/test_code_inline.py`.
- *
- * Ported: `test_inline_reads_inputs_dict_and_returns`,
- * `test_inline_calling_convention_matches_reference` (`Object.keys(inputs).sort()`),
- * `test_inline_multi_statement_body_with_helpers`, `test_inline_body_that_prints_still_returns_value`
- * (a spy on `console.log`) and `test_inline_non_owned_failure_uses_whole_code_origin` (also with a
- * `CodeError`-wrapped outside error).
- *
- * Ported (adapted): `test_classify_reference_inline_reject` and
- * `test_wrapped_line_selector_uses_exact_whole_then_node_fallback` (its `True` line is `true`);
- * `test_inline_stdlib_import_in_body_works_in_process` (a dynamic `import("node:path")`);
- * `test_reference_mode_still_dispatches_in_process` and
- * `test_reference_failure_uses_code_then_node_fallback` (`./compose_codefns.ts:echo` and `:boom`
- * with `baseDir` the repository's `conformance/fixtures`, and an inline `throw` for the source-free
- * node); `test_inline_exception_selects_deepest_owned_code_line` (JS `1 / 0` doesn't throw, so the lambda
- * and comprehension forms become a throwing arrow and a `map` callback; lines are 1-based);
- * `test_syntax_error_rejected_at_construction` becomes `syntax error rejected by the load check`
- * (construction succeeds; the awaited `check()` rejects with a `TypeStripError` at line 1).
- *
- * Changed: a reference is a relative path to a `.ts`, `.js` or `.mjs` file plus `:fn`
- * (`./mod.ts:fn`); any other value is an inline body, so there is no reject bucket and
- * `./helpers.ts`, `pkg.mod:fn` and `./x.py:fn` classify as inline. The selector takes the line of
- * the authored body (line 1 is the body's first line), not the line of Python's
- * `def main(inputs):` wrapper. `test_inline_return_comes_back_unchecked` becomes `inline return is
- * checked by intake`: a CODE result goes through host intake (design 3.2.1), so a `Date` fails
- * `contract.output` at the contract origin.
- *
- * TS-only: the constructor compiles nothing, so a body that doesn't parse constructs; the node's
- * `mode`; a non-integer line selects no line; the selector's origin shape checks; the built-in
- * identity form a value entry lowers to (its `"builtin"` mode, its frozen copy, and the shape and
- * type checks on `code`); TypeScript annotations and `await` run; ints arrive as `number` (big
- * ones as `bigint`) and an integral result becomes an int; the `inputs` proxy (an undeclared
- * input rejects, `in`, `JSON.stringify`, `return inputs`, strict assignment); a body returning
- * `undefined` rejects; a thrown string's and a thrown record's text; a thrown string falls back to
- * the whole code origin; a body error's code is `node.execute`; a built-in's origin is the node's;
- * the built-in identity runs on the bound record; the runtime's function header is 2 lines; a
- * failing body's stack names its frames after the node's `sourceFile` (`<inline-code>` by
- * default) and the body's own line and column (marker text that isn't a body location stays),
- * its raw copy keeps them, and the throwing line is still located; a reference's frames name its own file; through
- * the evaluator and the engine, a success commits its int, a throwing body fails `node.execute`
- * with `Error: boom` and `causeType` `CodeError` at the line origin, a no-value body fails at the
- * whole `code:` origin, and an intake refusal fails `contract.output` at the contract origin; a
- * reference returning an int commits an int; a reference returning `undefined` rejects with the
- * no-value error; a missing export rejects with a `TypeError`, not a `CodeError`; a module that
- * throws while loading rejects with a `CodeError`; a `../` reference resolves against `baseDir`;
- * the load check refuses a wrapper escape without running it (at stripping, a `TypeStripError`, and
- * one that strips cleanly by the constructor, a `SyntaxError`), a body redeclaring `inputs` (the
- * constructor's `SyntaxError`), a Python-style `module:function` value and a reference to a
- * missing file, and passes an existing file (`../` included, never imported), a body that would
- * throw (never called) and a built-in. The body runs in a worker thread: a file input arrives as
- * a `FileRef` and a returned one commits a `FileRef`; a class instance, a getter and a function
- * in a result fail `contract.output` with intake's messages; a custom error class keeps its name
- * and its line; `process.exit(3)` in a body and a body awaiting a promise nothing resolves reject
- * with the worker's exit code, and the next call still works; a late timer throw rejects as a
- * `CodeError`; the worker uses the caller's `withEnv` values (a refused result's path is cut to a
- * small shown-value cap); two serial calls reuse one thread (a global set by the first is seen by
- * the second); a worker shares the host's live environment both ways (a host change after its
- * thread started reaches a body, and a body's change reaches the host); a call after an aborted
- * call still works; an input the clone refuses rejects, leaves no abort listener on the signal,
- * and the next call works; a late error from an earlier body while its worker is idle prints a
- * console error line and doesn't fail the next call; aborting the signal stops a body that never
- * yields, rejecting with its reason within 5 s; an already-aborted signal rejects before a worker
- * starts; a process whose spinning body was stopped exits on its own, on Bun and, with
- * `YIAN_TEST_NODE`, built on Node; and in a pooled run a busy CODE node doesn't block a sibling.
- * With a `codeRoot`, the load check passes a reference inside it (a `../` that stays inside
- * included) and refuses one outside it, by `../` or through a symlinked file or directory; without
- * one it confines nothing.
- *
- * Not ported: `test_no_return_body_rejected_at_construction` and `test_return_only_in_nested_def_still_rejected`
- * (Python `ast`; TS has no load-time `return` check);
- * `test_structurally_equal_foreign_code_cannot_impersonate_owned_code` (Python code objects);
- * `test_dynamic_same_filename_code_falls_back_to_owned_call_site` (Python `compile` and `exec`);
- * `test_reference_failure_does_not_inspect_origin_truthiness` (Python `__bool__`).
- *
- * Ported through `loadFlow` and `runFlow`, in `hostEnv`: `test_inline_flow_loads_and_runs` and
- * `test_inline_raise_becomes_failed_run` (the body JavaScript, `toFixed(1)` for Python's `:.1f`).
+ * The CODE node's source classification, its inline line-origin selector, and its inline,
+ * reference and built-in bodies: the load check, the worker thread a body runs in, intake of its
+ * result, and its errors' origins and stacks. A reference is a relative path to a `.ts`, `.js` or
+ * `.mjs` file plus `:fn` (`./mod.ts:fn`); any other value is an inline body.
  */
 
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
@@ -147,7 +74,7 @@ test("classify reference inline reject", () => {
   expect(classifyCodeSource("./a/b.js:f")).toBe("reference");
   expect(classifyCodeSource("return 1")).toBe("inline");
   expect(classifyCodeSource("const x = 1\nreturn x")).toBe("inline");
-  // No `:fn`, a Python-style token and a non-TS file are bodies, not references.
+  // No `:fn`, a `module:function` token and a non-TS file are bodies, not references.
   expect(classifyCodeSource("./helpers.ts")).toBe("inline");
   expect(classifyCodeSource("pkg.mod:fn")).toBe("inline");
   expect(classifyCodeSource("./x.py:fn")).toBe("inline");
@@ -453,8 +380,6 @@ test("a run fails a result intake refuses with contract.output at the contract o
   expect(failure.message).toBe("output at handle: Date is not a yian value");
   expect(failure.trace.at(-1)).toEqual(contractOrigin);
 });
-
-// --- TS-only rows --- //
 
 test("a non-integer line selects no line", () => {
   const whole = new OriginRef("code");
@@ -958,7 +883,7 @@ test("the load check refuses a body redeclaring inputs, by the constructor", asy
   expect((error as Error).constructor).toBe(SyntaxError);
 });
 
-test("the load check refuses a Python-style reference", async () => {
+test("the load check refuses a module:function reference", async () => {
   for (const code of ["pkg.mod:fn", "mymod:myfunc"]) {
     const error = await rejected(new CodeNode("p", { code }).check());
 

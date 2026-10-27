@@ -1,20 +1,6 @@
 /**
- * A node's binding labels replace a param's name in its binding errors: a port of
- * `test_label_replaces_the_param_name`, `test_without_a_label_the_default_text_stays`,
- * `test_fresh_node_has_no_binding_labels` and `test_eval_node_uses_the_node_binding_labels` of
- * `tests/engine/test_binding_labels.py`. Without a label each message keeps its default
- * `input '<p>'` / `binding '<p>'` text.
- *
- * Changed (rule: infinity is a float value, NaN is not a yian value): the `nonfinite` and
- * `nonfinite-at-path` cases computed infinity (`${input.x * 10}` with `1e308`), which now binds;
- * they keep failing at the same check with a literal NaN source, reading
- * `input 'p': NaN is not a yian value` and `input 'p' at [1]: NaN is not a yian value`; for the
- * same reason `test_eval_node_uses_the_node_binding_labels` reads a literal NaN source and expects
- * `X: NaN is not a yian value`. Changed (values in messages use the text form):
- * `"x" does not match declared type int` and `division by zero: 1 / 0`.
- *
- * TS-only: `${input.x * 10}` with `1e308` delivers `Infinity`, and a function label passed to
- * `resolveSource` names a failing template leaf by its path.
+ * A node's binding labels replace a param's name in its binding errors; without a label each
+ * message keeps its default `input '<p>'` / `binding '<p>'` text.
  */
 
 import { expect, test } from "bun:test";
@@ -139,8 +125,6 @@ test.each(CASES)(
 test("a fresh node has no binding labels", () => {
   expect(new CodeNode("n", { code: "return 1" }).bindingLabels.size).toBe(0);
 });
-
-// --- TS-only rows --- //
 
 test("an infinite result binds", () => {
   const record = bindParams(

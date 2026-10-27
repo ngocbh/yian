@@ -1,113 +1,6 @@
 /**
- * Explicit backward proposals and ordered, append-authorized memory effects: a port of
- * `tests/engine/test_backward_memory_runtime.py`, over the shared fakes of `memory_fakes.ts`.
- *
- * Ported: `test_proposal_phase_visits_every_memory_without_committing` and
- * `test_proposal_contexts_validate_completely_before_any_learner` (6 rows), with the `_table` and
- * `_open` helpers; the `backend` and `duplicate` rows of
- * `test_late_proposal_failure_discards_all_staged_mutations`,
- * `test_policy_failure_preserves_prior_success_and_stops_later_policies` (2 rows; `{}` for Python's
- * `object()`), `test_empty_feedback_still_learns_empty_memories_and_commits_empty_batches`,
- * `test_no_policy_backward_still_records_ready_and_finished_without_opening_resources`,
- * `test_computation_failure_finishes_without_partial_feedback_or_learning` (2 rows),
- * `test_append_fault_preserves_exact_prefix_and_closes_resources` (8 rows; the log's `append`
- * instance-patched to throw an `Error`, Python's `OSError`),
- * `test_manual_precommit_retry_reopens_snapshots_and_recomputes_every_memory` (2 rows),
- * `test_known_precommit_failure_allows_fresh_complete_pass_without_prior_proposals`,
- * `test_failed_resource_setup_does_not_close_an_interrupted_attempt` (3 rows; the opener throws an
- * `Error`, Python's `OSError`),
- * `test_later_attempt_follows_or_closes_any_prior_attempt_and_recomputes_everything` (3 rows),
- * `test_repeated_driven_attempts_request_distinct_commit_ids_for_identical_batches`,
- * `test_opened_memory_runtime_subclass_is_closed_by_the_driver` and
- * `test_submission_gates_reject_before_opening_or_appending` (3 rows), with the `_terminal`,
- * `_records` and `_drive` helpers.
- *
- * Changed: Python's tuples are arrays and its dictionaries are `Map`s; `proposeLearning`,
- * `MemoryRuntime.open` and `driveBackward` return promises; each learner receives the very context
- * passed in (`toBe`, where Python compares a revalidated copy with `==`); each refusal pins its
- * class and full message (Python accepts either `TypeError` or `ValueError`), and the `list` row
- * passes a `Set` (Python's list for a tuple). Python's `type(record) is X` is
- * `record.constructor === X`, and its `copy.deepcopy(pool.store)` is `state.pool.toWire()`.
- * `test_backward_finishes_all_callbacks_before_ready_and_policy_requests` wraps the session's
- * commit with `spyOn(FakeSession.prototype, "commit")` (Python's class-level `monkeypatch`),
- * restored with `mockRestore()`.
- * - `test_late_proposal_failure_discards_all_staged_mutations`: the `tuple` row's learner returns a
- *   `Set` (not an array), and the `forged` row returns a plain object shaped like a mutation with
- *   `mutationId: true`, since a `MemoryMutation` is frozen (Python forges with `object.__setattr__`).
- * - `test_context_depth_failure_keeps_completed_backward_without_calling_learners` and
- *   `test_replayed_context_failure_must_name_an_accepted_receiving_occurrence` (7 rows): TS has no
- *   memory JSON nesting bound, so a spy on `LearnContext.fromFrozen` throws
- *   `RangeError("context too deep")` on its first call (START's occurrence, seq 1, under
- *   `_terminal`'s every-node scope), restored with `mockRestore()`; the six changes rebuild the
- *   failure through the `BackwardFailure` and `MemoryOperationFailure` constructors (Python's
- *   `dataclasses.replace`), and each refusal pins its `RangeError` and full message (Python's
- *   `ValueError`).
- * - `test_computation_failure_finishes_without_partial_feedback_or_learning`: the callback throws a
- *   plain `Error` (Python's `ValueError`).
- * - `test_backend_host_or_unexpected_error_escapes_with_exact_prefix`: the `RuntimeError` and
- *   `RecursionError` cells, × learn and commit, throw a plain `Error` and a `RangeError`.
- * - `test_host_capability_identity_and_cleanup_error_preserve_primary_exception`: the learner's
- *   `CapabilityFault` escapes as that same object (TS unwraps no capability fault), with both
- *   sessions' close failures noted on it; the close is wrapped with
- *   `spyOn(FakeSession.prototype, "close")` and throws an `Error` (Python's `OSError`).
- * - `test_cleanup_error_after_finished_preserves_success_and_admits_a_later_attempt`: the close is
- *   wrapped with `spyOn(FakeSession.prototype, "close")` and throws an `Error` (Python's `OSError`).
- * - `test_backward_and_memory_replay_calls_no_callbacks_or_materialization`: the module-private
- *   `materializeContext` can't be patched, so only the node hooks and
- *   `spyOn(MemoryRuntime.prototype, "proposeLearning"/"commitLearning")` fail if called, and the
- *   replayed backward state is compared with `toEqual`.
- * - `test_prepare_failure_is_not_sanitized_as_a_learner_failure`: `prepareRecord` is a module
- *   function that can't be patched, so the log's `append` throws the `MemoryOperationError` for the
- *   Ready record instead.
- * - `test_learner_mutation_of_its_arguments_and_returned_values_cannot_change_authority`: the
- *   context and the mutation are frozen, so each learner's edit throws a `TypeError` (asserted)
- *   before the same authority checks.
- * - `test_wrapped_host_error_during_partial_setup_closes_prior_sessions`: TS unwraps no cause, so
- *   B's `openRun` throwing a `MemoryOperationError` rejects the drive with the `MemorySetupError`
- *   whose `cause` is that error.
- * - `test_cleanup_unwraps_host_failure_after_closing_all_sessions`: the two `with_primary` cells,
- *   with plain errors: the learner throws an `Error` and B's close a `MemoryOperationError`, which
- *   escapes itself without a primary and is noted on the primary with one.
- * - `test_commit_batch_is_detached_from_every_accepted_authority`: the `mutation` and
- *   `public_payload` targets × the three completions (6 cells); the mutation and its payload are
- *   frozen, so the backend's edit throws a `TypeError` (asserted), and the `host_failure` commit
- *   throws a plain `Error` (Python's `MemoryError`) that escapes unchanged. TS also asserts that
- *   `commitLearning` receives the accepted request itself and the session its own commit id and
- *   mutations (`toBe`).
- *
- * TS only: driving with an inexact `RunState` or a non-log refuses before opening; feedback that
- * passes the feedback check but can't be prepared (a lone surrogate) is refused before the opener
- * runs; an async opener resolves before the first record; a drive overtaken by another drive while
- * it awaits its opener (fresh and unfinished prior attempt) or its handler (the handler then
- * throws, or its learner fails) is refused by the reducer, appends nothing and closes its runtime,
- * and one overtaken while its commit is pending is refused the same way and appends nothing
- * further; a drive whose handler throws or whose learner fails while a newer drive is mid-attempt
- * can't finish the newer attempt, which then finishes itself (choice 11); an opener result that
- * isn't a `MemoryRuntime` and a runtime whose earlier close failed are refused; a
- * `MemoryOperationError` with an `AbortError` or `CapabilityFault` cause is a learner or commit
- * failure; a thrown `undefined` still closes the runtime and is rethrown; a drive hands its
- * `models` and `onEvent` to a node's backward hook as its third argument.
- *
- * Not ported:
- * - `test_typed_backend_wrappers_preserve_original_host_error`: it walks the cause chain for the
- *   original host error, and TS unwraps no host control (choice 1): a `MemoryOperationError` from
- *   learn or commit is a learning failure whatever its `cause`, and any other thrown value escapes
- *   unchanged.
- * - `test_each_attempt_checks_only_its_own_records_not_earlier_attempts`: it counts the calls of a
- *   module-private function, which TS can't patch.
- * - `test_nested_capability_faults_never_escape_private_wrappers`,
- *   `test_capability_originals_are_checked_for_wrapped_host_controls` and
- *   `test_cyclic_capability_fault_is_a_host_error_without_exposing_private_carriers`: they unwrap
- *   capability faults (choice 1).
- * - The `BaseException`-type cells (`MemoryError`, both `CancelledError`s, `KeyboardInterrupt`,
- *   `SystemExit`) of `test_backend_host_or_unexpected_error_escapes_with_exact_prefix` and the
- *   `error_type` dimension (the same classes) of
- *   `test_cleanup_unwraps_host_failure_after_closing_all_sessions`: TS has no such classes.
- * - The `inner_payload` cells of `test_commit_batch_is_detached_from_every_accepted_authority`: TS
- *   has no private payload tree.
- *
- * Changed: an unfinished backward attempt fails `backward.unfinished`, where Python says
- * `backward.interrupted`.
+ * Explicit backward proposals and ordered, append-authorized memory effects, over the shared fakes
+ * of `memory_fakes.ts`: the proposal phase, policy failures, append faults, retries and cleanup.
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -1210,7 +1103,7 @@ test("a commit batch is detached from every accepted authority", async () => {
         expect(commitId).toBe(accepted.commitId);
         expect(mutations).toBe(accepted.mutations);
         const mutation = mutations[0]!;
-        // Python edits the mutation in place with `object.__setattr__`; a frozen carrier refuses both edits.
+        // A frozen carrier refuses both edits.
         if (target === "mutation") {
           expect(() => {
             (mutation as { mutationId: string }).mutationId = "backend-changed";

@@ -1,36 +1,7 @@
 /**
- * The serial append-only engine drain: a port of `tests/engine/test_engine.py`. Fake nodes (no
- * models or tools) exercise ordering, fan-out, the exactly-once diamond join, CASE branches and
- * skip floods, outputs before successors, failure and typed output commits.
- *
- * Ported: `test_linear_runs_in_order`, `test_end_assembles_declared_output_record`,
- * `test_no_declared_outputs_yields_none`, `test_end_output_coalesce_returns_first_non_none`,
- * `test_end_output_default_when_ref_none`, `test_end_output_literal_string_passthrough`,
- * `test_end_output_literal_numeric_passthrough` (a bigint), `test_end_output_flowoutput_carrier_builds_record`,
- * `test_end_output_whole_ref_preserves_typed_value`, `test_fan_out_runs_all_branches`,
- * `test_multiple_roots_all_start`, `test_diamond_join_fires_exactly_once`,
- * `test_outputs_written_before_successor_runs`, `test_case_takes_branch_and_skips_other`,
- * `test_case_else_fallback`, `test_skip_floods_through_unreachable_chain`,
- * `test_data_edged_branch_target_does_not_run_when_skipped`,
- * `test_skipped_terminal_producer_fails_run`, `test_coalesce_terminal_one_branch_skipped_succeeds`,
- * `test_does_not_misfire_on_optional_terminal`, `test_genuine_none_terminal_succeeds`,
- * `test_node_failure_produces_graph_failed`, `test_output_enforced_rejects_type_mismatch`,
- * `test_multi_output_record_is_a_closed_type`, `test_unresolvable_declared_type_is_not_enforced`,
- * `test_undeclared_output_is_not_enforced`, `test_num_workers_0_and_4_same_terminal` and
- * `test_fixture_engine_defaults_serial`.
- *
- * Changed: `test_output_enforced_coerces_and_types_storage`: an int filling a float slot stays an
- * int in TS, so the stored value is the int 3 with storage kind `int`, where Python coerces it to
- * the float 3.0.
- *
- * TS-only: nothing ready before a terminal result is nonterminal quiescence. The node failure row
- * also checks that a failed run aborts its signal. `resumedAttemptEvents` (on a live state): a crash
- * before the resume counts one crashed attempt, a `RunStopped` before it none, two crashes two,
- * and the events follow the record's `retryNodeIds`. Fixture sanity: `engine` records the memory
- * table, stacks and snapshots it is given in `RunStarted`, and `ownerEngine` scopes every node of a
- * flat flow under one root-owned memory.
- *
- * Not ported: `test_parallel_module_and_export_are_gone`; TS never had `ParallelFlowEngine`.
+ * The serial append-only engine drain. Fake nodes (no models or tools) exercise ordering, fan-out,
+ * the exactly-once diamond join, CASE branches and skip floods, outputs before successors, failure
+ * and typed output commits.
  */
 
 import { expect, test } from "bun:test";

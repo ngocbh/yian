@@ -1,12 +1,11 @@
 /**
- * TS-only: an AGENT's model calls and tool results are `node_step` records, written as the agent
- * runs. Each successful or failed model call is a `model_call` step, written once the call
- * returns and before any of its tools runs; each tool result is a `tool_result` step, written as
- * that call finishes (in finish order) and before the next model call. A `model_call`'s output
- * holds media as files beside the run, and its `request_sha256` hashes the request in that form,
- * steers left out. Failed calls carry their usage and a scrubbed error; a call a stop or abort
- * cut writes nothing. The step's `n` is its number within the node, which a tool call's
- * idempotency key also uses.
+ * An AGENT's model calls and tool results are `node_step` records, written as the agent runs. Each
+ * successful or failed model call is a `model_call` step, written once the call returns and before
+ * any of its tools runs; each tool result is a `tool_result` step, written as that call finishes
+ * (in finish order) and before the next model call. A `model_call`'s output holds media as files
+ * beside the run, and its `request_sha256` hashes the request in that form, steers left out. Failed
+ * calls carry their usage and a scrubbed error; a call a stop or abort cut writes nothing. The
+ * step's `n` is its number within the node, which a tool call's idempotency key also uses.
  *
  * Most rows run a YAML flow through `runFlow` with a JSONL log and read the log's records;
  * `AgentSteps` is also tested alone over a recording `NodeSteps`.

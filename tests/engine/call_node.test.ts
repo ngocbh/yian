@@ -1,18 +1,6 @@
 /**
- * The CALL and MAP drivers' shells: a port of `tests/engine/test_call_node.py`.
- *
- * Ported: `test_call_node_has_no_map_fields`, `test_map_node_kind_and_parallel_fields`,
- * `test_call_returns_grow`, `test_map_returns_grow`, `test_map_empty_returns_grow_with_lone_list_end`,
- * `test_call_unbaked_child_raises` and `test_map_unbaked_child_raises`.
- *
- * Changed: the baked child is a stub object (Python's growth rows use `test_expand`'s
- * `_child_flow`, which `run` never reads); `hasattr` is the `in` operator; `run` is async, so the
- * not-baked setup fault is a rejection, and MAP's `bindItem` capability is passed in `caps`.
- *
- * TS-only: the traits read on instances (`isSpawner`, `growDepthDelta`, MAP's `bindsPerItem` and
- * `itemSourceKey`); `forward` copies CALL's seed record and each MAP seed record (changing the
- * record afterwards leaves the seed alone), and each keeps an input named `__proto__` as an own
- * field; MAP without `bindItem` throws a `TypeError`, also for an empty `over`.
+ * The CALL and MAP drivers' shells: their fields and traits, `Grow` results, seed records, and the
+ * not-baked setup fault.
  */
 
 import { expect, test } from "bun:test";

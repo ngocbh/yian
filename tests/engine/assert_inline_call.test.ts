@@ -1,17 +1,7 @@
 /**
- * A named `call` node whose `.output` a flow `asserts:` expression reads: a port of
- * `tests/engine/test_assert_inline_call.py`.
- *
- * `dbl_call` runs the `dbl` def, and `dbl_call.output >= 0` is checked after the run. No synth node
- * is minted: the call is an ordinary, author-named node in the flow. The load half assembles the
- * flow (`assembleText`), the `dbl` def built by hand (`handChild`).
- *
- * The runs, loading the flow with its real `dbl` def (`loadConformanceFlow`) and running it through
- * `runFlow`: `test_inline_call_assert_passes` and `test_inline_call_assert_fails_post`. Their ints
- * are bigints (decision 4a).
- *
- * TS-only: the harvested `load-map-call/engine_assert_inline_call__named_call_node_assert_loads`,
- * pinned at the end.
+ * A named `call` node whose `.output` a flow `asserts:` expression reads. `dbl_call` runs the `dbl`
+ * def, and `dbl_call.output >= 0` is checked after the run; the call is an ordinary, author-named
+ * node, so no synth node is minted.
  */
 
 import { afterEach, expect, test } from "bun:test";

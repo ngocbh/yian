@@ -1,5 +1,5 @@
 /**
- * TS-only: an agent's pending calls across crashes and deadlines. A crash or stop closes the
+ * An agent's pending calls across crashes and deadlines. A crash or stop closes the
  * retried agent's open calls by record (`run_resumed.closed_calls`); the replay writes the closer
  * the record names; an `ask_user` timeout closes the call `timed_out` and the model reads 'timed
  * out: no answer'. A timed-out call closes at its own deadline while the reply's other calls stay

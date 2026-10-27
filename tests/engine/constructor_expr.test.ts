@@ -1,10 +1,8 @@
 /**
- * `T(...)` constructors in the expression language: the parse and evaluation tests of
- * `tests/engine/test_constructor_expr.py` (call shape, the positional and keyword forms, larger
- * expressions, names that are not constructors, a constructor in an embedded template span),
- * its walker tests (`expr_refs`, `rewrite_expr_refs`, `constructor_names`), the co-skip,
- * flow-callee and prompt tests, its binder tests (`bindParams` reports a failed constructor as
- * `binding.type` and delivers a constructed record), and its static inference tests.
+ * `T(...)` constructors in the expression language: call shape, the positional and keyword forms,
+ * larger expressions, names that are not constructors, a constructor in an embedded template span,
+ * the reference walkers, co-skip, flow callees and prompts, the binder (a failed constructor is
+ * `binding.type`, a good one delivers a record), and static inference.
  */
 
 import { expect, test } from "bun:test";

@@ -1,6 +1,5 @@
 /**
- * The raw-string binding API on the unified engine, a port of
- * `tests/engine/test_binding_raw_api.py`: `evalBinding(source, resolve, {item})` and
+ * The raw-string binding API on the unified engine: `evalBinding(source, resolve, {item})` and
  * `exprRefsOf(source)`, which take a raw template and scan it themselves.
  *
  * These cover the binding semantics (a typed whole span, an embedded span written as text, `$$`,
@@ -8,11 +7,6 @@
  * scope) and full expressions inside a binding span (arithmetic, text and list operations). The
  * values follow the TS number model (ints are `bigint`s). A binding capture marks only the
  * inputs whose template it actually evaluated.
- *
- * Changed: `test_capture_marks_actual_template_evaluation_in_materialized_seed` leaves out its
- * `scanned == ["missing | absent"]` line, which counts parses by patching the grammar's
- * `parse_expr`: an ES module export can't be patched. `evaluatedKeys` and the literal routes
- * still pin the behavior.
  */
 
 import { expect, test } from "bun:test";

@@ -1,18 +1,6 @@
 /**
- * Failure producers carry semantic origins, never YAML coordinates: a port of
- * `tests/engine/test_failure_surface.py`. Ported: the instance half of
- * `test_failure_producers_have_no_location_parameters_or_attributes`,
- * `test_source_span_is_absent_from_runtime_events`,
- * `test_failure_carriers_have_no_parallel_location_fields` and
- * `test_observers_share_the_same_failure_authority`.
- *
- * Changed: the carriers' own keys stand in for dataclass fields. The observers also hold their
- * `type` tag; a `RunResult` also holds `crashedAttempts`, reads `learning` and
- * `backwardOutcome` through getters, and keeps its backward handle outside the instance.
- *
- * Not ported: the `inspect.signature` half of
- * `test_failure_producers_have_no_location_parameters_or_attributes` (TypeScript has no keyword
- * parameters to inspect; an unknown option fails the type check).
+ * Failure producers carry semantic origins, never YAML coordinates: failure carriers and observers
+ * hold no location fields and share one failure authority.
  */
 
 import { expect, test } from "bun:test";

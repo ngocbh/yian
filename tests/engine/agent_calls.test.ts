@@ -1,10 +1,10 @@
 /**
- * TS-only: a host reads a run log's AGENT model calls (`agentCalls`) and one call's view
- * (`agentCall`): the request rebuilt from the recorded flow and the steps before it, checked
- * against the recorded digest, then the attempts, the reply and its tool results as recorded.
+ * A host reads a run log's AGENT model calls (`agentCalls`) and one call's view (`agentCall`): the
+ * request rebuilt from the recorded flow and the steps before it, checked against the recorded
+ * digest, then the attempts, the reply and its tool results as recorded.
  *
  * Each run is logged with a scripted model, which keeps every request it received; a rebuilt
- * request must equal the one the model received. No Python counterpart.
+ * request must equal the one the model received.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

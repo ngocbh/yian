@@ -2,8 +2,6 @@
  * The built-in `Message` value: its check, its conversion to and from the model message, the
  * public value codec round trip, its agreement with `message.schema.json`, and the conversation
  * check a request needs.
- *
- * TS-only: Python yian has no public message type.
  */
 import { describe, expect, test } from "bun:test";
 

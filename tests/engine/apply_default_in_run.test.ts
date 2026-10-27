@@ -1,19 +1,7 @@
 /**
- * The base `run` template fills parameter defaults before the pre-asserts: a port of
- * `tests/engine/test_apply_default_in_run.py`. A pre-assert may read an input the caller omitted
- * but its `Parameter` supplies; a caller's explicit `null` shadows the default (`f(x=None)`).
- *
- * Ported: `test_omitted_input_defaulted_before_pre_assert`, `test_bound_null_shadows_default`,
- * `test_explicit_null_default_fills_when_omitted`,
- * `test_compatible_stored_default_is_not_replaced_by_validation`,
- * `test_incompatible_stored_default_fails_without_string_coercion`,
- * `test_apply_default_idempotent_no_double_fill` (both halves) and
- * `test_node_run_rejects_noncanonical_parameter_elements`.
- *
- * TS-only: an `Array` subclass and a `Set` as `params` reject, in place of the tuple rows.
- *
- * Not ported: `test_node_run_rejects_noncanonical_parameter_containers`: both of its rows are
- * tuples, which TS doesn't have.
+ * The base `run` template fills parameter defaults before the pre-asserts. A pre-assert may read
+ * an input the caller omitted but its `Parameter` supplies; a caller's explicit `null` shadows the
+ * default.
  */
 
 import { expect, test } from "bun:test";

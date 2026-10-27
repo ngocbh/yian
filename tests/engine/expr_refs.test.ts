@@ -1,13 +1,12 @@
 /**
- * The one compile-time reference walk (`exprRefs`), a port of `tests/engine/test_expr_refs.py`.
+ * The one compile-time reference walk (`exprRefs`).
  *
  * `exprRefs(parseExpr(text))` collects every reference-leaf path a unified `${...}` expression
  * reads, in source order (no dedupe). A `refcall` without a `call_suffix` is a reference (its
  * dotted path is collected); one with a `call_suffix` is a call: the callee name contributes
  * nothing, but each argument value's references are collected. Literals contribute nothing.
  * `item`-headed references are collected here; the caller skips `item` when minting edges.
- *
- * TS-only: comprehension variables are not reads, and `rewriteExprRefs` leaves them alone.
+ * Comprehension variables are not reads, and `rewriteExprRefs` leaves them alone.
  */
 
 import { expect, test } from "bun:test";

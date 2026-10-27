@@ -1,252 +1,7 @@
 /**
- * Forward captures: a port of `tests/engine/test_forward_trace.py`. Ported:
- * `test_forward_capture_rejects_duplicate_record_names`, and the constructor halves of
- * `test_forward_capture_round_trips_invocation_names_and_structural_layout` (the caller's later
- * edit of `node_data` doesn't show),
- * `test_forward_capture_rejects_malformed_invocation_inventory_and_paths` (10 rows) and
- * `test_forward_capture_rejects_noncanonical_embedded_json` (5 rows). Python's `ValueError` is a
- * `RangeError` here. TS records no evidence (learning reads the steps), so
- * `test_scope_free_evidence_rejects_recalled_sections` is not ported.
- *
- * Ported, the record halves on the run log: of
- * `test_forward_capture_round_trips_invocation_names_and_structural_layout`,
- * `test_forward_capture_rejects_malformed_invocation_inventory_and_paths` (10 rows) and
- * `test_forward_capture_rejects_noncanonical_embedded_json` (5 rows, the reader's
- * `JSONDecodeError`); `test_schema_six_requires_explicit_invocation_inventories`,
- * `test_forward_capture_round_trips_without_memory_scope`,
- * `test_forward_capture_rejects_malformed_nested_route_wire` (15 rows),
- * `test_forward_capture_keeps_the_existing_canonical_depth_range`,
- * `test_codec_preserves_evaluated_route_variants` (9 rows),
- * `test_codec_preserves_opaque_argument_labels` and
- * `test_codec_rejects_misaligned_or_nonstring_opaque_argument_labels`. Each rejected row names its
- * class and message (a `JSONDecodeError` its reason).
- *
- * TS-only (run log): repeated or unsorted `evaluated_keys` on the wire, and an evaluated key added
- * to a capture's mutable `Set` after construction, refused by the encoder.
- *
- * TS-only: one row per `ForwardCapture` message with its class; a capture with items, scope and
- * node data keeps frozen copies; `ForwardCapture`'s defaults; `BackwardCapture`'s defaults, one row per check its constructor wires in, and
- * its frozen copy of `nodeData`; a `Set` subclass whose iterator changes between passes stores the
- * keys that were checked.
- *
- * Changed:
- * - Captures hold frozen copies, with no copy on read: a reader's edit throws a `TypeError` where
- *   Python changes a private copy, and `evaluatedKeys` is a private `Set` copy, read-only by
- *   contract, where Python keeps the caller's `frozenset`.
- * - Inventories and items are arrays, not tuples; `evaluatedKeys` is a `Set`, not a `frozenset`.
- * - Each rejected row names its one error class, where Python accepts either `TypeError` or
- *   `ValueError`. A malformed `value_json` throws the reader's `JSONDecodeError`.
- * - Schema 10 routes have no `count`, so the two `count` rows of the nested-route test are extra
- *   fields; schema 6 reads `unsupported run-record schema: 6`.
- * - A decoded capture is frozen, so editing its inputs or node data throws a `TypeError` where
- *   Python edits a private copy.
- * - `partial()` returns a record holding a file (the TS leaf JSON can't hold) for Python's
- *   `object()`; `collect_args` takes the named parameters `first`, `second` and `value`, each
- *   defaulting to 0, for Python's `*args, **kwargs`, so its call log holds the bound values.
- *
- * Not ported: the forged-field rows of `test_codec_revalidates_forged_immutable_capture_fields`
- * (`children`, `path`, `scope`): a TS route, source and scope are frozen by their constructors,
- * so a capture holds them without rebuilding them; the repetition rows (`${a * 2}`,
- * `${-2 * a}`) of `test_codec_preserves_evaluated_route_variants`, since repetition is a type
- * error in TS.
- *
- * TS-only (trace), with entries installed by setting the trace's internal maps: `captureBindings`
- * over a hand-built `BindingCapture` with one item and its two type errors; `SourceEntry.value`
- * restoring files through `files` where `storedValue` doesn't, each read fresh; `sameSourceEntry`
- * over each field; one row per `TraceTerminal` message and its `output`; `checkMemoryScope`; a
- * `TraceOccurrence` keeping a decoded copy of its envelope; `selectSeedRoute`; `RetainedTrace`'s
- * defaults, `lookupSource`, `resolve`, `occurrence` and `backwardContext`.
- *
- * TS-only (trace deltas), driving `prepareTrace` and `TraceDelta.apply` over `learnableRun()`: the
- * trace after each apply (started, occurrence, writer, sources, handler, a node's commit only
- * advancing it), the run start's commits installing the system values, the START inputs and the
- * root writer, a success refused without its commit, and the terminals (root writer, failed occurrence,
- * first causal route) and the root START source; `null` for a RunStarted that doesn't learn and
- * for records before one; one row per `prepareTrace` message with its class, the lookup error as
- * the cause of an absent source path, and the canonical terminal compare; one row per
- * `validateOrigin` message (another trace, a stale sequence, a forged occurrence, a consumed
- * connection gone); seed connections sorted, then consumed by the child start with evaluated keys
- * winning; boundaries sorted and filled by the child's endpoints; an expansion pruning current
- * names only; a resume clearing unfinished starts; an applied delta leaving earlier occurrences
- * alone; a `TraceDelta`'s defaults and frozen arrays.
- *
- * TS-only (bound inputs from the route): a learnable chat's replayed trace rebuilds each
- * occurrence's bound inputs by rebinding its node from the values its route read, a template
- * binding (`reply`) and a `+` binding (`__end__`) after the loop pruned their nodes; a replayed
- * derived record (an inner `__end__`) that holds a forward capture is refused.
- *
- * TS-only (frontier trace), on `learnableStarted` with START's `NodeStarted` committed: a learnable
- * `RunStopped` carries a sequence-only trace delta and commits; a forged stop plan whose trace
- * delta starts a node is refused; a frontier plan holding an outcome record is refused by the
- * frontier trace check.
- *
- * Ported, the run-state trace checks, on the shared `startTraceNode` (Python's
- * `_start_trace_node`, with its route handle) and a local `preparedScopedOutcome` (Python's
- * `_prepared_scoped_outcome`; its `growth` kind grows a `FuncNode` spawner into the shared
- * `fragment`):
- * `test_outcome_trace_writer_matches_the_same_accepted_physical_output` (`target`, `source`,
- * `sequence`, `value`, `missing`), `test_terminal_trace_root_writer_must_be_the_physical_accepted_output`
- * (`none`, `source`, `sequence`, `value`),
- * `test_terminal_trace_output_must_match_the_prepared_outcome_before_append`,
- * `test_outcome_trace_source_must_match_the_physical_accepted_start_before_append` (a failure),
- * the `success`, `route`, `failure` and `growth` rows of
- * `test_outcome_trace_occurrence_identity_matches_the_canonical_record` (`replace`: `source`,
- * `node`, `sequence`, `record`) and of `test_outcome_trace_cannot_override_dispatch_authority`
- * (`initialized`, `started`, `resumed`), `test_terminal_trace_rejects_forged_fields_before_append`
- * (`replace`: every change but `source_float`; its `route` rows, after rewrite, on a local
- * `preparedTerminalRoute`, Python's `_prepared_terminal_route`, built on `learnableStarted`),
- * `test_outcome_rejects_valid_scope_substitution_before_append` (`replace`: 3 rows per kind) and
- * `test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta` (3 rows per kind),
- * and the `success`, `route` and `growth` rows of
- * `test_nonterminal_outcome_rejects_fabricated_terminal_trace_authority` (4 rows each). Each
- * rejected row names its one class and full message (all `RangeError`s, where Python matches a
- * part of a `ValueError` or accepts either class); a refused commit leaves the log, the state
- * (the shared `snapshot`) and the trace (the shared `traceSnapshot`) unchanged.
- *
- * Ported, after rewrite (the start is built with prepareRunStarted, not the engine), on
- * `learnableStarted`: `test_trace_is_applied_only_after_successful_append` (the log's `append`
- * patched on the instance, its error an `Error`, Python's `OSError`),
- * `test_terminal_trace_root_start_latch_must_match_the_accepted_start` (`none`, `sequence`, `run`),
- * `test_paired_resolver_preserves_pool_namespaces` (10 rows; the system value is the fixture's run
- * id) and `test_reducer_requires_capture_exactly_when_learning` (its run that doesn't learn on
- * `initializedAndStarted`); the frontier trace checks, on a local `preparedTraceFrontier` (Python's
- * `_prepared_trace_frontier`): `test_frontier_trace_cannot_inject_a_causal_terminal_source_before_append`,
- * `test_frontier_trace_rejects_inappropriate_fields_before_append` (19 of its 34 rows; the rest
- * below) and `test_frontier_trace_started_identity_is_exact` (`node`, `sequence`).
- *
- * Ported, the replay tests (through `replayRecords` over a `copyGraph` copy of the flow taken
- * before the outcome, Python's `deepcopy`; detached copies are rebuilt with their constructors):
- * `test_outcome_accepts_detached_physical_scope_and_replays_it` (8 rows) and
- * `test_terminal_trace_uses_the_accepted_route_latch_until_an_explicit_failure` (2 rows; replay of
- * every prefix), each refusal with its full message.
- *
- * Changed:
- * - A forged trace delta, occurrence, source entry or terminal is rebuilt with its constructor,
- *   for Python's `dataclasses.replace`; a value its constructor refuses (a terminal whose
- *   `succeeded` is a number, a success terminal with a failure, a failed terminal with output, an
- *   occurrence with a scope that isn't a `MemoryScope`) is forged through its class's prototype,
- *   for Python's `object.__setattr__`.
- * - The `carrier` row of `test_trace_rejects_forged_memory_scope_before_append_and_when_copied`:
- *   the occurrence constructor refuses the scope, and the commit refuses a forged occurrence that
- *   holds it, each with a `TypeError` naming the historical memory scope.
- * - The trace snapshot keeps the backward handlers by reference, for Python's bound-method
- *   identities; a replay compares through the shared `replayTraceSnapshot`, the handlers by key
- *   (a TS bound handler can't name its node).
- * - `test_terminal_trace_accepts_detached_authority_without_repreparing` (3 rows): Python's
- *   monkeypatched "trace was reprepared" and "terminal was rederived" guards are dropped (an ES
- *   module's functions can't be patched); the test keeps the detached commit and the replay
- *   equality.
- * - `test_frontier_trace_and_terminal_source_match_live_replay_without_repreparing` (`started`,
- *   `resumed`), on the local `preparedTraceFrontier`: the "trace was reprepared" guard is dropped
- *   the same way; the detached delta is `changedDelta(delta, {})`; the replay compares through
- *   `replayTraceSnapshot`, and both `computeBackward` results are equal.
- *
- * Not ported (TS types): every `mutate` row (a TS delta, occurrence and terminal are frozen); the
- * `float_sequence` and `source_float` rows, and the `sequence` row of
- * `test_outcome_trace_cannot_override_dispatch_authority` (`float(n)` is the number `n`); the
- * `tuple` row of `test_outcome_trace_writer_matches_the_same_accepted_physical_output` (a list
- * and a tuple are both an array); the `nested` row of
- * `test_trace_rejects_forged_memory_scope_before_append_and_when_copied` (a `MemoryScope` is
- * frozen by its constructor); of `test_frontier_trace_rejects_inappropriate_fields_before_append`,
- * the `sequence` rows (`float(n)`), the `resumed` rows (`int(bool)`), the `prune_ids`,
- * `connections` and `boundaries` rows (`EmptyChanges`; a `TraceDelta` holds frozen array copies)
- * and the `consumed_connection` and `boundary_update` rows (`UnavailableChange`; it holds frozen
- * pair copies), and the `started` row of a dispatch (a list and a tuple are both an array); of
- * `test_frontier_trace_started_identity_is_exact`, the `float_sequence` row and the
- * `tuple_subclass` row (the delta copies the pair by index).
- *
- * TS-only (frontier trace): the same history-field rows, with `started` and `resumed`, on a
- * prepared `NodeStep` and `RunStopped` of the in-flight `router`.
- *
- * Not ported (thread race): `test_a_lookup_retains_its_entry_when_a_new_writer_commits`.
- *
- * Ported, through the engine (`engine` with `learnable`):
- * `test_trace_source_is_the_actual_commit_as_producer`
- * (the handler at the producer's source, called, is the producer's own `backward`),
- * `test_failed_binding_and_rejected_outcomes_retain_canonical_failures` (5 rows; the grow row's
- * seed is a `Set`), `test_learn_false_omits_backward_capture`,
- * `test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced`,
- * `test_capture_canonicalizes_supported_binding_objects` (an array for Python's tuple),
- * `test_learning_retains_opaque_calls_with_arguments` (4 rows; `collect_args` as in the codec row)
- * and `test_trace_replay_matches_live_accepted_prefixes` (8 rows; the `route` row's `BranchNode`
- * chooses the else handle, for Python's empty CASE; a node body called during replay throws;
- * Python's handler identity check is dropped, since a TS bound handler can't name its node).
- *
- * Ported (adapted), through the engine:
- * - `test_agent_render_capture_host_and_append_failures_do_not_install_worker_data`: the append
- *   row, on a CODE node, the log's `append` replaced on the instance. The capture row and
- *   `test_static_capture_host_fault_does_not_append_a_node_outcome` aren't ported: an evaluation
- *   captures no node data (learning rebuilds it), so no capture can fail before the append.
- * - `test_pooled_lookup_keeps_value_and_producer_identity_together`: a TS binding is synchronous,
- *   so no commit can land between two reads of one binding; instead `consumer` binds while `peer`
- *   is in flight and `late` after `peer` committed, each read's value and producer agreeing.
- * - `test_discarded_pooled_outcomes_are_not_trace_occurrences`: the sibling is a `BlockingNode`
- *   drained by the failure, for Python's stop event.
- * - `test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace`: the AGENT's model
- *   blocks until the failure aborts its signal (for Python's patched `run_agent` waiting on the stop
- *   event), and the failing sibling waits for that model call; the run records the agent's model
- *   map by hand.
- * - `test_trace_memory_scope_is_detached_and_replayed_without_evidence`: a `MemoryScope` is frozen
- *   by its constructor, so the occurrence may hold the node's scope itself; replacing the node's
- *   scope afterward doesn't change it, and the replay keeps it.
- * - `test_learning_retains_noncanonical_partial_temporary_comparisons`: its `partial-value` row
- *   without the lone-surrogate field, the file standing in for Python's `object()`; result types
- *   are TS type names (`record`, `file`).
- *
- * Changed: `test_learning_retains_valid_results_of_noncanonical_unicode_temporaries` (5 rows):
- * text holding a lone surrogate is not a yian value, so the template function's result fails the
- * binding; each row pins that it fails alike with and without learning.
- *
- * Not ported (TS values): the `partial-key` row of
- * `test_learning_retains_noncanonical_partial_temporary_comparisons` (a lone-surrogate key is not
- * a yian value).
- *
- * Ported through `loadFlow` and the engine (`engine` with `learnable`), then `replayRecords`:
- * `test_accepted_backward_inventories_and_layout_replay_without_recapturing` (the forbidden
- * methods are `spyOn` replacements on the class prototypes, restored afterward; the END handler
- * is the replayed END's bound `backward`, so its node's `names` and `params` are changed through
- * the replayed flow, for Python's `handler.__self__`).
- *
- * Ported through CALL, MAP and LOOP growth (`engine` with `learnable` and `buildGrow`, and
- * `loadFlow` where Python loads YAML), on a local `seedCallFlow` (Python's `_seed_call_flow`) and
- * `nestedGrowthFlow` (Python's `_nested_growth_flow`):
- * `test_nested_growth_preserves_authored_paths_and_local_driver_zero` (`call`, `map`; the first
- * driver is read from the nodes the run held, for Python's `handler.__self__`),
- * `test_missing_seed_selector_is_an_accepted_growth_failure` (2 rows),
- * `test_reference_looking_seed_strings_reach_the_child_as_text` (3 rows),
- * `test_failed_child_binding_joins_captured_fields`,
- * `test_pruned_seed_connections_do_not_leak_into_reused_node_ids` (2 rows),
- * `test_call_seed_routes_survive_materialized_values`,
- * `test_null_materialized_seed_keeps_its_selected_source` (`call`, `map`),
- * `test_map_seed_routes_preserve_equal_item_positions` (3 rows) and
- * `test_loop_carried_routes_survive_live_pruning` (times 0 and 3). A growth recipe Python sets on
- * the fragment is a rebuilt `Flow`.
- *
- * Changed:
- * - The CODE reference `tests.engine._compose_codefns:loop_countdown` is an inline body with the
- *   same behavior, since TS load refuses a Python reference.
- * - The `* 2` row of `test_map_seed_routes_preserve_equal_item_positions` maps over
- *   `input.left + input.right + input.right`, since repetition is a type error in TS; the list
- *   and each item's feedback are the same as Python's.
- * - `test_growth_recipe_tampering_fails_replay_before_apply` (`selector-digest`, `missing-field`,
- *   `missing-item`, `boundary-role`): the run goes to the end and the replay stops before its
- *   expansion record, for Python's two stepped nodes; each refusal names its class and message.
- * - `test_seed_connections_wait_for_append_and_survive_unfinished_start_retry`: START and the CALL
- *   are evaluated through `evalNode` with the engine's learning options, for Python's
- *   private `engine._evaluate`; the log's `append` is replaced on the instance.
- * - `test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution`:
- *   the run records `resolveLlmCascade(flow, {}, ...)` as Python's `_engine` computes; the AGENT's
- *   model comes through `FlowEngineOptions.models` and replies with the prompt as its topic, since
- *   ESM can't patch `run_agent`, so each occurrence holds that one model call's step where
- *   Python's evidence holds none; the evidence a backward pass rebuilds from it isn't on the trace. The forbidden replay methods are `spyOn` replacements of `AgentNode`'s `forward` and
- *   `resolveVariables` and `Node`'s `captureBackwardContext` (`render_template_record` runs only
- *   inside `forward`), active through the replay only: the backward-context reads render each
- *   occurrence again with the node that ran (TS rebuilds the node data Python records), so the
- *   agents aren't changed after the replay.
- *
- * Not ported (TS types): the `mutable-path` row of
- * `test_growth_recipe_tampering_fails_replay_before_apply` (a `SeedConnection` holds a frozen copy
- * of its path, and a forged unfrozen `["x"]` is the same selector).
+ * Forward captures and the retained trace: `ForwardCapture` and `BackwardCapture`, their run-log
+ * codec, trace deltas, the run state's trace checks, replay, and learning through the engine and
+ * through CALL, MAP and LOOP growth.
  */
 
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
@@ -746,7 +501,7 @@ test.each(NONCANONICAL_JSON)(
   },
 );
 
-// TS-only: the evaluated keys on the wire, and a key added to the capture's mutable `Set` after
+// The evaluated keys on the wire, and a key added to the capture's mutable `Set` after
 // construction, which the encoder checks again.
 test.each<[string, string[]]>([
   ["repeated", ["x", "x"]],
@@ -835,7 +590,7 @@ test.each<[string, unknown, ErrorClass, string]>([
       'missing=["children","expression","kind","names","path","result_type","sizes","snapshot","source","spans",' +
       '"value_json"], extra=[]',
   ],
-  // Schema 10 routes have no `count`, so Python's two `count` rows are extra fields here.
+  // Schema 10 routes have no `count`, so a `count` is an extra field.
   ["count", true, RangeError, 'invalid route fields; missing=[], extra=["count"]'],
   ["count", 2n, RangeError, 'invalid route fields; missing=[], extra=["count"]'],
   ["kind", "unknown", RangeError, "unknown route kind"],
@@ -865,8 +620,7 @@ test("a forward capture keeps the existing canonical depth range", () => {
   }
 });
 
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
+// Each registration's previous entry (or its absence), put back after the test.
 const saved: [string, TemplateFn | undefined][] = [];
 
 /** Register a stand-in builtin `name` running `call` for this test only. */
@@ -914,7 +668,7 @@ test.each([
 });
 
 // TS builtins take named parameters, so `collect_args` takes `first`, `second` and `value`, each
-// defaulting to 0, where Python's takes `*args, **kwargs`; its call log holds the bound values.
+// defaulting to 0; its call log holds the bound values.
 const OPAQUE_ARGUMENTS: [string, string[], Value[], bigint][] = [
   ["1", [""], [1n, 0n, 0n], 1n],
   ["1, 2", ["", ""], [1n, 2n, 0n], 3n],
@@ -971,7 +725,7 @@ test.each<[unknown[], string]>([
   expectError(() => decodeWire(wire), RangeError, message);
 });
 
-// TS-only (trace): the trace entries and `RetainedTrace`'s reads. Entries are installed by setting
+// The trace entries and `RetainedTrace`'s reads. Entries are installed by setting
 // the trace's internal maps directly.
 
 const RUN = "run";
@@ -1438,7 +1192,7 @@ test("backwardContext takes a routed terminal failure and reads output only for 
   expect(context.nodeData).toEqual({ k: "kept", _evaluation_evidence: null });
 });
 
-// TS-only (trace): trace deltas and `prepareTrace`, driven over `learnableRun()`.
+// Trace deltas and `prepareTrace`, driven over `learnableRun()`.
 
 /** A CODE node with a settable scope, memory scope and hidden inputs, recording its backward calls. */
 class TraceNode extends Node {
@@ -1520,7 +1274,7 @@ function runNode(
   return step(step(trace, at(seq, new NodeStartedRecord(node.id)))!, at(seq + 1, record), node, options)!;
 }
 
-test("a binding that finished must rebind; only a binding failure rebuilds to null (TS-only)", () => {
+test("a binding that finished must rebind; only a binding failure rebuilds to null", () => {
   const unfinished = fixedRebinder(null);
   // A success's binding finished, so a rebind that fails is a fault, not missing inputs.
   const succeeded = drivenTrace(new TraceNode("a"), { rebinder: unfinished });
@@ -2149,7 +1903,7 @@ test("a trace delta holds frozen copies of its arrays and defaults to an empty c
   expect(Object.isFrozen(delta.started)).toBe(true);
 });
 
-// TS-only (frontier trace): the learnable stop.
+// The frontier trace: the learnable stop.
 
 /** A learnable started state with START in flight, its log and a prepared `RunStopped`. */
 function preparedLearnableStop(): { state: RunState; log: MemoryRunLog; prepared: PreparedTransition } {
@@ -2237,7 +1991,7 @@ function withTrace(prepared: PreparedTransition, traceDelta: TraceDelta | null):
   );
 }
 
-/** Return a copy of `delta` with `changes`, for Python's `dataclasses.replace`. */
+/** Return a copy of `delta` with `changes`. */
 function changedDelta(delta: TraceDelta, changes: TraceDeltaFields): TraceDelta {
   return new TraceDelta(delta.originatingTrace, delta.sequence, { ...delta, ...changes });
 }
@@ -2314,7 +2068,7 @@ const OUTCOME_KINDS = ["success", "route", "failure", "growth"] as const;
 /** An outcome kind `preparedScopedOutcome` prepares. */
 type OutcomeKind = (typeof OUTCOME_KINDS)[number];
 
-/** A CODE node that may grow the graph, Python's `FuncNode` subclass `Spawner`. */
+/** A CODE node that may grow the graph. */
 class FuncSpawner extends FuncNode {
   override readonly isSpawner = true;
   // A spawner's seed is rebuilt from its binding on replay, so the double is derived and grows `{}`.
@@ -2326,7 +2080,7 @@ class FuncSpawner extends FuncNode {
 }
 
 /**
- * Python's `_prepared_scoped_outcome`: a CODE node `physical` (scoped unless `scoped` is false),
+ * A CODE node `physical` (scoped unless `scoped` is false),
  * the sole in-flight node of a learnable run, and its prepared outcome: a success committed to END,
  * which ends the run; a route along its `go` edge into END, which makes END ready; a failure, which
  * ends the run; or (a spawner) a growth into `fragment("physical")`. `original` is a copy of the
@@ -2366,7 +2120,7 @@ function preparedScopedOutcome(
 }
 
 /**
- * Python's `_prepared_terminal_route`: a learnable `terminalSkipRouteFlow({sibling})` after START's
+ * A learnable `terminalSkipRouteFlow({sibling})` after START's
  * success, with `router` (and with `sibling`, `unrelated`) in flight and `router`'s prepared `go`
  * route, which skips END and ends the run. `original` is a copy of the started flow, for a replay.
  */
@@ -2389,12 +2143,12 @@ function preparedTerminalRoute(options: { sibling?: boolean } = {}): {
   return { state, log, prepared, original };
 }
 
-/** Return a fresh copy of `source`, for Python's `deepcopy`. */
+/** Return a fresh copy of `source`. */
 function copiedSource(source: SourceRef | null): SourceRef | null {
   return source === null ? null : new SourceRef(source.runId, source.executionSeq, [...source.path]);
 }
 
-/** Return a fresh copy of `terminal`, for Python's `deepcopy`. */
+/** Return a fresh copy of `terminal`. */
 function copiedTerminal(terminal: TraceTerminal): TraceTerminal {
   const failure = terminal.failure === null ? null : retainFailure(terminal.failure);
   return new TraceTerminal(terminal.succeeded, copiedSource(terminal.source), terminal.outputJson, failure);
@@ -2405,7 +2159,7 @@ function replayed(original: CompiledFlow, envelopes: readonly RecordEnvelope[]):
   return replayRecords(new RunState(original), envelopes, { growBuilder: fragmentBuilder });
 }
 
-/** A START -> END flow for the learnable trace tests, Python's `_graph([], [(START_ID, END_ID)])`. */
+/** A START -> END flow for the learnable trace tests. */
 function startEndFlow(): CompiledFlow {
   return graph([], [[START_ID, END_ID]]);
 }
@@ -2894,7 +2648,7 @@ test("the reducer requires a capture exactly when learning", () => {
 type FrontierKind = "started" | "resumed" | "step" | "stopped";
 
 /**
- * Python's `_prepared_trace_frontier`: a learnable `terminalSkipRouteFlow()` after START's success,
+ * A learnable `terminalSkipRouteFlow()` after START's success,
  * with `router`'s prepared dispatch or, once `router` is in flight, a prepared resume, step or
  * stop. `original` is a copy of the started flow, for a replay.
  */
@@ -3535,7 +3289,7 @@ test("a discarded agent worker keeps its render capture out of the accepted trac
 
 /**
  * A `START -> spawn -> END` flow whose CALL `spawn` reads `sources` and calls a START -> END child
- * with one parameter per source (Python's `_seed_call_flow`); `extraNodes` hang off START, after
+ * with one parameter per source; `extraNodes` hang off START, after
  * `spawn` or, with `extraFirst`, before it.
  */
 function seedCallFlow(
@@ -3564,12 +3318,12 @@ function seedCallFlow(
   return graph([node, ...extraNodes], [...entries, ["spawn", END_ID]], { wiring: { spawn: sources } });
 }
 
-// A child body that decrements the carried `n` (Python's `_compose_codefns:loop_countdown`).
+// A child body that decrements the carried `n`.
 const COUNTDOWN = `code: 'return {n: inputs["n"] - 1}'`;
 
 /**
  * Load a flow whose `outer` CALL (or MAP over `[n, n]`) calls a LOOP of two iterations, each body
- * a CALL of a countdown leaf (Python's `_nested_growth_flow`).
+ * a CALL of a countdown leaf.
  */
 async function nestedGrowthFlow(kind: "call" | "map"): Promise<CompiledFlow> {
   const over = kind === "map" ? "    over: '${[input.n, input.n]}'\n" : "";
@@ -3624,7 +3378,7 @@ function growing(flow: CompiledFlow, options: Parameters<typeof engine>[1] = {})
   return engine(flow, { learnable: true, growBuilder: buildGrow, ...options });
 }
 
-/** Return `fragment` with its growth recipes replaced (Python sets them on the fragment). */
+/** Return `fragment` with its growth recipes replaced. */
 function withRecipes(
   fragment: Flow,
   recipes: { inputConnections?: readonly SeedConnection[]; childBoundaries?: readonly ChildFlowBoundary[] },
@@ -3848,7 +3602,7 @@ test("a failed child binding joins the captured fields", async () => {
   expect(trace.pendingConnections.size).toBe(0);
 });
 
-/** Evaluate started `nodeId` as the engine does for a learnable run (Python's `engine._evaluate`). */
+/** Evaluate started `nodeId` as the engine does for a learnable run. */
 function evaluateStarted(state: RunState, nodeId: string): Promise<EvaluatedOutcome> {
   const trace = state.trace!;
   return evalNode(state.flow.nodes.get(nodeId)!, state.flow, state.pool, {
@@ -4323,8 +4077,7 @@ nodes:
 output: {left: '\${left.output}', right: '\${right.output}'}
 `)
   ).compiled;
-  // Each model call's prompt; the reply's topic is the prompt, as Python's patched `run_agent`
-  // returns.
+  // Each model call's prompt; the reply's topic is the prompt.
   const rendered: string[] = [];
   let replaying = false;
   const models: ModelAccess = {
@@ -4406,7 +4159,7 @@ output: {left: '\${left.output}', right: '\${right.output}'}
   for (const occurrence of agents) {
     const { _evaluation_evidence: evidence, ...data } = replay.trace!.backwardContext(occurrence.source).nodeData;
     // The evidence is rebuilt from the steps by a backward pass; the replayed occurrence keeps
-    // its one model call, where Python's patched `run_agent` recorded none.
+    // its one model call.
     expect(evidence).toBeNull();
     expect(replay.trace!.occurrence(occurrence.source).steps.map((step) => step["kind"])).toEqual(["model_call"]);
     expect(data).toEqual(occurrence.nodeData);
@@ -4443,7 +4196,7 @@ output: \${chat.output.log}
 const boundDir = mkdtempSync(join(tmpdir(), "yian-forward-trace-"));
 afterAll(() => rmSync(boundDir, { recursive: true, force: true }));
 
-test("an occurrence's bound inputs are rebuilt from its route: a template and a + binding (TS-only)", async () => {
+test("an occurrence's bound inputs are rebuilt from its route: a template and a + binding", async () => {
   const log = join(boundDir, "chat.jsonl");
   const config = { provider: "anthropic", model: "claude-test" };
   const answers = ["a", "b", "c"];
@@ -4482,7 +4235,7 @@ test("an occurrence's bound inputs are rebuilt from its route: a template and a 
 /** A run-log line as plain JSON. */
 type Wire = Record<string, unknown>;
 
-test("a replayed derived record holding a forward capture is refused (TS-only)", async () => {
+test("a replayed derived record holding a forward capture is refused", async () => {
   const log = join(boundDir, "derived-capture.jsonl");
   const config = { provider: "anthropic", model: "claude-test" };
   const answers = ["a", "b", "c"];
@@ -4575,7 +4328,7 @@ function interpolationTexts(log: string): unknown[] {
   return texts;
 }
 
-test("an interpolation route's text isn't recorded: learning rebuilds it by binding its node again (TS-only)", async () => {
+test("an interpolation route's text isn't recorded: learning rebuilds it by binding its node again", async () => {
   const log = await greetLog("greet", "A");
   // `shout`'s `line` and END's output.
   expect(interpolationTexts(log)).toEqual([null, null]);
@@ -4590,7 +4343,7 @@ test("an interpolation route's text isn't recorded: learning rebuilds it by bind
   }
 });
 
-test("a binding that didn't finish rebuilds the interpolation route it collected first (TS-only)", async () => {
+test("a binding that didn't finish rebuilds the interpolation route it collected first", async () => {
   const log = await greetLog("greet-failed", null);
   expect(interpolationTexts(log)).toEqual([null]);
   const of = await replayedOccurrences(log);
@@ -4617,7 +4370,7 @@ nodes:
 output: \${each.output}
 `;
 
-test("a MAP whose item binding failed rebuilds each item's interpolation route (TS-only)", async () => {
+test("a MAP whose item binding failed rebuilds each item's interpolation route", async () => {
   const log = join(boundDir, "labels.jsonl");
   const labels = await loadFlow(LABELS, { sourceLabel: "flow.yaml" });
   const result = await runFlow(labels, { xs: ["a", null] }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
@@ -4659,7 +4412,7 @@ test("a recorded capture holding node data is refused", () => {
   );
 });
 
-test("a MAP's forward failing otherwise when bound again is a fault, not kept (TS-only)", async () => {
+test("a MAP's forward failing otherwise when bound again is a fault, not kept", async () => {
   const log = join(boundDir, "labels-fault.jsonl");
   const labels = await loadFlow(LABELS, { sourceLabel: "flow.yaml" });
   await runFlow(labels, { xs: ["a", null] }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
@@ -4691,7 +4444,7 @@ nodes:
 output: \${nap.output}
 `;
 
-test("a tool body failing with a binding code after its binding finished rebuilds its text (TS-only)", async () => {
+test("a tool body failing with a binding code after its binding finished rebuilds its text", async () => {
   const log = join(boundDir, "nap.jsonl");
   const nap = await loadFlow(NAP, { sourceLabel: "flow.yaml" });
   const result = await runFlow(nap, { x: "soon" }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
@@ -4745,7 +4498,7 @@ function textRoute(text: string | null): ValueRoute {
   });
 }
 
-test("a capture without an interpolation route is read as held, without binding again (TS-only)", () => {
+test("a capture without an interpolation route is read as held, without binding again", () => {
   let rebinds = 0;
   const counted: Rebinder = (sources, resolve, route) => {
     rebinds += 1;
@@ -4759,7 +4512,7 @@ test("a capture without an interpolation route is read as held, without binding 
   expect(rebinds).toBe(1);
 });
 
-test("an interpolation route's text rebuilds from the same binding; another shape is refused (TS-only)", () => {
+test("an interpolation route's text rebuilds from the same binding; another shape is refused", () => {
   const recorded = new ForwardCapture(ValueRoute.record([["v", textRoute(null)]]), { inputNames: ["v"] });
   const rebound = partialRebinder(ValueRoute.record([["v", textRoute("x=1")]]));
   const filled = failedBindingOccurrence(recorded, rebound.rebinder);
@@ -4837,7 +4590,7 @@ async function replayedPicks(log: string): Promise<(nodeId: string) => TraceOccu
   return (nodeId) => trace.occurrences.find((occurrence) => occurrence.nodeId === nodeId)!;
 }
 
-test("an AGENT's node data is rebuilt from its node and bound inputs, not read from the record (TS-only)", async () => {
+test("an AGENT's node data is rebuilt from its node and bound inputs, not read from the record", async () => {
   const [log, status] = await picksLog("picks", 2);
   expect(status).toBe("succeeded");
   expect(recordsNodeData(log)).toBe(false);
@@ -4864,7 +4617,7 @@ test("an AGENT's node data is rebuilt from its node and bound inputs, not read f
   });
 });
 
-test("an AGENT whose pre-assert failed rebuilds no render, and one whose binding failed no node data (TS-only)", async () => {
+test("an AGENT whose pre-assert failed rebuilds no render, and one whose binding failed no node data", async () => {
   const [log, status] = await picksLog("picks-negative", -1);
   expect(status).toBe("failed");
   expect(recordsNodeData(log)).toBe(false);

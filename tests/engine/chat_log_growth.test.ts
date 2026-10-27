@@ -1,6 +1,5 @@
 /**
- * TS-only: an 80-turn `examples/chat.yaml` run log grows linearly with the conversation, learnable
- * or not.
+ * An 80-turn `examples/chat.yaml` run log grows linearly with the conversation, learnable or not.
  *
  * Each turn's message is sent to the run's `owner_messages` inbox as a user `Message` and the
  * run advanced; closing the inbox ends it. One 80-turn run per case, its log measured after turns

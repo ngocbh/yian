@@ -14,10 +14,10 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { RunStarted } from "../../src/events.ts";
 import { MemorySetupError } from "../../src/memory/contracts.ts";
 import { type AdvanceOptions, type RunFlowOptions, advance, runFlow } from "../../src/run.ts";
-import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { McpConnectError, type McpServer, mcpServer } from "../../src/tools/mcp.ts";
+import { withAppendHook } from "../append_hook.ts";
 import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
 import { FakeMemory } from "./memory_fakes.ts";
 import { Crash, rejected } from "./run_state_fixtures.ts";
@@ -83,11 +83,6 @@ async function crashedRun(log: string): Promise<ToolContext> {
   const seen: ToolContext[] = [];
   const crash = new Crash("simulated crash");
   let frozen = false;
-  const append = JsonlRunLog.prototype.append;
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (frozen) throw crash;
-    return append.call(this, record);
-  };
   const whoami = tool({
     name: "whoami",
     description: "Crash the process on the call.",
@@ -98,12 +93,12 @@ async function crashedRun(log: string): Promise<ToolContext> {
       return "never recorded";
     },
   });
-  try {
-    const error = await rejected(run(await loadFlow(WHOAMI_FLOW), {}, { log, tools: { whoami }, runId: "run-5c2e" }));
-    expect(error).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
+  const freeze = () => {
+    if (frozen) throw crash;
+  };
+  const flow = await loadFlow(WHOAMI_FLOW);
+  const crashed = withAppendHook(freeze, () => run(flow, {}, { log, tools: { whoami }, runId: "run-5c2e" }));
+  expect(await rejected(crashed)).toBe(crash);
   expect(seen).toHaveLength(1);
   return seen[0]!;
 }

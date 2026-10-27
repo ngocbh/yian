@@ -161,6 +161,46 @@ export function readCommands(block: Block): CommandLine[] {
   return commands;
 }
 
+/** One line of a console block that runs the CLI, as a `yian ...` argv. */
+export interface Invocation {
+  line: number;
+  argv: string[];
+}
+
+const RUNNERS = new Set(["npx", "bunx"]);
+const PACKAGE = /^@ngocbh\/yian(?:@\S+)?$/;
+const BARE = /^\s*(?:yian|npx|bunx)(?:\s|$)/;
+
+/**
+ * Return `argv` as a `yian ...` argv when it runs the CLI, either as `yian` or as `npx` or `bunx`
+ * running `@ngocbh/yian` (options before the package aside); else null.
+ */
+export function asYian(argv: readonly string[]): string[] | null {
+  const [first, ...rest] = argv;
+  if (first === "yian") return [...argv];
+  if (first === undefined || !RUNNERS.has(first)) return null;
+  const at = rest.findIndex((word) => !word.startsWith("-"));
+  return at !== -1 && PACKAGE.test(rest[at]!) ? ["yian", ...rest.slice(at + 1)] : null;
+}
+
+/**
+ * Return the lines of a console block that run the CLI: its `$ ` commands, and lines that run
+ * `yian`, `npx @ngocbh/yian` or `bunx @ngocbh/yian` without the `$ ` prompt.
+ */
+export function readInvocations(block: Block): Invocation[] {
+  const prompted = readCommands(block).map(({ line, argv }) => ({ line, argv }));
+  const bare = block.text
+    .replace(/\n$/, "")
+    .split("\n")
+    .flatMap((text, i) => (BARE.test(text) ? [{ line: block.line + 1 + i, argv: shellWords(text) }] : []));
+  return [...prompted, ...bare]
+    .sort((a, b) => a.line - b.line)
+    .flatMap(({ line, argv }) => {
+      const yian = asYian(argv);
+      return yian === null ? [] : [{ line, argv: yian }];
+    });
+}
+
 /** `spec` without its path checks: a page's paths name files the reader has, not the repo. */
 function withoutPathChecks(spec: CommandSpec): CommandSpec {
   return {

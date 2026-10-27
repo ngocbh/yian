@@ -20,24 +20,54 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
 import { type Value, writeAsText } from "../../src/typesys/values.ts";
 import { NO_ENV, serving, textReply } from "../engine/run_state_fixtures.ts";
-import { type Block, checkOf, cliProblem, parseYian, readBlocks, readCommands, readDocs } from "./doc_blocks.ts";
+import {
+  type Block,
+  checkOf,
+  cliProblem,
+  parseYian,
+  readBlocks,
+  readCommands,
+  readDocs,
+  readInvocations,
+} from "./doc_blocks.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DOCS = join(ROOT, "docs", "src", "content", "docs");
 const EXAMPLES = join(ROOT, "examples");
+const PAGE_BLOCKS = readDocs(DOCS);
 // The root README is the npm page, so its examples are checked like a page's.
-const BLOCKS = [...readDocs(DOCS), ...readBlocks(readFileSync(join(ROOT, "README.md"), "utf8"), "README.md")];
+const README_BLOCKS = readBlocks(readFileSync(join(ROOT, "README.md"), "utf8"), "README.md");
+const BLOCKS = [...PAGE_BLOCKS, ...README_BLOCKS];
 // A `source=` block shows a file of examples/ whole.
 const SOURCE = /^examples\/[\w.-]+\.yaml$/;
 const YAML_BLOCKS = BLOCKS.filter((block) => block.lang === "yaml");
 const SHELLS = new Set(["sh", "bash", "shell", "zsh"]);
+// A shell line that runs the CLI, directly or through npx or bunx.
+const STRAY = /^\s*(?:\$\s+)?(?:yian\b|(?:npx|bunx)\s+(?:-\S+\s+)*@ngocbh\/yian\b)/;
 // Any provider and model: the scripted model answers whichever the flow asks for.
 const LLM_CONFIG = { provider: "anthropic", model: "claude-test" };
 
 const where = (block: Block) => `${block.file}:${block.line}`;
 
-test("the docs have YAML examples", () => {
-  expect(YAML_BLOCKS.length).toBeGreaterThan(0);
+/** The CLI lines of `blocks`' console blocks, each with a `<file>:<line> <command>` label. */
+const yianLines = (blocks: readonly Block[]) =>
+  blocks
+    .filter((block) => block.lang === "console")
+    .flatMap((block) =>
+      readInvocations(block).map(({ line, argv }) => [`${block.file}:${line} ${argv.join(" ")}`, argv] as const),
+    );
+
+const YIAN_LINES = yianLines(BLOCKS);
+
+// Counted apart, so the README's examples can't stand in for the pages' or hide an empty set.
+test("the pages have YAML examples and yian lines", () => {
+  expect(PAGE_BLOCKS.filter((block) => block.lang === "yaml").length).toBeGreaterThan(0);
+  expect(yianLines(PAGE_BLOCKS).length).toBeGreaterThan(0);
+});
+
+test("the README has a YAML example and yian lines", () => {
+  expect(README_BLOCKS.filter((block) => block.lang === "yaml").length).toBeGreaterThan(0);
+  expect(yianLines(README_BLOCKS).length).toBeGreaterThan(0);
 });
 
 test("YAML blocks are tagged yaml, not yml", () => {
@@ -82,15 +112,10 @@ async function expectShownOutput(block: Block, flow: ComposedFlow): Promise<void
   const inputs = parseKv(command.parsed.options["input"] as string[]);
   const result = await runFlow(flow, inputs, { env: NO_ENV, numWorkers: 0, models: serving(model), llmConfig: LLM_CONFIG });
   expect(result.failure).toBeNull();
-  expect(shown!.output).toBe(writeAsText(result.output as Value));
+  // The page's text is what's expected; the run's output is what's received.
+  expect(writeAsText(result.output as Value)).toBe(shown!.output);
   expect(model.requests).toHaveLength(replies.length);
 }
-
-const YIAN_LINES = BLOCKS.filter((block) => block.lang === "console").flatMap((block) =>
-  readCommands(block)
-    .filter((command) => command.argv[0] === "yian")
-    .map((command) => [`${block.file}:${command.line} ${command.argv.join(" ")}`, command.argv] as const),
-);
 
 test.each(YIAN_LINES)("%s", (_label, argv) => {
   expect(cliProblem(argv)).toBeNull();
@@ -100,7 +125,7 @@ test("yian lines are in console blocks", () => {
   const stray = BLOCKS.filter((block) => SHELLS.has(block.lang)).flatMap((block) =>
     block.text
       .split("\n")
-      .filter((line) => /^\s*(\$\s+)?yian\b/.test(line))
+      .filter((line) => STRAY.test(line))
       .map((line) => `${where(block)}: ${line}`),
   );
   expect(stray).toEqual([]);

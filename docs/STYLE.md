@@ -53,8 +53,9 @@ blocks in the root `README.md`.
 - When a runnable flow calls a model, give the model's replies, in order, on the line before the
   YAML block: `<!-- yian-test {"replies": ["Hello, Ada!"]} -->`.
 - Show commands in `console` blocks, each line starting with `$ `, followed only by what the
-  command prints on stdout. Every `yian` command and flag is checked against the CLI; don't put
-  `yian` lines in `sh` or `bash` blocks.
+  command prints on stdout. Every `yian` command and flag is checked against the CLI, with or
+  without the `$ `, and so are `npx @ngocbh/yian` and `bunx @ngocbh/yian` lines; don't put them in
+  `sh` or `bash` blocks.
 - Draw diagrams in `mermaid` blocks.
 
 ## Before you open a PR

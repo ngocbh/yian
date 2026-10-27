@@ -2,7 +2,16 @@
 
 import { expect, test } from "bun:test";
 
-import { checkOf, cliProblem, readBlocks, readCommands, readMeta, shellWords } from "./doc_blocks.ts";
+import {
+  asYian,
+  checkOf,
+  cliProblem,
+  readBlocks,
+  readCommands,
+  readInvocations,
+  readMeta,
+  shellWords,
+} from "./doc_blocks.ts";
 
 const PAGE = [
   "Intro.",
@@ -87,4 +96,23 @@ test("the CLI table refuses unknown commands and options", () => {
   expect(cliProblem(shellWords("yian walk flow.yaml"))).toBe("no command 'yian walk'");
   expect(cliProblem(shellWords("yian run flow.yaml --nope"))).toContain("--nope");
   expect(cliProblem(shellWords("yian skills list"))).toBe("no command 'yian skills list'");
+});
+
+test("npx and bunx running the package are yian lines", () => {
+  expect(asYian(shellWords("npx @ngocbh/yian run a.yaml"))).toEqual(["yian", "run", "a.yaml"]);
+  expect(asYian(shellWords("bunx @ngocbh/yian@0.1.0 --version"))).toEqual(["yian", "--version"]);
+  expect(asYian(shellWords("npx -y @ngocbh/yian check a.yaml"))).toEqual(["yian", "check", "a.yaml"]);
+  expect(asYian(shellWords("npx other run"))).toBeNull();
+  expect(asYian(shellWords("npm install @ngocbh/yian"))).toBeNull();
+});
+
+test("console blocks run the CLI with or without the $ prompt", () => {
+  const [block] = readBlocks(
+    ["```console", "$ npm install @ngocbh/yian", "yian run a.yaml", "$ bunx @ngocbh/yian check a.yaml", "ok", "```"].join("\n"),
+    "p.md",
+  );
+  expect(readInvocations(block!)).toEqual([
+    { line: 3, argv: ["yian", "run", "a.yaml"] },
+    { line: 4, argv: ["yian", "check", "a.yaml"] },
+  ]);
 });

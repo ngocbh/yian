@@ -1,6 +1,6 @@
 // Check the built site for what the Astro build doesn't fail on: every YAML block is highlighted
 // (at least two token colours), every Mermaid block reached the client renderer, and no
-// `check=` option of a fence leaked into the page.
+// `check=` option of a fence leaked into a code block's frame (its title or attributes).
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,7 +16,10 @@ for (const page of pages) {
     if (colours.size < 2) problems.push(`${page}: a YAML block is not highlighted`);
   }
   if (/<pre[^>]*data-language="mermaid"/.test(html)) problems.push(`${page}: a mermaid block was rendered as code`);
-  if (html.includes("check=")) problems.push(`${page}: a fence's check= option shows on the page`);
+  // A code block's frame is everything from its <figure> to its <code>: prose may say `check=`.
+  for (const [frame] of html.matchAll(/<figure class="frame[^"]*"[^>]*>.*?<code>/gs)) {
+    if (frame.includes("check=")) problems.push(`${page}: a fence's check= option shows on the page`);
+  }
 }
 if (yamlBlocks === 0) problems.push("no YAML block found in the built site");
 if (problems.length > 0) {

@@ -1,20 +1,7 @@
 /**
- * A port of `tests/engine/test_run_api_key.py`: a run-level `llm_config.api_key` authenticates
- * agents and stays out of every record.
- *
- * Ported: every test but the one covered below, the parametrized ones whole. The provider calls
- * go through the real `chatModelFromConfig` with a recording `send` (`recording`), where Python
- * routes the OpenAI client through `httpx.MockTransport`; the rows that patch `model_from_config`
- * read the configs `serving` receives, the key being a plain string there (Python's `SecretStr`).
- * The secret scan is `expectHidden`: each value as `inspect` shows it and as `plain`'s JSON (Python's
- * `repr` and `_plain`). Each run's environment is the file's (`hostEnv`) plus the variables a row
- * sets; a profile memory's learner builds through the same model access.
- *
- * Changed: refused configs are `RangeError`s and refused flow files `LoadError`s (Python's
- * `ValueError`s).
- *
- * Covered by `run-agent/engine_run_api_key__key_without_a_provider_is_rejected`:
- * `test_key_without_a_provider_is_rejected`.
+ * A run-level `llm_config.api_key` authenticates agents and stays out of every record. Provider
+ * calls go through the real `chatModelFromConfig` with a recording `send`, and `expectHidden` scans
+ * each value as `inspect` shows it and as `plain`'s JSON.
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";

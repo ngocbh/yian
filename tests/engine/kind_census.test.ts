@@ -1,6 +1,5 @@
 /**
- * Kind-dispatch census guarding the kind-agnostic engine core, a port of
- * `tests/engine/test_kind_census.py`.
+ * Kind-dispatch census guarding the kind-agnostic engine core.
  *
  * The engine core (`runtime/engine.ts` + `runtime/eval_node.ts`) knows only an
  * abstract node contract and the closed `Outcome` sum; it must not branch on a

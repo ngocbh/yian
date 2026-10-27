@@ -1,21 +1,5 @@
 /**
- * Strict type inference for parameters of generated inline composite flows: a port of
- * `tests/engine/test_inline_composite_types.py`.
- *
- * Ported: every test but `test_non_string_mapping_key_is_rejected` (see Changed), through
- * `inferInlineBindingType`, `requireProvenType`, `canonicalizeInlineType` and
- * `canonicalTypeLabel`. Where Python checks a message fragment, the row pins the whole message.
- *
- * TS-only: a typed `Binding` nested in a `ValueTemplate` infers as its declared type (the
- * docstring's rule, which no Python row checks).
- *
- * Changed: YAML ints are `bigint`s (`7n` infers `int`; a `number` infers `float`). TS values have
- * no tuples or arbitrary objects, so `test_unproven_or_unsupported_literal_is_rejected` replaces
- * its `(1, 2)` and `object()` params with one `undefined` param, whose message names the type with
- * `typeName`; `test_non_string_mapping_key_is_rejected` is dropped, as a record key is
- * always text. Lists print as JSON (`["absent"]`), and so does a record key in a literal's path
- * (`c.input.payload["items"]`, rule `messages`). The no-mutation checks compare a type with a
- * second one built the same way, where Python compares with a pickled copy.
+ * Strict type inference for parameters of generated inline composite flows.
  *
  * Pinned at the end (`assembled`, the inference errors of inline bodies):
  * `load-types/compose_nested_template_types__{an_empty_list_in_an_inline_call_template,

@@ -1,12 +1,8 @@
 /**
- * A port of `tests/engine/test_llm_cascade_e2e.py`: a 2-level flow run through `runFlow` with a
- * host `llmConfig` layer. The config each agent builds its model from reflects the whole authored
- * ladder (node, flow, parent, host), and an `inherit: false` agent skips those authored outer
- * layers while keeping the process provider and model defaults.
- *
- * Ported: `test_cascade_end_to_end_with_cli_layer`, with a scripted model from `serving` where
- * Python patches `model_from_config`; the `inherit: false` config is compared with
- * `resolveModelConfig` under the same environment.
+ * A 2-level flow run through `runFlow` with a host `llmConfig` layer. The config each agent builds
+ * its model from reflects the whole authored ladder (node, flow, parent, host), and an
+ * `inherit: false` agent skips those authored outer layers while keeping the process provider and
+ * model defaults.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

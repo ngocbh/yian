@@ -1,22 +1,9 @@
 /**
- * Typed flow outputs checked when a run reaches the flow's END: a port of
- * `tests/engine/test_typed_flow_outputs_run.py`.
+ * Typed flow outputs checked when a run reaches the flow's END.
  *
  * An output written `name: !Type value` declares the value's type. END's binder checks the
  * resolved value against it (code `binding.type`, located on the output), and END commits through
- * the declared contract.
- *
- * Ported: every row but the one covered below. Ints read as `bigint`s (decision 4a).
- *
- * Changed: a whole number in a `float` slot stays an int (decision 38), where Python widens it to
- * a float: `test_float_output_widens_an_int_value` and `test_float_child_output_widens_through_the_call`
- * give `30n`, `test_fully_typed_record_output_widens_an_int_in_a_float_field` and
- * `test_partly_typed_record_output_widens_its_typed_float_field` give `a: 30n`,
- * `test_partly_typed_record_output_keeps_its_untyped_field_as_given` gives `{a: 30n, b: 7n}`, and
- * `test_record_node_output_widens_like_a_whole_float_output` gives `{top: 1n, rec: 1n}`.
- *
- * Covered by `run-core/engine_typed_flow_outputs_run__mismatched_typed_child_output_fails_the_run`:
- * `test_mismatched_typed_child_output_fails_the_run`.
+ * the declared contract. A whole number in a `float` slot stays an int (decision 38).
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,12 +1,6 @@
 /**
- * The defaults table, `BUILTIN`, parsing and errors, the process values, recorded values and
- * resume checks, a port of `tests/engine/test_defaults.py` and of `tests/test_defaults_docs.py`.
- * Not ported: `test_int_digits_cannot_exceed_the_interpreter_limit` and
- * `test_int_digits_has_no_upper_bound_without_an_interpreter_limit` (TS has no int digit limit,
- * so no `MAX_INT_DIGITS` entry), `test_memory_json_nesting_follows_value_nesting` (TS has no
- * memory JSON nesting bound), and `test_set_defaults_fixture` and
- * `test_every_test_starts_from_builtin_values` (pytest fixtures; TS tests reset with `forget` or
- * `install(BUILTIN)` instead). TS-only: the per-call values `withEnv` scopes.
+ * The defaults table: its entries, `BUILTIN`, parsing and errors, the process values, recorded
+ * values and resume checks, the per-call values `withEnv` scopes, and the Reference page's table.
  */
 
 import { readFileSync } from "node:fs";
@@ -32,15 +26,6 @@ import {
   reload,
   withEnv,
 } from "../../src/defaults.ts";
-
-const TS_ONLY = [
-  "MODEL_RETRIES",
-  "MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS",
-  "MODEL_IDLE_TIMEOUT_SECONDS",
-  "REQUEST_TIMEOUT_SECONDS",
-  "MAX_MCP_MESSAGE_BYTES",
-  "MAX_EVENT_BYTES",
-];
 
 /** Return the entry named `name`. */
 function entryNamed(name: string): Entry {
@@ -118,35 +103,6 @@ describe("the table", () => {
     }
     expect(Object.isFrozen(BUILTIN)).toBe(true);
     expect(Object.isFrozen(ENTRIES)).toBe(true);
-  });
-
-  test("the TS entry set", () => {
-    const names: readonly string[] = ENTRIES.map((entry) => entry.name);
-    expect(names).not.toContain("MAX_INT_DIGITS");
-    expect(Object.keys(BUILTIN)).not.toContain("memoryJsonNesting");
-    for (const name of names) {
-      expect(name).not.toContain("RESTART");
-      expect(name).not.toContain("DIGITS");
-    }
-    const added = TS_ONLY.map((name) => {
-      const { default: value, group, minimum, maximum, noLimit } = entryNamed(name);
-      return [name, value, group, minimum, maximum, noLimit];
-    });
-    expect(added).toEqual([
-      ["MODEL_RETRIES", 6, "setting", 0, null, null],
-      ["MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS", 240, "setting", 1, null, null],
-      ["MODEL_IDLE_TIMEOUT_SECONDS", 240, "setting", 1, null, null],
-      ["REQUEST_TIMEOUT_SECONDS", 30, "setting", 1, null, null],
-      ["MAX_MCP_MESSAGE_BYTES", 16777216, "input cap", 1, null, null],
-      ["MAX_EVENT_BYTES", 1048576, "input cap", 1, null, null],
-    ]);
-    // The four settings follow MCP_CALL_TIMEOUT_SECONDS; the caps follow MAX_MODEL_LIST_BYTES.
-    const at = (name: string) => names.indexOf(name);
-    expect(names.slice(at("MCP_CALL_TIMEOUT_SECONDS") + 1, at("MCP_CALL_TIMEOUT_SECONDS") + 5)).toEqual(
-      TS_ONLY.slice(0, 4),
-    );
-    expect(names[at("MAX_MODEL_LIST_BYTES") + 1]).toBe("MAX_MCP_MESSAGE_BYTES");
-    expect(names[at("MAX_MCP_MESSAGE_BYTES") + 1]).toBe("MAX_EVENT_BYTES");
   });
 
   test("variable names are prefixed and do not collide", () => {
@@ -262,8 +218,8 @@ describe("read", () => {
   });
 });
 
-describe("docs/defaults.md", () => {
-  const DOC = readFileSync(new URL("../../docs/defaults.md", import.meta.url), "utf8");
+describe("the Reference page's defaults table", () => {
+  const DOC = readFileSync(new URL("../../docs/src/content/docs/reference.md", import.meta.url), "utf8");
 
   /** Return the stripped cells of one Markdown table row. */
   function cells(line: string): string[] {
@@ -291,7 +247,7 @@ describe("docs/defaults.md", () => {
     return rows;
   }
 
-  /** Return `n` with a comma between each group of three digits, as Python's `{n:,}` does. */
+  /** Return `n` with a comma between each group of three digits. */
   function grouped(n: number): string {
     return String(n).replace(/\B(?=(?:\d{3})+$)/g, ",");
   }
@@ -322,20 +278,8 @@ describe("docs/defaults.md", () => {
     expect([grouped(-1), grouped(256), grouped(1024), grouped(16777216)]).toEqual(["-1", "256", "1,024", "16,777,216"]);
   });
 
-  test("the Python table lists the shared entries in order", () => {
-    const rows = tableRows("Variable");
-    const skipped = rows.findIndex((row) => row[0] === "`YIAN_MAX_INT_DIGITS`");
-    expect(rows[skipped - 1]?.[0]).toBe("`YIAN_MAX_SKIP_WORLDS`");
-    rows.splice(skipped, 1);
-    // TS yian has no session memory, so it has no session settings.
-    const session = ["`YIAN_SESSION_HISTORY_BUDGET_CHARS`", "`YIAN_SESSION_RECENT_TURNS`"];
-    const shared = rows.filter((row) => !session.includes(row[0]!));
-    expect(rows.length - shared.length).toBe(session.length);
-    expect(shared).toEqual(ENTRIES.filter((entry) => !TS_ONLY.includes(entry.name)).map(expectedRow));
-  });
-
-  test("the TS yian table lists the TS-only entries in order", () => {
-    expect(tableRows("TS yian variable")).toEqual(TS_ONLY.map((name) => expectedRow(entryNamed(name))));
+  test("the table lists every entry in order", () => {
+    expect(tableRows("Variable")).toEqual(ENTRIES.map(expectedRow));
   });
 
   // Every read yian makes goes through an injected environment accessor; each later reader of
@@ -347,9 +291,7 @@ describe("docs/defaults.md", () => {
       return undefined;
     });
     expect(asked).toEqual(ENTRIES.map((entry) => entry.variable));
-    const documented = [...tableRows("Variable"), ...tableRows("TS yian variable")].map((row) =>
-      row[0]!.replaceAll("`", ""),
-    );
+    const documented = tableRows("Variable").map((row) => row[0]!.replaceAll("`", ""));
     expect(asked.filter((name) => !documented.includes(name))).toEqual([]);
   });
 });

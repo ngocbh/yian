@@ -1,29 +1,10 @@
 /**
- * A `call` node's node-level post `asserts:` fire from the cloned child END: a port of
- * `tests/engine/test_spawner_post_assert.py`.
- *
- * The grow builder lowers the call's `asserts:` onto the cloned child END, so a failing assert
- * fails the child END (e.g. `callee/__end__`), not the spawner. `${output}` stays as written; a
- * declared call input `${X}` maps to a synthesized END parameter wired off the cloned child
- * START's coerced output, allocated so it never collides with a parameter the child already
- * lowered, and shared by repeated references.
- *
- * Ported: `test_output_post_assert_satisfying_succeeds`,
- * `test_output_post_assert_violating_fails_on_child_end`,
- * `test_declared_input_post_assert_satisfying_succeeds`,
- * `test_declared_input_post_assert_violating_fails`,
- * `test_collision_free_cloned_end_has_no_duplicate_params_or_edges`,
- * `test_spawner_lowering_preserves_presentation_origin`,
- * `test_collision_case_run_satisfying_succeeds`,
- * `test_collision_case_run_violating_spawner_assert_fails_on_child_end`,
- * `test_repeated_input_ref_shares_one_synth_param`, `test_repeated_input_ref_run_succeeds` and
- * `test_python_built_unparseable_spawner_post_assert_fails_before_the_run`. Integers are bigints
- * (decision 4a); the CODE reference is the TS fixture's (`./fixtures/compose_codefns.ts:double`).
- *
- * Ported through `runFlow` and `advance`, in `hostEnv`: `test_spawner_post_assert_fires_after_log_recovery`.
- * Changed: the interruption before the human answer is the run's `signal`, which the `ask`
- * handler aborts (Python: the handler raises `_HostStop`); the child's gate is a TOOL `ask` where
- * Python's is a HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind).
+ * A `call` node's node-level post `asserts:` fire from the cloned child END. The grow builder
+ * lowers them onto the cloned child END, so a failing assert fails the child END (e.g.
+ * `callee/__end__`), not the spawner. `${output}` stays as written; a declared call input `${X}`
+ * maps to a synthesized END parameter wired off the cloned child START's coerced output, allocated
+ * so it never collides with a parameter the child already lowered, and shared by repeated
+ * references.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -380,7 +361,7 @@ test("repeated input ref run succeeds", async () => {
   expect(res.output).toBe(10n);
 });
 
-test("python built unparseable spawner post assert fails before the run", async () => {
+test("a spawner post assert set in code that doesn't parse fails before the run", async () => {
   // A spawner's bad post-assert set in code is named before the run, not thrown bare at growth.
   const loaded = await loadOutput(5);
   loaded.compiled.nodes.get("callee")!.postAsserts = [new Assertion("${output} < 100", "under 100")];

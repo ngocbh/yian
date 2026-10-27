@@ -326,7 +326,7 @@ describe("ProviderError", () => {
     expect(err.provider).toBe("azure");
   });
 
-  test("an unknown kind throws, as Python's ErrorKind(kind) does", () => {
+  test("an unknown kind throws", () => {
     expect(() => new ProviderError("nope" as never, "x")).toThrow(new TypeError("unknown provider error kind: nope"));
   });
 
@@ -382,7 +382,7 @@ describe("parseRetryAfter", () => {
     },
   );
 
-  test("a four-digit year below 100 follows Python's two-digit rule", () => {
+  test("a four-digit year below 100 reads as a two-digit year", () => {
     const now = Date.UTC(2050, 0, 15, 8, 0, 0) / 1000;
     expect(parseRetryAfter(new Headers({ "retry-after": "15 Jan 0050 08:00:30 GMT" }), now)).toBe(30);
     const then = Date.UTC(1999, 0, 15, 8, 0, 0) / 1000;

@@ -1,42 +1,6 @@
 /**
- * The public direct-engine contract: a port of `tests/engine/test_flow_engine_public_surface.py`.
- * A direct caller prepares and commits `RunStarted` first, then lends that state and log to
- * `FlowEngine`, which drives only new work and borrows the log.
- *
- * Ported (adapted), on `graph()` and `FuncNode` for Python's loaded CODE flows:
- * `test_growth_builder_is_a_required_constructor_dependency`,
- * `test_unprepared_state_is_rejected_before_any_node_executes`,
- * `test_mismatched_state_and_log_are_rejected_before_execution`,
- * `test_mismatched_durable_sequence_is_rejected_before_execution` and
- * `test_mismatched_durable_worker_count_is_rejected_before_execution`; each names its `RangeError`
- * and full message, where Python matches a part of its `ValueError`.
- *
- * Ported (adapted): `test_static_run_yields_only_new_post_durable_observers`: `run()` resolves to
- * the observers, which `onEvent` saw first, each after its record was appended.
- * `test_stream_chunks_are_callback_only_and_never_durable`: the fixture `StreamNode` streams through
- * `caps.emitStream` and returns `{output: "hello"}`; its chunks carry no `final` flag.
- * `test_engine_borrows_and_never_closes_the_run_log` counts the fixture log's `close` calls.
- *
- * TS-only: the constructor's other checks, the run's tool set bound to the run id and signal, a
- * terminal state returning no events, unfinished starts refused, a second `run()` refused, an
- * `onEvent` promise that rejects before the terminal result rejecting `run()` with its error, and
- * one that rejects after it being ignored, with nothing rejecting unhandled; `stopForCallback`
- * stopping a run with the given error and recording one `RunStopped`, and ignored after the result.
- *
- * Ported: `test_flow_engine_is_not_exported_from_the_package_root`, on `index.ts`.
- *
- * Changed: `test_direct_agent_uses_its_node_owned_model_factory`, on `engine(...)` over the loaded
- * flow and its `resolveLlmCascade` map: the model factory comes from `FlowEngineOptions.models`
- * (ESM exports can't be patched).
- *
- * Changed: `test_direct_engine_executes_real_dynamic_combinators` (`call`, `map`, `loop`): on
- * `engine(..., { growBuilder: buildGrow })` over the loaded flows; the CODE references
- * `tests.engine._compose_codefns:echo` and `:loop_bump` are inline bodies with the same behavior,
- * since TS load refuses a Python reference, and the LOOP's `n` is `3n`.
- *
- * Not ported: `test_constructor_is_exactly_the_recorded_state_log_surface` (`inspect` and type
- * hints; TS type-checks the options) and `test_checkpoint_era_engine_methods_are_absent` (TS never
- * had them).
+ * The public direct-engine contract. A direct caller prepares and commits `RunStarted` first, then
+ * lends that state and log to `FlowEngine`, which drives only new work and borrows the log.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -516,7 +480,6 @@ test("an onEvent promise that rejects after the terminal result is ignored", asy
   expect(unhandled).toEqual([]);
 });
 
-// test_flow_engine_is_not_exported_from_the_package_root
 test("FlowEngine is not exported from the package root", () => {
   expect("FlowEngine" in yian).toBe(false);
 });

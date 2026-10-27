@@ -1,5 +1,5 @@
 /**
- * TS-only: the reducer's producer index and the `derived` node trait.
+ * The reducer's producer index and the `derived` node trait.
  *
  * `RunState.producers` maps each pool name to the seq of the accepted `pool_commit` that last
  * wrote it, in every run: run inputs and system values map to their run-start commits, any other

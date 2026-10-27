@@ -1,11 +1,8 @@
 /**
- * TS-only: a loaded flow keeps the text of every flow file the loader read, and `run_started`
- * records it, with the skills, the tool specs, the yian version and the parent run; resume
- * compiles the recorded flow, never the files on disk.
- *
- * TS-only too: `loadFlowSource` with `codeRoot` checks every recorded file's CODE references, a
- * host child's included, against it, and so do `advance`, `loadRecordedFlow` and `foldRunLog`
- * with `codeRoot`.
+ * A loaded flow keeps the text of every flow file the loader read, and `run_started` records it,
+ * with the skills, the tool specs, the yian version and the parent run; resume compiles the recorded
+ * flow, never the files on disk. With `codeRoot`, `loadFlowSource`, `advance`, `loadRecordedFlow`
+ * and `foldRunLog` check every recorded file's CODE references, a host child's included, against it.
  */
 
 import {

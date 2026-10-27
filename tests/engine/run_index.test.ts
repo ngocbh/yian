@@ -1,5 +1,5 @@
 /**
- * TS-only: the run index, `<runs>/index.sqlite`. `updateRunIndex` folds each run folder's log into
+ * The run index, `<runs>/index.sqlite`. `updateRunIndex` folds each run folder's log into
  * one row from the byte offset it reached last time, rebuilds a row whose log was truncated or
  * replaced, and serializes builders in one SQLite transaction that waits a bounded time for the
  * lock. `readRunIndex` puts `running` on top of a stored status while the writer's lock is held.

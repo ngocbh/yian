@@ -1,26 +1,10 @@
 /**
- * A run's copy of its flow shares the flow's types, so a deep `output:` record runs: a port of
- * `tests/engine/test_deep_type_copies.py`.
+ * A run's copy of its flow shares the flow's types, so a deep `output:` record runs.
  *
  * Copying a compiled flow gives fresh nodes that share their types. A 100-level `output:` record
  * on a CODE node runs, runs learnably, and resumes under 10 nested `defs:` calls, and runs under
  * 50; a union nested at every level runs; and a deeper record allowed by a raised type limit fails
  * its output contract instead of overflowing.
- *
- * Ported: the copy rows, against `copyGraph` (the per-run copy `runFlow` makes, Python's
- * `copy.deepcopy` of a compiled flow), and the run rows. `deep_tree` is the TS fixture
- * `./fixtures/compose_codefns.ts:deep_tree`; the union row's CODE body is written in JS. Python
- * pins the recursion limit to a few hundred frames past the current depth around each run and
- * copy (`_stack_headroom`); TS has no such limit to pin, so the rows run on the default stack,
- * each run row with an explicit timeout. Python's `set_defaults(MAX_TYPE_NESTING=125)` is
- * `YIAN_MAX_TYPE_NESTING=125` in the load's and run's environment.
- *
- * Changed: `test_copying_a_compiled_flow_does_not_recurse_through_a_deep_record` checks only that
- * the copy is a new flow: there is no recursion limit to pin, and `copyGraph` never walks a type,
- * which `test_a_compiled_flow_copy_has_its_own_nodes_and_shares_their_types` checks.
- *
- * Not ported: `test_a_type_copies_as_itself` (TS has no copy operation on a `Type`; `copyGraph`
- * shares types instead of copying them).
  */
 
 import { afterAll, expect, test } from "bun:test";

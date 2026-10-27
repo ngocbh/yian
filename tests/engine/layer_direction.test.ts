@@ -1,6 +1,5 @@
 /**
- * Import-direction ratchets and source lints for `src`, a port of
- * `tests/engine/test_layer_direction.py`.
+ * Import-direction ratchets and source lints for `src`.
  *
  * Lower layers never import the layers that drive them, a few leaves import only
  * declared modules, and engine-dependent or platform-specific APIs stay out of
@@ -264,7 +263,7 @@ const BARE_SORT: Lint = {
   find: inCode(/\.(?:sort|toSorted)\s*\(\s*\)/g),
   fix:
     "a bare sort compares values converted to text by UTF-16 code units, so numbers sort as text " +
-    "and text doesn't sort in Python's code-point order; pass a comparator (compareCodeUnits for text)",
+    "and text doesn't sort in code-point order; pass a comparator (compareCodeUnits for text)",
 };
 
 const ENGINE_DEPENDENT: Lint = {

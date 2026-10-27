@@ -1,6 +1,5 @@
 /**
- * The template scanner over the one expression parser, a port of
- * `tests/engine/test_template_scanner.py`.
+ * The template scanner over the one expression parser.
  *
  * `scanTemplate(text)` splits a text into `Literal` runs (raw text, `$$` already collapsed to
  * `$`) and `Span`s whose interior went through `parseExpr`. Only span interiors are parsed, so
@@ -11,10 +10,9 @@
  * else writes each span's value in the text form and joins it with the literal runs.
  * `templateRefs(segments)` unions the span references in source order.
  *
- * The values follow the TS number model (ints are `bigint`s). Python's four digit-limit tests
- * become TS-era ones: an int has no digit limit here, so a huge int renders its digits, and an
- * int the runtime can't stringify fails with its own message. A text-form table checks what an
- * embedded span writes.
+ * Ints are `bigint`s with no digit limit, so a huge int renders its digits, and an int the runtime
+ * can't stringify fails with its own message. A text-form table checks what an embedded span
+ * writes.
  */
 
 import { expect, test } from "bun:test";

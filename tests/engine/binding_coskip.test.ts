@@ -1,6 +1,6 @@
 /**
- * The co-skip classifier, a port of `tests/engine/test_binding_coskip.py`: does a binding
- * co-skip when all its producers are skipped (`bindingCoSkips`)?
+ * The co-skip classifier: does a binding co-skip when all its producers are skipped
+ * (`bindingCoSkips`)?
  */
 
 import { expect, test } from "bun:test";

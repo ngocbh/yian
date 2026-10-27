@@ -1,24 +1,10 @@
 /**
- * Values stored for `Any` across a durable run log: replay and resume keep them unchanged: a port
- * of `tests/engine/test_any_replay.py`.
+ * Values stored for `Any` across a durable run log: replay and resume keep them unchanged.
  *
  * A value typed `Any` keeps its natural carrier (an int stays an int, a bool stays a bool, a list
  * is stored as `list[Any]`). Replay re-checks each recorded value against its declared type and
  * requires the same canonical wire back, so that check must be idempotent; a node that runs after
  * resume must see the same values a straight run sees.
- *
- * Ported: every row. The CODE bodies are written in JS: `big` returns `2n ** 80n`, and `seen`
- * names each input's JS `typeof` (`null` for null), where Python names its class. The gate is a
- * TOOL `ask` that runs after the `Any` nodes, where Python's is a HUMAN_INPUT reading them (TS yian
- * has no HUMAN_INPUT kind). A host stop is the `ask` handler aborting the run's signal and throwing
- * its reason, where Python raises `_HostStop`; the run rejects with that reason. The committed values are read with the TS log
- * codec's `decodeRecord`, which also checks every record, where Python reads the raw JSON after
- * `decode_record`.
- *
- * Changed: ints read as `bigint`s (decision 4a), and a CODE body receives an int within ±2^53 as a
- * `number` (decision 45), so `seen` names an int and a float alike, and `2**80` as `bigint`. A
- * whole number a CODE body returns reads back as an int (decision 9A), so the floats are `2.5`
- * and `1.5` where Python's are `2.0` and `1.0`.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,15 +1,4 @@
-/**
- * Import scoping: a `uses:` alias prefixes every reachable memory key. A port of
- * `tests/engine/test_memory_import_scope.py`.
- *
- * Ported: every row. Changed: CODE references are TS's form
- * (`./fixtures/compose_codefns.ts:echo_x`), resolved against the conformance directory: a flow
- * loaded from text names it as `baseDir`, and each temporary directory links `fixtures` to the
- * conformance fixtures, since a file read through the search path resolves its CODE against its
- * own directory. Python's `copy.copy` of a child flow is a new object with the same prototype and
- * fields; its `SimpleNamespace` stand-in for the loaded flow is a plain object carrying
- * `originResolver`.
- */
+/** Import scoping: a `uses:` alias prefixes every reachable memory key. */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

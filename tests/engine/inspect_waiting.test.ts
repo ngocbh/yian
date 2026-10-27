@@ -1,7 +1,6 @@
 /**
  * `inspectRun` without a flow on logs whose nodes wait: `waiting`, `ready`, `wakeAt` and the
- * waits; crashes while nodes wait; `cancelled` and `run_failed` endings. TS-only: Python yian has
- * no waits.
+ * waits; crashes while nodes wait; `cancelled` and `run_failed` endings.
  */
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

@@ -1,38 +1,15 @@
 /**
- * Flow `input:` declarations and supplied top-level inputs at the run boundary, a port of
- * `tests/engine/test_flow_inputs.py`: compose's `readFlowInputs` reads source-free type text
- * and `readSourceParameters` (through `parametersFromYaml`) reads tagged YAML declarations;
- * `coerceInputs` converts text under each parameter's `coerceStrings` policy and
- * `applyDefaults` fills omitted inputs. The binder tests build their parameters by hand with
- * `coerceStrings: true`, as the readers build them. Ints are `bigint` (`30n`).
+ * Flow `input:` declarations and supplied top-level inputs at the run boundary: compose's
+ * `readFlowInputs` reads source-free type text and `readSourceParameters` (through
+ * `parametersFromYaml`) reads tagged YAML declarations; `coerceInputs` converts text under each
+ * parameter's `coerceStrings` policy and `applyDefaults` fills omitted inputs. The binder tests
+ * build their parameters by hand with `coerceStrings: true`, as the readers build them. Ints are
+ * `bigint` (`30n`).
  *
- * Ported: `test_required_scalar`, `test_int_with_default_and_coercion` (its declaration half
- * here, its `coerceInputs` half with a hand-built parameter), `test_optional_nullable`,
- * `test_nullable_null_default_is_distinct_from_no_default`,
- * `test_nonnullable_null_default_is_rejected_during_load`,
- * `test_source_free_default_assignment_is_rejected_during_load`,
- * `test_quoted_integer_default_is_not_coerced`, the three former-boolean tests,
- * `test_number_default_retains_compatible_integer_payload`,
- * `test_input_declaration_errors_retain_their_source_range`, `test_float_default`,
- * `test_list_default`, `test_bare_word_string_default`, `test_apply_defaults_fills_omitted`,
- * `test_reader_returns_only_exact_parameter_carriers`, the three bool spelling tests and
- * `test_bad_number_passes_through_unchanged`.
- *
- * Changed (TS yian): a default holding a lone surrogate (a double-quoted `\ud800` escape) is
- * refused before its tag is read, where Python accepts it.
- *
- * TS-only: the text rules for `float` and `int` inputs (the rules `int-in-float` and `text`).
  * Text for a `float` input reads an int spelling as that int at any size (`"2"` is `2n`, kept an
  * int in the float slot), a float spelling as a float, `inf`/`-inf` as infinity, and refuses a
- * spelling beyond the float range; Python's `float()` reads `"2"` as `2.0` and also takes `nan`,
- * `Infinity` and `+inf`, which stay text here. An `int` input's text has no digit limit and its
- * digits are ASCII. Also TS-only: a parameter without `coerceStrings`, an `Any` input and a
- * non-record `raw`; a 5000-digit `bigint` default, the counterpart of
- * `test_long_int_boundaries.py::test_a_long_int_default_is_rejected` (no digit limit, so it is
- * accepted rather than rejected; `test_a_long_int_default_is_rejected_before_its_contract` is
- * ported in `long_int_boundaries.test.ts`); and the harvested-case table, which makes the
- * loader's call on the `input:` declarations of the conformance cases these readers decide,
- * comparing the message and the last frame.
+ * spelling beyond the float range; `nan`, `Infinity` and `+inf` stay text. An `int` input's text
+ * has no digit limit and its digits are ASCII.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";

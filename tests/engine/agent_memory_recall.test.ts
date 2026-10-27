@@ -1,35 +1,6 @@
 /**
- * AGENT recall is one trait-gated, source-neutral evaluator capability: mirrors
- * `tests/engine/test_agent_memory_recall.py`.
- *
- * Ported through `evalNode` (`drive`) with a hand-made memory context opener and a `ScriptedModel`
- * from `models`: `test_no_memory_preserves_the_existing_system_prompt_byte_for_byte` (2 rows),
- * `test_recall_sections_reach_every_agent_path_in_order_with_trace_parity` (3 rows),
- * `test_invalid_recall_context_becomes_sanitized_typed_node_failure`,
- * `test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled`,
- * `test_stop_observed_during_setup_prevents_recall`,
- * `test_stop_observed_after_recall_prevents_model_construction`,
- * `test_unexpected_recall_callback_exception_remains_a_host_fault`,
- * `test_invalid_recall_section_order_becomes_a_typed_node_failure`,
- * `test_empty_recall_section_becomes_a_typed_node_failure`,
- * `test_memory_text_cannot_spoof_composer_framing` and
- * `test_typed_recall_failure_uses_the_authored_policy_origin`.
- *
- * Changed: the opener is an async function returning a `MemoryContext` (Python: a context
- * manager); a stop is the signal, so a stopped node rejects with its reason; "no model is built"
- * reads as the model access receiving no build. The tool rows grant a real `noop` tool in the run's
- * `ToolSet`, where Python patches `ToolSet.resolve`; the model answers without calling it.
- * `test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled` binds a `Set`, which is
- * not a yian value.
- * TS records no evidence (learning reads the steps), so the trace parity and evidence checks of
- * those tests are not ported.
- * `test_invalid_recall_context_becomes_sanitized_typed_node_failure` binds its lone-surrogate text
- * through `bindReserved`, since the TS pool refuses it.
- * `test_scoped_agent_without_recall_callback_is_a_setup_error` rejects with an `Error` (Python:
- * `RuntimeError`).
- *
- * TS-only: a typed recall failure with no origin, and a variable-default `BindingError` with and
- * without one, keep their origin or fall back to the node's.
+ * AGENT recall is one trait-gated, source-neutral evaluator capability: recall sections reach
+ * every agent path in order, and bad recall input becomes a typed node failure.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

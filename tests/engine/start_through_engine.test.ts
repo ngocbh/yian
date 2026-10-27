@@ -1,28 +1,7 @@
 /**
- * The top-level START runs as an ordinary scheduled node: a port of
- * `tests/engine/test_start_through_engine.py`. START runs through `evalNode`, emits `NodeStarted`
- * and `NodeSucceeded`, and carries the flow's boundary asserts in its ordinary `postAsserts`, each
- * `input.X` lowered to `output.X` so it reads START's bound output record.
- *
- * Ported (adapted), on `graph()` with a typed `StartNode` whose `postAsserts` hold the lowered
- * boundary assert, for Python's loaded flows: `test_start_emits_started_and_succeeded`, and the
- * engine halves of `test_typed_int_default_is_used_when_omitted`,
- * `test_boundary_assert_violating_value_fails`, `test_boundary_assert_satisfying_value_succeeds`
- * and `test_boundary_assert_reads_typed_default`. Integers are bigints.
- *
- * Ported, through `loadFlow` and `runFlow` (a CALL whose def asserts its input), serial and pooled:
- * `test_child_boundary_assert_violation_fails_run` and `test_child_boundary_assert_satisfied_succeeds`.
- * Changed: the def body's CODE reference is TS's (`./compose_codefns.ts:double`).
- *
- * Ported, through `loadFlow` and `runFlow`: the `run_flow` halves of
- * `test_typed_int_default_is_used_when_omitted`, `test_boundary_assert_violating_value_fails` and
- * `test_boundary_assert_satisfying_value_succeeds`, and
- * `test_loadedflow_reusable_across_runs_shared_ir_untouched` (it compares START's wiring map
- * before and after each run). The CODE references are TS's (`./compose_codefns.ts:<name>`).
- *
- * Covered by `run-core/engine_start_through_engine__boundary_assert_reads_typed_default`, the
- * harvested `run_flow` half of `test_boundary_assert_reads_typed_default` (the same flow, run with
- * no inputs, succeeding with 5).
+ * The top-level START runs as an ordinary scheduled node: it runs through `evalNode`, emits
+ * `NodeStarted` and `NodeSucceeded`, and carries the flow's boundary asserts in its ordinary
+ * `postAsserts`, each `input.X` lowered to `output.X` so it reads START's bound output record.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

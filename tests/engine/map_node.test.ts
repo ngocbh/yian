@@ -1,18 +1,6 @@
 /**
- * `NodeKind.MAP` and `MapNode`, the re-split MAP driver: a port of `tests/engine/test_map_node.py`.
- * `MapNode` discriminates by kind, not an `over` flag: it carries no `over` field, and the `over`
- * source rides `flow.wiring[id].over`.
- *
- * Ported: `test_map_node_kind_value`, `test_map_node_carries_no_over_attr`,
- * `test_map_node_run_builds_grow_fan_in_per_element`, `test_map_node_run_empty_over_builds_lone_list_end`
- * and `test_map_node_kind_exists_and_package_imports`.
- *
- * Changed: `NodeKind` is a const object of strings, so a member is its value and has no `.value`;
- * `hasattr` is the `in` operator; the package import is a dynamic `import()` of the module; the
- * growth rows' baked child is a stub object (Python uses `test_expand`'s `_child_flow`, which
- * `run` never reads), `run` is async and `bindItem` is passed in `caps`.
- *
- * TS-only: `bindItem` receives `(element, index)` in order and isn't called for an empty `over`.
+ * `NodeKind.MAP` and `MapNode`, the re-split MAP driver. `MapNode` discriminates by kind, not an
+ * `over` flag: it carries no `over` field, and the `over` source rides `flow.wiring[id].over`.
  */
 
 import { expect, test } from "bun:test";

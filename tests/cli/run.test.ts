@@ -1,26 +1,6 @@
-// Ported from tests/cli/test_run.py: `test_bad_kv_is_rejected`, `test_inputs_json_must_be_an_object`,
-// `test_inputs_file_must_be_utf8` and `test_flag_overrides_json`, on the helpers those runs go
-// through (`parseKv`, `readInputsJson`, `mergeInputs`); the non-TTY run outcomes through `main`
-// (`test_run_succeeds_with_input_flag`, `test_run_keeps_registered_tools`,
-// `test_run_inline_code_in_process`, `test_run_reads_inputs_json`, `test_flag_overrides_json`,
-// `test_failed_run_exits_nonzero`, `test_non_tty_run_omits_optional_and_defaulted_inputs`,
-// `test_non_tty_inputs_json_preserves_explicit_structured_null`); the input gate
-// (`test_undeclared_input_flag_is_a_bad_parameter`,
-// `test_undeclared_inputs_json_key_is_a_bad_parameter`,
-// `test_non_tty_run_reports_all_missing_required_inputs_before_setup`, and from
-// tests/engine/test_cli_prompt.py `test_gather_non_tty_*` and the run half of
-// `test_prompt_accepting_omission_preserves_start_owned_defaults`, through `main`, on a fake TTY
-// for the prompts). Changed: an unknown name is quoted as `"topik"`; the CODE bodies are
-// TS's, and a non-string output prints in yian's text form, not Python's repr. Added here: the
-// other `cli/run.ts` helpers (`diagnosticJson`, `jsonValue`, `flowBanner`, `stopOnSignals`),
-// `skillsCheck`, and `main`'s command table: the defaults check, usage errors, `--licenses`,
-// `--version` and the routing to `cli/auth.ts`; `check`, on its own and confined to `--root`;
-// `run`'s `--json` documents, its `run failed:` setup errors, its stops (Ctrl-C at a run's
-// prompt, `io.stop`) and the `warning:` lines a run's warnings print as, through progress and
-// under `--quiet`; the entry's `run --json` child, its command line in a binary and as a script
-// (`childCommand`) and its forwarded stop (`abortOnSignal`), and one Ctrl-C ending a plain run
-// stuck in a CODE body; `status`, TS-only, on logs these runs write, and its help. From
-// tests/cli/test_run_log_options.py, the run-log checks running before the flow is read.
+// `yian run` and the rest of `main`'s command table: input parsing and the input gate, non-TTY
+// and prompted runs, `--json` documents, setup errors, stops and warnings, `check`, `status`, and
+// the run-log checks that run before the flow is read.
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
@@ -126,11 +106,11 @@ describe("readInputsJson", () => {
           "Expecting property name enclosed in double quotes",
       ),
     );
-    // Lines count as Python's text-mode read counts them, `\r\n` and `\r` as one break each.
+    // Line numbers count `\r\n` and a lone `\r` as one break each.
     expect(() => readInputsJson(inputsFile('{\r\n"a": 1,\r"b" 2}'))).toThrow(
       new UsageError("Invalid value for --inputs: invalid JSON at line 3, column 5: Expecting ':' delimiter"),
     );
-    // A BOM is kept, so it is refused as Python refuses it.
+    // A leading BOM is kept, so the text is not valid JSON.
     expect(() => readInputsJson(inputsFile("\ufeff{\"a\": 1}"))).toThrow(
       new UsageError(
         "Invalid value for --inputs: invalid JSON at line 1, column 1: " +
@@ -237,7 +217,7 @@ describe("flowBanner", () => {
     expect(flowBanner({ name: "", description: "", version: "" }, out, env)).toBeNull();
   });
 
-  // The expected boxes are rich's renders of Python's banner at each width.
+  // The expected banner boxes at each width.
   const banner = (
     columns: number | undefined,
     flow: { name: string | null; description: string | null; version?: string | null },

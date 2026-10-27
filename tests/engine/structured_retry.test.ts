@@ -1,69 +1,7 @@
 /**
  * `generateStructured`: correcting an invalid structured reply under `retries:`, and the output
- * path of the last error; mirrors `tests/engine/test_structured_retry.py` and the node-level
- * halves of `tests/engine/test_agent_missing_tool_call.py`.
- *
- * Ported: `test_literal_retries_an_invalid_tag_then_returns_bare_tag`,
- * `test_a_reply_without_a_structured_result_is_corrected_and_retried` and
- * `test_replies_without_a_structured_result_fail_naming_the_tool_once_retries_are_spent` (over a
- * stub `RouteModel` taking the tool strategy), `test_structured_validation_path_keeps_record_fields`
- * (native and prompt), `test_structured_validation_path_strips_only_generated_wrappers`,
- * `test_structured_validation_path_strips_nullable_record_wrapper` (native and prompt) and
- * `test_contract_path_validation_rejects_foreign_location_shapes` (`isContractPath`). The error's
- * output path is `OutputInvalidError.path` rather than a function of the exception.
- * `test_missing_tool_call_error_reads_cleanly` is ported in `tests/llm/structured.test.ts`
- * (`MissingToolCallError`'s text).
- *
- * Changed:
- * - `test_retry_on_invalid_then_succeeds`: the invalid first attempt is an unparseable reply;
- *   Python's raised a `ValueError` from the model call, which TS does not correct (next row).
- * - Python corrects any non-auth error a model call raises; TS never corrects a provider error:
- *   transport failures are `callWithRetries`' job under `YIAN_MODEL_RETRIES`, and what escapes it
- *   propagates unchanged after one call.
- * - `test_retry_on_invalid_provider_shape_then_succeeds`: the reply that can't be unwrapped is a
- *   JSON object without the wrapper field.
- * - `test_stop_during_native_binding_prevents_provider_invoke`: there is no binding step; a stop
- *   (an aborted signal) before the call sends nothing.
- * - `test_retry_exhausted_raises`: once the corrections are spent the error is an
- *   `OutputInvalidError` with the last error's message and the last error as `cause`, not the last
- *   error itself; so the tool rows and `test_agent_missing_tool_call.py` read
- *   `OutputInvalidError` with the `MissingToolCallError` as `cause` (Python's `cause_type` is
- *   `MissingToolCallError`, its code `node.execute`; TS's code is `agent.output_invalid`).
- * - `test_structured_validation_path_preserves_owned_root_location`: a reply is always a JSON
- *   object, so the root row is a reply without the wrapper field, refused at the root `[]`.
- *
- * Not ported: pydantic frame ownership (`test_structured_validation_path_accepts_generated_constructor_frame`,
- * `..._accepts_direct_parser_wrapped_error`, `..._rejects_wrapped_same_title_foreign_schema`,
- * `..._rejects_same_title_foreign_schema`, `..._rejects_unowned_pydantic_errors`): the path comes
- * with yian's own value check error, so there is no foreign validation error to tell apart;
- * `test_structured_validation_path_uses_first_pydantic_error`: the value check stops at its first
- * error, so there is no error list to choose from; `test_tool_parser_returns_none_for_a_reply_without_a_tool_call`:
- * a LangChain parser.
- *
- * Ported through `runFlow` (`runWith`), the flow rows of `test_agent_missing_tool_call.py`:
- * `test_an_agent_retries_a_reply_without_the_tool_call` and
- * `test_an_agent_fails_naming_the_tool_once_retries_are_spent`, without their session rows (TS yian
- * has no session memory). Changed: the model is the
- * `ToolRoute` stub on OpenAI Chat (Python: an Anthropic client over a fake server), so the flow's
- * config names `gpt-5.5`; the corrected request holds the system message, the question and the
- * correction, with no assistant reply (Anthropic's body sends the system apart and merges the two
- * user messages); the failure is `agent.output_invalid` with
- * cause type `OutputInvalidError` (Python: `node.execute`, `MissingToolCallError`).
- *
- * Not ported: `test_a_generic_agent_fails_naming_the_tool_when_the_reply_has_no_result`, whose
- * subject is a LangChain `with_structured_output` binding that returns no parsed value; TS has no
- * such binding, and a reply without the tool call is the tool strategy's, which the rows above run.
- *
- * TS-only: a corrected request holds the earlier messages and the correction, not the invalid
- * reply; a stop during the call of an invalid last reply wins over the `OutputInvalidError`, and
- * one during the call of a valid reply wins over its value; a
- * refusal written in the reply, once the corrections are spent, is an `OutputInvalidError` with no
- * path; a value check message reads `structured output at <path>:`; a reply whose value nests past
- * `YIAN_MAX_VALUE_NESTING` is corrected naming the path, then fails with no path, and a value
- * exactly at the limit passes (the wrapper is not a level); rebuilt from the recorded steps
- * (`structuredMaterial`), learning sees the native strategy's value and the prompt strategy's every
- * reply's text, and every recorded request matches; `retry` is called once per
- * structured call, so a transport retry of a later call reports that call.
+ * path of the last error. A provider error is never corrected: transport failures are
+ * `callWithRetries`' job under `YIAN_MODEL_RETRIES`, and what escapes it propagates after one call.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -182,7 +120,7 @@ test("test_retry_on_invalid_then_succeeds (an unparseable reply)", async () => {
   expect(model.requests).toHaveLength(2);
 });
 
-test("test_literal_retries_an_invalid_tag_then_returns_bare_tag", async () => {
+test("literal retries an invalid tag then returns bare tag", async () => {
   const typ = new Type({ kind: ValueKind.STRING, tags: new Set(["positive", "neutral", "negative"]) });
   const model = scripted([text('{"value": "The sentiment is neutral."}'), text('{"value": "neutral"}')]);
   expect(await generateStructured(model, [], typ, { retries: 2 })).toBe("neutral");
@@ -231,7 +169,7 @@ test("test_stop_during_native_binding_prevents_provider_invoke (a stop before th
   expect(model.requests).toEqual([]);
 });
 
-test("test_retry_exhausted_raises", async () => {
+test("retry exhausted raises", async () => {
   const model = scripted([text("nope 1"), text("nope 2"), text("nope 3")]);
   const error = await rejection(generateStructured(model, [], INT, { retries: 2 }));
   expect(error).toBeInstanceOf(OutputInvalidError);
@@ -247,7 +185,7 @@ test("test_retry_exhausted_raises", async () => {
 describe("a reply without the schema's tool call", () => {
   const missing = "the reply did not call the ScalarWrapper tool; call it with the answer";
 
-  test("test_a_reply_without_a_structured_result_is_corrected_and_retried", async () => {
+  test("a reply without a structured result is corrected and retried", async () => {
     const call = new ToolCallPart({ id: "c1", name: "ScalarWrapper", arguments: { value: 42n } });
     const model = new ToolRoute([text("42"), reply(call)]);
     expect(await generateStructured(model, [QUESTION], INT, { retries: 2 })).toBe(42n);
@@ -273,7 +211,7 @@ describe("a reply without the schema's tool call", () => {
   );
 });
 
-describe("test_structured_validation_path_keeps_record_fields", () => {
+describe("structured validation path keeps record fields", () => {
   const typ = record({ profile: record({ age: INT }) });
 
   test.each([
@@ -285,14 +223,14 @@ describe("test_structured_validation_path_keeps_record_fields", () => {
   });
 });
 
-test("test_structured_validation_path_strips_only_generated_wrappers", async () => {
+test("structured validation path strips only generated wrappers", async () => {
   expect((await exhausted(INT, '{"value": "bad"}')).path).toEqual([]);
   const listed = new Type({ kind: ValueKind.LIST_OBJECT, element: record({ age: INT }) });
   const error = await exhausted(listed, '{"items": [{"age": 1}, {"age": "bad"}]}');
   expect(error.path).toEqual([1, "age"]);
 });
 
-describe("test_structured_validation_path_strips_nullable_record_wrapper", () => {
+describe("structured validation path strips nullable record wrapper", () => {
   const typ = record({ name: Type.scalar(ValueKind.STRING), age: INT }, { nullable: true });
 
   test.each([
@@ -311,7 +249,7 @@ test("test_structured_validation_path_preserves_owned_root_location (a reply wit
   expect(error.cause).toBeInstanceOf(TypeCheckError);
 });
 
-test("test_contract_path_validation_rejects_foreign_location_shapes", () => {
+test("contract path validation rejects foreign location shapes", () => {
   const rec = new Type({ kind: ValueKind.OBJECT, fields: new Map([["age", INT]]) });
   const listed = new Type({ kind: ValueKind.LIST_OBJECT, element: rec });
   expect(isContractPath(["unknown"], rec)).toBe(false);

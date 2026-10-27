@@ -1,30 +1,6 @@
 /**
- * An authored AGENT `system_prompt:` replaces `DEFAULT_SYSTEM` on every model path: mirrors
- * `tests/engine/test_agent_system_prompt.py`.
- *
- * Ported through `evalNode` with a `ScriptedModel` from `models`:
- * `test_every_path_sends_the_rendered_system_prompt` (4 rows),
- * `test_system_prompt_reads_the_node_variables`, `test_memory_sections_append_after_the_authored_prompt`
- * (a hand-made memory context opener) and
- * `test_a_null_system_prompt_value_fails_the_node_before_any_model_call`; through `forward`,
- * `test_omitted_system_prompt_keeps_default_system` (2 rows) and
- * `test_skills_append_after_the_authored_prompt_and_recall_skips_them`.
- *
- * Changed: the bound inputs come from a one-node `CompiledFlow`'s wiring over a pool, where Python
- * passes a stub flow; "no model call" reads as the model access building no model. The tool rows
- * grant a real `noop` tool in the run's `ToolSet`, where Python patches `ToolSet.resolve`; the
- * model answers without calling it, then (structured) gives the value in a second request.
- *
- * Ported through `loadFlow`, `runFlow` and `advance`, in `hostEnv`, a `ScriptedModel` given as
- * `models`: `test_run_flow_sends_the_rendered_persona`,
- * `test_resume_replays_a_finished_node_with_its_recorded_system_prompt` (its backward through
- * `RunResult.backward`, the resumed model serving the backward replies too),
- * `test_retry_after_a_mid_node_crash_renders_the_same_system_prompt` and
- * `test_resume_refuses_a_flow_whose_system_prompt_changed`. Changed: the process loss is
- * `crashAfter`'s log refusing the append of the crashed node's success, after its model answered
- * (Python: the model call raises); the fingerprint refusal is a `RangeError` (Python's `ValueError`).
- * Resume compiles the flow the run recorded, so the changed prompt is an edit of the recorded text
- * (Python passes the changed flow).
+ * An authored AGENT `system_prompt:` replaces `DEFAULT_SYSTEM` on every model path, reads the
+ * node's variables, and is replayed and fingerprinted on resume.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

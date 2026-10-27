@@ -1,4 +1,4 @@
-/** No JSON file under `tests/llm` (cassettes, goldens) holds anything shaped like a secret; a port of `tests/llm/test_no_secrets.py`. */
+/** No JSON file under `tests/llm` (cassettes, goldens) holds anything shaped like a secret. */
 
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";

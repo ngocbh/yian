@@ -1,11 +1,11 @@
 /**
- * TS-only: a resumed AGENT replays the steps its earlier starts recorded. Each recorded
- * `model_call` reply is taken in order instead of calling the model, after its purpose and
- * request digest are checked against the rebuilt request (a mismatch is a host fault that writes
- * nothing); each tool call with a recorded `tool_result` gets that result without running. A
- * replayed call with no result is closed lazily (`closed: "crashed"`, outcome unknown) once its
- * check passes. Failed attempts after the last reply make the first live call wait the recorded
- * delay and continue the attempt count. Steers aren't read until the first live call.
+ * A resumed AGENT replays the steps its earlier starts recorded. Each recorded `model_call` reply
+ * is taken in order instead of calling the model, after its purpose and request digest are checked
+ * against the rebuilt request (a mismatch is a host fault that writes nothing); each tool call with
+ * a recorded `tool_result` gets that result without running. A replayed call with no result is
+ * closed lazily (`closed: "crashed"`, outcome unknown) once its check passes. Failed attempts after
+ * the last reply make the first live call wait the recorded delay and continue the attempt count.
+ * Steers aren't read until the first live call.
  *
  * Most rows run a YAML flow through `runFlow` with a JSONL log, cut it with `crashAfter`, and
  * resume it with `advance`; the replay cursor is also tested alone over a fake `NodeSteps`.

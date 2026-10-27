@@ -1,41 +1,8 @@
 /**
- * Tagged bindings checked when a run binds a node's inputs or the flow's outputs: a port of
- * `tests/engine/test_tagged_bindings_run.py`.
- *
- * A tag (`qty: !int ${size.output.qty}`) declares the value's type. The binder checks the resolved
- * value against it without converting or filling anything in, and a mismatch fails with code
+ * Tagged bindings checked when a run binds a node's inputs or the flow's outputs. A tag
+ * (`qty: !int ${size.output.qty}`) declares the value's type. The binder checks the resolved value
+ * against it without converting or filling anything in, and a mismatch fails with code
  * `binding.type`, located on the tagged binding.
- *
- * Ported: every row but those covered below. The CODE bodies are Python's, which read the same in
- * JS (decision 11), but for `return null` and the gate's producer, which parses digits with a
- * regular expression and `Number`. The AGENT's model is a `ScriptedModel` given as `models`, and
- * the rows read the rendered prompt from its request, where Python replaces `run_agent` with an
- * echo of the prompt; "before the model call" is no model built. The ask request is camelCase,
- * and `place_order` is a `FunctionTool` taking any `qty`.
- *
- * Changed: `test_tagged_input_does_not_convert_an_int_declared_float` keeps the int, as Python
- * does; an int is a `bigint` (decision 4a), so the output is `30n`, and every int output reads as
- * a `bigint`.
- * The row can't tell an int from a whole float, since a CODE body sees both as a JS `number`
- * (decision 45) and a whole number it returns reads back as an int (decision 9A); decision 38 is
- * pinned by `values/int_fills_float` and the flow-output rows of `typed_flow_outputs_run.test.ts`.
- * The gate is a TOOL `ask` where Python's is a HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind):
- * its tagged `count` is an ask input the handler declares, and its prompt reads `${src.output}`.
- *
- * Covered by `run-core/engine_tagged_bindings_run__narrower_source_fails_on_its_tagged_line`:
- * `test_narrower_source_fails_on_its_tagged_line`; by
- * `run-core/engine_tagged_bindings_run__tag_does_not_fill_in_a_missing_field`:
- * `test_tag_does_not_fill_in_a_missing_field`; by
- * `run-core/engine_tagged_bindings_run__isinstance_reads_a_record_without_the_field_as_false`:
- * `test_isinstance_still_reads_a_record_without_the_field_as_false`; by
- * `run-core/engine_tagged_bindings_run__tagged_map_item_arg_rejects_a_mistyped_item`:
- * `test_tagged_map_item_arg_rejects_a_mistyped_item`; by
- * `run-core/engine_tagged_bindings_run__tagged_mapping_output_returns_one_value`:
- * `test_tagged_mapping_output_returns_the_literal_as_one_value`. The `run-leaves` cases
- * `tagged_bindings_run__a_tagged_tool_input_fails_before_the_tool_runs` and
- * `tagged_bindings_run__a_tagged_human_input_context_fails_before_asking` stand an `!Any` flow
- * input in for the CODE source, and `run-core/engine_tagged_bindings_run__tagged_agent_input_fails_before_the_model_call`
- * can't pin that no model was built, so their rows are ported.
  */
 
 import { afterAll, expect, test } from "bun:test";

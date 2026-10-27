@@ -1,56 +1,6 @@
 /**
- * Recorded defaults: the log half of `tests/engine/test_defaults_recorded.py`, the
- * `RunStartedRecord.defaults` a run starts with. Python's `ValueError` is a `RangeError` here.
- *
- * Ported: `test_record_rejects_a_bad_recorded_value` (string, bool, float `5000`, empty name; each
- * with its exact error), `test_record_rejects_a_list_of_pairs_as_a_type_error`,
- * `test_record_keeps_its_own_copy_of_the_values`. The record is built directly, not from the
- * decoded `_RECORDED_ROUTE` line: TS has no `_RECORDED_ROUTE` golden fixture.
- *
- * TS-only: the values are `bigint`s, so a `number` (even a whole one) is refused; a `Map` is
- * refused like the list of pairs; omitted defaults are `{}`; the copy is frozen.
- *
- * Not ported: the `int-name` row (JS object keys are always text);
- * `test_append_revalidates_the_recorded_values` (it forges the frozen record with
- * `object.__setattr__`).
- *
- * Ported, the codec: `test_recorded_values_encode_and_decode` and
- * `test_recorded_values_are_sorted_by_name` (also pinned as bytes). The decoded lines are built
- * from records, since TS has no `_RECORDED_ROUTE` golden fixture.
- *
- * Changed (TS yian):
- * - The log half of `test_default_run_log_is_unchanged`: schema 13 always writes `defaults`, so
- *   an all-default run writes `"defaults":{}` and reads it back as `{}` (Python omits the field
- *   for byte compatibility within schema 9).
- * - `test_decode_rejects_a_bad_recorded_value`: each row with its class and message; the string,
- *   bool and float rows are `TypeError`s where Python raised a `ValidationError` (a `ValueError`),
- *   and the empty-name row is a `RangeError`.
- *
- * Covered by `resume/defaults_recorded__a_resume_with_the_same_recorded_defaults_succeeds` (a
- * TOOL for the CODE, its trace pinning the recorded value): `test_resume_with_same_value_succeeds`
- * and `test_non_default_value_is_recorded`.
- *
- * Ported through `loadFlow`, `runFlow` and `advance`, each run's `YIAN_*` values set in its
- * `hostEnv` (Python's `set_defaults` sets them in the process): the run half of
- * `test_default_run_log_is_unchanged` (`"defaults":{}`, as above),
- * `test_resume_with_a_different_value_fails`, `test_resume_without_the_variable_fails`,
- * `test_resume_of_default_run_with_a_variable_set_fails`, the plain-log half of
- * `test_old_log_resumes_as_all_defaults`,
- * `test_mismatch_is_reported_before_the_fingerprint` (the zero-retries flow loaded in `withEnv`,
- * its AGENT a `ScriptedModel` given as `models`), `test_unknown_recorded_name_fails`,
- * `test_bad_variable_fails_before_load` (the load half sets the process variable, the run half
- * the run's `env`) and `test_node_budget_over_the_limit_fails_live`. The CODE bodies are
- * JavaScript. `test_variable_changed_after_first_read_is_ignored` runs with `processEnv`, its
- * subject: the process's values, once read, ignore a later change to `process.env`.
- *
- * Ported over `replayRecords`, the process values installed unchecked (`install`, Python's
- * `set_defaults.unchecked`): `test_replay_takes_the_node_budget_from_the_record` and
- * `test_replay_takes_a_recorded_node_budget_from_the_record`.
- *
- * Changed: the stripped-log half of `test_old_log_resumes_as_all_defaults`. Schema 10 requires
- * `defaults` in `run_started` and TS reads only schema 13, so the decoder refuses a record without
- * it (`invalid run_started payload fields; missing=["defaults"]`) where Python reads an absent
- * field as all defaults; the row pins that refusal, which leaves the log unchanged.
+ * Recorded defaults: the `RunStartedRecord.defaults` a run starts with, its codec, and resume and
+ * replay checking them against the process's `YIAN_*` values.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";

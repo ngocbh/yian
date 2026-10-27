@@ -1,45 +1,7 @@
 /**
- * Route validation, route payloads and backward context reads: the `validated`, `encoded` and
- * `decoded` columns of `test_route_errors_on_multi_error_trees`, the round-trip half of
- * `test_route_encode_and_decode_check_each_node_once` (concat-64, concat-256, scalar-256) and
- * `test_downstream_context_reads_are_unaliased` of `tests/engine/test_route_chain_costs.py`.
- * Python's `ValueError` is a `RangeError` here.
- *
- * TS-only: one row per message `validateRoute` and `validateSource` can reach, with its class; a
- * `bigint` sequence is refused; `deep: false` skips a bad child and a bad snapshot's own fields
- * but still refuses a source inside the snapshot; `{"$float":"inf"}`, a 5000-digit int and a
- * literal nested 10,000 levels deep are valid `value_json` (the reader has no digit limit and
- * isn't recursive). A malformed `value_json` throws the reader's `JSONDecodeError`. The long-int
- * rows of `tests/engine/test_long_int_old_logs.py`, including its route `value_json` row, are in
- * `long_int_old_logs.test.ts`.
- *
- * Changed: reads return the frozen copy the constructor made, not a fresh copy per read, so the
- * test checks that a shared subtree is copied once, that the caller's objects aren't aliased, and
- * that the stored value is frozen. The balanced concat trees are built by a local helper (the
- * evaluator's `balancedConcat` is private), and a round trip goes through the run-log JSON.
- *
- * Not ported: Python's "route <field> must be a tuple" and span pair-length checks, since
- * `ValueRoute` and `SourceRef` copy every array field into an array and rebuild spans as pairs;
- * the call-counting half of `test_route_encode_and_decode_check_each_node_once`, since it
- * monkeypatches a module export, which ESM forbids (the decoder's `deep: false` structure is
- * reviewed instead).
- *
- * Ported through `runFlow` and `RunResult.backward`, with a `FakeMemory` under the key `test`:
- * `test_backward_lookups_grow_near_linearly`, counting `RetainedTrace.lookupSource` with `spyOn`
- * (a class method, so recursive and internal calls count).
- *
- * Covered by the backward cases whose headers name the Python test: the `list-3` and `scalar-3`
- * rows of `test_backward_results_match_the_recorded_results`, by
- * `backward/route_chain_costs__list_3` and `backward/route_chain_costs__scalar_3` (the same chain
- * flows, run and given the feedback `good`; they pin the whole log, the attributed feedback
- * included).
- *
- * Also not ported: the `list-7` row of `test_backward_results_match_the_recorded_results`, whose
- * fixture keeps only a digest of Python's `json.dumps` text; `test_run_and_resume_route_checks_grow_linearly`,
- * `test_backward_context_copies_grow_near_linearly` and `test_backward_freeze_work_grows_near_linearly`,
- * which count calls of module functions (`validateRoute`, `copyBackwardValue`, `freezeJson`)
- * that ESM can't patch; and `test_backward_peak_memory_grows_near_linearly`, which reads
- * `tracemalloc`, which JS lacks (a garbage-collected heap reading isn't a peak).
+ * Route validation, route payloads and backward context reads: each message `validateRoute` and
+ * `validateSource` can reach, round trips through the run-log JSON, unaliased frozen reads, and
+ * backward lookups that grow near linearly with the chain.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -454,8 +416,8 @@ const dir = mkdtempSync(join(tmpdir(), "yian-route-chain-costs-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 /**
- * Load a flow calling an identity child on an `n`-operand chain, with its inputs (Python's
- * `_chain_flow`): `list` concatenates `input.values` (a balanced `concat` route), `scalar` adds
+ * Load a flow calling an identity child on an `n`-operand chain, with its inputs:
+ * `list` concatenates `input.values` (a balanced `concat` route), `scalar` adds
  * `input.x` (one `scalar` route with `n` operands).
  */
 async function chainFlow(kind: "list" | "scalar", n: number) {

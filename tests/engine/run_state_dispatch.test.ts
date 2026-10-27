@@ -1,72 +1,7 @@
 /**
- * Transactional dispatch and recovery-frontier tests for the run-state reducer: a port of
- * `tests/engine/test_run_state_dispatch.py`.
- *
- * Ported: `test_node_started_requires_and_removes_the_exact_ready_head`,
- * `test_node_started_rejects_an_empty_wrong_or_unknown_ready_head` (3 rows),
- * `test_node_started_requires_a_string_node_id` (4 rows),
- * `test_node_started_requires_unknown_disposition_and_no_existing_flight`,
- * `test_retried_node_can_start_again_in_a_valid_record_sequence`,
- * `test_node_started_preparation_keeps_existing_frontier_live`,
- * `test_node_started_appends_before_applying_the_frontier_delta`,
- * `test_run_resumed_appends_before_applying_the_frontier_delta`,
- * `test_run_resumed_requires_an_exact_nonnegative_worker_count` (5 rows),
- * `test_run_resumed_allows_an_empty_retry_segment_and_changes_workers`,
- * `test_run_resumed_preserves_wide_ready_work_without_copying_it`,
- * `test_run_resumed_rejects_invalid_retry_frontiers` (2 rows),
- * `test_prepare_record_requires_the_exact_ordered_resume_retry_list` (4 rows),
- * `test_prepare_record_accepts_exact_dispatch_and_resume_records`,
- * `test_prepare_record_requires_a_builder_for_expansion_replay`,
- * `test_dispatch_and_resume_require_initialized_nonterminal_state`,
- * `test_competing_frontier_plans_reject_the_second_sequence_before_append` (2 rows),
- * `test_non_start_commit_requires_exact_log_identity_before_append` (2 rows),
- * `test_resume_rejects_cross_state_before_append`,
- * `test_dispatch_rejects_adopted_flow_or_boundary_replacement_before_append`,
- * `test_append_failure_leaves_dispatch_or_resume_state_exactly_unchanged` (2 rows),
- * `test_committed_frontier_deltas_preserve_container_identities` (2 rows) and
- * `test_non_start_append_return_mismatch_leaves_state_unapplied`. Python's `ValueError` is a
- * `RangeError` here; each rejected row names its one class and full message, where Python
- * matches a part of the message or accepts either class. `RUN_ID` is the shared fixture's, not
- * `dispatch-run`; Python's `_CoordinateLog` is a `ReturningLog` whose append throws. Each test
- * pins `state.ready` after the commits it makes.
- *
- * Changed:
- * - `test_run_resumed_preparation_preserves_retry_order_ahead_of_ready_work`: it also commits the
- *   resume and pins the retries ahead of the ready work.
- * - `test_run_resumed_validation_does_not_read_the_ready_frontier`: Python walks the function's
- *   AST; here `validateRunResumed`'s body is brace-matched in the blanked source (`source_scan.ts`)
- *   and holds no `state.ready`.
- * - `test_frontier_commit_uses_only_the_prevalidated_delta` (2 rows): only the instance patches,
- *   throwing `flow.incoming` and `flow.outgoing`.
- * - `test_frontier_commit_rejects_public_record_mutation_before_append`: the record is frozen, so a
- *   forged `PreparedTransition` pairs a different `NodeStartedRecord` with the original plan.
- * - `test_commit_returns_fresh_observers_derived_from_the_canonical_plan`: TS events aren't
- *   frozen, so the caller's change goes through a cast.
- * - `test_frontier_plan_is_frozen_and_contains_only_an_immutable_delta`: the envelope is canonical
- *   text, not bytes; assigning a plan field is a `TypeError`, and the delta is frozen too.
- * - The state snapshot keeps the root containers by reference and asserts each with `toBe`, for
- *   Python's `id()` values; it compares the pool as its wire object, keeps the terminal-unreachable
- *   latch as Python does, and adds the start counts, steps, crashed-attempt counts and last
- *   stop sequence.
- *
- * TS-only (RunStopped): `prepareRunStopped` lists the in-flight nodes in dispatch order; its
- * commit changes only the sequence and the last stop sequence, and returns no observers; a record
- * whose ids differ in order, miss one or add one is refused; a plan whose stop delta disagrees with
- * its record is refused; nothing in flight records no ids; a terminal state refuses it; after a
- * stop, a step and a resume still commit and the resume puts the stopped nodes first; an in-flight
- * node missing from the flow or not `UNKNOWN` is refused. Also: a frontier plan holding an outcome
- * record is refused; `prepareRecord` refuses a `RunStartedRecord`, hands a backward record to the
- * backward reducer (whose terminal check, not the graph check, refuses it on a nonterminal state),
- * and an expansion with a builder to the growth reducer, which checks the record's spawner before
- * anything else.
- *
- * TS-only (crashed-attempt counts, which Python doesn't keep): each resume counts every retried
- * start no stop covered; a stop covers the starts before it but not a later one, and two stops
- * cover everything before the second; a count survives the node's outcome; a resume clears the
- * last stop; `replayRecords` over the live log rebuilds the counts and the last stop.
- *
- * Not ported (ESM): the module patches of `test_frontier_commit_uses_only_the_prevalidated_delta`
- * (`_validate_node_started`, `_validate_run_resumed`, `encode_pool`, `decode_pool`).
+ * Transactional dispatch and recovery-frontier tests for the run-state reducer: `NodeStarted`,
+ * `RunResumed` and `RunStopped` preparation and commit, crashed-attempt counts and append failures.
+ * Each rejected row pins its class and full message.
  */
 
 import { expect, test } from "bun:test";
@@ -761,7 +696,7 @@ test("a non-start append return mismatch leaves the state unapplied", () => {
   expectUnchanged(state, before);
 });
 
-// TS-only: RunStopped.
+// RunStopped.
 
 test("prepareRunStopped lists the in-flight nodes in dispatch order", () => {
   const { state, log } = initialized();
@@ -908,7 +843,7 @@ test("a frontier plan holding an outcome record is refused", () => {
   expect(log.nextSequence).toBe(3);
 });
 
-// TS-only: crashed-attempt counts.
+// Crashed-attempt counts.
 
 test("a resume counts each start it retries, once per resume", () => {
   const { state, log } = initialized();

@@ -1,26 +1,14 @@
 /**
  * External callables through the default local file resolver (search path, inert paths, cycle,
- * cache): a port of `tests/engine/test_uses_files.py`.
+ * cache).
  *
- * Ported: every row but the seed run. The read-once rows count `fsp.readFile` calls with
- * `spyOn`. Changed: Python also counts source-document parses; a Bun test can't spy on a call
- * inside the loader's own module, so that half is dropped (the loader parses each text it reads
- * once). CODE references are TS's form (`./fixtures/compose_codefns.ts:echo`): a file read
- * through the search path resolves them against its own directory, so each directory a row writes
- * a flow into links `fixtures` to the conformance fixtures. The malformed child's message is TS's
- * YAML error, so only its frames are compared.
- *
- * TS-only: a child file that isn't UTF-8 fails at its alias as `could not resolve`; a CODE node's
+ * A child file that isn't UTF-8 fails at its alias as `could not resolve`; a CODE node's
  * `baseDir` is `loadFlow`'s option, else the first search path, else the current directory, made
  * absolute, for the root, its defs and its inline bodies alike, and a child file's own directory;
  * an importer doesn't check a `uses:` child's CODE again, so a host's cached child whose CODE file
  * was removed after its load still imports. With `codeRoot`, every CODE reference of the root, its
  * defs, its inline bodies and its search-path children must resolve (symlinks followed) inside it,
  * or the load fails at the `code:` value; a `childResolver`'s flow isn't checked again.
- *
- * Covered by `run-map-call/seed_24_uses_external`: `test_seed_24_runs_via_search_path`. The case
- * runs seed 24 with its sibling `lib_verdict.yaml` on the search path and pins the succeeded
- * output, which carries the given rationale (other input values than Python's row).
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -202,7 +190,7 @@ test("a missing ref is loud", async () => {
   expect(error.message).not.toContain("marketplace");
 });
 
-test("search path entries are spelled as Python's Path spells them", async () => {
+test("search path entries drop . segments and extra slashes and keep ..", async () => {
   const own = join(tmp, "f");
   mkdirSync(own);
   const system = ["../shared", "./lib", "x//y/", `${tmp}//abs/./`];
@@ -214,7 +202,7 @@ test("search path entries are spelled as Python's Path spells them", async () =>
 });
 
 test("a CRLF child reads with universal newlines", async () => {
-  // TS-only: Python's `Path.read_text()` turns `\r\n` and a lone `\r` into `\n`.
+  // `\r\n` and a lone `\r` read as `\n`.
   writeFileSync(join(tmp, "child.yaml"), flowText("child").replaceAll("\n", "\r\n"));
   const parent = write(tmp, "p", "p", { call: "ch", uses: { ch: "child" } });
   expect(await loadFlow(readFileSync(parent, "utf8"), { searchPaths: [tmp] })).toBeDefined();

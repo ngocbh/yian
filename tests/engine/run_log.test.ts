@@ -1,116 +1,6 @@
 /**
- * In-memory and locked JSONL run logs, the run-log reader and the schema checks: a port of
- * `tests/engine/test_run_log.py`.
- *
- * Ported: `test_schema_version_is_nine`, `test_memory_log_orders_records_and_retains_a_canonical_copy`,
- * `test_memory_log_reopening_rejects_invalid_prefix_coordinates` (the empty, gap, duplicate and
- * foreign rows), `test_memory_log_rejects_invalid_run_ids`, `test_prefix_identity_rejects_corruption`,
- * `test_schema_check_does_not_weaken_payload_validation`,
- * `test_jsonl_create_is_exclusive_and_preserves_an_existing_file`,
- * `test_jsonl_create_sets_owner_read_write_permissions`, `test_jsonl_excludes_a_second_writer`,
- * `test_jsonl_resume_truncates_and_syncs_every_incomplete_tail`,
- * `test_jsonl_resume_rejects_a_corrupt_complete_line_and_releases_lock`,
- * `test_jsonl_resume_errors_name_the_log_line_and_seq`, `test_jsonl_resume_empty_error_names_the_log`,
- * `test_jsonl_resume_rejects_identity_mismatches_and_releases_lock`,
- * `test_jsonl_resume_leaves_a_rejected_file_unchanged`,
- * `test_jsonl_resume_rejects_an_empty_file_and_releases_lock`,
- * `test_jsonl_close_is_idempotent_keeps_cache_and_releases_lock`,
- * `test_jsonl_context_releases_lock_when_the_body_raises` (`Symbol.dispose` in a `finally`),
- * `test_jsonl_append_uses_one_complete_write_flush_and_fsync`,
- * `test_jsonl_append_and_cache_are_isolated_from_caller_mutation`,
- * `test_jsonl_never_exposes_its_retained_mutable_payload`, `test_append_rollback_preserves_log`,
- * `test_invalid_append_retains_the_prior_complete_prefix`,
- * `test_write_failure_rolls_back_to_the_prior_complete_prefix`,
- * `test_fsync_failure_rolls_back_and_syncs_the_prior_complete_prefix`,
- * `test_short_write_is_an_append_failure_and_rolls_back` and
- * `test_tail_repair_failure_releases_the_lock`. Each rejection is pinned with its class and
- * message; Python's `ValueError` is a `RangeError` and its `RuntimeError` an `Error`, and a run id
- * that isn't text is a `RangeError` as in Python. A free lock is probed with
- * `isLocked(<log>.lock)`, where Python takes the `flock` itself. A failed write or sync is
- * injected with a spy on the `fs` operation, filtered to the log's descriptor, where Python wraps
- * the file object.
- *
- * TS-only: a run id holding a lone surrogate (also refused by `create` before any file exists); a
- * record appended while iterating doesn't show in that iteration, and `records()` is a fresh
- * frozen array; disposing a memory log closes it; appending a value that isn't a record leaves a
- * memory log unchanged; resuming a missing log throws `ENOENT` and creates no lock file;
- * `isRunLogLocked`; a symlink to a log shares the real log's lock; the reader `readRunLog` (a complete prefix read without the lock, an
- * incomplete tail ignored and left in place, an empty file, a corrupt line named by path, line and
- * seq, a line that isn't UTF-8); the streaming reader `iterRunRecords` (each record's seq, offsets,
- * time, kind, node and envelope, the time also with `payloads: false`; a log a writer holds; a torn last line skipped, then read from its
- * offset once complete; a log another process appends to, followed from saved offsets without
- * blocking the writer; a log that shrank before, at the end-of-line probe, or while it reads, as
- * `RunLogChangedError`; another run's log renamed over the path, caught by `runId` and `afterSeq`,
- * and their option checks; bad options and a missing file thrown on the first `next()`; offsets
- * that aren't the end of a line; seq checked from the start and after an offset, and the run id; `payloads: false`, and
- * what it still refuses; `kinds`; schemas 9, 10 and 12 as `RunLogSchemaError`; bounded reads that go
- * only as far as asked); a failed resume whose descriptor close also fails throws the
- * original error; a write that fails and whose rollback truncate also fails; closing a poisoned
- * log, after which an append throws `run log is closed`; with `YIAN_TEST_NODE` set to a Node
- * binary, the built log on Node through a failed sync, a failed write, a short write and a write
- * whose rollback truncate also fails.
- *
- * TS-only, record times (schema 11 on): each log stamps `at` from its clock, as read, even when the
- * clock moves back, and drops a fraction of a millisecond; the default clock is the wall clock; a
- * reading that isn't finite or falls outside the years 0000 to 9999 fails the append before any
- * write, without poisoning the log; a clock that isn't a function is refused before any file is
- * opened; a reopened log keeps its records' times and stamps new ones from its own clock; the
- * envelope's and the decoder's time checks, and the first and last times they take; an envelope
- * without a time encodes without `at`, decodes back with `null`, and every log reader refuses it;
- * a schema 10 record, from before record times, and a schema 11 one, from before `run_started` held
- * the flow files, are retired.
- *
- * Changed:
- * - `test_schema_version_is_nine`: `SCHEMA_VERSION` is 12.
- * - `MemoryRunLog._from_records` is `MemoryRunLog.fromRecords`, and Python's "tuple" reads
- *   "array".
- * - `test_memory_log_reopens_a_detached_prefix_at_the_next_sequence`,
- *   `test_memory_log_never_exposes_its_retained_mutable_payload` and
- *   `test_jsonl_never_exposes_its_retained_mutable_payload`: records are frozen, so a reader's
- *   edit throws `TypeError` where Python edits a private copy.
- * - `test_memory_log_reopening_revalidates_exact_envelope_authority`: the `record` row is the
- *   `NodeStartedRecord` constructor's rejection, and the `envelope` row (a `RecordEnvelope`
- *   subclass) is a `TypeError`.
- * - `test_retired_schema_record_is_rejected_by_name` and `test_retired_schema_log_is_rejected_on_resume`:
- *   every schema below 10 is Python's, so 7, 8 and 9 read `unsupported run-record schema: N`;
- *   TS's own schemas 10 and 11 are retired as Python names its retired schemas. Every schema
- *   rejection is a `RunLogSchemaError` (Python's `ValueError`).
- * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 13 and the float
- *   token `23.0` (the current schema written as a float); the float row is wire-only, since a JS
- *   `23.0` is the number 23.
- * - The writer's lock is a SQLite lock on the sibling `<log>.lock`, not a `flock` on the log:
- *   `test_jsonl_resume_locks_before_its_first_read` checks the lock is held when the log is read;
- *   `test_jsonl_lock_contention_names_the_log_and_the_likely_cause` pins a busy `FileLockError` as
- *   the cause, not an errno; `test_jsonl_excludes_a_writer_in_a_separate_process` runs the child
- *   in the test's runtime and matches the busy message.
- * - `test_jsonl_create_is_exclusive_and_preserves_an_existing_file`: the error's `code` is
- *   `EEXIST` (Python's `FileExistsError`).
- * - `test_jsonl_resume_empty_error_names_the_log` and
- *   `test_jsonl_resume_rejects_an_empty_file_and_releases_lock` are one test.
- * - `test_jsonl_resume_truncates_and_syncs_every_incomplete_tail`: one `ftruncateSync` and one
- *   `fsyncSync`; TS has no buffered flush to count.
- * - `test_jsonl_create_releases_lock_when_file_adoption_fails`: TS adopts no file object, so the
- *   rows are an `fchmodSync` failure and a lock held before `create`; each closes the descriptor
- *   and leaves the empty file.
- * - Python refuses entering a closed log with `with`; TS disposal (`Symbol.dispose`) has no enter
- *   step, so there is nothing to refuse.
- * - `test_jsonl_append_uses_one_complete_write_flush_and_fsync`: one `writeSync` and one
- *   `fsyncSync`; there is no flush.
- * - A failed append poisons the log: every later append throws `run log <path> refuses appends
- *   after a failed append` with the original error as `cause`, while the lock stays held until
- *   `close()`. Python retries in place, so `test_append_rollback_preserves_log` appends its third
- *   record after a fresh resume, and the failure tests also check the poisoned error.
- * - `test_append_rollback_preserves_log`: every sync fails, so the rollback's sync fails too and
- *   the error is an `AggregateError` of both, where Python adds a note.
- * - `test_invalid_append_retains_the_prior_complete_prefix`: the record is refused by
- *   `RecordEnvelope`, before any write, and doesn't poison the log.
- * - `test_short_write_is_an_append_failure_and_rolls_back`: a short write is completed by writing
- *   the rest, so the append succeeds; a write of 0 bytes after a partial one is the failure.
- *
- * Not ported: the list and tuple-subclass rows of the reopening-coordinates test (a TS prefix is
- * an array); the forgery rows of the envelope-authority and schema-check tests
- * (`object.__setattr__`; a frozen TS envelope refuses the edit);
- * `test_flush_failure_rolls_back_to_the_prior_complete_prefix` (there is no flush).
+ * In-memory and locked JSONL run logs, the readers `readRunLog` and `iterRunRecords`, record
+ * times and the schema checks. Each rejection is pinned with its class and message.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -680,7 +570,7 @@ test.each<[string, unknown, string]>([
   ["empty", "", "run log run_id must be a non-empty string"],
   ["a number", 7, "run log run_id must be a non-empty string"],
   ["null", null, "run log run_id must be a non-empty string"],
-  ["a lone surrogate (TS-only)", "\ud800", "Unicode surrogate is not valid canonical JSON"],
+  ["a lone surrogate", "\ud800", "Unicode surrogate is not valid canonical JSON"],
 ])("a memory log rejects an invalid run id: %s", (_name, runId, message) => {
   expectError(() => new MemoryRunLog(runId as string), RangeError, message);
 });

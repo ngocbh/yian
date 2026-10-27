@@ -1,27 +1,7 @@
 /**
- * Public runs, backward attempts and recovery with `ProfileMemory`: mirrors
- * `tests/engine/test_profile_memory_integration.py`.
- *
- * Ported, through `runFlow`: `test_sibling_agents_recall_one_shared_profile_document`; through
- * `runFlow` and `RunResult.backward`: `test_recall_learn_and_commit_through_a_public_run`,
- * `test_nested_declarations_of_one_key_show_and_rewrite_the_document_once`,
- * `test_profile_notes_and_a_session_transcript_share_one_agent_context` (profile only: TS yian has
- * no session memory),
- * `test_human_edit_during_learning_fails_the_commit_without_a_model` and
- * `test_a_new_attempt_after_a_mismatch_learns_from_the_edited_document`; through `advance` too:
- * `test_resume_reopens_the_recorded_version_for_backward` and
- * `test_an_attempt_killed_after_its_write_is_unknown_and_findable_in_provenance`.
- *
- * Changed: one `ScriptedModel` serves a run's AGENTs, its forward replies and then its AGENT
- * backward replies, where Python builds a chat per AGENT and patches a fresh one in for backward;
- * the run's environment names the default model (conftest's in Python), since the flow names none.
- * The profile learner is the backend's `createModel` option, reading the test's current `Learner`
- * (Python patches `profile.model_from_config`). The killed attempt's store throws a plain `Error`
- * after its write, a host failure that rejects `backward` (Python raises `SystemExit`).
- *
- * New (TS only): a host `MarkdownStore` whose versions are git blob ids, through the package root's
- * `ProfileMemory`: the round trip, the `run_started` snapshot, the read of the recorded version
- * by a resumed run's backward, and a store that dropped it.
+ * Public runs, backward attempts and recovery with `ProfileMemory`, and a host `MarkdownStore`
+ * whose versions are git blob ids: the round trip, the `run_started` snapshot, the read of the
+ * recorded version by a resumed run's backward, and a store that dropped it.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -132,7 +112,7 @@ const LEARNER_CONFIG: Readonly<Record<string, unknown>> = {
   model: "local-profiler",
 };
 
-/** Stub profile learner that can await a side effect before replying (Python's `_Learner`). */
+/** Stub profile learner that can await a side effect before replying. */
 class Learner extends ScriptedModel {
   readonly before: (() => Promise<unknown>) | null;
 
@@ -156,7 +136,7 @@ class Learner extends ScriptedModel {
 
 let dir: string;
 let env: Env;
-// The learner every profile backend builds, and the configs it was built from (Python's `_learner`).
+// The learner every profile backend builds, and the configs it was built from.
 let learner: Learner;
 let built: Readonly<Record<string, unknown>>[];
 
@@ -188,14 +168,14 @@ function backend(store: MarkdownStore): ProfileMemory {
   });
 }
 
-/** Python's `_profile`: Ada's document in a file store, learned by a local model. */
+/** Ada's document in a file store, learned by a local model. */
 async function profile(): Promise<ProfileMemory> {
   const store = new FileMarkdownStore(join(dir, "ada.md"));
   await store.write("# Ada\n- Works on reefs.\n", { baseVersion: (await store.read())[1] });
   return backend(store);
 }
 
-/** Python's `_forward`: a model answering `answers`, then `backwards` AGENT backward calls. */
+/** A model answering `answers`, then `backwards` AGENT backward calls. */
 function chat(answers: string[], backwards = 1): ScriptedModel {
   return new ScriptedModel([...answers.map(reply), ...Array.from({ length: backwards }, () => backwardReply())]);
 }

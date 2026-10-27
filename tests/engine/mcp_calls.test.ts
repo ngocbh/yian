@@ -1,19 +1,7 @@
 /**
- * `McpServer` tools call the server and map its results to yian values, a port of
- * `tests/engine/test_mcp_calls.py` over stdio: `test_echo_returns_the_text`,
- * `test_structured_content_is_the_value`, `test_the_call_meta_carries_the_call_id_and_attempt`,
- * `test_media_blocks_become_one_line_markers`, `test_bad_arguments_fail_before_the_server_is_called`,
- * `test_nested_arguments_reach_the_server`, `test_an_error_result_raises_a_reported_mcp_tool_error`,
- * `test_calls_from_many_threads_run_at_once` (as concurrent calls),
- * `test_result_value_renders_each_kind_of_content` and
- * `test_result_value_prefers_structured_content_and_renders_empty_content_as_empty`; and
- * `test_structured_content_failing_the_output_schema_is_a_tool_error` from `test_mcp_errors.py`.
- * Python runs each row in the `auto`, `legacy` and `http` modes; stdio connects only in `legacy`
- * here, and the HTTP rows run in both the `auto` and `legacy` modes, with an integer past 2^53
- * read as a `number` over HTTP (the SDK parses with `JSON.parse`) and refused in the arguments,
- * where a safe `bigint` is sent as a `number`.
- * `test_a_tool_node_calls_a_host_opened_server` runs the flow through `runFlow`, in an
- * environment holding only the test's credential store.
+ * `McpServer` tools call the server and map its results to yian values, over stdio and HTTP. An
+ * integer past 2^53 reads as a `number` over HTTP (the SDK parses with `JSON.parse`) and is
+ * refused in the arguments, where a safe `bigint` is sent as a `number`.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -92,39 +80,39 @@ describe("calls to the fake server", () => {
     await server?.close();
   }, SLOW);
 
-  test("test_echo_returns_the_text", async () => {
+  test("echo returns the text", async () => {
     expect(await tools().invoke("echo", { text: "hi" })).toBe("hi");
   });
 
-  test("test_structured_content_is_the_value", async () => {
+  test("structured content is the value", async () => {
     const value = await tools().invoke("add", { a: 1, b: 2 });
     expect(value).toEqual({ result: 3 });
     expect(typeof (value as { result: unknown }).result).toBe("number");
   });
 
-  test("test_the_call_meta_carries_the_call_id_and_attempt", async () => {
+  test("the call meta carries the call id and attempt", async () => {
     const bound = tools().forRun("run-1");
     expect(await bound.invoke("whoami", {}, { node: "n", attempt: 2 })).toBe("run-1/n 2");
   });
 
-  test("test_media_blocks_become_one_line_markers", async () => {
+  test("media blocks become one line markers", async () => {
     const size = Buffer.from(PNG_BASE64, "base64").length;
     expect(await tools().invoke("picture", {})).toBe(`[image image/png, ${size} B]\n\ncaption`);
     expect(await tools().invoke("resource", {})).toBe("note body\n\n[resource file:///a.png image/png]");
   });
 
-  test("test_bad_arguments_fail_before_the_server_is_called", async () => {
+  test("bad arguments fail before the server is called", async () => {
     const before = await tools().invoke("calls", {});
     expect(await rejection(tools().invoke("add", { a: "x", b: 1 }))).toBeInstanceOf(TypeCheckError);
     expect(await tools().invoke("calls", {})).toEqual(before as Record<string, unknown>);
   });
 
-  test("test_nested_arguments_reach_the_server", async () => {
+  test("nested arguments reach the server", async () => {
     const item = { name: "p", point: { x: 1, y: 2 } };
     expect(await tools().invoke("nested", { item })).toBe('{"name":"p","point":{"x":1,"y":2}}');
   });
 
-  test("test_an_error_result_raises_a_reported_mcp_tool_error", async () => {
+  test("an error result raises a reported mcp tool error", async () => {
     const error = await rejection(tools().invoke("fail", { message: "no luck" }));
     expect(error).toBeInstanceOf(McpToolError);
     expect(error.message).toContain("no luck");
@@ -134,7 +122,7 @@ describe("calls to the fake server", () => {
   });
 
   test(
-    "test_calls_from_many_threads_run_at_once",
+    "concurrent calls run at once",
     async () => {
       const set = tools();
       const results = await Promise.all(Array.from({ length: 8 }, () => set.invoke("gate", { seconds: 0.3 })));
@@ -191,26 +179,26 @@ for (const mode of ["auto", "legacy"] as const) {
       await http?.stop();
     }, SLOW);
 
-    test("test_echo_returns_the_text", async () => {
+    test("echo returns the text", async () => {
       expect(await tools().invoke("echo", { text: "hi" })).toBe("hi");
     }, SLOW);
 
-    test("test_structured_content_is_the_value", async () => {
+    test("structured content is the value", async () => {
       expect(await tools().invoke("add", { a: 1, b: 2 })).toEqual({ result: 3 });
     }, SLOW);
 
-    test("test_the_call_meta_carries_the_call_id_and_attempt", async () => {
+    test("the call meta carries the call id and attempt", async () => {
       const bound = tools().forRun("run-1");
       expect(await bound.invoke("whoami", {}, { node: "n", attempt: 2 })).toBe("run-1/n 2");
     }, SLOW);
 
-    test("test_media_blocks_become_one_line_markers", async () => {
+    test("media blocks become one line markers", async () => {
       const size = Buffer.from(PNG_BASE64, "base64").length;
       expect(await tools().invoke("picture", {})).toBe(`[image image/png, ${size} B]\n\ncaption`);
       expect(await tools().invoke("resource", {})).toBe("note body\n\n[resource file:///a.png image/png]");
     }, SLOW);
 
-    test("test_calls_from_many_threads_run_at_once", async () => {
+    test("concurrent calls run at once", async () => {
       const set = tools();
       const start = performance.now();
       const results = await Promise.all(Array.from({ length: 8 }, () => set.invoke("gate", { seconds: 0.3 })));
@@ -277,7 +265,7 @@ describe("tools that break their output schema", () => {
     await server?.close();
   }, SLOW);
 
-  test("test_structured_content_failing_the_output_schema_is_a_tool_error", async () => {
+  test("structured content failing the output schema is a tool error", async () => {
     const error = await rejection(tools().invoke("bad_output", {}));
     expect(error).toBeInstanceOf(McpOutputError);
     expect(error).toBeInstanceOf(McpToolError);
@@ -307,7 +295,7 @@ describe("resultValue", () => {
   /** `size` zero bytes in base64. */
   const b64 = (size: number) => Buffer.alloc(size).toString("base64");
 
-  test("test_result_value_renders_each_kind_of_content", () => {
+  test("result value renders each kind of content", () => {
     const result = {
       content: [
         { type: "text", text: "one" },
@@ -335,7 +323,7 @@ describe("resultValue", () => {
     );
   });
 
-  test("test_result_value_prefers_structured_content_and_renders_empty_content_as_empty", () => {
+  test("result value prefers structured content and renders empty content as empty", () => {
     expect(resultValue({ content: [], structuredContent: [1, 2] })).toEqual([1, 2]);
     expect(resultValue({ content: [{ type: "text", text: "x" }], structuredContent: 0 })).toBe(0);
     expect(resultValue({ content: [] })).toBe("");
@@ -354,7 +342,7 @@ describe("resultValue", () => {
     expect(error.message).toBe("bad");
   });
 
-  test("sizes decode base64 as Python does, and round to one decimal half to even", () => {
+  test("sizes decode base64 leniently, and round to one decimal half to even", () => {
     const sizeOf = (data: string) => resultValue({ content: [{ type: "image", data, mimeType: "m" }] });
     // Characters outside the alphabet are skipped, and decoding stops where padding ends a quad.
     expect(sizeOf("aGk=\n")).toBe("[image m, 2 B]");
@@ -362,7 +350,7 @@ describe("resultValue", () => {
     // Malformed input is estimated from its length.
     expect(sizeOf("aGk")).toBe("[image m, 2 B]");
     expect(sizeOf("aGkhaGkha")).toBe("[image m, 6 B]");
-    // 1280 bytes are 1.25 KB, which Python's `.1f` rounds to even.
+    // 1280 bytes are 1.25 KB, which rounds half to even.
     expect(sizeOf(b64(1280))).toBe("[image m, 1.2 KB]");
     expect(sizeOf(b64(1331))).toBe("[image m, 1.3 KB]");
   });
@@ -370,7 +358,7 @@ describe("resultValue", () => {
 
 describe("runs", () => {
   test(
-    "test_a_tool_node_calls_a_host_opened_server",
+    "a tool node calls a host opened server",
     async () => {
       const flow = await loadFlow(`
 id: mcp_echo

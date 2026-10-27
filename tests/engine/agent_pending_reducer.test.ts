@@ -1,6 +1,6 @@
 /**
- * TS-only: the run reducer's rules for an AGENT's pending host calls: registration, results,
- * closers, complete and pendingCalls.
+ * The run reducer's rules for an AGENT's pending host calls: registration, results, closers,
+ * complete and pendingCalls.
  */
 
 import { describe, expect, test } from "bun:test";

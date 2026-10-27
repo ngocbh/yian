@@ -1,18 +1,6 @@
 /**
- * A loaded flow is a reusable program; each run owns its mutable live graph: a port of
- * `tests/engine/test_run_reuse.py`.
- *
- * Ported: `test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks` and
- * `test_log_resume_restores_into_a_private_graph`.
- *
- * Changed: an AGENT's model comes from the `models` option, which records the config it is built
- * from (Python patches `model_from_config`); the interruption is the run's `signal`, which the
- * `ask` handler aborts, and the run rejects with its reason (Python: the handler raises
- * `_HostStop`); the child's gate is a TOOL `ask` (Python's is a HUMAN_INPUT node, a kind TS yian
- * doesn't have); a child flow's identity is compared by reference. CODE references resolve from the
- * conformance fixtures, and every run sees only the test's credential store in its environment.
- *
- * Covered by a case: none.
+ * A loaded flow is a reusable program; each run owns its mutable live graph, on a fresh run and on
+ * resume from a log.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -184,7 +172,7 @@ function scripted(seen: Record<string, unknown>[]): ModelAccess {
   };
 }
 
-test("test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks", async () => {
+test("loaded recursive flow can be run twice without graph or llm leaks", async () => {
   const seen: Record<string, unknown>[] = [];
   const loaded = await loadFlow(RECURSIVE_FLOW, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
   const original = graphSnapshot(loaded.compiled);
@@ -222,7 +210,7 @@ test("test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks", a
   }
 });
 
-test("test_log_resume_restores_into_a_private_graph", async () => {
+test("log resume restores into a private graph", async () => {
   const path = join(dir, "private-recovery-graph.jsonl");
   const interruption = new Error("interrupt before human answer");
   const host = new AbortController();

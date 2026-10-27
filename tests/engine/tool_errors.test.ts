@@ -1,10 +1,6 @@
 /**
- * TOOL retry defaults, the errors a host tool throws to steer retries, their brands, and
- * `ToolContext`, a port of `tests/engine/test_tool_errors.py`, and the exports of `tools/index.ts`
- * (`test_tool_errors_are_public`, and `test_tool_names_are_exported_from_yian_and_yian_tools` and
- * `test_yian_tools_exports_the_mcp_api` for `tools/index.ts`; the package root doesn't exist yet).
- * Not ported: `test_function_tool_awaitable_result_raises_a_tool_check_error` (a `FunctionTool`'s
- * execute may return a Promise, so an async result is not an error in TS).
+ * TOOL retry defaults, the errors a host tool throws to steer retries, their brands, `ToolContext`,
+ * and the exports of `tools/index.ts`.
  */
 
 import { describe, expect, test } from "bun:test";

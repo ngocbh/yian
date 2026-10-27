@@ -1,80 +1,4 @@
-/**
- * Host-side construction of the memories a flow declares (`memory_host.ts`): a port of
- * `tests/engine/test_memory_host.py`.
- *
- * Ported: `test_registry_is_a_read_only_mapping_with_types`,
- * `test_close_closes_owned_objects_in_reverse_order_once`,
- * `test_close_keeps_the_first_failure_and_notes_the_rest`,
- * `test_close_retries_only_the_backends_that_failed`, `test_close_copies_the_notes_of_later_failures`,
- * `test_exit_keeps_the_primary_exception`, `test_builtins_are_constructed_from_declared_config`,
- * `test_supplied_wins_and_is_not_closed`, `test_factories_build_custom_types_with_config`,
- * `test_setup_errors` (every case), `test_storage_values_must_be_text_paths` (every case),
- * `test_storage_path_errors_show_the_plain_path`, `test_flow_must_be_a_composed_flow`,
- * `test_setup_errors_carry_the_declaration_origin`, `test_flow_without_memory_builds_an_empty_registry`,
- * `test_root_layout_follows_flow_id_scope_and_name`,
- * `test_explicit_storage_overrides_root_and_needs_an_existing_parent`,
- * `test_two_keys_may_not_share_a_storage_path`, `test_explicit_storage_may_not_reuse_a_root_derived_path`,
- * `test_no_root_means_ram_and_no_flow_id_is_needed`, `test_root_requires_a_safe_flow_id` (every
- * case), `test_unsafe_flow_ids_are_rejected_before_touching_disk` (every case),
- * `test_partial_failure_closes_what_was_built_in_reverse`,
- * `test_factory_result_that_is_not_a_memory_is_closed`,
- * `test_second_registry_on_one_root_is_busy_until_the_first_closes` and
- * `test_open_after_close_is_closed_and_opens_no_file` (every case).
- *
- * Changed:
- * - `buildMemories` and `close` are async. The registry is a read-only `Map` subclass, and so is
- *   its `types`.
- * - `test_exit_keeps_the_primary_exception`: disposing in a `finally` throws the cleanup failure
- *   (with its `notes`) in place of the primary, which gets no notes (Node 22 has no `await using`
- *   and its `SuppressedError`; Python notes the cleanup failure on the primary).
- * - `storage`, `supplied` and `factories` are plain records. A factory gets `toHost(config)` (safe
- *   ints as `number`) and may be async. JS ignores extra arguments, so the "rejected its config" row
- *   uses a factory throwing `RangeError` (Python's `ValueError`).
- * - `test_storage_values_must_be_text_paths`: the `bytes`, `_BytesPath` and `None` rows are a
- *   `Buffer`, a `URL` and `null`; the int row stays a number. The message is
- *   `storage["notes"] must be a string path, not <type>`.
- * - Messages use the TS spellings: lists and quoted keys in the text form, keyword names without
- *   Python's `=`; `caught.value.__notes__` is `error.notes`; Python's `RuntimeError` is an `Error`.
- * - Flows are built by hand (`CompiledFlow` with START, a CODE or AGENT node and END; a `CallNode`
- *   whose child flow `lib` declares `notes` at scope `["lib"]` for the `uses:` rows) instead of
- *   loaded from YAML; flow ids the loader refuses are set with `Object.assign`.
- * - `test_setup_errors_carry_the_declaration_origin` checks the hand-built `OriginRef`: there is no
- *   loader to resolve a source line.
- *
- * TS-only: a `root` of `""` derives `<flow id>/notes.sqlite` relative to the current directory; a
- * `root` that isn't a string is a `TypeError`; `null` records read as empty; a custom type named
- * `toString` with no factory fails
- * "has no factory"; `set`, `delete`, `clear`, `getOrInsert` and `getOrInsertComputed` on the
- * registry and on `types` throw `TypeError`; a host object whose `close()` rejects is awaited and
- * reported like a sync failure; two overlapping `close()` calls close each object once and both
- * reject with the same first failure, and a later call retries it; an async factory is awaited; an
- * async factory rejecting `TypeError` is "rejected its config"; a wrapped failure keeps its cause;
- * `env` reaches reflective and profile memory and defaults to `processEnv`; with `models`, a
- * learner builds through `models.createModel` under node `__memory__` with consumer
- * `memory:<key>` and reads `models.env`, and each reason its model gives for leaving out replay
- * state reaches `onEvent` once per call as `ReplayDegraded`; each learner retry reaches `onEvent`
- * as `ModelCallRetried`, with and without `models`; without `models` a learner builds its
- * default `RouteModel`; one real reflective learn through `models` publishes its retry with the
- * echoed key redacted; a custom factory gets only its config.
- *
- * Ported, through `runFlow` in an environment holding only the test's credential store:
- * `test_registry_built_for_another_flow_is_rejected` and `test_registry_for_this_flow_runs`, whose
- * flows are loaded from YAML.
- * Changed: `test_run_flow_accepts_any_mapping` becomes "a plain object is refused; a Map runs":
- * `memory` must be a `Map`, as `skills` must.
- * TS-only, through `runFlow`: a run error gets one `memory-session close also raised` note, and
- * the notes that close error carries, when memory sessions fail to close (Python's
- * `_close_run_resources`, which no Python test pins).
- *
- * Ported: `test_package_exports_the_host_builder`, on `index.ts`.
- *
- * Ported, through `runFlow` and `advance` in that environment, the first run stopped by a
- * throwing `onEvent` at `RunStarted`: `test_resume_checks_registry_types_too` and
- * `test_resume_accepts_one_callee_called_from_two_nodes` (every case).
- *
- * Ported, through `runFlow`, `advance` and `RunResult.backward` in that environment:
- * `test_backward_checks_registry_types_too`.
- */
+/** Host-side construction of the memories a flow declares (`memory_host.ts`). */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -233,7 +157,7 @@ function graph(body: Node): Map<string, Node> {
 
 /**
  * A flow declaring `memories` around one CODE node, or around an AGENT `ask` declaring
- * `agentMemories` (Python's `_flow`).
+ * `agentMemories`.
  */
 function hostFlow(
   memories: readonly MemoryDecl[],
@@ -260,7 +184,7 @@ function importFlow(): ComposedFlow {
   );
 }
 
-/** Read one private field of a backend, as Python's tests read private attributes. */
+/** Read one private field of a backend. */
 function field(memory: Memory | undefined, name: string): unknown {
   return (memory as unknown as Record<string, unknown>)[name];
 }
@@ -733,7 +657,7 @@ test.each([
   await setupError(() => buildMemories(hostFlow(memories), options as never), message);
 });
 
-test("setup error messages use the TS spellings", async () => {
+test("setup error messages write key lists as JSON arrays", async () => {
   const flow = hostFlow([decl("notes", "episodic")]);
   await setupError(
     () => buildMemories(flow, { supplied: { other: new Custom() } }),
@@ -814,7 +738,6 @@ test("flow without memory builds an empty registry", async () => {
 });
 
 test("null records read as empty", async () => {
-  // As Python's `None` for these options.
   const options = { storage: null, supplied: null, factories: null };
   const nulls = await buildMemories(hostFlow([decl("notes", "episodic")]), options);
   try {
@@ -988,8 +911,8 @@ test.each([["episodic"], ["reflective"], ["profile"]] as const)(
 );
 
 /**
- * A loaded flow declaring `memory` around one CODE node (Python's `_flow`, loaded as Python loads
- * it, so the run has edges to follow).
+ * A loaded flow declaring `memory` around one CODE node (loaded, so the run has edges to
+ * follow).
  */
 function runnableFlow(memory: string): Promise<ComposedFlow> {
   return loadFlow(
@@ -998,7 +921,6 @@ function runnableFlow(memory: string): Promise<ComposedFlow> {
   );
 }
 
-// test_package_exports_the_host_builder
 test("the package root exports the host builder", () => {
   expect(yian.buildMemories).toBe(buildMemories);
   expect(yian.MemoryRegistry).toBe(MemoryRegistry);

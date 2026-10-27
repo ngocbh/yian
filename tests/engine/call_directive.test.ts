@@ -1,38 +1,13 @@
 /**
- * The whole-value `call(<flow-id>, kw=...)` compile-time directive: a port of
- * `tests/engine/test_call_directive.py`.
+ * The whole-value `call(<flow-id>, kw=...)` compile-time directive.
  *
  * An unquoted value whose trimmed text starts with `call(` must be exactly one directive, else it
  * is a load error naming the problem; a quoted value is text. The first arg is the POSITIONAL flow
  * id, the rest are `name=value` keywords. It desugars through `desugarInlineCalls` and a shared
  * minter into a synth `CallDescriptor` (`over = null`), the host binding rewritten to
- * `${<synth>.output}`. The rows drive the pass directly, as Python does, with a deterministic
- * minter; the `load_flow` rows assemble the flow (`assembleText`), a `defs:` callee built by hand
- * (`handChild`) where the build resolves it.
- *
- * Changed: a TS-era rule changes these rows.
- * `test_bare_keyword_values_read_with_the_flow_yaml_rules`: the date and datetime params give
- * text (rule `dates`) and ints are `bigint`s (`30n`, `0x1F` is `31n`).
- * `test_bare_nan_keyword_value_is_a_float`: TS refuses `.nan`, an `ArgumentValueError`
- * with the reason `NaN is not a yian value`.
- * `test_a_bare_int_too_long_to_convert_fails_as_in_the_named_form`: a 5000-digit int reads as a
- * `bigint` in both forms (rule `numbers`), so the row loads.
- * `test_bare_and_quoted_dates_into_call_inputs`: the quoted half ports; the unquoted half loads in
- * TS (rule `dates`). `test_named_and_inline_forms_read_a_bare_value_alike` compares with
- * `parseYamlLiteral`. The private-callee rows check that the scope's resolver is never reached (it
- * throws) instead of monkeypatching `_resolve_child`.
- *
- * The runs, each loading the flow (`loadConformanceFlow`) and running it through `runFlow`:
- * `test_quoted_binding_runs_as_text` (4) and `test_quoted_flow_output_runs_as_text`.
- *
- * Not ported: the run half of
- * `test_unquoted_directive_holding_a_separator_is_a_call_not_a_typed_binding`, covered by
- * `run-map-call/engine_call_directive__an_unquoted_call_with_a_separator_runs`.
- *
- * TS-only: the recognizer rows those tests reach through `desugarInlineCalls`, each matching the
- * whole message, and direct rows for `findParenEnd`, `splitCallsAware` and `InlineCall`; the
- * harvested `load-types/compose_tagged_bindings__malformed_unquoted_call_after_a_tag` and
- * `load-map-call/engine_call_directive__*` cases, pinned at the end.
+ * `${<synth>.output}`. The rows drive the pass directly with a deterministic minter; the load rows
+ * assemble the flow (`assembleText`), a `defs:` callee built by hand (`handChild`) where the build
+ * resolves it.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -475,7 +450,7 @@ test.each<[string, unknown]>([
   // The named form reads a list here; a bare argument is one scalar.
   ["[1]", "[1]"],
 ])("bare keyword value %p reads with the flow YAML rules", (arg, expected) => {
-  // `toBe` keeps a number and a bigint apart, as Python's type check does.
+  // `toBe` keeps a number and a bigint apart.
   expect(synthInputs(`call(f, x=${arg})`)["x"]).toBe(expected);
 });
 
@@ -516,7 +491,7 @@ test.each(["1e3", "0x1F", "~", "2026-10-14", "None", "tRUE", ".5"])(
   },
 );
 
-test("a bare int too long for Python reads as a bigint in both forms", () => {
+test("a 5000-digit bare int reads as a bigint in both forms", () => {
   const digits = "1".repeat(5000);
   expect(synthInputs(`call(f, x=${digits})`)["x"]).toBe(BigInt(digits));
   expect((parseYamlLiteral(`x: ${digits}`) as Record<string, unknown>)["x"]).toBe(BigInt(digits));

@@ -1,21 +1,4 @@
-/**
- * A port of `tests/engine/test_provider_connection_recovery.py`: a resumed or delayed run keeps
- * each provider's recorded connection.
- *
- * Ported: all 8 tests. The provider calls go through the real `chatModelFromConfig` with a
- * recording `send` (`recording`) that answers each request in its provider's stream, where Python
- * patches `create_llm_client` to record each client's provider and arguments. Each built client is
- * read from the request it sends: its provider from the URL, its key from `x-api-key` (Anthropic)
- * or `authorization`, its connection headers from the request's headers; "no client built" is no
- * request sent. Each row has its own environment (`hostEnv`) and so its own credential store,
- * which logins are saved to.
- *
- * Changed: Python's patched `connection_snapshot` (Ollama) and `AuthStore.credentials` (host key),
- * which fail the test when read, are a store file holding `not json` for the resume, which fails
- * any read of it (`breakStore` shows a fresh run of the row's flow reads it and fails). An
- * environment connection's client takes no key argument in Python and reads the variable itself;
- * here its request sends the variable's key.
- */
+/** A resumed or delayed run keeps each provider's recorded connection. */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

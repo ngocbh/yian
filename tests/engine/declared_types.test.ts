@@ -1,5 +1,5 @@
 /**
- * The declared types the run time derives from a compiled flow (TS-only, #1149): pool roots
+ * The declared types the run time derives from a compiled flow: pool roots
  * (`poolDeclaredTypes`), a node's locals (`localTypes`) and a MAP body's `item`
  * (`itemDeclaredType`). A field these types declare reads null when it's absent.
  */

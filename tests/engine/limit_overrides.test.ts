@@ -1,32 +1,15 @@
 /**
- * The language safety limits follow `YIAN_<NAME>`, and each maximum loads and runs: a port of
- * `tests/engine/test_limit_overrides.py`.
+ * The language safety limits follow `YIAN_<NAME>`, and each limit's maximum loads and runs.
  *
- * A test sets a limit in the `env` it passes to `loadFlow` and `runFlow` (decision 46), where
- * Python's `set_defaults` fixture sets it for the process; a check outside a load or run (a type
- * parse, a skip model) runs inside `withEnv` with that `env`. The chain helpers are
- * `test_call_nesting_limit.py`'s (as `call_nesting_limit.test.ts` writes them), the many-CASE skip
- * model `test_skip_model.py`'s, and the memory helpers `test_value_nesting_boundaries.py`'s; the
- * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`), and the inline CODE bodies
- * read the same in JS but for `_list_body`'s loop (decision 11). An AGENT's model is a
- * `ScriptedModel` (on Azure, a `chatModelFromConfig` model) given as `models`, where Python
- * patches `model_from_config`. Ints read as `bigint`s (decision 4a). Every run sees only the
- * test's credential store in its environment.
+ * A test sets a limit in the `env` it passes to `loadFlow` and `runFlow`; a check outside a load or
+ * run (a type parse, a skip model) runs inside `withEnv` with that `env`. The "with less stack"
+ * tests load and run at each entry's maximum on the stack as it is; `src/defaults.ts` notes the
+ * depths measured on Node and in a Bun Worker. An AGENT's model is a `ScriptedModel`, or on Azure
+ * a fake `send` that streams the reply. Ints read as `bigint`s. Every run sees only the test's
+ * credential store in its environment.
  *
- * Ported: every row but those below. Changed: the "with less stack" rows and
- * `test_agent_output_nesting_maximum_loads_under_the_deepest_import_chain` load and run at each
- * entry's maximum on the stack as it is: JS has no recursion limit to lower (Python's
- * `_with_less_stack` and `_stack_headroom`), and the maxima are measured for Node's and a Bun
- * Worker's stacks (`docs/defaults.md`). A refused load is a `LoadError` and a refused type a
- * `TypeCheckError`, as in Python. In
- * `test_agent_output_nesting_maximum_runs_with_less_stack_on_azure`, a fake `send` streams the
- * reply where Python uses `httpx.MockTransport`; every model call streams (decision 31).
- *
- * Already ported: `test_value_nesting_follows_the_variable`, in `value_nesting.test.ts`'s `value
- * nesting follows the variable`.
- *
- * Covered by `run-agent/engine_limit_overrides__a_run_input_over_the_set_value_limit_is_refused`:
- * `test_a_run_input_over_the_set_value_limit_is_refused`.
+ * A run input over the set value limit is checked by the conformance case
+ * `run-agent/engine_limit_overrides__a_run_input_over_the_set_value_limit_is_refused`.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -90,7 +73,7 @@ const yamlFlow = (topic: string) =>
   topic +
   "\n    output: str\noutput: ${use.output}\n";
 
-// ---- the chain helpers of `test_call_nesting_limit.py` ----
+// ---- call chain helpers ----
 
 const LEAF =
   "    input:\n" +
@@ -200,7 +183,7 @@ test("call nesting follows the variable", async () => {
   expect(error.message).toContain("nests calls 3 levels deep, past the call nesting limit of 2");
 });
 
-// ---- the many-CASE skip model of `test_skip_model.py` ----
+// ---- a skip model with many CASEs ----
 
 let ids = 0;
 
@@ -238,7 +221,7 @@ test("skip worlds follow the variable", () => {
 test("value nesting maximum learns with less stack", async () => {
   const levels = maximum("MAX_VALUE_NESTING");
   const env = limitEnv({ MAX_VALUE_NESTING: levels });
-  // `test_value_nesting_boundaries.py`'s `_memory_flow(_code_flow(_list_body(levels)))`.
+  // A learnable flow whose CODE node returns a list nested `levels` deep.
   const text = `id: nesting
 name: nesting
 long_term_memory: episodic
@@ -429,7 +412,7 @@ const chatChunk = (delta: Record<string, unknown>, finishReason: string | null =
 
 /**
  * A `send` that records each Chat Completions request body and answers with a call to its first
- * tool with `args`: Python's `_ToolCallServer`.
+ * tool with `args`.
  */
 function toolCallServer(args: unknown): { bodies: Record<string, unknown>[]; send: Send } {
   const bodies: Record<string, unknown>[] = [];

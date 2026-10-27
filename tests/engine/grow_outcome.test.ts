@@ -1,14 +1,6 @@
 /**
- * The seed-first `Grow` outcome of `nodes/base.ts` and the compile-owned `Flow` value type, a port
- * of `tests/engine/test_grow_outcome.py`.
- *
- * Changed: Python's `frozenset()` is an empty `Set`, and `hasattr` is the `in` operator; the
- * flow's node and wiring tables are `Map`s.
- *
- * TS-only: `Grow` copies `prune`, so changing the passed set doesn't change it, and `Output`,
- * `Route` and `Grow` are frozen.
- *
- * Not ported: `test_grow_is_a_noderesult_member` (the union is a type).
+ * The seed-first `Grow` outcome of `nodes/base.ts` and the compile-owned `Flow` value type; `Grow`
+ * copies `prune`, and `Output`, `Route` and `Grow` are frozen.
  */
 
 import { expect, test } from "bun:test";

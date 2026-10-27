@@ -1,80 +1,8 @@
 /**
- * Versioned compare-and-set markdown stores: a port of `tests/engine/test_markdown_store.py`.
- *
- * Ported: `test_missing_file_reads_as_empty_document`, `test_unknown_or_malformed_version_raises_lookup_error`,
- * `test_missing_parent_directory_fails_on_first_use`, `test_non_file_paths_are_rejected_at_construction`,
- * `test_directory_path_fails_on_first_use`, `test_create_parent_makes_the_directory_on_first_use`,
- * `test_relative_path_is_bound_to_the_construction_directory`,
- * `test_symlinked_path_writes_through_to_its_target`,
- * `test_symlinked_parent_follows_the_link_before_parent_steps`, `test_dangling_symlink_creates_its_target`,
- * `test_write_is_compare_and_set_and_keeps_every_version`,
- * `test_direct_file_edit_is_a_new_version_and_breaks_stale_writes`,
- * `test_carriage_returns_round_trip_exactly`, `test_hand_edited_crlf_file_reads_back_byte_for_byte`,
- * `test_every_write_appends_its_provenance_and_nothing_is_replayed`,
- * `test_non_json_provenance_is_rejected_before_anything_is_written`,
- * `test_concurrent_writers_from_one_base_have_exactly_one_winner`,
- * `test_in_memory_store_is_a_compare_and_set_markdown_store` and
- * `test_in_memory_store_accepts_initial_text_and_checks_types`.
- *
- * TS-only: a golden replay that writes exactly the files Python yian wrote for the same operations
- * (`conformance/fixtures/markdown_store.json`), byte for byte; a copy of those files read by name
- * and extended by a compare-and-set write; a lone surrogate in written text and invalid UTF-8 on
- * disk; a BOM kept; non-finite provenance; floats, an astral key and key order in the write log as
- * Python writes them; a written document's mode; a failed rename; a lock path that isn't a file.
- * With `YIAN_TEST_NODE` set to a Node binary, the golden replay and the read of the fixture copy
- * also run under Node, from the built store and `markdown_both_runtimes.ts`.
- *
- * Changed:
- * - `LookupError` and `ValueError` are `RangeError`; `FileNotFoundError` and `OSError` are Node
- *   system errors (an `Error` with a string `code` and a `syscall` or `errno`); the missing parent
- *   is `ENOENT` from `stat`.
- * - `FileMarkdownStore`'s `read` and `write` are async; `InMemoryMarkdownStore`'s are synchronous.
- * - `test_non_file_paths_are_rejected_at_construction`: bytes are a `Buffer`.
- * - `test_non_json_provenance_is_rejected_before_anything_is_written`: the `datetime` row is a
- *   `Date`, the tuple row a `Set` (there is no tuple), and the int-key row a symbol key (a JS key is
- *   always a string).
- * - `test_concurrent_writers_from_one_base_have_exactly_one_winner`: 8 concurrent `write`s with
- *   `Promise.all`, where Python starts 8 threads.
- *
- * Not ported: `isinstance(store, MarkdownStore)` (an interface; both classes' `implements` clauses
- * are checked by the typecheck).
- *
- * The fixture is the output of this script, run from the yian root with
- * `PYTHONPATH=src python make_markdown_fixture.py > conformance/fixtures/markdown_store.json`:
- *
- * ```python
- * """Write the FileMarkdownStore golden files with Python yian; print them as JSON {relative path: text}."""
- * import json, os, shutil, sys, tempfile
- * from yian.memory.storage import FileMarkdownStore
- *
- * root = tempfile.mkdtemp()
- * store = FileMarkdownStore(os.path.join(root, "ada.md"))
- * _, empty = store.read()
- * v1 = store.write("# Ada\n", base_version=empty, provenance={
- *     "run_id": "r1", "commit_id": "c1", "seen_version": empty,
- *     "feedback": ["Prefers email.", {"score": 3, "ok": True, "none": None, "ratio": 0.25, "whole": 100.0}],
- * })
- * v2 = store.write("# Ada\r\nPrefers email.\r\nCafé ☕ 日本語 😀\r\n", base_version=v1, provenance={
- *     "run_id": "r2", "commit_id": "c2", "seen_version": v1,
- *     "feedback": ["naïve — “quotes”", "tab\there\nnewline \"q\" back\\slash", "😀", "\u0001\u007f\u2028"],
- *     "Zeta": [], "_under": {}, "alpha": {"b": 2**70, "a": -5, "B": [1.5, -0.5]},
- * })
- * text, current = store.read()
- * v3 = store.write("\ufeff# BOM doc\rold mac\nno trailing newline", base_version=current)
- * v4 = store.write("", base_version=v3, provenance={"run_id": "r4", "commit_id": "c4", "feedback": []})
- * v5 = store.write("# Ada\r\nPrefers email.\r\nCafé ☕ 日本語 😀\r\n", base_version=v4, provenance={"run_id": "r5", "commit_id": "c5"})
- * store.read(v2)
- * files = {}
- * for dirpath, _, names in os.walk(root):
- *     for name in names:
- *         full = os.path.join(dirpath, name)
- *         with open(full, encoding="utf-8", newline="") as handle:
- *             files[os.path.relpath(full, root)] = handle.read()
- * shutil.rmtree(root)
- * json.dump(dict(sorted(files.items())), sys.stdout, ensure_ascii=True, indent=1)
- * ```
- *
- * (The original writes the BOM and U+2028 as literal characters; they are escaped here.)
+ * Versioned compare-and-set markdown stores. The golden replay writes exactly the files in
+ * `conformance/fixtures/markdown_store.json` for the same operations, byte for byte, since they
+ * are the format of documents and write logs on users' disks; with `YIAN_TEST_NODE` set to a Node
+ * binary, it and the read of the fixture copy also run under Node.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -460,12 +388,12 @@ test("the in-memory store accepts initial text and checks types", () => {
   expect(store.read()).toEqual(["seed\n", current]);
 });
 
-test("the same operations write exactly the files Python yian wrote", async () => {
+test("the same operations write exactly the fixture's files", async () => {
   await replay(new FileMarkdownStore(path.join(dir, "ada.md")));
   expectFixtureFiles(dir);
 });
 
-test("a copy of Python's files reads every version and takes a compare-and-set write", async () => {
+test("a copy of the fixture's files reads every version and takes a compare-and-set write", async () => {
   copyFixture(dir);
   expectExtendedFixture(dir, await readAndExtend(new FileMarkdownStore(path.join(dir, "ada.md")), FIXTURE_VERSIONS));
 });
@@ -500,7 +428,7 @@ test("a BOM survives a write and a hand edit", async () => {
   expect(await store.read()).toEqual(["\ufeffx", markdownVersion("\ufeffx")]);
 });
 
-test("floats and keys are written to the log as Python writes them", async () => {
+test("the write log sorts keys, escapes non-ASCII and keeps a float's fraction or exponent", async () => {
   const store = new FileMarkdownStore(path.join(dir, "ada.md"));
   const base = markdownVersion("");
   const version = await store.write("x", {
@@ -600,7 +528,7 @@ ${body}`;
   }
 
   test(
-    "the same operations write exactly the files Python yian wrote",
+    "the same operations write exactly the fixture's files",
     () => {
       runNode("await replay(new FileMarkdownStore(file));");
       expectFixtureFiles(dir);
@@ -609,7 +537,7 @@ ${body}`;
   );
 
   test(
-    "a copy of Python's files reads every version and takes a compare-and-set write",
+    "a copy of the fixture's files reads every version and takes a compare-and-set write",
     () => {
       copyFixture(dir);
       const stdout = runNode(`const result = await readAndExtend(

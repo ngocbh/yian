@@ -1,30 +1,6 @@
 /**
- * `runFlow`/`advance` pass the host `context` and per-call ids to tools in a run: a port of
- * `tests/engine/test_tool_context_run.py`.
- *
- * An AGENT's model is a `ScriptedModel` given as `models`, where Python patches
- * `model_from_config`; a crash is `crashAfter`'s log refusing the TOOL's outcome (the tool itself
- * returns). Every run sees only the test's credential store in its environment.
- *
- * Ported: `test_tool_node_sees_the_host_context_and_its_call_id`,
- * `test_a_resumed_tool_node_sees_the_same_call_id_and_the_new_context`,
- * `test_resume_without_context_gives_none` (`undefined`, JS's absent value),
- * `test_the_log_never_holds_the_context`, `test_a_registered_tool_sees_the_context`,
- * `test_agent_tool_calls_see_the_context_and_per_call_ids`,
- * `test_agent_tool_from_a_group_sees_the_context`, `test_agent_registered_tool_sees_the_context`,
- * `test_a_function_tool_in_a_tool_node_sees_the_context_and_its_call_id`,
- * `test_a_function_tool_granted_to_an_agent_sees_the_context_and_per_call_ids`,
- * `test_a_direct_agent_outside_a_run_gives_each_call_a_fresh_id` (through `node.run` with a
- * `ToolSet` holding the context) and
- * `test_ask_user_from_an_agent_and_a_human_input_node_sees_the_context` (the request is
- * camelCase, `nodeId`; the node is a TOOL `ask`, whose call is named `ask`, where Python's is a
- * HUMAN_INPUT node: TS yian has no HUMAN_INPUT kind). TS tools are all `FunctionTool`s, so the
- * "function tool" rows build one with `new FunctionTool` where the others use `tool()`.
- *
- * Covered by `run-leaves/tool_context_run__each_loop_iteration_gets_its_own_call_id`:
- * `test_each_loop_iteration_gets_its_own_call_id`; by
- * `run-leaves/tool_context_run__each_map_item_gets_its_own_call_id`:
- * `test_each_map_item_gets_its_own_call_id`.
+ * `runFlow`/`advance` pass the host `context` and per-call ids to tools in a run, and the log never
+ * holds the context. Every run sees only the test's credential store in its environment.
  */
 
 import { afterAll, afterEach, expect, test } from "bun:test";

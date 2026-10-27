@@ -1,49 +1,7 @@
 /**
- * The `Any` type's shape, labels, overlap, parsing, typedefs and resolution, and the values
- * `Any`, `object` and the list kinds take at the write boundary (`buildValueAs`) and through
- * the wire, a port of those tests of `tests/engine/test_any_type.py`. The non-JSON rows use JS
- * values (`Date`, `Map`, `Set`, `Uint8Array`, a class instance, `undefined`) for Python's.
- *
- * TS-only: `-0`, NaN and lone surrogates inside `object` and `Any` values, and an array whose
- * prototype was swapped to `Object.prototype` refused at the write boundary.
- *
- * It also ports the field-read test of node contracts (`test_a_field_read_on_any_is_not_checked`).
- *
- * It also ports the compatibility tests (`typesCompatible`, `typeRelation`):
- * `test_unproven_list_items_compare_as_optional_any`, `test_a_non_null_json_type_fits_any`
- * through `test_any_is_disjoint_from_file_and_none`,
- * `test_any_is_narrower_than_a_union_with_one_file_member_and_back` and
- * `test_any_is_narrower_than_a_record_whose_file_field_may_be_null`.
- *
- * It also ports the proof test
- * (`test_proof_rejects_an_unproven_list_and_accepts_list_of_optional_any`) through
- * `requireProvenType`.
- *
- * It also ports the flow loading tests the typed-binding and cross-flow binding checks decide,
- * through `assembleText` or `loadFlow`: `test_tagging_an_any_output_as_a_union_with_a_file_member_loads`,
- * `test_any_into_a_child_str_input_suggests_a_tag_or_isinstance`,
- * `test_the_any_hint_names_the_typedef_of_a_child_record_input`,
- * `test_optional_any_into_a_child_any_input_is_a_plain_nullability_error`,
- * `test_any_into_a_child_input_that_requires_a_file_gets_no_hint`,
- * `test_a_tagged_any_binding_into_a_child_str_input_loads`,
- * `test_an_untyped_source_into_a_child_any_input_is_left_to_runtime`,
- * `test_a_map_over_a_list_of_any_into_a_child_str_input_suggests_a_tag`,
- * `test_a_map_over_a_list_of_any_into_a_child_any_input_loads`,
- * `test_any_into_a_loop_carried_int_suggests_a_tag_or_isinstance` (and its case
- * `load-types/engine_any_type__any_into_a_loop_carried_int_suggests_a_tag_or_isinstance`) and
- * `test_a_tagged_loop_seed_over_an_any_output_loads` (and its `ok` case
- * `load-types/engine_any_type__a_tagged_loop_seed_over_an_any_output_loads`). The rows whose
- * flows call the `child` or `bump` def load through `loadFlow`, and the cases with the
- * `bump` def through `assembled`; the error rows pin
- * the whole message where Python matches fragments, and CODE bodies are TS. Also
- * `test_an_assert_reading_a_field_of_an_any_output_loads` (node asserts) and its `ok` case
- * `load-types/engine_any_type__an_assert_reading_a_field_of_an_any_output_loads`.
- *
- * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
- * rows (`test_object_rejects_a_non_text_key`,
- * `test_flat_list_of_objects_rejects_a_non_text_key_at_the_item` and the `{1: "a"}` rows): TS
- * has no tuples, and a record key is always an exact string.
- * `test_any_reports_the_first_bad_part_in_order` uses a second non-JSON part for the int key.
+ * The `Any` type's shape, labels, overlap, parsing, typedefs and resolution; the values `Any`,
+ * `object` and the list kinds take at the write boundary (`buildValueAs`) and through the wire;
+ * its compatibility and proof checks; and the load-time binding checks and hints around it.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -214,7 +172,7 @@ function typedefsError(raw: Readonly<Record<string, unknown>>): string {
   throw new Error("readTypedefs did not throw");
 }
 
-/** Python's overlap error for `label`, members `a` and `b`, with the `file` note if `files`. */
+/** The overlap error for `label`, members `a` and `b`, with the `file` note if `files`. */
 function overlap(label: string, a: string, b: string, files = false): string {
   const why = files
     ? " (a `file` slot reads `{uri, mime, name}`, so `file` overlaps `object`, `Any` and a " +
@@ -310,7 +268,6 @@ describe("Any values", () => {
   });
 
   test.each<[string, unknown, string, (string | number)[]]>([
-    // The message names yian's `None`, as Python's does.
     ["null", null, "null does not match declared type Any", []],
     ["a Set", new Set([1n, 2n]), "<Set object> is not a JSON value", []],
     ["bytes", new Uint8Array([120]), "<Uint8Array object> is not a JSON value", []],
@@ -851,7 +808,7 @@ output: \${loop.output}
   });
 });
 
-describe("TS-only: -0, NaN and lone surrogates in object and Any values", () => {
+describe("-0, NaN and lone surrogates in object and Any values", () => {
   test.each([ValueKind.OBJECT, ValueKind.ANY])(
     "%s turns -0 into 0, copying only what changes",
     (kind) => {
@@ -895,7 +852,7 @@ describe("TS-only: -0, NaN and lone surrogates in object and Any values", () => 
   });
 });
 
-describe("TS-only: an array whose prototype was swapped", () => {
+describe("an array whose prototype was swapped", () => {
   // An array is never a record, whatever its prototype, and it is a list only with
   // `Array.prototype`, so its log line can always be read back.
   const swapped = () => Object.setPrototypeOf([1n, 2n], Object.prototype) as unknown;

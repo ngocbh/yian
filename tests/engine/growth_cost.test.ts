@@ -1,14 +1,6 @@
 /**
- * Growth cost scales with the fragment and its prunes, not the run's graph so far: a port of
- * `tests/engine/test_growth_cost.py`.
- *
- * Ported: `test_map_over_a_call_child_costs_about_the_same_per_item_at_any_size`,
- * `test_map_over_a_loop_child_costs_about_the_same_per_item_at_any_size` and
- * `test_a_loop_iteration_costs_about_the_same_after_a_large_map`, with Python's `< 2 *` bounds
- * and best of two runs, timed with `performance.now()`. Integers are bigints (decision 4a).
- *
- * Changed: each test makes one unmeasured warm-up run before it times anything, so the first
- * timed size doesn't pay the JIT's warm-up; that only makes the bound stricter.
+ * Growth cost scales with the fragment and its prunes, not the run's graph so far. Each test makes
+ * one unmeasured warm-up run first, so the first timed size doesn't pay the JIT's warm-up.
  */
 
 import { expect, test } from "bun:test";
@@ -115,7 +107,7 @@ nodes:
 output: \${each.output}
 `;
 
-/** `[0n, ..., items - 1n]`, Python's `list(range(items))`. */
+/** `[0n, ..., items - 1n]`. */
 function range(items: number): bigint[] {
   return Array.from({ length: items }, (_, i) => BigInt(i));
 }

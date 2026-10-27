@@ -1,7 +1,7 @@
 /**
  * The TOOL built-ins at run time: `take` and `sleep` return the wait the engine decides, a host
  * tool or `ask` that returns `pending()` records its call and waits, a held call is reused, and
- * `waitResultStep` shapes a host's answer. TS-only: Python yian has no inboxes or pending calls.
+ * `waitResultStep` shapes a host's answer.
  */
 
 import { describe, expect, test } from "bun:test";

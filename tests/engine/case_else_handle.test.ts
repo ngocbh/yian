@@ -1,29 +1,7 @@
 /**
- * CASE's else route has its own handle: the node-level and reducer rows of
- * `tests/engine/test_case_else_handle.py`.
- *
- * Ported: `test_a_case_may_not_take_the_else_handle_as_a_branch`,
- * `test_a_route_to_an_unknown_handle_named_default_is_rejected`,
- * `test_the_else_handle_without_an_edge_skips_every_branch`.
- *
- * Changed: `Case` is frozen, so the node-level half can't set `handle` after construction as
- * Python does; it builds the `Case` holding `#else` without the constructor. `RangeError` stands
- * for Python's `ValueError`. The unknown-handle rejection is node data: a `NodeDataError` whose
- * `original` is the `RangeError`, with the full message where Python matches a part of it.
- *
- * Note: `CaseNode.rewriteLocalOrigins` rebuilds each `Case` through its constructor, so it
- * re-checks the handle there; Python's rewrite assigns the origin in place and checks the handle
- * only in `validate_execution_setup`. No path reaches a rewrite with such a `Case`.
- *
- * Ported, through `runFlow` and `advance` in an environment holding only the test's credential
- * store: `test_a_log_routed_to_the_old_default_handle_does_not_resume`. Changed: replay throws the
- * reducer's `RangeError` itself (never the live `NodeDataError`), with its full message.
- *
- * Ported through `loadFlow` and `runFlow`, in the same environment:
- * `test_a_then_target_named_default_runs_only_on_its_own_branch` (2),
- * `test_a_then_target_named_default_does_not_run_on_no_match_without_else`,
- * `test_an_on_case_target_named_default_runs_only_on_its_own_branch` (2) and, through `loadFlow`,
- * `test_the_else_handle_is_no_possible_node_id` (the whole message, where Python matches a part).
+ * CASE's else route has its own handle: a branch can't take it, a route to an unknown handle is
+ * rejected, the handle without an edge skips every branch, and a node named `default` runs only on
+ * its own branch.
  */
 
 import { afterAll, expect, test } from "bun:test";

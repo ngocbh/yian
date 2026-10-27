@@ -1,29 +1,6 @@
 /**
- * `RunStarted.callTimeLlm`: the log half of `tests/engine/test_run_log_call_time_llm.py`, the
- * record of agents whose LLM config resolves when they run. Python's `ValueError` is a
- * `RangeError` here.
- *
- * Ported: `test_the_record_keeps_its_own_copy`, `test_a_malformed_record_is_rejected` (11 rows,
- * each message and class pinned; Python matches `call_time_llm` only), `test_call_time_llm_round_trips`.
- *
- * TS-only: the copy is deep-frozen with its keys in code-unit order, `-0` becomes `0`; omitted, the
- * field is `null`; a NaN refusal's `cause` is the value layer's `TypeCheckError`.
- *
- * Changed:
- * - `test_the_schema_stays_nine`: TS writes schema 13, so the constant and the encoded line's
- *   `schema` are 13.
- * - The NaN row's message is the value layer's (`RunStarted call_time_llm: NaN is not a yian
- *   value`), where Python's canonical JSON copy says `non-finite numbers are not valid canonical
- *   JSON`.
- * - `test_a_run_without_call_time_agents_writes_the_same_bytes`: schema 13 always writes both
- *   fields, so the golden line holds `"call_time_llm":null,"defaults":{}` and `"schema":23`.
- * - `test_a_malformed_payload_is_rejected`: `null` is valid in schema 13 (no call-time agents), so
- *   its row is dropped; the other 10 rows are pinned with the record's class and message (a part of
- *   the wrong JSON type is a `TypeError`, where Python's pydantic raises `ValueError`).
- *
- * Ported, through the run state: `test_run_start_records_and_applies_call_time_llm`,
- * `test_run_start_without_call_time_agents_leaves_it_none` and
- * `test_run_start_requires_a_pristine_call_time_llm` (its message pinned).
+ * `RunStarted.callTimeLlm`, the record of agents whose LLM config resolves when they run: its
+ * frozen copy, its refusals with their classes and messages, its round trip, and the run state.
  */
 
 import { expect, test } from "bun:test";

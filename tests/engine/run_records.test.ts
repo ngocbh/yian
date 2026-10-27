@@ -1,137 +1,6 @@
 /**
- * Run records and their canonical wire codec: a port of `tests/engine/test_run_records.py` and of
- * `test_long_int_old_logs.py::test_invalid_record_json_keeps_its_message`.
- *
- * Ported, the canonical helper tests:
- * `test_typed_object_output_records_a_nested_file_as_its_mapping`,
- * `test_recorded_object_past_the_nesting_limit_still_replays`,
- * `test_seed_keeps_supported_values_and_independent_canonical_copies`,
- * `test_run_log_protocol_pins_iteration_append_close_and_context_management` (a class assigned
- * to `RunLog`, closed through `Symbol.dispose`),
- * `test_records_and_envelopes_are_frozen` (every record of this module and the envelope, nested
- * values and held arrays too; assignment is a `TypeError`). Python's `ValueError` is a
- * `RangeError` here.
- *
- * Ported, the wire codec tests (each row with its exact class and message; a field of the wrong
- * JSON type is a `TypeError`): `test_record_encoding_is_canonical_newline_free_and_byte_stable`
- * (`"schema":23`), `test_node_failure_encoding_nests_one_canonical_failure`,
- * `test_removed_frame_learning_wire_kinds_are_rejected`,
- * `test_removed_conversation_wire_kinds_are_rejected` (the module has no such export),
- * `test_decode_rejects_invalid_envelopes` (literal JSON text, so `10.0` stays a float token),
- * `test_decode_rejects_unknown_missing_and_wrong_payload_fields`,
- * `test_route_encoding_persists_only_its_optional_terminal_failure`,
- * `test_decode_requires_explicit_route_terminal_failure_field`,
- * `test_decode_rejects_extra_nested_route_terminal_failure_field`,
- * `test_decode_rejects_malformed_nested_failures` (20 rows),
- * `test_node_failure_rejects_legacy_location_fields`,
- * `test_decode_rejects_old_schemas_even_with_a_nested_failure` (1-9),
- * `test_decode_rejects_flattened_failure_aliases`,
- * `test_decode_rejects_duplicate_keys_at_any_object_depth` (`invalid run-record JSON`, caused by
- * the reader's `JSONDecodeError` `duplicate JSON object key: "node_id"`, double-quoted),
- * `test_invalid_record_json_keeps_its_message`,
- * `test_every_record_round_trips_through_a_validated_envelope` (each row also decoded from
- * bytes) and
- * `test_record_wire_examples_cover_the_closed_record_inventory` (against `RUN_RECORD_TYPES`).
- *
- * TS-only: a seed keeps `±Infinity` as a float (a TS yian value, unlike Python's); a seed's
- * record keys come out in code-unit order; the envelope's schema rows (7, 8, 9 and 23 are
- * unsupported, 10-21 are retired, a boolean is unsupported, and the schema is checked first),
- * its run-id rows (empty, a lone surrogate) and its unsupported-record row; the `RunStopped`
- * rows (an unknown reason, an empty or repeated node id, a non-text message; no node ids is
- * valid); a failure without a node id, a capture of another class, a bad worker
- * count, digest, commit key, commit seq, handle, spawner id, typed-value wire or envelope seq,
- * refused by the record's constructor; a bad flow fingerprint or run-start worker count, a
- * start wiring override holding NaN, a wiring override, agent configuration or one agent's
- * configuration that isn't a JSON object, a bad commit identity, mutation batch or failure, and
- * a backward carrier of another class, refused by the run-start, memory-commit and backward
- * records; `RUN_RECORD_TYPES`; carriers held by reference and failures and values held as
- * frozen copies. On the wire: a line starting with a UTF-8 BOM (bytes or text) and a line that
- * isn't UTF-8 are `invalid run-record JSON`; data that is neither text nor bytes; the `run_stopped`
- * round trip and its unknown-reason, extra-field, non-text and repeated-id rows; the
- * `run_resumed` float-counter, negative-counter, text-ids and closed-calls rows; envelope rows for a float or
- * too-large `seq`, a non-text run id or kind, a non-object payload or envelope, a missing schema,
- * and the schema named before anything else is checked; an empty `node_started` node id, a
- * non-text failure code, a failure or origin that isn't an object; a byte-pinned `node_succeeded`
- * line whose capture holds route sizes, spans and path indexes, an item index and an occurrence
- * index, all written as ints; a memory commit's `attempt_id` of 0 or -1; `run_started` rows for a
- * missing field, a non-text fingerprint, the retired `initial_pool`, a memory table or defaults of
- * the wrong JSON type, a float or negative worker count and a non-boolean `learnable`; a
- * `pool_commit` written flat (`{node_id, key, kind, value}`) keeping int and float apart; a
- * `node_succeeded` naming its commit's seq, and refusing the retired `value` and `commit_target`;
- * the inbox and wait record kinds and the take form of `pool_commit` in the round trip (their own
- * checks are in `wait_records.test.ts`).
- *
- * Changed:
- * - `test_encode_validates_programmatically_constructed_envelopes`: the record's constructor
- *   refuses the bad node id and the non-`Failure` (Python refused them at encode); `encodeRecord`
- *   refuses an object that isn't a `RecordEnvelope`.
- * - `test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors`: the seed rows are the
- *   value layer's `TypeCheckError`, the run-id row the envelope's `RangeError`, and the decode
- *   row reads `invalid run-record JSON` (the reader refuses the surrogate).
- * - Python's retired schemas 7 and 8 read `unsupported run-record schema: N` like every schema
- *   below 9; TS's retired schemas 10 to 22 read `run log schema N predates schema 23 and is
- *   not supported`.
- * - `test_encode_rejects_invalid_id_tuple_carriers`: the 9 rows are constructor rejections
- *   (Python refused them at encode); "tuple" reads "array".
- * - `test_typed_object_output_rejects_a_non_json_member`: Python's date and datetime rows are one
- *   JS `Date` row, refused by the value layer as `<Date object> is not a JSON value`.
- * - `test_seed_canonicalizes_tuple_date_and_file_ref`: only the `FileRef` half (TS has no tuples
- *   or dates among its values).
- * - `test_seed_rejects_nonfinite_before_json_mode_normalization`: the NaN rows `raw`, `dict` and
- *   `typed`, refused with the value layer's `NaN is not a yian value` at Python's paths. A TS seed
- *   is a plain value, never a `TypedValue`, so the `typed` row checks an unchecked `TypedValue`
- *   holding NaN through `canonicalTyped`.
- * - `test_typed_output_rejects_nonfinite_at_its_field_path`: the TS wording, at `["a", 1]`.
- * - `test_canonical_helpers_reject_unordered_containers`: a JS `Set`, refused by the value layer
- *   as `<Set object> is not a JSON value` by both helpers.
- * - `test_canonical_helpers_reject_cyclic_node_data`: both helpers give the value layer's `value
- *   contains itself` (Python's seed helper says `cyclic container`).
- * - `test_memory_commit_wire_requires_a_positive_attempt`: a `null` attempt is a `TypeError` (a
- *   field of the wrong JSON type), with its message pinned.
- * - `test_expansion_record_with_nonfinite_seed_does_not_append` and
- *   `test_run_started_record_with_nonfinite_llm_config_does_not_append`: the record's constructor
- *   refuses the NaN (the value layer's `NaN is not a yian value`, at its path), so no log is
- *   involved.
- *
- * Not ported: the two list rows of `test_encode_rejects_invalid_id_tuple_carriers` (a TS id
- * carrier is an array); the `inf` and `-inf` rows (a TS float may be infinite) and the tuple,
- * model and dataclass rows of the non-finite seed test; the pydantic-extras tests; the dataclass
- * row of the unordered-container test;
- * `test_canonical_seed_rejects_keys_before_json_stringification` (JS object keys are always
- * text); `test_typed_object_output_canonicalizes_a_tuple` (TS has no tuples); the
- * recursion-depth tests (the TS codec is iterative); `test_pool_codec_rejects_nonfinite_values`
- * (`inf` is a TS float, and a NaN fails at `pool.set`); the pool codec tests
- * (`test_pool_codec_is_canonical_and_lossless_for_typed_values`,
- * `test_pool_decoder_rejects_unknown_fields_and_wrong_types`), since a schema 23 log records no
- * pool: each pool write is a `pool_commit`.
- *
- * Ported, through the run state: `test_prepared_record_tamper_check_uses_frozen_schema` (3 rows,
- * calling the internal `requireUnchangedRecord` as Python does; the record is frozen, so the
- * `payload` row forges a `PreparedTransition` pairing a changed record with the original plan, and
- * the coordinate rows forge one with another run id or sequence).
- *
- * Changed, through the run state: `test_append_result_wrong_schema_is_protocol_fault`: TS refuses
- * to build an envelope of another schema, so the log returns one built on the envelope prototype
- * with schema 9; `encodeRecord` doesn't check the schema, so it fails as `run-log append result
- * does not match prepared transition` where Python names the old schema.
- *
- * Not ported: `test_historical_record_requires_an_exact_supported_schema` (`prepareRecord` has no
- * schema parameter, since schema 23 is the only one).
- *
- * Changed, through the run state (Python reads recorded schema-9 bytes of flows from `load_flow`;
- * schema 23 is the only TS schema, so each test records its own live log of a TS flow, replays it
- * through `replayRecords` and compares `_plan.envelopeJson` with the live line):
- * - `test_historical_frontier_prepares_recorded_schema_bytes` (2 rows): the one-record prefix is
- *   the RunStarted of `flow()` with `startData`.
- * - The `route` row of `test_historical_outcomes_keep_schema_in_trace_bytes`: the live learnable
- *   `terminalSkipRouteFlow()` route, committed through the internal `HistoricalLogCursor`; the
- *   occurrence keeps the live line as its `recordJson`.
- * - The `success`, `failure` and `growth` rows of
- *   `test_historical_outcomes_keep_schema_in_trace_bytes`: a live learnable `runFlow` of the
- *   source test's flow (Python's recorded `_RECORDED_BACKWARD`, `_RECORDED_FAILURE` and
- *   `_RECORDED_GROWTH_PREFIX` logs) writes the lines; all but the last replay through `run.ts`'s
- *   `replayRunLog` from a `MemoryRunLog`, and the last is prepared and committed through the
- *   internal `HistoricalLogCursor`. Memory keys are served by `FakeMemory`.
+ * Run records and their canonical wire codec: record construction and freezing, the seed and
+ * typed-value helpers, envelope and payload decoding, and replay of live log lines through the run state.
  */
 
 import { expect, test } from "bun:test";
@@ -589,7 +458,7 @@ test.each<[string, Readonly<{ kind: string; value: unknown }>, string]>([
   ["an int", { kind: "int", value: 2n }, '"kind":"int","node_id":"a","value":2'],
   ["a float", { kind: "float", value: 2 }, '"kind":"float","node_id":"a","value":2.0'],
   ["an int above 2^53", { kind: "int", value: 2n ** 60n }, `"kind":"int","node_id":"a","value":${2n ** 60n}`],
-])("a pool commit encodes flat and decodes back equal (TS-only): %s", (_name, wire, text) => {
+])("a pool commit encodes flat and decodes back equal: %s", (_name, wire, text) => {
   const record = new PoolCommitRecord("a", "a", wire as never);
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 1, record);
   const encoded = encodeRecord(envelope);
@@ -599,7 +468,7 @@ test.each<[string, Readonly<{ kind: string; value: unknown }>, string]>([
   expect((decoded.record as PoolCommitRecord).value).toEqual(wire as never);
 });
 
-test("a derived pool commit holds from and no value: an object with sorted keys that decodes back to a map (TS-only)", () => {
+test("a derived pool commit holds from and no value: an object with sorted keys that decodes back to a map", () => {
   const from = new Map([
     ["b", 7],
     ["a", 4],
@@ -639,11 +508,11 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
   ["a seq that isn't a positive integer", new Map([["a", 0]]), RangeError, "from seq of 'a' must be a positive integer"],
   ["an empty name", new Map([["", 3]]), RangeError, "from names must be non-empty"],
   ["a plain object", { a: 3 }, TypeError, "from must be a Map or null"],
-])("a pool commit refuses a from with %s (TS-only)", (_name, from, cls, message) => {
+])("a pool commit refuses a from with %s", (_name, from, cls, message) => {
   expectError(() => new PoolCommitRecord("e", "e", null, { from: from as never }), cls, message);
 });
 
-test("a node success names its commit and holds no value (TS-only)", () => {
+test("a node success names its commit and holds no value", () => {
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 6, new NodeSucceededRecord("a", 5));
   expect(envelope.payload).toEqual({ node_id: "a", commit: 5n, messages: null, forward_capture: null });
   for (const commit of [0, -1, 1.5, Number.NaN, 2 ** 53, "5"]) {
@@ -654,7 +523,7 @@ test("a node success names its commit and holds no value (TS-only)", () => {
 test.each<[string, string, string]>([
   ["node_succeeded", "value", '{"kind":"int","value":1}'],
   ["node_succeeded", "commit_target", '"a"'],
-])("decode rejects a %s payload holding the retired %s (TS-only)", (kind, field, json) => {
+])("decode rejects a %s payload holding the retired %s", (kind, field, json) => {
   const line =
     `{"at":"2026-01-01T00:00:00.000Z","kind":"${kind}","payload":{"commit":5,` +
     `"forward_capture":null,"messages":null,"node_id":"a","${field}":${json}},"run_id":"run","schema":${SCHEMA_VERSION},"seq":6}`;
@@ -1234,7 +1103,7 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     RangeError,
     "RunStarted yian_version must be a non-empty string",
   ],
-])("decode rejects a run_started payload with %s (TS-only)", (_name, edit, cls, message) => {
+])("decode rejects a run_started payload with %s", (_name, edit, cls, message) => {
   const wire = parseJson(RUN_STARTED_WIRE, "codec") as { payload: Record<string, unknown> };
   edit(wire.payload);
   expectError(() => decodeRecord(logJson(wire)), cls, message);
@@ -1566,7 +1435,6 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     RangeError,
     'invalid run-record envelope fields; missing=["payload"], extra=[]',
   ],
-  // TS-only rows.
   [
     "seq 0.0",
     `{"schema":23,"run_id":"run","seq":0.0,${NODE_STARTED}}`,
@@ -1660,7 +1528,6 @@ test.each<[string, string, unknown, new (...args: never[]) => Error, string]>([
     RangeError,
     'invalid node_failed payload fields; missing=["forward_capture"], extra=["locator"]',
   ],
-  // TS-only.
   [
     "an empty node id",
     "node_started",
@@ -1820,7 +1687,6 @@ test.each<[string, (payload: FailureWire["payload"]) => void, new (...args: neve
     TypeError,
     `${FAILURE_LABEL} traceback must be a string or null`,
   ],
-  // TS-only.
   ["wrong-code", (p) => (p.failure["code"] = 7), TypeError, `${FAILURE_LABEL} code must be a string`],
   ["failure-not-object", (p) => (p.failure = [] as never), TypeError, `${FAILURE_LABEL} must be an object`],
   [
@@ -2012,7 +1878,7 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     TypeError,
     "run_resumed payload closed_calls must be an array of strings",
   ],
-])("decode rejects a run_resumed payload with %s (TS-only)", (_name, payload, cls, message) => {
+])("decode rejects a run_resumed payload with %s", (_name, payload, cls, message) => {
   const text = `{"schema":23,"run_id":"run","seq":0,"kind":"run_resumed","payload":${payload}}`;
   expectError(() => decodeRecord(text), cls, message);
 });

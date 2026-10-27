@@ -1,6 +1,5 @@
 /**
- * A node lifted out of an authored node runs on its host's routes and ordering: a port of
- * `tests/engine/test_lifted_node_gating.py`.
+ * A node lifted out of an authored node runs on its host's routes and ordering.
  *
  * Each lifting desugar pass records the node it lifted from as the host: an inline `call(...)` in
  * a node's binding, the inner calls of a nested branch `call(...)`, and an adaptive gate's
@@ -9,22 +8,6 @@
  * inputs and is skipped when one of them would skip the host; a defaulted input (`:-`) only makes
  * it wait, and sibling calls lifted from one host still run in parallel. So no call, side effect
  * or LLM call happens on a branch the host isn't on, and the taken branch runs as before.
- *
- * Ported: every row, each parametrized row included. The `record` probes are TS's
- * (`./fixtures/compose_codefns.ts:record`), and Python's `RECORDED` is read from the run's events
- * as the tags the probe nodes (`prep`, and each `fx` and `p` inside a call) returned, in order. The
- * composer AGENT's model is a `ScriptedModel` given as `models` (`serving`), its provider and model
- * named by the run's `llmConfig`; the composer's calls are the model's requests, and a model with
- * no reply left fails any call, where Python's fake chat raises. The CODE bodies are Python's where
- * they read the same in JS (decision 11); `d`'s conditional and `audit`'s `len` are written in JS.
- * The compiled edges' `source_handle`, `input_group` and `from_` are `sourceHandle`, `inputGroup`
- * and `from`.
- *
- * Changed: `meet` is an inline CODE body that awaits a short timer, where Python's waits on a
- * barrier shared with the other `meet`; CODE bodies run in worker threads (decision 47), so
- * `test_sibling_calls_from_one_host_run_in_parallel` checks, with two workers, that both bodies
- * started before either succeeded. The adaptive gate is a TOOL `ask` where Python's is a
- * HUMAN_INPUT node (TS yian has no HUMAN_INPUT kind); its handler declares the context inputs.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -179,7 +162,7 @@ function edge(loaded: ComposedFlow, edgeId: string) {
 /** The probe nodes that record their tag: `prep`, and a `fx` or `p` inside a call. */
 const PROBE = /^prep$|\/(fx|p)$/;
 
-/** The tags the probe nodes returned, in order: what Python's `RECORDED` collects. */
+/** The tags the probe nodes returned, in order. */
 const recorded = (result: RunResult) =>
   result.events
     .filter((event): event is NodeSucceeded => event instanceof NodeSucceeded && PROBE.test(event.nodeId))

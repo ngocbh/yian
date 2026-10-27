@@ -1,70 +1,7 @@
 /**
- * Transactional run-state initialization: a port of `tests/engine/test_run_state_initialization.py`.
- *
- * Ported: `test_run_state_starts_pristine_around_the_owned_graph`,
- * `test_historical_start_prepares_recorded_schema_bytes`,
- * `test_prepare_run_started_requires_an_exact_nonnegative_worker_count` (3 rows),
- * `test_prepare_run_started_requires_a_pristine_state_with_a_start_node`,
- * `test_prepare_run_started_validates_the_public_envelope_contract` (3 rows),
- * `test_commit_prepared_appends_before_applying_the_total_plan`,
- * `test_commit_prepared_append_failure_leaves_state_and_observers_untouched`,
- * `test_commit_prepared_rejects_a_different_pristine_state_before_append`,
- * `test_commit_prepared_rejects_flow_or_boundary_replacement_before_append` (4 rows),
- * `test_commit_prepared_rejects_state_and_log_identity_mismatches_before_append` (4 rows),
- * `test_commit_prepared_rejects_a_custom_log_return_mismatch_without_applying` (4 rows) and
- * `test_mismatched_append_return_leaves_the_advanced_log_as_recovery_authority`. Python's
- * `ValueError` is a `RangeError` here; each rejected row names its one class and message, where
- * Python accepts either `TypeError` or `ValueError` or matches a part of the message.
- *
- * Changed:
- * - `test_private_plan_contains_no_mutable_transition_payload`: the plan is a frozen plain object;
- *   each own field is a primitive (the envelope is canonical text, not bytes), a `Node`, the
- *   originating state or flow, `null`, or a frozen value; assigning a field, or writing into the
- *   envelope text's characters, is a `TypeError`.
- * - `test_run_started_preparation_is_immutable_and_commit_restores_complete_state`: `RunStartData`
- *   is an interface, so its freeze half has no counterpart; assigning a `PreparedTransition` field
- *   is a `TypeError`; the tuple START value is an array, and its int is a `bigint`.
- * - `test_append_result_must_preserve_the_complete_validated_envelope`: TS envelopes and records
- *   are frozen, so the log returns a different envelope: one built on the envelope prototype with
- *   schema `true`, or one whose record holds the float `1` where the prepared record holds the int
- *   `1n`.
- * - `test_commit_prepared_rejects_mutation_of_the_public_prepared_record`: the record is frozen,
- *   so a forged `PreparedTransition` pairs a changed record with the original plan.
- * - `test_commit_prepared_rejects_every_stale_state_mutation_before_append`: the 7 rows that change
- *   values (`deferredPrune` is a `Set`).
- * - `test_committed_state_does_not_alias_old_containers_or_prepared_payloads`: the prepared record
- *   is deep-frozen, so each change to its payload is a `TypeError`.
- *
- * TS-only, for the part-2 entry points: `prepareExpanded` refuses an uninitialized state and a
- * node that isn't a graph spawner; `replayRecords` refuses a state that isn't a `RunState`,
- * envelopes that aren't an array of `RecordEnvelope`s and a builder that isn't a function before
- * it checks that the state is pristine, and that before it refuses an empty prefix; a hand-built
- * backward plan with no trace change is refused by the post-terminal trace check before anything
- * else, and one with a sequence-only trace change reaches its commit, whose initialized-state check
- * refuses the pristine state; a hand-built growth plan holding a RunStarted record fails the growth
- * commit's record check. The log stays empty.
- *
- * TS-only, for the crashed-attempt counts Python doesn't keep: `prepareRunStarted` refuses a
- * count or a last stop sequence on the fresh state, and an initialized state refuses a wrong
- * container, a count that isn't a positive integer by node id, or a stop sequence that isn't an
- * integer in `[1, nextSequence)`.
- *
- * TS-only, for record times: an append result without a time breaks the append protocol.
- *
- * Changed for schema 13, where `RunStarted` records no pool and the run start's commits follow it
- * (`commitInitialPool`): `test_prepare_run_started_rejects_pool_identity_and_start_priming_mismatches`
- * becomes the commits' checks (a pool of another START or storing another value, a `system.run_id`
- * of another run, START inputs that aren't a record or come first, a key of neither form, another
- * node, a system value twice, a node start before the START inputs); the complete-state test
- * checks the pool, the START input and the ready START after the commits; the no-alias test leaves
- * out the pool and the START input, which `RunStarted` no longer installs.
- *
- * Not ported:
- * - `test_historical_start_requires_an_exact_supported_schema`: `prepareRunStarted` has no schema
- *   parameter, since schema 13 is the only one.
- * - TS types: the `1.0` row of the worker-count test (`1.0` is `1`), and the `ready-container`,
- *   `in-flight-container`, `node-state-container` (dict subclass) and `node-disposition-type`
- *   (`NodeState.UNKNOWN` is the text `"unknown"`) rows of the stale-mutation test.
+ * Transactional run-state initialization: `prepareRunStarted`, `commitPrepared` and the run
+ * start's pool commits, with append failures and log-return mismatches. Each rejected row pins its
+ * class and message.
  */
 
 import { expect, test } from "bun:test";
@@ -282,12 +219,12 @@ test.each([
     (state: RunState) => prepareNodeStarted(state, START_ID),
     "the run start is incomplete: only its pool_commit records may follow RunStarted",
   ],
-] as const)("the run start's commits check the run's identity and the START inputs: %s (TS-only)", (_name, act, message) => {
+] as const)("the run start's commits check the run's identity and the START inputs: %s", (_name, act, message) => {
   const { state, log } = runStartedOnly();
   expectError(() => act(state, log), RangeError, new RegExp(`^${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
 });
 
-test("the run start's last commit, the START inputs, makes START ready (TS-only)", () => {
+test("the run start's last commit, the START inputs, makes START ready", () => {
   const { state, log } = runStartedOnly();
   expect(state.ready).toEqual([]);
   expect(state.inputsCommitted).toBe(false);
@@ -359,7 +296,7 @@ test("the private plan contains no mutable transition payload", () => {
   expect(() => {
     (plan as { envelopeJson: string }).envelopeJson = "changed";
   }).toThrow(TypeError);
-  // Strict-mode code can't write into a string's characters, as Python can't into bytes.
+  // Strict-mode code can't write into a string's characters.
   expect(() => {
     (plan.envelopeJson as unknown as string[])[0] = "x";
   }).toThrow(TypeError);

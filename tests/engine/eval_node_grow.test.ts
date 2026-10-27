@@ -1,11 +1,7 @@
 /**
- * `evalNode` accepts only trait-declared spawner `Grow` results: a port of
- * `tests/engine/test_eval_node_grow.py`.
- *
- * A node whose `isSpawner` trait is true may return `Grow` for `FlowEngine` to interpret. A
- * non-spawner returning `Grow` becomes an `EvaluationFailure`.
- *
- * Ported: `test_spawner_grow_remains_a_raw_grow_result` and `test_leaf_grow_is_an_evaluation_failure`.
+ * `evalNode` accepts only trait-declared spawner `Grow` results. A node whose `isSpawner` trait is
+ * true may return `Grow` for `FlowEngine` to interpret; a non-spawner returning `Grow` becomes an
+ * `EvaluationFailure`.
  */
 
 import { expect, test } from "bun:test";

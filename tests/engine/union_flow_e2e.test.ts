@@ -1,20 +1,6 @@
 /**
- * Unions of records end to end: load, route, narrow and replay through `runFlow`: a port of
- * `tests/engine/test_union_flow_e2e.py`.
- *
- * Ported: every row. The CODE bodies are Python's, which read the same in JS (decision 11), but
- * for `String(...)` and `toUpperCase()` in place of `str(...)` and `upper()`. A refused resume
- * rejects with the recovery error, where Python raises `ValueError`. Ints read as `bigint`s
- * (decision 4a).
- *
- * Changed: the sell branch's trade `2 * 1.5` is the whole number 3, which reads back from the CODE
- * body as the int `3n` and stays an int in its `float` slot (decisions 9A, 38), where Python gives
- * `3.0`. Messages show text values JSON-style and lists of names as JSON text (decisions 7, 43):
- * `"wait" is not a tag of the union (expected one of ["buy","hold","sell"])`,
- * `record missing required fields: ["price"]`.
- *
- * The harvested `run-core/engine_union_flow_e2e__*` cases run reduced flows (no `note` half, or
- * only the nested output), so each covers no whole test.
+ * Unions of records end to end: load, route, narrow and replay through `runFlow`. A whole number
+ * in a `float` slot stays an int (decisions 9A, 38).
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -1,20 +1,4 @@
-/**
- * Cascade resolution and replay over stable paths in the static call tree: mirrors
- * `tests/engine/test_llm_cascade.py`.
- *
- * Ported: every row. Changed: ints are `bigint`s; errors pin their class
- * (`RangeError` where Python raises `ValueError`); the LOOP body's CODE reference is TS's form,
- * loaded with the conformance directory as `baseDir` (`loadConformanceFlow`);
- * `test_replay_uses_logged_map_after_environment_changes` changes the environment around the
- * replay where Python also patches `connection_snapshot` to fail (an ES module export a Bun test
- * can't replace); `test_effective_map_resolves_environment_defaults_once` runs with an `env` accessor
- * that changes `YIAN_DEFAULT_MODEL` after its first read and a `ScriptedModel` from `models`, where
- * Python patches `connection_snapshot` and the client factory.
- *
- * TS-only: `bindHostCredentials` on a copied flow leaves the original's `llmConfig` unchanged; a
- * NaN run input is a `RangeError` naming the field and the input (Python's `ValueError` reads
- * `input 't': non-finite number nan is not a yian value`).
- */
+/** Cascade resolution and replay over stable paths in the static call tree. */
 
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -470,7 +454,7 @@ test.each([
   expect(error.message).toMatch(/llm_config has unknown field\(s\)/);
 });
 
-test("the host layer's Python block spelling names the dashed key", async () => {
+test("the host layer's underscore block spelling names the dashed key", async () => {
   const flow = await compiled(ONE_AGENT);
   const error = thrown(() => cascade(flow, { qwen_cn: { top_k: 4n } }));
   expect(error).toBeInstanceOf(RangeError);

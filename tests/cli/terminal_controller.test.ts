@@ -1,15 +1,5 @@
-// Ported from tests/cli/test_terminal_controller.py as scenarios on `yian run` in process: the
-// run's one AbortController takes the controller thread's stop event, a fake terminal the broker.
-// `test_prompt_eof_preserves_public_cause_without_leaking_host_stop` and
-// `test_pooled_prompt_eof_preserves_exact_initiating_cause`: a stdin that ends at a run's prompt
-// is `run.cancelled`. `test_sigint_during_reporter_stop_lets_it_finish_and_keeps_the_first_cause`:
-// the first stop wins, the end of input or the host's.
-// `test_failed_result_wins_over_sibling_prompt_host_stop`,
-// `test_observer_failure_wins_over_cancelled_controller_prompt`, and
-// `test_controller_host_stop_is_hidden_without_inventing_ctrl_c` (a `HostStop` a tool throws fails
-// its node; only the run's own stop is Ctrl-C). Ported in tests/cli/terminal_both_runtimes.ts:
-// Ctrl-C during a prompt and pooled EOF. The rest have no counterpart: threads, signal masks,
-// SIGINT replay.
+// Stops at a run's prompt, as scenarios on `yian run` in process: the end of input is
+// `run.cancelled`, the first stop wins, and a `HostStop` a tool throws fails only its node.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

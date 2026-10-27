@@ -1,9 +1,6 @@
 /**
- * Contracts for source-neutral diagnostic values and origin resolution, a port of
- * `tests/engine/test_diagnostics.py`, plus the text helpers yian's messages need.
- *
- * TS-only: `sameFailure` is true for separately built equal failures (origins compared by key) and
- * false for each differing field, with a both-null and a one-null row for each nullable field.
+ * Contracts for source-neutral diagnostic values and origin resolution, the text helpers yian's
+ * messages need, and `sameFailure`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -124,7 +121,7 @@ describe("reprText", () => {
     // CPython 3.12.14's
     // hashlib.sha256(''.join('1' if chr(c).isprintable() else '0'
     //                        for c in range(0x110000)).encode()).hexdigest()
-    // `\` is printable but escaped, and surrogates are never printable, as in Python.
+    // `\` is printable but escaped, and surrogates are never printable.
     const bits: string[] = [];
     for (let cp = 0; cp < 0x110000; cp++) {
       const ch = String.fromCodePoint(cp);
@@ -164,8 +161,7 @@ describe("getCloseMatches", () => {
     ["lookup", ["look_up", "lookups", "Lookup", "kool"], 4, 0.6, ["lookups", "look_up", "Lookup"]],
     ["int", ["Int", "integer", "in", "nit"], 4, 0.5, ["in", "nit", "Int", "integer"]],
     ["\ud83d\ude00\ud83d\ude01", ["\ud83d\ude00", "\ud83d\ude01x", "\ud83d"], 3, 0.0, ["\ud83d\ude00", "\ud83d\ude01x", "\ud83d"]],
-    // Python gives `["a", "\ud83d\ude00b", "\ue000a"]`; TS breaks the 0.5 tie by UTF-16
-    // code units.
+    // The 0.5 tie breaks by UTF-16 code units.
     ["\ud83d\ude00a", ["\ud83d\ude00b", "\ue000a", "a"], 3, 0.0, ["a", "\ue000a", "\ud83d\ude00b"]],
   ];
 
@@ -218,11 +214,11 @@ describe("SourceRange", () => {
     ["an end beyond the last line", new SourceRange(2, 1, 9, 1), "a\nb\nc\n", [2, 3]],
     ["\\r\\n line breaks", new SourceRange(1, 1, 3, 1), "a:\r\n  b: 1\r\nc: 2\r\n", [1, 2]],
     ["\\r line breaks", new SourceRange(1, 1, 3, 1), "a:\r  b: 1\rc: 2\r", [1, 2]],
-    // Python gives [2, 3]: its `splitlines` also breaks at U+2028 (`rule: columns`).
+    // U+2028 doesn't break a line (`rule: columns`).
     ["U+2028 inside a line", new SourceRange(2, 1, 9, 1), "a\u2028b\nc", [2]],
-    // Python gives [1, 2]: its `strip` keeps U+FEFF, JS `trim` strips it (`rule: text`).
+    // `trim` strips U+FEFF, so the line is blank (`rule: text`).
     ["a U+FEFF-only prefix", new SourceRange(1, 1, 2, 2), "a\n\ufeff\n", [1]],
-    // Python gives [1]: its `strip` removes U+001F, JS `trim` keeps it (`rule: text`).
+    // `trim` keeps U+001F, so the line isn't blank (`rule: text`).
     ["a U+001F-only prefix", new SourceRange(1, 1, 2, 2), "a\n\u001f\n", [1, 2]],
   ];
 

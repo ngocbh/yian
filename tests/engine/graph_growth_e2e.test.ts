@@ -1,34 +1,10 @@
 /**
- * The engine's graph growth end to end: a port of `tests/engine/test_graph_growth_e2e.py`.
+ * The engine's graph growth, end to end.
  *
  * A MAP run grows the live graph (each element splices its namespaced child START..END, the MAP
  * fans into one list END, and every synthesized reference is a bare `${<id>.output}`), an
  * `ask` inside a called child passes its namespaced id to the host and completes in one run,
  * and the representative seeds load with a runnable entry.
- *
- * Ported: `test_live_graph_grows_under_a_map_run`, `test_start_end_splice_is_exercised`,
- * `test_synthesized_refs_are_bare_outputs`, `test_nested_human_input_reaches_terminal` and
- * `test_representative_seed_loads_with_structure` (all seven seeds; their `load-*` cases pin only
- * that they load). Integers are bigints (decision 4a); the CODE reference is the TS fixture's
- * (`./fixtures/compose_codefns.ts:make_report`).
- *
- * Changed: the seeds come from the conformance cases `load-core/seed_00_hello_agent`,
- * `load-map-call/seed_04_call`, `load-map-call/seed_05_call_map`, `load-agent/seed_14_agent_tools`,
- * `load-leaves/seed_17_effects_human_wait`, `load-core/seed_18_research_pipeline` and
- * `load-map-call/seed_25_nested_suspension`, loaded with the conformance directory as `baseDir`
- * and a search path holding seed 03 (`03-research-one.yaml` of the seed 04 case), written into a
- * temporary directory linked to the conformance fixtures. A wiring value is a `Binding`, so the
- * bare-output check reads each text `source`.
- *
- * Not ported:
- * - `test_scratch_is_eliminated_structurally` and `test_no_node_attr_or_method_reads_scratch`:
- *   guards against Python's removed node scratch, which TS never had.
- * - `test_no_remaining_engine_xfails`: a pytest collection check.
- *
- * Ported through `runFlow` and the loader, each run in `hostEnv`: `test_f0_goldens_hold`, the
- * rows of `test_golden_run_results.py` it re-runs written out here (`test_golden_call_run_result`,
- * `test_golden_map_run_result` and `test_golden_static_edge_ids_case_and_call_and_map`, seed 02
- * from `load-case/seed_02_case`).
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

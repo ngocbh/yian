@@ -1,20 +1,8 @@
 /**
- * CALL / MAP / LOOP hand their child resolved values, never templates: a port of
- * `tests/engine/test_seed_values_are_data.py`.
- *
- * A spawner binds its inputs before it grows, so a string that reaches the child START is data:
- * text that contains `${...}` (a shell script, a JS template literal, an LLM answer) arrives
- * unchanged and is never evaluated a second time one level down.
- *
- * Ported: `test_call_passes_dollar_brace_text_through_unchanged` (all seven texts; the
- * `${input.text}` row is also the harvested
- * `run-core/engine_seed_values_are_data__dollar_brace_input_text_crosses_a_call`),
- * `test_map_passes_dollar_brace_items_through_unchanged`,
- * `test_loop_carries_dollar_brace_text_through_unchanged` and
- * `test_clone_child_mints_no_edge_for_a_dollar_brace_seed` (`cloneChild`).
- *
- * Not ported: `test_call_passes_code_output_with_dollar_brace_through_unchanged`: covered by
- * `run-core/engine_seed_values_are_data__code_output_with_dollar_brace_crosses_a_call`.
+ * CALL / MAP / LOOP hand their child resolved values, never templates. A spawner binds its inputs
+ * before it grows, so a string that reaches the child START is data: text that contains `${...}`
+ * (a shell script, a JS template literal, an LLM answer) arrives unchanged and is never evaluated
+ * a second time one level down.
  */
 
 import { expect, test } from "bun:test";

@@ -1,23 +1,7 @@
 /**
- * Reading `mcpServers` files into unopened MCP servers (`cli/mcp_config.ts`).
- *
- * Ported from tests/cli/test_mcp_config.py, all 23 tests under their names, parametrized rows as
- * `test.each`; the bad-entries table adds the row `{"command": "srv", "disabled": null}`.
- *
- * Changed:
- * - Python's `UserWarning` is the `warn` option; the tests collect its messages in an array.
- * - Python's `isolated_cli_home` fixture is an env with `HOME`.
- * - A value path quotes its key as JSON: `env["A"]`, not Python's `env['A']`.
- * - A built server's options are read through its private `spec` and `label`; Python's
- *   `server._args == ()` is `[]`, and `server._owner is None` is `server.isOpen === false`.
- * - The `mcpServer` validation message is TS's (`mcpServer url must be an http or https URL with a
- *   host`), still matching "http or https".
- *
- * TS-only: the exact messages of a few bad entries (a `null` `args` and `disabled` among them); a
- * `__proto__` server name and a `__proto__` `env` key are kept as data; a duplicate
- * server name and a `NaN` token are not valid JSON; a file that isn't UTF-8 is `not valid JSON: not
- * UTF-8 text`; `userMcpConfig` falls back to the account's home when `HOME` is unset or empty; with
- * `YIAN_TEST_NODE` set, the built module loads the same entries on Node.
+ * Reading `mcpServers` files into unopened MCP servers (`cli/mcp_config.ts`): the accepted and
+ * refused entries, their warnings (collected through the `warn` option) and the user config path.
+ * A value path quotes its key as JSON (`env["A"]`).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -73,7 +57,7 @@ function loadError(
   throw new Error("loadMcpConfig didn't throw");
 }
 
-test("test_user_config_is_under_the_home_yian_directory", () => {
+test("user config is under the home yian directory", () => {
   expect(userMcpConfig(envOf({ HOME: "/home/me" }))).toBe(join("/home/me", ".yian", "mcp.json"));
 });
 
@@ -81,7 +65,7 @@ test.each<Record<string, string>>([{}, { HOME: "" }])("userMcpConfig falls back 
   expect(userMcpConfig(envOf(vars))).toBe(join(userInfo().homedir, ".yian", "mcp.json"));
 });
 
-test("test_stdio_entry_expands_env_and_keeps_args", () => {
+test("stdio entry expands env and keeps args", () => {
   const path = write("mcp.json", {
     files: { type: "stdio", command: "npx", args: ["-y", "server-files", "."], env: { T: "${TOK}" }, cwd: "/srv" },
   });
@@ -113,7 +97,7 @@ test.each(["http", "streamable-http"])("test_http_entry_expands_headers (%s)", (
   expect(server!.label).toBe("remote");
 });
 
-test("test_sse_type_is_rejected", () => {
+test("sse type is rejected", () => {
   const path = write("mcp.json", { old: { type: "sse", url: "https://x.example.com/sse" } });
 
   const error = loadError([path]);
@@ -138,7 +122,7 @@ test.each([
   expect(loadError([path]).message).toBe(`${path}: server 's': ${reason}`);
 });
 
-test("test_missing_variable_names_file_server_and_field", () => {
+test("missing variable names file server and field", () => {
   const path = write("mcp.json", { files: { command: "srv", args: ["--key", "${MISSING}"] } });
 
   expect(loadError([path]).message).toBe(
@@ -163,7 +147,7 @@ test.each([
   expect(spec(server).args).toEqual([expected]);
 });
 
-test("test_expansion_covers_command_cwd_url_and_header_values", () => {
+test("expansion covers command cwd url and header values", () => {
   const path = write("mcp.json", {
     local: { command: "${BIN}/srv", cwd: "${HOME_DIR}" },
     remote: { url: "https://${HOST}/mcp", headers: { "X-Key": "${KEY}" } },
@@ -178,7 +162,7 @@ test("test_expansion_covers_command_cwd_url_and_header_values", () => {
   expect(spec(servers.remote).headers).toEqual({ "X-Key": "k" });
 });
 
-test("test_unterminated_reference_is_an_error", () => {
+test("unterminated reference is an error", () => {
   const path = write("mcp.json", { s: { command: "srv", env: { A: "${OPEN" } } });
 
   expect(loadError([path], { OPEN: "x" }).message).toBe(
@@ -187,13 +171,13 @@ test("test_unterminated_reference_is_an_error", () => {
   );
 });
 
-test("test_a_reference_inside_a_default_is_an_error", () => {
+test("a reference inside a default is an error", () => {
   const path = write("mcp.json", { s: { command: "srv", args: ["${A:-${B}}"] } });
 
   expect(loadError([path], { B: "b" }).message).toContain("args[0]: '${' must start");
 });
 
-test("test_a_reserved_server_name_is_an_error_naming_the_file", () => {
+test("a reserved server name is an error naming the file", () => {
   const first = write("first.json", { ok: { command: "srv" } });
   const second = write("second.json", { ask_user: { command: "srv" } });
 
@@ -205,14 +189,14 @@ test("test_a_reserved_server_name_is_an_error_naming_the_file", () => {
   );
 });
 
-test("test_a_reserved_name_a_later_file_disables_is_no_error", () => {
+test("a reserved name a later file disables is no error", () => {
   const first = write("first.json", { ask_user: { command: "srv" } });
   const second = write("second.json", { ask_user: { disabled: true } });
 
   expect(Object.keys(loadMcpConfig([first, second], envOf({}), { reserved: ["ask_user"] }))).toEqual([]);
 });
 
-test("test_later_file_replaces_same_named_server", () => {
+test("later file replaces same named server", () => {
   const first = write("a.json", { s: { command: "old", args: ["1"] }, keep: { command: "k" } });
   const second = write("b.json", { s: { url: "https://new.example.com/mcp" } });
 
@@ -224,14 +208,14 @@ test("test_later_file_replaces_same_named_server", () => {
   expect(spec(servers.s).args).toEqual([]);
 });
 
-test("test_later_disabled_entry_removes_server", () => {
+test("later disabled entry removes server", () => {
   const first = write("a.json", { s: { command: "srv" }, keep: { command: "k" } });
   const second = write("b.json", { s: { disabled: true } });
 
   expect(Object.keys(loadMcpConfig([first, second], envOf({})))).toEqual(["keep"]);
 });
 
-test("test_disabled_entry_with_command_is_skipped", () => {
+test("disabled entry with command is skipped", () => {
   const path = write("mcp.json", {
     off: { command: "srv", disabled: true },
     on: { command: "srv", disabled: false },
@@ -240,7 +224,7 @@ test("test_disabled_entry_with_command_is_skipped", () => {
   expect(Object.keys(loadMcpConfig([path], envOf({})))).toEqual(["on"]);
 });
 
-test("test_unknown_keys_warn_once_each_and_server_loads", () => {
+test("unknown keys warn once each and server loads", () => {
   const path = write("mcp.json", { s: { command: "srv", timeout: 30, autoApprove: [], description: "x" } });
   const messages: string[] = [];
 
@@ -254,7 +238,7 @@ test("test_unknown_keys_warn_once_each_and_server_loads", () => {
   expect(spec(servers.s).command).toBe("srv");
 });
 
-test("test_unknown_key_warning_is_a_user_warning", () => {
+test("unknown key warning is a user warning", () => {
   const path = write("mcp.json", { s: { command: "srv", alwaysAllow: [] } });
   const messages: string[] = [];
 
@@ -263,7 +247,7 @@ test("test_unknown_key_warning_is_a_user_warning", () => {
   expect(messages).toEqual([`${path}: server 's': ignoring unknown key 'alwaysAllow'`]);
 });
 
-test("test_not_json_names_the_file", () => {
+test("not json names the file", () => {
   const path = join(tmp, "mcp.json");
   writeFileSync(path, "{not json");
 
@@ -343,7 +327,7 @@ test("bad entries' messages", () => {
   }
 });
 
-test("test_mcp_server_validation_errors_are_reraised", () => {
+test("mcp server validation errors are reraised", () => {
   const path = write("mcp.json", { s: { url: "ftp://x.example.com/mcp" }, t: { command: "" } });
 
   const error = loadError([path]);
@@ -352,13 +336,13 @@ test("test_mcp_server_validation_errors_are_reraised", () => {
   expect(error.cause).toBeInstanceOf(RangeError);
 });
 
-test("test_missing_file_names_it", () => {
+test("missing file names it", () => {
   const path = join(tmp, "absent.json");
 
   expect(loadError([path]).message).toBe(`${path}: can't read the MCP config: No such file or directory`);
 });
 
-test("test_no_files_gives_no_servers", () => {
+test("no files gives no servers", () => {
   expect(Object.keys(loadMcpConfig([], envOf({})))).toEqual([]);
 });
 

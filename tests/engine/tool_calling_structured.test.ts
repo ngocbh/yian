@@ -1,26 +1,7 @@
 /**
- * An AGENT's declared `output:` type: without tools the structured call is the only call; mirrors
- * `tests/engine/test_tool_calling_structured.py`, driving `runAgent` directly with a hand-built
- * `AgentRunContext`.
- *
- * Ported: `test_tool_calling_final_answer_is_structured` (a tool turn, then the structured call over
- * the conversation, the final reply included),
- * `test_no_tools_structured_output_skips_discovery_call` (literal, scalar, list and record),
- * `test_no_tools_structured_fallback_uses_one_schema_prompt`,
- * `test_no_tools_structured_retry_never_adds_a_discovery_call`,
- * `test_tool_calling_literal_final_answer_is_structured` and
- * `test_tool_calling_declared_bare_str_answer_unchanged` (both grant no tools).
- *
- * Changed: the rows run `runAgent` rather than `eval_node`; the model is a `ScriptedModel` rather
- * than a LangChain chat model that fails on an unexpected `invoke` or `bind_tools`, so each row
- * asserts the purposes of the calls made and the requests' tools instead. The native rows use the
- * `openai`/`gpt-5.5` pair (Python: `anthropic`/`claude-sonnet-4-5`); a protocol-less model takes
- * the native `json_schema` plan whatever its provider, so the Ollama row asserts the structured
- * purpose. The tool is in a `ToolSet` given as `toolset`, where Python patches `TOOL_REGISTRY`.
- *
- * TS-only (pins): an `Optional(str)` output is text with or without tools: one chat call each turn,
- * no trailing structured call, and `""` for an empty reply. `Optional(int)` and
- * `Optional(Literal(...))` stay structured.
+ * An AGENT's declared `output:` type, driving `runAgent` directly with a hand-built
+ * `AgentRunContext`: without tools the structured call is the only call. An `Optional(str)` output
+ * is text with or without tools; `Optional(int)` and `Optional(Literal(...))` stay structured.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -108,7 +89,7 @@ for (const [id, outputType, reply, expected] of [
   });
 }
 
-test("test_no_tools_structured_fallback_uses_one_schema_prompt", async () => {
+test("no tools structured fallback uses one schema prompt", async () => {
   const model = new ScriptedModel([textReply('{"value": 5}')], PROMPTED);
   const result = await run(model, INT, { prompt: "produce a number" });
   expect(result.value).toBe(5n);
@@ -116,21 +97,21 @@ test("test_no_tools_structured_fallback_uses_one_schema_prompt", async () => {
   expect(model.requests[0]!.messages.at(-1)!.text().toLowerCase()).toContain("json");
 });
 
-test("test_no_tools_structured_retry_never_adds_a_discovery_call", async () => {
+test("no tools structured retry never adds a discovery call", async () => {
   const model = new ScriptedModel([textReply('{"value": "not-an-int"}'), textReply('{"value": 11}')], NATIVE);
   const result = await run(model, INT, { prompt: "produce a number" });
   expect(result.value).toBe(11n);
   expect(result.purposes).toEqual(["structured_native", "structured_native"]);
 });
 
-test("test_tool_calling_literal_final_answer_is_structured", async () => {
+test("tool calling literal final answer is structured", async () => {
   const model = new ScriptedModel([textReply('{"value": "neutral"}')], { provider: "ollama", model: "qwen2.5:72b" });
   const result = await run(model, SENTIMENT, { prompt: "classify" });
   expect(result.value).toBe("neutral");
   expect(result.purposes).toEqual(["structured_native"]);
 });
 
-test("test_tool_calling_declared_bare_str_answer_unchanged", async () => {
+test("tool calling declared bare str answer unchanged", async () => {
   const model = new ScriptedModel([textReply("plain answer")]);
   const result = await run(model, Type.scalar(ValueKind.STRING), { prompt: "hi" });
   expect(result.value).toBe("plain answer");
@@ -147,7 +128,7 @@ const RECORD = new Type({
   required: new Set(["name", "score"]),
 });
 
-test("test_tool_calling_final_answer_is_structured", async () => {
+test("tool calling final answer is structured", async () => {
   const seen: Record<string, unknown>[] = [];
   const value = new FunctionTool({
     name: "value",

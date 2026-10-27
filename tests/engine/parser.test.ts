@@ -1,25 +1,4 @@
-/**
- * The section parser, strict sections, `x-*` keys and anchors: a port of
- * `tests/engine/test_parser.py`.
- *
- * The seed rows read the conformance cases `load-core/seed_00_hello_agent` and
- * `load-core/seed_11_reuse_anchors`, which hold Python's `tests/seeds/` flows.
- *
- * Changed: TS checks the schema by hand and reports one failure, at the range Python's
- * `_validation_error_range` picks: the first located failure, else a missing required key at the
- * root. Its message is that failure's own; Python's error lists every failure (pydantic's text)
- * when a missing key comes first, as in `name: [bad]` with no `id:`.
- * `uses: {7: child}` now fails at the document, as a key YAML read as non-text, still at the key.
- * A recursive alias inside a tagged `nodes:` entry now parses; Python recursed until its generic
- * `except` reported the overflow with no location.
- *
- * TS-only: the messages of the schema rows, whose Python text is pydantic's except for a text
- * field read as non-text, and the tagged recursive-alias row.
- *
- * Pinned at the end (kept beside the conformance runner's `load` kind, which runs them whole):
- * the harvested cases whose error `parseSourceDocument` or `parseFile` raises, each group under a
- * comment naming the Python file it comes from.
- */
+/** The section parser, strict sections, `x-*` keys and anchors. */
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -208,10 +187,8 @@ const notValid = (what: string, reason: string) =>
   `invalid YAML: not a valid ${what}: ${reason}; quote it to keep it as text`;
 const BAD_MONTH = notValid("date", "month must be in 1..12");
 
-// A row with `message` pins yian's text where the case leaves out Python's message, which adds
-// PyYAML's mark to it.
+// A row with `message` pins yian's text where the case leaves the message out.
 test.each<Omit<TextCaseRow, "call">>([
-  // tests/compose/test_unbuildable_scalars.py
   { id: "yaml/compose_unbuildable_scalars__a_case_when", message: BAD_MONTH },
   { id: "yaml/compose_unbuildable_scalars__a_uses_file", file: "child.yaml", message: BAD_MONTH },
   {
@@ -232,21 +209,15 @@ test.each<Omit<TextCaseRow, "call">>([
     id: "yaml/compose_unbuildable_scalars__year_zero",
     message: notValid("date", "year 0 is out of range"),
   },
-  // tests/engine/test_long_int_literals.py
   { id: "yaml/engine_long_int_literals__long_int_literal" },
-  // tests/engine/test_limit_overrides.py
   { id: "load-core/engine_limit_overrides__yaml_nesting_follows_the_variable" },
-  // tests/engine/test_uses_files.py
   { id: "load-core/engine_uses_files__malformed_external_child", file: "child.yaml" },
-  // A sample case of the case format, with no Python test.
+  // A sample case of the case format.
   { id: "yaml/unclosed_flow_sequence" },
 ])("parseSourceDocument: $id", (row) => runTextCase({ ...row, call: parseSourceDocument }));
 
 test.each([
-  // tests/engine/test_surface_vocab_golden.py
   "load-core/engine_surface_vocab_golden__legacy_inputs_section",
-  // tests/seeds/errors/
   "load-core/seed_e09_unknown_top_level_key",
-  // tests/engine/test_memory_authoring.py
   "load-agent/engine_memory_authoring__retired_memory_policy_at_the_root",
 ])("parseFile: %s", (id) => runTextCase({ id, call: fileOf }));

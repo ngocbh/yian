@@ -1,19 +1,9 @@
 /**
- * Contracts for `src/platform.ts`: runtime detection; the SQLite wrapper that
- * `src/yian/memory/storage/sqlite.py`'s TypeScript port runs on, with the result
- * codes Python reads from `sqlite_errorcode`; and the exclusive file lock that
- * replaces the `flock` calls in `runtime/log.py` and `llm_clients/auth/store.py`;
- * the scheduler that ports TOOL's chunked `_sleep` in `nodes/tool/node.py`, with a
- * virtual one for tests; the waiting lock that ports the auth store's `_locked`; and
- * the type stripper for CODE bodies, whose errors keep `nodes/code/node.py`'s authored
- * line positions; and `safeFetch`, which ports `llm/transport.py`'s no-redirect client and
- * User-Agent, against real local servers; and `warn`/`withWarnings`, which port the stdlib
- * `warnings.warn` and `warnings.catch_warnings` the CLI collects yian's warnings with.
- * Child processes check the lock across processes, as `log.py`'s `_lock_exclusive`
- * and the storage and auth stores' multiprocess tests do, and, with
- * `YIAN_TEST_NODE` set to a Node binary, the built output on Node. The entry tests import
- * `@ngocbh/yian/platform` by package self-reference, which resolves through `package.json`'s
- * "exports" as an installed copy does.
+ * Contracts for `src/platform.ts`: runtime detection; the SQLite wrapper and its result codes; the
+ * exclusive file lock; the scheduler and its virtual twin for tests; the waiting lock; the type
+ * stripper for CODE bodies, whose errors keep authored line positions; `safeFetch`, against real
+ * local servers; and `warn`/`withWarnings`. Child processes check the lock across processes and,
+ * with `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
@@ -188,7 +178,7 @@ describe("openSqlite", () => {
     expect(type.get(1.5)).toEqual({ t: "real" });
   });
 
-  test("foreign keys are off and double-quoted literals are accepted, as in Python", () => {
+  test("foreign keys are off and double-quoted literals are accepted", () => {
     const db = open(file);
     expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
     expect(db.prepare('SELECT "x" AS v').get()).toEqual({ v: "x" });

@@ -1,12 +1,6 @@
 /**
- * Public flow integration for the built-in episodic-memory backend: mirrors
- * `tests/engine/test_episodic_memory_integration.py`.
- *
- * Ported, through `runFlow` and `RunResult.backward`:
- * `test_backward_commits_episode_recalled_by_a_fresh_run`. Changed: a `ScriptedModel` from
- * `models` answers each run and the recalled sections are read from its request's system prompt
- * (Python patches `run_agent` to read `context.memory_context`); the run's environment names the
- * default model (conftest's in Python), since the flow names none.
+ * Public flow integration for the built-in episodic-memory backend: a backward pass commits an
+ * episode that a fresh run recalls into its system prompt.
  */
 
 import { expect, test } from "bun:test";

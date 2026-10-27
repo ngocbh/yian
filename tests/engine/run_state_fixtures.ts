@@ -1,13 +1,9 @@
 /**
- * Builders shared by the run-state tests (Python's `_fakes.py`, `_backward_fakes.py`,
- * `_graph_builder.py` and the helpers `test_run_state_initialization.py`,
- * `test_run_state_growth.py`, `test_runtime_memory_learning.py`, `test_expand.py` and
- * `test_growth_index.py` lend to other files, and the `_resolver` several run tests define).
+ * Builders shared by the run-state tests.
  *
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here: also the recording `send`, reply streams and secret
- * scan the provider and host-credential tests share (Python's `_chat_completions`, `_rejecting`,
- * `_plain` and `_assert_hidden` of `test_run_api_key.py`), and the `runFlow` and `advance`
+ * scan the provider and host-credential tests share, and the `runFlow` and `advance`
  * helpers of the run-level AGENT and memory tests (`PLAIN_FLOW`, `runWith`, `resumeWith`,
  * `CrashAt`, `crashes`, `sentTexts`, `reply`, `backwardReply`,
  * `memorySections`, `memorySnapshot`) and the in-process `yian run` over a fake chat endpoint
@@ -474,8 +470,7 @@ export function nodeFlow(
 }
 
 /**
- * Evaluate `node` through `evalNode` and return its raw outcome (Python's `_fakes.drive`); the
- * other options go to `evalNode`.
+ * Evaluate `node` through `evalNode` and return its raw outcome; the other options go to `evalNode`.
  *
  * @param options.pool The pool the sources read; a fresh one by default.
  * @param options.flow The flow whose wiring holds the sources; `nodeFlow(node)` by default.
@@ -862,8 +857,8 @@ export function graph(
 }
 
 /**
- * Return a learnable state of `flow` after its committed RunStarted, and its memory log; Python's
- * `_engine(flow, inputs, learnable=True, ...)` where a test only needs the started state.
+ * Return a learnable state of `flow` after its committed RunStarted, and its memory log, for a test
+ * that only needs the started state.
  *
  * The flow gets its execution layout; the pool primes START with `inputs`, and START's wiring
  * reads each input as `${input.<name>}`. The run records no agent configuration.
@@ -906,8 +901,7 @@ export const noGrowth: GrowBuilder = () => {
 };
 
 /**
- * Return a direct engine over a fresh in-memory authority for `flow` (Python's
- * `_graph_builder._engine`): `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
+ * Return a direct engine over a fresh in-memory authority for `flow`: `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
  * is ready. The run's id is `runId` (`RUN_ID` by default). The pool primes START with `inputs`,
  * START's wiring reads each as `${input.<name>}`, and the run records `effectiveLlmByStaticPath`
  * (none by default), the memory configuration given and the `yian.defaults` values in `defaults`
@@ -965,8 +959,7 @@ export function engine(
 
 /**
  * Return a child resolver that serves `children[path]` for a `uses: <path>`, loaded on first use
- * (and then reused) with the conformance fixtures as its base directory (Python's
- * `_resolver(**children)`, which loads every child up front); an unknown path is a `LoadError`.
+ * (and then reused) with the conformance fixtures as its base directory; an unknown path is a `LoadError`.
  */
 export function childResolver(children: Readonly<Record<string, string>>): ChildResolver {
   const loaded = new Map<string, Promise<ComposedFlow>>();
@@ -980,7 +973,7 @@ export function childResolver(children: Readonly<Record<string, string>>): Child
 
 /**
  * Expect `state.growthIndex` to equal one rebuilt from the live state, and every edge and reducer
- * container to name only live nodes (`_require_index_matches_rebuild` of `test_growth_index.py`).
+ * container to name only live nodes.
  */
 export function expectIndexMatchesRebuild(state: RunState): void {
   const flow = state.flow;
@@ -1036,11 +1029,10 @@ export function expectUnknownIncomingMatchesRecount(state: RunState): void {
 export const POLICY = "reflective";
 
 /**
- * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY` (Python's
- * `test_runtime_memory_learning._owner_engine`), with the recorded table and stacks: the flow's
+ * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY`, with the recorded table and stacks: the flow's
  * `memories` become one root-owned `POLICY` declaration, `resolveMemoryLayout` and
  * `applyMemoryLayout` scope every node, the table and stacks are the layout's, and each snapshot
- * is `{}`. Unlike Python's, it leaves `flow.flowId` at its default (`null`), which the runtime
+ * is `{}`. It leaves `flow.flowId` at its default (`null`), which the runtime
  * never reads, and applies no effective LLM map.
  */
 export function ownerEngine(
@@ -1283,8 +1275,7 @@ export function routeInFlight(flow: CompiledFlow = routeFlow()): { state: RunSta
 
 /**
  * Return a binding capture of `inputs` for `node`: each input a literal route, under the node's
- * execution scope and with its input and variable names (Python's
- * `_graph_builder._forward_capture`).
+ * execution scope and with its input and variable names.
  */
 export function forwardCapture(node: Node, inputs: Readonly<Record<string, unknown>> | null): ForwardCapture {
   const route = ValueRoute.record(
@@ -1455,7 +1446,7 @@ export function replayOutcomeLog(
   return { state, log, observers };
 }
 
-// The growth builders (Python's `test_run_state_growth.py` helpers).
+// The growth builders.
 
 /** A minimal kind-blind spawner used to isolate reducer behavior. */
 export class Spawner extends Node {
@@ -1544,8 +1535,7 @@ export function fragmentIds(prepared: PreparedTransition): { fragmentStartId: st
 
 /**
  * Return a real manifestable child flow, as `buildGrow` accepts; with `optionalInput`, its START
- * declares an optional text input `optional` defaulting to `fallback` (Python's
- * `test_run_state_growth._canonical_child`).
+ * declares an optional text input `optional` defaulting to `fallback`.
  */
 export function canonicalChild(options: { optionalInput?: boolean } = {}): CompiledFlow {
   const parameters = options.optionalInput
@@ -1580,8 +1570,7 @@ export function intParameter(name: string): Parameter {
 }
 
 /**
- * A child START -> head (reads `${input.x}`) -> tail (reads `${head.output}`) -> END
- * (Python's `test_expand._child_flow`).
+ * A child START -> head (reads `${input.x}`) -> tail (reads `${head.output}`) -> END.
  */
 export function childFlow(): CompiledFlow {
   const head = new CodeNode("head", { code: 'return inputs["x"] + 1' });
@@ -1609,8 +1598,8 @@ export function childFlow(): CompiledFlow {
 }
 
 /**
- * A parent whose CALL `sp` of `child` reads `${input.x}` and whose `after` reads `${sp.output}`
- * (Python's `test_expand._parent_with_spawner`, whose call arguments are always `x`).
+ * A parent whose CALL `sp` of `child` reads `${input.x}` and whose `after` reads `${sp.output}`;
+ * its call arguments are always `x`.
  */
 export function parentWithSpawner(child: CompiledFlow): CompiledFlow {
   const sp = new CallNode("sp", { flowId: "child", child, childInputs: child.nodes.get(child.startId)!.params });
@@ -1918,7 +1907,7 @@ output: \${agent.output}
 `;
 
 /**
- * Python's `_FLOW` of the AGENT tests: one AGENT `nodeId` (`agent` by default) prompted with the
+ * The flow of the AGENT tests: one AGENT `nodeId` (`agent` by default) prompted with the
  * run's input `question`, its output (of type `output`, text by default) the flow's, its model
  * config `PLAIN_CONFIG`; the other options go to the node.
  */

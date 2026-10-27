@@ -1,27 +1,6 @@
 /**
- * A port of `tests/engine/test_failure_diagnosis.py`: `ComposedFlow.diagnose` resolves a semantic
- * failure through the flow's source authority, presentation-only.
- *
- * Ported: every row but the two named under "Already ported" and "Not ported" below, each
- * parametrized row whole. Python's resolver classes are objects with a `resolve` method; its
- * `cast(..., object())` stand-ins are plain objects cast;
- * a frame subclass whose `text` getter throws is a frame given a throwing `text` accessor (a
- * subclass can't shadow the fields the base constructor assigns); a type check (`type(x) is ...`)
- * reads the prototype. The forbidden compiled surface is a `Proxy` that throws on any access, and
- * the reparse spy replaces `SourceDocument.parse` for the row.
- *
- * Already ported: `test_diagnose_rejects_non_failure_input` in `assemble.test.ts` ("diagnose
- * requires a Failure").
- *
- * Not ported:
- * - `test_diagnose_frame_control_exception_propagates`: Python's `KeyboardInterrupt` isn't an
- *   ordinary exception; JS has no process-control exceptions, so every throw is one the
- *   presentation fallback catches.
- *
- * Ported (adapted): `test_inline_composite_failure_resolves_catalog_frames` and
- * `test_external_composite_failure_resolves_each_document`, with the CODE bodies in TypeScript
- * (`throw new Error("boom")`); a failing body's stack names the flow's file, as Python's traceback
- * does.
+ * `ComposedFlow.diagnose` resolves a semantic failure through the flow's source authority,
+ * presentation-only.
  */
 
 import { afterAll, expect, test } from "bun:test";

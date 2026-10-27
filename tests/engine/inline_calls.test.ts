@@ -1,58 +1,10 @@
 /**
- * Inline `call(...)` directive calls, end to end: a port of `tests/engine/test_inline_calls.py`.
+ * Inline `call(...)` directive calls, end to end.
  *
  * An inline call is a whole-value `call(<flow-id>, kw=...)` directive that desugars at load into
  * an anonymous `call` node, with the host binding rewritten to `${<synth>.output}`. The load
  * halves assemble the flow (`assembleText`), each `defs:` callee built by hand (`handChild`) with
  * the signature the row reads; the direct row drives `desugarInlineCalls`.
- *
- * Changed: Python loads and runs each flow; the load rows check the load (the synth node, its
- * edges, and the argument binding a run would read), and the runs are listed below.
- * `test_inline_call_in_human_input_synthesizes_and_wires_the_call` puts the call in a TOOL `ask`'s
- * input (TS yian has no HUMAN_INPUT kind).
- * `test_inline_call_seed_21_loads` is the harvested `load-map-call/seed_21_inline_call`, pinned at
- * the end. `test_inline_call_e06_type_mismatch_is_loud`
- * pins the whole message, where Python matches fragments; its harvested case
- * `load-map-call/engine_inline_calls__inline_call_argument_source_type_mismatch_is_rejected` is
- * pinned at the end too.
- *
- * Ported through `loadFlow` (the fixture CODE references resolve against the conformance dir):
- * the load halves of `test_inline_call_resolves_through_external_resolver` (its resolver also
- * loads the external flow) and `test_inline_call_inside_defs_body_runs` (the def's synth call is
- * read off the baked child), and `test_inline_call_unknown_callee_is_loud`, which pins the whole
- * message where Python matches fragments.
- *
- * The runs, each loading the flow with its real `defs:` (or, for the external flow, through
- * `childResolver`) and running it through `runFlow`: `test_inline_call_in_node_input_runs`,
- * `test_inline_call_literal_arg_runs` and the run halves of `test_inline_call_fan_in_infers_edges`
- * and `test_inline_call_resolves_through_external_resolver`.
- *
- * Not ported: the run halves of `test_inline_call_in_loop_input_synthesizes_wires_and_runs`,
- * covered by `run-map-call/engine_inline_calls__inline_call_in_a_loop_seed`;
- * `test_nested_inline_calls_run`, covered by `run-map-call/engine_inline_calls__nested_inline_calls`;
- * `test_inline_call_in_flow_output_runs`, covered by
- * `run-map-call/engine_inline_calls__inline_call_in_a_flow_output`;
- * `test_quoted_interpolated_arg_strips_quotes_like_named_form`, covered by
- * `run-map-call/engine_inline_calls__quoted_interpolated_argument`;
- * `test_inline_call_in_mapped_call_over_runs`, covered by
- * `run-map-call/engine_inline_calls__inline_call_in_a_map_over`;
- * `test_two_host_sites_mint_unique_ids_and_both_run`, covered by
- * `run-map-call/engine_inline_calls__two_sites_get_unique_ids`; and
- * `test_inline_call_inside_defs_body_runs`, covered by
- * `run-map-call/engine_inline_calls__inline_call_inside_a_def_body`.
- *
- * The origin rows locate each synth call node and its argument bindings at the authored binding
- * the `call(...)` was written in: the load halves of
- * `test_inline_call_rewrite_keeps_host_site_and_generated_call_shares_it`
- * (`tests/compose/test_node_input_origins.py`) and
- * `test_boundary_nodes_are_originless_and_an_inline_call_shares_its_binding`
- * (`tests/compose/test_node_origins.py`), neither file having a TS mirror yet, and TS-only rows for
- * nested calls in a node input, a flow output, a flow assert and the `then:`/`else:` targets of a
- * CASE. Origins resolve through the assembly's catalog builder.
- *
- * TS-only: the harvested cases the inline-call desugar raises, each named by its case id (from
- * `test_expression_nesting.py`, `test_limit_overrides.py`, `test_constructor_load.py`,
- * `test_any_name_literals.py` and this file's Python source), pinned at the end.
  */
 
 import { afterAll, afterEach, expect, test } from "bun:test";
@@ -789,7 +741,6 @@ function bindingOf(compiled: ReturnType<typeof load>, nodeId: string, name: stri
   return binding as Binding;
 }
 
-// From tests/compose/test_node_input_origins.py.
 test("inline call rewrite keeps host site and generated call shares it", () => {
   const text = `id: rewritten-input-origin
 name: rewritten-input-origin
@@ -832,7 +783,6 @@ output: \${consumer.output}
   expect(generated.origin).toBe(hostBinding.origin);
 });
 
-// From tests/compose/test_node_origins.py.
 test("boundary nodes are originless and an inline call shares its binding", () => {
   const text = `id: generated-origins
 name: generated-origins

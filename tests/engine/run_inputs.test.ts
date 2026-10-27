@@ -1,14 +1,6 @@
 /**
- * The run boundary accepts only declared input names and a record of inputs: a port of
- * `tests/engine/test_run_inputs.py`.
- *
- * Ported: `test_undeclared_input_is_rejected_before_the_log`,
- * `test_flow_without_inputs_names_none_declared`, `test_non_mapping_inputs_raise_type_error` and
- * `test_declared_inputs_in_any_mapping_run`.
- *
- * Changed: an undeclared name is a `RangeError` (Python's `ValueError`) that quotes names as JSON;
- * "any mapping" is any record (a frozen one, one with no prototype), where Python passes a
- * `MappingProxyType`.
+ * The run boundary accepts only declared input names, refusing others with a `RangeError` that
+ * quotes names as JSON, and any record of inputs (frozen, or with no prototype).
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

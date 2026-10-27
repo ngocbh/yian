@@ -72,9 +72,8 @@
  *   `NodeStartedRecord` constructor's rejection, and the `envelope` row (a `RecordEnvelope`
  *   subclass) is a `TypeError`.
  * - `test_retired_schema_record_is_rejected_by_name` and `test_retired_schema_log_is_rejected_on_resume`:
- *   every schema below 10 is Python's, so 7 and 8 read `unsupported run-record schema: N` and 9
- *   names Python yian; TS's own schemas 10 and 11 are retired as Python names its retired
- *   schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
+ *   every schema below 10 is Python's, so 7, 8 and 9 read `unsupported run-record schema: N`;
+ *   TS's own schemas 10 and 11 are retired as Python names its retired schemas. Every schema rejection is a `RunLogSchemaError` (Python's `ValueError`).
  * - `test_schema_check_does_not_weaken_validation`: Python's 10 and 9.0 rows are 13 and the float
  *   token `23.0` (the current schema written as a float); the float row is wire-only, since a JS
  *   `23.0` is the number 23.
@@ -146,7 +145,6 @@ const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
 /** The error text for the retired TS schema `schema`. */
 const retired = (schema: number) => `run log schema ${schema} predates schema 23 and is not supported`;
 const RETIRED_SCHEMA = retired(22);
-const PYTHON_SCHEMA = "run log schema 9 was written by Python yian; resume it with Python yian";
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
@@ -262,15 +260,10 @@ test("the schema version is 23", () => {
   expect(SCHEMA_VERSION).toBe(23);
 });
 
-test.each([7, 8])("retired schema %d record is rejected by name", (schema) => {
+test.each([7, 8, 9])("retired schema %d record is rejected by name", (schema) => {
   const message = `unsupported run-record schema: ${schema}`;
   expectError(() => decodeRecord(wireLine({ schema: String(schema) })), RunLogSchemaError, message);
   expectError(() => new RecordEnvelope(schema, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, message);
-});
-
-test("a schema 9 record names Python yian", () => {
-  expectError(() => decodeRecord(wireLine({ schema: "9" })), RunLogSchemaError, PYTHON_SCHEMA);
-  expectError(() => new RecordEnvelope(9, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, PYTHON_SCHEMA);
 });
 
 test("a schema 21 record, from before an AGENT's success wrote a messages commit, is retired", () => {
@@ -290,7 +283,7 @@ test("a schema 22 record, from before inbox_withdrawn and empty interrupted reco
 test.each<[number, string]>([
   [7, "unsupported run-record schema: 7"],
   [8, "unsupported run-record schema: 8"],
-  [9, PYTHON_SCHEMA],
+  [9, "unsupported run-record schema: 9"],
   [10, retired(10)],
   [11, retired(11)],
   [12, retired(12)],
@@ -1071,7 +1064,7 @@ test("iterRunRecords yields only the kinds asked for, still checking every line'
 });
 
 test.each<[string, string, number]>([
-  ["9", PYTHON_SCHEMA, 9],
+  ["9", "unsupported run-record schema: 9", 9],
   ["10", retired(10), 10],
   ["11", retired(11), 11],
   ["12", retired(12), 12],
